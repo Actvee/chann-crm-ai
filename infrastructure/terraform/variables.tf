@@ -153,7 +153,8 @@ variable "liff_ids" {
     sales      = string
     technician = string
   })
-  description = "LIFF IDs for the three locked audiences."
+  description = "LIFF IDs for the three locked audiences. Treat as deployment-sensitive so plan evidence cannot expose them."
+  sensitive   = true
   default = {
     customer   = ""
     sales      = ""

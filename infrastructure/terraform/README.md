@@ -83,8 +83,8 @@ Cloud Run documents that disabling this check still requires the operator to
 possess `run.services.setIamPolicy`; that capability is not inspected here. A
 future DEV apply must stop on a permission error rather than widening IAM scope.
 
-The database password and reduced-security runtime secrets are sensitive
-Terraform inputs, but Terraform state still stores them. This is an explicit
+The database password, LIFF identifiers, and reduced-security runtime
+secrets are sensitive Terraform inputs, but Terraform state still stores them. This is an explicit
 project limitation, not equivalent to Secret Manager. Never commit the real
 `terraform.tfvars` or backend file; repository ignore rules cover both.
 

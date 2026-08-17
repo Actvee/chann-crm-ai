@@ -86,3 +86,10 @@ Changes made to remove ambiguity before handing the project to a new AI:
    actions, counts, and the verified DEV invocation-mode addresses.
 4. Retain the binary plan only as a local `0600` artifact and mark it explicitly
    as sensitive and prohibited from upload.
+
+## Phase 1 DEV Terraform LIFF evidence hardening — 2026-08-17
+
+1. Marked `liff_ids` as a sensitive Terraform input so human-readable plan
+   evidence cannot expose environment identifiers.
+2. Extended the boundary contract so future changes cannot silently remove this
+   protection.
