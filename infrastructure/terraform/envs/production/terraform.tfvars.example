@@ -1,0 +1,51 @@
+# Fill from live preflight output, not from documentation.
+project_id                = "chann1-1"
+region                    = "asia-southeast1"
+environment               = "production"
+cloud_sql_instance        = "chann1-prod-pg"
+redis_instance            = "chann1-prod-cache"
+artifact_repository       = "chann1-VERIFY_WITH_PREFLIGHT"
+network_name              = "chann1-prod-net"
+vpc_connector_name        = "chann1-prod-vpc"
+application_database_name = "chann_crm_ai"
+application_database_user = "chann_crm_ai_app"
+database_password          = "REQUIRED_NOT_CONFIGURED_MIN_24_CHARS"
+
+enable_cloud_run_services = true
+cloud_run_min_instances   = 0
+cloud_run_max_instances   = 2
+platform_version          = "REQUIRED_PROMOTED_RELEASE_VERSION"
+git_commit                = "REQUIRED_FULL_40_CHAR_GIT_SHA"
+
+image_digests = {
+  data         = "asia-southeast1-docker.pkg.dev/chann1-1/chann1-VERIFY_WITH_PREFLIGHT/data@sha256:REQUIRED"
+  application  = "asia-southeast1-docker.pkg.dev/chann1-1/chann1-VERIFY_WITH_PREFLIGHT/application@sha256:REQUIRED"
+  presentation = "asia-southeast1-docker.pkg.dev/chann1-1/chann1-VERIFY_WITH_PREFLIGHT/presentation@sha256:REQUIRED"
+}
+
+admin_secret = "REQUIRED_NOT_CONFIGURED_MIN_32_CHARS"
+jwt_secret   = "REQUIRED_NOT_CONFIGURED_MIN_32_CHARS"
+
+line_credentials = {
+  customer = {
+    channel_secret       = "REQUIRED_NOT_CONFIGURED"
+    channel_access_token = "REQUIRED_NOT_CONFIGURED"
+  }
+  sales = {
+    channel_secret       = "REQUIRED_NOT_CONFIGURED"
+    channel_access_token = "REQUIRED_NOT_CONFIGURED"
+  }
+  technician = {
+    channel_secret       = "REQUIRED_NOT_CONFIGURED"
+    channel_access_token = "REQUIRED_NOT_CONFIGURED"
+  }
+}
+
+liff_ids = {
+  customer   = "REQUIRED_NOT_CONFIGURED"
+  sales      = "REQUIRED_NOT_CONFIGURED"
+  technician = "REQUIRED_NOT_CONFIGURED"
+}
+
+create_application_bucket = false
+application_bucket_name   = ""

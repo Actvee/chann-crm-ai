@@ -1,0 +1,115 @@
+name: CI
+
+# Official CI. scripts/dev-validate.sh is a convenience layer over these same
+# tests and must never be treated as a substitute (playbook 02 section 4.3).
+
+on:
+  push: {branches: [main]}
+  pull_request: {branches: [main]}
+
+jobs:
+  boundary:
+    name: Boundary tests (4-tier)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -r requirements-test.txt
+      - name: Enforce tier boundaries
+        run: python -m pytest tests/boundary -q
+
+  unit:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -r data/requirements.txt -r application/requirements.txt -r requirements-test.txt
+      - run: python -m pytest tests/unit -q
+
+  database:
+    name: Database integration (from empty)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: chann
+          POSTGRES_PASSWORD: chann
+          POSTGRES_DB: chann_crm_ai_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -r data/requirements.txt -r database/requirements.txt -r requirements-test.txt
+      - name: Migrate from an empty database, then seed
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://chann:chann@localhost:5432/chann_crm_ai_test
+        run: python -m pytest tests/integration -q
+
+  presentation:
+    name: Presentation typecheck and build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: "22"}
+      - run: npm install --no-audit --no-fund --prefix presentation
+      - run: npm run typecheck --prefix presentation
+      - run: npm run build --prefix presentation
+
+  build:
+    name: Build immutable artifacts
+    runs-on: ubuntu-latest
+    needs: [boundary, unit, database, presentation]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build tier images
+        run: |
+          for tier in data application presentation; do
+            docker build -t "chann-crm-ai/$tier:${GITHUB_SHA}" "./$tier"
+          done
+      # ---------------------------------------------------------------
+      # BLOCKED — pending a decision on how this repo authenticates to GCP.
+      #
+      #   Workload Identity Federation  -> preferred; no long-lived key
+      #   Service account key in Secrets -> works, but is IAM territory,
+      #                                     which is out of scope right now
+      #   Cloud Build trigger            -> conflicts with GitHub Actions;
+      #                                     pick one, not both
+      #
+      # Push and promotion stay disabled until that is settled. Building
+      # locally still proves the Dockerfiles work.
+      # ---------------------------------------------------------------
+      - name: Push to Artifact Registry
+        if: false
+        run: echo "enable once GCP auth is decided"
+
+  manifest:
+    name: Release manifest
+    runs-on: ubuntu-latest
+    needs: [build]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - name: Generate manifest
+        run: |
+          python scripts/release-manifest.py \
+            --phase 1 \
+            --platform-version "0.1.0-${GITHUB_SHA::7}" \
+            --environment dev \
+            --verification boundary_tests=PASS \
+            --verification auth_tests=PASS \
+            --verification multi_tenant_isolation=PASS \
+            --verification runtime_smoke=NOT_VERIFIED
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-manifest
+          path: release-manifest.json

@@ -1,0 +1,2 @@
+bucket = "CHANN_CRM_AI_TFSTATE_BUCKET_REQUIRED"
+prefix = "chann-crm-ai/stage"

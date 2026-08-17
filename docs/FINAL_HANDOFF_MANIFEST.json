@@ -1,0 +1,102 @@
+{
+  "package": "chann_crm_ai_project_docs_final_v3",
+  "status": "FINAL_HANDOFF",
+  "date": "2026-08-17",
+  "product_source_of_truth": "CHANN_CRM_AI_MASTER_SPEC.md",
+  "document_engine_decision": "SMARTBROWZ_DOCUMENT_ENGINE.md",
+  "new_chat_prompt": "GPT_NEW_CHAT_START_PROMPT.md",
+  "architecture": "Presentation -> Application -> Data -> Database",
+  "document_renderer": "Zoho Catalyst SmartBrowz",
+  "files": [
+    {
+      "path": "00_INFRASTRUCTURE_HANDOFF.md",
+      "sha256": "4f6c1c1131debdd851512120ce79ce48d9c2f13efa674416df139a40a25bf981",
+      "bytes": 4949
+    },
+    {
+      "path": "00_START_HERE.md",
+      "sha256": "08db6f2bf0f3e4dbf3f0741dedd2d699a6eb9f5d91af110ced547ac3a87177d6",
+      "bytes": 5185
+    },
+    {
+      "path": "01_REFERENCE_ARCHITECTURE_INFRASTRUCTURE_BLUEPRINT.md",
+      "sha256": "abd632b2b859b5cfb7ae005859ed4db73fea85ea46226b4691df1504b2d1dcfe",
+      "bytes": 9004
+    },
+    {
+      "path": "02_DEVELOPMENT_TESTING_RELEASE_OPERATIONS_PLAYBOOK.md",
+      "sha256": "f25b2036ea4a91fb85f9010860f83c4683de589363460bd75556aa5db87dd326",
+      "bytes": 8552
+    },
+    {
+      "path": "03_DATABASE_MIGRATION_CACHE_DATA_SAFETY_STANDARD.md",
+      "sha256": "7f5e2b64190778b32ec83ac1b6966d286f5bf4408d9a8e7f4056c669200aaa39",
+      "bytes": 6358
+    },
+    {
+      "path": "04_SECURITY_ENVIRONMENT_MODEL.md",
+      "sha256": "b970b5776e905d6a523eb0fbed49a22c9156bafc9a612ea6e0cb9fef8bc80c09",
+      "bytes": 5734
+    },
+    {
+      "path": "05_FINAL_REFERENCE_PROJECT_REPORT.md",
+      "sha256": "b073ce5ac6caee0aade1f957e6a3455e09d1aeba15aa3f643f63babd5ec868a3",
+      "bytes": 10524
+    },
+    {
+      "path": "06_PROJECT_BOOTSTRAP_MASTER_INSTRUCTIONS_FOR_AI.md",
+      "sha256": "6758906bd0edf778ce2bf30dcbd6e9ac45c4d5c709139cd8fbc406dad69ebde8",
+      "bytes": 14241
+    },
+    {
+      "path": "AI_FIRST_TASK.md",
+      "sha256": "8cd07ac0beb578bff3184c259bb32617ea2afd41de804f7efbafde6803d4bedb",
+      "bytes": 1793
+    },
+    {
+      "path": "CHANN_CRM_AI_MASTER_SPEC.md",
+      "sha256": "46ca7f99a34cbe18ffd9f8f5b84292b1d1e0b34c1c245d4567823299da9f415c",
+      "bytes": 186806
+    },
+    {
+      "path": "CLAUDE.md",
+      "sha256": "a4de0eff797712938227fe06af33e99c2b5fb29ad3100b4ad0554f8138c1646b",
+      "bytes": 14277
+    },
+    {
+      "path": "ENVIRONMENT_RESOURCE_MAP.yaml",
+      "sha256": "9684f74ae4971cf4656f167c7154abf92212f300b7372fc7764b125dfb351eb9",
+      "bytes": 3410
+    },
+    {
+      "path": "GPT_NEW_CHAT_START_PROMPT.md",
+      "sha256": "b69ee1a65c2ab5108dbb9c7f83cee1c6124cfd5726895bd745063db2802f0d26",
+      "bytes": 4252
+    },
+    {
+      "path": "INDEX.md",
+      "sha256": "aeee0c732ef268298e4ad8d65a4de30c1eeeba07d2d1c3a35a5b741a042a152e",
+      "bytes": 3742
+    },
+    {
+      "path": "PACKAGE_CHANGELOG.md",
+      "sha256": "65a81f356813ed27e1269dc801dcd96db757b459804d8a8d813ff076a935272c",
+      "bytes": 2491
+    },
+    {
+      "path": "RUNTIME_CONFIG_CONTRACT.md",
+      "sha256": "dfa1d81c048199b072d792a216e3b9294350782aa45a36ea37684f16bd3d76ef",
+      "bytes": 6206
+    },
+    {
+      "path": "SMARTBROWZ_DOCUMENT_ENGINE.md",
+      "sha256": "02eb015962a7ce3a6d68aa643390bc6ae998f9181a264f2994f36cc57387563c",
+      "bytes": 4158
+    },
+    {
+      "path": "scripts/infra-preflight.sh",
+      "sha256": "8900994e1d3519e09aa7e86d2672c6c8abe751a478466df0f496ada4ba7611b4",
+      "bytes": 2959
+    }
+  ]
+}

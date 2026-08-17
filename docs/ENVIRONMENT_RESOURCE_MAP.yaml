@@ -1,0 +1,111 @@
+version: 1
+project:
+  project_id: chann1-1
+  primary_region: asia-southeast1
+  application_mode: greenfield_on_existing_infrastructure
+  architecture: four_tier
+
+architecture:
+  flow:
+    - presentation
+    - application
+    - data
+    - database
+  supporting_not_tiers:
+    - redis
+    - gcs
+    - zoho_catalyst_smartbrowz
+    - line_oa_liff
+    - openrouter
+    - payment_provider
+    - scheduled_jobs
+
+environments:
+  dev:
+    cloud_sql_instance: chann1-dev-pg
+    redis_instance: chann1-dev-cache
+    application_database:
+      current_old_database: absent_by_intent
+      new_database: to_be_created_phase_1
+      recommended_name: chann_crm_ai
+    application_db_user: to_be_created_phase_1
+    cloud_run:
+      presentation: absent_by_intent
+      application: absent_by_intent
+      data: absent_by_intent
+    artifact_registry:
+      repository: chann1-dev
+      legacy_packages_may_exist: [presentation, application, data]
+      legacy_packages_authoritative: false
+    network:
+      current_name: VERIFY_WITH_PREFLIGHT
+    vpc_connector:
+      current_name: VERIFY_WITH_PREFLIGHT
+
+  stage:
+    cloud_sql_instance: chann1-stage-pg
+    redis_instance: chann1-stage-cache
+    application_database:
+      current_old_database: absent_by_intent
+      new_database: to_be_created_phase_1
+      recommended_name: chann_crm_ai
+    application_db_user: to_be_created_phase_1
+    cloud_run:
+      presentation: absent_by_intent
+      application: absent_by_intent
+      data: absent_by_intent
+    artifact_registry:
+      repository: chann1-stage
+      legacy_packages_may_exist: [presentation, application, data]
+      legacy_packages_authoritative: false
+    network:
+      current_name: VERIFY_WITH_PREFLIGHT
+    vpc_connector:
+      current_name: VERIFY_WITH_PREFLIGHT
+
+  production:
+    cloud_sql_instance: chann1-prod-pg
+    redis_instance: chann1-prod-cache
+    application_database:
+      current_old_database: absent_by_intent
+      new_database: to_be_created_only_through_approved_release_flow
+      recommended_name: chann_crm_ai
+    application_db_user: to_be_created_only_through_approved_release_flow
+    cloud_run:
+      presentation: absent_by_intent
+      application: absent_by_intent
+      data: absent_by_intent
+    artifact_registry:
+      repository: VERIFY_WITH_PREFLIGHT
+      note: >-
+        The reference project promoted Stage-proven immutable images to Production;
+        do not assume a dedicated Production repository exists.
+    network:
+      current_name: VERIFY_WITH_PREFLIGHT
+    vpc_connector:
+      current_name: VERIFY_WITH_PREFLIGHT
+
+terraform_adoption:
+  first_apply_blocked_until_inventory_complete: true
+  classifications:
+    - ALREADY_MANAGED_BY_STATE
+    - IMPORT_OR_ADOPT_REQUIRED
+    - REFERENCE_ONLY_NOT_MANAGED
+    - NEW_RESOURCE_REQUIRED
+
+live_state_authority:
+  source: scripts/infra-preflight.sh
+  rule: Live discovery overrides stale names/status in documentation.
+
+
+external_integrations:
+  smartbrowz:
+    provider: zoho_catalyst_smartbrowz
+    role: document_pdf_renderer
+    tier: supporting_external_service_not_a_business_tier
+    authoring_input: docx_uploaded_by_user
+    compiled_template_owner: chann_crm_ai
+    runtime_ai_required: false
+    baseline_render_mode: application_managed_html_to_smartbrowz_pdf
+    predefined_template_mode: optional_after_supported_management_path_is_verified
+    configuration_status: REQUIRED_NOT_CONFIGURED

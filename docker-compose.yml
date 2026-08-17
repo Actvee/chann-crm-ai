@@ -1,0 +1,65 @@
+# Local development only. Mirrors the tier boundaries so a violation shows up
+# on a laptop rather than in Stage.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: chann
+      POSTGRES_PASSWORD: chann
+      POSTGRES_DB: chann_crm_ai
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chann"]
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 10
+
+  data:
+    build: ./data
+    environment:
+      APP_ENV: dev
+      DATABASE_URL: postgresql+psycopg://chann:chann@postgres:5432/chann_crm_ai
+      REDIS_URL: redis://redis:6379/0
+      ADMIN_SECRET: dev-internal-secret
+      PORT: "8080"
+    ports: ["8081:8080"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+
+  application:
+    build: ./application
+    environment:
+      APP_ENV: dev
+      DATA_BASE_URL: http://data:8080
+      ADMIN_SECRET: dev-internal-secret
+      JWT_SECRET: dev-jwt-secret
+      LINE_CUSTOMER_CHANNEL_SECRET: ""
+      LINE_CUSTOMER_CHANNEL_ACCESS_TOKEN: ""
+      LINE_SALES_CHANNEL_SECRET: ""
+      LINE_SALES_CHANNEL_ACCESS_TOKEN: ""
+      LINE_TECHNICIAN_CHANNEL_SECRET: ""
+      LINE_TECHNICIAN_CHANNEL_ACCESS_TOKEN: ""
+      NEXT_PUBLIC_LIFF_CUSTOMER_ID: ""
+      NEXT_PUBLIC_LIFF_SALES_ID: ""
+      NEXT_PUBLIC_LIFF_TECHNICIAN_ID: ""
+      PORT: "8080"
+    ports: ["8080:8080"]
+    depends_on: [data]
+    # Note: no DATABASE_URL and no REDIS_URL here, on purpose. If this tier
+    # ever needs them, a boundary has been broken.
+
+  presentation:
+    build: ./presentation
+    environment:
+      APPLICATION_BASE_URL: http://application:8080
+      PORT: "3000"
+    ports: ["3000:3000"]
+    depends_on: [application]
