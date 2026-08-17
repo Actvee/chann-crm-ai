@@ -18,7 +18,7 @@ output "created_application_resources" {
 }
 
 output "cloud_run_service_urls" {
-  description = "Service URLs when Cloud Run creation is enabled; public invocation remains intentionally unconfigured."
+  description = "Service URLs when Cloud Run creation is enabled. Invocation mode is reported separately."
   value = var.enable_cloud_run_services ? {
     data         = google_cloud_run_v2_service.data[0].uri
     application  = google_cloud_run_v2_service.application[0].uri
@@ -27,5 +27,5 @@ output "cloud_run_service_urls" {
 }
 
 output "public_invocation_status" {
-  value = "BLOCKED_NOT_CONFIGURED_NO_IAM_SCOPE"
+  value = var.dev_reduced_security_disable_invoker_iam_check ? "DEV_REDUCED_SECURITY_INVOKER_IAM_CHECK_DISABLED" : "INVOKER_IAM_CHECK_ENABLED"
 }

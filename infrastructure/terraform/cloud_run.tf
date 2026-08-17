@@ -46,18 +46,19 @@ locals {
 }
 
 # No IAM policy, Service Account, or Secret Manager resource is declared here.
-# Cloud Run remains authenticated by default. Public invocation is a separate
-# blocking security decision and must not be smuggled into an infrastructure
-# apply through an allUsers IAM binding or an invoker-check bypass.
+# The default remains authenticated. DEV may explicitly use the approved
+# reduced-security Invoker-IAM-check exception; a lifecycle precondition blocks
+# that exception outside DEV. Application-layer authentication stays required.
 
 resource "google_cloud_run_v2_service" "data" {
   count = var.enable_cloud_run_services ? 1 : 0
 
-  name                = local.service_names.data
-  location            = var.region
-  project             = var.project_id
-  ingress             = "INGRESS_TRAFFIC_ALL"
-  deletion_protection = true
+  name                 = local.service_names.data
+  location             = var.region
+  project              = var.project_id
+  ingress              = "INGRESS_TRAFFIC_ALL"
+  invoker_iam_disabled = var.dev_reduced_security_disable_invoker_iam_check
+  deletion_protection  = true
 
   template {
     max_instance_request_concurrency = 80
@@ -114,17 +115,22 @@ resource "google_cloud_run_v2_service" "data" {
       condition     = var.cloud_run_min_instances <= var.cloud_run_max_instances
       error_message = "cloud_run_min_instances cannot exceed cloud_run_max_instances."
     }
+    precondition {
+      condition     = !var.dev_reduced_security_disable_invoker_iam_check || var.environment == "dev"
+      error_message = "Disabling the Cloud Run Invoker IAM check is an approved DEV-only reduced-security exception."
+    }
   }
 }
 
 resource "google_cloud_run_v2_service" "application" {
   count = var.enable_cloud_run_services ? 1 : 0
 
-  name                = local.service_names.application
-  location            = var.region
-  project             = var.project_id
-  ingress             = "INGRESS_TRAFFIC_ALL"
-  deletion_protection = true
+  name                 = local.service_names.application
+  location             = var.region
+  project              = var.project_id
+  ingress              = "INGRESS_TRAFFIC_ALL"
+  invoker_iam_disabled = var.dev_reduced_security_disable_invoker_iam_check
+  deletion_protection  = true
 
   template {
     max_instance_request_concurrency = 80
@@ -187,11 +193,12 @@ resource "google_cloud_run_v2_service" "application" {
 resource "google_cloud_run_v2_service" "presentation" {
   count = var.enable_cloud_run_services ? 1 : 0
 
-  name                = local.service_names.presentation
-  location            = var.region
-  project             = var.project_id
-  ingress             = "INGRESS_TRAFFIC_ALL"
-  deletion_protection = true
+  name                 = local.service_names.presentation
+  location             = var.region
+  project              = var.project_id
+  ingress              = "INGRESS_TRAFFIC_ALL"
+  invoker_iam_disabled = var.dev_reduced_security_disable_invoker_iam_check
+  deletion_protection  = true
 
   template {
     max_instance_request_concurrency = 80

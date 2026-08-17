@@ -44,6 +44,8 @@ grep -Eq "^[[:space:]]*project_id[[:space:]]*=[[:space:]]*\"${PROJECT}\"[[:space
   "${TFVARS_FILE}" || fail "tfvars_project_must_equal_${PROJECT}" 17
 grep -Eq '^[[:space:]]*enable_cloud_run_services[[:space:]]*=[[:space:]]*true[[:space:]]*$' \
   "${TFVARS_FILE}" || fail "complete_DEV_plan_requires_Cloud_Run_x3_enabled" 18
+grep -Eq '^[[:space:]]*dev_reduced_security_disable_invoker_iam_check[[:space:]]*=[[:space:]]*true[[:space:]]*$' \
+  "${TFVARS_FILE}" || fail "approved_DEV_plan_requires_explicit_reduced_security_invocation_mode" 19
 
 mkdir -p "${OUTPUT_DIR}"
 
@@ -109,6 +111,11 @@ required_addresses = {
     "google_cloud_run_v2_service.application[0]",
     "google_cloud_run_v2_service.presentation[0]",
 }
+required_public_services = {
+    "google_cloud_run_v2_service.data[0]",
+    "google_cloud_run_v2_service.application[0]",
+    "google_cloud_run_v2_service.presentation[0]",
+}
 counts = {}
 observed_addresses = set()
 for change in plan.get("resource_changes", []):
@@ -124,6 +131,13 @@ for change in plan.get("resource_changes", []):
         raise SystemExit(f"BLOCKED managed resource outside DEV boundary: {address} ({resource_type})")
     if mode == "managed" and "delete" in actions:
         raise SystemExit(f"BLOCKED delete/replace action: {address} {actions}")
+    if address in required_public_services:
+        after = change.get("change", {}).get("after") or {}
+        if after.get("invoker_iam_disabled") is not True:
+            raise SystemExit(
+                "BLOCKED DEV Cloud Run service does not carry the explicitly "
+                f"approved reduced-security invocation mode: {address}"
+            )
     key = "/".join(actions) if actions else "none"
     counts[key] = counts.get(key, 0) + 1
 

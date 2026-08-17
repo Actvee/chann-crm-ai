@@ -71,7 +71,13 @@ variable "image_digests" {
 
 variable "enable_cloud_run_services" {
   type        = bool
-  description = "Create the three application-tier Cloud Run services. Public invocation is not configured by this root."
+  description = "Create the three application-tier Cloud Run services. Invocation behavior is controlled by a separate default-off DEV exception."
+  default     = false
+}
+
+variable "dev_reduced_security_disable_invoker_iam_check" {
+  type        = bool
+  description = "DEV-only approved exception: disable the Cloud Run Invoker IAM check and rely on application-layer controls. Must remain false outside DEV."
   default     = false
 }
 

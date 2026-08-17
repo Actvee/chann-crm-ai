@@ -65,3 +65,14 @@ Changes made to remove ambiguity before handing the project to a new AI:
    remains an explicit blocking decision.
 7. Strengthened the DEV plan policy with an exact managed-resource allowlist
    and mandatory Cloud Run/database plan-address checks.
+
+## Phase 1 DEV reduced-security invocation approval — 2026-08-17
+
+1. Added an explicit, default-off Terraform input for disabling the Cloud Run
+   Invoker IAM check without creating or changing an IAM policy.
+2. Enabled the exception only in the DEV example and added a lifecycle
+   precondition that blocks it outside DEV.
+3. Required all three planned DEV Cloud Run services to show the approved
+   invocation setting before the plan gate can pass.
+4. Preserved application-layer LINE signature, JWT, and internal shared-secret
+   controls and documented that this is not a Production security proof.

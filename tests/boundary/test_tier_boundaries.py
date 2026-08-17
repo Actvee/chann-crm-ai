@@ -189,14 +189,43 @@ class TestInfrastructureSafetyBoundary:
                 declared.add(line.split('"')[1])
         assert declared == expected
 
-    def test_cloud_run_public_invocation_is_an_explicit_blocker(self):
+    def test_cloud_run_public_invocation_is_explicit_and_dev_only(self):
         terraform = "\n".join(
             path.read_text(encoding="utf-8")
             for path in sorted((ROOT / "infrastructure/terraform").glob("*.tf"))
         )
-        assert "invoker_iam_disabled" not in terraform
+        variables = (ROOT / "infrastructure/terraform/variables.tf").read_text(
+            encoding="utf-8"
+        )
+        plan_gate = (ROOT / "scripts/dev-infra-plan.sh").read_text(encoding="utf-8")
+        assert terraform.count(
+            "invoker_iam_disabled = "
+            "var.dev_reduced_security_disable_invoker_iam_check"
+        ) == 3
+        assert (
+            '!var.dev_reduced_security_disable_invoker_iam_check || '
+            'var.environment == "dev"'
+        ) in terraform
+        variable_start = variables.index(
+            'variable "dev_reduced_security_disable_invoker_iam_check"'
+        )
+        next_block = variables.find('\nvariable "', variable_start + 1)
+        variable_block = variables[
+            variable_start:next_block if next_block != -1 else None
+        ]
+        assert "default     = false" in variable_block
+        assert "required_public_services" in plan_gate
+        assert 'after.get("invoker_iam_disabled") is not True' in plan_gate
         assert 'member = "allUsers"' not in terraform
-        assert "BLOCKED_NOT_CONFIGURED_NO_IAM_SCOPE" in terraform
+
+        examples = ROOT / "infrastructure/terraform/envs"
+        assert "dev_reduced_security_disable_invoker_iam_check = true" in (
+            examples / "dev/terraform.tfvars.example"
+        ).read_text(encoding="utf-8")
+        for environment in ("stage", "production"):
+            assert "dev_reduced_security_disable_invoker_iam_check = false" in (
+                examples / environment / "terraform.tfvars.example"
+            ).read_text(encoding="utf-8")
 
     def test_cloud_run_images_are_digest_inputs_and_existing_connector_is_reused(self):
         terraform = (ROOT / "infrastructure/terraform/cloud_run.tf").read_text(

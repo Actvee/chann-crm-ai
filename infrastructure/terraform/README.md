@@ -64,12 +64,17 @@ application-owned resource types:
   until a file phase requires it and preflight proves the chosen name absent.
 
 No IAM policy/binding, Service Account, or Secret Manager resource is declared.
-Cloud Run therefore remains authenticated by default. Presentation and LINE
-webhook traffic require a separately approved public-invocation decision; this
-root neither grants `allUsers` nor disables the Cloud Run invoker IAM check.
-Do not apply the otherwise-valid resources until that access decision is
-resolved, because deployment without runtime reachability is not Phase 1
-acceptance.
+The approved DEV capability-limited exception sets
+`dev_reduced_security_disable_invoker_iam_check = true` for all three Cloud Run
+services. Application-layer controls remain mandatory: LINE signatures/JWT in
+Application and the shared internal secret in Data. A lifecycle precondition
+blocks this exception outside DEV, and the DEV plan gate rejects a service
+whose planned `invoker_iam_disabled` value is not explicitly true. Stage and
+Production examples keep the value false. This is reproducible lifecycle proof
+with a declared security limitation, not production-grade service isolation.
+Cloud Run documents that disabling this check still requires the operator to
+possess `run.services.setIamPolicy`; that capability is not inspected here. A
+future DEV apply must stop on a permission error rather than widening IAM scope.
 
 The database password and reduced-security runtime secrets are sensitive
 Terraform inputs, but Terraform state still stores them. This is an explicit

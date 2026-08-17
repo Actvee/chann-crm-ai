@@ -132,8 +132,10 @@ closure. The following source-only work was added without calling GCP:
 - optional private/versioned GCS bucket, disabled by default in Phase 1;
 - exact plan allowlist for only database, database user, Cloud Run, and the
   optional bucket;
-- executable checks preserving all existing infrastructure as data sources and
-  prohibiting IAM/Service Account/Secret Manager/public-invoker configuration.
+- executable checks preserving all existing infrastructure as data sources and,
+  at this checkpoint, prohibiting IAM/Service Account/Secret Manager and
+  public-invoker configuration. The later approved DEV-only invocation
+  exception is documented below.
 
 Post-change local evidence:
 
@@ -150,10 +152,11 @@ Post-change local evidence:
 
 1. A new app-specific Terraform-state bucket is required. Creating it is a
    cloud mutation and needs approval before execution.
-2. Presentation, Application-to-Data, and LINE webhook traffic need an agreed
-   Cloud Run invocation mode. The current
-   scope prohibits IAM inspection/modification, so the public-access mechanism
-   is a blocking scope decision.
+2. The DEV invocation decision is resolved: the approved capability-limited
+   mode disables the Cloud Run Invoker IAM check for all three services and
+   retains application-layer controls. Terraform blocks that exception outside
+   DEV. Stage/Production invocation remains unresolved and no IAM scope was
+   added.
 3. Production Artifact Registry is absent.
 4. LINE channel secrets/access tokens x3 and LIFF IDs x3 remain
    `REQUIRED_NOT_CONFIGURED`.

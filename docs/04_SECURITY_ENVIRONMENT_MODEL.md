@@ -82,6 +82,19 @@ May use controlled reduced-security conveniences when necessary for fast develop
 - they cannot silently propagate into target secure Production policy;
 - the exception is reproducible and documented.
 
+For the approved Chann CRM AI Phase 1 DEV bootstrap, all three Cloud Run
+services disable the platform Invoker IAM check through an explicit Terraform
+input. This avoids IAM policy changes in capability-limited mode. Presentation
+and the Application webhook/API are intentionally reachable; Data still
+requires the internal shared secret on protected endpoints. The Terraform
+lifecycle and plan gates prohibit this exception from silently propagating to
+Stage or Production.
+
+This service setting does not declare an IAM policy resource, but Cloud Run may
+still require the executing principal to hold `run.services.setIamPolicy`.
+Capability is intentionally not inspected; a permission failure blocks the
+DEV apply and does not authorize IAM investigation or remediation.
+
 ### Stage/Test
 
 Should resemble target Production behavior as closely as project constraints permit. In a real project, Stage should use the same authentication model intended for Production. In this reference proof, Stage used the test identity exception and must therefore be classified as PROVEN_WITH_LIMITATIONS for security.

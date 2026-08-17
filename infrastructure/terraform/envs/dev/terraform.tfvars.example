@@ -12,6 +12,7 @@ application_database_user = "chann_crm_ai_app"
 database_password          = "REQUIRED_NOT_CONFIGURED_MIN_24_CHARS"
 
 enable_cloud_run_services = true
+dev_reduced_security_disable_invoker_iam_check = true
 cloud_run_min_instances   = 0
 cloud_run_max_instances   = 2
 platform_version          = "REQUIRED_IMMUTABLE_RELEASE_VERSION"
