@@ -5,6 +5,7 @@
 # It never runs apply/import and rejects plans that touch IAM, service
 # accounts, Secret Manager, or delete/replace a managed resource.
 set -Eeuo pipefail
+umask 077
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TF_ROOT="${ROOT}/infrastructure/terraform"
@@ -16,6 +17,12 @@ RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
 OUTPUT_DIR="${CHANN_PLAN_OUTPUT_DIR:-${ROOT}/.artifacts/dev-infra-plan-${RUN_ID}}"
 EVIDENCE_FILE="${OUTPUT_DIR}/preflight-evidence.json"
 PLAN_FILE="${OUTPUT_DIR}/dev.tfplan"
+SENSITIVE_PLAN_JSON="${OUTPUT_DIR}/plan.json"
+
+cleanup_sensitive_plan_json() {
+  rm -f "${SENSITIVE_PLAN_JSON}"
+}
+trap cleanup_sensitive_plan_json EXIT
 
 fail() {
   printf 'STATUS=BLOCKED\nREASON=%s\n' "$1" >&2
@@ -88,15 +95,16 @@ plan_rc=$?
 set -e
 [[ "${plan_rc}" -eq 0 || "${plan_rc}" -eq 2 ]] || fail "terraform_plan_failed" "${plan_rc}"
 
-terraform -chdir="${TF_ROOT}" show -json "${PLAN_FILE}" >"${OUTPUT_DIR}/plan.json"
+terraform -chdir="${TF_ROOT}" show -json "${PLAN_FILE}" >"${SENSITIVE_PLAN_JSON}"
 terraform -chdir="${TF_ROOT}" show -no-color "${PLAN_FILE}" >"${OUTPUT_DIR}/plan.txt"
 
-python3 - "${OUTPUT_DIR}/plan.json" <<'PY'
+python3 - "${SENSITIVE_PLAN_JSON}" "${OUTPUT_DIR}/plan-policy-summary.json" <<'PY'
 import json
 import pathlib
 import sys
 
 plan = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+summary_path = pathlib.Path(sys.argv[2])
 forbidden_fragments = ("_iam", "service_account", "secret_manager")
 allowed_managed_types = {
     "google_sql_database",
@@ -118,6 +126,7 @@ required_public_services = {
 }
 counts = {}
 observed_addresses = set()
+managed_resources = []
 for change in plan.get("resource_changes", []):
     resource_type = change.get("type", "")
     mode = change.get("mode")
@@ -125,6 +134,11 @@ for change in plan.get("resource_changes", []):
     address = change.get("address", "")
     if mode == "managed":
         observed_addresses.add(address)
+        managed_resources.append({
+            "address": address,
+            "type": resource_type,
+            "actions": actions,
+        })
     if mode == "managed" and any(fragment in resource_type for fragment in forbidden_fragments):
         raise SystemExit(f"BLOCKED forbidden managed resource type: {resource_type}")
     if mode == "managed" and resource_type not in allowed_managed_types:
@@ -147,10 +161,25 @@ if missing:
 
 print("PLAN_POLICY=PASS")
 print("PLAN_ACTION_COUNTS=" + json.dumps(counts, sort_keys=True, separators=(",", ":")))
+summary = {
+    "policy": "PASS",
+    "contains_sensitive_values": False,
+    "action_counts": counts,
+    "managed_resources": sorted(managed_resources, key=lambda item: item["address"]),
+    "verified_reduced_security_public_services": sorted(required_public_services),
+}
+summary_path.write_text(
+    json.dumps(summary, indent=2, sort_keys=True) + "\n",
+    encoding="utf-8",
+)
 PY
 
-(cd "${OUTPUT_DIR}" && sha256sum preflight-evidence.json plan.json plan.txt dev.tfplan >SHA256SUMS)
+rm -f "${SENSITIVE_PLAN_JSON}"
+(cd "${OUTPUT_DIR}" && sha256sum preflight-evidence.json plan-policy-summary.json plan.txt dev.tfplan >SHA256SUMS)
 printf 'STATUS=DEV_PLAN_PASS_NOT_APPLIED\n'
 printf 'PLAN_SUMMARY=%s\n' "${OUTPUT_DIR}/plan.txt"
-printf 'PLAN_POLICY_JSON=%s\n' "${OUTPUT_DIR}/plan.json"
+printf 'PLAN_POLICY_SUMMARY=%s\n' "${OUTPUT_DIR}/plan-policy-summary.json"
+printf 'SENSITIVE_BINARY_PLAN=%s\n' "${PLAN_FILE}"
+printf 'DO_NOT_UPLOAD_BINARY_PLAN=YES\n'
+printf 'RAW_PLAN_JSON_RETAINED=NO\n'
 printf 'CHECKSUMS=%s\n' "${OUTPUT_DIR}/SHA256SUMS"

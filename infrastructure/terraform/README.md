@@ -25,6 +25,13 @@ backend, and writes a human-readable plan plus policy/checksum evidence. It
 refuses non-DEV input, placeholders, deletes/replacements, and any planned IAM,
 service-account, or Secret Manager resource.
 
+The runner uses a private process umask, deletes the raw JSON plan immediately
+after policy evaluation, and emits a redacted `plan-policy-summary.json` for
+review. The saved binary plan remains sensitive because Terraform plans can
+contain credentials; keep it local with mode `0600` and never upload it. A
+subsequent approved apply must use the exact reviewed binary plan or create and
+review a new one.
+
 It contains no apply/import path. The expected invocation, after the new
 state bucket has been separately approved/created and the two `.example`
 files have been copied and filled, is:

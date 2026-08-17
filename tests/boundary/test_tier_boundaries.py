@@ -263,6 +263,16 @@ class TestInfrastructureSafetyBoundary:
         assert "allowed_managed_types" in script
         assert "required_addresses" in script
 
+    def test_dev_plan_evidence_does_not_retain_raw_sensitive_json(self):
+        script = (ROOT / "scripts/dev-infra-plan.sh").read_text(encoding="utf-8")
+        assert "umask 077" in script
+        assert "cleanup_sensitive_plan_json" in script
+        assert 'rm -f "${SENSITIVE_PLAN_JSON}"' in script
+        assert "plan-policy-summary.json" in script
+        assert "RAW_PLAN_JSON_RETAINED=NO" in script
+        assert "DO_NOT_UPLOAD_BINARY_PLAN=YES" in script
+        assert "PLAN_POLICY_JSON=" not in script
+
 
 class TestConfigurationContract:
     @pytest.mark.parametrize(

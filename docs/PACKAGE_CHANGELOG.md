@@ -76,3 +76,13 @@ Changes made to remove ambiguity before handing the project to a new AI:
    invocation setting before the plan gate can pass.
 4. Preserved application-layer LINE signature, JWT, and internal shared-secret
    controls and documented that this is not a Production security proof.
+
+## Phase 1 DEV Terraform plan evidence hardening — 2026-08-17
+
+1. Set a private `umask 077` before creating DEV plan artifacts.
+2. Delete raw Terraform plan JSON after policy evaluation because it can carry
+   sensitive values even when the console rendering redacts them.
+3. Emit a value-free policy summary containing only resource addresses, types,
+   actions, counts, and the verified DEV invocation-mode addresses.
+4. Retain the binary plan only as a local `0600` artifact and mark it explicitly
+   as sensitive and prohibited from upload.
