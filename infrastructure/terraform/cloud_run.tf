@@ -11,8 +11,10 @@ locals {
     GIT_COMMIT       = var.git_commit
   }
 
+  cloud_sql_unix_socket = "/cloudsql/${data.google_sql_database_instance.primary.connection_name}"
+
   data_runtime_env = merge(local.common_runtime_env, {
-    DATABASE_URL = "postgresql+psycopg://${urlencode(google_sql_user.application.name)}:${urlencode(var.database_password)}@${data.google_sql_database_instance.primary.private_ip_address}:5432/${google_sql_database.application.name}"
+    DATABASE_URL = "postgresql+psycopg://${urlencode(google_sql_user.application.name)}:${urlencode(var.database_password)}@/${google_sql_database.application.name}?host=${urlencode(local.cloud_sql_unix_socket)}"
     REDIS_URL    = "redis://${data.google_redis_instance.cache.host}:${data.google_redis_instance.cache.port}/0"
     ADMIN_SECRET = var.admin_secret
   })
@@ -61,6 +63,7 @@ resource "google_cloud_run_v2_service" "data" {
   template {
     max_instance_request_concurrency = 80
     timeout                          = "300s"
+    execution_environment            = "EXECUTION_ENVIRONMENT_GEN2"
 
     scaling {
       min_instance_count = var.cloud_run_min_instances
@@ -86,12 +89,24 @@ resource "google_cloud_run_v2_service" "data" {
         }
       }
 
+      volume_mounts {
+        name       = "cloudsql"
+        mount_path = "/cloudsql"
+      }
+
       dynamic "env" {
         for_each = nonsensitive(toset(keys(local.data_runtime_env)))
         content {
           name  = env.value
           value = local.data_runtime_env[env.value]
         }
+      }
+    }
+
+    volumes {
+      name = "cloudsql"
+      cloud_sql_instance {
+        instances = [data.google_sql_database_instance.primary.connection_name]
       }
     }
   }
@@ -102,8 +117,8 @@ resource "google_cloud_run_v2_service" "data" {
       error_message = "image_digests must contain data, application, and presentation digest-pinned images."
     }
     precondition {
-      condition     = data.google_sql_database_instance.primary.private_ip_address != ""
-      error_message = "The reused Cloud SQL instance must expose a private IP for connector-based access."
+      condition     = data.google_sql_database_instance.primary.connection_name != ""
+      error_message = "The reused Cloud SQL instance must expose an instance connection name for the Cloud Run Unix socket."
     }
     precondition {
       condition     = var.platform_version != "" && var.git_commit != ""

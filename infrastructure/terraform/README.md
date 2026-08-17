@@ -92,6 +92,14 @@ Full LIFF app IDs are passed only to Presentation for `liff.init()`. Application
 receives the separate LINE Login Channel ID used as the expected ID-token
 audience; these identifiers are not interchangeable.
 
+The reused DEV Cloud SQL instance has no private IP. Data therefore uses the
+Cloud Run Cloud SQL volume and `/cloudsql/<connection-name>` Unix socket rather
+than mutating the existing instance. This path uses the managed Cloud SQL Auth
+Proxy and keeps the database password as the PostgreSQL credential. Runtime
+connectivity still requires the execution identity's existing Cloud SQL Client
+capability; that IAM capability is deliberately not inspected or changed here
+and remains a runtime acceptance gate.
+
 Switching a resource from `data` to `resource` later is a deliberate decision
 to take ownership, not a default.
 

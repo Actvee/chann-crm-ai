@@ -236,6 +236,16 @@ class TestInfrastructureSafetyBoundary:
         for tier in ("data", "application", "presentation"):
             assert f'image = var.image_digests["{tier}"]' in terraform
 
+    def test_data_cloud_run_uses_cloud_sql_unix_socket_without_mutating_instance(self):
+        terraform = (ROOT / "infrastructure/terraform/cloud_run.tf").read_text(
+            encoding="utf-8"
+        )
+        assert terraform.count('cloud_sql_instance {') == 1
+        assert 'mount_path = "/cloudsql"' in terraform
+        assert "data.google_sql_database_instance.primary.connection_name" in terraform
+        assert 'execution_environment            = "EXECUTION_ENVIRONMENT_GEN2"' in terraform
+        assert "private_ip_address" not in terraform
+
     def test_runtime_secrets_are_sensitive_and_real_tfvars_are_ignored(self):
         variables = (ROOT / "infrastructure/terraform/variables.tf").read_text(
             encoding="utf-8"

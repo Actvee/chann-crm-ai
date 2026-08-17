@@ -104,3 +104,12 @@ Changes made to remove ambiguity before handing the project to a new AI:
    LIFF app inside that channel.
 3. Added a sensitive Terraform input and boundary coverage for the expected
    LINE Login Channel ID.
+
+## Phase 1 DEV Cloud SQL connectivity correction — 2026-08-17
+
+1. Replaced the disproven private-IP assumption with the Cloud Run Cloud SQL
+   Unix-socket volume for the Data Tier.
+2. Kept the existing Cloud SQL instance reference-only and made no instance,
+   VPC, IAM, Service Account, or Secret Manager change.
+3. Declared the existing execution identity's Cloud SQL Client capability as a
+   runtime acceptance gate; it is not inspected or widened by this change.
