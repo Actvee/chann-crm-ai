@@ -43,6 +43,7 @@
 | `LINE_SALES_CHANNEL_ACCESS_TOKEN` | REQUIRED_NOT_CONFIGURED | push/reply Sales OA |
 | `LINE_TECHNICIAN_CHANNEL_SECRET` | REQUIRED_NOT_CONFIGURED | verify Technician OA webhook |
 | `LINE_TECHNICIAN_CHANNEL_ACCESS_TOKEN` | REQUIRED_NOT_CONFIGURED | push/reply Technician OA |
+| `LINE_LOGIN_CHANNEL_ID` | REQUIRED_NOT_CONFIGURED | expected ID-token audience (`client_id`); Channel ID, not full LIFF app ID |
 | `OPENROUTER_API_KEY` | REQUIRED_NOT_CONFIGURED | OpenRouter access |
 | `OPENROUTER_MODEL` | REQUIRED_NOT_CONFIGURED | default Qwen model selector |
 | `OPENROUTER_MODEL_REASONING` | OPTIONAL_UNTIL_PHASE_17 | DeepSeek reasoning model selector |

@@ -162,6 +162,13 @@ variable "liff_ids" {
   }
 }
 
+variable "line_login_channel_id" {
+  type        = string
+  description = "Expected LINE Login channel ID (ID-token audience), not a full LIFF app ID."
+  sensitive   = true
+  default     = ""
+}
+
 variable "openrouter_api_key" {
   type        = string
   description = "Optional in Phase 1; required when the Phase 4 AI path is enabled."

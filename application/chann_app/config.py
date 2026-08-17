@@ -23,10 +23,9 @@ class Settings(BaseSettings):
     line_technician_channel_secret: str = ""
     line_technician_channel_access_token: str = ""
 
-    # LIFF
-    next_public_liff_customer_id: str = ""
-    next_public_liff_sales_id: str = ""
-    next_public_liff_technician_id: str = ""
+    # LINE Login channel used as the expected ID-token audience. Full LIFF app
+    # IDs belong only in Presentation for liff.init().
+    line_login_channel_id: str = ""
 
     # Platform Admin auth
     jwt_secret: str = ""

@@ -242,7 +242,7 @@ class TestInfrastructureSafetyBoundary:
         )
         gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
         for variable in ("database_password", "admin_secret", "jwt_secret",
-                         "line_credentials", "liff_ids",
+                         "line_credentials", "liff_ids", "line_login_channel_id",
                          "openrouter_api_key"):
             block_start = variables.index(f'variable "{variable}"')
             next_block = variables.find('\nvariable "', block_start + 1)

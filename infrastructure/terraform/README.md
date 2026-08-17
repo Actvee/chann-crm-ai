@@ -88,6 +88,10 @@ secrets are sensitive Terraform inputs, but Terraform state still stores them. T
 project limitation, not equivalent to Secret Manager. Never commit the real
 `terraform.tfvars` or backend file; repository ignore rules cover both.
 
+Full LIFF app IDs are passed only to Presentation for `liff.init()`. Application
+receives the separate LINE Login Channel ID used as the expected ID-token
+audience; these identifiers are not interchangeable.
+
 Switching a resource from `data` to `resource` later is a deliberate decision
 to take ownership, not a default.
 

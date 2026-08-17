@@ -93,3 +93,14 @@ Changes made to remove ambiguity before handing the project to a new AI:
    evidence cannot expose environment identifiers.
 2. Extended the boundary contract so future changes cannot silently remove this
    protection.
+
+## Phase 1 LINE Login audience correction — 2026-08-17
+
+1. Separated full LIFF app IDs used by Presentation `liff.init()` from the
+   LINE Login Channel ID required as `client_id` by server-side ID-token
+   verification.
+2. Kept customer, sales, and technician routing as application authorization
+   context; an ID token's `aud` proves the LINE Login channel, not a specific
+   LIFF app inside that channel.
+3. Added a sensitive Terraform input and boundary coverage for the expected
+   LINE Login Channel ID.

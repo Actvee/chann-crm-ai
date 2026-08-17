@@ -19,11 +19,9 @@ class LiffTokenInvalid(Exception):
 
 
 def _channel_id_for(audience: str) -> str:
-    return {
-        "customer": settings.next_public_liff_customer_id,
-        "sales": settings.next_public_liff_sales_id,
-        "technician": settings.next_public_liff_technician_id,
-    }.get(audience, "")
+    if audience not in {"customer", "sales", "technician"}:
+        return ""
+    return settings.line_login_channel_id
 
 
 async def verify_id_token(id_token: str, audience: str,
@@ -33,7 +31,7 @@ async def verify_id_token(id_token: str, audience: str,
 
     channel_id = _channel_id_for(audience)
     if not channel_id:
-        raise LiffTokenInvalid(f"LIFF channel id for {audience} is REQUIRED_NOT_CONFIGURED")
+        raise LiffTokenInvalid("LINE Login channel id is REQUIRED_NOT_CONFIGURED")
 
     owns_client = client is None
     client = client or httpx.AsyncClient(timeout=10.0)

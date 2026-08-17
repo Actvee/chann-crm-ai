@@ -43,9 +43,7 @@ def required_configuration_missing() -> list[str]:
             "line_customer_channel_access_token",
             "line_sales_channel_access_token",
             "line_technician_channel_access_token",
-            "next_public_liff_customer_id",
-            "next_public_liff_sales_id",
-            "next_public_liff_technician_id",
+            "line_login_channel_id",
             "admin_secret",
             "jwt_secret",
         )

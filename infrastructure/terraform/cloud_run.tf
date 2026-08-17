@@ -27,9 +27,7 @@ locals {
     LINE_SALES_CHANNEL_ACCESS_TOKEN      = var.line_credentials.sales.channel_access_token
     LINE_TECHNICIAN_CHANNEL_SECRET       = var.line_credentials.technician.channel_secret
     LINE_TECHNICIAN_CHANNEL_ACCESS_TOKEN = var.line_credentials.technician.channel_access_token
-    NEXT_PUBLIC_LIFF_CUSTOMER_ID         = var.liff_ids.customer
-    NEXT_PUBLIC_LIFF_SALES_ID            = var.liff_ids.sales
-    NEXT_PUBLIC_LIFF_TECHNICIAN_ID       = var.liff_ids.technician
+    LINE_LOGIN_CHANNEL_ID                = var.line_login_channel_id
     OPENROUTER_API_KEY                   = var.openrouter_api_key
     OPENROUTER_MODEL                     = var.openrouter_model
   })
@@ -181,9 +179,9 @@ resource "google_cloud_run_v2_service" "application" {
             credentials.channel_access_token != "",
           ]
         ])),
-        alltrue([for _, id in var.liff_ids : id != ""]),
+        var.line_login_channel_id != "",
       ])
-      error_message = "Application runtime requires ADMIN/JWT secrets, all three LINE credentials, and all three LIFF IDs."
+      error_message = "Application runtime requires ADMIN/JWT secrets, all three LINE credentials, and the LINE Login channel ID."
     }
   }
 

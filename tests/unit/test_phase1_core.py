@@ -234,12 +234,12 @@ class TestLiffAuthentication:
 
     @pytest.mark.asyncio
     async def test_line_verified_token_is_accepted(self, monkeypatch):
-        monkeypatch.setattr(application_settings, "next_public_liff_customer_id", "123-liff")
+        monkeypatch.setattr(application_settings, "line_login_channel_id", "1234567890")
 
         async def handler(request: httpx.Request) -> httpx.Response:
             form = parse_qs(request.content.decode())
             assert form["id_token"] == ["a.b.c"]
-            assert form["client_id"] == ["123-liff"]
+            assert form["client_id"] == ["1234567890"]
             return httpx.Response(200, json={"sub": "U123", "name": "Test"})
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
@@ -248,7 +248,7 @@ class TestLiffAuthentication:
 
     @pytest.mark.asyncio
     async def test_line_rejected_token_is_rejected(self, monkeypatch):
-        monkeypatch.setattr(application_settings, "next_public_liff_customer_id", "123-liff")
+        monkeypatch.setattr(application_settings, "line_login_channel_id", "1234567890")
 
         async def handler(_request: httpx.Request) -> httpx.Response:
             return httpx.Response(400, json={"error": "invalid"})
