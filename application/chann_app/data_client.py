@@ -8,12 +8,16 @@ executable rather than aspirational.
 from __future__ import annotations
 
 import httpx
+from urllib.parse import quote
 
 from .config import settings
 
 
 class DataTierError(RuntimeError):
-    pass
+    def __init__(self, status_code: int, detail: str):
+        super().__init__(f"data tier returned {status_code}: {detail[:200]}")
+        self.status_code = status_code
+        self.detail = detail[:200]
 
 
 class DataClient:
@@ -60,6 +64,105 @@ class DataClient:
             return None
         return self._unwrap(resp)
 
+    async def authorization_context(self, license_id: str, chann_uid: str) -> dict | None:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/authorization/{chann_uid}",
+            headers=self._headers,
+        )
+        if resp.status_code == 404:
+            return None
+        return self._unwrap(resp)
+
+    async def list_roles(self, license_id: str) -> list[dict]:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/roles", headers=self._headers
+        )
+        return self._unwrap(resp)
+
+    async def create_role(self, license_id: str, payload: dict) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/roles",
+            headers=self._headers,
+            json=payload,
+        )
+        return self._unwrap(resp)
+
+    async def update_role(self, license_id: str, role_name: str, payload: dict) -> dict:
+        resp = await self._client.patch(
+            f"{self._base}/internal/v1/licenses/{license_id}/roles/{quote(role_name, safe='')}",
+            headers=self._headers,
+            json=payload,
+        )
+        return self._unwrap(resp)
+
+    async def delete_role(self, license_id: str, role_name: str) -> None:
+        resp = await self._client.delete(
+            f"{self._base}/internal/v1/licenses/{license_id}/roles/{quote(role_name, safe='')}",
+            headers=self._headers,
+        )
+        if resp.status_code not in (200, 204):
+            self._unwrap(resp)
+
+    async def set_member_role(self, license_id: str, chann_uid: str, role_name: str) -> dict:
+        resp = await self._client.patch(
+            f"{self._base}/internal/v1/licenses/{license_id}/members/{chann_uid}/role",
+            headers=self._headers,
+            json={"role_name": role_name},
+        )
+        return self._unwrap(resp)
+
+    async def list_license_settings(self, license_id: str) -> list[dict]:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/settings", headers=self._headers
+        )
+        return self._unwrap(resp)
+
+    async def put_license_setting(self, license_id: str, key: str, value) -> dict:
+        resp = await self._client.put(
+            f"{self._base}/internal/v1/licenses/{license_id}/settings/{quote(key, safe='')}",
+            headers=self._headers,
+            json={"setting_value": value},
+        )
+        return self._unwrap(resp)
+
+    async def delete_license_setting(self, license_id: str, key: str) -> None:
+        resp = await self._client.delete(
+            f"{self._base}/internal/v1/licenses/{license_id}/settings/{quote(key, safe='')}",
+            headers=self._headers,
+        )
+        if resp.status_code not in (200, 204):
+            self._unwrap(resp)
+
+    async def request_ownership_transfer(
+        self, license_id: str, from_chann_uid: str, to_chann_uid: str
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/ownership-transfers",
+            headers=self._headers,
+            json={"from_chann_uid": from_chann_uid, "to_chann_uid": to_chann_uid},
+        )
+        return self._unwrap(resp)
+
+    async def accept_ownership_transfer(
+        self, license_id: str, transfer_id: str, accepting_chann_uid: str
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/ownership-transfers/{transfer_id}/accept",
+            headers=self._headers,
+            json={"accepting_chann_uid": accepting_chann_uid},
+        )
+        return self._unwrap(resp)
+
+    async def force_transfer_owner(
+        self, license_id: str, target_chann_uid: str
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/platform/licenses/{license_id}/break-glass/transfer-owner",
+            headers=self._headers,
+            json={"target_chann_uid": target_chann_uid},
+        )
+        return self._unwrap(resp)
+
     async def authenticate_platform_admin(self, username: str, password: str) -> dict | None:
         resp = await self._client.post(
             f"{self._base}/internal/v1/platform-admins/authenticate",
@@ -100,7 +203,11 @@ class DataClient:
     @staticmethod
     def _unwrap(resp: httpx.Response):
         if resp.status_code >= 400:
-            raise DataTierError(f"data tier returned {resp.status_code}: {resp.text[:200]}")
+            try:
+                detail = str(resp.json().get("detail", resp.text))
+            except Exception:
+                detail = resp.text
+            raise DataTierError(resp.status_code, detail)
         return resp.json()
 
     async def aclose(self) -> None:

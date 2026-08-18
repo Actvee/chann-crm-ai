@@ -12,10 +12,15 @@ export class ApplicationError extends Error {
   }
 }
 
-export async function callApplication<T>(
+export type ApplicationResponse<T> = {
+  data: T;
+  status: number;
+};
+
+export async function callApplicationResponse<T>(
   path: string,
   init: RequestInit = {},
-): Promise<T> {
+): Promise<ApplicationResponse<T>> {
   if (!path.startsWith("/api/v1")) {
     throw new Error(
       `Presentation may only call the Application Tier /api/v1 surface, got: ${path}`,
@@ -29,5 +34,15 @@ export async function callApplication<T>(
   if (!res.ok) {
     throw new ApplicationError(res.status);
   }
-  return (await res.json()) as T;
+  if (res.status === 204) {
+    return { data: undefined as T, status: res.status };
+  }
+  return { data: (await res.json()) as T, status: res.status };
+}
+
+export async function callApplication<T>(
+  path: string,
+  init: RequestInit = {},
+): Promise<T> {
+  return (await callApplicationResponse<T>(path, init)).data;
 }

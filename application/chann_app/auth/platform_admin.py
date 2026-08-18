@@ -41,6 +41,7 @@ def issue_token(admin_id: str, username: str, session_id: str | None = None) -> 
         "sub": admin_id,
         "username": username,
         "scope": "platform.admin.access",
+        "permissions": ["platform.admin.access", "platform.admin.break_glass"],
         "jti": session_id or str(uuid.uuid4()),
         "iat": now,
         "exp": now + dt.timedelta(seconds=settings.jwt_ttl_s),

@@ -178,6 +178,319 @@ class TestTenantIsolationThroughDataApi:
         finally:
             app.dependency_overrides.clear()
 
+
+def _phase2_tenant(session, *, suffix: str | None = None):
+    from chann_data.models import ChannIdentity, CustomRole, License, LicenseMember, RolePermission
+    from chann_data.permissions import DEFAULT_ROLE_TEMPLATES
+
+    suffix = suffix or uuid.uuid4().hex[:8]
+    license_row = License(
+        id=uuid.uuid4(), license_code=f"P2{suffix}", company_name=f"Phase2 {suffix}"
+    )
+    owner_identity = ChannIdentity(
+        chann_uid=f"CHN-S-{uuid.uuid4().hex[:8]}",
+        line_user_id=f"U{uuid.uuid4().hex}",
+        primary_role="sales",
+    )
+    member_identity = ChannIdentity(
+        chann_uid=f"CHN-S-{uuid.uuid4().hex[:8]}",
+        line_user_id=f"U{uuid.uuid4().hex}",
+        primary_role="sales",
+    )
+    session.add_all([license_row, owner_identity, member_identity])
+    session.flush()
+    owner_member = LicenseMember(
+        id=uuid.uuid4(),
+        license_id=license_row.id,
+        chann_uid=owner_identity.chann_uid,
+        role="owner",
+    )
+    member = LicenseMember(
+        id=uuid.uuid4(),
+        license_id=license_row.id,
+        chann_uid=member_identity.chann_uid,
+        role="member",
+    )
+    session.add_all([owner_member, member])
+    for role_name, permission_keys in DEFAULT_ROLE_TEMPLATES.items():
+        session.add(
+            CustomRole(
+                id=uuid.uuid4(),
+                license_id=license_row.id,
+                role_name=role_name,
+                is_owner=role_name == "owner",
+            )
+        )
+        session.flush()
+        if permission_keys is not None:
+            session.add_all(
+                RolePermission(
+                    id=uuid.uuid4(),
+                    license_id=license_row.id,
+                    role=role_name,
+                    permission_key=key,
+                    allowed=True,
+                )
+                for key in permission_keys
+            )
+    session.flush()
+    return license_row, owner_member, member
+
+
+class TestPhase2MigrationAndSeed:
+    def test_phase2_tables_exist(self, migrated_db):
+        from sqlalchemy import inspect
+
+        tables = set(inspect(migrated_db).get_table_names())
+        assert {
+            "custom_roles",
+            "role_permissions",
+            "license_settings",
+            "ownership_transfers",
+        } <= tables
+
+    def test_seed_creates_four_templates_per_existing_tenant_without_overwrite(self, migrated_db):
+        from sqlalchemy import func, select
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import CustomRole, License
+
+        first = _run_seed({"APP_ENV": "dev"})
+        second = _run_seed({"APP_ENV": "dev"})
+        assert first.returncode == second.returncode == 0
+        with Session(migrated_db) as session:
+            licenses = list(session.execute(select(License)).scalars())
+            for license_row in licenses:
+                count = session.execute(
+                    select(func.count()).select_from(CustomRole).where(
+                        CustomRole.license_id == license_row.id
+                    )
+                ).scalar_one()
+                assert count >= 4
+
+    def test_default_cs_and_member_permissions_match_business_split(self, migrated_db):
+        from sqlalchemy.orm import Session
+
+        from chann_data.repositories.phase2 import RoleRepository
+        from chann_data.repositories.tenant_scope import TenantScope
+
+        with Session(migrated_db) as session:
+            license_row, _, _ = _phase2_tenant(session)
+            scope = TenantScope(license_row.id)
+            cs = RoleRepository(session).permission_keys(scope, "cs")
+            member = RoleRepository(session).permission_keys(scope, "member")
+            assert "ticket.assign" in cs
+            assert "deal.create" not in cs
+            assert "deal.create" in member
+            assert "ticket.assign" not in member
+            session.rollback()
+
+
+class TestPhase2RoleAndSettingIsolation:
+    def test_custom_role_is_tenant_scoped_and_owner_is_immutable(self, migrated_db):
+        from sqlalchemy.orm import Session
+
+        from chann_data.repositories.phase2 import Phase2Conflict, RoleRepository
+        from chann_data.repositories.tenant_scope import TenantScope
+
+        with Session(migrated_db) as session:
+            license_a, _, _ = _phase2_tenant(session)
+            license_b, _, _ = _phase2_tenant(session)
+            scope_a, scope_b = TenantScope(license_a.id), TenantScope(license_b.id)
+            RoleRepository(session).create(scope_a, "หัวหน้าทีมขาย", {"deal.create"})
+            session.flush()
+            assert RoleRepository(session).get(scope_a, "หัวหน้าทีมขาย") is not None
+            assert RoleRepository(session).get(scope_b, "หัวหน้าทีมขาย") is None
+            with pytest.raises(Phase2Conflict):
+                RoleRepository(session).delete(scope_a, "owner")
+            session.rollback()
+
+    def test_license_settings_are_isolated_and_upsert_by_business_key(self, migrated_db):
+        from sqlalchemy.orm import Session
+
+        from chann_data.repositories.phase2 import LicenseSettingRepository
+        from chann_data.repositories.tenant_scope import TenantScope
+
+        with Session(migrated_db) as session:
+            license_a, _, _ = _phase2_tenant(session)
+            license_b, _, _ = _phase2_tenant(session)
+            repo = LicenseSettingRepository(session)
+            repo.upsert(TenantScope(license_a.id), "chat_sla", {"minutes": 15})
+            repo.upsert(TenantScope(license_a.id), "chat_sla", {"minutes": 10})
+            session.flush()
+            rows_a = repo.list(TenantScope(license_a.id))
+            rows_b = repo.list(TenantScope(license_b.id))
+            assert [(row.setting_key, row.setting_value) for row in rows_a] == [
+                ("chat_sla", {"minutes": 10})
+            ]
+            assert rows_b == []
+            session.rollback()
+
+    def test_duplicate_role_creation_race_has_one_winner(self, migrated_db):
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Barrier
+
+        from sqlalchemy.exc import IntegrityError
+        from sqlalchemy.orm import Session
+
+        from chann_data.repositories.phase2 import RoleRepository
+        from chann_data.repositories.tenant_scope import TenantScope
+
+        with Session(migrated_db) as session:
+            license_row, _, _ = _phase2_tenant(session)
+            license_id = license_row.id
+            session.commit()
+
+        role_name = f"race-{uuid.uuid4().hex[:8]}"
+        barrier = Barrier(2)
+
+        def create_once():
+            with Session(migrated_db) as session:
+                try:
+                    barrier.wait(timeout=10)
+                    RoleRepository(session).create(
+                        TenantScope(license_id), role_name, {"deal.create"}
+                    )
+                    session.commit()
+                    return "created"
+                except IntegrityError:
+                    session.rollback()
+                    return "duplicate"
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda _value: create_once(), range(2)))
+        assert sorted(results) == ["created", "duplicate"]
+
+    def test_data_api_role_grant_is_used_by_authorization_context(
+        self, migrated_db, monkeypatch
+    ):
+        from fastapi.testclient import TestClient
+        from sqlalchemy.orm import Session
+
+        from chann_data.config import settings
+        from chann_data.db import get_session
+        from chann_data.main import app
+
+        with Session(migrated_db) as session:
+            license_row, _, member = _phase2_tenant(session)
+            license_id, member_uid = license_row.id, member.chann_uid
+            session.commit()
+
+        def override_session():
+            with Session(migrated_db) as session:
+                yield session
+
+        monkeypatch.setattr(settings, "admin_secret", "integration-secret")
+        app.dependency_overrides[get_session] = override_session
+        headers = {"X-Internal-Secret": "integration-secret"}
+        try:
+            client = TestClient(app)
+            create = client.post(
+                f"/internal/v1/licenses/{license_id}/roles",
+                headers=headers,
+                json={
+                    "role_name": "หัวหน้าทีมขาย",
+                    "permission_keys": ["deal.create"],
+                },
+            )
+            assert create.status_code == 201, create.text
+            assign = client.patch(
+                f"/internal/v1/licenses/{license_id}/members/{member_uid}/role",
+                headers=headers,
+                json={"role_name": "หัวหน้าทีมขาย"},
+            )
+            assert assign.status_code == 200, assign.text
+            context = client.get(
+                f"/internal/v1/licenses/{license_id}/authorization/{member_uid}",
+                headers=headers,
+            )
+            assert context.status_code == 200, context.text
+            assert context.json()["permission_keys"] == ["deal.create"]
+        finally:
+            app.dependency_overrides.clear()
+
+
+class TestPhase2OwnershipTransfer:
+    def test_two_party_transfer_requires_target_acceptance(self, migrated_db):
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import LicenseMember
+        from chann_data.repositories.phase2 import OwnershipTransferRepository, Phase2Conflict
+        from chann_data.repositories.tenant_scope import TenantScope
+
+        with Session(migrated_db) as session:
+            license_row, owner, member = _phase2_tenant(session)
+            license_id = license_row.id
+            owner_uid, member_uid = owner.chann_uid, member.chann_uid
+            owner_id, member_id = owner.id, member.id
+            session.commit()
+
+        with Session(migrated_db) as session:
+            scope = TenantScope(license_id)
+            transfer = OwnershipTransferRepository(session).request(scope, owner_uid, member_uid)
+            with pytest.raises(Phase2Conflict):
+                OwnershipTransferRepository(session).accept(scope, transfer.id, owner_uid)
+            session.rollback()
+
+        with Session(migrated_db) as session:
+            # The rejected acceptance was rolled back with its request; create
+            # a fresh authoritative request and let the nominated user accept.
+            scope = TenantScope(license_id)
+            transfer = OwnershipTransferRepository(session).request(scope, owner_uid, member_uid)
+            OwnershipTransferRepository(session).accept(scope, transfer.id, member_uid)
+            session.commit()
+            assert session.get(LicenseMember, owner_id).role == "admin"
+            assert session.get(LicenseMember, member_id).role == "owner"
+
+    def test_break_glass_keeps_at_least_one_owner(self, migrated_db):
+        from sqlalchemy import func, select
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import LicenseMember
+        from chann_data.repositories.phase2 import OwnershipTransferRepository
+        from chann_data.repositories.tenant_scope import TenantScope
+
+        with Session(migrated_db) as session:
+            license_row, _, member = _phase2_tenant(session)
+            license_id, target_uid = license_row.id, member.chann_uid
+            OwnershipTransferRepository(session).force(TenantScope(license_id), target_uid)
+            session.commit()
+            owner_count = session.execute(
+                select(func.count()).select_from(LicenseMember).where(
+                    LicenseMember.license_id == license_id,
+                    LicenseMember.role == "owner",
+                )
+            ).scalar_one()
+            assert owner_count == 1
+
+    def test_break_glass_cancels_stale_pending_transfer(self, migrated_db):
+        from sqlalchemy.orm import Session
+
+        from chann_data.repositories.phase2 import (
+            OwnershipTransferRepository,
+            Phase2Conflict,
+        )
+        from chann_data.repositories.tenant_scope import TenantScope
+
+        with Session(migrated_db) as session:
+            license_row, owner, member = _phase2_tenant(session)
+            license_id = license_row.id
+            scope = TenantScope(license_id)
+            transfer = OwnershipTransferRepository(session).request(
+                scope, owner.chann_uid, member.chann_uid
+            )
+            transfer_id = transfer.id
+            target_uid = member.chann_uid
+            OwnershipTransferRepository(session).force(scope, target_uid)
+            session.commit()
+
+        with Session(migrated_db) as session:
+            with pytest.raises(Phase2Conflict):
+                OwnershipTransferRepository(session).accept(
+                    TenantScope(license_id), transfer_id, target_uid
+                )
+
+class TestTenantIsolationCrossProbe:
     def test_license_a_cannot_list_or_probe_license_b(self, migrated_db, monkeypatch):
         from fastapi.testclient import TestClient
         from sqlalchemy.orm import Session

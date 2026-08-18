@@ -54,6 +54,7 @@ export default function LiffShell({ audience, liffId }: { audience: Audience; li
       />
       <h1>Chann CRM AI — {audience}</h1>
       <p>{status}</p>
+      {audience === "sales" && <a href="/liff/sales/roles">จัดการ Role & Permission</a>}
     </main>
   );
 }

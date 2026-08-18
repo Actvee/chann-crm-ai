@@ -209,6 +209,7 @@ class TestPlatformAdminAuth:
         result = await platform_login(LoginIn(username="admin", password="correct"), client)
         claims = decode_token(result.access_token)
         assert claims["scope"] == "platform.admin.access"
+        assert "platform.admin.break_glass" in claims["permissions"]
         assert claims["jti"] == client.created[0]
 
     @pytest.mark.asyncio

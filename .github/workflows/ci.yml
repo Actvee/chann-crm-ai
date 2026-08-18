@@ -102,9 +102,10 @@ jobs:
       - name: Generate manifest
         run: |
           python scripts/release-manifest.py \
-            --phase 1 \
-            --platform-version "0.1.0-${GITHUB_SHA::7}" \
+            --phase 2 \
+            --platform-version "0.2.0-${GITHUB_SHA::7}" \
             --environment dev \
+            --migration-head 0002_phase2_permissions \
             --verification boundary_tests=PASS \
             --verification auth_tests=PASS \
             --verification multi_tenant_isolation=PASS \

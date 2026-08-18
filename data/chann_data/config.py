@@ -21,6 +21,8 @@ class Settings(BaseSettings):
 
     cache_ttl_identity_s: int = 3600     # 1h   per Master Spec 1.8
     cache_ttl_member_s: int = 1800       # 30m  per Master Spec 1.8
+    cache_ttl_permissions_s: int = 300   # Phase 2; invalidate on role/member change
+    cache_ttl_license_setting_s: int = 300
     cache_ttl_admin_session_s: int = 86400  # 24h per Master Spec 1.8
 
     class Config:

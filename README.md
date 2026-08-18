@@ -3,7 +3,9 @@
 Multi-tenant SaaS CRM + Field Service platform on LINE.
 Greenfield application on existing GCP infrastructure.
 
-**Phase 1 — Architecture & Security Foundation. Source foundation in progress, not Done.**
+**Phase 1 DEV is accepted. Phase 2 — Permission Matrix & license_settings is
+implemented in source and remains not Done until source validation, deployment
+and DEV runtime business acceptance pass.**
 See [Evidence state](#evidence-state) for exactly what is and is not proven.
 
 ---
@@ -83,11 +85,13 @@ Vocabulary from `CLAUDE.md` section 10. **CI green is not Feature Complete.**
 | Cache fail-secure (ADR-006) | `PROVEN` — outage never widens permission |
 | LINE signature verification | `PROVEN` — incl. cross-OA replay rejection |
 | Platform Admin auth (argon2 + revocable Redis session) | `PROVEN_LOCAL` |
+| Phase 1 DEV runtime business acceptance | `PROVEN` — LINE reply + valid LIFF, 3/3 OAs |
+| Phase 2 permission matrix / settings / ownership transfer | `SOURCE_IMPLEMENTED_NOT_VERIFIED` |
 | Migration from empty database | `NOT_VERIFIED` — needs `TEST_DATABASE_URL`; runs in CI |
 | Seed idempotency | `NOT_VERIFIED` — same |
 | Cross-tier HTTP smoke | `NOT_VERIFIED` |
 | Browser E2E | `NOT_VERIFIED` |
-| DEV runtime acceptance | `NOT_VERIFIED` — needs LINE credentials |
+| Phase 2 DEV runtime acceptance | `NOT_VERIFIED` |
 | Stage / Production | `REQUIRES_EXPLICIT_APPROVAL` |
 | GCP infrastructure inventory | `PROVEN` — read-only discovery 2026-08-17 |
 | Terraform state ownership | `PROVEN_WITH_LIMITATIONS` — no backend bucket/state available; existing persistent resources remain reference-only |
@@ -109,14 +113,13 @@ Every Release Manifest carries these automatically —
 `scripts/release-manifest.py` injects them rather than trusting a human to
 remember.
 
-## Blocked
+## Current gates
 
 | Item | Blocked on |
 |---|---|
-| First `terraform apply` | New app-specific GCS backend is absent; Terraform root still lacks Cloud Run x3 and DB-user/runtime configuration |
-| Public Cloud Run access | LINE webhook and Presentation require public invocation; IAM change is outside current authorized scope |
 | CI push / promotion | GCP auth method undecided (WIF vs SA key vs Cloud Build) |
-| Phase 1 closure | LINE OA credentials ×3 + LIFF IDs ×3, cross-tier/runtime evidence, Cloud Run x3 |
+| Phase 2 prompt-to-permission AI interpretation | Phase 4 OpenRouter adapter; Phase 2 fails closed unless explicit permission keys are supplied |
+| Phase 2 closure | Source validation, migration/seed plan, selective DEV deploy and runtime role/settings/transfer acceptance |
 | Production anything | Explicit owner approval, per request |
 
 ## Deviations from the handoff package
@@ -149,7 +152,7 @@ Each was a judgement call; reverse any of them if you disagree.
 Run from the repository root in Cloud Shell:
 
 ```bash
-./scripts/phase1-source-verify.sh
+./scripts/phase2-source-verify.sh
 ```
 
 It runs boundary/unit tests, an empty-PostgreSQL migration + idempotent seed,
@@ -159,16 +162,13 @@ Manifest generation. It does not call `gcloud`, plan/apply Terraform, deploy,
 or mutate any cloud resource. A PASS still leaves runtime business acceptance
 `NOT_VERIFIED`.
 
-On success it also creates `chann-crm-ai-phase1-source-verified-*.zip` beside
+On success it also creates `chann-crm-ai-phase2-source-verified-*.zip` beside
 the repository, including the newly generated npm lockfile and verification
 report but excluding local build caches.
 
-The reviewed archive pins Next.js `16.2.11` and React `19.2.8`. The original
-Next.js `15.1.3` pin was removed because it predates current security-fixed
-branches. This review environment could not download the new npm packages, so
-the archive intentionally omits the stale 15.1.3 lockfile. The one-shot script
-generates `presentation/package-lock.json` from the exact direct pins and then
-must prove typecheck/build before that lockfile is committed.
+The reviewed archive pins Next.js `16.2.11` and React `19.2.8`, including the
+matching lockfile. Cloud Shell must still prove `npm ci`, typecheck and build;
+the presence of a lockfile is dependency identity, not execution evidence.
 
 ## Open decisions
 

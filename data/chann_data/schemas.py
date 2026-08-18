@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel
@@ -63,3 +64,59 @@ class HealthOut(BaseModel):
     git_commit: str
     database: str
     cache: str
+
+
+class AuthorizationContextOut(BaseModel):
+    member_id: uuid.UUID
+    chann_uid: str
+    role: str
+    is_owner: bool
+    permission_keys: list[str]
+
+
+class RoleWriteIn(BaseModel):
+    role_name: str
+    permission_keys: list[str]
+
+
+class RoleOut(BaseModel):
+    id: uuid.UUID
+    license_id: uuid.UUID
+    role_name: str
+    is_owner: bool
+    permission_keys: list[str]
+
+
+class MemberRoleIn(BaseModel):
+    role_name: str
+
+
+class LicenseSettingWriteIn(BaseModel):
+    setting_value: dict | list | str | int | float | bool | None
+
+
+class LicenseSettingOut(BaseModel):
+    setting_key: str
+    setting_value: dict | list | str | int | float | bool | None
+
+
+class OwnershipTransferRequestIn(BaseModel):
+    from_chann_uid: str
+    to_chann_uid: str
+
+
+class OwnershipTransferAcceptIn(BaseModel):
+    accepting_chann_uid: str
+
+
+class OwnershipTransferOut(BaseModel):
+    id: uuid.UUID
+    license_id: uuid.UUID
+    from_member_id: uuid.UUID
+    to_member_id: uuid.UUID
+    status: str
+    accepted_at: datetime | None = None
+
+
+class BreakGlassTransferIn(BaseModel):
+    target_chann_uid: str

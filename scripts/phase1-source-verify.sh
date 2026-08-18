@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# Deterministic, non-cloud Phase 1 source verification for Google Cloud Shell.
+# Deterministic, non-cloud source verification for Google Cloud Shell.
 # Creates only temporary local containers/files. It never calls gcloud and
 # never runs terraform plan/apply/import.
 set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
-RESULT_FILE="${ROOT}/phase1-source-verification-${RUN_ID}.txt"
+SOURCE_PHASE="${CHANN_SOURCE_PHASE:-1}"
+MIGRATION_HEAD="$(basename "$(find "${ROOT}/database/alembic/versions" -maxdepth 1 -type f -name '*.py' | sort | tail -1)" .py)"
+RESULT_FILE="${ROOT}/phase${SOURCE_PHASE}-source-verification-${RUN_ID}.txt"
 WORK_DIR="$(mktemp -d)"
 POSTGRES_CONTAINER=""
 TERRAFORM_VERSION="${CHANN_TERRAFORM_VERSION:-1.15.8}"
@@ -41,6 +43,7 @@ log "RUN_ID=${RUN_ID}"
 log "NO_GCLOUD_CALLS=YES"
 log "NO_TERRAFORM_PLAN_APPLY_IMPORT=YES"
 log "RUNTIME_BUSINESS_ACCEPTANCE=NOT_VERIFIED"
+log "MIGRATION_HEAD=${MIGRATION_HEAD}"
 
 for command_name in python3 node npm docker curl unzip zip sha256sum; do
   command -v "${command_name}" >/dev/null 2>&1 || {
@@ -118,7 +121,8 @@ run TERRAFORM_INIT_NO_BACKEND "${terraform_bin}" -chdir=infrastructure/terraform
 run TERRAFORM_VALIDATE "${terraform_bin}" -chdir=infrastructure/terraform validate
 
 run RELEASE_MANIFEST "${WORK_DIR}/venv/bin/python" scripts/release-manifest.py \
-  --phase 1 --platform-version 0.1.0-source-verify --environment dev \
+  --phase "${SOURCE_PHASE}" --platform-version "0.${SOURCE_PHASE}.0-source-verify" --environment dev \
+  --migration-head "${MIGRATION_HEAD}" \
   --verification boundary_tests=PASS \
   --verification auth_tests=PASS \
   --verification multi_tenant_isolation=PASS \
@@ -127,7 +131,7 @@ run RELEASE_MANIFEST "${WORK_DIR}/venv/bin/python" scripts/release-manifest.py \
   --verification runtime_smoke=NOT_VERIFIED \
   --out "${WORK_DIR}/release-manifest.json"
 
-VERIFIED_ARCHIVE="$(dirname "${ROOT}")/chann-crm-ai-phase1-source-verified-${RUN_ID}.zip"
+VERIFIED_ARCHIVE="$(dirname "${ROOT}")/chann-crm-ai-phase${SOURCE_PHASE}-source-verified-${RUN_ID}.zip"
 log "RESULT=SOURCE_VALIDATION_PASS_RUNTIME_ACCEPTANCE_NOT_VERIFIED"
 log "RESULT_FILE=${RESULT_FILE}"
 log "VERIFIED_ARCHIVE=${VERIFIED_ARCHIVE}"

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Idempotent reference seed — Phase 1.
+"""Idempotent reference seed — through Phase 2.
 
 Rules this obeys (03_DATABASE_MIGRATION_CACHE_DATA_SAFETY_STANDARD, section 7):
   * idempotent by BUSINESS KEY, not by surrogate UUID
@@ -33,7 +33,8 @@ from argon2 import PasswordHasher  # noqa: E402
 from sqlalchemy import create_engine, select  # noqa: E402
 from sqlalchemy.orm import Session  # noqa: E402
 
-from chann_data.models import License, LicenseMember, PlatformAdmin  # noqa: E402
+from chann_data.models import CustomRole, License, PlatformAdmin, RolePermission  # noqa: E402
+from chann_data.permissions import DEFAULT_ROLE_TEMPLATES  # noqa: E402
 
 DEV_FALLBACK_PASSWORD = "changeme123"  # DEV only, never promoted
 
@@ -86,6 +87,50 @@ def seed_dev_fixture(session: Session) -> list[str]:
     return notes
 
 
+def seed_default_roles(session: Session) -> list[str]:
+    """Create Phase 2 role templates once per tenant.
+
+    Existing non-owner roles are intentionally not overwritten: the product
+    permits tenants to customize the default templates after onboarding.
+    """
+    notes: list[str] = []
+    licenses = list(session.execute(select(License).order_by(License.license_code)).scalars())
+    for license_row in licenses:
+        for role_name, permission_keys in DEFAULT_ROLE_TEMPLATES.items():
+            role = session.execute(
+                select(CustomRole).where(
+                    CustomRole.license_id == license_row.id,
+                    CustomRole.role_name == role_name,
+                )
+            ).scalar_one_or_none()
+            if role is not None:
+                notes.append(
+                    f"role[{license_row.license_code}:{role_name}] exists — unchanged"
+                )
+                continue
+            role = CustomRole(
+                id=uuid.uuid4(),
+                license_id=license_row.id,
+                role_name=role_name,
+                is_owner=role_name == "owner",
+            )
+            session.add(role)
+            session.flush()
+            if permission_keys is not None:
+                session.add_all(
+                    RolePermission(
+                        id=uuid.uuid4(),
+                        license_id=license_row.id,
+                        role=role_name,
+                        permission_key=permission_key,
+                        allowed=True,
+                    )
+                    for permission_key in sorted(permission_keys)
+                )
+            notes.append(f"role[{license_row.license_code}:{role_name}] created")
+    return notes
+
+
 def main() -> int:
     database_url = os.environ.get("DATABASE_URL")
     if not database_url:
@@ -100,6 +145,7 @@ def main() -> int:
         results = [seed_platform_admin(session, password)]
         if app_env == "dev" and os.environ.get("SEED_DEV_FIXTURE", "1") == "1":
             results += seed_dev_fixture(session)
+        results += seed_default_roles(session)
         session.commit()
 
     for line in results:

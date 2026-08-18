@@ -1,8 +1,8 @@
-"""Phase 1 schema — Architecture & Security Foundation.
+"""ORM schema through Phase 2.
 
-Only the four Phase 1 tables live here. Later phases add their own tables in
-their own Alembic revisions, so every phase gets its own migration gate
-(see the Phase 1 Readiness Plan, 10.8).
+Each phase has its own Alembic revision and migration gate. Phase 2 adds
+tenant-owned roles, permission grants, settings and the two-party ownership
+transfer state required by the product flow.
 
 Columns marked "placed early" are required by a later phase but are created
 now because the Master Spec explicitly says so.
@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, String, UniqueConstraint, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -99,3 +99,78 @@ class LicenseMember(TimestampMixin, Base):
 
     license: Mapped["License"] = relationship(back_populates="members")
     identity: Mapped["ChannIdentity"] = relationship(back_populates="memberships")
+
+
+class CustomRole(TimestampMixin, Base):
+    __tablename__ = "custom_roles"
+    __table_args__ = (
+        UniqueConstraint("license_id", "role_name", name="uq_custom_role_license_name"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    license_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("licenses.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    role_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    is_owner: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+
+class RolePermission(Base):
+    __tablename__ = "role_permissions"
+    __table_args__ = (
+        UniqueConstraint(
+            "license_id", "role", "permission_key", name="uq_role_permission_grant"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    license_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("licenses.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    role: Mapped[str] = mapped_column(String(64), nullable=False)
+    permission_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    allowed: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class LicenseSetting(TimestampMixin, Base):
+    __tablename__ = "license_settings"
+    __table_args__ = (
+        UniqueConstraint("license_id", "setting_key", name="uq_license_setting_key"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    license_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("licenses.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    setting_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    setting_value: Mapped[dict | list | str | int | float | bool | None] = mapped_column(
+        JSONB, nullable=False
+    )
+
+
+class OwnershipTransfer(TimestampMixin, Base):
+    """Two-party owner transfer state.
+
+    This table is a necessary implementation detail for the Phase 2 flow even
+    though the abbreviated table list in the Master Spec omits it. Keeping the
+    pending request in a setting or cache would make authoritative transfer
+    state mutable or non-transactional.
+    """
+
+    __tablename__ = "ownership_transfers"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    license_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("licenses.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    from_member_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("license_members.id", ondelete="RESTRICT"), nullable=False
+    )
+    to_member_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("license_members.id", ondelete="RESTRICT"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

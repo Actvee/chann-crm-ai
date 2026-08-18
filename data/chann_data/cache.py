@@ -117,6 +117,14 @@ def k_member(license_id: str, chann_uid: str) -> str:
     return f"license_member:{license_id}:{chann_uid}"
 
 
+def k_permissions(license_id: str, chann_uid: str) -> str:
+    return f"permissions:{license_id}:{chann_uid}"
+
+
+def k_license_setting(license_id: str, setting_key: str) -> str:
+    return f"license_setting:{license_id}:{setting_key}"
+
+
 def k_admin_session(session_id: str) -> str:
     return f"admin_session:{session_id}"
 

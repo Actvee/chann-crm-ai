@@ -12,6 +12,7 @@ The rules:
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 
 import pytest
@@ -72,6 +73,20 @@ class TestApplicationTier:
         the PdfRenderer protocol so the next swap stays a one-class change."""
         violations = _violations("application", VENDOR_PDF_MODULES)
         assert not violations, "PDF vendor SDK must sit behind PdfRenderer:\n  " + "\n  ".join(violations)
+
+    def test_authorization_does_not_branch_on_tenant_role_names(self):
+        """Custom role labels are tenant data. Application policy may branch
+        on permission keys or the protected owner flag, never role strings."""
+        role_comparison = re.compile(
+            r"\brole\b\s*(?:==|!=)\s*['\"](?:owner|admin|member|cs|sales|technician)['\"]",
+            re.IGNORECASE,
+        )
+        offenders = []
+        for path in _python_files("application"):
+            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                if role_comparison.search(line):
+                    offenders.append(f"{path.relative_to(ROOT)}:{number}")
+        assert not offenders, "authorization hardcodes role names: " + ", ".join(offenders)
 
 
 class TestDataTier:

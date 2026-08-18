@@ -10,6 +10,7 @@ from .auth.liff import LiffTokenInvalid, verify_id_token
 from .auth.platform_admin import decode_token, issue_token
 from .config import settings
 from .data_client import DataClient, DataTierError
+from .services.identity import OA_TO_ROLE
 
 router = APIRouter(prefix="/api/v1", tags=["auth"])
 
@@ -98,5 +99,22 @@ async def platform_logout(
 
 
 @router.get("/liff/{audience}/me")
-async def liff_me(audience: str, claims: dict = Depends(require_liff)):
-    return {"sub": claims.get("sub"), "audience": audience}
+async def liff_me(
+    audience: str,
+    claims: dict = Depends(require_liff),
+    client: DataClient = Depends(get_data_client),
+):
+    if audience not in OA_TO_ROLE:
+        raise HTTPException(status_code=404, detail="unknown LIFF audience")
+    identity = await client.resolve_identity(
+        claims["sub"], OA_TO_ROLE[audience], claims.get("name")
+    )
+    memberships = await client.memberships_of(identity["chann_uid"])
+    # This returns only the authenticated user's own memberships so they can
+    # select a tenant. It is never an endpoint for probing another identity.
+    return {
+        "sub": claims.get("sub"),
+        "audience": audience,
+        "chann_uid": identity["chann_uid"],
+        "memberships": memberships,
+    }
