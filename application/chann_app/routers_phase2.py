@@ -119,7 +119,7 @@ async def create_role(
     _require_same_tenant(principal, license_id)
     principal.require("role.manage")
     try:
-        return await client.create_role(license_id, payload.model_dump())
+        return await client.create_role(license_id, payload.model_dump(), actor_id=principal.chann_uid)
     except DataTierError as exc:
         raise _propagate(exc)
 
@@ -135,7 +135,7 @@ async def update_role(
     _require_same_tenant(principal, license_id)
     principal.require("role.manage")
     try:
-        return await client.update_role(license_id, role_name, payload.model_dump())
+        return await client.update_role(license_id, role_name, payload.model_dump(), actor_id=principal.chann_uid)
     except DataTierError as exc:
         raise _propagate(exc)
 
@@ -150,7 +150,7 @@ async def delete_role(
     _require_same_tenant(principal, license_id)
     principal.require("role.manage")
     try:
-        await client.delete_role(license_id, role_name)
+        await client.delete_role(license_id, role_name, actor_id=principal.chann_uid)
     except DataTierError as exc:
         raise _propagate(exc)
 
@@ -166,7 +166,7 @@ async def set_member_role(
     _require_same_tenant(principal, license_id)
     principal.require("member.manage")
     try:
-        return await client.set_member_role(license_id, chann_uid, payload.role_name)
+        return await client.set_member_role(license_id, chann_uid, payload.role_name, actor_id=principal.chann_uid)
     except DataTierError as exc:
         raise _propagate(exc)
 
@@ -196,7 +196,7 @@ async def put_setting(
     _require_same_tenant(principal, license_id)
     principal.require("setting.manage")
     try:
-        return await client.put_license_setting(license_id, setting_key, payload.setting_value)
+        return await client.put_license_setting(license_id, setting_key, payload.setting_value, actor_id=principal.chann_uid)
     except DataTierError as exc:
         raise _propagate(exc)
 
@@ -211,7 +211,7 @@ async def delete_setting(
     _require_same_tenant(principal, license_id)
     principal.require("setting.manage")
     try:
-        await client.delete_license_setting(license_id, setting_key)
+        await client.delete_license_setting(license_id, setting_key, actor_id=principal.chann_uid)
     except DataTierError as exc:
         raise _propagate(exc)
 
@@ -244,7 +244,7 @@ async def accept_owner_transfer(
     _require_same_tenant(principal, license_id)
     try:
         return await client.accept_ownership_transfer(
-            license_id, transfer_id, principal.chann_uid
+            license_id, transfer_id, principal.chann_uid, actor_id=principal.chann_uid
         )
     except DataTierError as exc:
         raise _propagate(exc)
@@ -260,6 +260,6 @@ async def platform_break_glass_transfer(
     if "platform.admin.break_glass" not in claims.get("permissions", []):
         raise HTTPException(status_code=403, detail="permission required: platform.admin.break_glass")
     try:
-        return await client.force_transfer_owner(license_id, payload.target_chann_uid)
+        return await client.force_transfer_owner(license_id, payload.target_chann_uid, actor_id=claims.get("sub"))
     except DataTierError as exc:
         raise _propagate(exc)

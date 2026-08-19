@@ -174,3 +174,32 @@ class OwnershipTransfer(TimestampMixin, Base):
     )
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AuditLog(Base):
+    """Append-only. Phase 3 (Master Spec 3.3) — never updated or deleted once
+    written, so no TimestampMixin (there is no updated_at to have).
+
+    license_id is nullable because a few actions this table must record are
+    not scoped to a single tenant by nature (e.g. a cross-tenant lookup that
+    was correctly refused still needs an audit trail, and it may have been
+    attempted against a license the caller does not belong to at all).
+    """
+
+    __tablename__ = "audit_log"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    license_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("licenses.id", ondelete="RESTRICT"), index=True
+    )
+    entity_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    entity_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    actor_type: Mapped[str] = mapped_column(String(32), nullable=False)  # user|ai|system|platform_admin
+    actor_id: Mapped[str | None] = mapped_column(String(64))
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    field_changes: Mapped[dict | None] = mapped_column(JSONB)
+    ai_reasoning: Mapped[str | None] = mapped_column(String)
+    cross_tenant: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+    )

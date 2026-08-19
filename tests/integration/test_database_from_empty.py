@@ -664,3 +664,183 @@ class TestPhase2RoleNameRegression:
             session.commit()
             assert session.get(LicenseMember, member_id).role == "เจ้าของ"
             assert session.get(LicenseMember, owner_id).role == "admin"
+
+
+class TestPhase3AuditLog:
+    """Master Spec 3.5 — mandatory audit emission + cross-tenant audit tests."""
+
+    def test_audit_emission(self, migrated_db, monkeypatch):
+        from sqlalchemy.orm import Session
+
+        from chann_data.db import get_session
+        from chann_data.main import app
+        from chann_data.config import settings
+
+        with Session(migrated_db) as session:
+            license_row, owner, member = _phase2_tenant(session)
+            license_id = license_row.id
+            owner_uid = owner.chann_uid
+            session.commit()
+
+        def override_session():
+            with Session(migrated_db) as session:
+                yield session
+
+        monkeypatch.setattr(settings, "admin_secret", "integration-secret")
+        app.dependency_overrides[get_session] = override_session
+        try:
+            from fastapi.testclient import TestClient
+
+            client = TestClient(app)
+            headers = {
+                "X-Internal-Secret": "integration-secret",
+                "X-Actor-Id": owner_uid,
+            }
+
+            # create -> audit row with action=create
+            resp = client.post(
+                f"/internal/v1/licenses/{license_id}/roles",
+                headers=headers,
+                json={"role_name": "auditor", "permission_keys": ["ticket.read"]},
+            )
+            assert resp.status_code == 201, resp.text
+
+            # update -> audit row with action=update, field_changes has old+new
+            resp = client.patch(
+                f"/internal/v1/licenses/{license_id}/roles/auditor",
+                headers=headers,
+                json={"role_name": "auditor", "permission_keys": ["ticket.read", "ticket.update"]},
+            )
+            assert resp.status_code == 200, resp.text
+
+            # delete -> audit row with action=delete
+            resp = client.delete(
+                f"/internal/v1/licenses/{license_id}/roles/auditor", headers=headers
+            )
+            assert resp.status_code == 204, resp.text
+
+            # read -> must NOT produce an audit row
+            resp = client.get(f"/internal/v1/licenses/{license_id}/roles", headers=headers)
+            assert resp.status_code == 200, resp.text
+
+            log = client.get(
+                f"/internal/v1/licenses/{license_id}/audit-log",
+                headers=headers,
+                params={"entity_type": "role"},
+            )
+            assert log.status_code == 200, log.text
+            rows = log.json()
+            actions = [r["action"] for r in rows]
+            assert actions.count("create") == 1
+            assert actions.count("update") == 1
+            assert actions.count("delete") == 1
+            # the list_roles GET must not have produced an extra row
+            assert len(rows) == 3
+
+            update_row = next(r for r in rows if r["action"] == "update")
+            assert update_row["field_changes"]["permission_keys"]["old"] == ["ticket.read"]
+            assert update_row["field_changes"]["permission_keys"]["new"] == [
+                "ticket.read",
+                "ticket.update",
+            ]
+            assert all(r["actor_id"] == owner_uid for r in rows)
+            assert all(r["actor_type"] == "user" for r in rows)
+
+            # AI actor -> ai_reasoning must be non-empty (Phase 4 will be the
+            # real caller; exercised here directly through the generic write
+            # endpoint since no AI actor exists yet in this phase)
+            ai_resp = client.post(
+                "/internal/v1/audit-log",
+                headers=headers,
+                json={
+                    "license_id": str(license_id),
+                    "entity_type": "customer",
+                    "entity_id": str(uuid.uuid4()),
+                    "actor_type": "ai",
+                    "action": "create",
+                    "ai_reasoning": "user typed 'add customer somchai' -> create customer intent",
+                },
+            )
+            assert ai_resp.status_code == 201, ai_resp.text
+            assert ai_resp.json()["ai_reasoning"]
+
+            # ai_reasoning on a non-AI actor must be rejected (DB check constraint)
+            bad_resp = client.post(
+                "/internal/v1/audit-log",
+                headers=headers,
+                json={
+                    "license_id": str(license_id),
+                    "entity_type": "customer",
+                    "entity_id": str(uuid.uuid4()),
+                    "actor_type": "user",
+                    "action": "create",
+                    "ai_reasoning": "should not be allowed on a human actor",
+                },
+            )
+            assert bad_resp.status_code >= 400
+        finally:
+            app.dependency_overrides.clear()
+
+    def test_cross_tenant_audit(self, migrated_db, monkeypatch):
+        from sqlalchemy.orm import Session
+
+        from chann_data.db import get_session
+        from chann_data.main import app
+        from chann_data.config import settings
+
+        with Session(migrated_db) as session:
+            license_a, owner_a, _ = _phase2_tenant(session)
+            license_b, _, member_b = _phase2_tenant(session)
+            license_a_id, license_b_id = license_a.id, license_b.id
+            owner_a_uid, member_b_uid = owner_a.chann_uid, member_b.chann_uid
+            session.commit()
+
+        def override_session():
+            with Session(migrated_db) as session:
+                yield session
+
+        monkeypatch.setattr(settings, "admin_secret", "integration-secret")
+        app.dependency_overrides[get_session] = override_session
+        try:
+            from fastapi.testclient import TestClient
+
+            client = TestClient(app)
+            headers = {"X-Internal-Secret": "integration-secret"}
+
+            # cross-company lookup (refused) -> audit row, cross_tenant=true
+            resp = client.get(
+                f"/internal/v1/licenses/{license_a_id}/members/{member_b_uid}/cross-check",
+                params={"target_license_id": str(license_b_id)},
+                headers=headers,
+            )
+            assert resp.status_code == 403
+
+            # break-glass force transfer -> audit row, cross_tenant=true
+            resp = client.post(
+                f"/internal/v1/platform/licenses/{license_a_id}/break-glass/transfer-owner",
+                headers={**headers, "X-Actor-Id": "PA-000001"},
+                json={"target_chann_uid": owner_a_uid},
+            )
+            assert resp.status_code == 200, resp.text
+
+            # a same-tenant action for comparison -> cross_tenant must be false
+            resp = client.get(f"/internal/v1/licenses/{license_a_id}/roles", headers=headers)
+            assert resp.status_code == 200
+
+            log = client.get(
+                f"/internal/v1/licenses/{license_a_id}/audit-log", headers=headers
+            )
+            assert log.status_code == 200, log.text
+            rows = log.json()
+
+            cross_tenant_rows = [r for r in rows if r["cross_tenant"]]
+            assert len(cross_tenant_rows) >= 2
+            assert any(r["action"] == "cross_tenant_lookup" for r in cross_tenant_rows)
+            assert any(r["action"] == "transfer" for r in cross_tenant_rows)
+
+            same_tenant_rows = [r for r in rows if not r["cross_tenant"]]
+            assert len(same_tenant_rows) == 0 or all(
+                r["action"] != "cross_tenant_lookup" for r in same_tenant_rows
+            )
+        finally:
+            app.dependency_overrides.clear()

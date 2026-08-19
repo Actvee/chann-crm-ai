@@ -120,3 +120,29 @@ class OwnershipTransferOut(BaseModel):
 
 class BreakGlassTransferIn(BaseModel):
     target_chann_uid: str
+
+
+class AuditLogOut(BaseModel):
+    id: uuid.UUID
+    license_id: uuid.UUID | None
+    entity_type: str
+    entity_id: uuid.UUID
+    actor_type: str
+    actor_id: str | None
+    action: str
+    field_changes: dict | None
+    ai_reasoning: str | None
+    cross_tenant: bool
+    created_at: datetime
+
+
+class AuditLogWriteIn(BaseModel):
+    license_id: uuid.UUID | None = None
+    entity_type: str
+    entity_id: uuid.UUID
+    actor_type: str
+    action: str
+    actor_id: str | None = None
+    field_changes: dict | None = None
+    ai_reasoning: str | None = None
+    cross_tenant: bool = False

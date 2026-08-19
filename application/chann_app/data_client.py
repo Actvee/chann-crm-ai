@@ -31,6 +31,42 @@ class DataClient:
     def _headers(self) -> dict[str, str]:
         return {"X-Internal-Secret": self._secret, "Content-Type": "application/json"}
 
+    def _headers_for(self, actor_id: str | None) -> dict[str, str]:
+        headers = dict(self._headers)
+        if actor_id:
+            headers["X-Actor-Id"] = actor_id
+        return headers
+
+    async def write_audit_log(
+        self,
+        *,
+        entity_type: str,
+        entity_id: str,
+        actor_type: str,
+        action: str,
+        license_id: str | None = None,
+        actor_id: str | None = None,
+        field_changes: dict | None = None,
+        ai_reasoning: str | None = None,
+        cross_tenant: bool = False,
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/audit-log",
+            headers=self._headers,
+            json={
+                "license_id": license_id,
+                "entity_type": entity_type,
+                "entity_id": entity_id,
+                "actor_type": actor_type,
+                "actor_id": actor_id,
+                "action": action,
+                "field_changes": field_changes,
+                "ai_reasoning": ai_reasoning,
+                "cross_tenant": cross_tenant,
+            },
+        )
+        return self._unwrap(resp)
+
     async def resolve_identity(self, line_user_id: str, primary_role: str,
                                display_name: str | None = None) -> dict:
         resp = await self._client.post(
@@ -79,34 +115,40 @@ class DataClient:
         )
         return self._unwrap(resp)
 
-    async def create_role(self, license_id: str, payload: dict) -> dict:
+    async def create_role(self, license_id: str, payload: dict, actor_id: str | None = None) -> dict:
         resp = await self._client.post(
             f"{self._base}/internal/v1/licenses/{license_id}/roles",
-            headers=self._headers,
+            headers=self._headers_for(actor_id),
             json=payload,
         )
         return self._unwrap(resp)
 
-    async def update_role(self, license_id: str, role_name: str, payload: dict) -> dict:
+    async def update_role(
+        self, license_id: str, role_name: str, payload: dict, actor_id: str | None = None
+    ) -> dict:
         resp = await self._client.patch(
             f"{self._base}/internal/v1/licenses/{license_id}/roles/{quote(role_name, safe='')}",
-            headers=self._headers,
+            headers=self._headers_for(actor_id),
             json=payload,
         )
         return self._unwrap(resp)
 
-    async def delete_role(self, license_id: str, role_name: str) -> None:
+    async def delete_role(
+        self, license_id: str, role_name: str, actor_id: str | None = None
+    ) -> None:
         resp = await self._client.delete(
             f"{self._base}/internal/v1/licenses/{license_id}/roles/{quote(role_name, safe='')}",
-            headers=self._headers,
+            headers=self._headers_for(actor_id),
         )
         if resp.status_code not in (200, 204):
             self._unwrap(resp)
 
-    async def set_member_role(self, license_id: str, chann_uid: str, role_name: str) -> dict:
+    async def set_member_role(
+        self, license_id: str, chann_uid: str, role_name: str, actor_id: str | None = None
+    ) -> dict:
         resp = await self._client.patch(
             f"{self._base}/internal/v1/licenses/{license_id}/members/{chann_uid}/role",
-            headers=self._headers,
+            headers=self._headers_for(actor_id),
             json={"role_name": role_name},
         )
         return self._unwrap(resp)
@@ -117,18 +159,22 @@ class DataClient:
         )
         return self._unwrap(resp)
 
-    async def put_license_setting(self, license_id: str, key: str, value) -> dict:
+    async def put_license_setting(
+        self, license_id: str, key: str, value, actor_id: str | None = None
+    ) -> dict:
         resp = await self._client.put(
             f"{self._base}/internal/v1/licenses/{license_id}/settings/{quote(key, safe='')}",
-            headers=self._headers,
+            headers=self._headers_for(actor_id),
             json={"setting_value": value},
         )
         return self._unwrap(resp)
 
-    async def delete_license_setting(self, license_id: str, key: str) -> None:
+    async def delete_license_setting(
+        self, license_id: str, key: str, actor_id: str | None = None
+    ) -> None:
         resp = await self._client.delete(
             f"{self._base}/internal/v1/licenses/{license_id}/settings/{quote(key, safe='')}",
-            headers=self._headers,
+            headers=self._headers_for(actor_id),
         )
         if resp.status_code not in (200, 204):
             self._unwrap(resp)
@@ -144,21 +190,22 @@ class DataClient:
         return self._unwrap(resp)
 
     async def accept_ownership_transfer(
-        self, license_id: str, transfer_id: str, accepting_chann_uid: str
+        self, license_id: str, transfer_id: str, accepting_chann_uid: str,
+        actor_id: str | None = None,
     ) -> dict:
         resp = await self._client.post(
             f"{self._base}/internal/v1/licenses/{license_id}/ownership-transfers/{transfer_id}/accept",
-            headers=self._headers,
+            headers=self._headers_for(actor_id),
             json={"accepting_chann_uid": accepting_chann_uid},
         )
         return self._unwrap(resp)
 
     async def force_transfer_owner(
-        self, license_id: str, target_chann_uid: str
+        self, license_id: str, target_chann_uid: str, actor_id: str | None = None
     ) -> dict:
         resp = await self._client.post(
             f"{self._base}/internal/v1/platform/licenses/{license_id}/break-glass/transfer-owner",
-            headers=self._headers,
+            headers=self._headers_for(actor_id),
             json={"target_chann_uid": target_chann_uid},
         )
         return self._unwrap(resp)

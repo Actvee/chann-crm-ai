@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -39,7 +39,10 @@ from ..repositories.phase2 import (
     Phase2NotFound,
     RoleRepository,
 )
+from ..repositories.audit import AuditRepository, diff_fields
 from ..schemas import (
+    AuditLogOut,
+    AuditLogWriteIn,
     AuthorizationContextOut,
     BreakGlassTransferIn,
     IdentityOut,
@@ -220,14 +223,77 @@ def get_member(license_id: uuid.UUID, chann_uid: str, session: Session = Depends
 def cross_tenant_probe(license_id: uuid.UUID, target_license_id: uuid.UUID,
                        chann_uid: str, session: Session = Depends(get_session)):
     """Exists so the isolation test has a route that *attempts* a cross-tenant
-    read through the normal machinery and is refused by it."""
+    read through the normal machinery and is refused by it. Every attempt —
+    denied or not — gets an audit row per Master Spec 3.4/3.5: a refused
+    attempt is exactly the kind of event this table exists to catch."""
     scope = TenantScope(license_id=license_id)
     try:
         scope.assert_owns(target_license_id)
     except CrossTenantAccessDenied as exc:
+        AuditRepository(session).write(
+            license_id=license_id,
+            entity_type="license",
+            entity_id=target_license_id,
+            actor_type="system",
+            action="cross_tenant_lookup",
+            cross_tenant=True,
+        )
+        session.commit()
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
     member = MemberRepository(session).get(scope, chann_uid)
+    AuditRepository(session).write(
+        license_id=license_id,
+        entity_type="license",
+        entity_id=target_license_id,
+        actor_type="system",
+        action="cross_tenant_lookup",
+        cross_tenant=True,
+    )
+    session.commit()
     return {"found": member is not None}
+
+
+@router.post("/audit-log", response_model=AuditLogOut, status_code=201)
+def write_audit_log(
+    payload: AuditLogWriteIn,
+    session: Session = Depends(get_session),
+):
+    """Generic write path for callers (chiefly the Application Tier, which
+    knows the acting principal) that already know exactly what happened and
+    just need it recorded. Data-tier endpoints that mutate their own state
+    directly (roles, members, settings, transfers) emit their own audit row
+    inline instead of calling back through this endpoint."""
+    try:
+        row = AuditRepository(session).write(
+            license_id=payload.license_id,
+            entity_type=payload.entity_type,
+            entity_id=payload.entity_id,
+            actor_type=payload.actor_type,
+            actor_id=payload.actor_id,
+            action=payload.action,
+            field_changes=payload.field_changes,
+            ai_reasoning=payload.ai_reasoning,
+            cross_tenant=payload.cross_tenant,
+        )
+        session.commit()
+        return AuditLogOut.model_validate(row, from_attributes=True)
+    except Exception as exc:
+        session.rollback()
+        raise _phase2_http_error(exc)
+
+
+@router.get("/licenses/{license_id}/audit-log", response_model=list[AuditLogOut])
+def list_audit_log(
+    license_id: uuid.UUID,
+    entity_type: str | None = None,
+    actor_type: str | None = None,
+    limit: int = 100,
+    session: Session = Depends(get_session),
+):
+    rows = AuditRepository(session).list_for_license(
+        license_id, entity_type=entity_type, actor_type=actor_type, limit=limit
+    )
+    return [AuditLogOut.model_validate(r, from_attributes=True) for r in rows]
 
 
 def _role_out(session: Session, scope: TenantScope, role) -> RoleOut:
@@ -294,11 +360,25 @@ def list_roles(license_id: uuid.UUID, session: Session = Depends(get_session)):
 
 @router.post("/licenses/{license_id}/roles", response_model=RoleOut, status_code=201)
 def create_role(
-    license_id: uuid.UUID, payload: RoleWriteIn, session: Session = Depends(get_session)
+    license_id: uuid.UUID,
+    payload: RoleWriteIn,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
 ):
     scope = TenantScope(license_id=license_id)
     try:
         role = RoleRepository(session).create(scope, payload.role_name, set(payload.permission_keys))
+        AuditRepository(session).write(
+            license_id=license_id,
+            entity_type="role",
+            entity_id=role.id,
+            actor_type="user",
+            actor_id=x_actor_id or None,
+            action="create",
+            field_changes=diff_fields(
+                {}, {"role_name": role.role_name, "permission_keys": sorted(payload.permission_keys)}
+            ),
+        )
         session.commit()
         _invalidate_authorization_for_license(session, scope)
         return _role_out(session, scope, role)
@@ -313,11 +393,29 @@ def update_role(
     role_name: str,
     payload: RoleWriteIn,
     session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
 ):
     scope = TenantScope(license_id=license_id)
     try:
-        role = RoleRepository(session).update(
+        role_repo = RoleRepository(session)
+        existing = role_repo.get(scope, role_name)
+        before = (
+            {"role_name": existing.role_name, "permission_keys": sorted(role_repo.permission_keys(scope, role_name))}
+            if existing is not None
+            else {}
+        )
+        role = role_repo.update(
             scope, role_name, payload.role_name, set(payload.permission_keys)
+        )
+        after = {"role_name": role.role_name, "permission_keys": sorted(payload.permission_keys)}
+        AuditRepository(session).write(
+            license_id=license_id,
+            entity_type="role",
+            entity_id=role.id,
+            actor_type="user",
+            actor_id=x_actor_id or None,
+            action="update",
+            field_changes=diff_fields(before, after),
         )
         session.commit()
         _invalidate_authorization_for_license(session, scope)
@@ -329,11 +427,26 @@ def update_role(
 
 @router.delete("/licenses/{license_id}/roles/{role_name}", status_code=204)
 def delete_role(
-    license_id: uuid.UUID, role_name: str, session: Session = Depends(get_session)
+    license_id: uuid.UUID,
+    role_name: str,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
 ):
     scope = TenantScope(license_id=license_id)
     try:
-        RoleRepository(session).delete(scope, role_name)
+        role_repo = RoleRepository(session)
+        existing = role_repo.get(scope, role_name)
+        role_repo.delete(scope, role_name)
+        if existing is not None:
+            AuditRepository(session).write(
+                license_id=license_id,
+                entity_type="role",
+                entity_id=existing.id,
+                actor_type="user",
+                actor_id=x_actor_id or None,
+                action="delete",
+                field_changes=diff_fields({"role_name": existing.role_name}, {}),
+            )
         session.commit()
         _invalidate_authorization_for_license(session, scope)
     except Exception as exc:
@@ -347,10 +460,22 @@ def set_member_role(
     chann_uid: str,
     payload: MemberRoleIn,
     session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
 ):
     scope = TenantScope(license_id=license_id)
     try:
+        before_member = MemberRepository(session).get(scope, chann_uid)
+        before = {"role": before_member.role} if before_member is not None else {}
         member = MemberRoleRepository(session).set_role(scope, chann_uid, payload.role_name)
+        AuditRepository(session).write(
+            license_id=license_id,
+            entity_type="license_member",
+            entity_id=member.id,
+            actor_type="user",
+            actor_id=x_actor_id or None,
+            action="update",
+            field_changes=diff_fields(before, {"role": member.role}),
+        )
         session.commit()
         cache.invalidate(
             k_member(str(license_id), chann_uid),
@@ -377,10 +502,25 @@ def put_license_setting(
     setting_key: str,
     payload: LicenseSettingWriteIn,
     session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
 ):
     scope = TenantScope(license_id=license_id)
     try:
-        row = LicenseSettingRepository(session).upsert(scope, setting_key, payload.setting_value)
+        setting_repo = LicenseSettingRepository(session)
+        existing = next(
+            (r for r in setting_repo.list(scope) if r.setting_key == setting_key), None
+        )
+        before = {"setting_value": existing.setting_value} if existing is not None else {}
+        row = setting_repo.upsert(scope, setting_key, payload.setting_value)
+        AuditRepository(session).write(
+            license_id=license_id,
+            entity_type="license_setting",
+            entity_id=row.id,
+            actor_type="user",
+            actor_id=x_actor_id or None,
+            action="update",
+            field_changes=diff_fields(before, {"setting_value": row.setting_value}),
+        )
         session.commit()
         return LicenseSettingOut(setting_key=row.setting_key, setting_value=row.setting_value)
     except Exception as exc:
@@ -390,11 +530,28 @@ def put_license_setting(
 
 @router.delete("/licenses/{license_id}/settings/{setting_key}", status_code=204)
 def delete_license_setting(
-    license_id: uuid.UUID, setting_key: str, session: Session = Depends(get_session)
+    license_id: uuid.UUID,
+    setting_key: str,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
 ):
     scope = TenantScope(license_id=license_id)
     try:
-        LicenseSettingRepository(session).delete(scope, setting_key)
+        setting_repo = LicenseSettingRepository(session)
+        existing = next(
+            (r for r in setting_repo.list(scope) if r.setting_key == setting_key), None
+        )
+        setting_repo.delete(scope, setting_key)
+        if existing is not None:
+            AuditRepository(session).write(
+                license_id=license_id,
+                entity_type="license_setting",
+                entity_id=existing.id,
+                actor_type="user",
+                actor_id=x_actor_id or None,
+                action="delete",
+                field_changes=diff_fields({"setting_value": existing.setting_value}, {}),
+            )
         session.commit()
     except Exception as exc:
         session.rollback()
@@ -432,11 +589,21 @@ def accept_ownership_transfer(
     transfer_id: uuid.UUID,
     payload: OwnershipTransferAcceptIn,
     session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
 ):
     scope = TenantScope(license_id=license_id)
     try:
         transfer = OwnershipTransferRepository(session).accept(
             scope, transfer_id, payload.accepting_chann_uid
+        )
+        AuditRepository(session).write(
+            license_id=license_id,
+            entity_type="ownership_transfer",
+            entity_id=transfer.id,
+            actor_type="user",
+            actor_id=x_actor_id or None,
+            action="transfer",
+            field_changes=diff_fields({"status": "pending"}, {"status": transfer.status}),
         )
         session.commit()
         _invalidate_authorization_for_license(session, scope)
@@ -451,10 +618,25 @@ def force_transfer_owner(
     license_id: uuid.UUID,
     payload: BreakGlassTransferIn,
     session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
 ):
     scope = TenantScope(license_id=license_id)
     try:
+        before_target = MemberRepository(session).get(scope, payload.target_chann_uid)
+        before = {"role": before_target.role} if before_target is not None else {}
         member = OwnershipTransferRepository(session).force(scope, payload.target_chann_uid)
+        AuditRepository(session).write(
+            license_id=license_id,
+            entity_type="license_member",
+            entity_id=member.id,
+            actor_type="platform_admin",
+            actor_id=x_actor_id or None,
+            action="transfer",
+            field_changes=diff_fields(before, {"role": member.role}),
+            # Break-glass bypasses the normal two-party flow entirely — the
+            # exact scenario Master Spec 3.4's example row calls out.
+            cross_tenant=True,
+        )
         session.commit()
         _invalidate_authorization_for_license(session, scope)
         return MemberOut(chann_uid=member.chann_uid, role=member.role, status=member.status)
