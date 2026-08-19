@@ -251,10 +251,15 @@ def _phase2_http_error(exc: Exception) -> HTTPException:
 
 
 def _invalidate_authorization_for_license(session: Session, scope: TenantScope) -> None:
-    keys = [
-        k_permissions(str(scope.license_id), member.chann_uid)
-        for member in MemberRepository(session).list_for_license(scope)
-    ]
+    # Invalidates BOTH permission and member-role cache for every member of
+    # the tenant. Role rename, ownership transfer, and break-glass all
+    # mutate LicenseMember.role directly (not through set_member_role, the
+    # only call site that used to invalidate k_member on its own), so a
+    # single call site here needs to cover both caches or GET /members/{uid}
+    # can serve a stale role for up to cache_ttl_member_s after any of them.
+    members = MemberRepository(session).list_for_license(scope)
+    keys = [k_permissions(str(scope.license_id), m.chann_uid) for m in members]
+    keys += [k_member(str(scope.license_id), m.chann_uid) for m in members]
     cache.invalidate(*keys)
 
 
