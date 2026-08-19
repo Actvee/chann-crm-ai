@@ -18,6 +18,14 @@ from ..permissions import PERMISSION_KEYS, validate_permission_keys
 from .tenant_scope import TenantScope
 
 
+# ชื่อ role ที่เจ้าของเดิมจะถูกลดลงมาเมื่อโอน ownership.
+# license_members.role ไม่มี FK ไป custom_roles จึงเขียนชื่ออะไรลงไปก็ได้
+# ถ้าเขียนชื่อที่ไม่มีแถวใน custom_roles สมาชิกคนนั้นจะเหลือสิทธิ์ศูนย์
+# (AuthorizationRepository.context ตีเป็น unknown role) และแก้เองไม่ได้
+# จึงต้อง validate ก่อนเขียนเสมอ ห้ามเขียน literal ตรงๆ
+DEMOTION_ROLE_NAME = "admin"
+
+
 class Phase2Conflict(RuntimeError):
     pass
 
@@ -205,7 +213,8 @@ class MemberRoleRepository:
         ).scalar_one_or_none()
         if member is None:
             raise Phase2NotFound("member not found")
-        if member.role == "owner" and not role.is_owner:
+        current_role = RoleRepository(self._s).get(scope, member.role)
+        if current_role is not None and current_role.is_owner and not role.is_owner:
             raise Phase2Conflict("owner changes require the transfer flow")
         member.role = role.role_name
         return member
@@ -351,12 +360,13 @@ class OwnershipTransferRepository:
         ).scalar_one_or_none()
         if target is None:
             raise Phase2NotFound("target member not found")
+        owner_role = self._owner_role(scope)
         owners = list(
             self._s.execute(
                 select(LicenseMember)
                 .where(
                     LicenseMember.license_id == scope.license_id,
-                    LicenseMember.role == "owner",
+                    LicenseMember.role == owner_role.role_name,
                 )
                 .with_for_update()
             ).scalars()
@@ -374,17 +384,43 @@ class OwnershipTransferRepository:
             )
             .values(status="cancelled")
         )
+        demotion_role = None
         for owner in owners:
             if owner.id != target.id:
-                owner.role = "admin"
-        target.role = "owner"
+                if demotion_role is None:
+                    demotion_role = self._demotion_role(scope)
+                owner.role = demotion_role.role_name
+        target.role = owner_role.role_name
         return target
 
-    @staticmethod
+    def _owner_role(self, scope: TenantScope) -> CustomRole:
+        role = (
+            self._s.execute(
+                select(CustomRole).where(
+                    CustomRole.license_id == scope.license_id,
+                    CustomRole.is_owner.is_(True),
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if role is None:
+            raise Phase2Conflict("tenant has no owner role")
+        return role
+
+    def _demotion_role(self, scope: TenantScope) -> CustomRole:
+        role = RoleRepository(self._s).get(scope, DEMOTION_ROLE_NAME)
+        if role is None or role.is_owner:
+            raise Phase2Conflict(
+                f"demotion role '{DEMOTION_ROLE_NAME}' is missing in this tenant; "
+                "recreate it before transferring ownership"
+            )
+        return role
+
     def _apply_transfer(
-        scope: TenantScope, source: LicenseMember, target: LicenseMember
+        self, scope: TenantScope, source: LicenseMember, target: LicenseMember
     ) -> None:
         if source.license_id != scope.license_id or target.license_id != scope.license_id:
             raise Phase2Conflict("ownership transfer crossed tenant boundary")
-        source.role = "admin"
-        target.role = "owner"
+        source.role = self._demotion_role(scope).role_name
+        target.role = self._owner_role(scope).role_name

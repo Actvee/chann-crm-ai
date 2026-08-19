@@ -558,3 +558,109 @@ class TestTenantIsolationCrossProbe:
             assert cross.status_code == 403
         finally:
             app.dependency_overrides.clear()
+
+
+class TestPhase2RoleNameRegression:
+    """Regression: license_members.role ไม่มี FK ไป custom_roles
+
+    ก่อนแก้ การโอน ownership เขียน source.role = "admin" ตรงๆ ถ้า tenant
+    เปลี่ยนชื่อหรือลบ role "admin" ไปแล้ว เจ้าของเดิมจะเหลือ role ที่ไม่มีแถว
+    ใน custom_roles -> AuthorizationRepository.context คืน permission ศูนย์ตัว
+    -> ถูกล็อกออกจากระบบตัวเอง กู้ได้แค่ผ่าน Platform Admin break-glass
+    """
+
+    def test_transfer_refuses_when_demotion_role_missing(self, migrated_db):
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import LicenseMember
+        from chann_data.repositories.phase2 import (
+            OwnershipTransferRepository,
+            Phase2Conflict,
+            RoleRepository,
+        )
+        from chann_data.repositories.tenant_scope import TenantScope
+
+        with Session(migrated_db) as session:
+            license_row, owner, member = _phase2_tenant(session)
+            license_id = license_row.id
+            owner_uid, member_uid = owner.chann_uid, member.chann_uid
+            owner_id, member_id = owner.id, member.id
+            session.commit()
+
+        with Session(migrated_db) as session:
+            scope = TenantScope(license_id)
+            # tenant เปลี่ยนชื่อ role admin -> ผู้จัดการ (ทำได้ ไม่มีอะไรห้าม)
+            RoleRepository(session).update(
+                scope,
+                "admin",
+                "ผู้จัดการ",
+                RoleRepository(session).permission_keys(scope, "admin"),
+            )
+            session.commit()
+
+        with Session(migrated_db) as session:
+            scope = TenantScope(license_id)
+            transfer = OwnershipTransferRepository(session).request(
+                scope, owner_uid, member_uid
+            )
+            # ต้องปฏิเสธอย่างชัดเจน ไม่ใช่เขียนชื่อ role ลอยๆ ลงไปเงียบๆ
+            with pytest.raises(Phase2Conflict):
+                OwnershipTransferRepository(session).accept(
+                    scope, transfer.id, member_uid
+                )
+            session.rollback()
+
+        with Session(migrated_db) as session:
+            # เจ้าของเดิมต้องยังเป็น owner อยู่ ไม่ถูกลดสิทธิ์ไปเป็นอะไรที่ไม่มีจริง
+            assert session.get(LicenseMember, owner_id).role == "owner"
+            assert session.get(LicenseMember, member_id).role != "owner"
+
+    def test_break_glass_finds_owner_after_owner_role_renamed(self, migrated_db):
+        """break-glass ต้องหา owner เจอผ่าน custom_roles.is_owner
+
+        ถ้ายัง select ด้วย role == "owner" ตรงๆ วันที่ owner role ถูกตั้งชื่อ
+        เป็นอย่างอื่น break-glass จะ raise 'tenant has no current owner'
+        พอดีตอนที่จำเป็นต้องใช้มันที่สุด
+        """
+        from sqlalchemy import select
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import CustomRole, LicenseMember
+        from chann_data.repositories.phase2 import OwnershipTransferRepository
+        from chann_data.repositories.tenant_scope import TenantScope
+
+        with Session(migrated_db) as session:
+            license_row, owner, member = _phase2_tenant(session)
+            license_id = license_row.id
+            member_uid = member.chann_uid
+            owner_id, member_id = owner.id, member.id
+            session.commit()
+
+        with Session(migrated_db) as session:
+            # จำลองว่า owner role ถูกตั้งชื่อเป็นภาษาไทย (ผ่าน ORM ตรงๆ
+            # เพราะ RoleRepository.update กัน owner ไว้อยู่แล้ว)
+            role = session.execute(
+                select(CustomRole).where(
+                    CustomRole.license_id == license_id,
+                    CustomRole.is_owner.is_(True),
+                )
+            ).scalars().first()
+            assert role is not None
+            renamed = "เจ้าของ"
+            session.execute(
+                LicenseMember.__table__.update()
+                .where(
+                    LicenseMember.license_id == license_id,
+                    LicenseMember.role == role.role_name,
+                )
+                .values(role=renamed)
+            )
+            role.role_name = renamed
+            session.commit()
+
+        with Session(migrated_db) as session:
+            scope = TenantScope(license_id)
+            OwnershipTransferRepository(session).force(scope, member_uid)
+            session.commit()
+            assert session.get(LicenseMember, member_id).role == "เจ้าของ"
+            assert session.get(LicenseMember, owner_id).role == "admin"
