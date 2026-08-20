@@ -31,9 +31,13 @@ class Settings(BaseSettings):
     jwt_secret: str = ""
     jwt_ttl_s: int = 86400
 
-    # AI — stubbed in Phase 1, wired in Phase 4
+    # AI — wired in Phase 4. Two model tiers (Master Spec 4.3): the chat tier
+    # runs thinking OFF, the reasoning tier is for ad-hoc reports (Phase 17)
+    # and keeps thinking ON. Fallback per ADR-014 is done by swapping the slug
+    # in these vars, so they stay plain config with no code change needed.
     openrouter_api_key: str = ""
     openrouter_model: str = ""
+    openrouter_model_reasoning: str = ""
 
     # PDF — Phase 10. SmartBrowz is called over REST, not the Catalyst SDK,
     # because this tier runs on Cloud Run outside Catalyst.

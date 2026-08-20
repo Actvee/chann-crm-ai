@@ -182,6 +182,12 @@ variable "openrouter_model" {
   default     = ""
 }
 
+variable "openrouter_model_reasoning" {
+  type        = string
+  default     = ""
+  description = "Reasoning-tier model slug (thinking ON) for ad-hoc reports. Phase 17 uses it; empty is fine until then."
+}
+
 variable "create_application_bucket" {
   type        = bool
   description = "Create the private/versioned application bucket only when file features require it and preflight proves it absent."

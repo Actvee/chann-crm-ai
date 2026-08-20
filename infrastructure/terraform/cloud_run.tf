@@ -32,6 +32,7 @@ locals {
     LINE_LOGIN_CHANNEL_ID                = var.line_login_channel_id
     OPENROUTER_API_KEY                   = var.openrouter_api_key
     OPENROUTER_MODEL                     = var.openrouter_model
+    OPENROUTER_MODEL_REASONING           = var.openrouter_model_reasoning
   })
 
   presentation_runtime_env = merge(local.common_runtime_env, {

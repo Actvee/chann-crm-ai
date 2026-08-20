@@ -64,7 +64,7 @@ class TestApplicationPermissionGate:
         class FakeDataClient:
             called = False
 
-            async def create_role(self, license_id, payload):
+            async def create_role(self, license_id, payload, **kwargs):
                 self.called = True
                 return {"license_id": license_id, **payload}
 
