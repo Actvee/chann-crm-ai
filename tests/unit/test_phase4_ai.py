@@ -33,6 +33,7 @@ from chann_app.services.ai.intent import (  # noqa: E402
     build_prompt,
     parse_intent,
     parse_intent_json,
+    unavailable_reply,
 )
 from chann_app.services.ai.metrics import metrics  # noqa: E402
 from chann_app.services.ai.providers import provider_block  # noqa: E402
@@ -349,3 +350,75 @@ class TestPromptConstruction:
             chann_uid="CHN-S-1", role="sales", license_id="lic-1", permission_keys=[]
         )
         assert "language: th" in p
+
+
+class TestPhase5BotLanguage:
+    """Phase 5 — Master Spec 5.4/5.5 test_i18n_bot_language.
+
+    The UI half of Phase 5 (dictionary completeness, the switcher, localStorage)
+    is enforced by `npm run typecheck` in the presentation tier, which the
+    source-verification script already runs — see lib/i18n/th.ts.
+    """
+
+    async def test_language_en_is_instructed_in_the_prompt(self):
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["body"] = json.loads(request.content)
+            return _openrouter_reply(json.dumps({"action": "read", "entity": "customer"}))
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as c:
+            await parse_intent(
+                message="show me customers",
+                chann_uid="CHN-S-1", role="sales", license_id="lic-1",
+                permission_keys=["customer.read"], language="en", client=c,
+            )
+        system = captured["body"]["messages"][0]["content"]
+        assert "language: en" in system
+        assert "in English" in system
+        assert "in Thai" not in system
+
+    async def test_language_th_is_instructed_in_the_prompt(self):
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["body"] = json.loads(request.content)
+            return _openrouter_reply(json.dumps({"action": "read", "entity": "customer"}))
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as c:
+            await parse_intent(
+                message="ดูลูกค้า",
+                chann_uid="CHN-S-1", role="sales", license_id="lic-1",
+                permission_keys=["customer.read"], language="th", client=c,
+            )
+        system = captured["body"]["messages"][0]["content"]
+        assert "language: th" in system
+        assert "in Thai" in system
+
+    def test_machine_facing_values_stay_english_by_instruction(self):
+        p = build_prompt(
+            chann_uid="CHN-S-1", role="sales", license_id="lic-1",
+            permission_keys=["customer.read"], language="th",
+        )
+        # action/entity/field keys must not be translated or downstream
+        # matching breaks — the prompt has to say so explicitly
+        assert "stay in English" in p
+
+    def test_unknown_locale_falls_back_to_thai(self):
+        p = build_prompt(
+            chann_uid="CHN-S-1", role="sales", license_id="lic-1",
+            permission_keys=[], language="fr",
+        )
+        assert "in Thai" in p
+
+    def test_unavailable_reply_is_localised(self):
+        assert "ขออภัย" in unavailable_reply("th")
+        assert "Sorry" in unavailable_reply("en")
+
+    def test_unavailable_reply_defaults_to_thai(self):
+        assert unavailable_reply() == unavailable_reply("th")
+        assert unavailable_reply("de") == unavailable_reply("th")
+        assert unavailable_reply("") == unavailable_reply("th")
+
+    def test_legacy_constant_still_points_at_thai(self):
+        assert UNAVAILABLE_REPLY == unavailable_reply("th")

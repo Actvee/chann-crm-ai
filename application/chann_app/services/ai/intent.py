@@ -17,7 +17,24 @@ log = logging.getLogger(__name__)
 
 # Shown to the user when every provider failed (4.7). Deliberately plain: no
 # blame, no jargon, no invented detail about what went wrong.
-UNAVAILABLE_REPLY = "ขออภัย ระบบไม่พร้อมใช้งานชั่วคราว กรุณาลองใหม่อีกครั้ง"
+#
+# Phase 5: this string is produced before any model call succeeds, so it cannot
+# come from the model — it has to exist per-locale in our own code.
+UNAVAILABLE_REPLY_BY_LOCALE = {
+    "th": "ขออภัย ระบบไม่พร้อมใช้งานชั่วคราว กรุณาลองใหม่อีกครั้ง",
+    "en": "Sorry — the service is temporarily unavailable. Please try again.",
+}
+DEFAULT_LOCALE = "th"
+
+# Kept for callers that predate Phase 5's language plumbing.
+UNAVAILABLE_REPLY = UNAVAILABLE_REPLY_BY_LOCALE[DEFAULT_LOCALE]
+
+
+def unavailable_reply(language: str = DEFAULT_LOCALE) -> str:
+    """Fall back to Thai for an unknown locale — the product is Thai-first."""
+    return UNAVAILABLE_REPLY_BY_LOCALE.get(
+        (language or "").lower(), UNAVAILABLE_REPLY_BY_LOCALE[DEFAULT_LOCALE]
+    )
 
 INTENT_SYSTEM_PROMPT = """You are an intent parser for a CRM system.
 Convert the user's message into a JSON action.
@@ -40,7 +57,15 @@ Rules:
 - If the user's permission keys do not cover the requested action, return
   {{"action": "suggest", "suggestions": [...]}} listing things they may do instead.
 - Never invent field values the user did not provide.
+- Any human-readable text you produce (suggestions, and the names of missing
+  fields as shown to the user) MUST be written in {language_name}.
+  Machine-facing values — action, entity, and field keys — stay in English
+  regardless of language, because downstream code matches on them.
 """
+
+# Spelled out for the model rather than passing a bare code: "th" is far more
+# ambiguous in a prompt than "Thai".
+LANGUAGE_NAMES = {"th": "Thai", "en": "English"}
 
 
 def build_prompt(
@@ -52,11 +77,13 @@ def build_prompt(
     language: str = "th",
 ) -> str:
     keys = sorted(permission_keys)
+    lang = (language or DEFAULT_LOCALE).lower()
     return INTENT_SYSTEM_PROMPT.format(
         chann_uid=chann_uid,
         role=role,
         license_id=license_id,
-        language=language,
+        language=lang,
+        language_name=LANGUAGE_NAMES.get(lang, LANGUAGE_NAMES[DEFAULT_LOCALE]),
         permission_keys=", ".join(keys) if keys else "(none)",
     )
 
