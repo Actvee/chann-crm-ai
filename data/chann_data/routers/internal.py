@@ -40,9 +40,24 @@ from ..repositories.phase2 import (
     RoleRepository,
 )
 from ..repositories.audit import AuditRepository, diff_fields
+from ..repositories.phase6 import (
+    FollowUpRepository,
+    MessageEntityMapRepository,
+    NotificationRepository,
+    Phase6Conflict,
+    Phase6NotFound,
+)
 from ..schemas import (
     AuditLogOut,
     AuditLogWriteIn,
+    FollowUpIn,
+    FollowUpOut,
+    FollowUpStatusIn,
+    MessageEntityMapIn,
+    MessageEntityMapOut,
+    NotificationIn,
+    NotificationOut,
+    UnreadCountOut,
     AuthorizationContextOut,
     BreakGlassTransferIn,
     IdentityOut,
@@ -643,3 +658,254 @@ def force_transfer_owner(
     except Exception as exc:
         session.rollback()
         raise _phase2_http_error(exc)
+
+
+# ---------------------------------------------------------------- Phase 6
+
+
+def _phase6_http_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, Phase6NotFound):
+        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    if isinstance(exc, Phase6Conflict):
+        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    if isinstance(exc, CrossTenantAccessDenied):
+        return HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
+    if isinstance(exc, HTTPException):
+        return exc
+    return HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="internal error"
+    )
+
+
+@router.post(
+    "/licenses/{license_id}/message-entity-map",
+    response_model=MessageEntityMapOut,
+    status_code=201,
+)
+def record_message_entity(
+    license_id: uuid.UUID,
+    payload: MessageEntityMapIn,
+    session: Session = Depends(get_session),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = MessageEntityMapRepository(session).record(
+            scope,
+            message_id=payload.message_id,
+            entity_type=payload.entity_type,
+            entity_id=payload.entity_id,
+        )
+        session.commit()
+        return MessageEntityMapOut.model_validate(row, from_attributes=True)
+    except Exception as exc:
+        session.rollback()
+        raise _phase6_http_error(exc)
+
+
+@router.get(
+    "/licenses/{license_id}/message-entity-map/{message_id}",
+    response_model=MessageEntityMapOut,
+)
+def get_message_entity(
+    license_id: uuid.UUID, message_id: str, session: Session = Depends(get_session)
+):
+    scope = TenantScope(license_id=license_id)
+    row = MessageEntityMapRepository(session).get(scope, message_id)
+    if row is None:
+        # Same 404 whether the mapping is absent or belongs to another tenant —
+        # see the repository note; the caller's reply is identical either way.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="message mapping not found"
+        )
+    return MessageEntityMapOut.model_validate(row, from_attributes=True)
+
+
+@router.post(
+    "/licenses/{license_id}/notifications",
+    response_model=NotificationOut,
+    status_code=201,
+)
+def create_notification(
+    license_id: uuid.UUID,
+    payload: NotificationIn,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = NotificationRepository(session).create(
+            scope,
+            target_chann_uid=payload.target_chann_uid,
+            type=payload.type,
+            message=payload.message,
+            message_en=payload.message_en,
+            entity_type=payload.entity_type,
+            entity_id=payload.entity_id,
+            delivery_line=payload.delivery_line,
+            delivery_dashboard=payload.delivery_dashboard,
+        )
+        AuditRepository(session).write(
+            license_id=license_id,
+            entity_type="notification",
+            entity_id=row.id,
+            actor_type="system",
+            actor_id=x_actor_id or None,
+            action="create",
+        )
+        session.commit()
+        return NotificationOut.model_validate(row, from_attributes=True)
+    except Exception as exc:
+        session.rollback()
+        raise _phase6_http_error(exc)
+
+
+@router.get(
+    "/licenses/{license_id}/members/{chann_uid}/notifications",
+    response_model=list[NotificationOut],
+)
+def list_notifications(
+    license_id: uuid.UUID,
+    chann_uid: str,
+    unread_only: bool = False,
+    limit: int = 50,
+    session: Session = Depends(get_session),
+):
+    scope = TenantScope(license_id=license_id)
+    rows = NotificationRepository(session).list_for_member(
+        scope, chann_uid, unread_only=unread_only, limit=limit
+    )
+    return [NotificationOut.model_validate(r, from_attributes=True) for r in rows]
+
+
+@router.get(
+    "/licenses/{license_id}/members/{chann_uid}/notifications/unread-count",
+    response_model=UnreadCountOut,
+)
+def notification_unread_count(
+    license_id: uuid.UUID, chann_uid: str, session: Session = Depends(get_session)
+):
+    """Polled by the dashboard badge (6.8), so it counts rather than lists."""
+    scope = TenantScope(license_id=license_id)
+    return UnreadCountOut(
+        unread_count=NotificationRepository(session).unread_count(scope, chann_uid)
+    )
+
+
+@router.post(
+    "/licenses/{license_id}/members/{chann_uid}/notifications/{notification_id}/read",
+    response_model=NotificationOut,
+)
+def mark_notification_read(
+    license_id: uuid.UUID,
+    chann_uid: str,
+    notification_id: uuid.UUID,
+    session: Session = Depends(get_session),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = NotificationRepository(session).mark_read(
+            scope, notification_id, chann_uid
+        )
+        session.commit()
+        session.refresh(row)
+        return NotificationOut.model_validate(row, from_attributes=True)
+    except Exception as exc:
+        session.rollback()
+        raise _phase6_http_error(exc)
+
+
+@router.post(
+    "/licenses/{license_id}/follow-ups", response_model=FollowUpOut, status_code=201
+)
+def create_follow_up(
+    license_id: uuid.UUID,
+    payload: FollowUpIn,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = FollowUpRepository(session).create(
+            scope,
+            entity_type=payload.entity_type,
+            entity_id=payload.entity_id,
+            due_date=payload.due_date,
+            owner_member_id=payload.owner_member_id,
+            notes=payload.notes,
+        )
+        AuditRepository(session).write(
+            license_id=license_id,
+            entity_type="follow_up",
+            entity_id=row.id,
+            actor_type="user",
+            actor_id=x_actor_id or None,
+            action="create",
+            field_changes=diff_fields(
+                {}, {"entity_type": row.entity_type, "due_date": str(row.due_date)}
+            ),
+        )
+        session.commit()
+        return FollowUpOut.model_validate(row, from_attributes=True)
+    except Exception as exc:
+        session.rollback()
+        raise _phase6_http_error(exc)
+
+
+@router.get("/licenses/{license_id}/follow-ups", response_model=list[FollowUpOut])
+def list_follow_ups(
+    license_id: uuid.UUID,
+    status_filter: str | None = None,
+    entity_type: str | None = None,
+    limit: int = 100,
+    session: Session = Depends(get_session),
+):
+    scope = TenantScope(license_id=license_id)
+    rows = FollowUpRepository(session).list_for_license(
+        scope, status=status_filter, entity_type=entity_type, limit=limit
+    )
+    return [FollowUpOut.model_validate(r, from_attributes=True) for r in rows]
+
+
+@router.get("/licenses/{license_id}/follow-ups/due", response_model=list[FollowUpOut])
+def list_due_follow_ups(
+    license_id: uuid.UUID, days: int = 1, session: Session = Depends(get_session)
+):
+    """Drives the 1-day-ahead reminder sweep (6.7). Includes overdue rows."""
+    scope = TenantScope(license_id=license_id)
+    rows = FollowUpRepository(session).due_within(scope, days=days)
+    return [FollowUpOut.model_validate(r, from_attributes=True) for r in rows]
+
+
+@router.patch(
+    "/licenses/{license_id}/follow-ups/{follow_up_id}/status",
+    response_model=FollowUpOut,
+)
+def set_follow_up_status(
+    license_id: uuid.UUID,
+    follow_up_id: uuid.UUID,
+    payload: FollowUpStatusIn,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        repo = FollowUpRepository(session)
+        before = repo.get(scope, follow_up_id)
+        before_status = before.status if before is not None else None
+        row = repo.set_status(scope, follow_up_id, payload.status)
+        AuditRepository(session).write(
+            license_id=license_id,
+            entity_type="follow_up",
+            entity_id=row.id,
+            actor_type="user",
+            actor_id=x_actor_id or None,
+            action="update",
+            field_changes=diff_fields(
+                {"status": before_status}, {"status": row.status}
+            ),
+        )
+        session.commit()
+        return FollowUpOut.model_validate(row, from_attributes=True)
+    except Exception as exc:
+        session.rollback()
+        raise _phase6_http_error(exc)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import BaseModel
@@ -146,3 +146,76 @@ class AuditLogWriteIn(BaseModel):
     field_changes: dict | None = None
     ai_reasoning: str | None = None
     cross_tenant: bool = False
+
+
+# ---------------------------------------------------------------- Phase 6
+
+
+class MessageEntityMapIn(BaseModel):
+    message_id: str
+    entity_type: str
+    entity_id: uuid.UUID
+
+
+class MessageEntityMapOut(BaseModel):
+    id: uuid.UUID
+    message_id: str
+    entity_type: str
+    entity_id: uuid.UUID
+    license_id: uuid.UUID
+    created_at: datetime
+
+
+class NotificationIn(BaseModel):
+    target_chann_uid: str
+    type: str
+    message: str
+    message_en: str | None = None
+    entity_type: str | None = None
+    entity_id: uuid.UUID | None = None
+    delivery_line: bool = True
+    delivery_dashboard: bool = True
+
+
+class NotificationOut(BaseModel):
+    id: uuid.UUID
+    license_id: uuid.UUID | None
+    target_chann_uid: str
+    type: str
+    entity_type: str | None
+    entity_id: uuid.UUID | None
+    message: str
+    message_en: str | None
+    delivery_line: bool
+    delivery_dashboard: bool
+    read_at: datetime | None
+    created_at: datetime
+
+
+class UnreadCountOut(BaseModel):
+    unread_count: int
+
+
+class FollowUpIn(BaseModel):
+    entity_type: str
+    entity_id: uuid.UUID
+    due_date: date
+    owner_member_id: uuid.UUID | None = None
+    notes: str | None = None
+
+
+class FollowUpStatusIn(BaseModel):
+    status: Literal["pending", "completed", "cancelled"]
+
+
+class FollowUpOut(BaseModel):
+    id: uuid.UUID
+    license_id: uuid.UUID
+    entity_type: str
+    entity_id: uuid.UUID
+    due_date: date
+    status: str
+    owner_member_id: uuid.UUID | None
+    notes: str | None
+    created_at: datetime
+    updated_at: datetime

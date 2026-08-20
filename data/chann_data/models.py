@@ -8,9 +8,18 @@ Columns marked "placed early" are required by a later phase but are created
 now because the Master Spec explicitly says so.
 """
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, UniqueConstraint, func
+from sqlalchemy import (
+    Boolean,
+    Date,
+    DateTime,
+    ForeignKey,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -203,3 +212,83 @@ class AuditLog(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
     )
+
+
+class LineMessageEntityMap(Base):
+    """Phase 6 (Master Spec 6.3/6.5) — which entity a LINE message referred to.
+
+    Lets a user reply to an earlier bot message and have the reply act on the
+    right record. Write-once: a LINE message ID never comes to mean a
+    different entity later, so there is no updated_at.
+    """
+
+    __tablename__ = "line_message_entity_map"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    # LINE message IDs are globally unique, so this is unique platform-wide
+    # rather than per-tenant. The tenant check still happens on lookup — a
+    # mapping is only usable by the license that owns it.
+    message_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    entity_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    entity_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    license_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("licenses.id", ondelete="RESTRICT"),
+        nullable=False, index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class Notification(TimestampMixin, Base):
+    """Phase 6 (Master Spec 6.3/6.8).
+
+    license_id is nullable for platform-level notifications, matching the spec.
+    Both delivery channels are booleans rather than one enum because a single
+    notification can legitimately go to both, or to neither (recorded but not
+    delivered).
+    """
+
+    __tablename__ = "notifications"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    license_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("licenses.id", ondelete="RESTRICT"), index=True
+    )
+    target_chann_uid: Mapped[str] = mapped_column(
+        String(32), ForeignKey("chann_identities.chann_uid", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    type: Mapped[str] = mapped_column(String(64), nullable=False)
+    entity_type: Mapped[str | None] = mapped_column(String(64))
+    entity_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    # Thai is required, English optional: the product is Thai-first (Phase 5),
+    # and a notification with no Thai text would be undisplayable by default.
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    message_en: Mapped[str | None] = mapped_column(Text)
+    delivery_line: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    delivery_dashboard: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class FollowUp(TimestampMixin, Base):
+    """Phase 6 (Master Spec 6.3/6.7) — a dated reminder against any entity."""
+
+    __tablename__ = "follow_ups"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    license_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("licenses.id", ondelete="RESTRICT"),
+        nullable=False, index=True,
+    )
+    entity_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    entity_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    # DATE, not TIMESTAMPTZ, per spec. Postgres returns a naive date object for
+    # this column — comparing it against an aware datetime raises, so the
+    # repository works in dates throughout rather than mixing the two.
+    due_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    owner_member_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("license_members.id", ondelete="RESTRICT")
+    )
+    notes: Mapped[str | None] = mapped_column(Text)

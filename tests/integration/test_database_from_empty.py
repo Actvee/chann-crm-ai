@@ -844,3 +844,238 @@ class TestPhase3AuditLog:
             )
         finally:
             app.dependency_overrides.clear()
+
+
+class TestPhase6DataLayer:
+    """Phase 6 round 1 — data layer only (Master Spec 6.3).
+
+    The chat/notification-sending behaviour these tables support is round 2
+    (Application tier). What is asserted here is the storage contract those
+    handlers will rely on: tenant isolation, idempotency, and the state rules.
+    """
+
+    def test_message_entity_map_is_idempotent_and_tenant_scoped(self, migrated_db):
+        from sqlalchemy.orm import Session
+
+        from chann_data.repositories.phase6 import (
+            MessageEntityMapRepository,
+            Phase6Conflict,
+        )
+        from chann_data.repositories.tenant_scope import TenantScope
+
+        with Session(migrated_db) as session:
+            lic_a, _, _ = _phase2_tenant(session)
+            lic_b, _, _ = _phase2_tenant(session)
+            a_id, b_id = lic_a.id, lic_b.id
+            session.commit()
+
+        entity = uuid.uuid4()
+        with Session(migrated_db) as session:
+            scope_a = TenantScope(a_id)
+            repo = MessageEntityMapRepository(session)
+            first = repo.record(
+                scope_a, message_id="msg-1", entity_type="customer", entity_id=entity
+            )
+            # LINE redelivers webhooks — the same mapping twice must be a no-op
+            again = repo.record(
+                scope_a, message_id="msg-1", entity_type="customer", entity_id=entity
+            )
+            assert first.id == again.id
+            session.commit()
+
+        with Session(migrated_db) as session:
+            repo = MessageEntityMapRepository(session)
+            # same message_id, different entity -> real conflict, not a silent overwrite
+            with pytest.raises(Phase6Conflict):
+                repo.record(
+                    TenantScope(a_id),
+                    message_id="msg-1",
+                    entity_type="deal",
+                    entity_id=uuid.uuid4(),
+                )
+            session.rollback()
+
+        with Session(migrated_db) as session:
+            repo = MessageEntityMapRepository(session)
+            assert repo.get(TenantScope(a_id), "msg-1") is not None
+            # tenant B must not resolve tenant A's message id
+            assert repo.get(TenantScope(b_id), "msg-1") is None
+            assert repo.get(TenantScope(a_id), "no-such-message") is None
+
+    def test_notification_read_and_unread_count(self, migrated_db):
+        from sqlalchemy.orm import Session
+
+        from chann_data.repositories.phase6 import (
+            NotificationRepository,
+            Phase6NotFound,
+        )
+        from chann_data.repositories.tenant_scope import TenantScope
+
+        with Session(migrated_db) as session:
+            lic, owner, member = _phase2_tenant(session)
+            lic_id = lic.id
+            owner_uid, member_uid = owner.chann_uid, member.chann_uid
+            session.commit()
+
+        with Session(migrated_db) as session:
+            scope = TenantScope(lic_id)
+            repo = NotificationRepository(session)
+            n1 = repo.create(
+                scope, target_chann_uid=owner_uid, type="followup_due",
+                message="ครบกำหนดติดตาม", message_en="Follow-up due",
+            )
+            repo.create(
+                scope, target_chann_uid=owner_uid, type="sla_warning",
+                message="ใกล้ผิด SLA",
+            )
+            # goes to someone else — must not affect the owner's count
+            repo.create(
+                scope, target_chann_uid=member_uid, type="sla_warning",
+                message="ของอีกคน",
+            )
+            # LINE-only: recorded, but must stay out of the dashboard list
+            repo.create(
+                scope, target_chann_uid=owner_uid, type="chat_session_new",
+                message="เฉพาะ LINE", delivery_dashboard=False,
+            )
+            n1_id = n1.id
+            session.commit()
+
+        with Session(migrated_db) as session:
+            scope = TenantScope(lic_id)
+            repo = NotificationRepository(session)
+            assert repo.unread_count(scope, owner_uid) == 2
+            assert repo.unread_count(scope, member_uid) == 1
+            assert len(repo.list_for_member(scope, owner_uid)) == 2
+
+            repo.mark_read(scope, n1_id, owner_uid)
+            session.commit()
+
+        with Session(migrated_db) as session:
+            scope = TenantScope(lic_id)
+            repo = NotificationRepository(session)
+            assert repo.unread_count(scope, owner_uid) == 1
+            row = next(
+                r for r in repo.list_for_member(scope, owner_uid) if r.id == n1_id
+            )
+            assert row.read_at is not None
+            first_seen = row.read_at
+
+            # another member must not be able to clear someone else's badge
+            with pytest.raises(Phase6NotFound):
+                repo.mark_read(scope, n1_id, member_uid)
+            session.rollback()
+
+        with Session(migrated_db) as session:
+            scope = TenantScope(lic_id)
+            repo = NotificationRepository(session)
+            repo.mark_read(scope, n1_id, owner_uid)   # idempotent
+            session.commit()
+        with Session(migrated_db) as session:
+            row = NotificationRepository(session).mark_read(
+                TenantScope(lic_id), n1_id, owner_uid
+            )
+            # re-reading must not move the timestamp
+            assert row.read_at == first_seen
+
+    def test_follow_up_lifecycle_and_due_scan(self, migrated_db):
+        from datetime import date, timedelta
+
+        from sqlalchemy.orm import Session
+
+        from chann_data.repositories.phase6 import (
+            FollowUpRepository,
+            Phase6Conflict,
+        )
+        from chann_data.repositories.tenant_scope import TenantScope
+
+        with Session(migrated_db) as session:
+            lic, _, _ = _phase2_tenant(session)
+            lic_id = lic.id
+            session.commit()
+
+        today = date(2026, 8, 20)
+        with Session(migrated_db) as session:
+            scope = TenantScope(lic_id)
+            repo = FollowUpRepository(session)
+            due_tomorrow = repo.create(
+                scope, entity_type="deal", entity_id=uuid.uuid4(),
+                due_date=today + timedelta(days=1),
+            )
+            overdue = repo.create(
+                scope, entity_type="ticket", entity_id=uuid.uuid4(),
+                due_date=today - timedelta(days=3),
+            )
+            repo.create(
+                scope, entity_type="customer", entity_id=uuid.uuid4(),
+                due_date=today + timedelta(days=30),
+            )
+            tomorrow_id, overdue_id = due_tomorrow.id, overdue.id
+            session.commit()
+
+        with Session(migrated_db) as session:
+            scope = TenantScope(lic_id)
+            repo = FollowUpRepository(session)
+            due = repo.due_within(scope, days=1, today=today)
+            ids = {f.id for f in due}
+            assert tomorrow_id in ids
+            # overdue must be included — dropping it would lose it forever
+            assert overdue_id in ids
+            assert len(due) == 2
+            # ordered soonest-first, so the most overdue is chased first
+            assert due[0].id == overdue_id
+
+        with Session(migrated_db) as session:
+            scope = TenantScope(lic_id)
+            repo = FollowUpRepository(session)
+            assert repo.set_status(scope, tomorrow_id, "completed").status == "completed"
+            assert repo.set_status(scope, overdue_id, "cancelled").status == "cancelled"
+            session.commit()
+
+        with Session(migrated_db) as session:
+            scope = TenantScope(lic_id)
+            repo = FollowUpRepository(session)
+            # settled rows drop out of the due scan
+            assert repo.due_within(scope, days=1, today=today) == []
+            # re-completing is a harmless no-op
+            repo.set_status(scope, tomorrow_id, "completed")
+            # but a settled row must not be flipped to a different terminal state
+            with pytest.raises(Phase6Conflict):
+                repo.set_status(scope, tomorrow_id, "cancelled")
+            with pytest.raises(Phase6Conflict):
+                repo.set_status(scope, tomorrow_id, "bogus-status")
+            session.rollback()
+
+    def test_follow_ups_do_not_leak_across_tenants(self, migrated_db):
+        from datetime import date
+
+        from sqlalchemy.orm import Session
+
+        from chann_data.repositories.phase6 import (
+            FollowUpRepository,
+            Phase6NotFound,
+        )
+        from chann_data.repositories.tenant_scope import TenantScope
+
+        with Session(migrated_db) as session:
+            lic_a, _, _ = _phase2_tenant(session)
+            lic_b, _, _ = _phase2_tenant(session)
+            a_id, b_id = lic_a.id, lic_b.id
+            session.commit()
+
+        with Session(migrated_db) as session:
+            row = FollowUpRepository(session).create(
+                TenantScope(a_id), entity_type="deal", entity_id=uuid.uuid4(),
+                due_date=date(2026, 9, 1),
+            )
+            a_follow_up = row.id
+            session.commit()
+
+        with Session(migrated_db) as session:
+            repo = FollowUpRepository(session)
+            assert repo.get(TenantScope(a_id), a_follow_up) is not None
+            assert repo.get(TenantScope(b_id), a_follow_up) is None
+            assert repo.list_for_license(TenantScope(b_id)) == []
+            with pytest.raises(Phase6NotFound):
+                repo.set_status(TenantScope(b_id), a_follow_up, "cancelled")
+            session.rollback()
