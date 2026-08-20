@@ -3,6 +3,10 @@
 import Script from "next/script";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 
+import { useLanguage } from "@/lib/i18n/LanguageProvider";
+import { LanguageSwitcher } from "@/lib/i18n/LanguageSwitcher";
+import { NotificationBell } from "@/lib/NotificationBell";
+
 type Membership = { license_id: string; license_code: string; company_name: string };
 type Role = {
   role_name: string;
@@ -22,6 +26,7 @@ function getLiff(): LiffApi | undefined {
 
 export default function RoleManagement({ liffId }: { liffId: string }) {
   const [token, setToken] = useState("");
+  const { t } = useLanguage();
   const [memberships, setMemberships] = useState<Membership[]>([]);
   const [licenseId, setLicenseId] = useState("");
   const [roles, setRoles] = useState<Role[]>([]);
@@ -161,7 +166,11 @@ export default function RoleManagement({ liffId }: { liffId: string }) {
         onReady={() => void initialize()}
         onError={() => setStatus("LIFF SDK load failed")}
       />
-      <h1>Role & Permission Management</h1>
+      <h1>{t.role.title}</h1>
+      <LanguageSwitcher />
+      {token && licenseId && (
+        <NotificationBell idToken={token} licenseId={licenseId} />
+      )}
       <p aria-live="polite">{status}</p>
 
       {memberships.length > 1 && (
@@ -178,7 +187,7 @@ export default function RoleManagement({ liffId }: { liffId: string }) {
       )}
 
       <section>
-        <h2>Permission Matrix</h2>
+        <h2>{t.role.permissionMatrix}</h2>
         {roles.map((role) => (
           <article key={role.role_name} style={{ border: "1px solid #ddd", padding: 12, margin: "8px 0" }}>
             <strong>{role.role_name}</strong>{role.is_owner ? " — protected owner" : ""}
@@ -194,13 +203,13 @@ export default function RoleManagement({ liffId }: { liffId: string }) {
       </section>
 
       <form onSubmit={saveRole} style={{ display: "grid", gap: 8, marginTop: 24 }}>
-        <h2>{editingRoleName ? `แก้ Custom Role: ${editingRoleName}` : "สร้าง Custom Role"}</h2>
+        <h2>{editingRoleName ? `แก้ Custom Role: ${editingRoleName}` : t.role.createCustomRole}</h2>
         <label>
-          ชื่อ role
+          {t.role.roleName}
           <input value={roleName} onChange={(event) => setRoleName(event.target.value)} required />
         </label>
         <label>
-          Permission keys (คั่นด้วย comma)
+          {t.role.permissionKeys}
           <textarea
             value={permissionText}
             onChange={(event) => setPermissionText(event.target.value)}
@@ -217,16 +226,16 @@ export default function RoleManagement({ liffId }: { liffId: string }) {
       </form>
 
       <form onSubmit={saveSetting} style={{ display: "grid", gap: 8, marginTop: 32 }}>
-        <h2>License Setting</h2>
+        <h2>{t.licenseSetting.title}</h2>
         <label>
-          Setting key
+          {t.licenseSetting.settingKey}
           <input value={settingKey} onChange={(event) => setSettingKey(event.target.value)} required />
         </label>
         <label>
-          Value (JSON หรือข้อความ)
+          {t.licenseSetting.settingValue}
           <textarea value={settingValue} onChange={(event) => setSettingValue(event.target.value)} required />
         </label>
-        <button type="submit" disabled={!licenseId}>บันทึก setting</button>
+        <button type="submit" disabled={!licenseId}>{t.licenseSetting.saveButton}</button>
       </form>
     </main>
   );

@@ -40,6 +40,7 @@ from ..repositories.phase2 import (
     RoleRepository,
 )
 from ..repositories.audit import AuditRepository, diff_fields
+from ..permissions import PERMISSION_DESCRIPTIONS, PERMISSION_KEYS
 from ..repositories.phase6 import (
     FollowUpRepository,
     MessageEntityMapRepository,
@@ -909,3 +910,21 @@ def set_follow_up_status(
     except Exception as exc:
         session.rollback()
         raise _phase6_http_error(exc)
+
+
+@router.get("/permissions/catalog")
+def permission_catalog():
+    """The full permission catalogue with human labels.
+
+    Platform-wide and tenant-independent, so it is not under /licenses/{id}.
+    Serves both the bot's "what can I do" answer (6.6) and any UI that wants
+    to offer permissions as a pick-list rather than free text.
+    """
+    return [
+        {
+            "key": key,
+            "group": key.split(".", 1)[0] if "." in key else "general",
+            "label": PERMISSION_DESCRIPTIONS.get(key, {}),
+        }
+        for key in sorted(PERMISSION_KEYS)
+    ]

@@ -259,3 +259,127 @@ class DataClient:
 
     async def aclose(self) -> None:
         await self._client.aclose()
+
+    # ------------------------------------------------------------ Phase 6
+
+    async def permission_catalog(self) -> list[dict]:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/permissions/catalog", headers=self._headers
+        )
+        return self._unwrap(resp)
+
+    async def record_message_entity(
+        self, license_id: str, message_id: str, entity_type: str, entity_id: str
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/message-entity-map",
+            headers=self._headers,
+            json={
+                "message_id": message_id,
+                "entity_type": entity_type,
+                "entity_id": entity_id,
+            },
+        )
+        return self._unwrap(resp)
+
+    async def get_message_entity(self, license_id: str, message_id: str) -> dict | None:
+        """None for both 'no such mapping' and 'belongs to another tenant' —
+        the Data tier deliberately does not distinguish them."""
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}"
+            f"/message-entity-map/{quote(message_id, safe='')}",
+            headers=self._headers,
+        )
+        if resp.status_code == 404:
+            return None
+        return self._unwrap(resp)
+
+    async def create_notification(
+        self,
+        license_id: str,
+        *,
+        target_chann_uid: str,
+        type: str,
+        message: str,
+        message_en: str | None = None,
+        entity_type: str | None = None,
+        entity_id: str | None = None,
+        delivery_line: bool = True,
+        delivery_dashboard: bool = True,
+        actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/notifications",
+            headers=self._headers_for(actor_id),
+            json={
+                "target_chann_uid": target_chann_uid,
+                "type": type,
+                "message": message,
+                "message_en": message_en,
+                "entity_type": entity_type,
+                "entity_id": entity_id,
+                "delivery_line": delivery_line,
+                "delivery_dashboard": delivery_dashboard,
+            },
+        )
+        return self._unwrap(resp)
+
+    async def list_notifications(
+        self, license_id: str, chann_uid: str, *, unread_only: bool = False,
+        limit: int = 50,
+    ) -> list[dict]:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}"
+            f"/members/{chann_uid}/notifications",
+            headers=self._headers,
+            params={"unread_only": str(unread_only).lower(), "limit": limit},
+        )
+        return self._unwrap(resp)
+
+    async def notification_unread_count(self, license_id: str, chann_uid: str) -> int:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}"
+            f"/members/{chann_uid}/notifications/unread-count",
+            headers=self._headers,
+        )
+        return int(self._unwrap(resp)["unread_count"])
+
+    async def mark_notification_read(
+        self, license_id: str, chann_uid: str, notification_id: str
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}"
+            f"/members/{chann_uid}/notifications/{notification_id}/read",
+            headers=self._headers,
+        )
+        return self._unwrap(resp)
+
+    async def create_follow_up(
+        self, license_id: str, payload: dict, actor_id: str | None = None
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/follow-ups",
+            headers=self._headers_for(actor_id),
+            json=payload,
+        )
+        return self._unwrap(resp)
+
+    async def due_follow_ups(self, license_id: str, days: int = 1) -> list[dict]:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/follow-ups/due",
+            headers=self._headers,
+            params={"days": days},
+        )
+        return self._unwrap(resp)
+
+    async def set_follow_up_status(
+        self, license_id: str, follow_up_id: str, status: str,
+        actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.patch(
+            f"{self._base}/internal/v1/licenses/{license_id}"
+            f"/follow-ups/{follow_up_id}/status",
+            headers=self._headers_for(actor_id),
+            json={"status": status},
+        )
+        return self._unwrap(resp)

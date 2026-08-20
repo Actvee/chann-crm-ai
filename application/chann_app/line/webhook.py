@@ -13,7 +13,8 @@ from fastapi import APIRouter, Header, HTTPException, Request, status
 
 from ..config import OA_CHANNELS, channel_secret
 from ..data_client import DataClient
-from ..services.identity import TenantResolution, resolve_context
+from ..services.chat import ChatReply, greet, handle_chat_message, handle_reply
+from ..services.identity import resolve_context
 from .client import LineReplyError, reply_text
 from .signature import verify_signature
 
@@ -21,17 +22,17 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/webhook/line", tags=["line"])
 
 
-def _reply_stub(ctx) -> str:
-    """Phase 1 responds with a deterministic stub. The AI intent engine lands
-    in Phase 4; wiring a model in now would make the Phase 1 acceptance test
-    non-deterministic for no gain."""
-    if ctx.resolution is TenantResolution.SINGLE:
-        company = ctx.memberships[0]["company_name"]
-        return f"[{ctx.chann_uid}] เชื่อมต่อกับ {company} แล้ว"
-    if ctx.resolution is TenantResolution.MULTIPLE:
-        names = ", ".join(m["company_name"] for m in ctx.memberships)
-        return f"[{ctx.chann_uid}] คุณเป็นสมาชิกหลายบริษัท: {names} — กรุณาเลือก"
-    return f"[{ctx.chann_uid}] ยังไม่พบบริษัทที่ผูกไว้ กรุณาลงทะเบียน"
+# A first contact ("follow" event, or an empty message) is greeted rather than
+# parsed — sending "" to the intent parser would burn a model call to learn
+# nothing. Anything with actual text goes through the chat engine.
+def _is_reply(event: dict) -> str | None:
+    """The quoted message ID, if this event is a reply to an earlier one.
+
+    LINE exposes this as quotedMessageId on the message object. Absent for an
+    ordinary message, which is the overwhelmingly common case.
+    """
+    quoted = (event.get("message") or {}).get("quotedMessageId")
+    return quoted or None
 
 
 @router.post("/{oa}")
@@ -66,19 +67,52 @@ async def handle_webhook(
             if not line_user_id:
                 continue
             ctx = await resolve_context(client, oa, line_user_id)
-            text = _reply_stub(ctx)
+            user_text = (event.get("message") or {}).get("text") or ""
+
+            if not user_text.strip():
+                chat = ChatReply(text=greet(ctx))
+            else:
+                quoted_id = _is_reply(event)
+                if quoted_id:
+                    chat = await handle_reply(
+                        client, message_id=quoted_id, reply_text=user_text, ctx=ctx
+                    )
+                else:
+                    chat = await handle_chat_message(
+                        client, message=user_text, ctx=ctx
+                    )
+
             try:
-                await reply_text(oa, event.get("replyToken", ""), text)
+                await reply_text(oa, event.get("replyToken", ""), chat.text)
             except LineReplyError as exc:
                 log.error("LINE reply failed for oa=%s: %s", oa, exc)
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                     detail=str(exc),
                 )
-            replies.append({"chann_uid": ctx.chann_uid, "text": text})
+
+            # The mapping can only be written once a message exists to map.
+            # reply_text does not return the sent message ID, so the entity is
+            # bound to the message the user sent — enough for a reply-to-reply
+            # to resolve, and it never invents an ID we do not have.
+            if chat.entity_type and chat.entity_id and ctx.license_id:
+                inbound_id = (event.get("message") or {}).get("id")
+                if inbound_id:
+                    try:
+                        await client.record_message_entity(
+                            str(ctx.license_id), inbound_id,
+                            chat.entity_type, chat.entity_id,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        # Losing the mapping degrades a later reply into
+                        # "ไม่พบข้อความต้นฉบับ"; it must not fail the reply
+                        # the user is waiting on right now.
+                        log.warning("could not record message entity map: %s", exc)
+
+            replies.append({"chann_uid": ctx.chann_uid, "text": chat.text})
     finally:
         await client.aclose()
 
-    # LINE only needs a 200. The replies are returned so the Phase 1 runtime
-    # acceptance check can assert on what would have been sent.
+    # LINE only needs a 200. The replies are returned so the runtime
+    # acceptance checks can assert on what would have been sent.
     return {"ok": True, "oa": oa, "replies": replies}

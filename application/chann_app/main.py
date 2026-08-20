@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from .config import settings
 from .data_client import DataClient
 from .line import webhook
-from . import routers_admin, routers_phase2
+from . import routers_admin, routers_phase2, routers_phase6
 
 logging.basicConfig(level=logging.INFO)
 
@@ -19,6 +19,7 @@ app = FastAPI(title="Chann CRM AI — Application Tier", version=settings.platfo
 app.include_router(webhook.router)
 app.include_router(routers_admin.router)
 app.include_router(routers_phase2.router)
+app.include_router(routers_phase6.router)
 
 
 @app.get("/health")

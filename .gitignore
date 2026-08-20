@@ -16,6 +16,14 @@ out/
 .artifacts/
 infrastructure/terraform/envs/*/backend.hcl
 infrastructure/terraform/envs/*/terraform.tfvars
+# Backups of tfvars are full copies and contain the same secrets, but the
+# rule above does not match a .bak-<timestamp> suffix. Deploy scripts make
+# these, so they must be ignored explicitly.
+infrastructure/terraform/envs/*/terraform.tfvars.bak-*
+*.tfvars.bak-*
+# Source-verification reports are build output, not source.
+phase*-source-verification-*.txt
+chann-crm-ai-phase*-source-verified-*.zip
 release-manifest.json
 preflight-evidence.json
 smartbrowz_verification.json
