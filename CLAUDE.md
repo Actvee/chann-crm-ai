@@ -260,6 +260,34 @@ Backup configured ไม่เท่ากับ recovery proven
 - ถ้า long workflow fail ให้ resume จาก safe point; ไม่ restart/destructively clean โดยไม่จำเป็น
 - destructive persistent-infrastructure changes ต้องแสดง impact และขอ explicit approval
 
+### 14.1 Guardrails เพิ่มเติมเมื่อมีหลายคน / หลาย agent
+
+โปรเจกต์นี้มีหลายคนช่วยเขียน และแต่ละคนใช้ AI agent ของตัวเอง ข้อต่อไปนี้บังคับ
+กับทุก agent ไม่ว่าใครเป็นคนสั่ง:
+
+- **ห้าม agent รัน `terraform apply` เอง** — หยุดที่ plan เสมอ แล้วให้คนตัดสินใจ
+  deploy ทำได้เฉพาะ release owner ที่ถือ `terraform.tfvars` (ดู `CONTRIBUTING.md` §0)
+- **ห้ามรันคำสั่ง `gcloud` ที่เปลี่ยนสถานะโปรเจกต์** รวมถึงการตอบ `y` ให้ prompt
+  อย่าง "enable this API?" — เคยเกิดขึ้นจริงจากสคริปต์ที่ประกาศตัวว่า read-only
+  ถ้าสคริปต์อ้างว่า read-only ต้องใส่ `--quiet` หรือ redirect stdin ให้ prompt
+  ตอบ "no" โดยปริยาย
+- **`git add -A` เสมอ ห้ามใช้รายชื่อไฟล์** และต้องยืนยันว่า `git status` สะอาด
+  หลัง commit — โปรเจกต์นี้เสียหายจากเรื่องนี้มาแล้ว 3 ครั้ง (ไฟล์ใหม่ตกหล่นจน
+  `main` import โมดูลที่ไม่มีใน repo, และครั้งหนึ่งทั้ง feature หายไปทั้ง phase)
+  อาการที่ปิดบังปัญหาคือ DEV ยังทำงานปกติ เพราะ image ถูก build จาก working tree
+- **ก่อนแก้ไฟล์ที่ทุก phase ใช้ร่วมกัน** (`models.py`, `routers/internal.py`,
+  `schemas.py`) ต้องเช็คก่อนว่ามีคนอื่นถือ phase ที่แตะไฟล์เดียวกันอยู่หรือไม่
+- **patch ที่จะส่งให้คนอื่นรัน ต้อง validate ด้วยการ apply บน clone สดก่อน**
+  ไม่ใช่แค่ syntax check
+- **การตัดสินว่า "patch apply ไปแล้ว" ห้ามใช้แค่ว่าไฟล์มีอยู่หรือไม่** —
+  file-existence ไม่ใช่ version check; patch ที่แก้ใหม่จะถูกข้ามเงียบๆ
+- **ตรวจ config ด้วย `grep -n <ชื่อ>` ที่โชว์ว่ามีบรรทัดจริงหรือไม่** ห้ามใช้
+  `grep -c` กับ pattern เชิงลบ — `grep -c '^key *= *""'` คืน 0 ทั้งกรณีที่มีค่า
+  และกรณีที่ไม่มีบรรทัดนั้นเลย เคยทำให้ทั้ง phase เดินบนสมมติฐานผิดมาแล้ว
+- **test ต้องยิงของจริง** อย่าง Postgres ผ่าน `docker compose` ไม่ใช่ mock ทุกชั้น
+  — bug 2 ตัวที่เจอในโปรเจกต์นี้ถูกจับได้เพราะทดสอบกับ runtime จริงเท่านั้น
+  (member cache ไม่ถูก invalidate, และ role name ที่ hardcode)
+
 ## 15. เริ่มงานจริง
 
 ก่อน Phase 1 ให้ทำ **Infrastructure + Source-of-Truth Readiness Report** สั้น ๆ:
