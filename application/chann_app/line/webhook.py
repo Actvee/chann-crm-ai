@@ -14,6 +14,7 @@ from fastapi import APIRouter, Header, HTTPException, Request, status
 from ..config import OA_CHANNELS, channel_secret
 from ..data_client import DataClient
 from ..services.chat import ChatReply, greet, handle_chat_message, handle_reply
+from ..services.registration import handle_registration, is_unregistered
 from ..services.identity import resolve_context
 from .client import LineReplyError, reply_text
 from .signature import verify_signature
@@ -69,7 +70,17 @@ async def handle_webhook(
             ctx = await resolve_context(client, oa, line_user_id)
             user_text = (event.get("message") or {}).get("text") or ""
 
-            if not user_text.strip():
+            if is_unregistered(ctx):
+                # Phase 6.5: someone with no tenant gets the registration
+                # flow, not the intent parser. There is nothing to authorise
+                # against and no tenant to act in, so a model call here would
+                # spend money to reach the same dead end.
+                chat = ChatReply(
+                    text=await handle_registration(
+                        client, message=user_text, ctx=ctx, audience=oa
+                    )
+                )
+            elif not user_text.strip():
                 chat = ChatReply(text=greet(ctx))
             else:
                 quoted_id = _is_reply(event)

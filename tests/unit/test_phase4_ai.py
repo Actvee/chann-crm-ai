@@ -36,7 +36,10 @@ from chann_app.services.ai.intent import (  # noqa: E402
     unavailable_reply,
 )
 from chann_app.services.ai.metrics import metrics  # noqa: E402
-from chann_app.services.ai.providers import provider_block  # noqa: E402
+from chann_app.services.ai.providers import (  # noqa: E402
+    PROVIDER_PREFERENCE,
+    provider_block,
+)
 
 
 def _openrouter_reply(content: str, provider: str = "fireworks") -> httpx.Response:
@@ -285,17 +288,29 @@ class TestIntentJsonParsing:
 
 
 class TestProviderPreference:
-    def test_qwen_gets_its_fallback_chain(self):
-        block = provider_block("qwen/qwen3.6-35b-a3b")
-        assert block["order"] == ["fireworks", "together"]
-        assert block["allow_fallbacks"] is True
+    """PROVIDER_PREFERENCE is intentionally empty — see providers.py.
 
-    def test_deepseek_gets_its_own_chain(self):
-        assert provider_block("deepseek/deepseek-v4-pro")["order"][0] == "deepseek_official"
+    The original slugs were copied from the spec and never verified; a live
+    call was served by DeepInfra, meaning neither matched. These tests now
+    pin the honest behaviour: no preference is expressed unless someone adds
+    a slug they have actually observed serving the model.
+    """
+
+    def test_no_preference_is_expressed_by_default(self):
+        assert PROVIDER_PREFERENCE == {}
+        assert provider_block("qwen/qwen3.6-35b-a3b") is None
+        assert provider_block("deepseek/deepseek-v4-pro") is None
 
     def test_unknown_family_is_left_to_openrouter(self):
         assert provider_block("someone/else-9b") is None
         assert provider_block("no-slash-model") is None
+
+    def test_a_configured_family_still_produces_a_valid_block(self, monkeypatch):
+        """The mechanism must still work once real slugs are filled in."""
+        monkeypatch.setitem(PROVIDER_PREFERENCE, "qwen", ["deepinfra"])
+        block = provider_block("qwen/qwen3.6-35b-a3b")
+        assert block["order"] == ["deepinfra"]
+        assert block["allow_fallbacks"] is True
 
 
 class TestMetricsHook:

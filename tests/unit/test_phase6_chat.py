@@ -78,18 +78,24 @@ class FakeDataClient:
         return {"id": "rec"}
 
 
-def _ctx(resolution=TenantResolution.SINGLE, display_name="LINE Name", member_name=None):
+def _ctx(resolution=TenantResolution.SINGLE, display_name="LINE Name"):
     memberships = []
     if resolution is TenantResolution.SINGLE:
+        # Mirrors MembershipOut exactly — no display_name, because the real
+        # payload has none. A fake with extra keys hides dead code.
         memberships = [{
-            "license_id": LICENSE_ID, "company_name": "บริษัททดสอบ",
-            "role": "sales", "display_name": member_name,
+            "license_id": LICENSE_ID, "license_code": "TESTCO",
+            "company_name": "บริษัททดสอบ", "chann_uid": "CHN-S-000001",
+            "role": "sales", "status": "active",
         }]
     elif resolution is TenantResolution.MULTIPLE:
         memberships = [
-            {"license_id": LICENSE_ID, "company_name": "บริษัท ก", "role": "sales"},
+            {"license_id": LICENSE_ID, "license_code": "COA",
+             "company_name": "บริษัท ก", "chann_uid": "CHN-S-000001",
+             "role": "sales", "status": "active"},
             {"license_id": "22222222-2222-2222-2222-222222222222",
-             "company_name": "บริษัท ข", "role": "sales"},
+             "license_code": "COB", "company_name": "บริษัท ข",
+             "chann_uid": "CHN-S-000001", "role": "sales", "status": "active"},
         ]
     return ResolvedContext(
         chann_uid="CHN-S-000001", primary_role="sales",
@@ -251,15 +257,21 @@ class TestGreeting:
         assert "สมชาย LINE" in text
         assert "ยังไม่พบบริษัท" in text
 
-    def test_after_registration_prefers_the_tenant_record_name(self):
-        text = greet(_ctx(display_name="LINE Nickname", member_name="สมชาย ใจดี"))
-        assert "สมชาย ใจดี" in text
-        assert "LINE Nickname" not in text
+    def test_after_registration_uses_the_line_name_and_company(self):
+        """There is no per-tenant display name to prefer.
+
+        This previously asserted that a name on the membership row won over
+        the LINE profile name. It passed only because the fake membership
+        dict carried a display_name key that MembershipOut does not have —
+        the real payload never contains one, so that branch could never run.
+        """
+        text = greet(_ctx(display_name="LINE Nickname"))
+        assert "LINE Nickname" in text
         assert "บริษัททดสอบ" in text
 
-    def test_after_registration_falls_back_to_line_name(self):
-        text = greet(_ctx(display_name="LINE Nickname", member_name=None))
-        assert "LINE Nickname" in text
+    def test_falls_back_to_chann_uid_when_line_has_no_name(self):
+        text = greet(_ctx(display_name=None))
+        assert "CHN-S-000001" in text
 
     def test_multiple_tenants_asks_which(self):
         text = greet(_ctx(TenantResolution.MULTIPLE))

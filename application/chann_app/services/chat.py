@@ -85,18 +85,16 @@ class ChatReply:
 def greet(ctx: ResolvedContext, language: str = "th") -> str:
     """Master Spec 6.9 test_greeting.
 
-    Before registration there is no member record, so the LINE display name is
-    the only name available. After registration the tenant's own record is
-    preferred — that is the name colleagues actually know them by, which may
-    differ from whatever their personal LINE profile says.
+    The name always comes from the LINE profile. There is deliberately no
+    per-tenant display name to prefer: display_name lives on chann_identities
+    (one per person), not on license_members, so "the name colleagues know
+    them by" does not exist as a separate field yet. A per-tenant name would
+    belong to Phase 8 (profiles); until then, reading one here would be dead
+    code that looks like a feature.
     """
     if ctx.resolution is TenantResolution.SINGLE:
         member = ctx.memberships[0]
-        name = (
-            member.get("display_name")
-            or ctx.display_name
-            or ctx.chann_uid
-        )
+        name = ctx.display_name or ctx.chann_uid
         company = member.get("company_name", "")
         if language == "en":
             return f"Hello {name} — connected to {company}"

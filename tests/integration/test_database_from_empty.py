@@ -1079,3 +1079,391 @@ class TestPhase6DataLayer:
             with pytest.raises(Phase6NotFound):
                 repo.set_status(TenantScope(b_id), a_follow_up, "cancelled")
             session.rollback()
+
+
+class TestPhase65TenantRegistration:
+    """Phase 6.5 — Master Spec 6.5.8 mandatory tests."""
+
+    def test_license_self_registration(self, migrated_db):
+        from sqlalchemy import select
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import ChannIdentity, CustomRole, License, LicenseMember
+        from chann_data.repositories.phase65 import (
+            OWNER_ROLE_NAME,
+            RegistrationConflict,
+            RegistrationRepository,
+        )
+
+        with Session(migrated_db) as session:
+            session.add(
+                ChannIdentity(
+                    chann_uid="CHN-REG-0001",
+                    line_user_id="line-reg-0001",
+                    primary_role="sales",
+                )
+            )
+            session.commit()
+
+        with Session(migrated_db) as session:
+            row = RegistrationRepository(session).create_license(
+                company_name="บริษัท ทดสอบ จำกัด",
+                created_by_chann_uid="CHN-REG-0001",
+                display_name="ผู้ก่อตั้ง",
+            )
+            license_id = row.id
+            assert row.status == "trial"
+            assert row.trial_expires_at is not None
+            assert row.company_code and len(row.company_code) == 8
+            # must be typeable off a phone screen / over the phone
+            assert not set(row.company_code) & set("01OIL")
+            session.commit()
+
+        with Session(migrated_db) as session:
+            # owner membership created
+            member = session.execute(
+                select(LicenseMember).where(
+                    LicenseMember.license_id == license_id,
+                    LicenseMember.chann_uid == "CHN-REG-0001",
+                )
+            ).scalars().one()
+            assert member.role == OWNER_ROLE_NAME
+
+            # all default role templates seeded, owner flagged
+            roles = list(
+                session.execute(
+                    select(CustomRole).where(CustomRole.license_id == license_id)
+                ).scalars()
+            )
+            assert len(roles) == 4
+            assert sum(1 for r in roles if r.is_owner) == 1
+
+            # trial deadline ~30 days out
+            lic = session.get(License, license_id)
+            delta = lic.trial_expires_at - lic.created_at
+            assert 29 <= delta.days <= 30
+
+        # one LINE identity, one company
+        with Session(migrated_db) as session:
+            with pytest.raises(RegistrationConflict):
+                RegistrationRepository(session).create_license(
+                    company_name="บริษัทที่สอง",
+                    created_by_chann_uid="CHN-REG-0001",
+                )
+            session.rollback()
+
+    def test_one_company_limit_holds_under_concurrency(self, migrated_db):
+        """Two webhook deliveries racing must still yield one company.
+
+        The application-level check alone cannot guarantee this — both
+        sessions can pass it before either commits — so the partial unique
+        index is what actually holds. This asserts the index exists and bites.
+        """
+        from sqlalchemy import select
+        from sqlalchemy.exc import IntegrityError
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import ChannIdentity, License
+
+        with Session(migrated_db) as session:
+            session.add(
+                ChannIdentity(
+                    chann_uid="CHN-RACE-0001",
+                    line_user_id="line-race-0001",
+                    primary_role="sales",
+                )
+            )
+            session.commit()
+
+        # Bypass the repository's pre-check and hit the DB constraint directly,
+        # which is exactly what a lost race looks like.
+        with Session(migrated_db) as s1, Session(migrated_db) as s2:
+            for s in (s1, s2):
+                s.add(
+                    License(
+                        id=uuid.uuid4(),
+                        license_code=f"RACE{uuid.uuid4().hex[:6].upper()}",
+                        company_name="race",
+                        company_code=uuid.uuid4().hex[:8].upper(),
+                        status="trial",
+                        created_by_chann_uid="CHN-RACE-0001",
+                    )
+                )
+            s1.commit()
+            with pytest.raises(IntegrityError):
+                s2.commit()
+            s2.rollback()
+
+        with Session(migrated_db) as session:
+            rows = list(
+                session.execute(
+                    select(License).where(
+                        License.created_by_chann_uid == "CHN-RACE-0001"
+                    )
+                ).scalars()
+            )
+            assert len(rows) == 1
+
+    def test_invite_redeem(self, migrated_db):
+        from datetime import datetime, timedelta, timezone
+
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import ChannIdentity
+        from chann_data.repositories.phase65 import (
+            RegistrationConflict,
+            RegistrationNotFound,
+            RegistrationRepository,
+        )
+
+        with Session(migrated_db) as session:
+            for n in range(1, 5):
+                session.add(
+                    ChannIdentity(
+                        chann_uid=f"CHN-INV-000{n}",
+                        line_user_id=f"line-inv-000{n}",
+                        primary_role="sales",
+                    )
+                )
+            session.commit()
+
+        with Session(migrated_db) as session:
+            repo = RegistrationRepository(session)
+            lic = repo.create_license(
+                company_name="Invite Co", created_by_chann_uid="CHN-INV-0001"
+            )
+            license_id = lic.id
+            good = repo.create_invite(license_id, role="member", max_uses=2)
+            expired = repo.create_invite(license_id, role="member", expires_in_days=None)
+            expired.expires_at = datetime.now(timezone.utc) - timedelta(days=1)
+            revoked = repo.create_invite(license_id, role="member")
+            good_code, expired_code, revoked_code = (
+                good.invite_code, expired.invite_code, revoked.invite_code
+            )
+            repo.revoke_invite(license_id, revoked.id)
+            session.commit()
+
+        with Session(migrated_db) as session:
+            repo = RegistrationRepository(session)
+            member = repo.redeem_invite(
+                invite_code=good_code, chann_uid="CHN-INV-0002"
+            )
+            assert member.role == "member"
+            assert member.license_id == license_id
+            session.commit()
+
+        with Session(migrated_db) as session:
+            repo = RegistrationRepository(session)
+            # re-redeeming by the same person must not burn a use
+            again = repo.redeem_invite(invite_code=good_code, chann_uid="CHN-INV-0002")
+            assert again.id is not None
+            invites = {i.invite_code: i for i in repo.list_invites(license_id)}
+            assert invites[good_code].used_count == 1
+            session.commit()
+
+        with Session(migrated_db) as session:
+            repo = RegistrationRepository(session)
+            with pytest.raises(RegistrationConflict):
+                repo.redeem_invite(invite_code=expired_code, chann_uid="CHN-INV-0003")
+            session.rollback()
+
+        with Session(migrated_db) as session:
+            repo = RegistrationRepository(session)
+            with pytest.raises(RegistrationConflict):
+                repo.redeem_invite(invite_code=revoked_code, chann_uid="CHN-INV-0003")
+            session.rollback()
+
+        with Session(migrated_db) as session:
+            repo = RegistrationRepository(session)
+            with pytest.raises(RegistrationNotFound):
+                repo.redeem_invite(invite_code="NOSUCHCODE", chann_uid="CHN-INV-0003")
+            session.rollback()
+
+        # exhaust the remaining use, then the next person is refused
+        with Session(migrated_db) as session:
+            repo = RegistrationRepository(session)
+            repo.redeem_invite(invite_code=good_code, chann_uid="CHN-INV-0003")
+            session.commit()
+        with Session(migrated_db) as session:
+            repo = RegistrationRepository(session)
+            with pytest.raises(RegistrationConflict):
+                repo.redeem_invite(invite_code=good_code, chann_uid="CHN-INV-0004")
+            session.rollback()
+
+    def test_invite_cannot_grant_ownership(self, migrated_db):
+        """Owner must only change hands through Phase 2's two-party transfer."""
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import ChannIdentity
+        from chann_data.repositories.phase65 import (
+            OWNER_ROLE_NAME,
+            RegistrationConflict,
+            RegistrationRepository,
+        )
+
+        with Session(migrated_db) as session:
+            session.add(
+                ChannIdentity(
+                    chann_uid="CHN-OWN-0001",
+                    line_user_id="line-own-0001",
+                    primary_role="sales",
+                )
+            )
+            session.commit()
+
+        with Session(migrated_db) as session:
+            repo = RegistrationRepository(session)
+            lic = repo.create_license(
+                company_name="Owner Co", created_by_chann_uid="CHN-OWN-0001"
+            )
+            with pytest.raises(RegistrationConflict):
+                repo.create_invite(lic.id, role=OWNER_ROLE_NAME)
+            with pytest.raises(RegistrationConflict):
+                repo.create_invite(lic.id, role="no-such-role")
+            session.rollback()
+
+    def test_customer_license_link(self, migrated_db):
+        from sqlalchemy import select
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import ChannIdentity, LicenseMember
+        from chann_data.repositories.phase65 import (
+            RegistrationNotFound,
+            RegistrationRepository,
+        )
+
+        with Session(migrated_db) as session:
+            for uid in ("CHN-SHOP-0001", "CHN-SHOP-0002", "CHN-CUST-0001"):
+                session.add(
+                    ChannIdentity(
+                        chann_uid=uid, line_user_id=f"line-{uid}", primary_role="customer"
+                    )
+                )
+            session.commit()
+
+        with Session(migrated_db) as session:
+            repo = RegistrationRepository(session)
+            a = repo.create_license(company_name="ร้าน ก", created_by_chann_uid="CHN-SHOP-0001")
+            b = repo.create_license(company_name="ร้าน ข", created_by_chann_uid="CHN-SHOP-0002")
+            code_a, code_b = a.company_code, b.company_code
+            session.commit()
+
+        with Session(migrated_db) as session:
+            repo = RegistrationRepository(session)
+            repo.link_customer(chann_uid="CHN-CUST-0001", company_code=code_a)
+            repo.link_customer(chann_uid="CHN-CUST-0001", company_code=code_b)
+            # idempotent
+            repo.link_customer(chann_uid="CHN-CUST-0001", company_code=code_a)
+            session.commit()
+
+        with Session(migrated_db) as session:
+            repo = RegistrationRepository(session)
+            shops = repo.my_shops("CHN-CUST-0001")
+            assert {s.company_name for s in shops} == {"ร้าน ก", "ร้าน ข"}
+
+            # the crucial one: linking grants NO membership anywhere
+            memberships = list(
+                session.execute(
+                    select(LicenseMember).where(
+                        LicenseMember.chann_uid == "CHN-CUST-0001"
+                    )
+                ).scalars()
+            )
+            assert memberships == []
+
+            with pytest.raises(RegistrationNotFound):
+                repo.link_customer(chann_uid="CHN-CUST-0001", company_code="BADCODE1")
+
+    def test_public_shop_search(self, migrated_db):
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import ChannIdentity
+        from chann_data.repositories.phase65 import RegistrationRepository
+
+        with Session(migrated_db) as session:
+            for n in (1, 2):
+                session.add(
+                    ChannIdentity(
+                        chann_uid=f"CHN-SEARCH-000{n}",
+                        line_user_id=f"line-search-000{n}",
+                        primary_role="sales",
+                    )
+                )
+            session.commit()
+
+        with Session(migrated_db) as session:
+            repo = RegistrationRepository(session)
+            visible = repo.create_license(
+                company_name="ร้านมองเห็นได้", created_by_chann_uid="CHN-SEARCH-0001"
+            )
+            hidden = repo.create_license(
+                company_name="ร้านถูกระงับ", created_by_chann_uid="CHN-SEARCH-0002"
+            )
+            visible_code = visible.company_code
+            repo.set_status(hidden.id, "suspended")
+            session.commit()
+
+        with Session(migrated_db) as session:
+            repo = RegistrationRepository(session)
+            names = {s.company_name for s in repo.find_shops("ร้าน")}
+            assert "ร้านมองเห็นได้" in names
+            # suspended shops must not be findable
+            assert "ร้านถูกระงับ" not in names
+
+            # exact company code also resolves
+            assert any(
+                s.company_code == visible_code for s in repo.find_shops(visible_code)
+            )
+
+            # too-short queries are refused rather than returning the table
+            assert repo.find_shops("ร") == []
+            assert repo.find_shops("") == []
+
+    def test_trial_expiry_suspends_without_deleting(self, migrated_db):
+        from datetime import datetime, timedelta, timezone
+
+        from sqlalchemy import select
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import ChannIdentity, CustomRole, License, LicenseMember
+        from chann_data.repositories.phase65 import RegistrationRepository
+
+        with Session(migrated_db) as session:
+            session.add(
+                ChannIdentity(
+                    chann_uid="CHN-TRIAL-0001",
+                    line_user_id="line-trial-0001",
+                    primary_role="sales",
+                )
+            )
+            session.commit()
+
+        with Session(migrated_db) as session:
+            repo = RegistrationRepository(session)
+            lic = repo.create_license(
+                company_name="Trial Co", created_by_chann_uid="CHN-TRIAL-0001"
+            )
+            license_id = lic.id
+            # backdate the deadline rather than sleeping 30 days
+            lic.trial_expires_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+            session.commit()
+
+        with Session(migrated_db) as session:
+            expired = RegistrationRepository(session).expire_due_trials()
+            assert [r.id for r in expired] == [license_id]
+            session.commit()
+
+        with Session(migrated_db) as session:
+            lic = session.get(License, license_id)
+            assert lic.status == "suspended"
+            # nothing was deleted — data must survive non-payment
+            assert lic.company_name == "Trial Co"
+            assert len(list(session.execute(
+                select(CustomRole).where(CustomRole.license_id == license_id)
+            ).scalars())) == 4
+            assert len(list(session.execute(
+                select(LicenseMember).where(LicenseMember.license_id == license_id)
+            ).scalars())) == 1
+
+            # sweeping again is a no-op — already-suspended rows are not re-swept
+            assert RegistrationRepository(session).expire_due_trials() == []

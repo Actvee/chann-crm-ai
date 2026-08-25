@@ -219,3 +219,75 @@ class FollowUpOut(BaseModel):
     notes: str | None
     created_at: datetime
     updated_at: datetime
+
+
+# ---------------------------------------------------------------- Phase 6.5
+
+
+class LicenseCreateIn(BaseModel):
+    company_name: str
+    created_by_chann_uid: str
+    display_name: str | None = None
+
+
+class LicenseOut(BaseModel):
+    id: uuid.UUID
+    license_code: str
+    company_name: str
+    company_code: str | None
+    status: str
+    trial_expires_at: datetime | None
+    created_by_chann_uid: str | None
+
+
+class ShopOut(BaseModel):
+    """Public projection — company_name and company_code ONLY.
+
+    Deliberately narrow: this is served to callers with no tenant at all, so
+    anything else here (id, member counts, status) would leak the shape of
+    someone else's business to a stranger.
+    """
+
+    company_name: str
+    company_code: str
+
+
+class InviteCreateIn(BaseModel):
+    role: str
+    max_uses: int = 1
+    expires_in_days: int | None = 7
+    created_by_member_id: uuid.UUID | None = None
+
+
+class InviteOut(BaseModel):
+    id: uuid.UUID
+    license_id: uuid.UUID
+    invite_code: str
+    role: str
+    max_uses: int
+    used_count: int
+    expires_at: datetime | None
+    revoked_at: datetime | None
+    created_at: datetime
+
+
+class InviteRedeemIn(BaseModel):
+    invite_code: str
+    chann_uid: str
+    display_name: str | None = None
+
+
+class CustomerLinkIn(BaseModel):
+    chann_uid: str
+    company_code: str
+
+
+class CustomerLinkOut(BaseModel):
+    id: uuid.UUID
+    chann_uid: str
+    license_id: uuid.UUID
+    linked_at: datetime
+
+
+class LicenseStatusIn(BaseModel):
+    status: Literal["trial", "active", "suspended"]

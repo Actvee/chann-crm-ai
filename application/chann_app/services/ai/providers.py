@@ -12,10 +12,19 @@ from __future__ import annotations
 
 # Ordered provider preference per model family. OpenRouter takes this as
 # provider.order in the request body and falls through the list itself.
-PROVIDER_PREFERENCE: dict[str, list[str]] = {
-    "qwen": ["fireworks", "together"],
-    "deepseek": ["deepseek_official", "fireworks"],
-}
+#
+# EMPTY ON PURPOSE. The slugs originally here ("fireworks", "together") were
+# copied from the spec and never checked against OpenRouter; a live call showed
+# the request was actually served by "DeepInfra", i.e. neither preferred
+# provider matched and only allow_fallbacks saved it. A preference list that
+# silently matches nothing is worse than none: it looks like routing control
+# while providing none, and would hard-fail the moment allow_fallbacks was
+# turned off.
+#
+# To populate this, read the provider slugs off a real response
+# (`.provider` in the OpenRouter JSON) or the model's page on openrouter.ai,
+# and add only slugs observed to serve that model.
+PROVIDER_PREFERENCE: dict[str, list[str]] = {}
 
 
 def provider_block(model: str) -> dict | None:

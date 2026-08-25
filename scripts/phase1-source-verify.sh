@@ -60,6 +60,12 @@ run PYTHON_DEPENDENCIES "${WORK_DIR}/venv/bin/pip" install \
 run PYTHON_BOUNDARY_UNIT "${WORK_DIR}/venv/bin/python" -m pytest \
   tests/boundary tests/unit -q
 
+# Catches ORM constructor kwargs that are not real columns. Runs before the
+# Postgres steps on purpose: it needs no database, and this exact class of
+# bug once passed lint, syntax checks and 148 unit tests before a real
+# database caught it. Failing here is seconds instead of minutes.
+run MODEL_KWARGS "${WORK_DIR}/venv/bin/python" scripts/check-model-kwargs.py
+
 POSTGRES_CONTAINER="chann-crm-ai-verify-${RUN_ID,,}"
 run POSTGRES_START docker run -d --name "${POSTGRES_CONTAINER}" \
   -e POSTGRES_USER=chann -e POSTGRES_PASSWORD=chann \

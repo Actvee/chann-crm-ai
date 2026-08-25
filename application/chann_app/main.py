@@ -48,6 +48,13 @@ def required_configuration_missing() -> list[str]:
             "line_login_channel_id",
             "admin_secret",
             "jwt_secret",
+            # Added after these were silently absent on DEV through all of
+            # Phase 4: /health reported a clean bill while the chat engine
+            # could not call OpenRouter at all. A health check that omits the
+            # config a tier actually needs is worse than no health check,
+            # because it is believed.
+            "openrouter_api_key",
+            "openrouter_model",
         )
         if not getattr(settings, name)
     ]

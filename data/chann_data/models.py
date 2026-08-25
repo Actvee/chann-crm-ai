@@ -15,6 +15,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Integer,
     String,
     Text,
     UniqueConstraint,
@@ -78,6 +79,19 @@ class License(TimestampMixin, Base):
     company_name: Mapped[str] = mapped_column(String(255), nullable=False)
     # placed early — Phase 16
     auto_accept_new_customers: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    # --- Phase 6.5 ---
+    # Short, human-typeable code an end customer uses to identify this shop in
+    # chat. Nullable only so the migration can backfill existing rows; new
+    # licenses always get one.
+    company_code: Mapped[str | None] = mapped_column(String(8), unique=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="trial")
+    trial_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Who self-registered this tenant. Used for the 1-LINE-1-company limit
+    # instead of a unique index on license_members.role='owner', because
+    # ownership can legitimately be transferred (Phase 2) and the limit is
+    # meant to cap *creation*, not lifetime ownership.
+    created_by_chann_uid: Mapped[str | None] = mapped_column(String(32), index=True)
 
     members: Mapped[list["LicenseMember"]] = relationship(back_populates="license")
 
@@ -292,3 +306,54 @@ class FollowUp(TimestampMixin, Base):
         UUID(as_uuid=True), ForeignKey("license_members.id", ondelete="RESTRICT")
     )
     notes: Mapped[str | None] = mapped_column(Text)
+
+
+class LicenseInvite(TimestampMixin, Base):
+    """Phase 6.5 — an Owner-generated code that grants membership.
+
+    Separate from company_code on purpose: an invite makes someone a MEMBER
+    (with permissions), while company_code only lets an end customer say which
+    shop they are talking about. Conflating them would hand tenant permissions
+    to every customer who knew the shop code.
+    """
+
+    __tablename__ = "license_invites"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    license_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("licenses.id", ondelete="RESTRICT"),
+        nullable=False, index=True,
+    )
+    invite_code: Mapped[str] = mapped_column(String(16), unique=True, nullable=False)
+    role: Mapped[str] = mapped_column(String(64), nullable=False)
+    max_uses: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    used_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_by_member_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("license_members.id", ondelete="RESTRICT")
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class CustomerLicenseLink(Base):
+    """Phase 6.5 — an end customer remembering which shop they deal with.
+
+    Deliberately NOT a license_members row: a customer must never inherit the
+    tenant's permissions. No TimestampMixin — the link is created once and
+    either exists or is removed; there is nothing to update.
+    """
+
+    __tablename__ = "customer_license_links"
+    __table_args__ = (UniqueConstraint("chann_uid", "license_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    chann_uid: Mapped[str] = mapped_column(
+        String(32), ForeignKey("chann_identities.chann_uid", ondelete="RESTRICT"),
+        nullable=False, index=True,
+    )
+    license_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("licenses.id", ondelete="RESTRICT"), nullable=False
+    )
+    linked_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

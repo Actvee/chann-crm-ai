@@ -383,3 +383,83 @@ class DataClient:
             json={"status": status},
         )
         return self._unwrap(resp)
+
+    # ---------------------------------------------------------- Phase 6.5
+
+    async def create_license(
+        self, *, company_name: str, created_by_chann_uid: str,
+        display_name: str | None = None,
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses",
+            headers=self._headers,
+            json={
+                "company_name": company_name,
+                "created_by_chann_uid": created_by_chann_uid,
+                "display_name": display_name,
+            },
+        )
+        return self._unwrap(resp)
+
+    async def search_shops(self, q: str, limit: int = 10) -> list[dict]:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/public/shops",
+            headers=self._headers,
+            params={"q": q, "limit": limit},
+        )
+        return self._unwrap(resp)
+
+    async def create_invite(
+        self, license_id: str, payload: dict, actor_id: str | None = None
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/invites",
+            headers=self._headers_for(actor_id),
+            json=payload,
+        )
+        return self._unwrap(resp)
+
+    async def list_invites(self, license_id: str) -> list[dict]:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/invites",
+            headers=self._headers,
+        )
+        return self._unwrap(resp)
+
+    async def revoke_invite(
+        self, license_id: str, invite_id: str, actor_id: str | None = None
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/invites/{invite_id}/revoke",
+            headers=self._headers_for(actor_id),
+        )
+        return self._unwrap(resp)
+
+    async def redeem_invite(
+        self, *, invite_code: str, chann_uid: str, display_name: str | None = None
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/invites/redeem",
+            headers=self._headers,
+            json={
+                "invite_code": invite_code,
+                "chann_uid": chann_uid,
+                "display_name": display_name,
+            },
+        )
+        return self._unwrap(resp)
+
+    async def link_customer(self, *, chann_uid: str, company_code: str) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/customer-links",
+            headers=self._headers,
+            json={"chann_uid": chann_uid, "company_code": company_code},
+        )
+        return self._unwrap(resp)
+
+    async def my_shops(self, chann_uid: str) -> list[dict]:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/customers/{chann_uid}/shops",
+            headers=self._headers,
+        )
+        return self._unwrap(resp)

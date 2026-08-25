@@ -22,6 +22,7 @@ from ..cache import (
 )
 from ..config import settings
 from ..db import get_session
+from ..models import License
 from ..repositories.tenant_scope import (
     CrossTenantAccessDenied,
     IdentityRepository,
@@ -41,6 +42,11 @@ from ..repositories.phase2 import (
 )
 from ..repositories.audit import AuditRepository, diff_fields
 from ..permissions import PERMISSION_DESCRIPTIONS, PERMISSION_KEYS
+from ..repositories.phase65 import (
+    RegistrationConflict,
+    RegistrationNotFound,
+    RegistrationRepository,
+)
 from ..repositories.phase6 import (
     FollowUpRepository,
     MessageEntityMapRepository,
@@ -54,7 +60,16 @@ from ..schemas import (
     FollowUpIn,
     FollowUpOut,
     FollowUpStatusIn,
+    CustomerLinkIn,
+    CustomerLinkOut,
+    InviteCreateIn,
+    InviteOut,
+    InviteRedeemIn,
+    LicenseCreateIn,
+    LicenseOut,
+    LicenseStatusIn,
     MessageEntityMapIn,
+    ShopOut,
     MessageEntityMapOut,
     NotificationIn,
     NotificationOut,
@@ -928,3 +943,227 @@ def permission_catalog():
         }
         for key in sorted(PERMISSION_KEYS)
     ]
+
+
+# ---------------------------------------------------------------- Phase 6.5
+
+
+def _phase65_http_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, RegistrationNotFound):
+        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    if isinstance(exc, RegistrationConflict):
+        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    if isinstance(exc, HTTPException):
+        return exc
+    return HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="internal error"
+    )
+
+
+@router.post("/licenses", response_model=LicenseOut, status_code=201)
+def create_license(
+    payload: LicenseCreateIn, session: Session = Depends(get_session)
+):
+    """Self-service tenant creation — one per LINE identity."""
+    try:
+        row = RegistrationRepository(session).create_license(
+            company_name=payload.company_name,
+            created_by_chann_uid=payload.created_by_chann_uid,
+            display_name=payload.display_name,
+        )
+        AuditRepository(session).write(
+            license_id=row.id,
+            entity_type="license",
+            entity_id=row.id,
+            actor_type="user",
+            actor_id=payload.created_by_chann_uid,
+            action="create",
+            field_changes=diff_fields(
+                {}, {"company_name": row.company_name, "status": row.status}
+            ),
+        )
+        session.commit()
+        return LicenseOut.model_validate(row, from_attributes=True)
+    except Exception as exc:
+        session.rollback()
+        raise _phase65_http_error(exc)
+
+
+@router.get("/public/shops", response_model=list[ShopOut])
+def public_shop_search(q: str, limit: int = 10, session: Session = Depends(get_session)):
+    """The one deliberately un-tenant-scoped read (Master Spec 6.5.7).
+
+    Projected through ShopOut so only company_name + company_code leave the
+    tier — the repository returns full License rows and must never be
+    serialised directly here.
+    """
+    rows = RegistrationRepository(session).find_shops(q, limit=limit)
+    return [
+        ShopOut(company_name=r.company_name, company_code=r.company_code or "")
+        for r in rows
+        if r.company_code
+    ]
+
+
+@router.post("/licenses/{license_id}/invites", response_model=InviteOut, status_code=201)
+def create_invite(
+    license_id: uuid.UUID,
+    payload: InviteCreateIn,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    try:
+        row = RegistrationRepository(session).create_invite(
+            license_id,
+            role=payload.role,
+            max_uses=payload.max_uses,
+            expires_in_days=payload.expires_in_days,
+            created_by_member_id=payload.created_by_member_id,
+        )
+        AuditRepository(session).write(
+            license_id=license_id,
+            entity_type="license_invite",
+            entity_id=row.id,
+            actor_type="user",
+            actor_id=x_actor_id or None,
+            action="create",
+            field_changes=diff_fields({}, {"role": row.role, "max_uses": row.max_uses}),
+        )
+        session.commit()
+        return InviteOut.model_validate(row, from_attributes=True)
+    except Exception as exc:
+        session.rollback()
+        raise _phase65_http_error(exc)
+
+
+@router.get("/licenses/{license_id}/invites", response_model=list[InviteOut])
+def list_invites(license_id: uuid.UUID, session: Session = Depends(get_session)):
+    rows = RegistrationRepository(session).list_invites(license_id)
+    return [InviteOut.model_validate(r, from_attributes=True) for r in rows]
+
+
+@router.post("/licenses/{license_id}/invites/{invite_id}/revoke", response_model=InviteOut)
+def revoke_invite(
+    license_id: uuid.UUID,
+    invite_id: uuid.UUID,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    try:
+        row = RegistrationRepository(session).revoke_invite(license_id, invite_id)
+        AuditRepository(session).write(
+            license_id=license_id,
+            entity_type="license_invite",
+            entity_id=row.id,
+            actor_type="user",
+            actor_id=x_actor_id or None,
+            action="update",
+            field_changes=diff_fields({"revoked": False}, {"revoked": True}),
+        )
+        session.commit()
+        return InviteOut.model_validate(row, from_attributes=True)
+    except Exception as exc:
+        session.rollback()
+        raise _phase65_http_error(exc)
+
+
+@router.post("/invites/redeem", response_model=MemberOut, status_code=201)
+def redeem_invite(payload: InviteRedeemIn, session: Session = Depends(get_session)):
+    """Not under /licenses/{id} on purpose — the redeemer does not yet know
+    which tenant the code belongs to; that is what the code tells us."""
+    try:
+        member = RegistrationRepository(session).redeem_invite(
+            invite_code=payload.invite_code,
+            chann_uid=payload.chann_uid,
+            display_name=payload.display_name,
+        )
+        AuditRepository(session).write(
+            license_id=member.license_id,
+            entity_type="license_member",
+            entity_id=member.id,
+            actor_type="user",
+            actor_id=payload.chann_uid,
+            action="create",
+            field_changes=diff_fields({}, {"role": member.role}),
+        )
+        session.commit()
+        return MemberOut(
+            chann_uid=member.chann_uid, role=member.role, status=member.status
+        )
+    except Exception as exc:
+        session.rollback()
+        raise _phase65_http_error(exc)
+
+
+@router.post("/customer-links", response_model=CustomerLinkOut, status_code=201)
+def link_customer(payload: CustomerLinkIn, session: Session = Depends(get_session)):
+    """Bind an end customer to a shop. Grants NO tenant permissions."""
+    try:
+        row = RegistrationRepository(session).link_customer(
+            chann_uid=payload.chann_uid, company_code=payload.company_code
+        )
+        session.commit()
+        return CustomerLinkOut.model_validate(row, from_attributes=True)
+    except Exception as exc:
+        session.rollback()
+        raise _phase65_http_error(exc)
+
+
+@router.get("/customers/{chann_uid}/shops", response_model=list[ShopOut])
+def my_shops(chann_uid: str, session: Session = Depends(get_session)):
+    rows = RegistrationRepository(session).my_shops(chann_uid)
+    return [
+        ShopOut(company_name=r.company_name, company_code=r.company_code or "")
+        for r in rows
+    ]
+
+
+@router.patch("/licenses/{license_id}/status", response_model=LicenseOut)
+def set_license_status(
+    license_id: uuid.UUID,
+    payload: LicenseStatusIn,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    try:
+        repo = RegistrationRepository(session)
+        before = session.get(License, license_id)
+        before_status = before.status if before is not None else None
+        row = repo.set_status(license_id, payload.status)
+        AuditRepository(session).write(
+            license_id=license_id,
+            entity_type="license",
+            entity_id=license_id,
+            actor_type="platform_admin",
+            actor_id=x_actor_id or None,
+            action="update",
+            field_changes=diff_fields({"status": before_status}, {"status": row.status}),
+        )
+        session.commit()
+        return LicenseOut.model_validate(row, from_attributes=True)
+    except Exception as exc:
+        session.rollback()
+        raise _phase65_http_error(exc)
+
+
+@router.post("/platform/trials/expire", response_model=list[LicenseOut])
+def expire_due_trials(session: Session = Depends(get_session)):
+    """Sweep for the trial deadline. Suspends; never deletes."""
+    try:
+        rows = RegistrationRepository(session).expire_due_trials()
+        for row in rows:
+            AuditRepository(session).write(
+                license_id=row.id,
+                entity_type="license",
+                entity_id=row.id,
+                actor_type="system",
+                action="update",
+                field_changes=diff_fields(
+                    {"status": "trial"}, {"status": "suspended"}
+                ),
+            )
+        session.commit()
+        return [LicenseOut.model_validate(r, from_attributes=True) for r in rows]
+    except Exception as exc:
+        session.rollback()
+        raise _phase65_http_error(exc)
