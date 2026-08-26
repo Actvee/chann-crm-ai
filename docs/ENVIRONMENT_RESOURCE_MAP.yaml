@@ -43,8 +43,16 @@ environments:
       current_name: VERIFY_WITH_PREFLIGHT
 
   stage:
-    cloud_sql_instance: chann1-stage-pg
-    redis_instance: chann1-stage-cache
+    # PARKED 2026-08-25 to stop paying for idle capacity during development.
+    # Only dev is in use; stage and production were provisioned up front and
+    # never connected to. See cost_control below for how to bring them back.
+    provisioning_status: PARKED_FOR_COST
+    cloud_sql_instance: chann1-stage-pg      # STOPPED (activation-policy=NEVER)
+    redis_instance: chann1-stage-cache       # DELETED — recreate: BASIC, 1 GB
+    recreate_spec:
+      cloud_sql: db-f1-micro, 10 GB disk, ZONAL
+      redis: BASIC tier, 1 GB, asia-southeast1
+      vpc_connector: e2-micro, min_instances 2, max_instances 3
     application_database:
       current_old_database: absent_by_intent
       new_database: to_be_created_phase_1
@@ -61,11 +69,24 @@ environments:
     network:
       current_name: VERIFY_WITH_PREFLIGHT
     vpc_connector:
-      current_name: VERIFY_WITH_PREFLIGHT
+      current_name: chann1-stage-vpc         # DELETED — see recreate_spec
 
   production:
-    cloud_sql_instance: chann1-prod-pg
-    redis_instance: chann1-prod-cache
+    # PARKED 2026-08-25 — same reason as stage. Note prod's Cloud SQL is a
+    # much larger machine type than dev/stage, so it was the single biggest
+    # line on the bill despite never holding data.
+    provisioning_status: PARKED_FOR_COST
+    cloud_sql_instance: chann1-prod-pg       # STOPPED (activation-policy=NEVER)
+    redis_instance: chann1-prod-cache        # DELETED — recreate: BASIC, 1 GB
+    recreate_spec:
+      cloud_sql: db-custom-1-3840, 10 GB disk, ZONAL
+      redis: BASIC tier, 1 GB, asia-southeast1
+      vpc_connector: e2-micro, min_instances 2, max_instances 3
+    before_go_live_required:
+      # Both are cost increases, and both are non-negotiable for real customers.
+      - Enable automated backups (currently OFF on every instance)
+      - Change availabilityType ZONAL -> REGIONAL (ZONAL means a zone outage
+        takes the system down and loses anything not yet backed up)
     application_database:
       current_old_database: absent_by_intent
       new_database: to_be_created_only_through_approved_release_flow
@@ -83,7 +104,38 @@ environments:
     network:
       current_name: VERIFY_WITH_PREFLIGHT
     vpc_connector:
-      current_name: VERIFY_WITH_PREFLIGHT
+      current_name: chann1-prod-vpc          # DELETED — see recreate_spec
+
+cost_control:
+  parked_on: "2026-08-25"
+  why: >-
+    Everything was provisioned in triplicate but only dev is used, so roughly
+    70% of the bill was idle capacity. Parking stage and production cut it by
+    about two thirds.
+  stopped_not_deleted:
+    what: Cloud SQL for stage and production
+    why: >-
+      Stopping keeps the instance name, machine type and configuration, and
+      still costs a little for disk. Deleting would free that too, but both
+      instances are empty and the name is worth more than the disk saving —
+      and backups are OFF, so a delete would be unrecoverable.
+    verified_empty_first: >-
+      gcloud sql databases list showed only the system 'postgres' database on
+      both instances before anything was stopped.
+    resume: gcloud sql instances patch <name> --activation-policy=ALWAYS --project=chann1-1
+  deleted:
+    what: Memorystore Redis and Serverless VPC Access connectors, stage + production
+    why: >-
+      Memorystore has no pause — provisioned capacity is billed whether used or
+      not, so deletion is the only way to stop the charge. VPC connectors bill
+      for the instances they keep warm (min_instances 2).
+    resume: Recreate from recreate_spec above; takes 5-10 minutes.
+  unaffected:
+    terraform: >-
+      terraform state holds only dev resources (3 Cloud Run services plus the
+      SQL database and user), and the data sources reference only the current
+      environment's names. Confirmed with terraform state list.
+    dev: Untouched and fully running.
 
 terraform_adoption:
   first_apply_blocked_until_inventory_complete: true

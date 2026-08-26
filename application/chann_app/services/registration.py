@@ -88,7 +88,25 @@ def _t(table: dict[str, str], language: str) -> str:
     return table.get(language) or table["th"]
 
 
-CREATE_TRIGGERS = ("เปิดบริษัทใหม่", "สร้างบริษัท", "create company", "new company")
+# Ordered longest-first so "เปิดบริษัทใหม่ ร้าน ก" strips the full trigger and
+# not just "เปิดบริษัท", which would leave "ใหม่" as part of the company name.
+#
+# "เปิดบริษัท" and "สมัคร" were added after a live test: the menu says
+# "เปิดบริษัทใหม่", and the user naturally typed the shorter "เปิดบริษัท",
+# which matched nothing and fell through to the menu again. Triggers should
+# cover what people actually type, not only the exact wording we printed.
+CREATE_TRIGGERS = (
+    "เปิดบริษัทใหม่",
+    "สร้างบริษัทใหม่",
+    "ลงทะเบียนบริษัท",
+    "เปิดบริษัท",
+    "สร้างบริษัท",
+    "สมัครบริษัท",
+    "create new company",
+    "create company",
+    "new company",
+    "register company",
+)
 
 
 def parse_create_company(message: str) -> str | None:
@@ -101,9 +119,11 @@ def parse_create_company(message: str) -> str | None:
     """
     text = (message or "").strip()
     lowered = text.lower()
-    for trigger in CREATE_TRIGGERS:
+    # Longest match wins, so a shorter trigger that is a prefix of a longer one
+    # cannot swallow the difference into the company name.
+    for trigger in sorted(CREATE_TRIGGERS, key=len, reverse=True):
         if lowered.startswith(trigger.lower()):
-            return text[len(trigger):].strip()
+            return text[len(trigger):].strip(" \t:：-—")
     return None
 
 

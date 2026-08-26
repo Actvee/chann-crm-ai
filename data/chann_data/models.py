@@ -16,6 +16,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -355,5 +356,118 @@ class CustomerLicenseLink(Base):
         UUID(as_uuid=True), ForeignKey("licenses.id", ondelete="RESTRICT"), nullable=False
     )
     linked_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class Product(TimestampMixin, Base):
+    """Phase 7 (Master Spec 7.3).
+
+    NOTE ON A SPEC CONTRADICTION: 7.3 marks product_id as globally
+    `UNIQUE NOT NULL` and *also* declares `UNIQUE(license_id, product_id)`.
+    Those cannot both hold — a global unique would stop two tenants both
+    using "P001", which 7.5's test_multi_tenant_product explicitly requires
+    ("product_id ซ้ำข้าม tenant ได้"). Only the composite is implemented.
+
+    archived_at exists because 7.5 requires delete to be an archive, not a
+    hard delete, but 7.3's column list has nowhere to record that.
+    """
+
+    __tablename__ = "products"
+    __table_args__ = (UniqueConstraint("license_id", "product_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    license_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("licenses.id", ondelete="RESTRICT"),
+        nullable=False, index=True,
+    )
+    product_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    product_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    sku: Mapped[str | None] = mapped_column(String(64))
+    # Drives Assignment Rules in Phase 11, so it is indexed even though
+    # nothing reads it by category yet.
+    category: Mapped[str | None] = mapped_column(String(64), index=True)
+    # NUMERIC, never float: money that rounds differently on two machines is
+    # a defect people notice on an invoice.
+    unit_price: Mapped[object | None] = mapped_column(Numeric(18, 2))
+    description: Mapped[str | None] = mapped_column(Text)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class SalesGroup(TimestampMixin, Base):
+    """Phase 7 (Master Spec 7.3)."""
+
+    __tablename__ = "sales_groups"
+    __table_args__ = (UniqueConstraint("license_id", "group_name"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    license_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("licenses.id", ondelete="RESTRICT"),
+        nullable=False, index=True,
+    )
+    group_name: Mapped[str] = mapped_column(String(128), nullable=False)
+
+
+class SalesGroupMember(Base):
+    """Join row. No TimestampMixin — membership is added or removed, never edited."""
+
+    __tablename__ = "sales_group_members"
+    __table_args__ = (UniqueConstraint("group_id", "member_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    license_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("licenses.id", ondelete="RESTRICT"), nullable=False
+    )
+    # CASCADE here and only here: deleting a group must delete its membership
+    # rows, but 7.5 requires it must NOT delete the people themselves — hence
+    # RESTRICT on member_id.
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("sales_groups.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    member_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("license_members.id", ondelete="RESTRICT"),
+        nullable=False, index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class TechnicianTeam(TimestampMixin, Base):
+    """Phase 7 (Master Spec 7.3)."""
+
+    __tablename__ = "technician_teams"
+    __table_args__ = (UniqueConstraint("license_id", "team_name"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    license_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("licenses.id", ondelete="RESTRICT"),
+        nullable=False, index=True,
+    )
+    team_name: Mapped[str] = mapped_column(String(128), nullable=False)
+
+
+class TechnicianTeamMember(Base):
+    """Join row. is_lead is not unique per team — 7.5 requires a team to be
+    able to have several leads."""
+
+    __tablename__ = "technician_team_members"
+    __table_args__ = (UniqueConstraint("team_id", "member_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    license_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("licenses.id", ondelete="RESTRICT"), nullable=False
+    )
+    team_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("technician_teams.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    member_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("license_members.id", ondelete="RESTRICT"),
+        nullable=False, index=True,
+    )
+    is_lead: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

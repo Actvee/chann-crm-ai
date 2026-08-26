@@ -463,3 +463,81 @@ class DataClient:
             headers=self._headers,
         )
         return self._unwrap(resp)
+
+    # ------------------------------------------------------------ Phase 7
+
+    async def upsert_product(
+        self, license_id: str, product_id: str, payload: dict,
+        actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.put(
+            f"{self._base}/internal/v1/licenses/{license_id}"
+            f"/products/{quote(product_id, safe='')}",
+            headers=self._headers_for(actor_id),
+            json=payload,
+        )
+        return self._unwrap(resp)
+
+    async def list_products(
+        self, license_id: str, *, category: str | None = None,
+        include_archived: bool = False, limit: int = 200,
+    ) -> list[dict]:
+        params: dict = {"include_archived": str(include_archived).lower(), "limit": limit}
+        if category:
+            params["category"] = category
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/products",
+            headers=self._headers,
+            params=params,
+        )
+        return self._unwrap(resp)
+
+    async def upload_products_csv(
+        self, license_id: str, content: str, actor_id: str | None = None
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/products/csv",
+            headers=self._headers_for(actor_id),
+            json={"content": content},
+        )
+        return self._unwrap(resp)
+
+    async def archive_product(
+        self, license_id: str, product_id: str, actor_id: str | None = None
+    ) -> dict:
+        resp = await self._client.delete(
+            f"{self._base}/internal/v1/licenses/{license_id}"
+            f"/products/{quote(product_id, safe='')}",
+            headers=self._headers_for(actor_id),
+        )
+        return self._unwrap(resp)
+
+    async def create_sales_group(self, license_id: str, group_name: str) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/sales-groups",
+            headers=self._headers,
+            json={"group_name": group_name},
+        )
+        return self._unwrap(resp)
+
+    async def list_sales_groups(self, license_id: str) -> list[dict]:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/sales-groups",
+            headers=self._headers,
+        )
+        return self._unwrap(resp)
+
+    async def create_technician_team(self, license_id: str, team_name: str) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/technician-teams",
+            headers=self._headers,
+            json={"team_name": team_name},
+        )
+        return self._unwrap(resp)
+
+    async def list_technician_teams(self, license_id: str) -> list[dict]:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/technician-teams",
+            headers=self._headers,
+        )
+        return self._unwrap(resp)

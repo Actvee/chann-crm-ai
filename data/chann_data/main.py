@@ -12,6 +12,30 @@ from .routers import internal
 from .schemas import HealthOut
 
 logging.basicConfig(level=logging.INFO)
+log = logging.getLogger(__name__)
+
+# The alembic revision this build's models expect. Bump it in the same commit
+# as each new migration.
+#
+# Exists because a deploy once shipped code that queried a column the database
+# did not have yet: the service booted fine, /health said "ok", and the only
+# symptom was a generic 500 the moment a user touched that table. A health
+# check that cannot see a schema/code mismatch reports health it has not
+# actually verified.
+EXPECTED_MIGRATION_HEAD = "0006_phase7_master_data"
+
+
+def _schema_state() -> tuple[str, str | None]:
+    """(state, actual_head). state is up-to-date | stale | unknown."""
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(text("SELECT version_num FROM alembic_version")).first()
+    except Exception:
+        return "unknown", None
+    if row is None:
+        return "unknown", None
+    actual = row[0]
+    return ("up-to-date" if actual == EXPECTED_MIGRATION_HEAD else "stale"), actual
 
 app = FastAPI(title="Chann CRM AI — Data Tier", version=settings.platform_version)
 app.include_router(internal.router)
@@ -37,14 +61,34 @@ def health() -> HealthOut:
     except Exception:
         cache_state = "down"
 
+    schema_state, actual_head = _schema_state()
+    if schema_state == "stale":
+        # Loud, because this is the state where every write path is one query
+        # away from a 500 and nothing else would say so.
+        log.error(
+            "SCHEMA MISMATCH: database is at %s but this build expects %s — "
+            "run the migration",
+            actual_head, EXPECTED_MIGRATION_HEAD,
+        )
+
+    if db_state != "up":
+        status_value = "degraded"
+    elif schema_state == "stale":
+        status_value = "degraded"
+    else:
+        status_value = "ok"
+
     return HealthOut(
-        status="ok" if db_state == "up" else "degraded",
+        status=status_value,
         tier="data",
         app_env=settings.app_env,
         platform_version=settings.platform_version,
         git_commit=settings.git_commit,
         database=db_state,
         cache=cache_state,
+        schema_state=schema_state,
+        migration_head=actual_head,
+        expected_migration_head=EXPECTED_MIGRATION_HEAD,
     )
 
 

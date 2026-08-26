@@ -20,12 +20,14 @@ sys.path.insert(0, str(ROOT / "application"))
 
 from chann_app.config import settings  # noqa: E402
 from chann_app.services.chat import (  # noqa: E402
+    ACTION_PERMISSIONS,
     SUGGEST_LIMIT,
     ChatReply,
     ask_for_missing,
     greet,
     handle_chat_message,
     handle_reply,
+    required_permission,
     suggest_what_you_can_do,
 )
 from chann_app.services.identity import ResolvedContext, TenantResolution  # noqa: E402
@@ -323,3 +325,97 @@ class TestPermissionCatalogue:
 
     def test_describe_falls_back_to_thai_for_unknown_language(self):
         assert describe("customer.read", "fr") == describe("customer.read", "th")
+
+class TestPermissionGateIsEnforcedInCode:
+    """Regression for the live failure on 24 Aug 2026.
+
+    Asked "ขอดูรายงานทางการเงิน", the model returned
+    {"action":"view","entity":"financial_report"} — an entity the system has
+    never heard of — and the engine replied "coming soon" instead of listing
+    what the user can actually do. The prompt was the only thing deciding
+    permission, which it must never be.
+    """
+
+    async def test_unknown_entity_falls_back_to_suggest(self):
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "view", "entity": "financial_report", "fields": {}, "missing": []})))
+        reply = await handle_chat_message(
+            FakeDataClient(permission_keys=["customer.read"]),
+            message="ขอดูรายงานทางการเงิน", ctx=_ctx(), ai_client=ai,
+        )
+        assert "เข้าใจแล้ว" not in reply.text
+        assert describe("customer.read") in reply.text
+
+    async def test_known_entity_without_permission_suggests(self):
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "create", "entity": "ticket", "fields": {"x": 1}, "missing": []})))
+        reply = await handle_chat_message(
+            FakeDataClient(permission_keys=["customer.read"]),   # no ticket.create
+            message="เปิดใบงานให้หน่อย", ctx=_ctx(), ai_client=ai,
+        )
+        assert "เข้าใจแล้ว" not in reply.text
+        assert describe("customer.read") in reply.text
+
+    async def test_known_entity_with_permission_proceeds(self):
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "create", "entity": "customer",
+             "fields": {"name": "สมชาย"}, "missing": []}, ensure_ascii=False)))
+        reply = await handle_chat_message(
+            FakeDataClient(permission_keys=["customer.create"]),
+            message="เพิ่มลูกค้าชื่อสมชาย", ctx=_ctx(), ai_client=ai,
+        )
+        assert "เข้าใจแล้ว" in reply.text
+        assert reply.entity_type == "customer"
+
+    async def test_action_aliases_are_normalised(self):
+        """The model uses view/list/read interchangeably; all must resolve."""
+        for action in ("view", "list", "read", "show", "get"):
+            ai = httpx.AsyncClient(transport=_ai(json.dumps(
+                {"action": action, "entity": "customer", "fields": {}, "missing": []})))
+            reply = await handle_chat_message(
+                FakeDataClient(permission_keys=["customer.read"]),
+                message="ดูลูกค้า", ctx=_ctx(), ai_client=ai,
+            )
+            assert "เข้าใจแล้ว" in reply.text, f"action={action} was not normalised"
+
+    def test_required_permission_mapping(self):
+        assert required_permission("create", "customer") == "customer.create"
+        assert required_permission("view", "customer") == "customer.read"     # alias
+        assert required_permission("read", "financial_report") is None        # unknown
+        assert required_permission("create", None) is None
+        assert required_permission("explode", "customer") is None             # bad action
+
+    def test_every_mapped_permission_key_actually_exists(self):
+        """A typo here would silently deny an action forever."""
+        unknown = {v for v in ACTION_PERMISSIONS.values() if v not in PERMISSION_KEYS}
+        assert unknown == set(), f"unknown permission keys in mapping: {unknown}"
+
+
+class TestPhase7EntitiesAreGated:
+    """Phase 7 master data must go through the same code-level gate."""
+
+    def test_product_and_team_map_to_real_permission_keys(self):
+        assert required_permission("create", "product") == "product.manage"
+        assert required_permission("add", "product") == "product.manage"     # alias
+        assert required_permission("create", "team") == "team.manage"
+        assert required_permission("create", "sales_group") == "team.manage"
+
+    async def test_product_without_permission_suggests(self):
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "create", "entity": "product",
+             "fields": {"name": "แอร์"}, "missing": []}, ensure_ascii=False)))
+        reply = await handle_chat_message(
+            FakeDataClient(permission_keys=["customer.read"]),   # no product.manage
+            message="เพิ่มสินค้าแอร์", ctx=_ctx(), ai_client=ai,
+        )
+        assert "เข้าใจแล้ว" not in reply.text
+
+    async def test_product_with_permission_proceeds(self):
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "create", "entity": "product",
+             "fields": {"name": "แอร์"}, "missing": []}, ensure_ascii=False)))
+        reply = await handle_chat_message(
+            FakeDataClient(permission_keys=["product.manage"]),
+            message="เพิ่มสินค้าแอร์", ctx=_ctx(), ai_client=ai,
+        )
+        assert "เข้าใจแล้ว" in reply.text

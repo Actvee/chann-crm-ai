@@ -1467,3 +1467,258 @@ class TestPhase65TenantRegistration:
 
             # sweeping again is a no-op — already-suspended rows are not re-swept
             assert RegistrationRepository(session).expire_due_trials() == []
+
+
+class TestPhase7MasterData:
+    """Phase 7 — Master Spec 7.5 mandatory tests."""
+
+    def _tenant(self, session, suffix):
+        from chann_data.models import ChannIdentity, License, LicenseMember
+
+        lic = License(
+            id=uuid.uuid4(),
+            license_code=f"P7{suffix}",
+            company_name=f"P7 Co {suffix}",
+        )
+        session.add(lic)
+        ident = ChannIdentity(
+            chann_uid=f"CHN-P7-{suffix}",
+            line_user_id=f"line-p7-{suffix}",
+            primary_role="sales",
+        )
+        session.add(ident)
+        session.flush()
+        member = LicenseMember(
+            id=uuid.uuid4(),
+            license_id=lic.id,
+            chann_uid=ident.chann_uid,
+            role="member",
+            status="active",
+        )
+        session.add(member)
+        session.flush()
+        return lic, member
+
+    def test_product_crud(self, migrated_db):
+        from decimal import Decimal
+
+        from sqlalchemy.orm import Session
+
+        from chann_data.repositories.phase7 import ProductRepository
+        from chann_data.repositories.tenant_scope import TenantScope
+
+        with Session(migrated_db) as session:
+            lic, _ = self._tenant(session, "CRUD")
+            license_id = lic.id
+            session.commit()
+
+        scope = TenantScope(license_id)
+
+        with Session(migrated_db) as session:
+            repo = ProductRepository(session)
+            p = repo.upsert(
+                scope, product_id="P001", product_name="แอร์ LG 12000 BTU",
+                sku="AC-LG-12K", category="AIR_CONDITIONER", unit_price="25,000",
+            )
+            assert p.unit_price == Decimal("25000")
+            session.commit()
+
+        # duplicate product_id upserts rather than erroring
+        with Session(migrated_db) as session:
+            repo = ProductRepository(session)
+            again = repo.upsert(
+                scope, product_id="P001", product_name="แอร์ LG 12000 BTU (ใหม่)",
+                unit_price="26000",
+            )
+            assert again.product_name.endswith("(ใหม่)")
+            assert again.unit_price == Decimal("26000")
+            assert len(repo.list(scope)) == 1
+            session.commit()
+
+        # CSV import
+        with Session(migrated_db) as session:
+            repo = ProductRepository(session)
+            result = repo.upsert_csv(scope, (
+                "product_id,product_name,sku,category,unit_price,description\n"
+                "P002,ฟิลเตอร์ HEPA,FILTER-01,AIR_FILTER,1500,ฟิลเตอร์\n"
+                "P003,ท่อทองแดง,PIPE-01,PARTS,\"2,300\",\n"
+            ))
+            assert result["imported"] == 2
+            assert result["errors"] == []
+            session.commit()
+
+        # a bad row must not sink the whole file
+        with Session(migrated_db) as session:
+            repo = ProductRepository(session)
+            result = repo.upsert_csv(scope, (
+                "product_id,product_name,unit_price\n"
+                "P004,ดีอยู่,100\n"
+                "P005,ราคาพัง,ไม่ใช่ตัวเลข\n"
+                ",ไม่มีรหัส,50\n"
+            ))
+            assert result["imported"] == 1
+            assert len(result["errors"]) == 2
+            # the reported line number must match what the user sees in Excel
+            assert {e["line"] for e in result["errors"]} == {3, 4}
+            session.commit()
+
+        # archive, not hard delete
+        with Session(migrated_db) as session:
+            repo = ProductRepository(session)
+            repo.archive(scope, "P001")
+            session.commit()
+        with Session(migrated_db) as session:
+            repo = ProductRepository(session)
+            assert repo.get(scope, "P001") is not None          # row still there
+            assert "P001" not in {p.product_id for p in repo.list(scope)}
+            assert "P001" in {
+                p.product_id for p in repo.list(scope, include_archived=True)
+            }
+            # re-adding an archived product brings it back
+            repo.upsert(scope, product_id="P001", product_name="กลับมาแล้ว")
+            assert "P001" in {p.product_id for p in repo.list(scope)}
+            session.commit()
+
+    def test_multi_tenant_product(self, migrated_db):
+        from sqlalchemy.orm import Session
+
+        from chann_data.repositories.phase7 import ProductRepository
+        from chann_data.repositories.tenant_scope import TenantScope
+
+        with Session(migrated_db) as session:
+            a, _ = self._tenant(session, "MTA")
+            b, _ = self._tenant(session, "MTB")
+            a_id, b_id = a.id, b.id
+            session.commit()
+
+        with Session(migrated_db) as session:
+            repo = ProductRepository(session)
+            # the same product_id in two tenants must be allowed
+            repo.upsert(TenantScope(a_id), product_id="P001", product_name="ของ A")
+            repo.upsert(TenantScope(b_id), product_id="P001", product_name="ของ B")
+            session.commit()
+
+        with Session(migrated_db) as session:
+            repo = ProductRepository(session)
+            assert repo.get(TenantScope(a_id), "P001").product_name == "ของ A"
+            assert repo.get(TenantScope(b_id), "P001").product_name == "ของ B"
+            assert [p.product_name for p in repo.list(TenantScope(a_id))] == ["ของ A"]
+
+    def test_sales_group(self, migrated_db):
+        from sqlalchemy import select
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import LicenseMember
+        from chann_data.repositories.phase7 import (
+            MasterDataConflict,
+            SalesGroupRepository,
+        )
+        from chann_data.repositories.tenant_scope import TenantScope
+
+        with Session(migrated_db) as session:
+            lic, member = self._tenant(session, "SG")
+            license_id, member_id = lic.id, member.id
+            session.commit()
+
+        scope = TenantScope(license_id)
+
+        with Session(migrated_db) as session:
+            repo = SalesGroupRepository(session)
+            north = repo.create(scope, "ภาคเหนือ")
+            south = repo.create(scope, "ภาคใต้")
+            north_id, south_id = north.id, south.id
+            with pytest.raises(MasterDataConflict):
+                repo.create(scope, "ภาคเหนือ")       # duplicate name
+            session.rollback()
+
+        with Session(migrated_db) as session:
+            repo = SalesGroupRepository(session)
+            north = repo.create(scope, "ภาคเหนือ")
+            south = repo.create(scope, "ภาคใต้")
+            north_id, south_id = north.id, south.id
+            # one salesperson, several groups
+            repo.add_member(scope, north_id, member_id)
+            repo.add_member(scope, south_id, member_id)
+            repo.add_member(scope, north_id, member_id)   # idempotent
+            session.commit()
+
+        with Session(migrated_db) as session:
+            repo = SalesGroupRepository(session)
+            groups = repo.groups_for_member(scope, member_id)
+            assert {g.group_name for g in groups} == {"ภาคเหนือ", "ภาคใต้"}
+            assert len(repo.members(scope, north_id)) == 1
+
+        # deleting a group must not delete the person
+        with Session(migrated_db) as session:
+            SalesGroupRepository(session).delete(scope, north_id)
+            session.commit()
+        with Session(migrated_db) as session:
+            repo = SalesGroupRepository(session)
+            assert {g.group_name for g in repo.list(scope)} == {"ภาคใต้"}
+            still_there = session.execute(
+                select(LicenseMember).where(LicenseMember.id == member_id)
+            ).scalars().first()
+            assert still_there is not None
+            # and they keep their other group
+            assert len(repo.groups_for_member(scope, member_id)) == 1
+
+    def test_technician_team(self, migrated_db):
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import ChannIdentity, LicenseMember
+        from chann_data.repositories.phase7 import TechnicianTeamRepository
+        from chann_data.repositories.tenant_scope import TenantScope
+
+        with Session(migrated_db) as session:
+            lic, tech1 = self._tenant(session, "TT")
+            license_id, tech1_id = lic.id, tech1.id
+            ident2 = ChannIdentity(
+                chann_uid="CHN-P7-TT2", line_user_id="line-p7-tt2",
+                primary_role="technician",
+            )
+            session.add(ident2)
+            session.flush()
+            tech2 = LicenseMember(
+                id=uuid.uuid4(), license_id=license_id,
+                chann_uid="CHN-P7-TT2", role="member", status="active",
+            )
+            session.add(tech2)
+            session.flush()
+            tech2_id = tech2.id
+            session.commit()
+
+        scope = TenantScope(license_id)
+
+        with Session(migrated_db) as session:
+            repo = TechnicianTeamRepository(session)
+            a = repo.create(scope, "ทีม A")
+            b = repo.create(scope, "ทีม B")
+            a_id, b_id = a.id, b.id
+            # one technician, several teams
+            repo.add_member(scope, a_id, tech1_id, is_lead=True)
+            repo.add_member(scope, b_id, tech1_id)
+            # a team may have more than one lead
+            repo.add_member(scope, a_id, tech2_id, is_lead=True)
+            session.commit()
+
+        with Session(migrated_db) as session:
+            repo = TechnicianTeamRepository(session)
+            assert {t.team_name for t in repo.teams_for_member(scope, tech1_id)} == {
+                "ทีม A", "ทีม B"
+            }
+            leads = [m for m in repo.members(scope, a_id) if m.is_lead]
+            assert len(leads) == 2, "a team must be able to have several leads"
+
+            # re-adding updates is_lead rather than erroring
+            repo.add_member(scope, b_id, tech1_id, is_lead=True)
+            session.commit()
+        with Session(migrated_db) as session:
+            repo = TechnicianTeamRepository(session)
+            b_members = repo.members(scope, b_id)
+            assert len(b_members) == 1 and b_members[0].is_lead is True
+
+            repo.set_lead(scope, b_id, tech1_id, False)
+            session.commit()
+        with Session(migrated_db) as session:
+            repo = TechnicianTeamRepository(session)
+            assert repo.members(scope, b_id)[0].is_lead is False

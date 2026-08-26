@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Literal
 
 from pydantic import BaseModel
@@ -64,6 +65,12 @@ class HealthOut(BaseModel):
     git_commit: str
     database: str
     cache: str
+    # Named schema_state, not schema: "schema" shadows a BaseModel attribute
+    # and Pydantic warns about it. Optional so an older caller parsing this
+    # response does not break.
+    schema_state: str | None = None
+    migration_head: str | None = None
+    expected_migration_head: str | None = None
 
 
 class AuthorizationContextOut(BaseModel):
@@ -291,3 +298,78 @@ class CustomerLinkOut(BaseModel):
 
 class LicenseStatusIn(BaseModel):
     status: Literal["trial", "active", "suspended"]
+
+
+# ---------------------------------------------------------------- Phase 7
+
+
+class ProductIn(BaseModel):
+    product_id: str
+    product_name: str
+    sku: str | None = None
+    category: str | None = None
+    # str so "25,000" from a spreadsheet survives to the Decimal parser;
+    # float would reintroduce the rounding this column exists to avoid.
+    unit_price: str | float | int | None = None
+    description: str | None = None
+
+
+class ProductOut(BaseModel):
+    id: uuid.UUID
+    license_id: uuid.UUID
+    product_id: str
+    product_name: str
+    sku: str | None
+    category: str | None
+    unit_price: Decimal | None
+    description: str | None
+    archived_at: datetime | None
+    created_at: datetime
+
+
+class ProductCsvIn(BaseModel):
+    content: str
+
+
+class ProductCsvOut(BaseModel):
+    imported: int
+    errors: list[dict]
+
+
+class GroupIn(BaseModel):
+    group_name: str
+
+
+class GroupOut(BaseModel):
+    id: uuid.UUID
+    license_id: uuid.UUID
+    group_name: str
+    created_at: datetime
+
+
+class TeamIn(BaseModel):
+    team_name: str
+
+
+class TeamOut(BaseModel):
+    id: uuid.UUID
+    license_id: uuid.UUID
+    team_name: str
+    created_at: datetime
+
+
+class GroupMemberIn(BaseModel):
+    member_id: uuid.UUID
+
+
+class TeamMemberIn(BaseModel):
+    member_id: uuid.UUID
+    is_lead: bool = False
+
+
+class TeamMemberOut(BaseModel):
+    id: uuid.UUID
+    team_id: uuid.UUID
+    member_id: uuid.UUID
+    is_lead: bool
+    created_at: datetime

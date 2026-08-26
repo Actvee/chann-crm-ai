@@ -100,6 +100,30 @@ class TestCreateCompanyParsing:
         assert parse_create_company("สวัสดี") is None
         assert parse_create_company("") is None
 
+    def test_shorter_natural_phrasings_also_match(self):
+        """Found live: the menu says "เปิดบริษัทใหม่", the user typed the
+        shorter "เปิดบริษัท", and it matched nothing."""
+        for text, expected in [
+            ("เปิดบริษัท ร้านทดสอบ", "ร้านทดสอบ"),
+            ("สร้างบริษัท ร้าน ก", "ร้าน ก"),
+            ("ลงทะเบียนบริษัท ร้าน ข", "ร้าน ข"),
+            ("สมัครบริษัท ร้าน ค", "ร้าน ค"),
+            ("create new company Acme", "Acme"),
+            ("register company Acme", "Acme"),
+        ]:
+            assert parse_create_company(text) == expected, text
+
+    def test_longest_trigger_wins(self):
+        """A shorter trigger that prefixes a longer one must not leave its
+        remainder in the company name."""
+        assert parse_create_company("เปิดบริษัทใหม่ ร้าน ก") == "ร้าน ก"
+        assert parse_create_company("เปิดบริษัทใหม่") == ""      # not "ใหม่"
+        assert parse_create_company("create new company X") == "X"
+
+    def test_separators_after_the_trigger_are_stripped(self):
+        assert parse_create_company("เปิดบริษัทใหม่: ร้าน ง") == "ร้าน ง"
+        assert parse_create_company("create company - Acme") == "Acme"
+
 
 class TestCodeShapes:
     def test_invite_code_is_ten_chars(self):
@@ -204,3 +228,39 @@ class TestCustomerRegistration:
             client, message="zz", ctx=_ctx(), audience="customer"
         )
         assert "รหัสร้าน" in reply
+
+
+class TestSchemaHeadGuard:
+    """The /health schema check is only useful if EXPECTED_MIGRATION_HEAD is
+    kept current — so pin it to the actual latest migration file."""
+
+    def test_expected_head_matches_the_newest_migration(self):
+        import re
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[2]
+        versions = sorted((root / "database/alembic/versions").glob("*.py"))
+        assert versions, "no migrations found"
+
+        # the file whose revision nothing else declares as down_revision
+        revs, downs = {}, set()
+        for f in versions:
+            t = f.read_text(encoding="utf-8")
+            rev = re.search(r'^revision = "([^"]+)"', t, re.M).group(1)
+            down = re.search(r'^down_revision = (?:"([^"]+)"|None)', t, re.M).group(1)
+            revs[rev] = f.name
+            if down:
+                downs.add(down)
+        heads = set(revs) - downs
+        assert len(heads) == 1, f"migration chain has {len(heads)} heads: {heads}"
+
+        import sys
+        sys.path.insert(0, str(root / "data"))
+        import os
+        os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://u:p@l/x")
+        from chann_data.main import EXPECTED_MIGRATION_HEAD
+
+        assert EXPECTED_MIGRATION_HEAD == heads.pop(), (
+            "EXPECTED_MIGRATION_HEAD in data/chann_data/main.py is out of date — "
+            "bump it in the same commit as the new migration"
+        )

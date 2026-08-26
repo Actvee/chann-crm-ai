@@ -5,6 +5,7 @@ shared internal secret.
 """
 from __future__ import annotations
 
+import logging
 import uuid
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
@@ -42,6 +43,13 @@ from ..repositories.phase2 import (
 )
 from ..repositories.audit import AuditRepository, diff_fields
 from ..permissions import PERMISSION_DESCRIPTIONS, PERMISSION_KEYS
+from ..repositories.phase7 import (
+    MasterDataConflict,
+    MasterDataNotFound,
+    ProductRepository,
+    SalesGroupRepository,
+    TechnicianTeamRepository,
+)
 from ..repositories.phase65 import (
     RegistrationConflict,
     RegistrationNotFound,
@@ -60,6 +68,17 @@ from ..schemas import (
     FollowUpIn,
     FollowUpOut,
     FollowUpStatusIn,
+    GroupIn,
+    GroupMemberIn,
+    GroupOut,
+    ProductCsvIn,
+    ProductCsvOut,
+    ProductIn,
+    ProductOut,
+    TeamIn,
+    TeamMemberIn,
+    TeamMemberOut,
+    TeamOut,
     CustomerLinkIn,
     CustomerLinkOut,
     InviteCreateIn,
@@ -94,6 +113,8 @@ from ..schemas import (
     RoleWriteIn,
 )
 from ..security import require_internal_secret
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/internal/v1", dependencies=[Depends(require_internal_secret)])
 
@@ -344,6 +365,7 @@ def _phase2_http_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
     if isinstance(exc, ValueError):
         return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+    log.exception("unhandled phase2 error: %s", exc)
     return HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="phase2 operation failed")
 
 
@@ -688,6 +710,12 @@ def _phase6_http_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
     if isinstance(exc, HTTPException):
         return exc
+    # Log the real exception before flattening it to "internal error".
+    # Without this the cause is lost entirely: the client sees a generic 500
+    # and the server keeps no trace, because a *handled* HTTPException is not
+    # something FastAPI logs. That cost a full debugging round when a missing
+    # migration surfaced only as "internal error" with nothing behind it.
+    log.exception("unhandled data-tier error: %s", exc)
     return HTTPException(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="internal error"
     )
@@ -955,6 +983,12 @@ def _phase65_http_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
     if isinstance(exc, HTTPException):
         return exc
+    # Log the real exception before flattening it to "internal error".
+    # Without this the cause is lost entirely: the client sees a generic 500
+    # and the server keeps no trace, because a *handled* HTTPException is not
+    # something FastAPI logs. That cost a full debugging round when a missing
+    # migration surfaced only as "internal error" with nothing behind it.
+    log.exception("unhandled data-tier error: %s", exc)
     return HTTPException(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="internal error"
     )
@@ -1167,3 +1201,290 @@ def expire_due_trials(session: Session = Depends(get_session)):
     except Exception as exc:
         session.rollback()
         raise _phase65_http_error(exc)
+
+
+# ---------------------------------------------------------------- Phase 7
+
+
+def _phase7_http_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, MasterDataNotFound):
+        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    if isinstance(exc, MasterDataConflict):
+        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    if isinstance(exc, CrossTenantAccessDenied):
+        return HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
+    if isinstance(exc, HTTPException):
+        return exc
+    # Log the real exception before flattening it to "internal error".
+    # Without this the cause is lost entirely: the client sees a generic 500
+    # and the server keeps no trace, because a *handled* HTTPException is not
+    # something FastAPI logs. That cost a full debugging round when a missing
+    # migration surfaced only as "internal error" with nothing behind it.
+    log.exception("unhandled data-tier error: %s", exc)
+    return HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="internal error"
+    )
+
+
+@router.put("/licenses/{license_id}/products/{product_id}", response_model=ProductOut)
+def upsert_product(
+    license_id: uuid.UUID,
+    product_id: str,
+    payload: ProductIn,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    """PUT because it is idempotent on the business key (7.5)."""
+    scope = TenantScope(license_id=license_id)
+    try:
+        repo = ProductRepository(session)
+        before = repo.get(scope, product_id)
+        existed = before is not None
+        before_name = before.product_name if before else None
+        row = repo.upsert(
+            scope,
+            product_id=product_id,
+            product_name=payload.product_name,
+            sku=payload.sku,
+            category=payload.category,
+            unit_price=payload.unit_price,
+            description=payload.description,
+        )
+        AuditRepository(session).write(
+            license_id=license_id,
+            entity_type="product",
+            entity_id=row.id,
+            actor_type="user",
+            actor_id=x_actor_id or None,
+            action="update" if existed else "create",
+            field_changes=diff_fields(
+                {"product_name": before_name}, {"product_name": row.product_name}
+            ),
+        )
+        session.commit()
+        return ProductOut.model_validate(row, from_attributes=True)
+    except Exception as exc:
+        session.rollback()
+        raise _phase7_http_error(exc)
+
+
+@router.get("/licenses/{license_id}/products", response_model=list[ProductOut])
+def list_products(
+    license_id: uuid.UUID,
+    category: str | None = None,
+    include_archived: bool = False,
+    limit: int = 200,
+    session: Session = Depends(get_session),
+):
+    scope = TenantScope(license_id=license_id)
+    rows = ProductRepository(session).list(
+        scope, category=category, include_archived=include_archived, limit=limit
+    )
+    return [ProductOut.model_validate(r, from_attributes=True) for r in rows]
+
+
+@router.post(
+    "/licenses/{license_id}/products/csv", response_model=ProductCsvOut
+)
+def upload_products_csv(
+    license_id: uuid.UUID,
+    payload: ProductCsvIn,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    """Bulk upsert. Per-row errors are reported, not fatal — one bad row in a
+    200-row file should not reject the other 199."""
+    scope = TenantScope(license_id=license_id)
+    try:
+        result = ProductRepository(session).upsert_csv(scope, payload.content)
+        AuditRepository(session).write(
+            license_id=license_id,
+            entity_type="product",
+            entity_id=license_id,  # a bulk action has no single entity
+            actor_type="user",
+            actor_id=x_actor_id or None,
+            action="update",
+            field_changes=diff_fields(
+                {}, {"imported": result["imported"], "errors": len(result["errors"])}
+            ),
+        )
+        session.commit()
+        return ProductCsvOut(**result)
+    except Exception as exc:
+        session.rollback()
+        raise _phase7_http_error(exc)
+
+
+@router.delete("/licenses/{license_id}/products/{product_id}", response_model=ProductOut)
+def archive_product(
+    license_id: uuid.UUID,
+    product_id: str,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    """DELETE archives — a product referenced by past deals must stay
+    resolvable, or historical documents render blanks (7.5)."""
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = ProductRepository(session).archive(scope, product_id)
+        AuditRepository(session).write(
+            license_id=license_id,
+            entity_type="product",
+            entity_id=row.id,
+            actor_type="user",
+            actor_id=x_actor_id or None,
+            action="delete",
+            field_changes=diff_fields({"archived": False}, {"archived": True}),
+        )
+        session.commit()
+        return ProductOut.model_validate(row, from_attributes=True)
+    except Exception as exc:
+        session.rollback()
+        raise _phase7_http_error(exc)
+
+
+@router.post("/licenses/{license_id}/sales-groups", response_model=GroupOut, status_code=201)
+def create_sales_group(
+    license_id: uuid.UUID, payload: GroupIn, session: Session = Depends(get_session)
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = SalesGroupRepository(session).create(scope, payload.group_name)
+        session.commit()
+        return GroupOut.model_validate(row, from_attributes=True)
+    except Exception as exc:
+        session.rollback()
+        raise _phase7_http_error(exc)
+
+
+@router.get("/licenses/{license_id}/sales-groups", response_model=list[GroupOut])
+def list_sales_groups(license_id: uuid.UUID, session: Session = Depends(get_session)):
+    rows = SalesGroupRepository(session).list(TenantScope(license_id=license_id))
+    return [GroupOut.model_validate(r, from_attributes=True) for r in rows]
+
+
+@router.delete("/licenses/{license_id}/sales-groups/{group_id}", status_code=204)
+def delete_sales_group(
+    license_id: uuid.UUID, group_id: uuid.UUID, session: Session = Depends(get_session)
+):
+    """Removes the group and its membership rows — never the people."""
+    scope = TenantScope(license_id=license_id)
+    try:
+        SalesGroupRepository(session).delete(scope, group_id)
+        session.commit()
+    except Exception as exc:
+        session.rollback()
+        raise _phase7_http_error(exc)
+
+
+@router.post("/licenses/{license_id}/sales-groups/{group_id}/members", status_code=201)
+def add_sales_group_member(
+    license_id: uuid.UUID,
+    group_id: uuid.UUID,
+    payload: GroupMemberIn,
+    session: Session = Depends(get_session),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = SalesGroupRepository(session).add_member(scope, group_id, payload.member_id)
+        session.commit()
+        return {"id": str(row.id), "group_id": str(group_id), "member_id": str(payload.member_id)}
+    except Exception as exc:
+        session.rollback()
+        raise _phase7_http_error(exc)
+
+
+@router.delete(
+    "/licenses/{license_id}/sales-groups/{group_id}/members/{member_id}", status_code=204
+)
+def remove_sales_group_member(
+    license_id: uuid.UUID,
+    group_id: uuid.UUID,
+    member_id: uuid.UUID,
+    session: Session = Depends(get_session),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        SalesGroupRepository(session).remove_member(scope, group_id, member_id)
+        session.commit()
+    except Exception as exc:
+        session.rollback()
+        raise _phase7_http_error(exc)
+
+
+@router.post(
+    "/licenses/{license_id}/technician-teams", response_model=TeamOut, status_code=201
+)
+def create_technician_team(
+    license_id: uuid.UUID, payload: TeamIn, session: Session = Depends(get_session)
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = TechnicianTeamRepository(session).create(scope, payload.team_name)
+        session.commit()
+        return TeamOut.model_validate(row, from_attributes=True)
+    except Exception as exc:
+        session.rollback()
+        raise _phase7_http_error(exc)
+
+
+@router.get("/licenses/{license_id}/technician-teams", response_model=list[TeamOut])
+def list_technician_teams(license_id: uuid.UUID, session: Session = Depends(get_session)):
+    rows = TechnicianTeamRepository(session).list(TenantScope(license_id=license_id))
+    return [TeamOut.model_validate(r, from_attributes=True) for r in rows]
+
+
+@router.delete("/licenses/{license_id}/technician-teams/{team_id}", status_code=204)
+def delete_technician_team(
+    license_id: uuid.UUID, team_id: uuid.UUID, session: Session = Depends(get_session)
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        TechnicianTeamRepository(session).delete(scope, team_id)
+        session.commit()
+    except Exception as exc:
+        session.rollback()
+        raise _phase7_http_error(exc)
+
+
+@router.post(
+    "/licenses/{license_id}/technician-teams/{team_id}/members",
+    response_model=TeamMemberOut,
+    status_code=201,
+)
+def add_technician_team_member(
+    license_id: uuid.UUID,
+    team_id: uuid.UUID,
+    payload: TeamMemberIn,
+    session: Session = Depends(get_session),
+):
+    """Idempotent; re-adding updates is_lead. A team may have several leads."""
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = TechnicianTeamRepository(session).add_member(
+            scope, team_id, payload.member_id, is_lead=payload.is_lead
+        )
+        session.commit()
+        return TeamMemberOut.model_validate(row, from_attributes=True)
+    except Exception as exc:
+        session.rollback()
+        raise _phase7_http_error(exc)
+
+
+@router.delete(
+    "/licenses/{license_id}/technician-teams/{team_id}/members/{member_id}",
+    status_code=204,
+)
+def remove_technician_team_member(
+    license_id: uuid.UUID,
+    team_id: uuid.UUID,
+    member_id: uuid.UUID,
+    session: Session = Depends(get_session),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        TechnicianTeamRepository(session).remove_member(scope, team_id, member_id)
+        session.commit()
+    except Exception as exc:
+        session.rollback()
+        raise _phase7_http_error(exc)

@@ -20,6 +20,91 @@ from .ai.client import AIUnavailable, AINotConfigured
 from .ai.intent import parse_intent, unavailable_reply
 from .identity import ResolvedContext, TenantResolution
 
+# Which permission key an (action, entity) pair requires. This is the real
+# gate — the prompt tells the model what the user holds, but a model that
+# ignores that, or names an entity the system has never heard of, must still
+# be stopped here. Prompt text is guidance; this table is the boundary.
+#
+# Actions are normalised: the model emits read/view/list interchangeably.
+ACTION_ALIASES = {
+    "view": "read",
+    "list": "read",
+    "get": "read",
+    "show": "read",
+    "add": "create",
+    "new": "create",
+    "edit": "update",
+    "modify": "update",
+    "remove": "delete",
+}
+
+# (action, entity) -> permission key. An entity that is not in this table is
+# not something the system can do at all, which is a different answer from
+# "you lack permission" but produces the same reply: here is what you CAN do.
+ACTION_PERMISSIONS: dict[tuple[str, str], str] = {
+    ("read", "customer"): "customer.read",
+    ("create", "customer"): "customer.create",
+    ("update", "customer"): "customer.update",
+    ("archive", "customer"): "customer.archive",
+    ("read", "deal"): "deal.read",
+    ("create", "deal"): "deal.create",
+    ("update", "deal"): "deal.update",
+    ("archive", "deal"): "deal.archive",
+    ("read", "note"): "note.read",
+    ("create", "note"): "note.create",
+    ("update", "note"): "note.update",
+    ("read", "followup"): "followup.read",
+    ("create", "followup"): "followup.create",
+    ("update", "followup"): "followup.update",
+    ("read", "ticket"): "ticket.read",
+    ("create", "ticket"): "ticket.create",
+    ("update", "ticket"): "ticket.update",
+    ("assign", "ticket"): "ticket.assign",
+    ("close", "ticket"): "ticket.close",
+    ("read", "quote"): "quote.read",
+    ("create", "quote"): "quote.create",
+    ("update", "quote"): "quote.update",
+    ("read", "service_report"): "service_report.read",
+    ("create", "service_report"): "service_report.create",
+    ("update", "service_report"): "service_report.update",
+    ("read", "warranty"): "warranty.read",
+    ("create", "warranty"): "warranty.create",
+    ("update", "warranty"): "warranty.update",
+    # Phase 7 master data
+    ("read", "product"): "product.manage",
+    ("create", "product"): "product.manage",
+    ("update", "product"): "product.manage",
+    ("delete", "product"): "product.manage",
+    ("read", "team"): "team.manage",
+    ("create", "team"): "team.manage",
+    ("update", "team"): "team.manage",
+    ("read", "sales_group"): "team.manage",
+    ("create", "sales_group"): "team.manage",
+    ("update", "sales_group"): "team.manage",
+    ("read", "report"): "view_reports",
+    ("read", "audit_log"): "audit_log.view",
+    ("read", "role"): "role.manage",
+    ("update", "role"): "role.manage",
+    ("create", "role"): "role.manage",
+    ("read", "member"): "member.manage",
+    ("update", "member"): "member.manage",
+    ("read", "setting"): "setting.manage",
+    ("update", "setting"): "setting.manage",
+}
+
+
+def required_permission(action: str, entity: str | None) -> str | None:
+    """The permission key an intent needs, or None if the system cannot do it.
+
+    None means two different things that deliberately get the same treatment:
+    an unknown entity, and a known entity with an action it does not support.
+    Neither is executable, so neither should be answered with "coming soon".
+    """
+    if not entity:
+        return None
+    act = ACTION_ALIASES.get((action or "").strip().lower(), (action or "").strip().lower())
+    return ACTION_PERMISSIONS.get((act, str(entity).strip().lower()))
+
 log = logging.getLogger(__name__)
 
 # Cap on how many capabilities a "what can I do" reply lists. A member with a
@@ -203,6 +288,20 @@ async def handle_chat_message(
         return ChatReply(text=ask_for_missing(missing, language), intent=intent)
 
     if intent.get("action") == "suggest":
+        catalog = await client.permission_catalog()
+        return ChatReply(
+            text=suggest_what_you_can_do(permission_keys, catalog, language),
+            intent=intent,
+        )
+
+    # The real permission gate. Checked here rather than trusted from the
+    # model: asked for "รายงานทางการเงิน", the model happily returned
+    # action=view entity=financial_report — an entity that does not exist and
+    # that no permission key covers. Echoing "coming soon" at that would both
+    # mislead the user and, once Phase 9 adds execution, skip the check
+    # entirely for anything the model mislabels.
+    needed = required_permission(intent.get("action", ""), intent.get("entity"))
+    if needed is None or needed not in set(permission_keys):
         catalog = await client.permission_catalog()
         return ChatReply(
             text=suggest_what_you_can_do(permission_keys, catalog, language),
