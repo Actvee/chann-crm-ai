@@ -110,6 +110,13 @@ log = logging.getLogger(__name__)
 # Cap on how many capabilities a "what can I do" reply lists. A member with a
 # broad role can hold 40+ permissions, and a LINE bubble that long is unusable.
 SUGGEST_LIMIT = 8
+# When the request names a group, that group is shown in full — capped
+# separately so a role with a huge group (owner, ~10 keys in one group) does
+# not itself blow past a reasonable message length.
+SUGGEST_GROUP_LIMIT = 10
+# How many OTHER groups to show after the priority one, so a broad role like
+# owner still gets something more useful than one enormous flat list.
+SUGGEST_OTHER_GROUPS = 2
 
 REPLY_NO_SOURCE_MESSAGE = {
     "th": "ไม่พบข้อความต้นฉบับที่ตอบกลับ",
@@ -135,6 +142,49 @@ SUGGEST_HEADER = {
     "th": "คุณสามารถทำสิ่งเหล่านี้ได้:",
     "en": "Here is what you can do:",
 }
+
+# Two different reasons land here, and users need to hear the right one:
+# not knowing a feature exists reads very differently from being denied it.
+SUGGEST_NO_PERMISSION_LEAD = {
+    "th": "คุณยังไม่มีสิทธิ์ทำสิ่งนี้ แต่คุณสามารถทำสิ่งเหล่านี้ได้:",
+    "en": "You do not have permission for that, but here is what you can do:",
+}
+SUGGEST_UNKNOWN_FEATURE_LEAD = {
+    "th": "ระบบยังไม่มีฟังก์ชันนี้ ตอนนี้คุณสามารถทำสิ่งเหล่านี้ได้:",
+    "en": "That is not a feature yet — here is what you can do right now:",
+}
+
+# Thai/English group headers, keyed to the catalogue's "group" field
+# (permission_key.split(".", 1)[0], or "general" for a dotless key).
+GROUP_LABELS: dict[str, dict[str, str]] = {
+    "customer": {"th": "ลูกค้า", "en": "Customers"},
+    "deal": {"th": "ดีล", "en": "Deals"},
+    "note": {"th": "บันทึก", "en": "Notes"},
+    "followup": {"th": "การติดตาม", "en": "Follow-ups"},
+    "product": {"th": "สินค้า", "en": "Products"},
+    "team": {"th": "ทีมและกลุ่ม", "en": "Teams & groups"},
+    "assignment_rule": {"th": "กฎการมอบหมายงาน", "en": "Assignment rules"},
+    "ticket": {"th": "ใบงาน", "en": "Tickets"},
+    "quote": {"th": "ใบเสนอราคา", "en": "Quotes"},
+    "service_report": {"th": "รายงานบริการ", "en": "Service reports"},
+    "approval": {"th": "การอนุมัติ", "en": "Approvals"},
+    "chat_session": {"th": "ห้องแชท", "en": "Chat sessions"},
+    "role": {"th": "บทบาทและสิทธิ์", "en": "Roles & permissions"},
+    "member": {"th": "สมาชิก", "en": "Members"},
+    "setting": {"th": "การตั้งค่า", "en": "Settings"},
+    "warranty": {"th": "ใบรับประกัน", "en": "Warranties"},
+    "audit_log": {"th": "ประวัติการใช้งาน", "en": "Audit log"},
+    "pdpa": {"th": "คำขอ PDPA", "en": "PDPA requests"},
+    "billing": {"th": "การเรียกเก็บเงิน", "en": "Billing"},
+    "general": {"th": "ทั่วไป", "en": "General"},
+}
+
+
+def _group_label(group: str, language: str) -> str:
+    entry = GROUP_LABELS.get(group)
+    if entry is None:
+        return group
+    return entry.get(language) or entry["th"]
 
 SUGGEST_NOTHING = {
     "th": "ตอนนี้บัญชีของคุณยังไม่มีสิทธิ์ใช้งานใด ๆ กรุณาติดต่อผู้ดูแลบริษัท",
@@ -203,7 +253,12 @@ def ask_for_missing(missing: list[str], language: str = "th") -> str:
 
 
 def suggest_what_you_can_do(
-    permission_keys, catalog: list[dict], language: str = "th"
+    permission_keys,
+    catalog: list[dict],
+    language: str = "th",
+    *,
+    requested_action: str | None = None,
+    requested_entity: str | None = None,
 ) -> str:
     """Spec 6.6/6.9 — list ONLY what this member actually holds.
 
@@ -211,35 +266,105 @@ def suggest_what_you_can_do(
     never from their role name: two tenants can both have a role called
     "sales" with entirely different permissions, so suggesting by role would
     offer people things they cannot do.
+
+    requested_action/requested_entity are optional context from the intent
+    that led here. They change two things: which lead-in sentence is used
+    (not knowing a feature exists is a different message from being denied
+    it), and which group is shown first — a flat 49-item alphabetical list is
+    not an answer to "can I see the financial report", and a group the person
+    never asked about does not belong ahead of the one they did.
     """
     held = set(permission_keys)
     if not held:
         return _t(SUGGEST_NOTHING, language)
 
-    labels: list[str] = []
+    # Group first, in catalogue order, so the fallback (no request context)
+    # still reads as organised rather than alphabetical-by-key.
+    groups: dict[str, list[str]] = {}
     for entry in catalog:
         key = entry.get("key")
         if key not in held:
             continue
-        # Platform-admin capabilities are not tenant actions and would be
-        # noise (or worse, a hint) in an ordinary member's list.
         if str(key).startswith("platform.admin."):
             continue
         label = (entry.get("label") or {}).get(language) or (
             entry.get("label") or {}
         ).get("th")
-        labels.append(label or str(key))
+        group = entry.get("group") or "general"
+        groups.setdefault(group, []).append(label or str(key))
 
-    if not labels:
+    if not groups:
         return _t(SUGGEST_NOTHING, language)
 
-    shown = labels[:SUGGEST_LIMIT]
-    body = "\n".join(f"• {label}" for label in shown)
-    text = f"{_t(SUGGEST_HEADER, language)}\n{body}"
-    if len(labels) > len(shown):
-        more = len(labels) - len(shown)
-        text += f"\n… +{more}" if language == "en" else f"\n… และอีก {more} รายการ"
-    return text
+    # Was the request understood as a real feature, and does this person hold
+    # it? required_permission returning None means the system does not have
+    # that capability at all — a different situation from holding the wrong
+    # permission, and the two must not be worded the same way.
+    needed = required_permission(requested_action or "", requested_entity)
+    feature_is_known = needed is not None
+
+    priority_group = None
+    if needed:
+        priority_group = needed.split(".", 1)[0] if "." in needed else "general"
+    elif requested_entity:
+        # Even for an unmapped entity, if its name happens to match a real
+        # group (the model said "product" for something we do track), lead
+        # with that rather than an arbitrary catalogue-order group.
+        candidate = str(requested_entity).strip().lower()
+        if candidate in groups:
+            priority_group = candidate
+
+    # An unmapped entity with nothing to key off of (the model invented a
+    # word like "financial_report" that matches no real group) has no honest
+    # way to pick which groups are relevant. Showing two arbitrary groups —
+    # e.g. "approvals" and "billing" for a question about reports — repeats
+    # the exact confusion this rewrite exists to fix. Keep it short instead
+    # and point at the full list on request rather than guessing.
+    if requested_entity and not feature_is_known and priority_group is None:
+        return (
+            _t(SUGGEST_UNKNOWN_FEATURE_LEAD, language)
+            + ("\n" if language == "en" else "\n")
+            + ('Type "what can I do" to see the full list.' if language == "en"
+               else 'พิมพ์ "ทำอะไรได้บ้าง" เพื่อดูรายการทั้งหมด')
+        )
+
+    ordered_groups = list(groups.keys())
+    if priority_group in groups:
+        ordered_groups.remove(priority_group)
+        ordered_groups.insert(0, priority_group)
+
+    lines: list[str] = []
+    other_groups_shown = 0
+    for group in ordered_groups:
+        is_priority = group == priority_group
+        if not is_priority:
+            if other_groups_shown >= SUGGEST_OTHER_GROUPS:
+                continue
+            other_groups_shown += 1
+        items = groups[group]
+        cap = SUGGEST_GROUP_LIMIT if is_priority else SUGGEST_LIMIT
+        shown_items = items[:cap]
+        lines.append(f"{_group_label(group, language)}:")
+        lines.extend(f"  • {label}" for label in shown_items)
+        if len(items) > len(shown_items):
+            more = len(items) - len(shown_items)
+            lines.append(f"  … +{more}" if language == "en" else f"  … และอีก {more} รายการ")
+
+    remaining_groups = len(ordered_groups) - (1 if priority_group in groups else 0) - other_groups_shown
+    if remaining_groups > 0:
+        lines.append(
+            f"… +{remaining_groups} more categories" if language == "en"
+            else f"… และอีก {remaining_groups} หมวดหมู่"
+        )
+
+    if requested_entity and not feature_is_known:
+        lead = _t(SUGGEST_UNKNOWN_FEATURE_LEAD, language)
+    elif requested_entity:
+        lead = _t(SUGGEST_NO_PERMISSION_LEAD, language)
+    else:
+        lead = _t(SUGGEST_HEADER, language)
+
+    return lead + "\n" + "\n".join(lines)
 
 
 async def handle_chat_message(
@@ -300,11 +425,16 @@ async def handle_chat_message(
     # that no permission key covers. Echoing "coming soon" at that would both
     # mislead the user and, once Phase 9 adds execution, skip the check
     # entirely for anything the model mislabels.
-    needed = required_permission(intent.get("action", ""), intent.get("entity"))
+    req_action = intent.get("action", "")
+    req_entity = intent.get("entity")
+    needed = required_permission(req_action, req_entity)
     if needed is None or needed not in set(permission_keys):
         catalog = await client.permission_catalog()
         return ChatReply(
-            text=suggest_what_you_can_do(permission_keys, catalog, language),
+            text=suggest_what_you_can_do(
+                permission_keys, catalog, language,
+                requested_action=req_action, requested_entity=req_entity,
+            ),
             intent=intent,
         )
 

@@ -21,8 +21,6 @@ sys.path.insert(0, str(ROOT / "application"))
 from chann_app.config import settings  # noqa: E402
 from chann_app.services.chat import (  # noqa: E402
     ACTION_PERMISSIONS,
-    SUGGEST_LIMIT,
-    ChatReply,
     ask_for_missing,
     greet,
     handle_chat_message,
@@ -232,14 +230,78 @@ class TestSuggestWhatYouCanDo:
         )
         assert describe("platform.admin.break_glass") not in text
 
-    def test_long_permission_sets_are_truncated(self):
+    def test_long_permission_sets_are_grouped_and_capped(self):
+        """Regression for the live failure on 25 Aug 2026: a flat 49-item
+        alphabetical list ("อนุมัติ", "ไม่อนุมัติ", ... billing) with no
+        relation to what was asked. Groups now cap the number of categories
+        shown up front rather than truncating one long flat list."""
         text = suggest_what_you_can_do(sorted(PERMISSION_KEYS), _catalog(), "th")
-        assert text.count("•") == SUGGEST_LIMIT
-        assert "และอีก" in text
+        assert "และอีก" in text and "หมวดหมู่" in text
+        # no more than (no priority group + the "other groups" allowance)
+        # category headers appear
+        assert text.count(":\n") <= 1 + 2  # SUGGEST_OTHER_GROUPS = 2
 
     def test_suggest_is_localised(self):
         text = suggest_what_you_can_do(["customer.read"], _catalog(), "en")
         assert "View customers" in text
+        assert "Customers" in text  # group header, also localised
+
+    def test_unknown_entity_gets_a_short_honest_reply_not_random_groups(self):
+        """The exact live failure: asked about a report, the model returned
+        an entity ("financial_report") the system has never heard of, and
+        the reply dumped unrelated categories (approvals, assignment rules)
+        with no connection to reports at all."""
+        text = suggest_what_you_can_do(
+            sorted(PERMISSION_KEYS), _catalog(), "th",
+            requested_action="read", requested_entity="financial_report",
+        )
+        assert "ระบบยังไม่มีฟังก์ชันนี้" in text
+        assert "ทำอะไรได้บ้าง" in text
+        # must NOT dump unrelated categories
+        assert "อนุมัติ" not in text
+        assert "กฎการมอบหมายงาน" not in text
+
+    def test_known_feature_denied_leads_with_no_permission_message(self):
+        text = suggest_what_you_can_do(
+            ["customer.read"], _catalog(), "th",
+            requested_action="create", requested_entity="product",
+        )
+        assert "คุณยังไม่มีสิทธิ์ทำสิ่งนี้" in text
+        assert "ระบบยังไม่มีฟังก์ชันนี้" not in text
+
+    def test_requested_group_is_shown_first(self):
+        """A member who can do lots of things, asked about tickets, should
+        see tickets first — not wherever "ticket" happens to sort."""
+        text = suggest_what_you_can_do(
+            ["customer.read", "deal.create", "ticket.read", "ticket.assign"],
+            _catalog(), "th",
+            requested_action="read", requested_entity="ticket",
+        )
+        # group headers are the short, un-indented lines ending in ":" —
+        # the lead sentence also ends in ":" but is a full sentence, not one
+        headers = [
+            l for l in text.splitlines()
+            if l.endswith(":") and not l.startswith(" ") and len(l) < 20
+        ]
+        assert headers, "no group headers found"
+        assert headers[0] == "ใบงาน:"
+        assert text.index("ใบงาน:") < text.index("ลูกค้า:")
+
+    def test_plain_query_with_no_entity_is_unaffected(self):
+        """A bare "what can I do" must never trip the unknown-feature path —
+        that path requires an actual requested_entity."""
+        text = suggest_what_you_can_do(
+            ["customer.read", "deal.create"], _catalog(), "th"
+        )
+        assert "ระบบยังไม่มีฟังก์ชันนี้" not in text
+        assert describe("customer.read") in text
+
+    def test_unknown_entity_reply_is_localised(self):
+        text = suggest_what_you_can_do(
+            sorted(PERMISSION_KEYS), _catalog(), "en",
+            requested_action="read", requested_entity="financial_report",
+        )
+        assert "not a feature yet" in text
 
     async def test_no_permission_intent_routes_to_suggest(self):
         ai = httpx.AsyncClient(transport=_ai(json.dumps(
@@ -337,6 +399,11 @@ class TestPermissionGateIsEnforcedInCode:
     """
 
     async def test_unknown_entity_falls_back_to_suggest(self):
+        """Regression for the live failure: the model invented an entity
+        ("financial_report") the system has never heard of. The gate must
+        not treat it as understood — and the reply must be the short,
+        honest "not a feature yet" message, not a dump of unrelated groups
+        (that dump was itself what made the earlier bug hard to notice)."""
         ai = httpx.AsyncClient(transport=_ai(json.dumps(
             {"action": "view", "entity": "financial_report", "fields": {}, "missing": []})))
         reply = await handle_chat_message(
@@ -344,7 +411,8 @@ class TestPermissionGateIsEnforcedInCode:
             message="ขอดูรายงานทางการเงิน", ctx=_ctx(), ai_client=ai,
         )
         assert "เข้าใจแล้ว" not in reply.text
-        assert describe("customer.read") in reply.text
+        assert "ระบบยังไม่มีฟังก์ชันนี้" in reply.text
+        assert describe("customer.read") not in reply.text
 
     async def test_known_entity_without_permission_suggests(self):
         ai = httpx.AsyncClient(transport=_ai(json.dumps(
