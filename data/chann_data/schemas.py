@@ -373,3 +373,29 @@ class TeamMemberOut(BaseModel):
     member_id: uuid.UUID
     is_lead: bool
     created_at: datetime
+
+
+# ---------------------------------------------------------------- Phase 8
+
+
+class ProfileUpdateIn(BaseModel):
+    first_name: str | None = None
+    last_name: str | None = None
+    phone: str | None = None
+    email: str | None = None
+    address: str | None = None
+
+
+class ProfileOut(BaseModel):
+    chann_uid: str
+    first_name: str | None
+    last_name: str | None
+    phone: str | None
+    email: str | None
+    address: str | None
+    registered: bool
+    registered_at: datetime | None
+
+
+class ProfileEditCheckOut(BaseModel):
+    allowed: bool

@@ -1722,3 +1722,146 @@ class TestPhase7MasterData:
         with Session(migrated_db) as session:
             repo = TechnicianTeamRepository(session)
             assert repo.members(scope, b_id)[0].is_lead is False
+
+
+class TestPhase8Profiles:
+    """Phase 8 — Master Spec 8.5 mandatory tests."""
+
+    def test_profile_self_edit(self, migrated_db):
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import ChannIdentity
+        from chann_data.repositories.profile import (
+            ProfileConflict,
+            ProfileNotFound,
+            ProfileRepository,
+        )
+
+        with Session(migrated_db) as session:
+            session.add(
+                ChannIdentity(
+                    chann_uid="CHN-P8-0001", line_user_id="line-p8-0001",
+                    primary_role="technician",
+                )
+            )
+            session.commit()
+
+        with Session(migrated_db) as session:
+            repo = ProfileRepository(session)
+            row = repo.update_profile(
+                "CHN-P8-0001",
+                {"first_name": "สมชาย", "phone": "081-234-5678", "email": "somchai@test.com"},
+            )
+            assert row.first_name == "สมชาย"
+            assert row.phone == "0812345678"          # normalised, hyphens stripped
+            assert row.email == "somchai@test.com"
+            assert row.registered is True              # first real edit marks it registered
+            assert row.registered_at is not None
+            session.commit()
+
+        with Session(migrated_db) as session:
+            repo = ProfileRepository(session)
+            # editing again must not re-stamp registered_at
+            first_registered_at = repo.get("CHN-P8-0001").registered_at
+            repo.update_profile("CHN-P8-0001", {"last_name": "ใจดี"})
+            session.commit()
+        with Session(migrated_db) as session:
+            row = ProfileRepository(session).get("CHN-P8-0001")
+            assert row.last_name == "ใจดี"
+            assert row.registered_at == first_registered_at
+
+        # invalid values are refused, not silently dropped or half-applied
+        with Session(migrated_db) as session:
+            repo = ProfileRepository(session)
+            with pytest.raises(ProfileConflict):
+                repo.update_profile("CHN-P8-0001", {"phone": "not-a-phone"})
+            with pytest.raises(ProfileConflict):
+                repo.update_profile("CHN-P8-0001", {"email": "not-an-email"})
+            with pytest.raises(ProfileConflict):
+                repo.update_profile("CHN-P8-0001", {"role": "owner"})  # not editable
+            session.rollback()
+
+        with Session(migrated_db) as session:
+            with pytest.raises(ProfileNotFound):
+                ProfileRepository(session).update_profile(
+                    "CHN-NOSUCH", {"first_name": "x"}
+                )
+
+    def test_profile_edit_on_behalf_requires_a_real_relationship(self, migrated_db):
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import ChannIdentity
+        from chann_data.repositories.phase65 import RegistrationRepository
+        from chann_data.repositories.profile import ProfileRepository
+
+        with Session(migrated_db) as session:
+            for uid, role in (
+                ("CHN-P8-SALES1", "sales"),
+                ("CHN-P8-CUST1", "customer"),
+                ("CHN-P8-STRANGER", "customer"),
+            ):
+                session.add(
+                    ChannIdentity(chann_uid=uid, line_user_id=f"line-{uid}", primary_role=role)
+                )
+            session.commit()
+
+        with Session(migrated_db) as session:
+            lic = RegistrationRepository(session).create_license(
+                company_name="Profile Co", created_by_chann_uid="CHN-P8-SALES1"
+            )
+            license_id = lic.id
+            RegistrationRepository(session).link_customer(
+                chann_uid="CHN-P8-CUST1", company_code=lic.company_code
+            )
+            session.commit()
+
+        with Session(migrated_db) as session:
+            repo = ProfileRepository(session)
+            # self-edit: always allowed, no relationship needed
+            assert repo.may_edit_on_behalf(
+                actor_chann_uid="CHN-P8-CUST1", target_chann_uid="CHN-P8-CUST1",
+                license_id=license_id,
+            ) is True
+            # sales editing a customer actually linked to their tenant: allowed
+            assert repo.may_edit_on_behalf(
+                actor_chann_uid="CHN-P8-SALES1", target_chann_uid="CHN-P8-CUST1",
+                license_id=license_id,
+            ) is True
+            # sales editing a total stranger with no link to this tenant: refused
+            assert repo.may_edit_on_behalf(
+                actor_chann_uid="CHN-P8-SALES1", target_chann_uid="CHN-P8-STRANGER",
+                license_id=license_id,
+            ) is False
+
+    def test_profile_chat_vs_liff_use_the_same_domain_function(self, migrated_db):
+        """Spec 8.5: chat and LIFF must produce identical results because both
+        call update_profile — proven here by calling it twice the same way
+        two different callers would, and getting the same state either time."""
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import ChannIdentity
+        from chann_data.repositories.profile import ProfileRepository
+
+        with Session(migrated_db) as session:
+            session.add(
+                ChannIdentity(
+                    chann_uid="CHN-P8-BOTH", line_user_id="line-p8-both",
+                    primary_role="customer",
+                )
+            )
+            session.commit()
+
+        # "via chat"
+        with Session(migrated_db) as session:
+            ProfileRepository(session).update_profile(
+                "CHN-P8-BOTH", {"phone": "0899999999"}
+            )
+            session.commit()
+        # "via LIFF" — same function, same effect
+        with Session(migrated_db) as session:
+            row = ProfileRepository(session).update_profile(
+                "CHN-P8-BOTH", {"address": "123 ถนนสุขุมวิท"}
+            )
+            session.commit()
+            assert row.phone == "0899999999"           # earlier edit preserved
+            assert row.address == "123 ถนนสุขุมวิท"

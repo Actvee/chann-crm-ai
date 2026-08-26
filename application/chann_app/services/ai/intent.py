@@ -61,6 +61,13 @@ Rules:
   fields as shown to the user) MUST be written in {language_name}.
   Machine-facing values — action, entity, and field keys — stay in English
   regardless of language, because downstream code matches on them.
+
+Special case — the user's OWN contact details (their name, phone number,
+email, or address, e.g. "แก้เบอร์เป็น 08x-xxx-xxxx", "เปลี่ยนอีเมลเป็น..."):
+use entity="profile", action="update", and put only the changed value(s) in
+"fields" using exactly these keys: first_name, last_name, phone, email,
+address. Do not use "profile" for anyone else's details — only the current
+user's own.
 """
 
 # Spelled out for the model rather than passing a bare code: "th" is far more

@@ -367,6 +367,65 @@ def suggest_what_you_can_do(
     return lead + "\n" + "\n".join(lines)
 
 
+# Phase 8 — the fields a profile edit is allowed to touch through chat.
+# Mirrors data/chann_data/repositories/profile.py's EDITABLE_FIELDS; kept as
+# a separate constant rather than imported, since the Application tier has
+# no dependency on the Data tier's Python package (only its HTTP API).
+PROFILE_EDITABLE_FIELDS = frozenset(
+    {"first_name", "last_name", "phone", "email", "address"}
+)
+
+PROFILE_UPDATED = {
+    "th": "แก้ไขข้อมูลส่วนตัวเรียบร้อยแล้ว",
+    "en": "Your profile has been updated.",
+}
+PROFILE_INVALID_VALUE = {
+    "th": "ข้อมูลที่ให้มาไม่ถูกต้อง กรุณาตรวจสอบอีกครั้ง",
+    "en": "That value doesn't look right — please check and try again.",
+}
+PROFILE_NOTHING_TO_UPDATE = {
+    "th": "กรุณาระบุข้อมูลที่ต้องการแก้ไข เช่น ชื่อ เบอร์โทร อีเมล หรือที่อยู่",
+    "en": "Please say what to update — name, phone, email, or address.",
+}
+
+
+def _is_conflict(exc: Exception) -> bool:
+    return getattr(exc, "status_code", None) == 409 or "409" in str(exc)
+
+
+async def _handle_profile_intent(
+    client: DataClient, *, intent: dict, ctx: ResolvedContext, language: str
+) -> ChatReply:
+    """Phase 8 self-edit through chat (Master Spec 8.4).
+
+    Self-edit only: resolving "แก้ลูกค้าชื่อสมชาย" to a real chann_uid needs a
+    customer directory search, which is Phase 9. The on-behalf path exists
+    and is fully authorized (data/chann_data/repositories/profile.py's
+    may_edit_on_behalf, exercised via DataClient.check_profile_edit) but is
+    not yet reachable from free-text chat for that reason — wiring it in is
+    a Phase 9 follow-up, not a missing feature here.
+    """
+    raw_fields = intent.get("fields") or {}
+    fields = {
+        k: v for k, v in raw_fields.items()
+        if k in PROFILE_EDITABLE_FIELDS and v not in (None, "")
+    }
+    if not fields:
+        return ChatReply(text=_t(PROFILE_NOTHING_TO_UPDATE, language), intent=intent)
+
+    try:
+        await client.update_profile(ctx.chann_uid, fields, actor_id=ctx.chann_uid)
+    except Exception as exc:  # noqa: BLE001
+        if _is_conflict(exc):
+            return ChatReply(text=_t(PROFILE_INVALID_VALUE, language), intent=intent)
+        raise
+
+    return ChatReply(
+        text=_t(PROFILE_UPDATED, language),
+        entity_type="profile", entity_id=ctx.chann_uid, intent=intent,
+    )
+
+
 async def handle_chat_message(
     client: DataClient,
     *,
@@ -418,6 +477,14 @@ async def handle_chat_message(
             text=suggest_what_you_can_do(permission_keys, catalog, language),
             intent=intent,
         )
+
+    # Profile edits (Phase 8) bypass the generic gate entirely: self-edit is
+    # always allowed regardless of tenant permission keys, and that "always"
+    # is exactly what ACTION_PERMISSIONS cannot express — it maps
+    # (action, entity) to a single permission key, with no notion of "unless
+    # it's your own record". Handled here, before the gate ever runs.
+    if intent.get("entity") == "profile":
+        return await _handle_profile_intent(client, intent=intent, ctx=ctx, language=language)
 
     # The real permission gate. Checked here rather than trusted from the
     # model: asked for "รายงานทางการเงิน", the model happily returned

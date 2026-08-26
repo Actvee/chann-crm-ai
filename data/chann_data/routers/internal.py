@@ -50,6 +50,11 @@ from ..repositories.phase7 import (
     SalesGroupRepository,
     TechnicianTeamRepository,
 )
+from ..repositories.profile import (
+    ProfileConflict,
+    ProfileNotFound,
+    ProfileRepository,
+)
 from ..repositories.phase65 import (
     RegistrationConflict,
     RegistrationNotFound,
@@ -68,6 +73,9 @@ from ..schemas import (
     FollowUpIn,
     FollowUpOut,
     FollowUpStatusIn,
+    ProfileEditCheckOut,
+    ProfileOut,
+    ProfileUpdateIn,
     GroupIn,
     GroupMemberIn,
     GroupOut,
@@ -1488,3 +1496,100 @@ def remove_technician_team_member(
     except Exception as exc:
         session.rollback()
         raise _phase7_http_error(exc)
+
+
+# ---------------------------------------------------------------- Phase 8
+
+
+def _phase8_http_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, ProfileNotFound):
+        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    if isinstance(exc, ProfileConflict):
+        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    if isinstance(exc, HTTPException):
+        return exc
+    return HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="internal error"
+    )
+
+
+@router.get("/identities/{chann_uid}/profile", response_model=ProfileOut)
+def get_profile(chann_uid: str, session: Session = Depends(get_session)):
+    row = ProfileRepository(session).get(chann_uid)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="identity not found")
+    return ProfileOut.model_validate(row, from_attributes=True)
+
+
+@router.patch("/identities/{chann_uid}/profile", response_model=ProfileOut)
+def update_profile(
+    chann_uid: str,
+    payload: ProfileUpdateIn,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    """The one domain function chat and LIFF both call (spec 8.5).
+
+    Authorization (self vs on-behalf) is the Application tier's job — this
+    endpoint only validates and writes. It still requires the shared-secret
+    header like every internal endpoint, so it is not reachable from outside
+    the platform at all, only from an Application tier that already decided
+    the edit is allowed.
+    """
+    try:
+        repo = ProfileRepository(session)
+        before = repo.get(chann_uid)
+        before_fields = (
+            {k: getattr(before, k) for k in ("first_name", "last_name", "phone", "email", "address")}
+            if before is not None else {}
+        )
+        fields = payload.model_dump(exclude_unset=True)
+        row = repo.update_profile(chann_uid, fields)
+        after_fields = {k: getattr(row, k) for k in fields}
+        AuditRepository(session).write(
+            license_id=None,
+            entity_type="identity",
+            # chann_identities is keyed by chann_uid (a string), not a UUID,
+            # but audit_log.entity_id is UUID NOT NULL. Deriving a stable
+            # UUID5 from the chann_uid keeps every audit row for the same
+            # identity traceable to the same entity_id, rather than using a
+            # meaningless placeholder that would make audit history for
+            # profile edits useless.
+            entity_id=uuid.uuid5(uuid.NAMESPACE_OID, chann_uid),
+            actor_type="user",
+            actor_id=x_actor_id or chann_uid,
+            action="update",
+            field_changes=diff_fields(
+                {k: before_fields.get(k) for k in fields}, after_fields
+            ),
+        )
+        session.commit()
+        return ProfileOut.model_validate(row, from_attributes=True)
+    except Exception as exc:
+        session.rollback()
+        raise _phase8_http_error(exc)
+
+
+@router.get(
+    "/licenses/{license_id}/profile-edit-check/{actor_chann_uid}/{target_chann_uid}",
+    response_model=ProfileEditCheckOut,
+)
+def check_profile_edit(
+    license_id: uuid.UUID,
+    actor_chann_uid: str,
+    target_chann_uid: str,
+    session: Session = Depends(get_session),
+):
+    """Does a real tenant relationship justify actor editing target's profile?
+
+    Self-edit is always allowed and doesn't need this call; this exists for
+    the on-behalf case, so the Application tier never has to trust a bare
+    name from the AI parser — it checks an actual row (customer_license_links
+    or license_members) before letting the edit through.
+    """
+    allowed = ProfileRepository(session).may_edit_on_behalf(
+        actor_chann_uid=actor_chann_uid,
+        target_chann_uid=target_chann_uid,
+        license_id=license_id,
+    )
+    return ProfileEditCheckOut(allowed=allowed)

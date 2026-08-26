@@ -541,3 +541,34 @@ class DataClient:
             headers=self._headers,
         )
         return self._unwrap(resp)
+
+    # ------------------------------------------------------------ Phase 8
+
+    async def get_profile(self, chann_uid: str) -> dict | None:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/identities/{chann_uid}/profile",
+            headers=self._headers,
+        )
+        if resp.status_code == 404:
+            return None
+        return self._unwrap(resp)
+
+    async def update_profile(
+        self, chann_uid: str, fields: dict, actor_id: str | None = None
+    ) -> dict:
+        resp = await self._client.patch(
+            f"{self._base}/internal/v1/identities/{chann_uid}/profile",
+            headers=self._headers_for(actor_id),
+            json=fields,
+        )
+        return self._unwrap(resp)
+
+    async def check_profile_edit(
+        self, license_id: str, actor_chann_uid: str, target_chann_uid: str
+    ) -> bool:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}"
+            f"/profile-edit-check/{actor_chann_uid}/{target_chann_uid}",
+            headers=self._headers,
+        )
+        return bool(self._unwrap(resp)["allowed"])

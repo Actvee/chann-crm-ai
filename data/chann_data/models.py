@@ -56,6 +56,15 @@ class ChannIdentity(TimestampMixin, Base):
     display_name: Mapped[str | None] = mapped_column(String(255))
     signature_url: Mapped[str | None] = mapped_column(String(512))  # placed early — Phase 13
 
+    # --- Phase 8 ---
+    first_name: Mapped[str | None] = mapped_column(String(255))
+    last_name: Mapped[str | None] = mapped_column(String(255))
+    phone: Mapped[str | None] = mapped_column(String(32))
+    email: Mapped[str | None] = mapped_column(String(255))
+    address: Mapped[str | None] = mapped_column(Text)
+    registered: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    registered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
     memberships: Mapped[list["LicenseMember"]] = relationship(back_populates="identity")
 
 

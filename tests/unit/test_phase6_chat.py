@@ -29,6 +29,10 @@ from chann_app.services.chat import (  # noqa: E402
     suggest_what_you_can_do,
 )
 from chann_app.services.identity import ResolvedContext, TenantResolution  # noqa: E402
+
+
+class ProfileConflictForTest(Exception):
+    status_code = 409
 from chann_data.permissions import (  # noqa: E402
     PERMISSION_DESCRIPTIONS,
     PERMISSION_KEYS,
@@ -76,6 +80,12 @@ class FakeDataClient:
     async def record_message_entity(self, license_id, message_id, entity_type, entity_id):
         self.recorded.append((license_id, message_id, entity_type, entity_id))
         return {"id": "rec"}
+
+    async def update_profile(self, chann_uid, fields, actor_id=None):
+        self.recorded.append(("update_profile", chann_uid, fields, actor_id))
+        if getattr(self, "_profile_conflict", False):
+            raise ProfileConflictForTest("invalid value")
+        return {"chann_uid": chann_uid, **fields}
 
 
 def _ctx(resolution=TenantResolution.SINGLE, display_name="LINE Name"):
@@ -487,3 +497,72 @@ class TestPhase7EntitiesAreGated:
             message="เพิ่มสินค้าแอร์", ctx=_ctx(), ai_client=ai,
         )
         assert "เข้าใจแล้ว" in reply.text
+
+
+class TestPhase8ProfileChat:
+    """Phase 8 — Master Spec 8.5 chat-side tests.
+
+    The Data-tier authorization/validation logic (may_edit_on_behalf,
+    phone/email format) is covered by the Postgres integration suite; these
+    cover the chat dispatch — that a profile intent bypasses the generic
+    gate, self-edit always succeeds regardless of permission_keys, and
+    invalid values surface as a friendly reply rather than an exception.
+    """
+
+    async def test_self_edit_bypasses_the_generic_gate(self):
+        """A member with ZERO permission keys must still be able to edit
+        their own phone number — self-edit is not a permission-gated action."""
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "update", "entity": "profile",
+             "fields": {"phone": "0812345678"}, "missing": []})))
+        client = FakeDataClient(permission_keys=[])   # holds nothing at all
+        reply = await handle_chat_message(
+            client, message="แก้เบอร์เป็น 0812345678", ctx=_ctx(), ai_client=ai,
+        )
+        assert "แก้ไขข้อมูลส่วนตัวเรียบร้อยแล้ว" in reply.text
+        assert ("update_profile", "CHN-S-000001", {"phone": "0812345678"}, "CHN-S-000001") in client.recorded
+
+    async def test_invalid_value_gets_a_friendly_reply_not_a_crash(self):
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "update", "entity": "profile",
+             "fields": {"email": "not-an-email"}, "missing": []})))
+        client = FakeDataClient(permission_keys=[])
+        client._profile_conflict = True
+        reply = await handle_chat_message(
+            client, message="เปลี่ยนอีเมล", ctx=_ctx(), ai_client=ai,
+        )
+        assert "ไม่ถูกต้อง" in reply.text
+
+    async def test_no_fields_asks_what_to_change(self):
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "update", "entity": "profile", "fields": {}, "missing": []})))
+        client = FakeDataClient(permission_keys=[])
+        reply = await handle_chat_message(
+            client, message="แก้โปรไฟล์", ctx=_ctx(), ai_client=ai,
+        )
+        assert "กรุณาระบุ" in reply.text
+        assert not any(r[0] == "update_profile" for r in client.recorded)
+
+    async def test_unknown_field_from_model_is_dropped_not_forwarded(self):
+        """If the model puts something outside PROFILE_EDITABLE_FIELDS in
+        fields (e.g. it hallucinates a "role" key), it must never reach the
+        Data tier update call — only the real editable fields are sent."""
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "update", "entity": "profile",
+             "fields": {"phone": "0812345678", "role": "owner"}, "missing": []})))
+        client = FakeDataClient(permission_keys=[])
+        await handle_chat_message(
+            client, message="แก้เบอร์และสิทธิ์", ctx=_ctx(), ai_client=ai,
+        )
+        sent_fields = next(r[2] for r in client.recorded if r[0] == "update_profile")
+        assert sent_fields == {"phone": "0812345678"}
+
+    async def test_profile_reply_is_localised(self):
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "update", "entity": "profile",
+             "fields": {"phone": "0812345678"}, "missing": []})))
+        client = FakeDataClient(permission_keys=[])
+        reply = await handle_chat_message(
+            client, message="update my phone", ctx=_ctx(), ai_client=ai, language="en",
+        )
+        assert "updated" in reply.text.lower()
