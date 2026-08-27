@@ -399,3 +399,21 @@ class ProfileOut(BaseModel):
 
 class ProfileEditCheckOut(BaseModel):
     allowed: bool
+
+
+# ---------------------------------------------------------------- Chat state
+
+
+class PendingIntentIn(BaseModel):
+    action: str
+    entity: str | None = None
+    fields: dict = {}
+    missing: list[str] = []
+    ttl_seconds: int = 600
+
+
+class PendingIntentOut(BaseModel):
+    action: str
+    entity: str | None
+    fields: dict
+    missing: list[str]

@@ -70,6 +70,25 @@ address. Do not use "profile" for anyone else's details — only the current
 user's own.
 """
 
+# Appended only when the previous turn left a question hanging. Spec 6.4
+# describes parsing one message in isolation, which silently assumes every
+# message is self-contained — but the bot itself creates messages that are
+# NOT: it asks "what is the phone number?", and the honest human answer is a
+# bare "0812345678" with no verb, no entity, and no way to parse it alone.
+PENDING_PROMPT_BLOCK = """
+
+There is an action ALREADY IN PROGRESS from the previous message:
+- action: {p_action}
+- entity: {p_entity}
+- values already collected: {p_fields}
+- still waiting for: {p_missing}
+
+The user's new message is most likely their answer to what was being waited
+for. If it is, return that SAME action and entity, and put the value they
+just gave into "fields" under the field name that was waited for. Return a
+different action/entity ONLY if the user has clearly changed the subject.
+"""
+
 # Spelled out for the model rather than passing a bare code: "th" is far more
 # ambiguous in a prompt than "Thai".
 LANGUAGE_NAMES = {"th": "Thai", "en": "English"}
@@ -82,10 +101,11 @@ def build_prompt(
     license_id: str,
     permission_keys: list[str] | frozenset[str],
     language: str = "th",
+    pending: dict | None = None,
 ) -> str:
     keys = sorted(permission_keys)
     lang = (language or DEFAULT_LOCALE).lower()
-    return INTENT_SYSTEM_PROMPT.format(
+    prompt = INTENT_SYSTEM_PROMPT.format(
         chann_uid=chann_uid,
         role=role,
         license_id=license_id,
@@ -93,6 +113,14 @@ def build_prompt(
         language_name=LANGUAGE_NAMES.get(lang, LANGUAGE_NAMES[DEFAULT_LOCALE]),
         permission_keys=", ".join(keys) if keys else "(none)",
     )
+    if pending:
+        prompt += PENDING_PROMPT_BLOCK.format(
+            p_action=pending.get("action") or "?",
+            p_entity=pending.get("entity") or "?",
+            p_fields=json.dumps(pending.get("fields") or {}, ensure_ascii=False),
+            p_missing=", ".join(pending.get("missing") or []) or "(nothing)",
+        )
+    return prompt
 
 
 def parse_intent_json(raw: str) -> dict:
@@ -150,6 +178,7 @@ async def parse_intent(
     permission_keys: list[str] | frozenset[str],
     language: str = "th",
     client=None,
+    pending: dict | None = None,
 ) -> dict:
     """Parse one user message. Raises AIUnavailable; never returns a half-result."""
     system_prompt = build_prompt(
@@ -158,6 +187,7 @@ async def parse_intent(
         license_id=license_id,
         permission_keys=permission_keys,
         language=language,
+        pending=pending,
     )
     raw = await complete(
         system_prompt=system_prompt,

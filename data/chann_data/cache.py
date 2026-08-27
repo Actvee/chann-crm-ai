@@ -129,4 +129,25 @@ def k_admin_session(session_id: str) -> str:
     return f"admin_session:{session_id}"
 
 
+def k_pending_intent(chann_uid: str, oa: str) -> str:
+    """Phase 6's missing piece: an in-progress slot-filling conversation.
+
+    Deliberately Redis, not Postgres — this is conversational scratch state
+    with a short TTL, not business data that needs an audit trail. If Redis
+    is down the safe degrade is "ask fresh" (today's behaviour), never
+    "assume the old answer" — the opposite of ADR-006's permission-cache
+    rule, but the same underlying principle: an outage must never let stale
+    state override what the user just said.
+
+    Keyed by (chann_uid, oa), not chann_uid alone: chann_identities is
+    global (one row per LINE user), and LINE issues the SAME user ID to the
+    same physical account across every OA under one provider — the normal
+    setup when one company runs all three official accounts. Without the OA
+    in the key, an in-progress "create customer" conversation on the Sales
+    OA could get merged with an unrelated message the same person later
+    sends to the Customer OA.
+    """
+    return f"pending_intent:{chann_uid}:{oa}"
+
+
 cache = Cache()

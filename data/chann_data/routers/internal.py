@@ -19,6 +19,7 @@ from ..cache import (
     k_admin_session,
     k_identity,
     k_member,
+    k_pending_intent,
     k_permissions,
 )
 from ..config import settings
@@ -73,6 +74,8 @@ from ..schemas import (
     FollowUpIn,
     FollowUpOut,
     FollowUpStatusIn,
+    PendingIntentIn,
+    PendingIntentOut,
     ProfileEditCheckOut,
     ProfileOut,
     ProfileUpdateIn,
@@ -1593,3 +1596,44 @@ def check_profile_edit(
         license_id=license_id,
     )
     return ProfileEditCheckOut(allowed=allowed)
+
+
+# ---------------------------------------------------------------- Chat state
+
+
+@router.put("/chat/pending-intent/{oa}/{chann_uid}", status_code=204)
+def set_pending_intent(oa: str, chann_uid: str, payload: PendingIntentIn):
+    """Store the in-progress slot-filling state that this identity's NEXT
+    message should be merged with.
+
+    Spec 6.4's pattern describes parsing one message in isolation and never
+    addressed what happens across turns — so a bare "0812345678" answering
+    the bot's own question about a phone number was parsed from nothing.
+    Keyed by (chann_uid, oa); see cache.k_pending_intent for why the OA has
+    to be part of the key rather than trusting chann_uid alone.
+    """
+    cache.set(
+        k_pending_intent(chann_uid, oa),
+        {
+            "action": payload.action,
+            "entity": payload.entity,
+            "fields": payload.fields,
+            "missing": payload.missing,
+        },
+        payload.ttl_seconds,
+    )
+
+
+@router.get("/chat/pending-intent/{oa}/{chann_uid}", response_model=PendingIntentOut)
+def get_pending_intent(oa: str, chann_uid: str):
+    raw = cache.get_or_load(k_pending_intent(chann_uid, oa), ttl_s=0, loader=lambda: None)
+    if raw is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="no pending intent"
+        )
+    return PendingIntentOut(**raw)
+
+
+@router.delete("/chat/pending-intent/{oa}/{chann_uid}", status_code=204)
+def clear_pending_intent(oa: str, chann_uid: str):
+    cache.invalidate(k_pending_intent(chann_uid, oa))

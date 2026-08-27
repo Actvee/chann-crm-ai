@@ -21,6 +21,7 @@ sys.path.insert(0, str(ROOT / "application"))
 from chann_app.config import settings  # noqa: E402
 from chann_app.services.chat import (  # noqa: E402
     ACTION_PERMISSIONS,
+    _filter_by_oa,
     ask_for_missing,
     greet,
     handle_chat_message,
@@ -56,8 +57,10 @@ def _catalog() -> list[dict]:
 class FakeDataClient:
     """Stands in for the Data tier. Records what the engine asked it for."""
 
-    def __init__(self, *, role="sales", permission_keys=None, mapping=None):
+    def __init__(self, *, role="sales", permission_keys=None, mapping=None,
+                 pending_intent=None):
         self._role = role
+        self._pending = pending_intent
         self._permission_keys = list(
             permission_keys if permission_keys is not None else ["customer.read"]
         )
@@ -87,8 +90,29 @@ class FakeDataClient:
             raise ProfileConflictForTest("invalid value")
         return {"chann_uid": chann_uid, **fields}
 
+    async def get_pending_intent(self, chann_uid, oa):
+        self.recorded.append(("get_pending_intent", chann_uid, oa))
+        return self._pending
 
-def _ctx(resolution=TenantResolution.SINGLE, display_name="LINE Name"):
+    async def set_pending_intent(self, chann_uid, oa, *, action, entity,
+                                 fields, missing, ttl_seconds=600):
+        self._pending = {"action": action, "entity": entity,
+                         "fields": fields, "missing": missing}
+        self.recorded.append(("set_pending_intent", chann_uid, oa, self._pending))
+
+    async def clear_pending_intent(self, chann_uid, oa):
+        self._pending = None
+        self.recorded.append(("clear_pending_intent", chann_uid, oa))
+
+
+def _ctx(resolution=TenantResolution.SINGLE, display_name="LINE Name",
+         primary_role="sales", oa=None):
+    # oa defaults to primary_role: in the ordinary case a message really does
+    # arrive on the OA matching the identity's role. Tests that specifically
+    # prove ctx.oa is used INSTEAD of a possibly-stale ctx.primary_role pass
+    # the two explicitly and differently.
+    if oa is None:
+        oa = primary_role
     memberships = []
     if resolution is TenantResolution.SINGLE:
         # Mirrors MembershipOut exactly — no display_name, because the real
@@ -108,8 +132,9 @@ def _ctx(resolution=TenantResolution.SINGLE, display_name="LINE Name"):
              "chann_uid": "CHN-S-000001", "role": "sales", "status": "active"},
         ]
     return ResolvedContext(
-        chann_uid="CHN-S-000001", primary_role="sales",
+        chann_uid="CHN-S-000001", primary_role=primary_role,
         display_name=display_name, resolution=resolution, memberships=memberships,
+        oa=oa,
     )
 
 
@@ -517,7 +542,7 @@ class TestPhase8ProfileChat:
              "fields": {"phone": "0812345678"}, "missing": []})))
         client = FakeDataClient(permission_keys=[])   # holds nothing at all
         reply = await handle_chat_message(
-            client, message="แก้เบอร์เป็น 0812345678", ctx=_ctx(), ai_client=ai,
+            client, message="แก้เบอร์เป็น 0812345678", ctx=_ctx(primary_role="technician"), ai_client=ai,
         )
         assert "แก้ไขข้อมูลส่วนตัวเรียบร้อยแล้ว" in reply.text
         assert ("update_profile", "CHN-S-000001", {"phone": "0812345678"}, "CHN-S-000001") in client.recorded
@@ -529,7 +554,7 @@ class TestPhase8ProfileChat:
         client = FakeDataClient(permission_keys=[])
         client._profile_conflict = True
         reply = await handle_chat_message(
-            client, message="เปลี่ยนอีเมล", ctx=_ctx(), ai_client=ai,
+            client, message="เปลี่ยนอีเมล", ctx=_ctx(primary_role="technician"), ai_client=ai,
         )
         assert "ไม่ถูกต้อง" in reply.text
 
@@ -538,7 +563,7 @@ class TestPhase8ProfileChat:
             {"action": "update", "entity": "profile", "fields": {}, "missing": []})))
         client = FakeDataClient(permission_keys=[])
         reply = await handle_chat_message(
-            client, message="แก้โปรไฟล์", ctx=_ctx(), ai_client=ai,
+            client, message="แก้โปรไฟล์", ctx=_ctx(primary_role="technician"), ai_client=ai,
         )
         assert "กรุณาระบุ" in reply.text
         assert not any(r[0] == "update_profile" for r in client.recorded)
@@ -552,7 +577,7 @@ class TestPhase8ProfileChat:
              "fields": {"phone": "0812345678", "role": "owner"}, "missing": []})))
         client = FakeDataClient(permission_keys=[])
         await handle_chat_message(
-            client, message="แก้เบอร์และสิทธิ์", ctx=_ctx(), ai_client=ai,
+            client, message="แก้เบอร์และสิทธิ์", ctx=_ctx(primary_role="technician"), ai_client=ai,
         )
         sent_fields = next(r[2] for r in client.recorded if r[0] == "update_profile")
         assert sent_fields == {"phone": "0812345678"}
@@ -563,6 +588,209 @@ class TestPhase8ProfileChat:
              "fields": {"phone": "0812345678"}, "missing": []})))
         client = FakeDataClient(permission_keys=[])
         reply = await handle_chat_message(
-            client, message="update my phone", ctx=_ctx(), ai_client=ai, language="en",
+            client, message="update my phone", ctx=_ctx(primary_role="technician"), ai_client=ai, language="en",
         )
         assert "updated" in reply.text.lower()
+
+
+class TestProfileEligibilityFollowsTheChannel:
+    """Master Spec 8.1 lists self-profile editing under the Customer and
+    Technician OA tables only. The check must follow the CURRENT message's
+    OA, not the identity's stored primary_role — primary_role is fixed at
+    first contact and goes stale the moment the same LINE account later
+    messages a different OA under the same provider.
+    """
+
+    async def test_sales_oa_cannot_self_edit_through_chat(self):
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "update", "entity": "profile",
+             "fields": {"phone": "0812345678"}, "missing": []})))
+        client = FakeDataClient(permission_keys=[])
+        reply = await handle_chat_message(
+            client, message="แก้เบอร์เป็น 0812345678",
+            ctx=_ctx(primary_role="sales"), ai_client=ai,
+        )
+        assert "ช่างและลูกค้า" in reply.text
+        assert not any(r[0] == "update_profile" for r in client.recorded)
+
+    async def test_stale_primary_role_does_not_deny_incorrectly(self):
+        """Stored primary_role is "sales" from first contact, but this
+        message genuinely arrived on the Customer OA — ctx.oa is the ground
+        truth, so the edit must go through."""
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "update", "entity": "profile",
+             "fields": {"phone": "0812345678"}, "missing": []})))
+        client = FakeDataClient(permission_keys=[])
+        reply = await handle_chat_message(
+            client, message="แก้เบอร์เป็น 0812345678",
+            ctx=_ctx(primary_role="sales", oa="customer"), ai_client=ai,
+        )
+        assert "แก้ไขข้อมูลส่วนตัวเรียบร้อยแล้ว" in reply.text
+
+    async def test_stale_primary_role_does_not_bypass_the_restriction_either(self):
+        """The reverse: stored primary_role is "customer", but the message
+        arrived on Sales OA — the restriction follows the channel, not the
+        label."""
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "update", "entity": "profile",
+             "fields": {"phone": "0812345678"}, "missing": []})))
+        client = FakeDataClient(permission_keys=[])
+        reply = await handle_chat_message(
+            client, message="แก้เบอร์เป็น 0812345678",
+            ctx=_ctx(primary_role="customer", oa="sales"), ai_client=ai,
+        )
+        assert "แก้ไขข้อมูลส่วนตัวเรียบร้อยแล้ว" not in reply.text
+        assert "ช่างและลูกค้า" in reply.text
+
+
+class TestConversationContinuity:
+    """Spec 6.4 describes parsing one message in isolation, which quietly
+    assumes every message is self-contained. The bot itself produces messages
+    that are not: it asks "what is the phone number?", and the honest human
+    answer is a bare "0812345678" — no verb, no entity, unparseable alone.
+    """
+
+    async def test_an_unanswered_question_is_remembered(self):
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "create", "entity": "customer",
+             "fields": {"name": "สมชาย"}, "missing": ["phone"]}, ensure_ascii=False)))
+        client = FakeDataClient(permission_keys=["customer.create"])
+        reply = await handle_chat_message(
+            client, message="เพิ่มลูกค้าชื่อสมชาย",
+            ctx=_ctx(primary_role="sales"), ai_client=ai,
+        )
+        assert "กรุณาระบุ" in reply.text
+        stored = next(r for r in client.recorded if r[0] == "set_pending_intent")
+        _, chann_uid, oa, saved = stored
+        assert chann_uid == "CHN-S-000001"
+        assert oa == "sales"
+        assert saved["action"] == "create"
+        assert saved["entity"] == "customer"
+        assert saved["missing"] == ["phone"]
+
+    async def test_a_bare_answer_completes_the_previous_action(self):
+        """The whole point: the model returns only the field, with no entity
+        and no action of its own, and it must still land in the action that
+        was already under way rather than being parsed from nothing."""
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "create", "entity": None,
+             "fields": {"phone": "0812345678"}, "missing": []})))
+        client = FakeDataClient(
+            permission_keys=["customer.create"],
+            pending_intent={"action": "create", "entity": "customer",
+                            "fields": {"name": "สมชาย"}, "missing": ["phone"]},
+        )
+        reply = await handle_chat_message(
+            client, message="0812345678", ctx=_ctx(primary_role="sales"), ai_client=ai,
+        )
+        assert reply.intent["entity"] == "customer"
+        assert reply.intent["fields"] == {"name": "สมชาย", "phone": "0812345678"}
+        assert reply.intent["missing"] == []
+        assert any(r[0] == "clear_pending_intent" for r in client.recorded)
+
+    async def test_a_clearly_new_request_abandons_the_old_one(self):
+        """Conservative on purpose: filing a genuinely new request into an
+        unrelated half-built record is much worse than re-asking."""
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "create", "entity": "deal",
+             "fields": {"title": "ดีลใหม่"}, "missing": []}, ensure_ascii=False)))
+        client = FakeDataClient(
+            permission_keys=["deal.create"],
+            pending_intent={"action": "create", "entity": "customer",
+                            "fields": {"name": "สมชาย"}, "missing": ["phone"]},
+        )
+        reply = await handle_chat_message(
+            client, message="สร้างดีลใหม่", ctx=_ctx(primary_role="sales"), ai_client=ai,
+        )
+        assert reply.intent["entity"] == "deal"
+        assert "สมชาย" not in json.dumps(reply.intent, ensure_ascii=False)
+        assert any(r[0] == "clear_pending_intent" for r in client.recorded)
+
+    async def test_pending_state_is_read_and_written_per_oa_not_globally(self):
+        """LINE issues the SAME user ID to one physical account across every
+        OA under one provider, so an in-progress Sales-OA conversation must
+        never be visible to a message on a different OA for the same
+        chann_uid."""
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "create", "entity": "customer",
+             "fields": {"name": "สมชาย"}, "missing": ["phone"]}, ensure_ascii=False)))
+        client = FakeDataClient(permission_keys=["customer.create"])
+        await handle_chat_message(
+            client, message="เพิ่มลูกค้าชื่อสมชาย",
+            ctx=_ctx(primary_role="sales"), ai_client=ai,
+        )
+        read_oa = next(r[2] for r in client.recorded if r[0] == "get_pending_intent")
+        write_oa = next(r[2] for r in client.recorded if r[0] == "set_pending_intent")
+        assert read_oa == "sales" and write_oa == "sales"
+
+
+class TestOAChannelScoping:
+    """Regression for a live bug: an account holding tenant-wide permissions
+    (an Owner) texting through the Technician or Customer OA saw a "what can
+    I do" list including "อนุมัติ" and "จัดการการเรียกเก็บเงิน" —
+    capabilities Master Spec §6's OA activity tables place exclusively under
+    Sales OA. Holding a tenant permission and a channel actually offering it
+    through chat are two different questions; the gate only ever asked the
+    first one.
+    """
+
+    async def test_technician_oa_never_offers_sales_only_capabilities(self):
+        filtered = _filter_by_oa(list(PERMISSION_KEYS), "technician")
+        for key in ("approval.approve", "billing.manage", "role.manage",
+                    "member.manage", "deal.create", "quote.create"):
+            assert key not in filtered
+        assert "ticket.read" in filtered
+        assert "service_report.create" in filtered
+
+    async def test_customer_oa_never_offers_sales_only_capabilities(self):
+        filtered = _filter_by_oa(list(PERMISSION_KEYS), "customer")
+        for key in ("approval.approve", "billing.manage", "deal.create",
+                    "role.manage", "audit_log.view"):
+            assert key not in filtered
+        assert "customer.read" in filtered
+        assert "warranty.read" in filtered
+
+    async def test_sales_oa_is_not_additionally_restricted(self):
+        """Sales OA's own spec table covers nearly everything a tenant does,
+        so there is nothing left to narrow beyond the tenant permission gate
+        itself."""
+        held = ["approval.approve", "billing.manage", "deal.create"]
+        assert _filter_by_oa(held, "sales") == held
+
+    async def test_owner_via_technician_channel_gets_the_narrow_list(self):
+        """End-to-end, the exact reported scenario: an account holding every
+        permission key asks "what can I do" on the Technician OA."""
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "suggest", "suggestions": []})))
+        client = FakeDataClient(permission_keys=list(PERMISSION_KEYS))
+        reply = await handle_chat_message(
+            client, message="ทำอะไรได้บ้าง",
+            ctx=_ctx(primary_role="technician"), ai_client=ai,
+        )
+        assert describe("approval.approve") not in reply.text
+        assert describe("billing.manage") not in reply.text
+        assert describe("role.manage") not in reply.text
+
+    async def test_a_sales_only_action_via_technician_oa_is_refused(self):
+        """Holding the tenant permission is not enough if the channel does
+        not offer that capability at all — an Owner cannot create a deal by
+        texting the Technician OA, even holding deal.create tenant-wide."""
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "create", "entity": "deal",
+             "fields": {"title": "x"}, "missing": []})))
+        client = FakeDataClient(permission_keys=list(PERMISSION_KEYS))
+        reply = await handle_chat_message(
+            client, message="สร้างดีล", ctx=_ctx(primary_role="technician"), ai_client=ai,
+        )
+        assert "เข้าใจแล้ว" not in reply.text
+
+    async def test_the_same_action_on_sales_oa_still_works(self):
+        """The counterpart, so the fix cannot pass by refusing everything."""
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "create", "entity": "deal",
+             "fields": {"title": "x"}, "missing": []})))
+        client = FakeDataClient(permission_keys=list(PERMISSION_KEYS))
+        reply = await handle_chat_message(
+            client, message="สร้างดีล", ctx=_ctx(primary_role="sales"), ai_client=ai,
+        )
+        assert "เข้าใจแล้ว" in reply.text

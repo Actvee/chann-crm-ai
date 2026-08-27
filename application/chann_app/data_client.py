@@ -572,3 +572,35 @@ class DataClient:
             headers=self._headers,
         )
         return bool(self._unwrap(resp)["allowed"])
+
+    # ------------------------------------------ Chat state (conversation continuity)
+
+    async def set_pending_intent(
+        self, chann_uid: str, oa: str, *, action: str, entity: str | None,
+        fields: dict, missing: list[str], ttl_seconds: int = 600,
+    ) -> None:
+        resp = await self._client.put(
+            f"{self._base}/internal/v1/chat/pending-intent/{oa}/{chann_uid}",
+            headers=self._headers,
+            json={
+                "action": action, "entity": entity, "fields": fields,
+                "missing": missing, "ttl_seconds": ttl_seconds,
+            },
+        )
+        self._unwrap(resp)
+
+    async def get_pending_intent(self, chann_uid: str, oa: str) -> dict | None:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/chat/pending-intent/{oa}/{chann_uid}",
+            headers=self._headers,
+        )
+        if resp.status_code == 404:
+            return None
+        return self._unwrap(resp)
+
+    async def clear_pending_intent(self, chann_uid: str, oa: str) -> None:
+        resp = await self._client.delete(
+            f"{self._base}/internal/v1/chat/pending-intent/{oa}/{chann_uid}",
+            headers=self._headers,
+        )
+        self._unwrap(resp)

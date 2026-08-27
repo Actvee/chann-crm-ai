@@ -31,6 +31,15 @@ class ResolvedContext:
     display_name: str | None
     resolution: TenantResolution
     memberships: list[dict]
+    # The OA THIS message actually arrived on — ground truth for the current
+    # conversation. Deliberately separate from primary_role: an identity is
+    # global (one row per line_user_id) and primary_role is fixed at first
+    # contact, so it goes stale the moment the same LINE account later
+    # messages a DIFFERENT OA. LINE issues the same user ID to one physical
+    # account across every channel under one provider, which is exactly how
+    # this project's three OAs are set up. Anything deciding "what does THIS
+    # message's channel allow" must read oa, never primary_role.
+    oa: str = ""
 
     @property
     def license_id(self) -> str | None:
@@ -69,4 +78,5 @@ async def resolve_context(client: DataClient, oa: str, line_user_id: str,
         display_name=identity.get("display_name"),
         resolution=resolution,
         memberships=memberships,
+        oa=oa,
     )

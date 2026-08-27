@@ -93,6 +93,49 @@ ACTION_PERMISSIONS: dict[tuple[str, str], str] = {
 }
 
 
+# Which permission keys are even IN SCOPE for a given LINE channel, per
+# Master Spec §6's OA activity tables. This is a SECOND, separate boundary
+# from the tenant permission gate above: an Owner holds every permission key
+# there is, but "อนุมัติ", "จัดการการเรียกเก็บเงิน" and "จัดการบทบาทและสิทธิ์"
+# have no business ever surfacing in a Technician or Customer OA
+# conversation — those channels are scoped to a small, specific set of
+# activities (claim ticket / check-in-out / service report / own profile for
+# Technician; storefront, repair ticket, warranty and own profile for
+# Customer), and the rest of the tenant's permission surface (deals, quotes,
+# billing, roles, approvals...) belongs to Sales OA regardless of who
+# happens to be texting from where.
+#
+# A value of None means "no additional restriction beyond the tenant
+# permission gate" — Sales OA's own table in the spec covers nearly
+# everything a tenant does, so there is nothing meaningful left to narrow.
+OA_ALLOWED_PERMISSION_KEYS: dict[str, frozenset[str] | None] = {
+    "customer": frozenset({
+        "customer.read", "customer.update",
+        "ticket.create", "ticket.read",
+        "warranty.read", "warranty.create",
+    }),
+    "technician": frozenset({
+        "ticket.read", "ticket.update", "ticket.assign", "ticket.close",
+        "service_report.create", "service_report.read", "service_report.update",
+    }),
+    "sales": None,
+}
+
+
+def _oa_allows(oa: str, permission_key: str) -> bool:
+    """Does this channel even offer this capability, independent of whether
+    the caller holds the tenant permission for it?"""
+    allowed = OA_ALLOWED_PERMISSION_KEYS.get(oa)
+    return allowed is None or permission_key in allowed
+
+
+def _filter_by_oa(permission_keys, oa: str) -> list[str]:
+    """The held permission keys that are also in scope for this channel —
+    applied before ranking or suggesting, so the channel's own boundary is
+    respected even when the underlying tenant permission is present."""
+    return [k for k in permission_keys if _oa_allows(oa, k)]
+
+
 def required_permission(action: str, entity: str | None) -> str | None:
     """The permission key an intent needs, or None if the system cannot do it.
 
@@ -388,6 +431,27 @@ PROFILE_NOTHING_TO_UPDATE = {
     "en": "Please say what to update — name, phone, email, or address.",
 }
 
+# Master Spec 8.1 lists "ลงทะเบียน profile ตัวเอง" under the Customer and
+# Technician OA activity tables only. Sales OA is deliberately excluded: that
+# same channel is where leads, deals and quotes are discussed, so "แก้เบอร์
+# เป็น 08x" becomes genuinely ambiguous there once Phase 9 exists — whose
+# phone number, the sender's or the customer they were just talking about?
+# Keyed on the CURRENT message's OA, never on primary_role, which is fixed
+# at first contact and goes stale the moment the same LINE account messages
+# a different channel.
+PROFILE_ELIGIBLE_ROLES = frozenset({"technician", "customer"})
+
+PROFILE_NOT_ELIGIBLE = {
+    "th": (
+        "การแก้ไขข้อมูลส่วนตัวผ่านแชทใช้ได้เฉพาะบัญชีช่างและลูกค้าเท่านั้น "
+        "กรุณาแก้ไขผ่าน Dashboard"
+    ),
+    "en": (
+        "Editing your own profile through chat is available to technician and "
+        "customer accounts only — please use the Dashboard instead."
+    ),
+}
+
 
 def _is_conflict(exc: Exception) -> bool:
     return getattr(exc, "status_code", None) == 409 or "409" in str(exc)
@@ -405,6 +469,9 @@ async def _handle_profile_intent(
     not yet reachable from free-text chat for that reason — wiring it in is
     a Phase 9 follow-up, not a missing feature here.
     """
+    if ctx.oa not in PROFILE_ELIGIBLE_ROLES:
+        return ChatReply(text=_t(PROFILE_NOT_ELIGIBLE, language), intent=intent)
+
     raw_fields = intent.get("fields") or {}
     fields = {
         k: v for k, v in raw_fields.items()
@@ -424,6 +491,50 @@ async def _handle_profile_intent(
         text=_t(PROFILE_UPDATED, language),
         entity_type="profile", entity_id=ctx.chann_uid, intent=intent,
     )
+
+
+# How long an unanswered question stays open. Long enough that a user can
+# finish another chat and come back; short enough that tomorrow's unrelated
+# "0812345678" is never silently attached to yesterday's half-built record.
+PENDING_INTENT_TTL_S = 600
+
+
+def _is_continuation(pending: dict | None, intent: dict) -> bool:
+    """Is this message the answer to the question the last turn asked?
+
+    Conservative on purpose. Wrongly treating a NEW request as a continuation
+    would file the user's words into an unrelated record, which is far worse
+    than wrongly treating a continuation as new — that just re-asks.
+    """
+    if not pending:
+        return False
+    entity = intent.get("entity")
+    if entity and entity != pending.get("entity"):
+        return False            # a different subject entirely
+    if (intent.get("action") or "") == "suggest":
+        return False            # explicitly asking something else
+    fields = intent.get("fields") or {}
+    if not fields:
+        return False
+    wanted = set(pending.get("missing") or [])
+    # Either it supplies something that was actually asked for, or it supplies
+    # values without naming any entity at all — the shape of a bare answer.
+    return bool(wanted & set(fields)) or not entity
+
+
+def _merge_pending(pending: dict, intent: dict) -> dict:
+    """Fold the new answer into the action already under way."""
+    fields = {**(pending.get("fields") or {}), **(intent.get("fields") or {})}
+    still_missing = [
+        f for f in (pending.get("missing") or [])
+        if fields.get(f) in (None, "")
+    ]
+    return {
+        "action": pending.get("action") or intent.get("action"),
+        "entity": pending.get("entity") or intent.get("entity"),
+        "fields": fields,
+        "missing": still_missing,
+    }
 
 
 async def handle_chat_message(
@@ -447,6 +558,11 @@ async def handle_chat_message(
         return ChatReply(text=_t(REPLY_NOT_REGISTERED, language))
     permission_keys = list(context.get("permission_keys") or [])
 
+    # What the previous turn was still waiting for, if anything. Loaded before
+    # parsing so the model can be told about it — a bare "0812345678" is not
+    # parseable in isolation, only as the answer to a question that was asked.
+    pending_intent = await client.get_pending_intent(ctx.chann_uid, ctx.oa)
+
     try:
         intent = await parse_intent(
             message=message,
@@ -456,6 +572,7 @@ async def handle_chat_message(
             permission_keys=permission_keys,
             language=language,
             client=ai_client,
+            pending=pending_intent,
         )
     except AINotConfigured as exc:
         # A deploy problem, not an outage — log loudly, but the user still
@@ -466,15 +583,35 @@ async def handle_chat_message(
         log.warning("AI unavailable: %s", exc)
         return ChatReply(text=unavailable_reply(language))
 
+    if _is_continuation(pending_intent, intent):
+        intent = _merge_pending(pending_intent, intent)
+
     # Missing fields come first: never refuse a request we did not understand.
     missing = intent.get("missing") or []
     if missing:
+        # Remember what is still outstanding so the next message — which may
+        # be nothing but the answer itself — can be understood as part of it.
+        await client.set_pending_intent(
+            ctx.chann_uid, ctx.oa,
+            action=intent.get("action", ""),
+            entity=intent.get("entity"),
+            fields=intent.get("fields") or {},
+            missing=missing,
+            ttl_seconds=PENDING_INTENT_TTL_S,
+        )
         return ChatReply(text=ask_for_missing(missing, language), intent=intent)
+
+    # Nothing outstanding any more: whatever was open is either now complete
+    # or has been abandoned for a new request. Either way it must not linger.
+    if pending_intent is not None:
+        await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
 
     if intent.get("action") == "suggest":
         catalog = await client.permission_catalog()
         return ChatReply(
-            text=suggest_what_you_can_do(permission_keys, catalog, language),
+            text=suggest_what_you_can_do(
+                _filter_by_oa(permission_keys, ctx.oa), catalog, language,
+            ),
             intent=intent,
         )
 
@@ -495,11 +632,15 @@ async def handle_chat_message(
     req_action = intent.get("action", "")
     req_entity = intent.get("entity")
     needed = required_permission(req_action, req_entity)
-    if needed is None or needed not in set(permission_keys):
+    if (
+        needed is None
+        or needed not in set(permission_keys)
+        or not _oa_allows(ctx.oa, needed)
+    ):
         catalog = await client.permission_catalog()
         return ChatReply(
             text=suggest_what_you_can_do(
-                permission_keys, catalog, language,
+                _filter_by_oa(permission_keys, ctx.oa), catalog, language,
                 requested_action=req_action, requested_entity=req_entity,
             ),
             intent=intent,
