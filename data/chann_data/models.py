@@ -578,3 +578,145 @@ class DealProduct(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class Quote(TimestampMixin, Base):
+    """Phase 10 (Master Spec 10.3) — a price quote generated from a Deal.
+
+    `quote_id` IS per-tenant ("Q-YYYY-NNNN แยกต่อบริษัท", explicitly, unlike
+    Deal.deal_id which is deliberately global — see that model's
+    docstring). A quote is a customer-facing document number, closer in
+    kind to an invoice than to an internal staff reference.
+
+    `generated_document_id` is nullable because a quote can exist in
+    "draft" status before any PDF has ever been rendered — 10.4's
+    authoring/runtime split means document generation is a distinct,
+    later step, not something that happens automatically at quote
+    creation.
+    """
+
+    __tablename__ = "quotes"
+    __table_args__ = (UniqueConstraint("license_id", "quote_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    license_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("licenses.id", ondelete="RESTRICT"),
+        nullable=False, index=True,
+    )
+    quote_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    deal_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("deals.id", ondelete="RESTRICT"), nullable=False,
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft")
+    generated_document_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("generated_documents.id", ondelete="SET NULL")
+    )
+    owner_member_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("license_members.id", ondelete="RESTRICT")
+    )
+
+
+class DocumentTemplate(TimestampMixin, Base):
+    """Phase 10 (Master Spec 10.3) — a named template slot a tenant fills
+    with versions over time (e.g. "our standard quote template"). The
+    generic shape is deliberately reused across every document type this
+    project will ever render (quote now; warranty, service report, PDPA
+    export, invoice later) rather than each type inventing its own table —
+    10.1 states this explicitly.
+    """
+
+    __tablename__ = "document_templates"
+    __table_args__ = (UniqueConstraint("license_id", "template_code"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    license_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("licenses.id", ondelete="RESTRICT"),
+        nullable=False, index=True,
+    )
+    document_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    template_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    template_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
+class DocumentTemplateVersion(Base):
+    """Phase 10 (Master Spec 10.3/10.4/10.5) — one immutable-once-published
+    revision of a template's content.
+
+    `status` follows 10.4's DRAFT -> PREVIEWED -> PUBLISHED -> ARCHIVED
+    state machine (repository enforces the transitions and immutability;
+    this table only records the current state). `intermediate_model` is
+    10.5's provider-neutral abstraction — the stable boundary between AI
+    authoring and whatever renderer adapter is used, so a future renderer
+    swap never has to re-derive it from the original DOCX.
+
+    No TimestampMixin: `created_at` and `published_at` are both meaningful
+    on their own (a version can sit in draft for a long time before ever
+    being published, or never), so they're modeled explicitly rather than
+    via the mixin's created/updated pair.
+    """
+
+    __tablename__ = "document_template_versions"
+    __table_args__ = (UniqueConstraint("template_id", "version"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    template_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("document_templates.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft")
+    source_docx_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    intermediate_model: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    mapping_schema: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    compiled_template_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    renderer: Mapped[str] = mapped_column(String(32), nullable=False, default="smartbrowz")
+    renderer_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="html_convert")
+    smartbrowz_template_id: Mapped[str | None] = mapped_column(String(128))
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("license_members.id", ondelete="RESTRICT")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class GeneratedDocument(Base):
+    """Phase 10 (Master Spec 10.3/10.4) — one deterministic render's audit
+    trail: exactly which template version and which data snapshot produced
+    this file, so any PDF a customer received can be reproduced or
+    verified byte-for-byte later. `sha256` exists specifically so
+    "was this the file we actually sent" is answerable without trusting
+    GCS metadata alone.
+
+    `source_entity_type`/`source_entity_id` are generic (not a `quote_id`
+    FK) for the same reuse reason `DocumentTemplate` is generic — a
+    warranty certificate or service report will point at their own source
+    rows through the same two columns later.
+    """
+
+    __tablename__ = "generated_documents"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    license_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("licenses.id", ondelete="RESTRICT"),
+        nullable=False, index=True,
+    )
+    document_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_entity_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_entity_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    template_version_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("document_template_versions.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    data_snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    output_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    renderer: Mapped[str] = mapped_column(String(32), nullable=False, default="smartbrowz")
+    generated_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("license_members.id", ondelete="RESTRICT")
+    )
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

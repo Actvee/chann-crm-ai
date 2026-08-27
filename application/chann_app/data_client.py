@@ -761,3 +761,119 @@ class DataClient:
             json={"chann_uid": chann_uid, "license_id": license_id, "product_name": product_name},
         )
         return self._unwrap(resp)
+
+    # ------------------------------------------------------------ Phase 10
+
+    async def create_quote(
+        self, license_id: str, payload: dict, actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/quotes",
+            headers=self._headers_for(actor_id), json=payload,
+        )
+        return self._unwrap(resp)
+
+    async def get_quote(self, license_id: str, quote_id: str) -> dict | None:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/quotes/{quote_id}",
+            headers=self._headers,
+        )
+        if resp.status_code == 404:
+            return None
+        return self._unwrap(resp)
+
+    async def list_quotes(self, license_id: str, status: str | None = None) -> list[dict]:
+        params = {"status_": status} if status else None
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/quotes",
+            headers=self._headers, params=params,
+        )
+        return self._unwrap(resp)
+
+    async def transition_quote_status(
+        self, license_id: str, quote_id: str, status: str, actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/quotes/{quote_id}/status",
+            headers=self._headers_for(actor_id), json={"status": status},
+        )
+        return self._unwrap(resp)
+
+    async def create_document_template(
+        self, license_id: str, payload: dict, actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/document-templates",
+            headers=self._headers_for(actor_id), json=payload,
+        )
+        return self._unwrap(resp)
+
+    async def list_document_templates(
+        self, license_id: str, document_type: str | None = None,
+    ) -> list[dict]:
+        params = {"document_type": document_type} if document_type else None
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/document-templates",
+            headers=self._headers, params=params,
+        )
+        return self._unwrap(resp)
+
+    async def create_document_template_version(
+        self, license_id: str, template_id: str, payload: dict,
+        actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}"
+            f"/document-templates/{template_id}/versions",
+            headers=self._headers_for(actor_id), json=payload,
+        )
+        return self._unwrap(resp)
+
+    async def list_document_template_versions(
+        self, license_id: str, template_id: str,
+    ) -> list[dict]:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}"
+            f"/document-templates/{template_id}/versions",
+            headers=self._headers,
+        )
+        return self._unwrap(resp)
+
+    async def preview_document_template_version(
+        self, license_id: str, version_id: str, actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}"
+            f"/document-template-versions/{version_id}/preview",
+            headers=self._headers_for(actor_id),
+        )
+        return self._unwrap(resp)
+
+    async def publish_document_template_version(
+        self, license_id: str, version_id: str, actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}"
+            f"/document-template-versions/{version_id}/publish",
+            headers=self._headers_for(actor_id),
+        )
+        return self._unwrap(resp)
+
+    async def archive_document_template_version(
+        self, license_id: str, version_id: str, actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}"
+            f"/document-template-versions/{version_id}/archive",
+            headers=self._headers_for(actor_id),
+        )
+        return self._unwrap(resp)
+
+    async def record_generated_document(
+        self, license_id: str, payload: dict, actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/generated-documents",
+            headers=self._headers_for(actor_id), json=payload,
+        )
+        return self._unwrap(resp)

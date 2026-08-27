@@ -200,8 +200,16 @@ _DEAL_STAGE_KEYWORDS: tuple[tuple[tuple[str, ...], str], ...] = (
     # so checking won first would misclassify "ปิดไม่สำเร็จ" as a win.
     (("ปิดไม่สำเร็จ", "ปิดดีลไม่สำเร็จ", "ไม่สำเร็จ", "lost", "lose"), "lost"),
     (("ปิดสำเร็จ", "ปิดดีลสำเร็จ", "สำเร็จ", "won", "win"), "won"),
-    (("เสนอราคาแล้ว", "เสนอราคา", "proposed", "propose"), "proposed"),
 )
+# Checked separately from the table above: "เสนอราคา" (propose a price) is
+# also the literal root of "ใบเสนอราคา" (a quote — the document, Phase
+# 10's own entity) — "สร้างใบเสนอราคาจากดีล D-2026-0001" contains BOTH a
+# valid deal code AND the substring "เสนอราคา", and was being misread as a
+# deal-stage command instead of quote creation. If "ใบเสนอราคา" appears
+# anywhere in the message, this is about the noun (a quote), never the
+# deal-stage verb, regardless of what else the message contains.
+_PROPOSED_KEYWORDS = ("เสนอราคาแล้ว", "เสนอราคา", "proposed", "propose")
+_QUOTE_NOUN_MARKER = "ใบเสนอราคา"
 # Checked separately from the table above: Thai naturally splits this one
 # across the deal code ("เปิดดีล D-2026-0001 ใหม่"), so it needs both words
 # present rather than one contiguous phrase. Safe as an AND-check because a
@@ -231,6 +239,10 @@ def _parse_deal_stage_command(message: str) -> tuple[str, str] | None:
     for keywords, stage in _DEAL_STAGE_KEYWORDS:
         if any(k.lower() in remainder for k in keywords):
             return match.group(0).upper(), stage
+    if _QUOTE_NOUN_MARKER not in remainder and any(
+        k.lower() in remainder for k in _PROPOSED_KEYWORDS
+    ):
+        return match.group(0).upper(), "proposed"
     return None
 
 
@@ -971,6 +983,64 @@ async def _handle_product_intent(
         entity_type="product", entity_id=row["id"], intent=intent,
     )
 
+
+QUOTE_NEEDS_DEAL_CODE = {
+    "th": "กรุณาระบุรหัสดีลที่จะสร้างใบเสนอราคา เช่น D-2026-0001",
+    "en": "Please provide the deal code to create a quote from, e.g. D-2026-0001",
+}
+QUOTE_DEAL_NOT_FOUND = {
+    "th": "ไม่พบดีลรหัส {deal_id} ในบริษัทนี้",
+    "en": "No deal {deal_id} was found in this company.",
+}
+QUOTE_CREATED = {
+    "th": "สร้างใบเสนอราคา {quote_id} จากดีล {deal_id} เรียบร้อยแล้ว",
+    "en": "Created quote {quote_id} from deal {deal_id}.",
+}
+
+
+async def _handle_quote_intent(
+    client: DataClient, *, intent: dict, ctx: ResolvedContext,
+    license_id, language: str,
+) -> ChatReply:
+    """10.1's quote-from-deal creation only — the DOCX-authoring/AI-mapping/
+    SmartBrowz-render pipeline (10.4-10.6) isn't wired to chat at all yet;
+    see data/chann_data/repositories/phase10.py's module docstring for why.
+    A quote created here exists in "draft" status with no rendered document
+    (Quote.generated_document_id nullable, by 10.3's design) until that
+    pipeline exists."""
+    action = intent.get("action")
+    fields = intent.get("fields") or {}
+    license_id = str(license_id)
+
+    if action != "create":
+        return ChatReply(text=_pending_execution_reply(intent, language), intent=intent)
+
+    deal_code = (fields.get("deal_code") or "").strip().upper()
+    if not deal_code:
+        return ChatReply(text=_t(QUOTE_NEEDS_DEAL_CODE, language), intent=intent)
+
+    deals = await client.list_deals(license_id)
+    match = next((d for d in deals if d["deal_id"].upper() == deal_code), None)
+    if match is None:
+        return ChatReply(
+            text=_t(QUOTE_DEAL_NOT_FOUND, language).format(deal_id=deal_code), intent=intent,
+        )
+
+    try:
+        row = await client.create_quote(
+            license_id, {"deal_id": match["id"]}, actor_id=ctx.chann_uid,
+        )
+    except Exception as exc:  # noqa: BLE001
+        if _is_not_found(exc):
+            return ChatReply(
+                text=_t(QUOTE_DEAL_NOT_FOUND, language).format(deal_id=deal_code), intent=intent,
+            )
+        raise
+    return ChatReply(
+        text=_t(QUOTE_CREATED, language).format(quote_id=row["quote_id"], deal_id=deal_code),
+        entity_type="quote", entity_id=row["id"], intent=intent,
+    )
+
 # How long an unanswered question stays open. Long enough that a user can
 # finish another chat and come back; short enough that tomorrow's unrelated
 # "0812345678" is never silently attached to yesterday's half-built record.
@@ -1324,6 +1394,10 @@ async def handle_chat_message(
         )
     if intent.get("entity") == "product":
         return await _handle_product_intent(
+            client, intent=intent, ctx=ctx, license_id=license_id, language=language,
+        )
+    if intent.get("entity") == "quote":
+        return await _handle_quote_intent(
             client, intent=intent, ctx=ctx, license_id=license_id, language=language,
         )
 

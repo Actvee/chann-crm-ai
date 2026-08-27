@@ -2366,3 +2366,256 @@ class TestPhase9CRMCore:
         with Session(migrated_db) as session:
             assert DealRepository(session).get(scope_b, deal_a_id) is None
             assert DealRepository(session).get(scope_a, deal_a_id) is not None
+
+
+class TestPhase10QuoteAndTemplateEngine:
+    """Master Spec 10.7's mandatory automated tests — the subset that
+    doesn't need a real SmartBrowz render (see phase10.py's module
+    docstring: the DOCX-authoring/AI-mapping/SmartBrowz-render pipeline
+    itself isn't built in this patch, only the quote and template-version
+    workflow it will eventually sit behind)."""
+
+    def test_quote_create(self, migrated_db):
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import ChannIdentity
+        from chann_data.repositories.phase65 import RegistrationRepository
+        from chann_data.repositories.phase9 import CustomerRepository, DealRepository
+        from chann_data.repositories.phase10 import Phase10NotFound, QuoteRepository
+        from chann_data.repositories.tenant_scope import TenantScope
+
+        with Session(migrated_db) as session:
+            session.add(ChannIdentity(
+                chann_uid="CHN-P10Q-0001", line_user_id="line-p10q-0001", primary_role="sales",
+            ))
+            session.commit()
+
+        with Session(migrated_db) as session:
+            reg = RegistrationRepository(session)
+            lic = reg.create_license(company_name="Quote Co", created_by_chann_uid="CHN-P10Q-0001")
+            license_id = lic.id
+            session.commit()
+
+        scope = TenantScope(license_id=license_id)
+
+        with Session(migrated_db) as session:
+            cust = CustomerRepository(session).create(scope, first_name="ลูกค้า", phone="0812345678")
+            deal = DealRepository(session).create(scope, contact_id=cust.id)
+            deal_id = deal.id
+            session.commit()
+
+        # create -> success, quote number increments per tenant
+        with Session(migrated_db) as session:
+            quote_repo = QuoteRepository(session)
+            q1 = quote_repo.create(scope, deal_id=deal_id)
+            q2 = quote_repo.create(scope, deal_id=deal_id)
+            assert q1.quote_id != q2.quote_id
+            assert q1.quote_id.startswith("Q-")
+            n1 = int(q1.quote_id.rsplit("-", 1)[1])
+            n2 = int(q2.quote_id.rsplit("-", 1)[1])
+            assert n2 == n1 + 1
+            assert q1.status == "draft"
+            session.commit()
+            q1_id = q1.id
+
+        # a quote against a deal that doesn't exist in this tenant fails
+        with Session(migrated_db) as session:
+            quote_repo = QuoteRepository(session)
+            try:
+                quote_repo.create(scope, deal_id=uuid.uuid4())
+                raise AssertionError("expected Phase10NotFound")
+            except Phase10NotFound:
+                pass
+
+        # status lifecycle: draft -> sent -> accepted, illegal transitions refused
+        with Session(migrated_db) as session:
+            from chann_data.repositories.phase10 import Phase10Conflict
+            quote_repo = QuoteRepository(session)
+            q = quote_repo.transition_status(scope, q1_id, to_status="sent")
+            assert q.status == "sent"
+            q = quote_repo.transition_status(scope, q1_id, to_status="accepted")
+            assert q.status == "accepted"
+            try:
+                quote_repo.transition_status(scope, q1_id, to_status="draft")
+                raise AssertionError("expected Phase10Conflict for accepted->draft")
+            except Phase10Conflict:
+                pass
+            session.commit()
+
+    def test_template_versioning(self, migrated_db):
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import ChannIdentity
+        from chann_data.repositories.phase65 import RegistrationRepository
+        from chann_data.repositories.phase10 import (
+            DocumentTemplateRepository,
+            GeneratedDocumentRepository,
+            Phase10Conflict,
+        )
+        from chann_data.repositories.tenant_scope import TenantScope
+
+        with Session(migrated_db) as session:
+            session.add(ChannIdentity(
+                chann_uid="CHN-P10T-0001", line_user_id="line-p10t-0001", primary_role="sales",
+            ))
+            session.commit()
+
+        with Session(migrated_db) as session:
+            reg = RegistrationRepository(session)
+            lic = reg.create_license(company_name="Template Co", created_by_chann_uid="CHN-P10T-0001")
+            license_id = lic.id
+            session.commit()
+
+        scope = TenantScope(license_id=license_id)
+
+        with Session(migrated_db) as session:
+            tmpl_repo = DocumentTemplateRepository(session)
+            tmpl = tmpl_repo.create_template(
+                scope, document_type="quote", template_code="STD",
+                template_name="Standard Quote Template",
+            )
+            tmpl_id = tmpl.id
+            session.commit()
+
+        # preview does not publish
+        with Session(migrated_db) as session:
+            tmpl_repo = DocumentTemplateRepository(session)
+            v1 = tmpl_repo.create_draft_version(
+                scope, tmpl_id, source_docx_path="gs://b/v1.docx",
+                intermediate_model={"fields": []}, mapping_schema={},
+                compiled_template_path="gs://b/v1.html",
+            )
+            assert v1.version == 1
+            v1 = tmpl_repo.mark_previewed(scope, v1.id)
+            assert v1.status == "previewed"
+            session.commit()
+            v1_id = v1.id
+
+        # publish requires explicit approval
+        with Session(migrated_db) as session:
+            tmpl_repo = DocumentTemplateRepository(session)
+            v1 = tmpl_repo.get_version(scope, v1_id)
+            assert v1.status == "previewed"  # not auto-published by preview
+            v1 = tmpl_repo.publish_version(scope, v1_id)
+            assert v1.status == "published"
+            assert v1.published_at is not None
+            session.commit()
+
+        # published version is immutable — re-publishing / re-previewing refused
+        with Session(migrated_db) as session:
+            tmpl_repo = DocumentTemplateRepository(session)
+            try:
+                tmpl_repo.publish_version(scope, v1_id)
+                raise AssertionError("expected Phase10Conflict re-publishing")
+            except Phase10Conflict:
+                pass
+            try:
+                tmpl_repo.mark_previewed(scope, v1_id)
+                raise AssertionError("expected Phase10Conflict re-previewing a published version")
+            except Phase10Conflict:
+                pass
+
+        # editing published version creates N+1 draft, doesn't touch v1
+        with Session(migrated_db) as session:
+            tmpl_repo = DocumentTemplateRepository(session)
+            v2 = tmpl_repo.create_draft_version(
+                scope, tmpl_id, source_docx_path="gs://b/v2.docx",
+                intermediate_model={"fields": ["new_field"]}, mapping_schema={},
+                compiled_template_path="gs://b/v2.html",
+            )
+            assert v2.version == 2
+            assert v2.status == "draft"
+            v1_reloaded = tmpl_repo.get_version(scope, v1_id)
+            assert v1_reloaded.status == "published"  # unchanged by v2 existing
+            session.commit()
+
+        # old generated document still references old (published) version
+        with Session(migrated_db) as session:
+            doc_repo = GeneratedDocumentRepository(session)
+            gen = doc_repo.record(
+                scope, document_type="quote", source_entity_type="quote",
+                source_entity_id=uuid.uuid4(), template_version_id=v1_id,
+                data_snapshot={"example": True}, output_path="gs://b/out.pdf",
+                sha256="a" * 64,
+            )
+            session.commit()
+            gen_id = gen.id
+
+        with Session(migrated_db) as session:
+            doc_repo = GeneratedDocumentRepository(session)
+            reloaded = doc_repo.get(scope, gen_id)
+            assert reloaded.template_version_id == v1_id  # still v1, unaffected by v2
+
+    def test_multi_tenant_quote(self, migrated_db):
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import ChannIdentity
+        from chann_data.repositories.phase65 import RegistrationRepository
+        from chann_data.repositories.phase9 import CustomerRepository, DealRepository
+        from chann_data.repositories.phase10 import DocumentTemplateRepository, QuoteRepository
+        from chann_data.repositories.tenant_scope import TenantScope
+
+        with Session(migrated_db) as session:
+            session.add(ChannIdentity(
+                chann_uid="CHN-P10MT-A", line_user_id="line-p10mt-a", primary_role="sales",
+            ))
+            session.add(ChannIdentity(
+                chann_uid="CHN-P10MT-B", line_user_id="line-p10mt-b", primary_role="sales",
+            ))
+            session.commit()
+
+        with Session(migrated_db) as session:
+            reg = RegistrationRepository(session)
+            lic_a = reg.create_license(company_name="Quote Iso A", created_by_chann_uid="CHN-P10MT-A")
+            lic_b = reg.create_license(company_name="Quote Iso B", created_by_chann_uid="CHN-P10MT-B")
+            license_a, license_b = lic_a.id, lic_b.id
+            session.commit()
+
+        scope_a = TenantScope(license_id=license_a)
+        scope_b = TenantScope(license_id=license_b)
+
+        with Session(migrated_db) as session:
+            cust_a = CustomerRepository(session).create(scope_a, first_name="ลูกค้า A")
+            deal_a = DealRepository(session).create(scope_a, contact_id=cust_a.id)
+            deal_a_id = deal_a.id
+            session.commit()
+
+        with Session(migrated_db) as session:
+            quote_repo = QuoteRepository(session)
+            quote_a = quote_repo.create(scope_a, deal_id=deal_a_id)
+            quote_a_id = quote_a.id
+            session.commit()
+
+        # quote in tenant A is invisible in tenant B
+        with Session(migrated_db) as session:
+            quote_repo = QuoteRepository(session)
+            assert quote_repo.get(scope_b, quote_a_id) is None
+            assert quote_repo.get(scope_a, quote_a_id) is not None
+
+        # tenant A cannot use tenant B's deal to create a quote — a deal
+        # id that exists, but not in this tenant, must behave exactly like
+        # one that doesn't exist at all (no cross-tenant leakage of
+        # existence).
+        with Session(migrated_db) as session:
+            from chann_data.repositories.phase10 import Phase10NotFound
+            quote_repo = QuoteRepository(session)
+            try:
+                quote_repo.create(scope_b, deal_id=deal_a_id)
+                raise AssertionError("expected Phase10NotFound using another tenant's deal")
+            except Phase10NotFound:
+                pass
+
+        # tenant A cannot use tenant B's template/version
+        with Session(migrated_db) as session:
+            tmpl_repo = DocumentTemplateRepository(session)
+            tmpl_b = tmpl_repo.create_template(
+                scope_b, document_type="quote", template_code="B-STD",
+                template_name="B's Standard Template",
+            )
+            tmpl_b_id = tmpl_b.id
+            session.commit()
+
+        with Session(migrated_db) as session:
+            tmpl_repo = DocumentTemplateRepository(session)
+            assert tmpl_repo.get_template(scope_a, tmpl_b_id) is None
+            assert tmpl_repo.get_template(scope_b, tmpl_b_id) is not None

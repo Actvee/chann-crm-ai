@@ -55,18 +55,150 @@ Registration) → 7 (Master Data) → 8 (Profiles) → OA-scoping/conversation-
 continuity/profile-eligibility fix → OA-aware identity resolution for
 Customer/Technician → Phase 9 (CRM core: customers/deals/storefront) →
 last-customer-reference + product chat command → last_name+phone
-validation rule + safety net → **`_unwrap()` 204-body crash fix (a critical
-bug that had silently broken conversation continuity since Phase 6),
-deployed and confirmed via `/health` matching `git_commit`.**
+validation rule + safety net → `_unwrap()` 204-body crash fix → **missing-
+field-label translation + storefront confirm-before-search UX, deployed
+and confirmed working by the owner on real LINE traffic.**
 
-`origin/main` HEAD is **`56f296f` — `fix(phase9): _unwrap() crashes on 204
-No Content -- critical bug`**.
+`origin/main` HEAD is **`5becf26` — `fix(phase9): translate missing-field
+labels, confirm before storefront search`**.
 
-**Not started (past this point):** Phases 10-20 haven't been started.
+**In progress: Phase 10 (Quote + AI-assisted Document Template + PDF)** —
+see the section immediately below for exactly what's built vs. explicitly
+deferred. Phases 11-20 haven't been started.
 
 ---
 
-## Uncommitted work waiting to be deployed — two UX gaps found in live testing
+## Uncommitted work waiting to be deployed — Phase 10, quote CRUD only
+
+Patch: `phase10-quotes.patch` + `phase10-quotes-deploy.sh`. **Has a real
+migration** (`0009_phase10_quotes_templates`) — the first new one since
+Phase 9's.
+
+### Scope decision, made explicitly rather than silently
+
+Phase 10 in the master spec is really two very different pieces of work:
+
+1. **Quote CRUD** — a quote record tied to a deal, with its own status
+   lifecycle. Fully buildable and testable right now with what already
+   exists in this project.
+2. **DOCX-upload → AI-assisted field mapping → compiled HTML template →
+   SmartBrowz PDF rendering** (spec 10.4-10.6) — needs real Zoho Catalyst
+   SmartBrowz credentials to build against and validate meaningfully.
+   `docs/RUNTIME_CONFIG_CONTRACT.md` still lists every `SMARTBROWZ_*`
+   variable as `REQUIRED_BY_PHASE_10`, not yet configured anywhere. Writing
+   an adapter against a real external API with no way to call it and see
+   what comes back would be exactly the kind of untested code this
+   project's own validation discipline exists to prevent.
+
+**This patch only builds #1.** The document-template *schema* (all 4
+tables spec 10.3 asks for — `quotes`, `document_templates`,
+`document_template_versions`, `generated_documents`) is built now, since
+future phases (Warranty, Service Report, PDPA Export, Invoice) all reuse
+this same generic engine and a second migration later would be wasteful —
+but the actual DOCX/AI/SmartBrowz pipeline behind it is not. Concretely,
+what a template version's `intermediate_model`/`mapping_schema`/
+`compiled_template_path` columns actually contain is not decided by this
+patch; only that a draft version can be created, previewed, published
+(immutably), and superseded by a new draft, whatever fills those JSONB
+columns once the pipeline exists.
+
+### What this patch builds
+
+1. **Data tier** (`data/chann_data/repositories/phase10.py`):
+   - `QuoteRepository` — `create()` (validates the deal exists in-tenant,
+     generates a per-tenant `quote_id` like `Q-2026-0001` — see
+     `Quote`'s docstring in `models.py` for why this is per-tenant, unlike
+     `Deal.deal_id`), `get`/`list_for_license`, `transition_status`
+     (`draft → sent → accepted/rejected/expired`, no reopen concept —
+     spec gives quotes no reopen path the way 9.6 gives deals one).
+   - `DocumentTemplateRepository` — template CRUD, and the version
+     workflow spec 10.4 describes: `create_draft_version` (version
+     auto-increments per template), `mark_previewed` ("preview does not
+     publish" — its own distinct state), `publish_version` (explicit
+     approval; refuses on an already-published/archived version — the
+     *only* way this row can ever exist a second time is a brand new N+1
+     draft, never an in-place edit), `archive_version`.
+   - `GeneratedDocumentRepository` — records a render's audit trail
+     (template version + data snapshot + SHA-256). Does not perform a
+     render — see scope decision above.
+2. **14 Data-tier endpoints**, `DataClient` methods for all of them.
+3. **Chat**: "สร้างใบเสนอราคาจากดีล D-2026-0001" creates a quote from an
+   existing deal (looked up by its `deal_id` code, same pattern as deal
+   stage transitions). `entity="quote"` already existed in
+   `ACTION_PERMISSIONS` since Phase 6/7 scaffolding; this patch adds its
+   AI-prompt field shape and a real dispatch handler.
+
+### A real bug found and fixed while building this
+
+Wiring quote creation into chat surfaced a genuine collision: `เสนอราคา`
+("propose a price" — the deal-stage keyword for moving a deal to
+"proposed") is also the literal root of `ใบเสนอราคา` ("a quote" — this
+entity's own noun). "สร้างใบเสนอราคาจากดีล D-2026-0001" contains BOTH a
+valid deal code and that substring, and was being silently intercepted by
+the deal-stage-command matcher as "move this deal to proposed" instead of
+ever reaching quote creation — no error, just silently the wrong thing.
+Fixed by excluding the "proposed" keyword match specifically when
+`ใบเสนอราคา` (the noun) appears anywhere in the message; the deal-stage
+command still works correctly for genuine stage-transition phrases like
+"ดีล D-2026-0001 เสนอราคาแล้ว". Two regression tests lock this down: one
+proving the collision is gone (holding *both* `quote.create` and
+`deal.update` permissions, to prove which handler actually ran), one
+proving the real stage-transition phrase still works.
+
+### Validated
+
+On a clean clone: applies cleanly (3-way), migration runs empty-to-head
+successfully, **290 tests pass**, 0 skipped (real Postgres),
+`check-model-kwargs.py` OK, both tiers boot (data 95 routes, app 21
+paths). Covers the subset of spec 10.7's mandatory tests that don't need
+SmartBrowz: `test_quote_create` (increments per tenant, illegal-status-
+transition refused), `test_template_versioning` (preview ≠ publish,
+publish requires explicit approval, published version immutable, editing
+creates N+1, old generated document still references the old version
+after a new one exists), `test_multi_tenant_quote` (quote/template
+isolation, cross-tenant deal reference refused cleanly).
+
+### What's still needed before Phase 10 is actually complete
+
+- DOCX upload + parsing + GCS storage
+- AI-assisted field/mapping/layout proposal (spec 10.5's Intermediate
+  Template Model)
+- HTML compilation from the intermediate model
+- The SmartBrowz adapter itself (`html_convert` mode per
+  `docs/SMARTBROWZ_DOCUMENT_ENGINE.md`) — needs the owner to provision
+  `SMARTBROWZ_CATALYST_PROJECT_ID`/`SMARTBROWZ_CATALYST_ORG_ID`/whatever
+  auth path Catalyst requires, then verify it's actually reachable from
+  the deployed Cloud Run environment (10.6 explicitly requires this
+  verification before claiming readiness — GCP's own egress/auth quirks
+  are exactly the kind of thing that looks fine in isolation and then
+  doesn't work from Cloud Run)
+- `GCS_BUCKET_NAME` provisioning for original DOCX / compiled template /
+  generated PDF storage
+- The Presentation-tier upload/mapping-review/preview/publish UI (10.2) —
+  this project has stayed chat-first through every phase so far, and
+  quote creation via chat covers the "generate a quote" runtime path, but
+  *authoring* a template by chat alone is a much worse fit than a real
+  upload+review UI
+
+---
+
+## Already deployed (27 Aug 2026) — for context, not action
+
+### 9. Missing-field label translation + storefront confirm-before-search UX (`5becf26`)
+
+Two UX gaps, confirmed deployed and tested by the owner. Missing-field
+prompts (e.g. asking for a customer's last name/phone) used to leak raw
+English field-name keys verbatim into Thai sentences — fixed with a
+`MISSING_FIELD_LABELS` translation table covering every field name the
+slot-filling mechanism can currently ask about. Separately, a bare product
+name in Customer OA (e.g. "พัดลม", no "ค้นหา" prefix) used to fall through
+to the registration flow's shop-name search instead of finding anything —
+fixed by trying a silent storefront search first, but (per the owner's own
+framing: a bare word is genuinely ambiguous — buy one, or ask about a
+repair ticket already filed for one?) asking for confirmation before
+showing results rather than assuming intent. An explicit "ค้นหา [term]" is
+already unambiguous and still skips straight to results.
+
 
 Patch: `phase9-storefront-ux.patch` + `phase9-storefront-ux-deploy.sh`. Two
 independent fixes on top of `56f296f` (the real live HEAD), found by the
@@ -130,10 +262,6 @@ want to search?" going cold quickly is the safer default).
 On top of `56f296f` (the real live HEAD) on a clean clone: applies cleanly
 (3-way), **280 tests pass**, 0 skipped (real Postgres), `check-model-kwargs.py`
 OK, both tiers boot (data 80 routes, app 21 paths). No migration.
-
----
-
-## Already deployed (27 Aug 2026) — for context, not action
 
 ### 8. `_unwrap()` 204 No Content crash fix (`56f296f`)
 

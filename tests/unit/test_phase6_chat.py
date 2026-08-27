@@ -69,12 +69,14 @@ class FakeDataClient:
 
     def __init__(self, *, role="sales", permission_keys=None, mapping=None,
                  pending_intent=None, customers=None, deals=None,
-                 storefront_results=None, last_customer_ref=None, raises=None):
+                 storefront_results=None, last_customer_ref=None, raises=None,
+                 quotes=None):
         self._role = role
         self._raises = raises
         self._last_customer_ref = last_customer_ref
         self._customers = list(customers) if customers is not None else []
         self._deals = list(deals) if deals is not None else []
+        self._quotes = list(quotes) if quotes is not None else []
         self._next_deal_n = 1
         self._storefront_results = storefront_results or []
         self._pending = pending_intent
@@ -209,6 +211,21 @@ class FakeDataClient:
         )
         row = next(d for d in self._deals if d["id"] == deal_id)
         row["stage"] = stage
+        return row
+
+    # ------------------------------------------------------------ Phase 10
+
+    async def create_quote(self, license_id, payload, actor_id=None):
+        self.recorded.append(("create_quote", license_id, payload, actor_id))
+        if self._raises:
+            raise self._raises
+        quote_id = f"Q-2026-{len(self._quotes) + 1:04d}"
+        row = {
+            "id": f"QUOTE-{len(self._quotes) + 1}", "license_id": license_id,
+            "quote_id": quote_id, "deal_id": payload["deal_id"], "status": "draft",
+            "generated_document_id": None, "owner_member_id": None,
+        }
+        self._quotes.append(row)
         return row
 
     async def storefront_search(self, q, limit=10):
@@ -1746,3 +1763,132 @@ class TestChatNeverGoesSilentOnADataTierError:
         )
         assert reply.text
         assert "ไม่พบลูกค้า" in reply.text
+
+
+class TestPhase10QuoteChat:
+    """Master Spec 10.1/10.7 — chat-side dispatch for quote creation. The
+    DOCX-authoring/AI-mapping/SmartBrowz-render pipeline (10.4-10.6) isn't
+    wired to chat at all yet (needs real Zoho Catalyst SmartBrowz
+    credentials this environment doesn't have — see phase10.py's module
+    docstring); these only cover the quote-from-deal creation that already
+    works standalone (Quote.generated_document_id is nullable by 10.3's
+    own design, precisely so a quote can exist before any document does).
+    """
+
+    async def test_create_quote_from_an_existing_deal(self):
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "create", "entity": "quote",
+             "fields": {"deal_code": "D-2026-0001"}, "missing": []}, ensure_ascii=False)))
+        client = FakeDataClient(
+            permission_keys=["quote.create"],
+            deals=[{"id": "DEAL-1", "deal_id": "D-2026-0001", "stage": "proposed",
+                    "contact_id": "CUST-1", "notes": None, "products": []}],
+        )
+        reply = await handle_chat_message(
+            client, message="สร้างใบเสนอราคาจากดีล D-2026-0001",
+            ctx=_ctx(primary_role="sales"), ai_client=ai,
+        )
+        assert "Q-2026-" in reply.text
+        assert "D-2026-0001" in reply.text
+        assert reply.entity_type == "quote"
+        call = next(r for r in client.recorded if r[0] == "create_quote")
+        assert call[2]["deal_id"] == "DEAL-1"
+
+    async def test_create_quote_without_a_deal_code_is_refused(self):
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "create", "entity": "quote", "fields": {}, "missing": []})))
+        client = FakeDataClient(permission_keys=["quote.create"])
+        reply = await handle_chat_message(
+            client, message="สร้างใบเสนอราคา",
+            ctx=_ctx(primary_role="sales"), ai_client=ai,
+        )
+        assert "กรุณาระบุรหัสดีล" in reply.text
+        assert not any(r[0] == "create_quote" for r in client.recorded)
+
+    async def test_create_quote_for_a_deal_code_that_does_not_exist(self):
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "create", "entity": "quote",
+             "fields": {"deal_code": "D-2026-9999"}, "missing": []}, ensure_ascii=False)))
+        client = FakeDataClient(permission_keys=["quote.create"], deals=[])
+        reply = await handle_chat_message(
+            client, message="สร้างใบเสนอราคาจากดีล D-2026-9999",
+            ctx=_ctx(primary_role="sales"), ai_client=ai,
+        )
+        assert "ไม่พบดีล" in reply.text
+        assert not any(r[0] == "create_quote" for r in client.recorded)
+
+    async def test_quote_create_hitting_a_not_found_gets_a_friendly_reply(self):
+        """Mirrors the same defensive pattern already proven for customer/
+        deal/product handlers: never let a Data-tier error propagate
+        uncaught and kill the reply silently."""
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "create", "entity": "quote",
+             "fields": {"deal_code": "D-2026-0001"}, "missing": []}, ensure_ascii=False)))
+        client = FakeDataClient(
+            permission_keys=["quote.create"],
+            deals=[{"id": "DEAL-1", "deal_id": "D-2026-0001", "stage": "proposed",
+                    "contact_id": "CUST-1", "notes": None, "products": []}],
+            raises=NotFoundForTest("gone"),
+        )
+        reply = await handle_chat_message(
+            client, message="สร้างใบเสนอราคาจากดีล D-2026-0001",
+            ctx=_ctx(primary_role="sales"), ai_client=ai,
+        )
+        assert reply.text
+        assert "ไม่พบดีล" in reply.text
+
+    async def test_quote_create_requires_quote_create_permission(self):
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "create", "entity": "quote",
+             "fields": {"deal_code": "D-2026-0001"}, "missing": []}, ensure_ascii=False)))
+        client = FakeDataClient(
+            permission_keys=[],
+            deals=[{"id": "DEAL-1", "deal_id": "D-2026-0001", "stage": "proposed",
+                    "contact_id": "CUST-1", "notes": None, "products": []}],
+        )
+        reply = await handle_chat_message(
+            client, message="สร้างใบเสนอราคาจากดีล D-2026-0001",
+            ctx=_ctx(primary_role="sales"), ai_client=ai,
+        )
+        assert not any(r[0] == "create_quote" for r in client.recorded)
+
+    async def test_quote_creation_message_is_not_misread_as_a_deal_stage_command(self):
+        """Regression for a real bug found while building this feature:
+        "เสนอราคา" (propose a price — the deal-stage keyword for
+        "proposed") is also the literal root of "ใบเสนอราคา" (a quote, this
+        entity's own noun). "สร้างใบเสนอราคาจากดีล D-2026-0001" contains
+        BOTH a valid deal code and that substring, and was being
+        intercepted as a deal-stage-transition command (moving the deal to
+        "proposed") instead of reaching quote creation at all — silently
+        wrong, not even an error, since the deal-stage path never checked
+        entity="quote" was actually what the AI parsed."""
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "create", "entity": "quote",
+             "fields": {"deal_code": "D-2026-0001"}, "missing": []}, ensure_ascii=False)))
+        client = FakeDataClient(
+            permission_keys=["quote.create", "deal.update"],  # holds BOTH, to prove
+            deals=[{"id": "DEAL-1", "deal_id": "D-2026-0001", "stage": "new",
+                    "contact_id": "CUST-1", "notes": None, "products": []}],
+        )
+        reply = await handle_chat_message(
+            client, message="สร้างใบเสนอราคาจากดีล D-2026-0001",
+            ctx=_ctx(primary_role="sales"), ai_client=ai,
+        )
+        assert any(r[0] == "create_quote" for r in client.recorded)
+        assert not any(r[0] == "transition_deal_stage" for r in client.recorded)
+        assert "Q-2026-" in reply.text
+
+    async def test_a_genuine_deal_stage_command_still_works_after_the_fix(self):
+        """The counterpart, so the collision fix cannot pass by simply
+        disabling the "proposed" stage transition altogether."""
+        client = FakeDataClient(
+            permission_keys=["deal.update"],
+            deals=[{"id": "DEAL-1", "deal_id": "D-2026-0001", "stage": "new",
+                    "contact_id": "CUST-1", "notes": None, "products": []}],
+        )
+        reply = await handle_chat_message(
+            client, message="ดีล D-2026-0001 เสนอราคาแล้ว",
+            ctx=_ctx(primary_role="sales"), ai_client=None,
+        )
+        assert any(r[0] == "transition_deal_stage" for r in client.recorded)
+        assert "proposed" in reply.text

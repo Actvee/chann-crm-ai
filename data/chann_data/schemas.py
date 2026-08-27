@@ -522,3 +522,99 @@ class StorefrontInterestIn(BaseModel):
     chann_uid: str
     license_id: uuid.UUID
     product_name: str
+
+
+# ---------------------------------------------------------------- Phase 10
+
+
+class QuoteIn(BaseModel):
+    deal_id: uuid.UUID
+    owner_member_id: uuid.UUID | None = None
+
+
+class QuoteOut(BaseModel):
+    id: uuid.UUID
+    license_id: uuid.UUID
+    quote_id: str
+    deal_id: uuid.UUID
+    status: str
+    generated_document_id: uuid.UUID | None
+    owner_member_id: uuid.UUID | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class QuoteStatusIn(BaseModel):
+    status: str
+
+
+class DocumentTemplateIn(BaseModel):
+    document_type: str
+    template_code: str
+    template_name: str
+
+
+class DocumentTemplateOut(BaseModel):
+    id: uuid.UUID
+    license_id: uuid.UUID
+    document_type: str
+    template_code: str
+    template_name: str
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class DocumentTemplateVersionIn(BaseModel):
+    source_docx_path: str
+    intermediate_model: dict
+    mapping_schema: dict
+    compiled_template_path: str
+    renderer: str = "smartbrowz"
+    renderer_mode: str = "html_convert"
+    smartbrowz_template_id: str | None = None
+    created_by: uuid.UUID | None = None
+
+
+class DocumentTemplateVersionOut(BaseModel):
+    id: uuid.UUID
+    template_id: uuid.UUID
+    version: int
+    status: str
+    source_docx_path: str
+    intermediate_model: dict
+    mapping_schema: dict
+    compiled_template_path: str
+    renderer: str
+    renderer_mode: str
+    smartbrowz_template_id: str | None
+    created_by: uuid.UUID | None
+    created_at: datetime
+    published_at: datetime | None
+
+
+class GeneratedDocumentIn(BaseModel):
+    document_type: str
+    source_entity_type: str
+    source_entity_id: uuid.UUID
+    template_version_id: uuid.UUID
+    data_snapshot: dict
+    output_path: str
+    sha256: str
+    renderer: str = "smartbrowz"
+    generated_by: uuid.UUID | None = None
+
+
+class GeneratedDocumentOut(BaseModel):
+    id: uuid.UUID
+    license_id: uuid.UUID
+    document_type: str
+    source_entity_type: str
+    source_entity_id: uuid.UUID
+    template_version_id: uuid.UUID
+    data_snapshot: dict
+    output_path: str
+    sha256: str
+    renderer: str
+    generated_by: uuid.UUID | None
+    generated_at: datetime

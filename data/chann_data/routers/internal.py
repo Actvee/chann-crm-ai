@@ -59,6 +59,13 @@ from ..repositories.phase9 import (
     Phase9NotFound,
     StorefrontRepository,
 )
+from ..repositories.phase10 import (
+    DocumentTemplateRepository,
+    GeneratedDocumentRepository,
+    Phase10Conflict,
+    Phase10NotFound,
+    QuoteRepository,
+)
 from ..repositories.profile import (
     ProfileConflict,
     ProfileNotFound,
@@ -85,6 +92,15 @@ from ..schemas import (
     DealProductIn,
     DealProductOut,
     DealStageIn,
+    DocumentTemplateIn,
+    DocumentTemplateOut,
+    DocumentTemplateVersionIn,
+    DocumentTemplateVersionOut,
+    GeneratedDocumentIn,
+    GeneratedDocumentOut,
+    QuoteIn,
+    QuoteOut,
+    QuoteStatusIn,
     StorefrontInterestIn,
     StorefrontProductOut,
     AuditLogWriteIn,
@@ -2026,3 +2042,330 @@ def storefront_record_interest(
     except Exception as exc:
         session.rollback()
         raise _phase9_http_error(exc)
+
+
+# ---------------------------------------------------------------- Phase 10
+
+
+def _phase10_http_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, Phase10NotFound):
+        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    if isinstance(exc, Phase10Conflict):
+        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    if isinstance(exc, HTTPException):
+        return exc
+    log.exception("unhandled data-tier error: %s", exc)
+    return HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="internal error"
+    )
+
+
+@router.post("/licenses/{license_id}/quotes", response_model=QuoteOut, status_code=201)
+def create_quote(
+    license_id: uuid.UUID, payload: QuoteIn,
+    session: Session = Depends(get_session), x_actor_id: str = Header(default=""),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = QuoteRepository(session).create(
+            scope, deal_id=payload.deal_id, owner_member_id=payload.owner_member_id,
+        )
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="quote", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="create",
+            field_changes=diff_fields({}, {"quote_id": row.quote_id, "status": row.status}),
+        )
+        session.commit()
+        return QuoteOut.model_validate(row, from_attributes=True)
+    except Exception as exc:
+        session.rollback()
+        raise _phase10_http_error(exc)
+
+
+@router.get("/licenses/{license_id}/quotes/{quote_id}", response_model=QuoteOut)
+def get_quote(
+    license_id: uuid.UUID, quote_id: uuid.UUID, session: Session = Depends(get_session),
+):
+    scope = TenantScope(license_id=license_id)
+    row = QuoteRepository(session).get(scope, quote_id)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="quote not found")
+    return QuoteOut.model_validate(row, from_attributes=True)
+
+
+@router.get("/licenses/{license_id}/quotes", response_model=list[QuoteOut])
+def list_quotes(
+    license_id: uuid.UUID, status_: str | None = None, session: Session = Depends(get_session),
+):
+    scope = TenantScope(license_id=license_id)
+    rows = QuoteRepository(session).list_for_license(scope, status=status_)
+    return [QuoteOut.model_validate(r, from_attributes=True) for r in rows]
+
+
+@router.post("/licenses/{license_id}/quotes/{quote_id}/status", response_model=QuoteOut)
+def transition_quote_status(
+    license_id: uuid.UUID, quote_id: uuid.UUID, payload: QuoteStatusIn,
+    session: Session = Depends(get_session), x_actor_id: str = Header(default=""),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        repo = QuoteRepository(session)
+        before = repo.get(scope, quote_id)
+        before_status = before.status if before else None
+        row = repo.transition_status(scope, quote_id, to_status=payload.status)
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="quote", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="update",
+            field_changes=diff_fields({"status": before_status}, {"status": row.status}),
+        )
+        session.commit()
+        return QuoteOut.model_validate(row, from_attributes=True)
+    except Exception as exc:
+        session.rollback()
+        raise _phase10_http_error(exc)
+
+
+@router.post(
+    "/licenses/{license_id}/document-templates", response_model=DocumentTemplateOut,
+    status_code=201,
+)
+def create_document_template(
+    license_id: uuid.UUID, payload: DocumentTemplateIn,
+    session: Session = Depends(get_session), x_actor_id: str = Header(default=""),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = DocumentTemplateRepository(session).create_template(
+            scope, document_type=payload.document_type,
+            template_code=payload.template_code, template_name=payload.template_name,
+        )
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="document_template", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="create",
+            field_changes=diff_fields({}, {"template_code": row.template_code}),
+        )
+        session.commit()
+        return DocumentTemplateOut.model_validate(row, from_attributes=True)
+    except Exception as exc:
+        session.rollback()
+        raise _phase10_http_error(exc)
+
+
+@router.get(
+    "/licenses/{license_id}/document-templates", response_model=list[DocumentTemplateOut],
+)
+def list_document_templates(
+    license_id: uuid.UUID, document_type: str | None = None,
+    session: Session = Depends(get_session),
+):
+    scope = TenantScope(license_id=license_id)
+    rows = DocumentTemplateRepository(session).list_templates(scope, document_type=document_type)
+    return [DocumentTemplateOut.model_validate(r, from_attributes=True) for r in rows]
+
+
+@router.get(
+    "/licenses/{license_id}/document-templates/{template_id}",
+    response_model=DocumentTemplateOut,
+)
+def get_document_template(
+    license_id: uuid.UUID, template_id: uuid.UUID, session: Session = Depends(get_session),
+):
+    scope = TenantScope(license_id=license_id)
+    row = DocumentTemplateRepository(session).get_template(scope, template_id)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="template not found")
+    return DocumentTemplateOut.model_validate(row, from_attributes=True)
+
+
+@router.post(
+    "/licenses/{license_id}/document-templates/{template_id}/versions",
+    response_model=DocumentTemplateVersionOut, status_code=201,
+)
+def create_document_template_version(
+    license_id: uuid.UUID, template_id: uuid.UUID, payload: DocumentTemplateVersionIn,
+    session: Session = Depends(get_session), x_actor_id: str = Header(default=""),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = DocumentTemplateRepository(session).create_draft_version(
+            scope, template_id,
+            source_docx_path=payload.source_docx_path,
+            intermediate_model=payload.intermediate_model,
+            mapping_schema=payload.mapping_schema,
+            compiled_template_path=payload.compiled_template_path,
+            renderer=payload.renderer, renderer_mode=payload.renderer_mode,
+            smartbrowz_template_id=payload.smartbrowz_template_id,
+            created_by=payload.created_by,
+        )
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="document_template_version", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="create",
+            field_changes=diff_fields({}, {"version": row.version, "status": row.status}),
+        )
+        session.commit()
+        return DocumentTemplateVersionOut.model_validate(row, from_attributes=True)
+    except Exception as exc:
+        session.rollback()
+        raise _phase10_http_error(exc)
+
+
+@router.get(
+    "/licenses/{license_id}/document-templates/{template_id}/versions",
+    response_model=list[DocumentTemplateVersionOut],
+)
+def list_document_template_versions(
+    license_id: uuid.UUID, template_id: uuid.UUID, session: Session = Depends(get_session),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        rows = DocumentTemplateRepository(session).list_versions(scope, template_id)
+    except Exception as exc:
+        raise _phase10_http_error(exc)
+    return [DocumentTemplateVersionOut.model_validate(r, from_attributes=True) for r in rows]
+
+
+@router.get(
+    "/licenses/{license_id}/document-template-versions/{version_id}",
+    response_model=DocumentTemplateVersionOut,
+)
+def get_document_template_version(
+    license_id: uuid.UUID, version_id: uuid.UUID, session: Session = Depends(get_session),
+):
+    scope = TenantScope(license_id=license_id)
+    row = DocumentTemplateRepository(session).get_version(scope, version_id)
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="template version not found"
+        )
+    return DocumentTemplateVersionOut.model_validate(row, from_attributes=True)
+
+
+@router.post(
+    "/licenses/{license_id}/document-template-versions/{version_id}/preview",
+    response_model=DocumentTemplateVersionOut,
+)
+def preview_document_template_version(
+    license_id: uuid.UUID, version_id: uuid.UUID,
+    session: Session = Depends(get_session), x_actor_id: str = Header(default=""),
+):
+    """Marks the version "previewed" (10.7: "preview does not publish").
+    Does NOT render anything yet — the actual SmartBrowz preview render is
+    not built in this patch (see phase10.py's module docstring)."""
+    scope = TenantScope(license_id=license_id)
+    try:
+        repo = DocumentTemplateRepository(session)
+        before = repo.get_version(scope, version_id)
+        before_status = before.status if before else None
+        row = repo.mark_previewed(scope, version_id)
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="document_template_version", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="update",
+            field_changes=diff_fields({"status": before_status}, {"status": row.status}),
+        )
+        session.commit()
+        return DocumentTemplateVersionOut.model_validate(row, from_attributes=True)
+    except Exception as exc:
+        session.rollback()
+        raise _phase10_http_error(exc)
+
+
+@router.post(
+    "/licenses/{license_id}/document-template-versions/{version_id}/publish",
+    response_model=DocumentTemplateVersionOut,
+)
+def publish_document_template_version(
+    license_id: uuid.UUID, version_id: uuid.UUID,
+    session: Session = Depends(get_session), x_actor_id: str = Header(default=""),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        repo = DocumentTemplateRepository(session)
+        before = repo.get_version(scope, version_id)
+        before_status = before.status if before else None
+        row = repo.publish_version(scope, version_id)
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="document_template_version", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="update",
+            field_changes=diff_fields({"status": before_status}, {"status": row.status}),
+        )
+        session.commit()
+        return DocumentTemplateVersionOut.model_validate(row, from_attributes=True)
+    except Exception as exc:
+        session.rollback()
+        raise _phase10_http_error(exc)
+
+
+@router.post(
+    "/licenses/{license_id}/document-template-versions/{version_id}/archive",
+    response_model=DocumentTemplateVersionOut,
+)
+def archive_document_template_version(
+    license_id: uuid.UUID, version_id: uuid.UUID,
+    session: Session = Depends(get_session), x_actor_id: str = Header(default=""),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        repo = DocumentTemplateRepository(session)
+        before = repo.get_version(scope, version_id)
+        before_status = before.status if before else None
+        row = repo.archive_version(scope, version_id)
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="document_template_version", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="update",
+            field_changes=diff_fields({"status": before_status}, {"status": row.status}),
+        )
+        session.commit()
+        return DocumentTemplateVersionOut.model_validate(row, from_attributes=True)
+    except Exception as exc:
+        session.rollback()
+        raise _phase10_http_error(exc)
+
+
+@router.post(
+    "/licenses/{license_id}/generated-documents", response_model=GeneratedDocumentOut,
+    status_code=201,
+)
+def record_generated_document(
+    license_id: uuid.UUID, payload: GeneratedDocumentIn,
+    session: Session = Depends(get_session), x_actor_id: str = Header(default=""),
+):
+    """Records that a render already happened somewhere else — this
+    endpoint does not perform any rendering itself (see phase10.py's
+    module docstring for why)."""
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = GeneratedDocumentRepository(session).record(
+            scope, document_type=payload.document_type,
+            source_entity_type=payload.source_entity_type,
+            source_entity_id=payload.source_entity_id,
+            template_version_id=payload.template_version_id,
+            data_snapshot=payload.data_snapshot, output_path=payload.output_path,
+            sha256=payload.sha256, renderer=payload.renderer,
+            generated_by=payload.generated_by,
+        )
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="generated_document", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="create",
+            field_changes=diff_fields({}, {"output_path": row.output_path}),
+        )
+        session.commit()
+        return GeneratedDocumentOut.model_validate(row, from_attributes=True)
+    except Exception as exc:
+        session.rollback()
+        raise _phase10_http_error(exc)
+
+
+@router.get(
+    "/licenses/{license_id}/generated-documents/{document_id}",
+    response_model=GeneratedDocumentOut,
+)
+def get_generated_document(
+    license_id: uuid.UUID, document_id: uuid.UUID, session: Session = Depends(get_session),
+):
+    scope = TenantScope(license_id=license_id)
+    row = GeneratedDocumentRepository(session).get(scope, document_id)
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="generated document not found"
+        )
+    return GeneratedDocumentOut.model_validate(row, from_attributes=True)
