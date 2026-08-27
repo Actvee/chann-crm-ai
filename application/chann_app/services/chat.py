@@ -20,6 +20,7 @@ from ..data_client import DataClient
 from .ai.client import AIUnavailable, AINotConfigured
 from .ai.intent import parse_intent, unavailable_reply
 from .identity import ResolvedContext, TenantResolution
+from .registration import COMPANY_CODE_RE
 
 # Which permission key an (action, entity) pair requires. This is the real
 # gate — the prompt tells the model what the user holds, but a model that
@@ -435,9 +436,38 @@ def greet(ctx: ResolvedContext, language: str = "th") -> str:
     return f"สวัสดีคุณ{name} — {_t(REPLY_NOT_REGISTERED, 'th')}"
 
 
+# Field-name -> human label, for ask_for_missing below. "missing" lists are
+# populated two ways: the AI's own JSON output (told in the prompt to keep
+# machine-facing keys in English, e.g. "last_name") and this project's own
+# code-side validation (e.g. the last_name+phone hard check in
+# _handle_customer_intent) — both use the same raw field-key vocabulary, so
+# one lookup table covers both sources rather than needing two.
+MISSING_FIELD_LABELS = {
+    "first_name": {"th": "ชื่อ", "en": "first name"},
+    "last_name": {"th": "นามสกุล", "en": "last name"},
+    "phone": {"th": "เบอร์โทร", "en": "phone number"},
+    "email": {"th": "อีเมล", "en": "email"},
+    "address": {"th": "ที่อยู่", "en": "address"},
+    "target_name": {"th": "ชื่อลูกค้า", "en": "the customer's name"},
+    "product_id": {"th": "รหัสสินค้า", "en": "product code"},
+    "product_name": {"th": "ชื่อสินค้า", "en": "product name"},
+    "unit_price": {"th": "ราคา", "en": "price"},
+}
+
+
 def ask_for_missing(missing: list[str], language: str = "th") -> str:
-    """Spec 6.4 — ask only for what is actually absent."""
-    labels = ", ".join(str(m) for m in missing)
+    """Spec 6.4 — ask only for what is actually absent.
+
+    Reported live: an unrecognised field name (e.g. "last_name" straight
+    from the AI's own JSON) was shown to the user verbatim —
+    "กรุณาระบุlast_name, phone" — because this only ever joined the raw
+    keys. Translates anything in MISSING_FIELD_LABELS; anything genuinely
+    unknown still falls back to the raw key rather than hiding it, since a
+    silently-dropped missing field would be worse than an ugly one.
+    """
+    labels = ", ".join(
+        MISSING_FIELD_LABELS.get(m, {}).get(language) or str(m) for m in missing
+    )
     return _t(ASK_MISSING, language).format(fields=labels)
 
 
@@ -1023,6 +1053,20 @@ STOREFRONT_INTEREST_RECORDED = {
     "en": 'Recorded your interest in "{product}" from {shop} — they will '
           "be in touch.",
 }
+STOREFRONT_CONFIRM_TTL_S = 120
+# Reported live: a bare word like "พัดลม" is genuinely ambiguous for a
+# customer — do they want to search for one to buy, ask about a repair
+# ticket they already filed for one, or something else entirely? Jumping
+# straight to a product list assumes the first meaning with no chance to
+# say otherwise. This asks first; only an explicit "ค้นหา [term]" (already
+# an unambiguous request) skips straight to results.
+STOREFRONT_CONFIRM_PROMPT = {
+    "th": "พบสินค้าที่เกี่ยวข้องกับ \"{query}\" ต้องการดูรายการสินค้าไหม? "
+          'พิมพ์ "ใช่" หรือ "ค้นหา {query}" เพื่อดูรายการ',
+    "en": 'Found products related to "{query}" — want to see the list? '
+          'Type "yes" or "search {query}" to see them.',
+}
+STOREFRONT_CONFIRM_WORDS = ("ใช่", "โอเค", "เอา", "ต้องการ", "yes", "y", "ok")
 
 
 def _parse_storefront_query(message: str) -> str | None:
@@ -1042,13 +1086,39 @@ def _format_storefront_results(results: list[dict], language: str) -> str:
     return "\n".join(lines)
 
 
+def _is_storefront_confirmation(message: str) -> bool:
+    text = (message or "").strip().lower()
+    return any(text == w or text.startswith(w) for w in STOREFRONT_CONFIRM_WORDS)
+
+
 async def maybe_handle_storefront(
     client: DataClient, *, message: str, ctx: ResolvedContext, language: str,
 ) -> ChatReply | None:
-    """Returns a reply if this message was storefront browsing (a search or
-    a selection from one already in progress), else None so the caller
-    proceeds with its normal tenant-scoped handling."""
+    """Returns a reply if this message was storefront browsing (a search, a
+    confirmation of one just offered, or a selection from a list already
+    shown), else None so the caller proceeds with its normal tenant-scoped
+    handling."""
     pending = await client.get_pending_intent(ctx.chann_uid, ctx.oa)
+
+    if pending is not None and pending.get("entity") == "storefront_confirm":
+        cached = pending.get("fields") or {}
+        cached_results = cached.get("results") or []
+        await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
+        # Either an explicit yes, or the customer just re-typed "ค้นหา ..."
+        # themselves — both mean the same thing here.
+        if _is_storefront_confirmation(message) or _parse_storefront_query(message):
+            await client.set_pending_intent(
+                ctx.chann_uid, ctx.oa,
+                action="select", entity="storefront",
+                fields={"options": cached_results}, missing=[],
+                ttl_seconds=STOREFRONT_PENDING_TTL_S,
+            )
+            return ChatReply(text=_format_storefront_results(cached_results, language))
+        # Anything else means they meant something other than a product
+        # search ("พัดลมที่แจ้งซ่อมไว้เป็นยังไงบ้าง" and similar) — drop it
+        # and let the message be handled normally instead of insisting.
+        return None
+
     if pending is not None and pending.get("entity") == "storefront":
         options = pending.get("fields", {}).get("options") or []
         text = (message or "").strip()
@@ -1071,7 +1141,25 @@ async def maybe_handle_storefront(
 
     query = _parse_storefront_query(message)
     if query is None:
-        return None
+        # A bare word ("พัดลม", no "ค้นหา" prefix) is genuinely ambiguous —
+        # confirm before committing to "this was a product search" rather
+        # than assuming it and listing results outright. A company code
+        # (its own distinct alphabet) or anything too short to be a real
+        # search term is never intercepted, so shop-code/shop-name lookup
+        # in the registration flow is completely unaffected.
+        text = (message or "").strip()
+        if len(text) < 2 or COMPANY_CODE_RE.match(text.upper()):
+            return None
+        results = await client.storefront_search(text, limit=STOREFRONT_RESULTS_LIMIT)
+        if not results:
+            return None
+        await client.set_pending_intent(
+            ctx.chann_uid, ctx.oa,
+            action="confirm", entity="storefront_confirm",
+            fields={"query": text, "results": results}, missing=[],
+            ttl_seconds=STOREFRONT_CONFIRM_TTL_S,
+        )
+        return ChatReply(text=_t(STOREFRONT_CONFIRM_PROMPT, language).format(query=text))
     if not query:
         return ChatReply(text=_t(STOREFRONT_NO_QUERY, language))
 

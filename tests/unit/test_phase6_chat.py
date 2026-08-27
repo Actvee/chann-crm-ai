@@ -1014,7 +1014,7 @@ class TestPhase9CustomerChat:
             client, message="เพิ่มลูกค้าชื่อสมชาย อีเมล somchai@example.com",
             ctx=_ctx(primary_role="sales"), ai_client=ai,
         )
-        assert "last_name" in reply.text and "phone" in reply.text
+        assert "นามสกุล" in reply.text and "เบอร์โทร" in reply.text
         assert not any(r[0] == "create_customer" for r in client.recorded)
         # sets pending_intent too, so a bare follow-up answer can complete
         # this request instead of being parsed as a new, meaningless message
@@ -1030,7 +1030,7 @@ class TestPhase9CustomerChat:
             client, message="เพิ่มลูกค้าชื่อสมชาย ใจดี",
             ctx=_ctx(primary_role="sales"), ai_client=ai,
         )
-        assert "phone" in reply.text
+        assert "เบอร์โทร" in reply.text
         assert not any(r[0] == "create_customer" for r in client.recorded)
 
     async def test_phone_without_last_name_is_not_enough(self):
@@ -1043,7 +1043,7 @@ class TestPhase9CustomerChat:
             client, message="เพิ่มลูกค้าชื่อสมชาย เบอร์ 0812345678",
             ctx=_ctx(primary_role="sales"), ai_client=ai,
         )
-        assert "last_name" in reply.text
+        assert "นามสกุล" in reply.text
         assert not any(r[0] == "create_customer" for r in client.recorded)
 
     async def test_last_name_and_phone_together_is_enough_even_without_first_name(self):
@@ -1078,7 +1078,7 @@ class TestPhase9CustomerChat:
             client, message="เพิ่มลูกค้า สมหญิง",
             ctx=_ctx(primary_role="sales"), ai_client=ai_1,
         )
-        assert "last_name" in first_reply.text
+        assert "นามสกุล" in first_reply.text
         assert not any(r[0] == "create_customer" for r in client.recorded)
         stored = next(r for r in client.recorded if r[0] == "set_pending_intent")
         assert stored[3]["missing"] == ["last_name", "phone"]
@@ -1097,7 +1097,7 @@ class TestPhase9CustomerChat:
         second_reply = await handle_chat_message(
             client, message="ใจดี", ctx=_ctx(primary_role="sales"), ai_client=ai_2,
         )
-        assert "phone" in second_reply.text
+        assert "เบอร์โทร" in second_reply.text
         assert not any(r[0] == "create_customer" for r in client.recorded)
 
         # Turn 3: the phone number arrives — now everything required is
@@ -1370,6 +1370,150 @@ class TestPhase9Storefront:
             ctx=_ctx(primary_role="customer", oa="customer"), language="th",
         )
         assert reply is None
+
+    async def test_a_bare_product_name_with_no_trigger_word_asks_to_confirm_first(self):
+        """Reported live: typing just "พัดลม" (no "ค้นหา" prefix) fell
+        straight through to the registration flow's shop-name search
+        instead. A bare word is genuinely ambiguous for a customer (search
+        for one to buy? ask about a repair ticket for one already filed?),
+        so this asks for confirmation rather than assuming a product
+        search and listing results outright."""
+        client = FakeDataClient(storefront_results=[
+            {"product_id": "P1", "product_name": "พัดลมไอเย็น", "sku": None,
+             "category": None, "unit_price": "3500", "license_id": "LIC-A",
+             "company_name": "ร้าน A"},
+        ])
+        reply = await maybe_handle_storefront(
+            client, message="พัดลม",
+            ctx=_ctx(primary_role="customer", oa="customer"), language="th",
+        )
+        assert reply is not None
+        assert "พัดลม" in reply.text
+        assert "ต้องการดูรายการสินค้าไหม" in reply.text
+        assert "พัดลมไอเย็น" not in reply.text  # results not shown yet
+        assert any(r[0] == "storefront_search" for r in client.recorded)
+        assert any(r[0] == "set_pending_intent" for r in client.recorded)
+
+    async def test_confirming_after_a_bare_word_then_shows_the_results(self):
+        client = FakeDataClient(pending_intent={
+            "action": "confirm", "entity": "storefront_confirm",
+            "fields": {"query": "พัดลม", "results": [
+                {"product_id": "P1", "product_name": "พัดลมไอเย็น", "sku": None,
+                 "category": None, "unit_price": "3500", "license_id": "LIC-A",
+                 "company_name": "ร้าน A"},
+            ]},
+            "missing": [],
+        })
+        reply = await maybe_handle_storefront(
+            client, message="ใช่",
+            ctx=_ctx(primary_role="customer", oa="customer"), language="th",
+        )
+        assert reply is not None
+        assert "พัดลมไอเย็น" in reply.text
+        assert any(r[0] == "clear_pending_intent" for r in client.recorded)
+        assert any(
+            r[0] == "set_pending_intent" and r[3]["entity"] == "storefront"
+            for r in client.recorded
+        )
+
+    async def test_declining_after_a_bare_word_lets_the_message_be_handled_normally(self):
+        """The exact scenario asked about: "พัดลมที่แจ้งซ่อมไว้เป็นยังไง
+        บ้าง" after being asked to confirm — this is clearly NOT a product
+        search, so it must fall through (return None) rather than being
+        forced into the storefront flow."""
+        client = FakeDataClient(pending_intent={
+            "action": "confirm", "entity": "storefront_confirm",
+            "fields": {"query": "พัดลม", "results": [
+                {"product_id": "P1", "product_name": "พัดลมไอเย็น", "sku": None,
+                 "category": None, "unit_price": "3500", "license_id": "LIC-A",
+                 "company_name": "ร้าน A"},
+            ]},
+            "missing": [],
+        })
+        reply = await maybe_handle_storefront(
+            client, message="พัดลมที่แจ้งซ่อมไว้เป็นยังไงบ้าง",
+            ctx=_ctx(primary_role="customer", oa="customer"), language="th",
+        )
+        assert reply is None
+        assert any(r[0] == "clear_pending_intent" for r in client.recorded)
+
+    async def test_retyping_the_explicit_search_trigger_also_confirms(self):
+        client = FakeDataClient(pending_intent={
+            "action": "confirm", "entity": "storefront_confirm",
+            "fields": {"query": "พัดลม", "results": [
+                {"product_id": "P1", "product_name": "พัดลมไอเย็น", "sku": None,
+                 "category": None, "unit_price": "3500", "license_id": "LIC-A",
+                 "company_name": "ร้าน A"},
+            ]},
+            "missing": [],
+        })
+        reply = await maybe_handle_storefront(
+            client, message="ค้นหา พัดลม",
+            ctx=_ctx(primary_role="customer", oa="customer"), language="th",
+        )
+        assert reply is not None
+        assert "พัดลมไอเย็น" in reply.text
+
+    async def test_explicit_search_trigger_still_skips_confirmation(self):
+        """An explicit "ค้นหา [term]" is already unambiguous — it must go
+        straight to results, never through the confirm step."""
+        client = FakeDataClient(storefront_results=[
+            {"product_id": "P1", "product_name": "พัดลมไอเย็น", "sku": None,
+             "category": None, "unit_price": "3500", "license_id": "LIC-A",
+             "company_name": "ร้าน A"},
+        ])
+        reply = await maybe_handle_storefront(
+            client, message="ค้นหา พัดลม",
+            ctx=_ctx(primary_role="customer", oa="customer"), language="th",
+        )
+        assert reply is not None
+        assert "พัดลมไอเย็น" in reply.text
+        assert not any(r[0] == "set_pending_intent" and r[3]["entity"] == "storefront_confirm"
+                      for r in client.recorded)
+
+    async def test_a_bare_word_with_no_matching_products_falls_through_untouched(self):
+        """Must not regress the existing shop-name/registration flow: if
+        nothing matches as a product, this returns None exactly as before
+        so the caller's normal handling still runs."""
+        client = FakeDataClient(storefront_results=[])
+        reply = await maybe_handle_storefront(
+            client, message="ร้านสมชาย",
+            ctx=_ctx(primary_role="customer", oa="customer"), language="th",
+        )
+        assert reply is None
+
+    async def test_a_bare_company_code_shaped_message_never_tries_a_product_search(self):
+        """An 8-character company code must always be handled by the
+        registration flow (linking to a shop), never intercepted as a
+        product search attempt — even if it happened to also look like a
+        product name, which real company codes (letters+digits, no O/0/I/1/L)
+        essentially never will."""
+        client = FakeDataClient(storefront_results=[
+            {"product_id": "P1", "product_name": "ตัวอย่าง", "sku": None,
+             "category": None, "unit_price": None, "license_id": "LIC-A",
+             "company_name": "ร้าน A"},
+        ])
+        reply = await maybe_handle_storefront(
+            client, message="ABCD2345",
+            ctx=_ctx(primary_role="customer", oa="customer"), language="th",
+        )
+        assert reply is None
+        assert not any(r[0] == "storefront_search" for r in client.recorded)
+
+    async def test_a_single_character_message_never_triggers_a_product_search(self):
+        """Too short to be a meaningful search — avoids firing a search on
+        every one-letter reply in an otherwise ordinary conversation."""
+        client = FakeDataClient(storefront_results=[
+            {"product_id": "P1", "product_name": "ตัวอย่าง", "sku": None,
+             "category": None, "unit_price": None, "license_id": "LIC-A",
+             "company_name": "ร้าน A"},
+        ])
+        reply = await maybe_handle_storefront(
+            client, message="ก",
+            ctx=_ctx(primary_role="customer", oa="customer"), language="th",
+        )
+        assert reply is None
+        assert not any(r[0] == "storefront_search" for r in client.recorded)
 
     async def test_selecting_a_valid_number_records_interest_and_clears_pending(self):
         client = FakeDataClient(pending_intent={

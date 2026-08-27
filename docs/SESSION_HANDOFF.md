@@ -55,101 +55,110 @@ Registration) → 7 (Master Data) → 8 (Profiles) → OA-scoping/conversation-
 continuity/profile-eligibility fix → OA-aware identity resolution for
 Customer/Technician → Phase 9 (CRM core: customers/deals/storefront) →
 last-customer-reference + product chat command → last_name+phone
-validation rule + a silent-failure safety net.
+validation rule + safety net → **`_unwrap()` 204-body crash fix (a critical
+bug that had silently broken conversation continuity since Phase 6),
+deployed and confirmed via `/health` matching `git_commit`.**
 
-`origin/main` HEAD is **`50d78ab` — `fix(phase9): require last_name+phone,
-fix silent-failure bug class`**.
+`origin/main` HEAD is **`56f296f` — `fix(phase9): _unwrap() crashes on 204
+No Content -- critical bug`**.
 
 **Not started (past this point):** Phases 10-20 haven't been started.
 
 ---
 
-## 🔴 Uncommitted work waiting to be deployed — a critical, long-standing bug
+## Uncommitted work waiting to be deployed — two UX gaps found in live testing
 
-Patch: `phase9-unwrap-fix.patch` + `phase9-unwrap-fix-deploy.sh`. Found
-**immediately** after the safety-net patch above deployed: the owner tried
-"เพิ่มลูกค้า สมหญิง" and "เพิ่มสินค้า..." and got "ขออภัย ระบบไม่พร้อม
-ใช้งาน" (the AI-unavailable fallback text) on both — looked like an
-OpenRouter outage, but the real Cloud Run logs told a completely different
-story:
+Patch: `phase9-storefront-ux.patch` + `phase9-storefront-ux-deploy.sh`. Two
+independent fixes on top of `56f296f` (the real live HEAD), found by the
+owner testing the `_unwrap` fix live — both are genuine improvements, not
+bugs in the strict sense; the underlying features worked, they just fed
+back confusing or presumptuous replies.
 
-```
-File ".../data_client.py", line 259, in _unwrap
-    return resp.json()
-json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
-```
+### 1. Missing-field prompts leaked raw field-name keys
 
-### Root cause — and why it went unnoticed for so long
+Reported: asking to create a customer without a last name or phone
+answered "กรุณาระบุlast_name, phone" — the English machine-facing key
+names, verbatim, mixed into a Thai sentence. `ask_for_missing()` only ever
+joined the raw `missing` list with no translation step at all. This
+affected every caller of `ask_for_missing`, not just the customer-creation
+case, since it's the shared function the whole slot-filling mechanism uses.
 
-`DataClient._unwrap()` called `resp.json()` unconditionally on every
-successful response, including a bare `204 No Content` — which by HTTP
-definition has an empty body, so parsing it as JSON always raises. This
-affected **every single call** to `set_pending_intent`, `clear_pending_intent`,
-and `set_last_customer_ref` — all three of the Phase 9 conversation-state
-endpoints, none of which have ever worked correctly since they were first
-built.
+Fixed with a small `MISSING_FIELD_LABELS` lookup (`first_name`, `last_name`,
+`phone`, `email`, `address`, `target_name`, `product_id`, `product_name`,
+`unit_price` → Thai/English labels). Anything not in the table still falls
+back to the raw key rather than silently dropping it — an ugly label is
+better than a missing one.
 
-It went unnoticed for so long because it had always failed *silently*:
-before the webhook-level exception-logging safety net (deployed one patch
-ago, in `50d78ab`), an uncaught exception here just killed the request with
-no reply and nothing in the logs pointing at why. The safety net didn't
-introduce this bug — it's what finally made a bug that had been live since
-Phase 6 visible for the first time. The newer, stricter last_name+phone
-validation rule (same patch) then made it manifest on nearly *every*
-message, since far more messages now hit the "missing fields →
-set_pending_intent" path than before.
+### 2. A bare product name in Customer OA fell through to the wrong flow
 
-### The fix
+Reported: typing just "พัดลม" (no "ค้นหา" prefix) got "พิมพ์รหัสร้านค้า
+หรือชื่อร้านเพื่อค้นหา" instead of any product results — the storefront
+trigger only recognised an explicit "ค้นหา [term]" prefix per the spec's
+literal wording, so a bare word fell straight through to the registration
+flow's shop-name search, which knows nothing about products at all.
 
-One-line fix in the one shared place: `_unwrap()` now returns `None` for
-`204` or any response with an empty body, instead of trying to parse it.
-This is the correct general fix for all 9 endpoints in this codebase that
-return `204` (only 3 were confirmed broken via live traffic; the other 6 —
-`delete_role`, `delete_setting`, `delete_sales_group`, and similar
-Dashboard/admin-only actions — were never exercised through chat, so
-whether they'd hit the same crash in practice was never observed, but the
-fix covers them too since the bug was in the shared unwrapping code, not
-any one endpoint).
+The owner's own framing of the fix mattered here: a bare word is genuinely
+**ambiguous** for a customer — "พัดลม" could mean "I want to buy one" or
+"how's the repair ticket I filed for mine going?" — so the fix should not
+just silently assume "product search" either. Implemented as a two-step
+confirmation specifically for the bare-word case (an explicit "ค้นหา
+[term]" is already unambiguous and still goes straight to results, no
+confirmation needed):
 
-Confirmed the regression test actually catches the bug: reverted `_unwrap`
-to the broken version locally and watched it raise the *exact* same
-`JSONDecodeError` from the production log, before restoring the fix.
-`FakeDataClient` (used throughout `tests/unit/test_phase6_chat.py`) never
-exercises the real `DataClient._unwrap` at all — it's a hand-written
-stand-in that returns plain Python objects, bypassing httpx entirely. A new
-file, `tests/unit/test_data_client.py`, exists specifically to cover the
-real HTTP-unwrapping path the fake bypasses.
+- Bare word, ≥2 chars, not shaped like a company code → try a storefront
+  search silently; if it finds nothing, return `None` exactly as before
+  (zero regression to shop-code/shop-name lookup). If it finds something,
+  ask "พบสินค้าที่เกี่ยวข้องกับ '{query}' ต้องการดูรายการสินค้าไหม?"
+  instead of listing results outright.
+- A "ใช่"/"yes"/"ok"-shaped reply, or simply re-typing "ค้นหา ...", shows
+  the cached results (no second Data-tier query needed — the results from
+  the first search are cached in the same `pending_intent` mechanism).
+- Anything else (e.g. "พัดลมที่แจ้งซ่อมไว้เป็นยังไงบ้าง") clears the
+  pending confirmation and returns `None`, letting the message be handled
+  by whatever it actually was instead of being forced into the storefront
+  flow. Ticket-status lookup itself isn't built yet (Phase 12) — this
+  doesn't add that capability, it just stops presumptuously hijacking a
+  message that wasn't a product search in the first place.
 
-### Also fixed in this patch: hard-validation refusals now support continuity
-
-Asked directly by the owner: if "เพิ่มลูกค้า สมหญิง" gets refused for
-missing `last_name`+`phone`, can a follow-up reply with just the last name
-complete it? Answer was **no, not yet** — the hard validation in
-`_handle_customer_intent` (added in the previous patch) refused with a
-static message but never registered a `pending_intent`, so a bare
-follow-up reply had nothing to merge against and would have been parsed as
-a new, meaningless message instead.
-
-Fixed: the hard-validation refusal now calls `set_pending_intent` itself,
-using the same `ask_for_missing()` wording the rest of the system already
-uses, so it participates in the exact same slot-filling continuity Phase 6
-built. A 3-turn regression test proves the full flow: name only → asks for
-last name → reply with just the last name → asks for phone → reply with
-just the phone → customer actually created with all three fields merged.
+New pending-intent state `entity="storefront_confirm"` carries the query
+and cached results between the two turns, with its own short TTL (120s —
+shorter than the 300s selection-list TTL, since a stale unanswered "did you
+want to search?" going cold quickly is the safer default).
 
 ### Validated
 
-On top of `50d78ab` (the real live HEAD) on a clean clone: applies cleanly
-(3-way), **272 tests pass**, 0 skipped (real Postgres), `check-model-kwargs.py`
+On top of `56f296f` (the real live HEAD) on a clean clone: applies cleanly
+(3-way), **280 tests pass**, 0 skipped (real Postgres), `check-model-kwargs.py`
 OK, both tiers boot (data 80 routes, app 21 paths). No migration.
-
-**This is a high-priority deploy** — it fixes a bug that has silently
-broken conversation continuity since Phase 6 and now manifests on
-essentially every message that doesn't arrive complete in one shot.
 
 ---
 
 ## Already deployed (27 Aug 2026) — for context, not action
+
+### 8. `_unwrap()` 204 No Content crash fix (`56f296f`)
+
+**Critical bug, confirmed deployed.** `DataClient._unwrap()` called
+`resp.json()` unconditionally on every successful response, including a
+bare `204 No Content` — which by HTTP definition has an empty body, so
+parsing it as JSON always raised `JSONDecodeError`. This affected every
+call to `set_pending_intent`, `clear_pending_intent`, and
+`set_last_customer_ref` — meaning conversation continuity had been broken
+since Phase 6 first built it, silently, because before the webhook-level
+exception-logging safety net (deployed one patch earlier), an uncaught
+exception here just killed the request with no reply and nothing in the
+logs. The safety net didn't introduce this bug; it's what finally made a
+years-old — well, hours-old in this project's young life, but structurally
+ancient — bug visible for the first time. Fixed with one change in the one
+shared place: `_unwrap()` now returns `None` for `204`/empty-body
+responses instead of trying to parse them, covering all 9 endpoints in
+this codebase that return `204`. Also fixed in the same patch: the
+last_name+phone hard-validation refusal now registers its own
+`pending_intent`, so a bare follow-up reply naming only the missing field
+actually completes the request (it silently didn't before). New test file
+`tests/unit/test_data_client.py` exercises `DataClient` against a real
+`httpx.MockTransport` — `FakeDataClient` (used everywhere else) never
+touches the real HTTP-unwrapping code path at all, which is why this bug
+went uncaught through every earlier patch.
 
 ### 7. last_name+phone validation + silent-failure safety net (`50d78ab`)
 
