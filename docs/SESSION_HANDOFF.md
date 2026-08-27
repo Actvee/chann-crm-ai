@@ -55,22 +55,84 @@ Registration) → 7 (Master Data) → 8 (Profiles) → OA-scoping/conversation-
 continuity/profile-eligibility fix (27 Aug) → OA-aware identity resolution
 for Customer/Technician (27 Aug, `ecf0724`).
 
-`origin/main` HEAD is **`ecf0724` — `fix(phase6.5+phase8): OA-aware identity
-resolution for Customer/Technician`**.
+`origin/main` HEAD is **`8e4ee4c` — `feat(phase9): CRM core —
+customer/deal/storefront`**.
 
-**Not started (past this point):** Phase 9 is built and validated below but
-**not yet deployed**. Phases 10-20 haven't been started.
+**⚠️ Code is pushed, but NOT fully deployed — read this carefully before
+doing anything else.** The `phase9-crm-core-deploy.sh` run that pushed
+`8e4ee4c` (STAGE 3) then failed at STAGE 4.5 (running the new
+`0008_phase9_crm_core` migration against Cloud SQL via a Cloud Run Job) with:
+
+```
+ValueError: invalid interpolation syntax in
+'postgresql+psycopg://...?host=%2Fcloudsql%2Fchann1-1%3Aasia-southeast1%3Achann1-dev-pg'
+```
+
+That bug is now fixed (see "How the migration actually runs" below) —
+`database/alembic/env.py` no longer round-trips `DATABASE_URL` through
+`configparser`, which is what broke on a Unix-socket URL full of `%XX`
+escapes. **The fix has NOT been pushed yet.** Concretely, right now:
+
+- `origin/main` (`8e4ee4c`) has the Phase 9 **code** — customers, deals,
+  storefront, chat wiring — but the **migration has never successfully run**
+  against the live Cloud SQL instance, so those tables don't exist there yet.
+- The currently-running `data`/`application` Cloud Run services are still
+  on the **previous** image (STAGE 4 build+push happened, digests exist in
+  Artifact Registry, but STAGE 5-7 — updating `terraform.tfvars` and
+  applying — never ran). So live traffic is unaffected by any of this.
+- **Next action is `phase9-crm-core-env-fix.patch` +
+  `phase9-crm-core-env-fix-deploy.sh`** (not the original phase9-crm-core
+  ones — those are already pushed). This smaller patch applies the env.py
+  fix on top of `8e4ee4c`, then resumes exactly where the previous run left
+  off: STAGE 4.5 (migration) → 5 (tfvars) → 6 (plan) → 7 (apply).
+
+**Not started (past this point):** Phases 10-20 haven't been started.
 
 ---
 
-## Uncommitted work waiting to be deployed — Phase 9 CRM Core
+## Uncommitted work waiting to be deployed — env.py configparser fix
 
-Patch: `phase9-crm-core.patch` + `phase9-crm-core-deploy.sh`.
+Patch: `phase9-crm-core-env-fix.patch` + `phase9-crm-core-env-fix-deploy.sh`.
 
-Built and validated on top of `ecf0724` (the real live HEAD) on a clean
-clone: applies cleanly (3-way), **253 tests pass** (0 skipped — a real
-Postgres was available for this validation, unlike earlier sessions),
-`check-model-kwargs.py` OK, both tiers boot (data 78 routes, app 21 paths).
+This is a small, focused patch — 2 files — NOT a re-send of the whole
+Phase 9 patch (that part is already live on `origin/main`). Do not try to
+re-apply the original `phase9-crm-core.patch` against current HEAD; it will
+conflict, because its content is already there.
+
+Fixes `database/alembic/env.py`: it used to hand `DATABASE_URL` to
+`config.set_main_option("sqlalchemy.url", database_url)`, which stores the
+value through Python's `configparser`. `configparser`'s default
+interpolation treats a bare `%` as the start of a `%(name)s` reference —
+and a Cloud SQL Unix-socket URL is `postgresql+psycopg://user:pass@/db?host=%2Fcloudsql%2Fproject%3Aregion%3Ainstance`,
+full of `%XX` escapes. This had never surfaced before because no earlier
+migration in this project's history had ever run against a URL containing
+percent-encoding — direct `host:port` TCP connections don't need it, and
+this was the first migration ever run against Cloud SQL through its
+Unix-socket path (via the Cloud Run Job STAGE 4.5 introduces). Fixed by
+building the engine straight from the raw `database_url` string via
+`sqlalchemy.create_engine()` instead — nothing round-trips through
+`configparser`'s interpolation again, in either online or offline mode.
+
+Added `TestMigration.test_percent_encoded_database_url_does_not_break_configparser`
+— no real Unix socket needed; any URL containing literal `%` characters
+must get past `env.py`'s module-load step, and a subsequent connection
+failure against a bogus host is fine and expected. Confirmed this test
+actually catches the bug: reverted `env.py` to the broken version locally
+and watched it fail with the exact same `ValueError` from the real deploy
+log, before restoring the fix.
+
+Validated on top of `8e4ee4c` (the real live HEAD) on a clean clone:
+applies cleanly (3-way), **254 tests pass** (0 skipped — real Postgres),
+`check-model-kwargs.py` OK. Also reproduced the exact container filesystem
+layout locally and ran the fixed migration end-to-end against real
+Postgres with a genuine percent-encoded Unix-socket URL (not just a
+mocked one) — full chain empty → `0008_phase9_crm_core` succeeds.
+
+### What Phase 9 built (already pushed in `8e4ee4c` — reference only)
+
+The rest of this section describes what's already live on GitHub. Nothing
+here needs re-applying; it's kept for context on what the env-fix patch
+above is unblocking.
 
 **Has a real migration this time**: `0008_phase9_crm_core` (3 new tables:
 `customers`, `deals`, `deal_products`). `EXPECTED_MIGRATION_HEAD` in

@@ -10,7 +10,7 @@ from logging.config import fileConfig
 from pathlib import Path
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import create_engine, pool
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "data"))
 
@@ -24,7 +24,14 @@ if config.config_file_name is not None:
 database_url = os.environ.get("DATABASE_URL")
 if not database_url:
     raise RuntimeError("DATABASE_URL is DERIVED_AT_DEPLOY and must be set")
-config.set_main_option("sqlalchemy.url", database_url)
+
+# Deliberately NOT config.set_main_option("sqlalchemy.url", database_url):
+# configparser's default interpolation treats a bare "%" as the start of a
+# %(name)s reference, and a Cloud SQL Unix-socket URL is full of them
+# (?host=%2Fcloudsql%2Fproject%3Aregion%3Ainstance) — passing one through
+# raises ValueError("invalid interpolation syntax") before a single query
+# runs. database_url is used directly below instead, in both modes, so
+# nothing here ever round-trips through configparser at all.
 
 target_metadata = Base.metadata
 
@@ -37,11 +44,7 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    connectable = engine_from_config(
-        config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-    )
+    connectable = create_engine(database_url, poolclass=pool.NullPool)
     with connectable.connect() as connection:
         context.configure(connection=connection, target_metadata=target_metadata)
         with context.begin_transaction():

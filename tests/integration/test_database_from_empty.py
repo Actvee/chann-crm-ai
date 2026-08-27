@@ -62,6 +62,37 @@ def _run_seed(env_overrides: dict) -> subprocess.CompletedProcess:
 
 
 class TestMigration:
+    def test_percent_encoded_database_url_does_not_break_configparser(self):
+        """Regression for a real deploy failure: a Cloud SQL Unix-socket
+        DATABASE_URL (?host=%2Fcloudsql%2Fproject%3Aregion%3Ainstance) is
+        full of "%" characters. env.py used to hand this straight to
+        configparser via config.set_main_option("sqlalchemy.url", ...),
+        which treats "%" as the start of a %(name)s interpolation
+        reference and raised ValueError("invalid interpolation syntax")
+        before a single query ran — on the actual deploy, not in any test,
+        because no earlier migration ever ran against a URL with
+        percent-encoding in it (direct host:port URLs don't need it).
+
+        Doesn't need a real Unix socket to prove the fix: any DATABASE_URL
+        containing literal "%" characters must get PAST env.py's own
+        module-load step. A subsequent connection failure for an
+        intentionally-bogus host is fine and expected here — only the
+        configparser crash is what this guards against.
+        """
+        fake_socket_path = "/nonexistent/socket/path"
+        percent_encoded_url = (
+            f"{TEST_DATABASE_URL}?host=" + fake_socket_path.replace("/", "%2F")
+        )
+        env = {**os.environ, "DATABASE_URL": percent_encoded_url}
+        result = subprocess.run(
+            [sys.executable, "-m", "alembic", "current"],
+            cwd=str(ROOT / "database"), env=env, capture_output=True, text=True,
+        )
+        assert "invalid interpolation syntax" not in result.stderr, (
+            "env.py is passing a % containing URL through configparser again "
+            f"— full stderr:\n{result.stderr}"
+        )
+
     def test_all_phase1_tables_exist(self, migrated_db):
         from sqlalchemy import inspect
 
