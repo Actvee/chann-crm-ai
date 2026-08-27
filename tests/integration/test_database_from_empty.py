@@ -1129,13 +1129,15 @@ class TestPhase65TenantRegistration:
             ).scalars().one()
             assert member.role == OWNER_ROLE_NAME
 
-            # all default role templates seeded, owner flagged
+            # all default role templates seeded, owner flagged — 5 as of
+            # "technician" joining owner/admin/member/cs in
+            # DEFAULT_ROLE_TEMPLATES
             roles = list(
                 session.execute(
                     select(CustomRole).where(CustomRole.license_id == license_id)
                 ).scalars()
             )
-            assert len(roles) == 4
+            assert len(roles) == 5
             assert sum(1 for r in roles if r.is_owner) == 1
 
             # trial deadline ~30 days out
@@ -1322,6 +1324,205 @@ class TestPhase65TenantRegistration:
                 repo.create_invite(lic.id, role="no-such-role")
             session.rollback()
 
+    def test_technician_invite_self_heals_missing_role(self, migrated_db):
+        """"technician" was added to DEFAULT_ROLE_TEMPLATES after some
+        tenants already existed. create_invite must provision the CustomRole
+        + RolePermission rows on first use rather than rejecting — no
+        migration should be required for a tenant created before this."""
+        from sqlalchemy import select
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import ChannIdentity, CustomRole, RolePermission
+        from chann_data.permissions import DEFAULT_ROLE_TEMPLATES
+        from chann_data.repositories.phase65 import RegistrationRepository
+
+        with Session(migrated_db) as session:
+            session.add(ChannIdentity(
+                chann_uid="CHN-TECH-0001", line_user_id="line-tech-0001",
+                primary_role="sales",
+            ))
+            session.add(ChannIdentity(
+                chann_uid="CHN-TECH-0002", line_user_id="line-tech-0002",
+                primary_role="technician",
+            ))
+            session.commit()
+
+        with Session(migrated_db) as session:
+            repo = RegistrationRepository(session)
+            lic = repo.create_license(
+                company_name="Repair Co", created_by_chann_uid="CHN-TECH-0001",
+            )
+            license_id = lic.id
+            # Simulate a pre-existing tenant: delete the role this same
+            # _seed_role_templates call just wrote, so create_invite has to
+            # provision it from scratch, exactly like a tenant that existed
+            # before "technician" was added to DEFAULT_ROLE_TEMPLATES.
+            session.execute(
+                RolePermission.__table__.delete().where(
+                    RolePermission.license_id == license_id,
+                    RolePermission.role == "technician",
+                )
+            )
+            session.execute(
+                CustomRole.__table__.delete().where(
+                    CustomRole.license_id == license_id,
+                    CustomRole.role_name == "technician",
+                )
+            )
+            session.commit()
+
+        with Session(migrated_db) as session:
+            assert session.execute(
+                select(CustomRole).where(
+                    CustomRole.license_id == license_id,
+                    CustomRole.role_name == "technician",
+                )
+            ).scalars().first() is None
+
+        with Session(migrated_db) as session:
+            repo = RegistrationRepository(session)
+            invite = repo.create_invite(license_id, role="technician")
+            session.commit()
+            invite_code = invite.invite_code
+
+        with Session(migrated_db) as session:
+            role_row = session.execute(
+                select(CustomRole).where(
+                    CustomRole.license_id == license_id,
+                    CustomRole.role_name == "technician",
+                )
+            ).scalars().one()
+            assert role_row.is_owner is False
+            granted = {
+                r.permission_key for r in session.execute(
+                    select(RolePermission).where(
+                        RolePermission.license_id == license_id,
+                        RolePermission.role == "technician",
+                    )
+                ).scalars()
+            }
+            assert granted == DEFAULT_ROLE_TEMPLATES["technician"]
+
+        with Session(migrated_db) as session:
+            repo = RegistrationRepository(session)
+            member = repo.redeem_invite(
+                invite_code=invite_code, chann_uid="CHN-TECH-0002",
+            )
+            assert member.role == "technician"
+            session.commit()
+
+    def test_memberships_of_is_oa_scoped(self, migrated_db):
+        """A Sales-side membership must not, by itself, satisfy Technician
+        OA — and a technician-role membership must not satisfy Sales OA.
+        Directly reported: an account already registered as Sales staff
+        could message the Technician OA and be treated as already belonging
+        to that company there too.
+
+        Uses two identities, not one: redeem_invite treats an existing
+        license_members row at that license as already-a-member and returns
+        it UNCHANGED rather than adding a second role (see redeem_invite's
+        "do NOT burn a use" branch) — one chann_uid holds exactly one role
+        per license, by design. A technician joining a company is a
+        different person from its owner in practice anyway.
+        """
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import ChannIdentity
+        from chann_data.repositories.phase65 import RegistrationRepository
+        from chann_data.repositories.tenant_scope import MemberRepository
+
+        with Session(migrated_db) as session:
+            session.add(ChannIdentity(
+                chann_uid="CHN-OASCOPE-0001", line_user_id="line-oascope-0001",
+                primary_role="sales",
+            ))
+            session.add(ChannIdentity(
+                chann_uid="CHN-OASCOPE-0002", line_user_id="line-oascope-0002",
+                primary_role="technician",
+            ))
+            session.commit()
+
+        with Session(migrated_db) as session:
+            repo = RegistrationRepository(session)
+            lic = repo.create_license(
+                company_name="Scoped Co", created_by_chann_uid="CHN-OASCOPE-0001",
+            )
+            license_id = lic.id
+            # A different person entirely redeems a technician invite at the
+            # same company — the owner's own membership is untouched.
+            tech_invite = repo.create_invite(license_id, role="technician")
+            session.commit()
+            tech_code = tech_invite.invite_code
+
+        with Session(migrated_db) as session:
+            member_repo = MemberRepository(session)
+            owner_as_tech = member_repo.memberships_of("CHN-OASCOPE-0001", oa="technician")
+            assert owner_as_tech == [], (
+                "an Owner/Sales membership must not satisfy Technician OA"
+            )
+            owner_as_sales = member_repo.memberships_of("CHN-OASCOPE-0001", oa="sales")
+            assert len(owner_as_sales) == 1 and owner_as_sales[0].role == "owner"
+
+        with Session(migrated_db) as session:
+            repo = RegistrationRepository(session)
+            repo.redeem_invite(invite_code=tech_code, chann_uid="CHN-OASCOPE-0002")
+            session.commit()
+
+        with Session(migrated_db) as session:
+            member_repo = MemberRepository(session)
+            tech_ok = member_repo.memberships_of("CHN-OASCOPE-0002", oa="technician")
+            assert len(tech_ok) == 1 and tech_ok[0].role == "technician"
+            # The technician must not show up as a valid Sales OA member at
+            # the same company.
+            tech_as_sales = member_repo.memberships_of("CHN-OASCOPE-0002", oa="sales")
+            assert tech_as_sales == []
+            # And the owner's own scoping is unaffected by a second person
+            # joining the same license with a different role.
+            owner_as_sales = member_repo.memberships_of("CHN-OASCOPE-0001", oa="sales")
+            assert {m.role for m in owner_as_sales} == {"owner"}
+            unscoped = member_repo.memberships_of("CHN-OASCOPE-0002")
+            assert {m.role for m in unscoped} == {"technician"}
+
+    def test_customer_license_link_is_separate_from_staff_membership(self, migrated_db):
+        """The other half of the same gap: a Sales/Owner account must not be
+        treated as an automatic customer of its own company. Only a real
+        customer_license_links row (via company code) counts."""
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import ChannIdentity
+        from chann_data.repositories.phase65 import RegistrationRepository
+
+        with Session(migrated_db) as session:
+            session.add(ChannIdentity(
+                chann_uid="CHN-CUSTSCOPE-0001", line_user_id="line-custscope-0001",
+                primary_role="sales",
+            ))
+            session.commit()
+
+        with Session(migrated_db) as session:
+            repo = RegistrationRepository(session)
+            lic = repo.create_license(
+                company_name="Custscope Co", created_by_chann_uid="CHN-CUSTSCOPE-0001",
+            )
+            license_id = lic.id
+            company_code = lic.company_code
+            session.commit()
+
+        with Session(migrated_db) as session:
+            repo = RegistrationRepository(session)
+            before = repo.my_shops("CHN-CUSTSCOPE-0001")
+            assert before == [], (
+                "the owner's own account must not already appear as a "
+                "customer of the company it owns"
+            )
+            repo.link_customer(chann_uid="CHN-CUSTSCOPE-0001", company_code=company_code)
+            session.commit()
+
+        with Session(migrated_db) as session:
+            repo = RegistrationRepository(session)
+            after = repo.my_shops("CHN-CUSTSCOPE-0001")
+            assert len(after) == 1 and after[0].id == license_id
+
     def test_customer_license_link(self, migrated_db):
         from sqlalchemy import select
         from sqlalchemy.orm import Session
@@ -1458,9 +1659,11 @@ class TestPhase65TenantRegistration:
             assert lic.status == "suspended"
             # nothing was deleted — data must survive non-payment
             assert lic.company_name == "Trial Co"
+            # 5 default roles as of "technician" joining
+            # owner/admin/member/cs in DEFAULT_ROLE_TEMPLATES
             assert len(list(session.execute(
                 select(CustomRole).where(CustomRole.license_id == license_id)
-            ).scalars())) == 4
+            ).scalars())) == 5
             assert len(list(session.execute(
                 select(LicenseMember).where(LicenseMember.license_id == license_id)
             ).scalars())) == 1

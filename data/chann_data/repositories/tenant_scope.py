@@ -74,22 +74,41 @@ class MemberRepository:
             )
         ).scalar_one_or_none()
 
-    def memberships_of(self, chann_uid: str) -> list[LicenseMember]:
-        """Deliberately unscoped — used at webhook time to decide which tenant
-        a message belongs to, before any scope exists.
+    def memberships_of(
+        self, chann_uid: str, *, oa: str | None = None
+    ) -> list[LicenseMember]:
+        """Deliberately unscoped by default — used at webhook time to decide
+        which tenant a message belongs to, before any scope exists.
 
         The result must NOT be returned to a tenant caller: exposing it would
         reveal which other companies a person works with. Callers inside the
         Application Tier use it only to select a scope.
+
+        `oa` narrows by role when given, because holding ANY active
+        membership at a company is not the same as being onboarded for that
+        specific channel's persona. LINE gives one physical account the same
+        userId across every OA under a provider (see cache.k_pending_intent
+        for the fuller explanation), so a person who is Sales staff at
+        Company X was, before this filter existed, treated as already
+        "belonging" to Company X the instant they messaged the Technician
+        OA too — despite never having been invited as a technician there.
+
+        "sales" (or omitted): every role except "technician" — Master Spec
+        section 6 lists Sales OA as Sales/CS/Admin/Owner, technician is a
+        separate persona with its own onboarding.
+        "technician": only role == "technician" — must have been invited
+        into that specific role, not merely employed at the company in some
+        other capacity.
         """
-        return list(
-            self._s.execute(
-                select(LicenseMember).where(
-                    LicenseMember.chann_uid == chann_uid,
-                    LicenseMember.status == "active",
-                )
-            ).scalars()
+        query = select(LicenseMember).where(
+            LicenseMember.chann_uid == chann_uid,
+            LicenseMember.status == "active",
         )
+        if oa == "technician":
+            query = query.where(LicenseMember.role == "technician")
+        elif oa is not None:
+            query = query.where(LicenseMember.role != "technician")
+        return list(self._s.execute(query).scalars())
 
 
 class IdentityRepository:

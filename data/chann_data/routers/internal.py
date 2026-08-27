@@ -229,14 +229,45 @@ def resolve_identity(payload: IdentityResolveIn, session: Session = Depends(get_
 
 
 @router.get("/identities/{chann_uid}/memberships", response_model=list[MembershipOut])
-def list_memberships(chann_uid: str, session: Session = Depends(get_session)):
-    """Which tenants this identity belongs to.
+def list_memberships(
+    chann_uid: str, oa: str | None = None, session: Session = Depends(get_session),
+):
+    """Which tenants this identity belongs to, for THIS OA's persona.
 
     Application-Tier-only: used to pick a tenant for an inbound message. It is
     never proxied to a tenant user, because that would reveal which other
     companies a person works with (Master Spec 1.7 privacy rule).
+
+    `oa` narrows what "belongs to" means, because the three OAs are three
+    different personas that happen to share one LINE userId (see
+    MemberRepository.memberships_of for the full explanation):
+
+    - oa="customer": staff membership at a company (Sales/CS/Owner/Admin)
+      must NOT count as being that company's customer — a real end customer
+      links via customer_license_links (Phase 6.5's company code), which
+      grants no tenant permissions at all. Resolved from that table instead
+      of license_members entirely.
+    - oa="technician": only a license_members row whose role is literally
+      "technician" counts — any other staff role at the same company must
+      not grant Technician OA access just because a membership exists.
+    - "sales" or omitted: the pre-existing behaviour, everyone except
+      "technician".
     """
-    members = MemberRepository(session).memberships_of(chann_uid)
+    if oa == "customer":
+        shops = RegistrationRepository(session).my_shops(chann_uid)
+        return [
+            MembershipOut(
+                license_id=shop.id,
+                license_code=shop.license_code,
+                company_name=shop.company_name,
+                chann_uid=chann_uid,
+                role="customer",
+                status="active",
+            )
+            for shop in shops
+        ]
+
+    members = MemberRepository(session).memberships_of(chann_uid, oa=oa)
     return [
         MembershipOut(
             license_id=m.license_id,

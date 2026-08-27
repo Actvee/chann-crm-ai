@@ -104,6 +104,11 @@ class FakeDataClient:
         self._pending = None
         self.recorded.append(("clear_pending_intent", chann_uid, oa))
 
+    async def create_invite(self, license_id, payload, actor_id=None):
+        self.recorded.append(("create_invite", license_id, payload, actor_id))
+        return {"invite_code": "ABC234XY7Z", "role": payload["role"],
+                "license_id": license_id}
+
 
 def _ctx(resolution=TenantResolution.SINGLE, display_name="LINE Name",
          primary_role="sales", oa=None):
@@ -794,3 +799,50 @@ class TestOAChannelScoping:
             client, message="สร้างดีล", ctx=_ctx(primary_role="sales"), ai_client=ai,
         )
         assert "เข้าใจแล้ว" in reply.text
+
+
+class TestTechnicianInviteRequest:
+    """Sales OA only: mints the one-time code a technician redeems on the
+    Technician OA to actually become one at this company. Reported gap: a
+    Sales-registered account could message Technician OA and immediately
+    see technician-scoped capabilities with no invite/registration step at
+    all — see TestOAIdentityIsolation for the resolve_context-level fix;
+    these test the chat-side command that produces the code in the first
+    place.
+    """
+
+    async def test_holder_of_member_manage_gets_a_code(self):
+        client = FakeDataClient(permission_keys=["member.manage"])
+        reply = await handle_chat_message(
+            client, message="ขอรหัสเชิญช่าง",
+            ctx=_ctx(primary_role="sales"), ai_client=None,
+        )
+        assert "ABC234XY7Z" in reply.text
+        call = next(r for r in client.recorded if r[0] == "create_invite")
+        _, license_id, payload, actor_id = call
+        assert payload["role"] == "technician"
+        assert payload["max_uses"] == 1
+        assert actor_id == "CHN-S-000001"
+
+    async def test_without_member_manage_is_refused(self):
+        client = FakeDataClient(permission_keys=["customer.read"])
+        reply = await handle_chat_message(
+            client, message="ขอรหัสเชิญช่าง",
+            ctx=_ctx(primary_role="sales"), ai_client=None,
+        )
+        assert "ต้องมีสิทธิ์จัดการสมาชิก" in reply.text
+        assert not any(r[0] == "create_invite" for r in client.recorded)
+
+    async def test_never_triggers_outside_sales_oa(self):
+        """The trigger check is gated on ctx.oa == "sales" specifically —
+        even an account holding member.manage tenant-wide must not be able
+        to mint a technician invite by texting the Technician OA itself."""
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "suggest", "suggestions": []})))
+        client = FakeDataClient(permission_keys=["member.manage"])
+        reply = await handle_chat_message(
+            client, message="ขอรหัสเชิญช่าง",
+            ctx=_ctx(primary_role="technician"), ai_client=ai,
+        )
+        assert not any(r[0] == "create_invite" for r in client.recorded)
+        assert "ABC234XY7Z" not in reply.text

@@ -203,13 +203,38 @@ class RegistrationRepository:
         if max_uses < 1:
             raise RegistrationConflict("max_uses must be at least 1")
 
-        from ..models import CustomRole
+        from ..models import CustomRole, RolePermission
+        from ..permissions import DEFAULT_ROLE_TEMPLATES
 
         known = self._s.execute(
             select(CustomRole).where(
                 CustomRole.license_id == license_id, CustomRole.role_name == role
             )
         ).scalars().first()
+        if known is None and role in DEFAULT_ROLE_TEMPLATES:
+            # "technician" (and any other spec-defined default role) is a
+            # universal persona, not a tenant-customisable one — a tenant
+            # should never have to visit a role editor before its first
+            # technician can be invited. Self-heals tenants created before
+            # this role template existed, with no migration required: the
+            # same permission set _seed_role_templates would have written
+            # at creation time, written now instead.
+            known = CustomRole(
+                id=uuid.uuid4(), license_id=license_id, role_name=role,
+                is_owner=False,
+            )
+            self._s.add(known)
+            self._s.flush()
+            permission_keys = DEFAULT_ROLE_TEMPLATES[role]
+            if permission_keys is not None:
+                self._s.add_all(
+                    RolePermission(
+                        id=uuid.uuid4(), license_id=license_id, role=role,
+                        permission_key=key, allowed=True,
+                    )
+                    for key in sorted(permission_keys)
+                )
+                self._s.flush()
         if known is None:
             raise RegistrationConflict(f"role '{role}' does not exist in this tenant")
         # An invite that hands out ownership would bypass the two-party

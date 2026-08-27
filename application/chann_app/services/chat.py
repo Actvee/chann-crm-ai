@@ -136,6 +136,53 @@ def _filter_by_oa(permission_keys, oa: str) -> list[str]:
     return [k for k in permission_keys if _oa_allows(oa, k)]
 
 
+# Sales OA only: mints the one-time code a technician redeems on the
+# Technician OA to actually become one at this company (see
+# identity.resolve_context and MemberRepository.memberships_of for why
+# holding a Sales-side membership here does not already grant that).
+# Trigger-matched like registration.py's create-company/invite-code paths,
+# not sent through the AI intent parser — this is a closed, short flow and
+# not worth a model call or the risk of a hallucinated action.
+TECHNICIAN_INVITE_TRIGGERS = (
+    "ขอรหัสเชิญช่าง",
+    "สร้างรหัสเชิญช่าง",
+    "เชิญช่าง",
+    "invite technician",
+    "technician invite code",
+)
+
+TECHNICIAN_INVITE_REPLY = {
+    "th": "รหัสเชิญช่าง: {code}\nให้ช่างพิมพ์รหัสนี้ผ่านช่องทาง Technician เพื่อเข้าร่วมบริษัทนี้ (ใช้ได้ครั้งเดียว หมดอายุใน 7 วัน)",
+    "en": "Technician invite code: {code}\nHave the technician type this code on the Technician OA to join this company (one-time use, expires in 7 days).",
+}
+
+TECHNICIAN_INVITE_DENIED = {
+    "th": "การออกรหัสเชิญช่างต้องมีสิทธิ์จัดการสมาชิก",
+    "en": "Issuing a technician invite code requires member-management permission",
+}
+
+
+def _is_technician_invite_request(message: str) -> bool:
+    text = (message or "").strip().lower()
+    return any(trigger.lower() in text for trigger in TECHNICIAN_INVITE_TRIGGERS)
+
+
+async def _handle_technician_invite_request(
+    client: DataClient, *, ctx: ResolvedContext, permission_keys: list[str],
+    language: str,
+) -> ChatReply:
+    if "member.manage" not in set(permission_keys):
+        return ChatReply(text=_t(TECHNICIAN_INVITE_DENIED, language))
+    invite = await client.create_invite(
+        str(ctx.license_id),
+        {"role": "technician", "max_uses": 1, "expires_in_days": 7},
+        actor_id=ctx.chann_uid,
+    )
+    return ChatReply(
+        text=_t(TECHNICIAN_INVITE_REPLY, language).format(code=invite["invite_code"]),
+    )
+
+
 def required_permission(action: str, entity: str | None) -> str | None:
     """The permission key an intent needs, or None if the system cannot do it.
 
@@ -557,6 +604,15 @@ async def handle_chat_message(
     if context is None:
         return ChatReply(text=_t(REPLY_NOT_REGISTERED, language))
     permission_keys = list(context.get("permission_keys") or [])
+
+    # Closed, trigger-matched flow (see registration.py's create-company /
+    # invite-code paths for the same pattern) — checked before the AI
+    # parser, and before the pending-intent load below, since it is
+    # unrelated to any in-progress slot-filling.
+    if ctx.oa == "sales" and _is_technician_invite_request(message):
+        return await _handle_technician_invite_request(
+            client, ctx=ctx, permission_keys=permission_keys, language=language,
+        )
 
     # What the previous turn was still waiting for, if anything. Loaded before
     # parsing so the model can be told about it — a bare "0812345678" is not

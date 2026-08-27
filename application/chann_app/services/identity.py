@@ -63,7 +63,12 @@ async def resolve_context(client: DataClient, oa: str, line_user_id: str,
                           display_name: str | None = None) -> ResolvedContext:
     primary_role = OA_TO_ROLE[oa]
     identity = await client.resolve_identity(line_user_id, primary_role, display_name)
-    memberships = await client.memberships_of(identity["chann_uid"])
+    # oa-scoped: a person can hold a real membership at Company X as Sales
+    # staff and simultaneously have never been onboarded as Company X's
+    # customer or technician — the three OAs are three different personas
+    # that happen to share one LINE userId. See
+    # MemberRepository.memberships_of for the full reasoning.
+    memberships = await client.memberships_of(identity["chann_uid"], oa=oa)
 
     if len(memberships) == 1:
         resolution = TenantResolution.SINGLE

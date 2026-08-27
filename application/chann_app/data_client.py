@@ -84,10 +84,11 @@ class DataClient:
         resp = await self._client.get(f"{self._base}/health")
         return self._unwrap(resp)
 
-    async def memberships_of(self, chann_uid: str) -> list[dict]:
+    async def memberships_of(self, chann_uid: str, oa: str | None = None) -> list[dict]:
+        params = {"oa": oa} if oa else None
         resp = await self._client.get(
             f"{self._base}/internal/v1/identities/{chann_uid}/memberships",
-            headers=self._headers,
+            headers=self._headers, params=params,
         )
         return self._unwrap(resp)
 

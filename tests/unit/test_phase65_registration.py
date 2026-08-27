@@ -18,6 +18,7 @@ from chann_app.services.identity import ResolvedContext, TenantResolution  # noq
 from chann_app.services.registration import (  # noqa: E402
     COMPANY_CODE_RE,
     INVITE_CODE_RE,
+    WELCOME_TECHNICIAN,
     handle_registration,
     is_unregistered,
     parse_create_company,
@@ -68,10 +69,12 @@ class NotFound(Exception):
     status_code = 404
 
 
-def _ctx(resolution=TenantResolution.NONE):
+def _ctx(resolution=TenantResolution.NONE, primary_role="sales", oa=None):
+    if oa is None:
+        oa = primary_role
     return ResolvedContext(
-        chann_uid="CHN-S-000009", primary_role="sales",
-        display_name="สมชาย", resolution=resolution, memberships=[],
+        chann_uid="CHN-S-000009", primary_role=primary_role,
+        display_name="สมชาย", resolution=resolution, memberships=[], oa=oa,
     )
 
 
@@ -264,3 +267,42 @@ class TestSchemaHeadGuard:
             "EXPECTED_MIGRATION_HEAD in data/chann_data/main.py is out of date — "
             "bump it in the same commit as the new migration"
         )
+
+
+class TestTechnicianOAHasNoCreateCompanyOption:
+    """Technician OA is a distinct persona from Sales OA, even for the same
+    LINE account (see identity.resolve_context / MemberRepository.
+    memberships_of): a technician joins an existing company via invite code,
+    they never create one through this channel."""
+
+    async def test_empty_message_gets_the_technician_welcome_not_the_generic_one(self):
+        reply = await handle_registration(
+            FakeRegClient(), message="", ctx=_ctx(oa="technician"), audience="technician",
+        )
+        assert reply == WELCOME_TECHNICIAN["th"]
+        assert "เปิดบริษัทใหม่" not in reply
+
+    async def test_create_company_trigger_is_not_recognised_on_technician_oa(self):
+        """The generic create-company trigger words must not fire here even
+        if someone types them — this channel does not offer that action."""
+        reply = await handle_registration(
+            FakeRegClient(), message="เปิดบริษัทใหม่ ร้านสมชาย",
+            ctx=_ctx(oa="technician"), audience="technician",
+        )
+        assert reply == WELCOME_TECHNICIAN["th"]
+
+    async def test_invite_code_still_redeems_normally_on_technician_oa(self):
+        client = FakeRegClient(member={"company_name": "ร้านสมชาย", "role": "technician"})
+        reply = await handle_registration(
+            client, message="ABC234XY7Z", ctx=_ctx(oa="technician"), audience="technician",
+        )
+        assert client.calls == ["redeem_invite"]
+        assert "ร้านสมชาย" in reply
+        assert "technician" in reply
+
+    async def test_bad_code_on_technician_oa_gets_the_same_bad_code_reply(self):
+        client = FakeRegClient(raises=NotFound("nope"))
+        reply = await handle_registration(
+            client, message="ZZZZZZZZZZ", ctx=_ctx(oa="technician"), audience="technician",
+        )
+        assert "ไม่พบรหัสนี้" in reply

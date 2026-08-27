@@ -100,6 +100,20 @@ DEFAULT_ROLE_TEMPLATES: dict[str, frozenset[str] | None] = {
             "reassign_records",
         }
     ),
+    # Master Spec section 6's Technician OA activity table: claim/assign/
+    # close a ticket, and file the service report that closing one requires.
+    # Not "cs" widened — a field technician has no business with approvals,
+    # customer records, or chat-session handling, all of which are
+    # Sales/CS-side. Mirrors application/chann_app/services/chat.py's
+    # OA_ALLOWED_PERMISSION_KEYS["technician"] deliberately, not by import:
+    # the Data tier has no dependency on the Application tier's Python
+    # package, only its HTTP API.
+    "technician": frozenset(
+        {
+            *(key for key in PERMISSION_KEYS if key.startswith("ticket.")),
+            *(key for key in PERMISSION_KEYS if key.startswith("service_report.")),
+        }
+    ),
 }
 
 

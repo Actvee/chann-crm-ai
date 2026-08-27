@@ -49,9 +49,12 @@ clone.
 
 **Deployed and live on DEV**, in order: Phase 1 (Identity) → 2 (Permissions)
 → 3 (Audit Log) → 4 (AI Infra) → 5 (i18n) → 6 (Chat) → 6.5 (Tenant
-Registration) → 7 (Master Data) → 8 (Profiles).
+Registration) → 7 (Master Data) → 8 (Profiles) → **the OA-scoping/
+conversation-continuity/profile-eligibility fix described below (deployed
+27 Aug 2026, terraform apply confirmed — 3 changed, 0 destroyed)**.
 
-`origin/main` HEAD is **`67b1bb3` — `feat(phase8): profiles`**.
+`origin/main` HEAD is **`5eacfd2` — `fix(phase6+phase8): OA channel scoping,
+conversation continuity, profile eligibility`**.
 
 **Not started:** Phases 9-20. Phase 9 (CRM entities: customer, deal, note,
 follow-up) is next in spec order.
@@ -60,13 +63,96 @@ follow-up) is next in spec order.
 
 ## Uncommitted work waiting to be deployed
 
-Three fixes were built and validated but **never landed** — two prior
-sessions ended mid-deploy. They ship as one patch:
-`phase8-fix-oa-scoping.patch` + `phase8-fix-oa-scoping-deploy.sh`.
+A **second, independent fix** was built and validated on top of `5eacfd2`
+but not yet deployed: `technician-customer-scoping.patch` +
+`technician-customer-scoping-deploy.sh`.
 
-Validated against `67b1bb3` on a clean clone: applies cleanly, **175 tests
-pass** (baseline 162), `check-model-kwargs.py` OK, pyflakes clean, both tiers
-boot (data 64 routes, app 21 paths).
+Validated against `5eacfd2` (the real live HEAD) on a clean clone: applies
+cleanly (3-way), **182 tests pass, 43 skipped** (Postgres-gated integration
+tests — skip without `TEST_DATABASE_URL`, same as always in this repo),
+`check-model-kwargs.py` OK, both tiers boot (data 64 routes, app 21 paths).
+
+### Why this fix exists — found by the owner testing the previous fix live
+
+Testing the just-deployed OA-scoping fix on real LINE traffic surfaced a
+**deeper** identity bug the OA-scoping fix didn't touch: `resolve_context()`
+decided "which company does this message belong to" using `memberships_of()`
+— which queried `license_members` (the STAFF table) **regardless of which
+OA the message arrived on**. Since LINE gives one physical account the same
+`userId` across every OA under one provider, an account already registered
+as **Sales staff at Company X** got treated as already "belonging to
+Company X" the instant it messaged **Customer OA or Technician OA too** —
+with **no registration step at all**, even though:
+
+- `customer_license_links` (Phase 6.5, company-code linking) already existed
+  in the schema specifically to keep a real customer separate from staff
+  permissions — it just was never consulted by `resolve_context()`.
+- Technician onboarding had **no real mechanism** at all: no seeded
+  "technician" role existed in `DEFAULT_ROLE_TEMPLATES` (only
+  owner/admin/member/cs), and `memberships_of()` didn't check the
+  membership's role — ANY staff role at a company satisfied "is a technician
+  there."
+
+### What this patch does
+
+1. **`MemberRepository.memberships_of(chann_uid, oa=)`** — opt-in role
+   filter: `oa="technician"` → only `role == "technician"` rows count;
+   `oa="sales"`/omitted → everyone except `role == "technician"`. Unscoped
+   calls (routers_admin.py, authorization.py) are untouched.
+2. **`list_memberships` endpoint** — `oa="customer"` now resolves via
+   `customer_license_links` (through `RegistrationRepository.my_shops`,
+   which already existed) instead of `license_members` entirely.
+3. **`"technician"` added to `DEFAULT_ROLE_TEMPLATES`** (ticket.*,
+   service_report.* — mirrors `chat.py`'s `OA_ALLOWED_PERMISSION_KEYS`).
+4. **`create_invite()` self-heals a missing default role** — if `role`
+   is in `DEFAULT_ROLE_TEMPLATES` and the tenant has no matching `CustomRole`
+   yet (true for every tenant created before this patch), it provisions the
+   `CustomRole` + `RolePermission` rows on first use instead of rejecting.
+   No migration needed for existing tenants.
+5. **New Sales-OA-only chat command**: typing "ขอรหัสเชิญช่าง" (requires
+   `member.manage`) mints a one-time, 7-day invite coded `role="technician"`
+   via the existing `create_invite`/`redeem_invite` machinery — closing the
+   loop the owner asked for: *"code should come from someone with permission
+   on Sales OA, one-time, to become a technician of that company."*
+6. **Technician OA gets its own registration welcome** (`WELCOME_TECHNICIAN`)
+   — no "create a new company" option, since that's nonsensical for this
+   persona; only "type your invite code."
+
+### What this patch deliberately does NOT touch
+
+- Phase 9's storefront/cross-tenant shop browsing (`เลือกร้าน`) — that's a
+  genuinely different, not-yet-built feature; this patch only makes the
+  *already-built* `customer_license_links` linking mechanism actually
+  reachable from the chat identity-resolution path.
+- Whether an Owner should be able to ALSO act as a technician at their own
+  company via a second membership row — current schema is one
+  `license_members` row per `(license_id, chann_uid)`, so an Owner wanting
+  technician access needs the SAME invite-redemption flow everyone else
+  uses; this patch doesn't add owner-specific shortcuts.
+
+### Files touched (11, all on top of `5eacfd2`)
+
+```
+application/chann_app/data_client.py                ← memberships_of(oa=), create_invite unchanged (already existed)
+application/chann_app/services/chat.py               ← technician invite request command
+application/chann_app/services/identity.py           ← resolve_context passes oa to memberships_of
+application/chann_app/services/registration.py       ← WELCOME_TECHNICIAN, technician invite-redeem path
+data/chann_data/permissions.py                        ← DEFAULT_ROLE_TEMPLATES["technician"]
+data/chann_data/repositories/phase65.py               ← create_invite self-heals missing default role
+data/chann_data/repositories/tenant_scope.py          ← memberships_of(oa=) role filter
+data/chann_data/routers/internal.py                   ← list_memberships(oa=) — customer_license_links path
+tests/integration/test_database_from_empty.py         ← +4 Postgres-backed tests
+tests/unit/test_phase65_registration.py                ← +4 technician-welcome tests
+tests/unit/test_phase6_chat.py                         ← +3 technician-invite-command tests
+```
+
+---
+
+## Already deployed (27 Aug 2026) — for context, not action
+
+The following three fixes shipped in `5eacfd2` and are confirmed live via
+`terraform apply` (3 changed, 0 destroyed). Kept here because the new patch
+above builds directly on the `ctx.oa` concept they introduced.
 
 ### 1. Profile self-edit restricted to Technician/Customer OA (Spec 8.1)
 

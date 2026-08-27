@@ -42,6 +42,27 @@ WELCOME = {
     ),
 }
 
+# Technician OA has no "create a company" option at all — a technician does
+# not start a company through this channel, they join one that already
+# exists. Holding a Sales-side membership at Company X does not count either
+# (see identity.resolve_context / MemberRepository.memberships_of): only a
+# license_members row with role="technician" does, and the only way to get
+# one is this invite code, requested by someone on the Sales OA who holds
+# member.manage (see TECHNICIAN_INVITE_TRIGGERS in chat.py).
+WELCOME_TECHNICIAN = {
+    "th": (
+        "ยินดีต้อนรับ\n"
+        "บัญชีนี้ยังไม่ได้ผูกกับบริษัทไหนในฐานะช่าง\n"
+        "ขอรหัสเชิญจากบริษัทที่คุณจะไปทำงานด้วยก่อน แล้วพิมพ์รหัสนั้นที่นี่"
+    ),
+    "en": (
+        "Welcome\n"
+        "This account is not yet linked to any company as a technician.\n"
+        "Ask the company you'll be working with for an invite code, then "
+        "type that code here."
+    ),
+}
+
 ASK_COMPANY_NAME = {
     "th": 'กรุณาระบุชื่อบริษัท เช่น "เปิดบริษัทใหม่ ร้านสมชายการช่าง"',
     "en": 'Please include the company name, e.g. "create company Somchai Repairs"',
@@ -143,6 +164,14 @@ async def handle_registration(
     if audience == "customer":
         return await _handle_customer(client, text, ctx, language)
 
+    # Technician OA: same reasoning as Customer OA above — the only thing to
+    # do is redeem an invite code obtained from the company beforehand.
+    # "Create a company" is a Sales-OA-only concept and never offered here.
+    if audience == "technician":
+        if INVITE_CODE_RE.match(text.upper()):
+            return await _redeem_invite_reply(client, text, ctx, language)
+        return _t(WELCOME_TECHNICIAN, language)
+
     if not text:
         return _t(WELCOME, language)
 
@@ -167,19 +196,7 @@ async def handle_registration(
         )
 
     if INVITE_CODE_RE.match(text.upper()):
-        try:
-            member = await client.redeem_invite(
-                invite_code=text.upper(),
-                chann_uid=ctx.chann_uid,
-                display_name=ctx.display_name,
-            )
-        except Exception as exc:  # noqa: BLE001
-            if _is_not_found(exc) or _is_conflict(exc):
-                return _t(BAD_CODE, language)
-            raise
-        return _t(JOINED, language).format(
-            name=member.get("company_name", ""), role=member.get("role", "")
-        )
+        return await _redeem_invite_reply(client, text, ctx, language)
 
     return _t(WELCOME, language)
 
@@ -215,6 +232,27 @@ async def _handle_customer(
         "พิมพ์รหัสร้าน หรือชื่อร้านเพื่อค้นหา"
         if language != "en"
         else "Type a shop code, or a shop name to search"
+    )
+
+
+async def _redeem_invite_reply(
+    client: DataClient, text: str, ctx: ResolvedContext, language: str
+) -> str:
+    """Shared by the Sales-OA and Technician-OA invite-code paths — the code
+    itself carries the role being granted, so redemption does not need to
+    know or care which OA it arrived on."""
+    try:
+        member = await client.redeem_invite(
+            invite_code=text.upper(),
+            chann_uid=ctx.chann_uid,
+            display_name=ctx.display_name,
+        )
+    except Exception as exc:  # noqa: BLE001
+        if _is_not_found(exc) or _is_conflict(exc):
+            return _t(BAD_CODE, language)
+        raise
+    return _t(JOINED, language).format(
+        name=member.get("company_name", ""), role=member.get("role", "")
     )
 
 
