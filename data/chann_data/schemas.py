@@ -419,6 +419,17 @@ class PendingIntentOut(BaseModel):
     missing: list[str]
 
 
+class LastCustomerRefIn(BaseModel):
+    customer_id: str
+    name: str
+    ttl_seconds: int = 600
+
+
+class LastCustomerRefOut(BaseModel):
+    customer_id: str
+    name: str
+
+
 # ---------------------------------------------------------------- Phase 9 CRM
 
 

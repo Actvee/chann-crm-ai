@@ -606,6 +606,26 @@ class DataClient:
         )
         self._unwrap(resp)
 
+    async def set_last_customer_ref(
+        self, chann_uid: str, oa: str, *, customer_id: str, name: str,
+        ttl_seconds: int = 600,
+    ) -> None:
+        resp = await self._client.put(
+            f"{self._base}/internal/v1/chat/last-customer/{oa}/{chann_uid}",
+            headers=self._headers,
+            json={"customer_id": customer_id, "name": name, "ttl_seconds": ttl_seconds},
+        )
+        self._unwrap(resp)
+
+    async def get_last_customer_ref(self, chann_uid: str, oa: str) -> dict | None:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/chat/last-customer/{oa}/{chann_uid}",
+            headers=self._headers,
+        )
+        if resp.status_code == 404:
+            return None
+        return self._unwrap(resp)
+
     # ------------------------------------------------------------ Phase 9 CRM
 
     async def create_customer(

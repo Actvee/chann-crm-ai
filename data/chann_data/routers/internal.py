@@ -18,6 +18,7 @@ from ..cache import (
     cache,
     k_admin_session,
     k_identity,
+    k_last_customer_ref,
     k_member,
     k_pending_intent,
     k_permissions,
@@ -92,6 +93,8 @@ from ..schemas import (
     FollowUpStatusIn,
     PendingIntentIn,
     PendingIntentOut,
+    LastCustomerRefIn,
+    LastCustomerRefOut,
     ProfileEditCheckOut,
     ProfileOut,
     ProfileUpdateIn,
@@ -1684,6 +1687,30 @@ def get_pending_intent(oa: str, chann_uid: str):
 @router.delete("/chat/pending-intent/{oa}/{chann_uid}", status_code=204)
 def clear_pending_intent(oa: str, chann_uid: str):
     cache.invalidate(k_pending_intent(chann_uid, oa))
+
+
+@router.put("/chat/last-customer/{oa}/{chann_uid}", status_code=204)
+def set_last_customer_ref(oa: str, chann_uid: str, payload: LastCustomerRefIn):
+    """9.7 follow-up, reported live: "บันทึกสมชายเป็น Contact แล้ว" followed
+    immediately by "สร้างดีล" with no name — a completely natural way to
+    talk once a customer has already been named once. See
+    cache.k_last_customer_ref for why this is a separate key from
+    pending_intent rather than reusing it."""
+    cache.set(
+        k_last_customer_ref(chann_uid, oa),
+        {"customer_id": payload.customer_id, "name": payload.name},
+        payload.ttl_seconds,
+    )
+
+
+@router.get("/chat/last-customer/{oa}/{chann_uid}", response_model=LastCustomerRefOut)
+def get_last_customer_ref(oa: str, chann_uid: str):
+    raw = cache.get_or_load(k_last_customer_ref(chann_uid, oa), ttl_s=0, loader=lambda: None)
+    if raw is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="no recent customer reference"
+        )
+    return LastCustomerRefOut(**raw)
 
 
 # ---------------------------------------------------------------- Phase 9 CRM

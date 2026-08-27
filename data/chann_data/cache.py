@@ -150,4 +150,22 @@ def k_pending_intent(chann_uid: str, oa: str) -> str:
     return f"pending_intent:{chann_uid}:{oa}"
 
 
+def k_last_customer_ref(chann_uid: str, oa: str) -> str:
+    """Phase 9 — "which customer was this conversation just about?"
+
+    Reported live: "บันทึกสมชายเป็น Contact แล้ว" followed immediately by
+    "สร้างดีล" with no name at all — a completely natural way to talk, and
+    the chat engine had no notion of "the customer we were just discussing"
+    at all. Deliberately a SEPARATE key from pending_intent, not the same
+    one reused: pending_intent is cleared the instant an action completes
+    (see handle_chat_message), which is exactly the moment this needs to
+    start existing. Conflating the two would mean the reference vanishes
+    at the one point it's needed.
+
+    Same (chann_uid, oa) scoping and same Redis-not-Postgres reasoning as
+    pending_intent above.
+    """
+    return f"last_customer_ref:{chann_uid}:{oa}"
+
+
 cache = Cache()

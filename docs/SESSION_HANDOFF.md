@@ -52,87 +52,107 @@ clone.
 **Deployed and live on DEV**, in order: Phase 1 (Identity) → 2 (Permissions)
 → 3 (Audit Log) → 4 (AI Infra) → 5 (i18n) → 6 (Chat) → 6.5 (Tenant
 Registration) → 7 (Master Data) → 8 (Profiles) → OA-scoping/conversation-
-continuity/profile-eligibility fix (27 Aug) → OA-aware identity resolution
-for Customer/Technician (27 Aug, `ecf0724`).
+continuity/profile-eligibility fix → OA-aware identity resolution for
+Customer/Technician → **Phase 9 (CRM core: customers/deals/storefront),
+fully deployed and confirmed working on real LINE traffic** — `terraform
+apply` succeeded (3 changed, 0 destroyed), `/health` confirmed
+`git_commit` matches, and the owner tested live: create customer, promote
+to Contact, create deal, deal stage transitions all worked end-to-end.
 
-`origin/main` HEAD is **`8e4ee4c` — `feat(phase9): CRM core —
-customer/deal/storefront`**.
-
-**⚠️ Code is pushed, but NOT fully deployed — read this carefully before
-doing anything else.** The `phase9-crm-core-deploy.sh` run that pushed
-`8e4ee4c` (STAGE 3) then failed at STAGE 4.5 (running the new
-`0008_phase9_crm_core` migration against Cloud SQL via a Cloud Run Job) with:
-
-```
-ValueError: invalid interpolation syntax in
-'postgresql+psycopg://...?host=%2Fcloudsql%2Fchann1-1%3Aasia-southeast1%3Achann1-dev-pg'
-```
-
-That bug is now fixed (see "How the migration actually runs" below) —
-`database/alembic/env.py` no longer round-trips `DATABASE_URL` through
-`configparser`, which is what broke on a Unix-socket URL full of `%XX`
-escapes. **The fix has NOT been pushed yet.** Concretely, right now:
-
-- `origin/main` (`8e4ee4c`) has the Phase 9 **code** — customers, deals,
-  storefront, chat wiring — but the **migration has never successfully run**
-  against the live Cloud SQL instance, so those tables don't exist there yet.
-- The currently-running `data`/`application` Cloud Run services are still
-  on the **previous** image (STAGE 4 build+push happened, digests exist in
-  Artifact Registry, but STAGE 5-7 — updating `terraform.tfvars` and
-  applying — never ran). So live traffic is unaffected by any of this.
-- **Next action is `phase9-crm-core-env-fix.patch` +
-  `phase9-crm-core-env-fix-deploy.sh`** (not the original phase9-crm-core
-  ones — those are already pushed). This smaller patch applies the env.py
-  fix on top of `8e4ee4c`, then resumes exactly where the previous run left
-  off: STAGE 4.5 (migration) → 5 (tfvars) → 6 (plan) → 7 (apply).
+`origin/main` HEAD is **`dbbe063` — `fix(phase9): env.py configparser
+crash on percent-encoded DATABASE_URL`**.
 
 **Not started (past this point):** Phases 10-20 haven't been started.
 
 ---
 
-## Uncommitted work waiting to be deployed — env.py configparser fix
+## Uncommitted work waiting to be deployed — two gaps found during live testing
 
-Patch: `phase9-crm-core-env-fix.patch` + `phase9-crm-core-env-fix-deploy.sh`.
+Patch: `phase9-followups.patch` + `phase9-followups-deploy.sh`. Two small,
+independent fixes on top of `dbbe063` (the real live HEAD), found by the
+owner testing Phase 9 live traffic.
 
-This is a small, focused patch — 2 files — NOT a re-send of the whole
-Phase 9 patch (that part is already live on `origin/main`). Do not try to
-re-apply the original `phase9-crm-core.patch` against current HEAD; it will
-conflict, because its content is already there.
+### 1. "สร้างดีล" with no name at all didn't know who was just discussed
 
-Fixes `database/alembic/env.py`: it used to hand `DATABASE_URL` to
-`config.set_main_option("sqlalchemy.url", database_url)`, which stores the
-value through Python's `configparser`. `configparser`'s default
-interpolation treats a bare `%` as the start of a `%(name)s` reference —
-and a Cloud SQL Unix-socket URL is `postgresql+psycopg://user:pass@/db?host=%2Fcloudsql%2Fproject%3Aregion%3Ainstance`,
-full of `%XX` escapes. This had never surfaced before because no earlier
-migration in this project's history had ever run against a URL containing
-percent-encoding — direct `host:port` TCP connections don't need it, and
-this was the first migration ever run against Cloud SQL through its
-Unix-socket path (via the Cloud Run Job STAGE 4.5 introduces). Fixed by
-building the engine straight from the raw `database_url` string via
-`sqlalchemy.create_engine()` instead — nothing round-trips through
-`configparser`'s interpolation again, in either online or offline mode.
+Reported: "บันทึกสมชายเป็น Contact แล้ว" (promote succeeded) immediately
+followed by "สร้างดีล" (create a deal) with **no name in the message at
+all** — a completely natural way to talk once a customer has already been
+named once, but the chat engine had no notion of "the customer we were
+just discussing."
 
-Added `TestMigration.test_percent_encoded_database_url_does_not_break_configparser`
-— no real Unix socket needed; any URL containing literal `%` characters
-must get past `env.py`'s module-load step, and a subsequent connection
-failure against a bogus host is fine and expected. Confirmed this test
-actually catches the bug: reverted `env.py` to the broken version locally
-and watched it fail with the exact same `ValueError` from the real deploy
-log, before restoring the fix.
+Root cause: `pending_intent` (Phase 6) tracks "an action still waiting on
+more info," and is deliberately **cleared** the instant an action
+completes — exactly the moment a "last discussed" reference would need to
+start existing. Reusing that key wasn't an option.
 
-Validated on top of `8e4ee4c` (the real live HEAD) on a clean clone:
-applies cleanly (3-way), **254 tests pass** (0 skipped — real Postgres),
-`check-model-kwargs.py` OK. Also reproduced the exact container filesystem
-layout locally and ran the fixed migration end-to-end against real
-Postgres with a genuine percent-encoded Unix-socket URL (not just a
-mocked one) — full chain empty → `0008_phase9_crm_core` succeeds.
+Fixed with a new, separate Redis key: `k_last_customer_ref(chann_uid, oa)`
+(`data/chann_data/cache.py`), written whenever a customer create/update/
+promote succeeds (`_remember_customer` in `chat.py`), read as a fallback
+in deal-creation only when the message names no customer at all. An
+explicit name in the message always wins over the remembered one — the
+fallback is last-resort only, and the reply says explicitly when it was
+used ("...เพิ่งคุยถึง") rather than silently guessing, since a wrong guess
+here is worse than asking.
 
-### What Phase 9 built (already pushed in `8e4ee4c` — reference only)
+New Data-tier endpoints (`PUT`/`GET /chat/last-customer/{oa}/{chann_uid}`),
+`DataClient.set_last_customer_ref`/`get_last_customer_ref`. 5 new tests,
+including one confirming an explicit name in the message overrides a
+stale remembered one.
 
-The rest of this section describes what's already live on GitHub. Nothing
-here needs re-applying; it's kept for context on what the env-fix patch
-above is unblocking.
+### 2. "เพิ่มสินค้า" (add product) via chat didn't work at all
+
+Reported: typing it returned the full "here's what you can do" suggestion
+list (starting with "การอนุมัติ") instead of creating anything — looked
+like a permission problem but wasn't one.
+
+Root cause: Phase 7 built product master-data CRUD only through the
+Dashboard/internal API, **never through chat** — `entity="product"` was
+listed in `chat.py`'s `ACTION_PERMISSIONS` table (so the permission gate
+itself was fine) but had **no dispatch handler at all**, and critically,
+the AI intent prompt was **never told product's field shape** — only
+`customer`/`deal` got that treatment when Phase 9 fixed the same class of
+gap for those two entities. Without a described shape, the model most
+likely emitted a field/entity name that didn't match anything in the
+lookup table, so `required_permission()` returned `None` and the gate
+treated it as a completely unknown request — the same failure path as an
+unrecognized entity, regardless of what permission the account actually
+held.
+
+Fixed: added product's field shape (`product_id`, `product_name`, `sku`,
+`category`, `unit_price`, `description`) to the AI intent prompt, and
+wired real execution (`_handle_product_intent` in `chat.py`) using the
+already-existing `ProductRepository.upsert` via
+`DataClient.upsert_product` — idempotent on `product_id` since 7.5, so
+create and update are the same call from chat's side.
+
+### Validated
+
+On top of `dbbe063` (the real live HEAD) on a clean clone: applies
+cleanly (3-way), **259 tests pass**, 0 skipped (real Postgres),
+`check-model-kwargs.py` OK, both tiers boot (data 80 routes, app 21
+paths).
+
+### Still needed before storefront (item 5 in the owner's test list) can
+### be verified
+
+The storefront "ค้นหา พัดลม" test returned no results — **not a bug**:
+the storefront searches the real `products` table, and no product named
+"พัดลม" exists in any tenant yet. This gap (#2 above) is exactly what
+blocked adding one via chat; once this patch deploys, add a product via
+chat (e.g. "เพิ่มสินค้า รหัส FAN001 ชื่อ พัดลมไอเย็น ราคา 3500") and retry
+the storefront search.
+
+---
+
+## Already deployed (27 Aug 2026) — for context, not action
+
+### 5. Phase 9 — CRM Core: Lead/Contact/Deal + Storefront (`8e4ee4c`, `dbbe063`)
+
+Fully deployed and confirmed working live: create customer, promote to
+Contact, create deal, deal stage transitions (new→proposed→won) all
+tested successfully on real LINE traffic by the owner. Storefront search
+works but returned no results in testing because no product existed yet
+in any tenant — not a bug (see gap #2 above, now fixed).
 
 **Has a real migration this time**: `0008_phase9_crm_core` (3 new tables:
 `customers`, `deals`, `deal_products`). `EXPECTED_MIGRATION_HEAD` in
@@ -250,8 +270,6 @@ two real bugs before they'd have surfaced in Cloud Shell:
   which `env.py` needs transitively (`chann_data.db` → `chann_data.config`).
 
 ---
-
-## Already deployed (27 Aug 2026) — for context, not action
 
 ### 4. OA-aware identity resolution for Customer/Technician (`ecf0724`)
 

@@ -744,6 +744,7 @@ async def _handle_customer_intent(
             if _is_conflict(exc):
                 return ChatReply(text=_t(CUSTOMER_NEEDS_SOMETHING, language), intent=intent)
             raise
+        await _remember_customer(client, ctx, row)
         return ChatReply(
             text=_t(CUSTOMER_CREATED, language).format(name=f" {_display_name(row)} "),
             entity_type="customer", entity_id=row["id"], intent=intent,
@@ -756,6 +757,7 @@ async def _handle_customer_intent(
             return err
         if action == "promote":
             updated = await client.promote_customer(license_id, row["id"], actor_id=ctx.chann_uid)
+            await _remember_customer(client, ctx, updated)
             return ChatReply(
                 text=_t(CUSTOMER_PROMOTED, language).format(name=_display_name(updated)),
                 entity_type="customer", entity_id=updated["id"], intent=intent,
@@ -770,12 +772,32 @@ async def _handle_customer_intent(
         updated = await client.update_customer(
             license_id, row["id"], editable, actor_id=ctx.chann_uid,
         )
+        await _remember_customer(client, ctx, updated)
         return ChatReply(
             text=_t(CUSTOMER_UPDATED, language).format(name=f" {_display_name(updated)} "),
             entity_type="customer", entity_id=updated["id"], intent=intent,
         )
 
     return ChatReply(text=_pending_execution_reply(intent, language), intent=intent)
+
+
+async def _remember_customer(client: DataClient, ctx: ResolvedContext, row: dict) -> None:
+    """Records "the customer we were just talking about", so a follow-up
+    like "สร้างดีล" with no name at all can fall back to them instead of
+    refusing. See cache.k_last_customer_ref for why this can't just reuse
+    pending_intent."""
+    await client.set_last_customer_ref(
+        ctx.chann_uid, ctx.oa, customer_id=row["id"], name=_display_name(row),
+        ttl_seconds=LAST_CUSTOMER_REF_TTL_S,
+    )
+
+
+LAST_CUSTOMER_REF_TTL_S = 600
+
+DEAL_CREATED_FROM_CONTEXT = {
+    "th": "สร้างดีล {deal_id} สำหรับ {name} (ลูกค้าที่เพิ่งคุยถึง) เรียบร้อยแล้ว",
+    "en": "Created deal {deal_id} for {name} (the customer just mentioned).",
+}
 
 
 async def _handle_deal_intent(
@@ -788,18 +810,32 @@ async def _handle_deal_intent(
 
     if action == "create":
         target_name = fields.get("target_name")
+        used_context = False
         if not (target_name or "").strip():
-            return ChatReply(text=_t(DEAL_NEEDS_TARGET_NAME, language), intent=intent)
-        contact, err = await _find_one_customer_by_name(client, license_id, target_name, language)
-        if err is not None:
-            return err
+            # No name at all — fall back to whoever was just discussed,
+            # rather than refusing outright. A wrong guess here would be
+            # worse than asking, so this only fires when a real reference
+            # exists (see cache.k_last_customer_ref) and says so explicitly
+            # in the reply rather than silently substituting.
+            last_ref = await client.get_last_customer_ref(ctx.chann_uid, ctx.oa)
+            if last_ref is None:
+                return ChatReply(text=_t(DEAL_NEEDS_TARGET_NAME, language), intent=intent)
+            contact = {"id": last_ref["customer_id"], "first_name": last_ref["name"]}
+            used_context = True
+        else:
+            contact, err = await _find_one_customer_by_name(
+                client, license_id, target_name, language,
+            )
+            if err is not None:
+                return err
         row = await client.create_deal(
             license_id,
             {"contact_id": contact["id"], "notes": fields.get("notes")},
             actor_id=ctx.chann_uid,
         )
+        template = DEAL_CREATED_FROM_CONTEXT if used_context else DEAL_CREATED
         return ChatReply(
-            text=_t(DEAL_CREATED, language).format(
+            text=_t(template, language).format(
                 deal_id=row["deal_id"], name=_display_name(contact),
             ),
             entity_type="deal", entity_id=row["id"], intent=intent,
@@ -807,6 +843,51 @@ async def _handle_deal_intent(
 
     return ChatReply(text=_pending_execution_reply(intent, language), intent=intent)
 
+
+PRODUCT_SAVED = {
+    "th": "บันทึกสินค้า {name} (รหัส {code}) เรียบร้อยแล้ว",
+    "en": "Saved product {name} (code {code}).",
+}
+PRODUCT_NEEDS_ID_AND_NAME = {
+    "th": "กรุณาระบุรหัสสินค้าและชื่อสินค้า",
+    "en": "Please provide both a product code and a product name.",
+}
+
+
+async def _handle_product_intent(
+    client: DataClient, *, intent: dict, ctx: ResolvedContext,
+    license_id, language: str,
+) -> ChatReply:
+    """Phase 7 master data, made reachable from chat. ProductRepository.
+    upsert (already idempotent on product_id since 7.5) means create and
+    update are the same call — there is no meaningful difference between
+    "add a product" and "add a product that happens to already exist" from
+    the chat side."""
+    action = intent.get("action")
+    fields = intent.get("fields") or {}
+    license_id = str(license_id)
+
+    if action not in ("create", "update"):
+        return ChatReply(text=_pending_execution_reply(intent, language), intent=intent)
+
+    product_id = (fields.get("product_id") or "").strip()
+    product_name = (fields.get("product_name") or "").strip()
+    if not product_id or not product_name:
+        return ChatReply(text=_t(PRODUCT_NEEDS_ID_AND_NAME, language), intent=intent)
+
+    payload = {
+        "product_id": product_id,
+        "product_name": product_name,
+        "sku": fields.get("sku"),
+        "category": fields.get("category"),
+        "unit_price": fields.get("unit_price"),
+        "description": fields.get("description"),
+    }
+    row = await client.upsert_product(license_id, product_id, payload, actor_id=ctx.chann_uid)
+    return ChatReply(
+        text=_t(PRODUCT_SAVED, language).format(name=row["product_name"], code=row["product_id"]),
+        entity_type="product", entity_id=row["id"], intent=intent,
+    )
 
 # How long an unanswered question stays open. Long enough that a user can
 # finish another chat and come back; short enough that tomorrow's unrelated
@@ -1100,6 +1181,10 @@ async def handle_chat_message(
         return await _handle_deal_intent(
             client, intent=intent, ctx=ctx, license_id=license_id,
             permission_keys=permission_keys, language=language,
+        )
+    if intent.get("entity") == "product":
+        return await _handle_product_intent(
+            client, intent=intent, ctx=ctx, license_id=license_id, language=language,
         )
 
     # Domain execution arrives with the entities themselves (Phase 7+). Until

@@ -60,8 +60,9 @@ class FakeDataClient:
 
     def __init__(self, *, role="sales", permission_keys=None, mapping=None,
                  pending_intent=None, customers=None, deals=None,
-                 storefront_results=None):
+                 storefront_results=None, last_customer_ref=None):
         self._role = role
+        self._last_customer_ref = last_customer_ref
         self._customers = list(customers) if customers is not None else []
         self._deals = list(deals) if deals is not None else []
         self._next_deal_n = 1
@@ -109,6 +110,23 @@ class FakeDataClient:
     async def clear_pending_intent(self, chann_uid, oa):
         self._pending = None
         self.recorded.append(("clear_pending_intent", chann_uid, oa))
+
+    async def set_last_customer_ref(self, chann_uid, oa, *, customer_id, name, ttl_seconds=600):
+        self._last_customer_ref = {"customer_id": customer_id, "name": name}
+        self.recorded.append(("set_last_customer_ref", chann_uid, oa, customer_id, name))
+
+    async def get_last_customer_ref(self, chann_uid, oa):
+        self.recorded.append(("get_last_customer_ref", chann_uid, oa))
+        return self._last_customer_ref
+
+    async def upsert_product(self, license_id, product_id, payload, actor_id=None):
+        self.recorded.append(("upsert_product", license_id, product_id, payload, actor_id))
+        return {
+            "id": f"PROD-{product_id}", "license_id": license_id,
+            "product_id": product_id, "product_name": payload["product_name"],
+            "sku": payload.get("sku"), "category": payload.get("category"),
+            "unit_price": payload.get("unit_price"), "description": payload.get("description"),
+        }
 
     async def create_invite(self, license_id, payload, actor_id=None):
         self.recorded.append(("create_invite", license_id, payload, actor_id))
@@ -596,12 +614,14 @@ class TestPhase7EntitiesAreGated:
     async def test_product_with_permission_proceeds(self):
         ai = httpx.AsyncClient(transport=_ai(json.dumps(
             {"action": "create", "entity": "product",
-             "fields": {"name": "แอร์"}, "missing": []}, ensure_ascii=False)))
+             "fields": {"product_id": "AC-001", "product_name": "แอร์"},
+             "missing": []}, ensure_ascii=False)))
+        client = FakeDataClient(permission_keys=["product.manage"])
         reply = await handle_chat_message(
-            FakeDataClient(permission_keys=["product.manage"]),
-            message="เพิ่มสินค้าแอร์", ctx=_ctx(), ai_client=ai,
+            client, message="เพิ่มสินค้าแอร์", ctx=_ctx(), ai_client=ai,
         )
-        assert "เข้าใจแล้ว" in reply.text
+        assert "แอร์" in reply.text
+        assert any(r[0] == "upsert_product" for r in client.recorded)
 
 
 class TestPhase8ProfileChat:
@@ -1276,3 +1296,87 @@ class TestPhase9Storefront:
             ctx=_ctx(primary_role="customer", oa="customer"), language="th",
         )
         assert reply is None
+
+
+class TestLastCustomerReference:
+    """Reported live: "บันทึกสมชายเป็น Contact แล้ว" followed immediately by
+    "สร้างดีล" with no name at all — a completely natural way to talk once
+    a customer has already been named once in the conversation."""
+
+    async def test_creating_a_customer_remembers_them(self):
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "create", "entity": "customer",
+             "fields": {"first_name": "สมชาย"}, "missing": []}, ensure_ascii=False)))
+        client = FakeDataClient(permission_keys=["customer.create"])
+        await handle_chat_message(
+            client, message="เพิ่มลูกค้าชื่อสมชาย",
+            ctx=_ctx(primary_role="sales"), ai_client=ai,
+        )
+        call = next(r for r in client.recorded if r[0] == "set_last_customer_ref")
+        assert call[4] == "สมชาย"
+
+    async def test_promoting_a_customer_remembers_them(self):
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "promote", "entity": "customer",
+             "fields": {"target_name": "สมชาย"}, "missing": []}, ensure_ascii=False)))
+        client = FakeDataClient(
+            permission_keys=["customer.update"],
+            customers=[{"id": "CUST-1", "first_name": "สมชาย", "last_name": None,
+                        "phone": "0812345678", "email": None, "stage": "lead"}],
+        )
+        await handle_chat_message(
+            client, message="ยืนยันลูกค้าสมชาย", ctx=_ctx(primary_role="sales"), ai_client=ai,
+        )
+        assert any(r[0] == "set_last_customer_ref" for r in client.recorded)
+
+    async def test_deal_create_with_no_name_falls_back_to_last_customer(self):
+        """The exact reported scenario: no target_name at all in the
+        parsed intent, but a customer was just discussed."""
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "create", "entity": "deal", "fields": {}, "missing": []})))
+        client = FakeDataClient(
+            permission_keys=["deal.create"],
+            last_customer_ref={"customer_id": "CUST-1", "name": "สมชาย"},
+        )
+        reply = await handle_chat_message(
+            client, message="สร้างดีล", ctx=_ctx(primary_role="sales"), ai_client=ai,
+        )
+        assert "D-2026-" in reply.text
+        assert "สมชาย" in reply.text
+        # says explicitly that it used the recently-discussed customer,
+        # rather than silently guessing
+        assert "เพิ่งคุยถึง" in reply.text
+        call = next(r for r in client.recorded if r[0] == "create_deal")
+        assert call[2]["contact_id"] == "CUST-1"
+
+    async def test_deal_create_with_no_name_and_no_context_still_asks(self):
+        """No fallback exists — must not fail silently or guess; asks like
+        before."""
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "create", "entity": "deal", "fields": {}, "missing": []})))
+        client = FakeDataClient(permission_keys=["deal.create"], last_customer_ref=None)
+        reply = await handle_chat_message(
+            client, message="สร้างดีล", ctx=_ctx(primary_role="sales"), ai_client=ai,
+        )
+        assert "กรุณาระบุชื่อลูกค้า" in reply.text
+        assert not any(r[0] == "create_deal" for r in client.recorded)
+
+    async def test_deal_create_with_an_explicit_name_ignores_stale_context(self):
+        """An explicit name in this message must win over whatever was
+        remembered from an earlier one — the fallback is last resort only."""
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "create", "entity": "deal",
+             "fields": {"target_name": "วิชัย"}, "missing": []}, ensure_ascii=False)))
+        client = FakeDataClient(
+            permission_keys=["deal.create"],
+            customers=[{"id": "CUST-2", "first_name": "วิชัย", "last_name": None,
+                        "phone": "0899999999", "email": None, "stage": "contact"}],
+            last_customer_ref={"customer_id": "CUST-1", "name": "สมชาย"},
+        )
+        reply = await handle_chat_message(
+            client, message="สร้างดีลให้วิชัย", ctx=_ctx(primary_role="sales"), ai_client=ai,
+        )
+        assert "วิชัย" in reply.text
+        assert "เพิ่งคุยถึง" not in reply.text
+        call = next(r for r in client.recorded if r[0] == "create_deal")
+        assert call[2]["contact_id"] == "CUST-2"
