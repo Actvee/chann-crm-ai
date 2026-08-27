@@ -13,7 +13,13 @@ from fastapi import APIRouter, Header, HTTPException, Request, status
 
 from ..config import OA_CHANNELS, channel_secret
 from ..data_client import DataClient
-from ..services.chat import ChatReply, greet, handle_chat_message, handle_reply
+from ..services.chat import (
+    ChatReply,
+    maybe_handle_storefront,
+    greet,
+    handle_chat_message,
+    handle_reply,
+)
 from ..services.registration import handle_registration, is_unregistered
 from ..services.identity import resolve_context
 from .client import LineReplyError, reply_text
@@ -70,7 +76,21 @@ async def handle_webhook(
             ctx = await resolve_context(client, oa, line_user_id)
             user_text = (event.get("message") or {}).get("text") or ""
 
-            if is_unregistered(ctx):
+            # 9.4 storefront browsing is checked before registration status
+            # at all: a customer with no shop link yet, and one already
+            # linked to another shop, must both be able to search products
+            # and become a Lead somewhere new. Nothing about is_unregistered
+            # applies to this — there is no tenant to register against until
+            # a shop is actually chosen.
+            storefront_reply = None
+            if oa == "customer" and user_text.strip():
+                storefront_reply = await maybe_handle_storefront(
+                    client, message=user_text, ctx=ctx, language="th",
+                )
+
+            if storefront_reply is not None:
+                chat = storefront_reply
+            elif is_unregistered(ctx):
                 # Phase 6.5: someone with no tenant gets the registration
                 # flow, not the intent parser. There is nothing to authorise
                 # against and no tenant to act in, so a model call here would

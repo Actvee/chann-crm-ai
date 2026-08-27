@@ -417,3 +417,97 @@ class PendingIntentOut(BaseModel):
     entity: str | None
     fields: dict
     missing: list[str]
+
+
+# ---------------------------------------------------------------- Phase 9 CRM
+
+
+class CustomerIn(BaseModel):
+    first_name: str | None = None
+    last_name: str | None = None
+    phone: str | None = None
+    email: str | None = None
+    address: str | None = None
+    notes: str | None = None
+    customer_chann_uid: str | None = None
+    owner_member_id: uuid.UUID | None = None
+
+
+class CustomerOut(BaseModel):
+    id: uuid.UUID
+    license_id: uuid.UUID
+    customer_chann_uid: str | None
+    stage: str
+    owner_member_id: uuid.UUID | None
+    first_name: str | None
+    last_name: str | None
+    phone: str | None
+    email: str | None
+    address: str | None
+    notes: str | None
+    archived_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class DealProductIn(BaseModel):
+    product_id: uuid.UUID | None = None
+    product_name: str
+    quoted_unit_price: str | float | int
+    qty: int = 1
+    notes: str | None = None
+
+
+class DealProductOut(BaseModel):
+    id: uuid.UUID
+    deal_id: uuid.UUID
+    product_id: uuid.UUID | None
+    product_name: str
+    quoted_unit_price: Decimal
+    qty: int
+    notes: str | None
+    created_at: datetime
+
+
+class DealIn(BaseModel):
+    contact_id: uuid.UUID
+    notes: str | None = None
+    owner_member_id: uuid.UUID | None = None
+    products: list[DealProductIn] = []
+
+
+class DealOut(BaseModel):
+    id: uuid.UUID
+    license_id: uuid.UUID
+    deal_id: str
+    contact_id: uuid.UUID
+    stage: str
+    owner_member_id: uuid.UUID | None
+    notes: str | None
+    archived_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+    products: list[DealProductOut] = []
+
+
+class DealStageIn(BaseModel):
+    stage: str
+
+
+class StorefrontProductOut(BaseModel):
+    """Deliberately narrower than ProductOut — 9.4 requires storefront search
+    to never reveal which shop a product belongs to until the customer picks
+    one, only the product info itself."""
+    product_id: str
+    product_name: str
+    sku: str | None
+    category: str | None
+    unit_price: Decimal | None
+    license_id: uuid.UUID
+    company_name: str
+
+
+class StorefrontInterestIn(BaseModel):
+    chann_uid: str
+    license_id: uuid.UUID
+    product_name: str

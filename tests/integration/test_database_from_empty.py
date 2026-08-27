@@ -2068,3 +2068,270 @@ class TestPhase8Profiles:
             session.commit()
             assert row.phone == "0899999999"           # earlier edit preserved
             assert row.address == "123 ถนนสุขุมวิท"
+
+
+class TestPhase9CRMCore:
+    """Master Spec 9.7's mandatory automated tests."""
+
+    def test_customer_crud(self, migrated_db):
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import ChannIdentity
+        from chann_data.repositories.phase65 import RegistrationRepository
+        from chann_data.repositories.phase9 import CustomerRepository, Phase9Conflict
+        from chann_data.repositories.tenant_scope import TenantScope
+
+        with Session(migrated_db) as session:
+            session.add(ChannIdentity(
+                chann_uid="CHN-P9C-0001", line_user_id="line-p9c-0001", primary_role="sales",
+            ))
+            session.commit()
+
+        with Session(migrated_db) as session:
+            lic = RegistrationRepository(session).create_license(
+                company_name="Customer Co", created_by_chann_uid="CHN-P9C-0001",
+            )
+            license_id = lic.id
+            session.commit()
+
+        scope = TenantScope(license_id=license_id)
+
+        # สร้าง customer ผ่านแชท (ตัวแทนด้วยการเรียก repository ตรง — chat
+        # layer เป็นแค่ AI parse + field validation ที่อยู่หน้าเรียกนี้)
+        with Session(migrated_db) as session:
+            row = CustomerRepository(session).create(
+                scope, first_name="สมชาย", phone="0812345678",
+            )
+            customer_id = row.id
+            assert row.stage == "lead"
+            session.commit()
+
+        # ต้องการอย่างน้อยหนึ่งอย่าง — สร้างเปล่าไม่ได้
+        with Session(migrated_db) as session:
+            with pytest.raises(Phase9Conflict):
+                CustomerRepository(session).create(scope)
+            session.rollback()
+
+        # 1 customer ต่อ tenant (UNIQUE constraint บน customer_chann_uid)
+        with Session(migrated_db) as session:
+            session.add(ChannIdentity(
+                chann_uid="CHN-P9C-CUST", line_user_id="line-p9c-cust",
+                primary_role="customer",
+            ))
+            session.commit()
+        with Session(migrated_db) as session:
+            CustomerRepository(session).create(
+                scope, customer_chann_uid="CHN-P9C-CUST", first_name="วิชัย",
+            )
+            session.commit()
+        with Session(migrated_db) as session:
+            with pytest.raises(Phase9Conflict):
+                CustomerRepository(session).create(
+                    scope, customer_chann_uid="CHN-P9C-CUST", first_name="วิชัย อีกครั้ง",
+                )
+            session.rollback()
+
+        # Lead -> Contact promotion
+        with Session(migrated_db) as session:
+            promoted = CustomerRepository(session).promote_to_contact(scope, customer_id)
+            assert promoted.stage == "contact"
+            session.commit()
+        # idempotent — promoting an already-Contact record is a no-op success
+        with Session(migrated_db) as session:
+            promoted_again = CustomerRepository(session).promote_to_contact(scope, customer_id)
+            assert promoted_again.stage == "contact"
+
+    def test_deal_crud(self, migrated_db):
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import ChannIdentity
+        from chann_data.repositories.phase65 import RegistrationRepository
+        from chann_data.repositories.phase9 import (
+            CustomerRepository,
+            DealRepository,
+            Phase9Conflict,
+        )
+        from chann_data.repositories.tenant_scope import TenantScope
+
+        with Session(migrated_db) as session:
+            session.add(ChannIdentity(
+                chann_uid="CHN-P9D-0001", line_user_id="line-p9d-0001", primary_role="sales",
+            ))
+            session.commit()
+
+        with Session(migrated_db) as session:
+            lic = RegistrationRepository(session).create_license(
+                company_name="Deal Co", created_by_chann_uid="CHN-P9D-0001",
+            )
+            license_id = lic.id
+            session.commit()
+
+        scope = TenantScope(license_id=license_id)
+
+        with Session(migrated_db) as session:
+            contact = CustomerRepository(session).create(scope, first_name="สมหญิง")
+            contact_id = contact.id
+            session.commit()
+
+        # สร้าง deal ผ่านแชท
+        with Session(migrated_db) as session:
+            deal = DealRepository(session).create(scope, contact_id=contact_id)
+            deal_id = deal.id
+            assert deal.deal_id.startswith("D-")
+            assert deal.stage == "new"
+            session.commit()
+
+        # เพิ่ม product ใน deal
+        with Session(migrated_db) as session:
+            DealRepository(session).add_product(
+                scope, deal_id, product_id=None, product_name="เครื่องซักผ้า",
+                quoted_unit_price="12000", qty=2,
+            )
+            session.commit()
+        with Session(migrated_db) as session:
+            products = DealRepository(session).products_of(deal_id)
+            assert len(products) == 1
+            assert products[0].qty == 2
+
+        # stage transition: new -> proposed -> won
+        with Session(migrated_db) as session:
+            repo = DealRepository(session)
+            d = repo.transition_stage(scope, deal_id, to_stage="proposed", allow_reopen=False)
+            assert d.stage == "proposed"
+            d = repo.transition_stage(scope, deal_id, to_stage="won", allow_reopen=False)
+            assert d.stage == "won"
+            session.commit()
+
+        # reopen: won -> new ต้องมี deal.reopen (allow_reopen=False ต้องถูกปฏิเสธ)
+        with Session(migrated_db) as session:
+            with pytest.raises(Phase9Conflict):
+                DealRepository(session).transition_stage(
+                    scope, deal_id, to_stage="new", allow_reopen=False,
+                )
+            session.rollback()
+        with Session(migrated_db) as session:
+            d = DealRepository(session).transition_stage(
+                scope, deal_id, to_stage="new", allow_reopen=True,
+            )
+            assert d.stage == "new"
+            session.commit()
+
+        # illegal transition (new -> won directly) refused
+        with Session(migrated_db) as session:
+            with pytest.raises(Phase9Conflict):
+                DealRepository(session).transition_stage(
+                    scope, deal_id, to_stage="won", allow_reopen=True,
+                )
+            session.rollback()
+
+    def test_storefront_cross_tenant(self, migrated_db):
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import ChannIdentity
+        from chann_data.repositories.phase65 import RegistrationRepository
+        from chann_data.repositories.phase7 import ProductRepository
+        from chann_data.repositories.phase9 import StorefrontRepository
+        from chann_data.repositories.tenant_scope import TenantScope
+
+        with Session(migrated_db) as session:
+            session.add(ChannIdentity(
+                chann_uid="CHN-P9SF-A", line_user_id="line-p9sf-a", primary_role="sales",
+            ))
+            session.add(ChannIdentity(
+                chann_uid="CHN-P9SF-B", line_user_id="line-p9sf-b", primary_role="sales",
+            ))
+            session.add(ChannIdentity(
+                chann_uid="CHN-P9SF-CUST", line_user_id="line-p9sf-cust",
+                primary_role="customer",
+            ))
+            session.commit()
+
+        with Session(migrated_db) as session:
+            reg = RegistrationRepository(session)
+            lic_a = reg.create_license(company_name="Shop A", created_by_chann_uid="CHN-P9SF-A")
+            lic_b = reg.create_license(company_name="Shop B", created_by_chann_uid="CHN-P9SF-B")
+            license_a, license_b = lic_a.id, lic_b.id
+            session.commit()
+
+        scope_a = TenantScope(license_id=license_a)
+        scope_b = TenantScope(license_id=license_b)
+
+        with Session(migrated_db) as session:
+            ProductRepository(session).upsert(
+                scope_a, product_id="P-A-1", product_name="พัดลมไอเย็น A",
+                unit_price="3500",
+            )
+            ProductRepository(session).upsert(
+                scope_b, product_id="P-B-1", product_name="พัดลมไอเย็น B",
+                unit_price="3900",
+            )
+            session.commit()
+
+        # ค้นสินค้า -> เห็นสินค้าจากหลาย tenant
+        with Session(migrated_db) as session:
+            results = StorefrontRepository(session).search_products("พัดลมไอเย็น")
+            assert len(results) == 2
+            companies = {r["company_name"] for r in results}
+            assert companies == {"Shop A", "Shop B"}
+
+        # เลือกร้าน -> สร้าง Lead ใน tenant นั้น (เฉพาะ Shop A)
+        with Session(migrated_db) as session:
+            lead = StorefrontRepository(session).record_interest(
+                chann_uid="CHN-P9SF-CUST", license_id=license_a,
+                product_name="พัดลมไอเย็น A",
+            )
+            assert lead.license_id == license_a
+            session.commit()
+
+        # ร้าน A ไม่เห็นว่าลูกค้าคนนี้สนใจสินค้าร้าน B — ร้าน B ไม่มี Lead เลย
+        with Session(migrated_db) as session:
+            from chann_data.repositories.phase9 import CustomerRepository
+            leads_in_a = CustomerRepository(session).list_for_license(scope_a)
+            leads_in_b = CustomerRepository(session).list_for_license(scope_b)
+            assert len(leads_in_a) == 1
+            assert leads_in_a[0].customer_chann_uid == "CHN-P9SF-CUST"
+            assert leads_in_b == []
+
+    def test_multi_tenant_customer_and_deal_isolation(self, migrated_db):
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import ChannIdentity
+        from chann_data.repositories.phase65 import RegistrationRepository
+        from chann_data.repositories.phase9 import CustomerRepository, DealRepository
+        from chann_data.repositories.tenant_scope import TenantScope
+
+        with Session(migrated_db) as session:
+            session.add(ChannIdentity(
+                chann_uid="CHN-P9MT-A", line_user_id="line-p9mt-a", primary_role="sales",
+            ))
+            session.add(ChannIdentity(
+                chann_uid="CHN-P9MT-B", line_user_id="line-p9mt-b", primary_role="sales",
+            ))
+            session.commit()
+
+        with Session(migrated_db) as session:
+            reg = RegistrationRepository(session)
+            lic_a = reg.create_license(company_name="Iso A", created_by_chann_uid="CHN-P9MT-A")
+            lic_b = reg.create_license(company_name="Iso B", created_by_chann_uid="CHN-P9MT-B")
+            license_a, license_b = lic_a.id, lic_b.id
+            session.commit()
+
+        scope_a = TenantScope(license_id=license_a)
+        scope_b = TenantScope(license_id=license_b)
+
+        with Session(migrated_db) as session:
+            cust_a = CustomerRepository(session).create(scope_a, first_name="ลูกค้า A")
+            cust_a_id = cust_a.id
+            deal_a = DealRepository(session).create(scope_a, contact_id=cust_a_id)
+            deal_a_id = deal_a.id
+            session.commit()
+
+        # customer ใน tenant A ไม่ปรากฏใน tenant B
+        with Session(migrated_db) as session:
+            assert CustomerRepository(session).get(scope_b, cust_a_id) is None
+            assert CustomerRepository(session).get(scope_a, cust_a_id) is not None
+
+        # deal ใน tenant A ไม่ปรากฏใน tenant B
+        with Session(migrated_db) as session:
+            assert DealRepository(session).get(scope_b, deal_a_id) is None
+            assert DealRepository(session).get(scope_a, deal_a_id) is not None

@@ -1,10 +1,12 @@
 # Session Handoff — 27 Aug 2026
 
-Written because the conversation doing Phases 3-8 hit its context limit twice.
-This is what the next AI session needs to pick up cleanly — read this before
-`docs/CHANN_CRM_AI_MASTER_SPEC.md`, not instead of it.
+Written because the conversation doing Phases 3-9 hit its context limit
+several times across the day. This is what the next AI session needs to
+pick up cleanly — read this before `docs/CHANN_CRM_AI_MASTER_SPEC.md`, not
+instead of it.
 
-Supersedes the 26 Aug 2026 version of this file.
+Supersedes the earlier 27 Aug 2026 version of this file (written mid-day,
+before Phase 9 existed).
 
 ---
 
@@ -49,106 +51,165 @@ clone.
 
 **Deployed and live on DEV**, in order: Phase 1 (Identity) → 2 (Permissions)
 → 3 (Audit Log) → 4 (AI Infra) → 5 (i18n) → 6 (Chat) → 6.5 (Tenant
-Registration) → 7 (Master Data) → 8 (Profiles) → **the OA-scoping/
-conversation-continuity/profile-eligibility fix described below (deployed
-27 Aug 2026, terraform apply confirmed — 3 changed, 0 destroyed)**.
+Registration) → 7 (Master Data) → 8 (Profiles) → OA-scoping/conversation-
+continuity/profile-eligibility fix (27 Aug) → OA-aware identity resolution
+for Customer/Technician (27 Aug, `ecf0724`).
 
-`origin/main` HEAD is **`5eacfd2` — `fix(phase6+phase8): OA channel scoping,
-conversation continuity, profile eligibility`**.
+`origin/main` HEAD is **`ecf0724` — `fix(phase6.5+phase8): OA-aware identity
+resolution for Customer/Technician`**.
 
-**Not started:** Phases 9-20. Phase 9 (CRM entities: customer, deal, note,
-follow-up) is next in spec order.
+**Not started (past this point):** Phase 9 is built and validated below but
+**not yet deployed**. Phases 10-20 haven't been started.
 
 ---
 
-## Uncommitted work waiting to be deployed
+## Uncommitted work waiting to be deployed — Phase 9 CRM Core
 
-A **second, independent fix** was built and validated on top of `5eacfd2`
-but not yet deployed: `technician-customer-scoping.patch` +
-`technician-customer-scoping-deploy.sh`.
+Patch: `phase9-crm-core.patch` + `phase9-crm-core-deploy.sh`.
 
-Validated against `5eacfd2` (the real live HEAD) on a clean clone: applies
-cleanly (3-way), **182 tests pass, 43 skipped** (Postgres-gated integration
-tests — skip without `TEST_DATABASE_URL`, same as always in this repo),
-`check-model-kwargs.py` OK, both tiers boot (data 64 routes, app 21 paths).
+Built and validated on top of `ecf0724` (the real live HEAD) on a clean
+clone: applies cleanly (3-way), **253 tests pass** (0 skipped — a real
+Postgres was available for this validation, unlike earlier sessions),
+`check-model-kwargs.py` OK, both tiers boot (data 78 routes, app 21 paths).
 
-### Why this fix exists — found by the owner testing the previous fix live
+**Has a real migration this time**: `0008_phase9_crm_core` (3 new tables:
+`customers`, `deals`, `deal_products`). `EXPECTED_MIGRATION_HEAD` in
+`data/chann_data/main.py` is bumped in the same patch — a guard test
+(`test_expected_head_matches_the_newest_migration`) fails loudly if these
+ever drift apart again.
 
-Testing the just-deployed OA-scoping fix on real LINE traffic surfaced a
-**deeper** identity bug the OA-scoping fix didn't touch: `resolve_context()`
-decided "which company does this message belong to" using `memberships_of()`
-— which queried `license_members` (the STAFF table) **regardless of which
-OA the message arrived on**. Since LINE gives one physical account the same
-`userId` across every OA under one provider, an account already registered
-as **Sales staff at Company X** got treated as already "belonging to
-Company X" the instant it messaged **Customer OA or Technician OA too** —
-with **no registration step at all**, even though:
+### What this patch builds (Master Spec 9.1-9.7)
 
-- `customer_license_links` (Phase 6.5, company-code linking) already existed
-  in the schema specifically to keep a real customer separate from staff
-  permissions — it just was never consulted by `resolve_context()`.
-- Technician onboarding had **no real mechanism** at all: no seeded
-  "technician" role existed in `DEFAULT_ROLE_TEMPLATES` (only
-  owner/admin/member/cs), and `memberships_of()` didn't check the
-  membership's role — ANY staff role at a company satisfied "is a technician
-  there."
+1. **Data tier** — `Customer` (stage: lead/contact), `Deal`
+   (`deal_id` like `D-2026-0001`, globally unique — see the model's
+   docstring for why this deliberately differs from quotes' per-tenant
+   numbering), `DealProduct` (line items, `product_id` nullable for
+   off-catalogue items). Repository: `CustomerRepository`, `DealRepository`
+   (9.6's stage machine: `new→proposed→won/lost`, `won/lost→new` gated by
+   `allow_reopen`), `StorefrontRepository` (cross-tenant product search +
+   auto-lead). 14 new Data-tier endpoints.
 
-### What this patch does
+2. **Chat wiring** — real execution replaces the Phase 6 stub
+   (`_pending_execution_reply`) for `entity="customer"` and `entity="deal"`:
+   - Create/update/promote a customer by **name** (never by an id the user
+     would type) — ambiguous names ask to clarify, same pattern
+     `registration.py`'s shop search already uses.
+   - Create a deal against an existing customer (looked up by name).
+   - Deal stage transitions are matched **directly against the message**,
+     not sent through the AI parser — a deal code (`D-YYYY-NNNN`) is a
+     stable, machine-parseable token and the stage vocabulary is a small
+     closed set, so free-text understanding buys nothing and only risks a
+     hallucinated stage. Two subtle bugs were caught and fixed by the
+     integration tests before this ever reached a patch:
+     - `"ไม่สำเร็จ"` (lost) contains `"สำเร็จ"` (won) as a literal Thai
+       substring — checking won's keyword first misclassified every lost
+       deal as won. Lost is now checked first.
+     - `"เปิดดีล D-2026-0001 ใหม่"` splits the reopen phrase across the
+       deal code. The code is now stripped from the message before keyword
+       matching, not after.
+   - **The AI intent prompt now describes customer/deal's real field
+     shape** (`first_name`/`last_name`/`phone`/`email`/`address`/`notes`,
+     `target_name` for update/promote/deal-create) — this was a known,
+     previously-documented gap: without it the model invents plausible-
+     looking field names that don't exist anywhere else to check against.
 
-1. **`MemberRepository.memberships_of(chann_uid, oa=)`** — opt-in role
-   filter: `oa="technician"` → only `role == "technician"` rows count;
-   `oa="sales"`/omitted → everyone except `role == "technician"`. Unscoped
-   calls (routers_admin.py, authorization.py) are untouched.
-2. **`list_memberships` endpoint** — `oa="customer"` now resolves via
-   `customer_license_links` (through `RegistrationRepository.my_shops`,
-   which already existed) instead of `license_members` entirely.
-3. **`"technician"` added to `DEFAULT_ROLE_TEMPLATES`** (ticket.*,
-   service_report.* — mirrors `chat.py`'s `OA_ALLOWED_PERMISSION_KEYS`).
-4. **`create_invite()` self-heals a missing default role** — if `role`
-   is in `DEFAULT_ROLE_TEMPLATES` and the tenant has no matching `CustomRole`
-   yet (true for every tenant created before this patch), it provisions the
-   `CustomRole` + `RolePermission` rows on first use instead of rejecting.
-   No migration needed for existing tenants.
-5. **New Sales-OA-only chat command**: typing "ขอรหัสเชิญช่าง" (requires
-   `member.manage`) mints a one-time, 7-day invite coded `role="technician"`
-   via the existing `create_invite`/`redeem_invite` machinery — closing the
-   loop the owner asked for: *"code should come from someone with permission
-   on Sales OA, one-time, to become a technician of that company."*
-6. **Technician OA gets its own registration welcome** (`WELCOME_TECHNICIAN`)
-   — no "create a new company" option, since that's nonsensical for this
-   persona; only "type your invite code."
+3. **Storefront (9.4)** — cross-tenant product search, wired into
+   `webhook.py` **before** the `is_unregistered` check, not inside
+   `handle_chat_message`. This matters: an unregistered Customer OA visitor
+   never reaches `handle_chat_message` at all (the webhook routes them to
+   `handle_registration` first), so storefront browsing has to be its own
+   webhook-level branch to work for someone who has never linked to any
+   shop yet — which is the primary path the spec describes (browse
+   anonymously → pick a product → pick a shop → become a Lead there).
+   Trigger phrase is literally specified in the spec: `"ค้นหา [keyword]"`.
+   Selection state (the numbered result list) lives in the same
+   `pending_intent` Redis mechanism Phase 6 built for slot-filling —
+   `entity="storefront"` distinguishes it from an unrelated in-progress
+   conversation on the same channel.
 
 ### What this patch deliberately does NOT touch
 
-- Phase 9's storefront/cross-tenant shop browsing (`เลือกร้าน`) — that's a
-  genuinely different, not-yet-built feature; this patch only makes the
-  *already-built* `customer_license_links` linking mechanism actually
-  reachable from the chat identity-resolution path.
-- Whether an Owner should be able to ALSO act as a technician at their own
-  company via a second membership row — current schema is one
-  `license_members` row per `(license_id, chann_uid)`, so an Owner wanting
-  technician access needs the SAME invite-redemption flow everyone else
-  uses; this patch doesn't add owner-specific shortcuts.
+- Presentation-tier Dashboard CRUD for customers/deals (spec 9.2 lists it,
+  but this project has stayed chat-first through every phase so far — no
+  Presentation tier exists yet for anything).
+- Quote generation (Phase 10) — `deals.stage="proposed"` is reachable by
+  chat, but nothing produces an actual quote document yet.
+- Any change to the identity-resolution fix already deployed in `ecf0724`.
 
-### Files touched (11, all on top of `5eacfd2`)
+### Files touched (14, all on top of `ecf0724`)
 
 ```
-application/chann_app/data_client.py                ← memberships_of(oa=), create_invite unchanged (already existed)
-application/chann_app/services/chat.py               ← technician invite request command
-application/chann_app/services/identity.py           ← resolve_context passes oa to memberships_of
-application/chann_app/services/registration.py       ← WELCOME_TECHNICIAN, technician invite-redeem path
-data/chann_data/permissions.py                        ← DEFAULT_ROLE_TEMPLATES["technician"]
-data/chann_data/repositories/phase65.py               ← create_invite self-heals missing default role
-data/chann_data/repositories/tenant_scope.py          ← memberships_of(oa=) role filter
-data/chann_data/routers/internal.py                   ← list_memberships(oa=) — customer_license_links path
-tests/integration/test_database_from_empty.py         ← +4 Postgres-backed tests
-tests/unit/test_phase65_registration.py                ← +4 technician-welcome tests
-tests/unit/test_phase6_chat.py                         ← +3 technician-invite-command tests
+application/chann_app/data_client.py               ← 12 new Phase 9 methods
+application/chann_app/line/webhook.py               ← storefront hook before is_unregistered
+application/chann_app/services/ai/intent.py         ← customer/deal field-shape prompt block
+application/chann_app/services/chat.py              ← customer/deal execution, deal-stage commands, storefront
+data/chann_data/main.py                             ← EXPECTED_MIGRATION_HEAD bump
+data/chann_data/models.py                           ← Customer, Deal, DealProduct
+data/chann_data/repositories/phase9.py              ← new file: Customer/Deal/Storefront repositories
+data/chann_data/routers/internal.py                 ← 14 new endpoints
+data/chann_data/schemas.py                          ← Customer/Deal/DealProduct/Storefront schemas
+database/Dockerfile                                 ← new file: migration runner image (see below)
+database/alembic/versions/0008_phase9_crm_core.py   ← new migration
+database/requirements.txt                           ← +pydantic/pydantic-settings (env.py needs them)
+tests/integration/test_database_from_empty.py       ← +4 tests (spec 9.7's mandatory list)
+tests/unit/test_phase6_chat.py                      ← +19 tests (customer/deal chat, storefront)
 ```
+
+### How the migration actually runs against Cloud SQL — no IAM changes
+
+The deploying account has no `roles/cloudsql.client` (confirmed via
+`gcloud projects get-iam-policy ... --filter="bindings.role:roles/cloudsql.client"`
+→ 0 items), and the owner has been explicit more than once: don't touch IAM,
+don't suggest granting roles, don't ask for it either. `cloud-sql-proxy`
+needs that role on the account running it, so it's the wrong tool here.
+
+Instead, the migration runs as a **Cloud Run Job** — `database/Dockerfile`
+builds a small image (alembic + `chann_data.models` for the metadata
+`env.py` needs, from the repo root so `database/` and `data/chann_data`
+sit as siblings the way `env.py`'s relative path expects) with `CMD ["sh",
+"-c", "cd database && python -m alembic upgrade head"]`. Deployed with
+`--set-cloudsql-instances`, exactly like the existing `data` Cloud Run
+service already is — the job inherits the **default compute service
+account** (neither Cloud Run resource in Terraform sets an explicit one),
+which already proves out Cloud SQL connectivity today. No new IAM grant of
+any kind. Deploying/executing a Cloud Run Job uses the same permission
+surface as deploying a Cloud Run service, which this account already does
+successfully.
+
+Validated locally by reproducing the exact container filesystem layout in a
+temp directory and running the exact `CMD` against real Postgres — caught
+two real bugs before they'd have surfaced in Cloud Shell:
+- Alembic resolves `script_location` relative to **CWD**, not the ini
+  file's own path — `python -m alembic -c database/alembic.ini upgrade
+  head` from `/srv` looked for `/srv/alembic`, not `/srv/database/alembic`.
+  Fixed by `cd database` first, matching how this project's other scripts
+  already invoke alembic.
+- `database/requirements.txt` didn't include `pydantic`/`pydantic-settings`,
+  which `env.py` needs transitively (`chann_data.db` → `chann_data.config`).
 
 ---
 
 ## Already deployed (27 Aug 2026) — for context, not action
+
+### 4. OA-aware identity resolution for Customer/Technician (`ecf0724`)
+
+Found by the owner testing the OA-scoping fix (below) on real LINE traffic:
+`resolve_context()` decided "which company does this message belong to"
+using `memberships_of()`, which queried `license_members` (the STAFF table)
+regardless of which OA the message arrived on. An account already
+registered as Sales staff at Company X was treated as already "belonging to
+Company X" the instant it messaged Customer OA or Technician OA too, with
+no registration step at all.
+
+Fixed: `memberships_of(chann_uid, oa=)` now filters by role
+(`oa="technician"` → only `role=="technician"`; `oa="sales"`/omitted →
+everyone except technician). Customer OA resolves via
+`customer_license_links` instead of `license_members` entirely. A
+`"technician"` role was added to `DEFAULT_ROLE_TEMPLATES`, and
+`create_invite()` self-heals a missing default role on first use so
+existing tenants don't need a migration. A new Sales-OA chat command,
+"ขอรหัสเชิญช่าง" (requires `member.manage`), mints a one-time invite coded
+`role="technician"`.
 
 The following three fixes shipped in `5eacfd2` and are confirmed live via
 `terraform apply` (3 changed, 0 destroyed). Kept here because the new patch
@@ -252,16 +313,17 @@ tests/unit/test_phase6_chat.py               ← +13 tests
 - **CI/CD via Workload Identity Federation is blocked** — the deploying GCP
   account has no Owner/IAM-admin role. Manual build+push+deploy is the only
   path until someone with Owner sets it up.
-- **Phase 9 must pass each entity's real field schema into the AI intent
-  prompt**, or the model invents plausible-looking fields that don't exist
-  (observed live with a customer entity).
-- **Phase 9 also inherits the ambiguity that fix #1 side-steps:** once
-  customer records are searchable, "แก้เบอร์เป็น..." on Sales OA needs an
-  explicit disambiguation path. `may_edit_on_behalf` /
-  `check_profile_edit` already exist in the Data tier and are fully
-  authorized — they're just not reachable from free-text chat yet, because
-  resolving "แก้ลูกค้าชื่อสมชาย" to a real `chann_uid` needs the Phase 9
-  customer directory.
+- ~~Phase 9 must pass each entity's real field schema into the AI intent
+  prompt~~ — **done** in the Phase 9 patch above (`ai/intent.py`'s prompt
+  now describes customer/deal's real fields).
+- ~~Phase 9 also inherits the ambiguity that fix #1 side-steps~~ — **done**:
+  customer create/update/promote and deal-create all resolve a name to a
+  record via `_find_one_customer_by_name`, asking to clarify on an
+  ambiguous match rather than guessing. `may_edit_on_behalf` /
+  `check_profile_edit` (the on-behalf profile path, distinct from this) are
+  still not wired into chat — nothing in Phase 9 needed them.
+- **Quote generation (Phase 10) is next in spec order** — `deals.stage`
+  reaches `"proposed"` via chat already, but no document is produced yet.
 - `view_reports` is intentionally one broad permission key — deferred to
   Phase 17 where reports actually get designed.
 - **Rich Menu test (Phase 19) must avoid hardcoded role names** —
@@ -273,6 +335,19 @@ tests/unit/test_phase6_chat.py               ← +13 tests
 
 ## Patterns worth reusing (all proven in this codebase)
 
+- **A real local Postgres catches things a mocked one can't.** Two earlier
+  sessions validated Phase 8/6 patches with integration tests *skipped*
+  (no `TEST_DATABASE_URL` available in the sandbox) and shipped clean. This
+  session installed Postgres locally (`apt-get install postgresql-16`,
+  works fine through `archive.ubuntu.com`/`security.ubuntu.com`) and ran
+  the real integration suite — it caught 4 failures in the technician/
+  customer-scoping patch immediately (two stale role-count assertions, one
+  missing FK row in a test, one test that assumed a person can hold two
+  roles at one license when `redeem_invite` doesn't allow that), and later
+  caught two subtle Phase 9 deal-stage-parsing bugs no unit test with a
+  `FakeDataClient` would ever have exercised realistically. If Postgres is
+  available, use it — don't rely on the skip path just because it's
+  historically been fine before.
 - **`scripts/check-model-kwargs.py`** — statically checks every SQLAlchemy
   model constructor call against real mapped columns, no database needed.
   Catches "I assumed this column exists" before integration tests.

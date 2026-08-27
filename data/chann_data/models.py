@@ -480,3 +480,101 @@ class TechnicianTeamMember(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class Customer(TimestampMixin, Base):
+    """Phase 9 (Master Spec 9.3) — Lead and Contact are the same row, only
+    `stage` differs. Splitting them into separate tables would need a
+    migration the moment a Lead is promoted, for no real gain: nothing about
+    a Contact's shape differs from a Lead's.
+
+    `customer_chann_uid` is nullable, unlike the spec's literal column list —
+    a walk-in customer added by chat with just a name and phone number has no
+    LINE account at all, and every other customer this project relies on
+    knowing something about is far more likely to lack a chann_uid early on
+    than to have one. Postgres treats multiple NULLs in a unique constraint
+    as distinct, so this does not weaken the "1 customer per chann_uid per
+    tenant" rule the spec asks for — it only exempts the walk-in case, which
+    the rule was never meant to constrain in the first place.
+    """
+
+    __tablename__ = "customers"
+    __table_args__ = (UniqueConstraint("license_id", "customer_chann_uid"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    license_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("licenses.id", ondelete="RESTRICT"),
+        nullable=False, index=True,
+    )
+    customer_chann_uid: Mapped[str | None] = mapped_column(
+        String(32), ForeignKey("chann_identities.chann_uid", ondelete="RESTRICT"),
+    )
+    stage: Mapped[str] = mapped_column(String(32), nullable=False, default="lead")
+    owner_member_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("license_members.id", ondelete="RESTRICT")
+    )
+    first_name: Mapped[str | None] = mapped_column(String(255))
+    last_name: Mapped[str | None] = mapped_column(String(255))
+    phone: Mapped[str | None] = mapped_column(String(32))
+    email: Mapped[str | None] = mapped_column(String(255))
+    address: Mapped[str | None] = mapped_column(Text)
+    notes: Mapped[str | None] = mapped_column(Text)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class Deal(TimestampMixin, Base):
+    """Phase 9 (Master Spec 9.3/9.6).
+
+    `deal_id` is globally unique, not per-tenant — the spec marks it plainly
+    `UNIQUE NOT NULL` with no "แยกต่อบริษัท" ("separated per company") note,
+    unlike quotes.quote_id in Phase 10 which explicitly carries that
+    qualifier. Treated as deliberate: a deal code is an internal reference
+    shown to staff, not a customer-facing document number the way a quote or
+    invoice is.
+    """
+
+    __tablename__ = "deals"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    license_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("licenses.id", ondelete="RESTRICT"),
+        nullable=False, index=True,
+    )
+    deal_id: Mapped[str] = mapped_column(String(32), unique=True, nullable=False)
+    contact_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("customers.id", ondelete="RESTRICT"), nullable=False,
+    )
+    stage: Mapped[str] = mapped_column(String(32), nullable=False, default="new")
+    owner_member_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("license_members.id", ondelete="RESTRICT")
+    )
+    notes: Mapped[str | None] = mapped_column(Text)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class DealProduct(Base):
+    """Phase 9 (Master Spec 9.3) — a line item quoted on a deal.
+
+    `product_id` is nullable on purpose: 9.3 allows a product outside the
+    tenant's own catalogue ("สินค้านอก list"), so `product_name` and
+    `quoted_unit_price` are captured directly rather than only ever
+    resolved through a Product row.
+    """
+
+    __tablename__ = "deal_products"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    deal_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("deals.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    product_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("products.id", ondelete="SET NULL")
+    )
+    product_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    quoted_unit_price: Mapped[object] = mapped_column(Numeric(18, 2), nullable=False)
+    qty: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

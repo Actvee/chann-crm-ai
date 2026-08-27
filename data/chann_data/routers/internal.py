@@ -51,6 +51,13 @@ from ..repositories.phase7 import (
     SalesGroupRepository,
     TechnicianTeamRepository,
 )
+from ..repositories.phase9 import (
+    CustomerRepository,
+    DealRepository,
+    Phase9Conflict,
+    Phase9NotFound,
+    StorefrontRepository,
+)
 from ..repositories.profile import (
     ProfileConflict,
     ProfileNotFound,
@@ -70,6 +77,15 @@ from ..repositories.phase6 import (
 )
 from ..schemas import (
     AuditLogOut,
+    CustomerIn,
+    CustomerOut,
+    DealIn,
+    DealOut,
+    DealProductIn,
+    DealProductOut,
+    DealStageIn,
+    StorefrontInterestIn,
+    StorefrontProductOut,
     AuditLogWriteIn,
     FollowUpIn,
     FollowUpOut,
@@ -1668,3 +1684,318 @@ def get_pending_intent(oa: str, chann_uid: str):
 @router.delete("/chat/pending-intent/{oa}/{chann_uid}", status_code=204)
 def clear_pending_intent(oa: str, chann_uid: str):
     cache.invalidate(k_pending_intent(chann_uid, oa))
+
+
+# ---------------------------------------------------------------- Phase 9 CRM
+
+
+def _phase9_http_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, Phase9NotFound):
+        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    if isinstance(exc, Phase9Conflict):
+        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    if isinstance(exc, HTTPException):
+        return exc
+    log.exception("unhandled data-tier error: %s", exc)
+    return HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="internal error"
+    )
+
+
+def _deal_out(deal, products) -> DealOut:
+    return DealOut(
+        id=deal.id, license_id=deal.license_id, deal_id=deal.deal_id,
+        contact_id=deal.contact_id, stage=deal.stage,
+        owner_member_id=deal.owner_member_id, notes=deal.notes,
+        archived_at=deal.archived_at, created_at=deal.created_at,
+        updated_at=deal.updated_at,
+        products=[
+            DealProductOut(
+                id=p.id, deal_id=p.deal_id, product_id=p.product_id,
+                product_name=p.product_name, quoted_unit_price=p.quoted_unit_price,
+                qty=p.qty, notes=p.notes, created_at=p.created_at,
+            )
+            for p in products
+        ],
+    )
+
+
+@router.post("/licenses/{license_id}/customers", response_model=CustomerOut, status_code=201)
+def create_customer(
+    license_id: uuid.UUID, payload: CustomerIn,
+    session: Session = Depends(get_session), x_actor_id: str = Header(default=""),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = CustomerRepository(session).create(
+            scope,
+            first_name=payload.first_name, last_name=payload.last_name,
+            phone=payload.phone, email=payload.email, address=payload.address,
+            notes=payload.notes, customer_chann_uid=payload.customer_chann_uid,
+            owner_member_id=payload.owner_member_id,
+        )
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="customer", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="create",
+            field_changes=diff_fields({}, {"stage": row.stage}),
+        )
+        session.commit()
+        return CustomerOut.model_validate(row, from_attributes=True)
+    except Exception as exc:
+        session.rollback()
+        raise _phase9_http_error(exc)
+
+
+@router.get("/licenses/{license_id}/customers/{customer_id}", response_model=CustomerOut)
+def get_customer(
+    license_id: uuid.UUID, customer_id: uuid.UUID, session: Session = Depends(get_session),
+):
+    scope = TenantScope(license_id=license_id)
+    row = CustomerRepository(session).get(scope, customer_id)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="customer not found")
+    return CustomerOut.model_validate(row, from_attributes=True)
+
+
+@router.get("/licenses/{license_id}/customers", response_model=list[CustomerOut])
+def list_customers(
+    license_id: uuid.UUID, stage: str | None = None, session: Session = Depends(get_session),
+):
+    scope = TenantScope(license_id=license_id)
+    rows = CustomerRepository(session).list_for_license(scope, stage=stage)
+    return [CustomerOut.model_validate(r, from_attributes=True) for r in rows]
+
+
+@router.patch("/licenses/{license_id}/customers/{customer_id}", response_model=CustomerOut)
+def update_customer(
+    license_id: uuid.UUID, customer_id: uuid.UUID, payload: CustomerIn,
+    session: Session = Depends(get_session), x_actor_id: str = Header(default=""),
+):
+    scope = TenantScope(license_id=license_id)
+    fields = payload.model_dump(exclude_unset=True, exclude={"customer_chann_uid", "owner_member_id"})
+    try:
+        before = CustomerRepository(session).get(scope, customer_id)
+        before_snapshot = {
+            k: getattr(before, k) for k in fields
+        } if before else {}
+        row = CustomerRepository(session).update(scope, customer_id, fields)
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="customer", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="update",
+            field_changes=diff_fields(before_snapshot, fields),
+        )
+        session.commit()
+        return CustomerOut.model_validate(row, from_attributes=True)
+    except Exception as exc:
+        session.rollback()
+        raise _phase9_http_error(exc)
+
+
+@router.post(
+    "/licenses/{license_id}/customers/{customer_id}/promote", response_model=CustomerOut,
+)
+def promote_customer(
+    license_id: uuid.UUID, customer_id: uuid.UUID,
+    session: Session = Depends(get_session), x_actor_id: str = Header(default=""),
+):
+    """9.5 — Lead -> Contact."""
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = CustomerRepository(session).promote_to_contact(scope, customer_id)
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="customer", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="update",
+            field_changes=diff_fields({"stage": "lead"}, {"stage": "contact"}),
+        )
+        session.commit()
+        return CustomerOut.model_validate(row, from_attributes=True)
+    except Exception as exc:
+        session.rollback()
+        raise _phase9_http_error(exc)
+
+
+@router.post(
+    "/licenses/{license_id}/customers/{customer_id}/archive", response_model=CustomerOut,
+)
+def archive_customer(
+    license_id: uuid.UUID, customer_id: uuid.UUID,
+    session: Session = Depends(get_session), x_actor_id: str = Header(default=""),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = CustomerRepository(session).archive(scope, customer_id)
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="customer", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="update",
+            field_changes=diff_fields({"archived": False}, {"archived": True}),
+        )
+        session.commit()
+        return CustomerOut.model_validate(row, from_attributes=True)
+    except Exception as exc:
+        session.rollback()
+        raise _phase9_http_error(exc)
+
+
+@router.post("/licenses/{license_id}/deals", response_model=DealOut, status_code=201)
+def create_deal(
+    license_id: uuid.UUID, payload: DealIn,
+    session: Session = Depends(get_session), x_actor_id: str = Header(default=""),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = DealRepository(session).create(
+            scope, contact_id=payload.contact_id, notes=payload.notes,
+            owner_member_id=payload.owner_member_id,
+            products=[p.model_dump() for p in payload.products],
+        )
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="deal", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="create",
+            field_changes=diff_fields({}, {"deal_id": row.deal_id, "stage": row.stage}),
+        )
+        session.commit()
+        products = DealRepository(session).products_of(row.id)
+        return _deal_out(row, products)
+    except Exception as exc:
+        session.rollback()
+        raise _phase9_http_error(exc)
+
+
+@router.get("/licenses/{license_id}/deals/{deal_id}", response_model=DealOut)
+def get_deal(
+    license_id: uuid.UUID, deal_id: uuid.UUID, session: Session = Depends(get_session),
+):
+    scope = TenantScope(license_id=license_id)
+    repo = DealRepository(session)
+    row = repo.get(scope, deal_id)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="deal not found")
+    return _deal_out(row, repo.products_of(row.id))
+
+
+@router.get("/licenses/{license_id}/deals", response_model=list[DealOut])
+def list_deals(
+    license_id: uuid.UUID, stage: str | None = None, session: Session = Depends(get_session),
+):
+    scope = TenantScope(license_id=license_id)
+    repo = DealRepository(session)
+    rows = repo.list_for_license(scope, stage=stage)
+    return [_deal_out(r, repo.products_of(r.id)) for r in rows]
+
+
+@router.post(
+    "/licenses/{license_id}/deals/{deal_id}/products", response_model=DealProductOut,
+    status_code=201,
+)
+def add_deal_product(
+    license_id: uuid.UUID, deal_id: uuid.UUID, payload: DealProductIn,
+    session: Session = Depends(get_session), x_actor_id: str = Header(default=""),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = DealRepository(session).add_product(
+            scope, deal_id,
+            product_id=payload.product_id, product_name=payload.product_name,
+            quoted_unit_price=payload.quoted_unit_price, qty=payload.qty,
+            notes=payload.notes,
+        )
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="deal_product", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="create",
+            field_changes=diff_fields({}, {"product_name": row.product_name, "qty": row.qty}),
+        )
+        session.commit()
+        return DealProductOut.model_validate(row, from_attributes=True)
+    except Exception as exc:
+        session.rollback()
+        raise _phase9_http_error(exc)
+
+
+@router.post(
+    "/licenses/{license_id}/deals/{deal_id}/stage", response_model=DealOut,
+)
+def transition_deal_stage(
+    license_id: uuid.UUID, deal_id: uuid.UUID, payload: DealStageIn,
+    allow_reopen: bool = False,
+    session: Session = Depends(get_session), x_actor_id: str = Header(default=""),
+):
+    """`allow_reopen` is a query param the Application tier sets after
+    checking the actor holds deal.reopen — this endpoint trusts it rather
+    than re-deriving permission_keys itself, the same division of
+    responsibility as every other permission-gated action in this project
+    (the tenant-permission gate lives in chat.py, not the Data tier)."""
+    scope = TenantScope(license_id=license_id)
+    try:
+        repo = DealRepository(session)
+        before_stage = repo.get(scope, deal_id)
+        before = before_stage.stage if before_stage else None
+        row = repo.transition_stage(
+            scope, deal_id, to_stage=payload.stage, allow_reopen=allow_reopen,
+        )
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="deal", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="update",
+            field_changes=diff_fields({"stage": before}, {"stage": row.stage}),
+        )
+        session.commit()
+        return _deal_out(row, repo.products_of(row.id))
+    except Exception as exc:
+        session.rollback()
+        raise _phase9_http_error(exc)
+
+
+@router.post("/licenses/{license_id}/deals/{deal_id}/archive", response_model=DealOut)
+def archive_deal(
+    license_id: uuid.UUID, deal_id: uuid.UUID,
+    session: Session = Depends(get_session), x_actor_id: str = Header(default=""),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        repo = DealRepository(session)
+        row = repo.archive(scope, deal_id)
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="deal", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="update",
+            field_changes=diff_fields({"archived": False}, {"archived": True}),
+        )
+        session.commit()
+        return _deal_out(row, repo.products_of(row.id))
+    except Exception as exc:
+        session.rollback()
+        raise _phase9_http_error(exc)
+
+
+@router.get("/public/storefront/products", response_model=list[StorefrontProductOut])
+def storefront_search(q: str, limit: int = 10, session: Session = Depends(get_session)):
+    """Public, cross-tenant, un-scoped — same reasoning as
+    RegistrationRepository.find_shops: a customer browsing the storefront
+    has no tenant yet, that is what this search is for."""
+    results = StorefrontRepository(session).search_products(q, limit=limit)
+    return [StorefrontProductOut(**r) for r in results]
+
+
+@router.post("/public/storefront/interest", response_model=CustomerOut, status_code=201)
+def storefront_record_interest(
+    payload: StorefrontInterestIn, session: Session = Depends(get_session),
+):
+    """9.4's "กดสนใจ" step — creates or updates a Lead in the ONE tenant the
+    customer picked. Every call is cross-tenant by nature (the customer
+    reached this from a cross-tenant search), so the audit row is marked
+    accordingly even though the resulting write itself lands in a single
+    tenant."""
+    try:
+        row = StorefrontRepository(session).record_interest(
+            chann_uid=payload.chann_uid, license_id=payload.license_id,
+            product_name=payload.product_name,
+        )
+        AuditRepository(session).write(
+            license_id=payload.license_id, entity_type="customer", entity_id=row.id,
+            actor_type="user", actor_id=payload.chann_uid, action="create",
+            field_changes=diff_fields({}, {"stage": row.stage, "source": "storefront"}),
+            cross_tenant=True,
+        )
+        session.commit()
+        return CustomerOut.model_validate(row, from_attributes=True)
+    except Exception as exc:
+        session.rollback()
+        raise _phase9_http_error(exc)

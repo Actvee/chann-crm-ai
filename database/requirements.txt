@@ -2,3 +2,7 @@ alembic==1.14.0
 sqlalchemy==2.0.36
 psycopg[binary]==3.2.3
 argon2-cffi==23.1.0
+# env.py imports chann_data.db -> chann_data.config, which needs these even
+# though this package never runs the API server itself.
+pydantic==2.10.4
+pydantic-settings==2.7.0

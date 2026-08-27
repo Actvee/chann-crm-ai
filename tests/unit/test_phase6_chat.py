@@ -26,6 +26,7 @@ from chann_app.services.chat import (  # noqa: E402
     greet,
     handle_chat_message,
     handle_reply,
+    maybe_handle_storefront,
     required_permission,
     suggest_what_you_can_do,
 )
@@ -58,8 +59,13 @@ class FakeDataClient:
     """Stands in for the Data tier. Records what the engine asked it for."""
 
     def __init__(self, *, role="sales", permission_keys=None, mapping=None,
-                 pending_intent=None):
+                 pending_intent=None, customers=None, deals=None,
+                 storefront_results=None):
         self._role = role
+        self._customers = list(customers) if customers is not None else []
+        self._deals = list(deals) if deals is not None else []
+        self._next_deal_n = 1
+        self._storefront_results = storefront_results or []
         self._pending = pending_intent
         self._permission_keys = list(
             permission_keys if permission_keys is not None else ["customer.read"]
@@ -108,6 +114,76 @@ class FakeDataClient:
         self.recorded.append(("create_invite", license_id, payload, actor_id))
         return {"invite_code": "ABC234XY7Z", "role": payload["role"],
                 "license_id": license_id}
+
+    # ------------------------------------------------------------ Phase 9 CRM
+
+    async def create_customer(self, license_id, payload, actor_id=None):
+        self.recorded.append(("create_customer", license_id, payload, actor_id))
+        row = {
+            "id": f"CUST-{len(self._customers) + 1}", "license_id": license_id,
+            "customer_chann_uid": None, "stage": "lead", "owner_member_id": None,
+            "first_name": payload.get("first_name"), "last_name": payload.get("last_name"),
+            "phone": payload.get("phone"), "email": payload.get("email"),
+            "address": payload.get("address"), "notes": payload.get("notes"),
+        }
+        self._customers.append(row)
+        return row
+
+    async def list_customers(self, license_id, stage=None):
+        self.recorded.append(("list_customers", license_id, stage))
+        if stage:
+            return [c for c in self._customers if c["stage"] == stage]
+        return list(self._customers)
+
+    async def update_customer(self, license_id, customer_id, fields, actor_id=None):
+        self.recorded.append(("update_customer", license_id, customer_id, fields, actor_id))
+        row = next(c for c in self._customers if c["id"] == customer_id)
+        row.update(fields)
+        return row
+
+    async def promote_customer(self, license_id, customer_id, actor_id=None):
+        self.recorded.append(("promote_customer", license_id, customer_id, actor_id))
+        row = next(c for c in self._customers if c["id"] == customer_id)
+        row["stage"] = "contact"
+        return row
+
+    async def create_deal(self, license_id, payload, actor_id=None):
+        self.recorded.append(("create_deal", license_id, payload, actor_id))
+        deal_id = f"D-2026-{self._next_deal_n:04d}"
+        self._next_deal_n += 1
+        row = {
+            "id": f"DEAL-{len(self._deals) + 1}", "license_id": license_id,
+            "deal_id": deal_id, "contact_id": payload["contact_id"],
+            "stage": "new", "owner_member_id": None, "notes": payload.get("notes"),
+            "products": [],
+        }
+        self._deals.append(row)
+        return row
+
+    async def list_deals(self, license_id, stage=None):
+        self.recorded.append(("list_deals", license_id, stage))
+        if stage:
+            return [d for d in self._deals if d["stage"] == stage]
+        return list(self._deals)
+
+    async def transition_deal_stage(self, license_id, deal_id, stage, *,
+                                     allow_reopen=False, actor_id=None):
+        self.recorded.append(
+            ("transition_deal_stage", license_id, deal_id, stage, allow_reopen, actor_id)
+        )
+        row = next(d for d in self._deals if d["id"] == deal_id)
+        row["stage"] = stage
+        return row
+
+    async def storefront_search(self, q, limit=10):
+        self.recorded.append(("storefront_search", q, limit))
+        return list(self._storefront_results)
+
+    async def storefront_record_interest(self, *, chann_uid, license_id, product_name):
+        self.recorded.append(
+            ("storefront_record_interest", chann_uid, license_id, product_name)
+        )
+        return {"id": "CUST-STOREFRONT-1", "license_id": license_id, "stage": "lead"}
 
 
 def _ctx(resolution=TenantResolution.SINGLE, display_name="LINE Name",
@@ -177,13 +253,12 @@ class TestSlotFilling:
     async def test_complete_message_proceeds_past_slot_filling(self):
         ai = httpx.AsyncClient(transport=_ai(json.dumps(
                 {"action": "create", "entity": "customer",
-                 "fields": {"name": "สมชาย"}, "missing": []}, ensure_ascii=False)))
+                 "fields": {"first_name": "สมชาย"}, "missing": []}, ensure_ascii=False)))
         reply = await handle_chat_message(
             FakeDataClient(permission_keys=["customer.create"]),
             message="เพิ่มลูกค้าชื่อสมชาย", ctx=_ctx(), ai_client=ai,
         )
         assert "กรุณาระบุ" not in reply.text
-        assert reply.intent["fields"]["name"] == "สมชาย"
         assert reply.entity_type == "customer"
 
     async def test_missing_is_asked_before_permission_is_considered(self):
@@ -467,12 +542,12 @@ class TestPermissionGateIsEnforcedInCode:
     async def test_known_entity_with_permission_proceeds(self):
         ai = httpx.AsyncClient(transport=_ai(json.dumps(
             {"action": "create", "entity": "customer",
-             "fields": {"name": "สมชาย"}, "missing": []}, ensure_ascii=False)))
+             "fields": {"first_name": "สมชาย"}, "missing": []}, ensure_ascii=False)))
         reply = await handle_chat_message(
             FakeDataClient(permission_keys=["customer.create"]),
             message="เพิ่มลูกค้าชื่อสมชาย", ctx=_ctx(), ai_client=ai,
         )
-        assert "เข้าใจแล้ว" in reply.text
+        assert "สมชาย" in reply.text
         assert reply.entity_type == "customer"
 
     async def test_action_aliases_are_normalised(self):
@@ -793,12 +868,17 @@ class TestOAChannelScoping:
         """The counterpart, so the fix cannot pass by refusing everything."""
         ai = httpx.AsyncClient(transport=_ai(json.dumps(
             {"action": "create", "entity": "deal",
-             "fields": {"title": "x"}, "missing": []})))
-        client = FakeDataClient(permission_keys=list(PERMISSION_KEYS))
+             "fields": {"target_name": "สมชาย"}, "missing": []}, ensure_ascii=False)))
+        client = FakeDataClient(
+            permission_keys=list(PERMISSION_KEYS),
+            customers=[{"id": "CUST-1", "first_name": "สมชาย", "last_name": None,
+                        "phone": "0812345678", "email": None, "stage": "lead"}],
+        )
         reply = await handle_chat_message(
             client, message="สร้างดีล", ctx=_ctx(primary_role="sales"), ai_client=ai,
         )
-        assert "เข้าใจแล้ว" in reply.text
+        assert "D-2026-" in reply.text
+        assert any(r[0] == "create_deal" for r in client.recorded)
 
 
 class TestTechnicianInviteRequest:
@@ -846,3 +926,353 @@ class TestTechnicianInviteRequest:
         )
         assert not any(r[0] == "create_invite" for r in client.recorded)
         assert "ABC234XY7Z" not in reply.text
+
+
+class TestPhase9CustomerChat:
+    """Master Spec 9.5/9.7 — chat-side dispatch. Data-tier correctness
+    (uniqueness, cross-tenant isolation) is covered by the Postgres
+    integration suite; these cover intent -> real Data-tier call wiring."""
+
+    async def test_create_customer_with_a_name_succeeds(self):
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "create", "entity": "customer",
+             "fields": {"first_name": "สมชาย", "phone": "0812345678"},
+             "missing": []}, ensure_ascii=False)))
+        client = FakeDataClient(permission_keys=["customer.create"])
+        reply = await handle_chat_message(
+            client, message="เพิ่มลูกค้าชื่อสมชาย เบอร์ 0812345678",
+            ctx=_ctx(primary_role="sales"), ai_client=ai,
+        )
+        assert "สมชาย" in reply.text
+        assert reply.entity_type == "customer"
+        assert any(r[0] == "create_customer" for r in client.recorded)
+
+    async def test_create_customer_with_nothing_at_all_is_refused(self):
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "create", "entity": "customer", "fields": {}, "missing": []})))
+        client = FakeDataClient(permission_keys=["customer.create"])
+        reply = await handle_chat_message(
+            client, message="เพิ่มลูกค้า", ctx=_ctx(primary_role="sales"), ai_client=ai,
+        )
+        assert "กรุณาระบุ" in reply.text
+        assert not any(r[0] == "create_customer" for r in client.recorded)
+
+    async def test_update_customer_by_name(self):
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "update", "entity": "customer",
+             "fields": {"target_name": "สมชาย", "phone": "0899999999"},
+             "missing": []}, ensure_ascii=False)))
+        client = FakeDataClient(
+            permission_keys=["customer.update"],
+            customers=[{"id": "CUST-1", "first_name": "สมชาย", "last_name": None,
+                        "phone": "0812345678", "email": None, "stage": "lead"}],
+        )
+        reply = await handle_chat_message(
+            client, message="แก้เบอร์ลูกค้าสมชายเป็น 0899999999",
+            ctx=_ctx(primary_role="sales"), ai_client=ai,
+        )
+        assert any(r[0] == "update_customer" for r in client.recorded)
+        assert "สมชาย" in reply.text
+
+    async def test_update_customer_not_found(self):
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "update", "entity": "customer",
+             "fields": {"target_name": "วิชัย", "phone": "0899999999"},
+             "missing": []}, ensure_ascii=False)))
+        client = FakeDataClient(permission_keys=["customer.update"], customers=[])
+        reply = await handle_chat_message(
+            client, message="แก้เบอร์ลูกค้าวิชัย", ctx=_ctx(primary_role="sales"), ai_client=ai,
+        )
+        assert "ไม่พบลูกค้า" in reply.text
+        assert not any(r[0] == "update_customer" for r in client.recorded)
+
+    async def test_update_customer_ambiguous_name_asks_to_clarify(self):
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "update", "entity": "customer",
+             "fields": {"target_name": "สมชาย", "phone": "0899999999"},
+             "missing": []}, ensure_ascii=False)))
+        client = FakeDataClient(
+            permission_keys=["customer.update"],
+            customers=[
+                {"id": "CUST-1", "first_name": "สมชาย", "last_name": "ใจดี",
+                 "phone": "0811111111", "email": None, "stage": "lead"},
+                {"id": "CUST-2", "first_name": "สมชาย", "last_name": "มั่งมี",
+                 "phone": "0822222222", "email": None, "stage": "lead"},
+            ],
+        )
+        reply = await handle_chat_message(
+            client, message="แก้เบอร์ลูกค้าสมชาย", ctx=_ctx(primary_role="sales"), ai_client=ai,
+        )
+        assert "หลายคน" in reply.text
+        assert not any(r[0] == "update_customer" for r in client.recorded)
+
+    async def test_promote_lead_to_contact(self):
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "promote", "entity": "customer",
+             "fields": {"target_name": "สมชาย"}, "missing": []}, ensure_ascii=False)))
+        client = FakeDataClient(
+            permission_keys=["customer.update"],
+            customers=[{"id": "CUST-1", "first_name": "สมชาย", "last_name": None,
+                        "phone": "0812345678", "email": None, "stage": "lead"}],
+        )
+        reply = await handle_chat_message(
+            client, message="ยืนยันลูกค้าสมชาย", ctx=_ctx(primary_role="sales"), ai_client=ai,
+        )
+        assert any(r[0] == "promote_customer" for r in client.recorded)
+        assert "สมชาย" in reply.text
+
+
+class TestPhase9DealChat:
+    async def test_create_deal_for_an_existing_customer(self):
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "create", "entity": "deal",
+             "fields": {"target_name": "สมชาย"}, "missing": []}, ensure_ascii=False)))
+        client = FakeDataClient(
+            permission_keys=["deal.create"],
+            customers=[{"id": "CUST-1", "first_name": "สมชาย", "last_name": None,
+                        "phone": "0812345678", "email": None, "stage": "contact"}],
+        )
+        reply = await handle_chat_message(
+            client, message="สร้างดีลให้สมชาย", ctx=_ctx(primary_role="sales"), ai_client=ai,
+        )
+        assert "D-2026-" in reply.text
+        assert any(r[0] == "create_deal" for r in client.recorded)
+
+    async def test_create_deal_without_naming_a_customer_is_refused(self):
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "create", "entity": "deal", "fields": {}, "missing": []})))
+        client = FakeDataClient(permission_keys=["deal.create"])
+        reply = await handle_chat_message(
+            client, message="สร้างดีล", ctx=_ctx(primary_role="sales"), ai_client=ai,
+        )
+        assert "กรุณาระบุชื่อลูกค้า" in reply.text
+        assert not any(r[0] == "create_deal" for r in client.recorded)
+
+    async def test_deal_stage_command_is_matched_directly_not_via_ai(self):
+        """9.6 — closed pattern, no AI call needed at all: ai_client=None
+        must still work."""
+        client = FakeDataClient(
+            permission_keys=["deal.update"],
+            deals=[{"id": "DEAL-1", "deal_id": "D-2026-0001", "stage": "new",
+                    "contact_id": "CUST-1", "notes": None, "products": []}],
+        )
+        reply = await handle_chat_message(
+            client, message="ดีล D-2026-0001 เสนอราคาแล้ว",
+            ctx=_ctx(primary_role="sales"), ai_client=None,
+        )
+        assert "D-2026-0001" in reply.text
+        assert "proposed" in reply.text
+        assert any(r[0] == "transition_deal_stage" for r in client.recorded)
+
+    async def test_deal_stage_command_requires_deal_update_permission(self):
+        client = FakeDataClient(permission_keys=[], deals=[])
+        reply = await handle_chat_message(
+            client, message="ดีล D-2026-0001 ปิดสำเร็จ",
+            ctx=_ctx(primary_role="sales"), ai_client=None,
+        )
+        assert not any(r[0] == "transition_deal_stage" for r in client.recorded)
+
+    async def test_reopen_without_deal_reopen_permission_is_refused(self):
+        client = FakeDataClient(
+            permission_keys=["deal.update"],
+            deals=[{"id": "DEAL-1", "deal_id": "D-2026-0001", "stage": "won",
+                    "contact_id": "CUST-1", "notes": None, "products": []}],
+        )
+        reply = await handle_chat_message(
+            client, message="เปิดดีล D-2026-0001 ใหม่",
+            ctx=_ctx(primary_role="sales"), ai_client=None,
+        )
+        assert "deal.reopen" in reply.text
+        assert not any(r[0] == "transition_deal_stage" for r in client.recorded)
+
+    async def test_reopen_with_deal_reopen_permission_succeeds(self):
+        client = FakeDataClient(
+            permission_keys=["deal.update", "deal.reopen"],
+            deals=[{"id": "DEAL-1", "deal_id": "D-2026-0001", "stage": "won",
+                    "contact_id": "CUST-1", "notes": None, "products": []}],
+        )
+        reply = await handle_chat_message(
+            client, message="เปิดดีล D-2026-0001 ใหม่",
+            ctx=_ctx(primary_role="sales"), ai_client=None,
+        )
+        assert any(r[0] == "transition_deal_stage" for r in client.recorded)
+        assert "new" in reply.text
+
+    async def test_deal_stage_command_only_recognised_on_sales_oa(self):
+        """A Technician OA account must not be able to close deals just
+        because the deal code happens to appear in their message."""
+        client = FakeDataClient(
+            permission_keys=["deal.update"],
+            deals=[{"id": "DEAL-1", "deal_id": "D-2026-0001", "stage": "new",
+                    "contact_id": "CUST-1", "notes": None, "products": []}],
+        )
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "suggest", "suggestions": []})))
+        reply = await handle_chat_message(
+            client, message="D-2026-0001 เสนอราคาแล้ว",
+            ctx=_ctx(primary_role="technician"), ai_client=ai,
+        )
+        assert not any(r[0] == "transition_deal_stage" for r in client.recorded)
+
+    async def test_deal_not_found_is_reported(self):
+        client = FakeDataClient(permission_keys=["deal.update"], deals=[])
+        reply = await handle_chat_message(
+            client, message="ดีล D-2026-9999 ปิดสำเร็จ",
+            ctx=_ctx(primary_role="sales"), ai_client=None,
+        )
+        assert "ไม่พบดีล" in reply.text
+
+    async def test_lost_is_not_misparsed_as_won(self):
+        """"ไม่สำเร็จ" (lost) contains "สำเร็จ" (won) as a literal substring
+        — checking won's keyword first would misclassify every lost deal as
+        won. Regression for exactly that ordering mistake."""
+        client = FakeDataClient(
+            permission_keys=["deal.update"],
+            deals=[{"id": "DEAL-1", "deal_id": "D-2026-0001", "stage": "proposed",
+                    "contact_id": "CUST-1", "notes": None, "products": []}],
+        )
+        reply = await handle_chat_message(
+            client, message="ดีล D-2026-0001 ปิดไม่สำเร็จ",
+            ctx=_ctx(primary_role="sales"), ai_client=None,
+        )
+        call = next(r for r in client.recorded if r[0] == "transition_deal_stage")
+        assert call[3] == "lost"
+        assert "lost" in reply.text
+
+    async def test_reopen_phrase_with_deal_code_in_the_middle(self):
+        """"เปิดดีล D-2026-0001 ใหม่" splits the reopen phrase across the
+        deal code — the code must be stripped before keyword matching, not
+        after, or this never matches at all."""
+        client = FakeDataClient(
+            permission_keys=["deal.update", "deal.reopen"],
+            deals=[{"id": "DEAL-1", "deal_id": "D-2026-0001", "stage": "lost",
+                    "contact_id": "CUST-1", "notes": None, "products": []}],
+        )
+        reply = await handle_chat_message(
+            client, message="เปิดดีล D-2026-0001 ใหม่",
+            ctx=_ctx(primary_role="sales"), ai_client=None,
+        )
+        call = next(r for r in client.recorded if r[0] == "transition_deal_stage")
+        assert call[3] == "new"
+
+
+class TestPhase9Storefront:
+    """Master Spec 9.4 — cross-tenant product search, independent of
+    registration status. Exercises maybe_handle_storefront directly since
+    the webhook-level wiring (checked before is_unregistered) is what
+    actually calls it in production; these confirm the function's own
+    behaviour in isolation.
+    """
+
+    async def test_search_trigger_returns_a_numbered_list(self):
+        client = FakeDataClient(storefront_results=[
+            {"product_id": "P1", "product_name": "พัดลมไอเย็น", "sku": None,
+             "category": None, "unit_price": "3500", "license_id": "LIC-A",
+             "company_name": "ร้าน A"},
+            {"product_id": "P2", "product_name": "พัดลมตั้งพื้น", "sku": None,
+             "category": None, "unit_price": "1200", "license_id": "LIC-B",
+             "company_name": "ร้าน B"},
+        ])
+        reply = await maybe_handle_storefront(
+            client, message="ค้นหา พัดลม",
+            ctx=_ctx(primary_role="customer", oa="customer"), language="th",
+        )
+        assert reply is not None
+        assert "1. พัดลมไอเย็น" in reply.text
+        assert "2. พัดลมตั้งพื้น" in reply.text
+        assert any(r[0] == "set_pending_intent" for r in client.recorded)
+
+    async def test_no_results_says_so(self):
+        client = FakeDataClient(storefront_results=[])
+        reply = await maybe_handle_storefront(
+            client, message="ค้นหา จรวด",
+            ctx=_ctx(primary_role="customer", oa="customer"), language="th",
+        )
+        assert reply is not None
+        assert "ไม่พบสินค้า" in reply.text
+
+    async def test_trigger_with_no_keyword_asks_for_one(self):
+        client = FakeDataClient()
+        reply = await maybe_handle_storefront(
+            client, message="ค้นหา",
+            ctx=_ctx(primary_role="customer", oa="customer"), language="th",
+        )
+        assert reply is not None
+        assert "ค้นหา" in reply.text
+
+    async def test_non_search_message_with_no_pending_returns_none(self):
+        """The caller (webhook.py) must fall through to normal handling —
+        this is the whole reason the function returns None rather than
+        always producing a reply."""
+        client = FakeDataClient(pending_intent=None)
+        reply = await maybe_handle_storefront(
+            client, message="สวัสดีครับ",
+            ctx=_ctx(primary_role="customer", oa="customer"), language="th",
+        )
+        assert reply is None
+
+    async def test_selecting_a_valid_number_records_interest_and_clears_pending(self):
+        client = FakeDataClient(pending_intent={
+            "action": "select", "entity": "storefront",
+            "fields": {"options": [
+                {"product_id": "P1", "product_name": "พัดลมไอเย็น",
+                 "license_id": "LIC-A", "company_name": "ร้าน A"},
+            ]},
+            "missing": [],
+        })
+        reply = await maybe_handle_storefront(
+            client, message="1",
+            ctx=_ctx(primary_role="customer", oa="customer"), language="th",
+        )
+        assert reply is not None
+        assert "พัดลมไอเย็น" in reply.text
+        assert "ร้าน A" in reply.text
+        assert any(r[0] == "storefront_record_interest" for r in client.recorded)
+        assert any(r[0] == "clear_pending_intent" for r in client.recorded)
+
+    async def test_selecting_an_out_of_range_number_is_refused(self):
+        client = FakeDataClient(pending_intent={
+            "action": "select", "entity": "storefront",
+            "fields": {"options": [
+                {"product_id": "P1", "product_name": "พัดลมไอเย็น",
+                 "license_id": "LIC-A", "company_name": "ร้าน A"},
+            ]},
+            "missing": [],
+        })
+        reply = await maybe_handle_storefront(
+            client, message="9",
+            ctx=_ctx(primary_role="customer", oa="customer"), language="th",
+        )
+        assert reply is not None
+        assert "1-1" in reply.text
+        assert not any(r[0] == "storefront_record_interest" for r in client.recorded)
+
+    async def test_pending_selection_that_is_not_a_number_is_refused(self):
+        client = FakeDataClient(pending_intent={
+            "action": "select", "entity": "storefront",
+            "fields": {"options": [
+                {"product_id": "P1", "product_name": "พัดลมไอเย็น",
+                 "license_id": "LIC-A", "company_name": "ร้าน A"},
+            ]},
+            "missing": [],
+        })
+        reply = await maybe_handle_storefront(
+            client, message="เอาอันแรก",
+            ctx=_ctx(primary_role="customer", oa="customer"), language="th",
+        )
+        assert reply is not None
+        assert not any(r[0] == "storefront_record_interest" for r in client.recorded)
+
+    async def test_a_second_unrelated_pending_intent_is_not_mistaken_for_storefront(self):
+        """entity != "storefront" — e.g. a leftover create-customer
+        continuation from Sales OA — must never be treated as a product
+        selection."""
+        client = FakeDataClient(pending_intent={
+            "action": "create", "entity": "customer",
+            "fields": {"first_name": "สมชาย"}, "missing": ["phone"],
+        })
+        reply = await maybe_handle_storefront(
+            client, message="สวัสดี",
+            ctx=_ctx(primary_role="customer", oa="customer"), language="th",
+        )
+        assert reply is None

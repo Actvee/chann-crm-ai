@@ -13,6 +13,7 @@ never actually understood.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 
 from ..data_client import DataClient
@@ -46,6 +47,9 @@ ACTION_PERMISSIONS: dict[tuple[str, str], str] = {
     ("create", "customer"): "customer.create",
     ("update", "customer"): "customer.update",
     ("archive", "customer"): "customer.archive",
+    # 9.5 — confirming a Lead as a Contact is a customer.update-level
+    # action; the spec does not define a separate permission for it.
+    ("promote", "customer"): "customer.update",
     ("read", "deal"): "deal.read",
     ("create", "deal"): "deal.create",
     ("update", "deal"): "deal.update",
@@ -180,6 +184,101 @@ async def _handle_technician_invite_request(
     )
     return ChatReply(
         text=_t(TECHNICIAN_INVITE_REPLY, language).format(code=invite["invite_code"]),
+    )
+
+
+# Deal stage transitions (9.6) are matched directly against the message
+# rather than sent through the AI parser: a deal_id is a stable,
+# machine-parseable token (D-YYYY-NNNN) and the possible stage words are a
+# small closed set — free-text understanding buys nothing here and only
+# risks a hallucinated stage.
+DEAL_ID_RE = re.compile(r"D-\d{4}-\d{4}", re.IGNORECASE)
+
+_DEAL_STAGE_KEYWORDS: tuple[tuple[tuple[str, ...], str], ...] = (
+    # lost checked BEFORE won: "ไม่สำเร็จ" contains "สำเร็จ" as a substring,
+    # so checking won first would misclassify "ปิดไม่สำเร็จ" as a win.
+    (("ปิดไม่สำเร็จ", "ปิดดีลไม่สำเร็จ", "ไม่สำเร็จ", "lost", "lose"), "lost"),
+    (("ปิดสำเร็จ", "ปิดดีลสำเร็จ", "สำเร็จ", "won", "win"), "won"),
+    (("เสนอราคาแล้ว", "เสนอราคา", "proposed", "propose"), "proposed"),
+)
+# Checked separately from the table above: Thai naturally splits this one
+# across the deal code ("เปิดดีล D-2026-0001 ใหม่"), so it needs both words
+# present rather than one contiguous phrase. Safe as an AND-check because a
+# deal code must already be present in the message for this function to be
+# called at all — "เปิด"+"ใหม่" alone, without a deal code anywhere, means
+# nothing here.
+_REOPEN_WORDS = ("เปิด", "ใหม่")
+_REOPEN_ENGLISH = ("reopen",)
+
+
+def _parse_deal_stage_command(message: str) -> tuple[str, str] | None:
+    """Returns (deal_code, target_stage) if the message names a deal AND a
+    recognised stage keyword, else None — a bare deal code with no
+    recognisable stage word is not a command this function claims.
+
+    The deal code is stripped out before keyword matching so its position
+    in the sentence doesn't matter — "เปิดดีล D-2026-0001 ใหม่" and "เปิด
+    D-2026-0001 ใหม่อีกครั้ง" both say the same thing with the code in a
+    different place.
+    """
+    match = DEAL_ID_RE.search(message or "")
+    if not match:
+        return None
+    remainder = (message or "").replace(match.group(0), " ").lower()
+    if any(w in remainder for w in _REOPEN_ENGLISH) or all(w in remainder for w in _REOPEN_WORDS):
+        return match.group(0).upper(), "new"
+    for keywords, stage in _DEAL_STAGE_KEYWORDS:
+        if any(k.lower() in remainder for k in keywords):
+            return match.group(0).upper(), stage
+    return None
+
+
+DEAL_STAGE_UPDATED = {
+    "th": "อัปเดตดีล {deal_id} เป็นสถานะ {stage} เรียบร้อยแล้ว",
+    "en": "Deal {deal_id} is now {stage}.",
+}
+DEAL_STAGE_NOT_FOUND = {
+    "th": "ไม่พบดีลรหัส {deal_id} ในบริษัทนี้",
+    "en": "No deal {deal_id} was found in this company.",
+}
+DEAL_STAGE_ILLEGAL = {
+    "th": "ไม่สามารถเปลี่ยนสถานะดีล {deal_id} ได้ในตอนนี้",
+    "en": "Deal {deal_id} cannot move to that stage right now.",
+}
+DEAL_REOPEN_DENIED = {
+    "th": "การเปิดดีลที่ปิดแล้วใหม่ต้องมีสิทธิ์ deal.reopen",
+    "en": "Reopening a closed deal requires deal.reopen permission",
+}
+
+
+async def _handle_deal_stage_command(
+    client: DataClient, *, license_id, deal_code: str, target_stage: str,
+    permission_keys: list[str], language: str, actor_id: str,
+) -> ChatReply:
+    license_id = str(license_id)
+    deals = await client.list_deals(license_id)
+    match = next((d for d in deals if d["deal_id"].upper() == deal_code), None)
+    if match is None:
+        return ChatReply(text=_t(DEAL_STAGE_NOT_FOUND, language).format(deal_id=deal_code))
+
+    allow_reopen = "deal.reopen" in set(permission_keys)
+    if match["stage"] in ("won", "lost") and target_stage == "new" and not allow_reopen:
+        return ChatReply(text=_t(DEAL_REOPEN_DENIED, language))
+
+    try:
+        row = await client.transition_deal_stage(
+            license_id, match["id"], target_stage,
+            allow_reopen=allow_reopen, actor_id=actor_id,
+        )
+    except Exception as exc:  # noqa: BLE001
+        if _is_conflict(exc):
+            return ChatReply(text=_t(DEAL_STAGE_ILLEGAL, language).format(deal_id=deal_code))
+        if _is_not_found(exc):
+            return ChatReply(text=_t(DEAL_STAGE_NOT_FOUND, language).format(deal_id=deal_code))
+        raise
+    return ChatReply(
+        text=_t(DEAL_STAGE_UPDATED, language).format(deal_id=row["deal_id"], stage=row["stage"]),
+        entity_type="deal", entity_id=row["id"],
     )
 
 
@@ -504,6 +603,10 @@ def _is_conflict(exc: Exception) -> bool:
     return getattr(exc, "status_code", None) == 409 or "409" in str(exc)
 
 
+def _is_not_found(exc: Exception) -> bool:
+    return getattr(exc, "status_code", None) == 404 or "404" in str(exc)
+
+
 async def _handle_profile_intent(
     client: DataClient, *, intent: dict, ctx: ResolvedContext, language: str
 ) -> ChatReply:
@@ -538,6 +641,171 @@ async def _handle_profile_intent(
         text=_t(PROFILE_UPDATED, language),
         entity_type="profile", entity_id=ctx.chann_uid, intent=intent,
     )
+
+
+# ---------------------------------------------------------------- Phase 9 CRM
+
+CUSTOMER_CREATED = {
+    "th": "เพิ่มลูกค้า{name}เรียบร้อยแล้ว",
+    "en": "Added customer {name}.",
+}
+CUSTOMER_NEEDS_SOMETHING = {
+    "th": "กรุณาระบุอย่างน้อยชื่อ เบอร์โทร หรืออีเมลของลูกค้า",
+    "en": "Please provide at least a name, phone, or email for the customer.",
+}
+CUSTOMER_UPDATED = {
+    "th": "แก้ไขข้อมูลลูกค้า{name}เรียบร้อยแล้ว",
+    "en": "Updated customer {name}.",
+}
+CUSTOMER_PROMOTED = {
+    "th": "ยืนยัน{name}เป็นลูกค้าจริง (Contact) แล้ว",
+    "en": "{name} is now a confirmed Contact.",
+}
+CUSTOMER_NOT_FOUND = {
+    "th": "ไม่พบลูกค้าชื่อ {name} ในบริษัทนี้",
+    "en": "No customer named {name} was found in this company.",
+}
+CUSTOMER_AMBIGUOUS = {
+    "th": "พบลูกค้าหลายคนที่ชื่อ {name}: {options} — กรุณาระบุเบอร์โทรด้วย",
+    "en": "Several customers named {name} found: {options} — please include a phone number.",
+}
+CUSTOMER_NEEDS_TARGET_NAME = {
+    "th": "กรุณาระบุชื่อลูกค้าที่ต้องการแก้ไขหรือยืนยัน",
+    "en": "Please say which customer's name you mean.",
+}
+
+DEAL_CREATED = {
+    "th": "สร้างดีล {deal_id} สำหรับ {name} เรียบร้อยแล้ว",
+    "en": "Created deal {deal_id} for {name}.",
+}
+DEAL_NEEDS_TARGET_NAME = {
+    "th": "กรุณาระบุชื่อลูกค้าที่จะสร้างดีลด้วย",
+    "en": "Please say which customer this deal is for.",
+}
+
+
+def _display_name(row: dict) -> str:
+    name = " ".join(p for p in (row.get("first_name"), row.get("last_name")) if p).strip()
+    return name or row.get("phone") or row.get("email") or "(ไม่มีชื่อ)"
+
+
+async def _find_one_customer_by_name(
+    client: DataClient, license_id: str, name: str, language: str,
+) -> tuple[dict | None, ChatReply | None]:
+    """Name-based lookup, because a chat message names a customer by name,
+    never by the internal id nobody but the system ever sees.
+
+    Returns (row, None) on exactly one match, or (None, ChatReply) with a
+    not-found/ambiguous reply the caller should return as-is otherwise —
+    the same "ask to be more specific" shape registration.py's shop search
+    already uses for the identical kind of ambiguity.
+    """
+    name = (name or "").strip()
+    if not name:
+        return None, ChatReply(text=_t(CUSTOMER_NEEDS_TARGET_NAME, language))
+    rows = await client.list_customers(license_id)
+    matches = [
+        r for r in rows
+        if name.lower() in " ".join(
+            p for p in (r.get("first_name"), r.get("last_name")) if p
+        ).lower()
+    ]
+    if not matches:
+        return None, ChatReply(text=_t(CUSTOMER_NOT_FOUND, language).format(name=name))
+    if len(matches) > 1:
+        options = ", ".join(
+            f"{_display_name(m)} ({m.get('phone') or '-'})" for m in matches[:5]
+        )
+        return None, ChatReply(
+            text=_t(CUSTOMER_AMBIGUOUS, language).format(name=name, options=options)
+        )
+    return matches[0], None
+
+
+async def _handle_customer_intent(
+    client: DataClient, *, intent: dict, ctx: ResolvedContext,
+    license_id, language: str,
+) -> ChatReply:
+    action = intent.get("action")
+    fields = intent.get("fields") or {}
+    license_id = str(license_id)
+
+    if action == "create":
+        editable = {
+            k: v for k, v in fields.items()
+            if k in ("first_name", "last_name", "phone", "email", "address", "notes")
+            and v not in (None, "")
+        }
+        if not any(editable.get(k) for k in ("first_name", "last_name", "phone", "email")):
+            return ChatReply(text=_t(CUSTOMER_NEEDS_SOMETHING, language), intent=intent)
+        try:
+            row = await client.create_customer(license_id, editable, actor_id=ctx.chann_uid)
+        except Exception as exc:  # noqa: BLE001
+            if _is_conflict(exc):
+                return ChatReply(text=_t(CUSTOMER_NEEDS_SOMETHING, language), intent=intent)
+            raise
+        return ChatReply(
+            text=_t(CUSTOMER_CREATED, language).format(name=f" {_display_name(row)} "),
+            entity_type="customer", entity_id=row["id"], intent=intent,
+        )
+
+    if action in ("update", "promote"):
+        target_name = fields.get("target_name")
+        row, err = await _find_one_customer_by_name(client, license_id, target_name, language)
+        if err is not None:
+            return err
+        if action == "promote":
+            updated = await client.promote_customer(license_id, row["id"], actor_id=ctx.chann_uid)
+            return ChatReply(
+                text=_t(CUSTOMER_PROMOTED, language).format(name=_display_name(updated)),
+                entity_type="customer", entity_id=updated["id"], intent=intent,
+            )
+        editable = {
+            k: v for k, v in fields.items()
+            if k in ("first_name", "last_name", "phone", "email", "address", "notes")
+            and v not in (None, "")
+        }
+        if not editable:
+            return ChatReply(text=_t(CUSTOMER_NEEDS_SOMETHING, language), intent=intent)
+        updated = await client.update_customer(
+            license_id, row["id"], editable, actor_id=ctx.chann_uid,
+        )
+        return ChatReply(
+            text=_t(CUSTOMER_UPDATED, language).format(name=f" {_display_name(updated)} "),
+            entity_type="customer", entity_id=updated["id"], intent=intent,
+        )
+
+    return ChatReply(text=_pending_execution_reply(intent, language), intent=intent)
+
+
+async def _handle_deal_intent(
+    client: DataClient, *, intent: dict, ctx: ResolvedContext,
+    license_id, permission_keys: list[str], language: str,
+) -> ChatReply:
+    action = intent.get("action")
+    fields = intent.get("fields") or {}
+    license_id = str(license_id)
+
+    if action == "create":
+        target_name = fields.get("target_name")
+        if not (target_name or "").strip():
+            return ChatReply(text=_t(DEAL_NEEDS_TARGET_NAME, language), intent=intent)
+        contact, err = await _find_one_customer_by_name(client, license_id, target_name, language)
+        if err is not None:
+            return err
+        row = await client.create_deal(
+            license_id,
+            {"contact_id": contact["id"], "notes": fields.get("notes")},
+            actor_id=ctx.chann_uid,
+        )
+        return ChatReply(
+            text=_t(DEAL_CREATED, language).format(
+                deal_id=row["deal_id"], name=_display_name(contact),
+            ),
+            entity_type="deal", entity_id=row["id"], intent=intent,
+        )
+
+    return ChatReply(text=_pending_execution_reply(intent, language), intent=intent)
 
 
 # How long an unanswered question stays open. Long enough that a user can
@@ -584,6 +852,108 @@ def _merge_pending(pending: dict, intent: dict) -> dict:
     }
 
 
+# ---------------------------------------------------------------- Storefront
+#
+# 9.4 — Lazada-style cross-tenant product search. Deliberately independent of
+# ctx.resolution: a customer already linked to one shop can still browse and
+# become a Lead at another, and someone with NO link yet can browse before
+# ever choosing one. Handled entirely before the tenant-resolution gate that
+# governs everything else in this function.
+#
+# Spec 9.4/15's own chat wording is "พิมพ์ \"ค้นหา [keyword]\"" — matched
+# directly, not sent through the AI parser: free-text product search is a
+# keyword lookup, not something that benefits from a model call, and a
+# trigger word keeps this from firing on ordinary conversation.
+STOREFRONT_SEARCH_TRIGGERS = ("ค้นหา", "search")
+STOREFRONT_RESULTS_LIMIT = 5
+STOREFRONT_PENDING_TTL_S = 300
+
+STOREFRONT_NO_QUERY = {
+    "th": 'พิมพ์ "ค้นหา" ตามด้วยชื่อสินค้าที่ต้องการ เช่น "ค้นหา พัดลม"',
+    "en": 'Type "search" followed by what you\'re looking for, e.g. "search fan"',
+}
+STOREFRONT_NO_RESULTS = {
+    "th": "ไม่พบสินค้าที่ตรงกับ \"{query}\"",
+    "en": 'No products matched "{query}"',
+}
+STOREFRONT_RESULTS_HEADER = {
+    "th": "พบสินค้าดังนี้ พิมพ์หมายเลขเพื่อสนใจสินค้านั้น:",
+    "en": "Found these products — type the number to express interest:",
+}
+STOREFRONT_INVALID_SELECTION = {
+    "th": "กรุณาพิมพ์หมายเลข 1-{n} จากรายการที่แนะนำ",
+    "en": "Please type a number from 1 to {n} from the list shown",
+}
+STOREFRONT_INTEREST_RECORDED = {
+    "th": "บันทึกความสนใจใน \"{product}\" จากร้าน {shop} เรียบร้อยแล้ว "
+          "ทางร้านจะติดต่อกลับ",
+    "en": 'Recorded your interest in "{product}" from {shop} — they will '
+          "be in touch.",
+}
+
+
+def _parse_storefront_query(message: str) -> str | None:
+    text = (message or "").strip()
+    lowered = text.lower()
+    for trigger in STOREFRONT_SEARCH_TRIGGERS:
+        if lowered.startswith(trigger.lower()):
+            return text[len(trigger):].strip(" \t:：-—")
+    return None
+
+
+def _format_storefront_results(results: list[dict], language: str) -> str:
+    lines = [_t(STOREFRONT_RESULTS_HEADER, language)]
+    for i, r in enumerate(results, start=1):
+        price = f" — {r['unit_price']}" if r.get("unit_price") is not None else ""
+        lines.append(f"{i}. {r['product_name']} ({r['company_name']}){price}")
+    return "\n".join(lines)
+
+
+async def maybe_handle_storefront(
+    client: DataClient, *, message: str, ctx: ResolvedContext, language: str,
+) -> ChatReply | None:
+    """Returns a reply if this message was storefront browsing (a search or
+    a selection from one already in progress), else None so the caller
+    proceeds with its normal tenant-scoped handling."""
+    pending = await client.get_pending_intent(ctx.chann_uid, ctx.oa)
+    if pending is not None and pending.get("entity") == "storefront":
+        options = pending.get("fields", {}).get("options") or []
+        text = (message or "").strip()
+        if not text.isdigit() or not (1 <= int(text) <= len(options)):
+            return ChatReply(
+                text=_t(STOREFRONT_INVALID_SELECTION, language).format(n=len(options))
+            )
+        chosen = options[int(text) - 1]
+        await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
+        row = await client.storefront_record_interest(
+            chann_uid=ctx.chann_uid, license_id=chosen["license_id"],
+            product_name=chosen["product_name"],
+        )
+        return ChatReply(
+            text=_t(STOREFRONT_INTEREST_RECORDED, language).format(
+                product=chosen["product_name"], shop=chosen["company_name"],
+            ),
+            entity_type="customer", entity_id=row["id"],
+        )
+
+    query = _parse_storefront_query(message)
+    if query is None:
+        return None
+    if not query:
+        return ChatReply(text=_t(STOREFRONT_NO_QUERY, language))
+
+    results = await client.storefront_search(query, limit=STOREFRONT_RESULTS_LIMIT)
+    if not results:
+        return ChatReply(text=_t(STOREFRONT_NO_RESULTS, language).format(query=query))
+
+    await client.set_pending_intent(
+        ctx.chann_uid, ctx.oa,
+        action="select", entity="storefront", fields={"options": results}, missing=[],
+        ttl_seconds=STOREFRONT_PENDING_TTL_S,
+    )
+    return ChatReply(text=_format_storefront_results(results, language))
+
+
 async def handle_chat_message(
     client: DataClient,
     *,
@@ -612,6 +982,24 @@ async def handle_chat_message(
     if ctx.oa == "sales" and _is_technician_invite_request(message):
         return await _handle_technician_invite_request(
             client, ctx=ctx, permission_keys=permission_keys, language=language,
+        )
+
+    # Same reasoning: deal stage transitions (9.6) are a closed, deterministic
+    # pattern (a deal code plus a small set of stage keywords) — matched
+    # directly rather than sent through the AI parser, and checked before
+    # pending-intent since it is unrelated to any in-progress slot-filling.
+    deal_stage_cmd = _parse_deal_stage_command(message) if ctx.oa == "sales" else None
+    if deal_stage_cmd is not None:
+        deal_code, target_stage = deal_stage_cmd
+        if "deal.update" not in set(permission_keys):
+            catalog = await client.permission_catalog()
+            return ChatReply(text=suggest_what_you_can_do(
+                _filter_by_oa(permission_keys, ctx.oa), catalog, language,
+                requested_action="update", requested_entity="deal",
+            ))
+        return await _handle_deal_stage_command(
+            client, license_id=license_id, deal_code=deal_code, target_stage=target_stage,
+            permission_keys=permission_keys, language=language, actor_id=ctx.chann_uid,
         )
 
     # What the previous turn was still waiting for, if anything. Loaded before
@@ -700,6 +1088,18 @@ async def handle_chat_message(
                 requested_action=req_action, requested_entity=req_entity,
             ),
             intent=intent,
+        )
+
+    # Domain execution. Phase 9 adds real customer/deal CRUD; everything
+    # else still falls through to the stub below until its own phase lands.
+    if intent.get("entity") == "customer":
+        return await _handle_customer_intent(
+            client, intent=intent, ctx=ctx, license_id=license_id, language=language,
+        )
+    if intent.get("entity") == "deal":
+        return await _handle_deal_intent(
+            client, intent=intent, ctx=ctx, license_id=license_id,
+            permission_keys=permission_keys, language=language,
         )
 
     # Domain execution arrives with the entities themselves (Phase 7+). Until

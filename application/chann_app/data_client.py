@@ -605,3 +605,130 @@ class DataClient:
             headers=self._headers,
         )
         self._unwrap(resp)
+
+    # ------------------------------------------------------------ Phase 9 CRM
+
+    async def create_customer(
+        self, license_id: str, payload: dict, actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/customers",
+            headers=self._headers_for(actor_id), json=payload,
+        )
+        return self._unwrap(resp)
+
+    async def get_customer(self, license_id: str, customer_id: str) -> dict | None:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/customers/{customer_id}",
+            headers=self._headers,
+        )
+        if resp.status_code == 404:
+            return None
+        return self._unwrap(resp)
+
+    async def list_customers(self, license_id: str, stage: str | None = None) -> list[dict]:
+        params = {"stage": stage} if stage else None
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/customers",
+            headers=self._headers, params=params,
+        )
+        return self._unwrap(resp)
+
+    async def update_customer(
+        self, license_id: str, customer_id: str, fields: dict, actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.patch(
+            f"{self._base}/internal/v1/licenses/{license_id}/customers/{customer_id}",
+            headers=self._headers_for(actor_id), json=fields,
+        )
+        return self._unwrap(resp)
+
+    async def promote_customer(
+        self, license_id: str, customer_id: str, actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/customers/{customer_id}/promote",
+            headers=self._headers_for(actor_id),
+        )
+        return self._unwrap(resp)
+
+    async def archive_customer(
+        self, license_id: str, customer_id: str, actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/customers/{customer_id}/archive",
+            headers=self._headers_for(actor_id),
+        )
+        return self._unwrap(resp)
+
+    async def create_deal(
+        self, license_id: str, payload: dict, actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/deals",
+            headers=self._headers_for(actor_id), json=payload,
+        )
+        return self._unwrap(resp)
+
+    async def get_deal(self, license_id: str, deal_id: str) -> dict | None:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/deals/{deal_id}",
+            headers=self._headers,
+        )
+        if resp.status_code == 404:
+            return None
+        return self._unwrap(resp)
+
+    async def list_deals(self, license_id: str, stage: str | None = None) -> list[dict]:
+        params = {"stage": stage} if stage else None
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/deals",
+            headers=self._headers, params=params,
+        )
+        return self._unwrap(resp)
+
+    async def add_deal_product(
+        self, license_id: str, deal_id: str, payload: dict, actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/deals/{deal_id}/products",
+            headers=self._headers_for(actor_id), json=payload,
+        )
+        return self._unwrap(resp)
+
+    async def transition_deal_stage(
+        self, license_id: str, deal_id: str, stage: str, *,
+        allow_reopen: bool = False, actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/deals/{deal_id}/stage",
+            headers=self._headers_for(actor_id),
+            params={"allow_reopen": allow_reopen}, json={"stage": stage},
+        )
+        return self._unwrap(resp)
+
+    async def archive_deal(
+        self, license_id: str, deal_id: str, actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/deals/{deal_id}/archive",
+            headers=self._headers_for(actor_id),
+        )
+        return self._unwrap(resp)
+
+    async def storefront_search(self, q: str, limit: int = 10) -> list[dict]:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/public/storefront/products",
+            headers=self._headers, params={"q": q, "limit": limit},
+        )
+        return self._unwrap(resp)
+
+    async def storefront_record_interest(
+        self, *, chann_uid: str, license_id: str, product_name: str,
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/public/storefront/interest",
+            headers=self._headers,
+            json={"chann_uid": chann_uid, "license_id": license_id, "product_name": product_name},
+        )
+        return self._unwrap(resp)
