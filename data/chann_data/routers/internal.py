@@ -22,6 +22,7 @@ from ..cache import (
     k_member,
     k_pending_intent,
     k_permissions,
+    k_smartbrowz_token,
 )
 from ..config import settings
 from ..db import get_session
@@ -101,6 +102,8 @@ from ..schemas import (
     QuoteIn,
     QuoteOut,
     QuoteStatusIn,
+    SmartBrowzTokenIn,
+    SmartBrowzTokenOut,
     StorefrontInterestIn,
     StorefrontProductOut,
     AuditLogWriteIn,
@@ -1727,6 +1730,37 @@ def get_last_customer_ref(oa: str, chann_uid: str):
             status_code=status.HTTP_404_NOT_FOUND, detail="no recent customer reference"
         )
     return LastCustomerRefOut(**raw)
+
+
+@router.put("/chat/smartbrowz-token", status_code=204)
+def set_smartbrowz_token(payload: SmartBrowzTokenIn):
+    """Phase 10 — caches a freshly-refreshed SmartBrowz access token.
+
+    Global (no chann_uid/oa in the key — see cache.k_smartbrowz_token for
+    why), so every Application-tier instance shares the same still-valid
+    token instead of each one refreshing independently against Zoho's own
+    rate limit.
+    """
+    cache.set(
+        k_smartbrowz_token(),
+        {"access_token": payload.access_token, "api_domain": payload.api_domain},
+        payload.ttl_seconds,
+    )
+
+
+@router.get("/chat/smartbrowz-token", response_model=SmartBrowzTokenOut)
+def get_smartbrowz_token():
+    raw = cache.get_or_load(k_smartbrowz_token(), ttl_s=0, loader=lambda: None)
+    if raw is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="no cached smartbrowz token"
+        )
+    return SmartBrowzTokenOut(**raw)
+
+
+@router.delete("/chat/smartbrowz-token", status_code=204)
+def clear_smartbrowz_token():
+    cache.invalidate(k_smartbrowz_token())
 
 
 # ---------------------------------------------------------------- Phase 9 CRM

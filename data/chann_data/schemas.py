@@ -618,3 +618,14 @@ class GeneratedDocumentOut(BaseModel):
     renderer: str
     generated_by: uuid.UUID | None
     generated_at: datetime
+
+
+class SmartBrowzTokenIn(BaseModel):
+    access_token: str
+    api_domain: str | None = None
+    ttl_seconds: int = 3300  # slightly under Zoho's real 3600s expiry
+
+
+class SmartBrowzTokenOut(BaseModel):
+    access_token: str
+    api_domain: str | None

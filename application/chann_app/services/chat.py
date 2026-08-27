@@ -707,10 +707,6 @@ CUSTOMER_NOT_FOUND = {
     "th": "ไม่พบลูกค้าชื่อ {name} ในบริษัทนี้",
     "en": "No customer named {name} was found in this company.",
 }
-CUSTOMER_AMBIGUOUS = {
-    "th": "พบลูกค้าหลายคนที่ชื่อ {name}: {options} — กรุณาระบุเบอร์โทรด้วย",
-    "en": "Several customers named {name} found: {options} — please include a phone number.",
-}
 CUSTOMER_NEEDS_TARGET_NAME = {
     "th": "กรุณาระบุชื่อลูกค้าที่ต้องการแก้ไขหรือยืนยัน",
     "en": "Please say which customer's name you mean.",
@@ -731,16 +727,52 @@ def _display_name(row: dict) -> str:
     return name or row.get("phone") or row.get("email") or "(ไม่มีชื่อ)"
 
 
+CUSTOMER_DISAMBIGUATION_HEADER = {
+    "th": "พบลูกค้าชื่อ {name} หลายคน กรุณาพิมพ์หมายเลขเพื่อเลือก:",
+    "en": "Found several customers named {name} — reply with the number to choose:",
+}
+CUSTOMER_DISAMBIGUATION_INVALID = {
+    "th": "กรุณาพิมพ์หมายเลข 1-{n} จากรายการที่แนะนำ",
+    "en": "Please type a number from 1 to {n} from the list shown",
+}
+# Long enough that picking up a Word doc, checking with a colleague, or
+# just pausing mid-conversation doesn't lose the list; short enough that a
+# stale unanswered "which one?" goes cold before it could be answered
+# against the wrong context days later. Matches the storefront selection
+# TTL (STOREFRONT_PENDING_TTL_S) for the same reasoning.
+CUSTOMER_DISAMBIGUATION_TTL_S = 300
+# How many candidates to offer — long enough to almost never truncate a
+# real disambiguation (shared first+last name AND same tenant is already
+# rare), short enough that a LINE reply listing them stays readable.
+CUSTOMER_DISAMBIGUATION_MAX = 9
+
+
+def _format_customer_candidates(candidates: list[dict], language: str, name: str) -> str:
+    lines = [_t(CUSTOMER_DISAMBIGUATION_HEADER, language).format(name=name)]
+    for i, m in enumerate(candidates, start=1):
+        phone = m.get("phone") or "-"
+        lines.append(f"{i}. {_display_name(m)} ({phone})")
+    return "\n".join(lines)
+
+
 async def _find_one_customer_by_name(
-    client: DataClient, license_id: str, name: str, language: str,
+    client: DataClient, license_id: str, name: str, language: str, *,
+    ctx: ResolvedContext | None = None, resume_entity: str | None = None,
+    resume_action: str | None = None, resume_fields: dict | None = None,
 ) -> tuple[dict | None, ChatReply | None]:
     """Name-based lookup, because a chat message names a customer by name,
     never by the internal id nobody but the system ever sees.
 
     Returns (row, None) on exactly one match, or (None, ChatReply) with a
-    not-found/ambiguous reply the caller should return as-is otherwise —
-    the same "ask to be more specific" shape registration.py's shop search
-    already uses for the identical kind of ambiguity.
+    not-found/ambiguous reply the caller should return as-is otherwise.
+
+    Reported live: an ambiguous match ("มีสมชายหลายคน") used to just list
+    the candidates as text and ask the user to type something more
+    specific — no way to simply pick one. When ctx/resume_* are given (the
+    normal case from every real caller), an ambiguous match now also
+    stores a pending_intent carrying enough to finish the ORIGINAL
+    action once the user replies with a bare number — see
+    _resolve_customer_disambiguation, which is what actually consumes it.
     """
     name = (name or "").strip()
     if not name:
@@ -755,13 +787,70 @@ async def _find_one_customer_by_name(
     if not matches:
         return None, ChatReply(text=_t(CUSTOMER_NOT_FOUND, language).format(name=name))
     if len(matches) > 1:
-        options = ", ".join(
-            f"{_display_name(m)} ({m.get('phone') or '-'})" for m in matches[:5]
-        )
-        return None, ChatReply(
-            text=_t(CUSTOMER_AMBIGUOUS, language).format(name=name, options=options)
-        )
+        candidates = matches[:CUSTOMER_DISAMBIGUATION_MAX]
+        if ctx is not None:
+            await client.set_pending_intent(
+                ctx.chann_uid, ctx.oa,
+                action="resolve", entity="customer_disambiguation",
+                fields={
+                    "resume_entity": resume_entity, "resume_action": resume_action,
+                    "resume_fields": resume_fields or {}, "candidates": candidates,
+                },
+                missing=[], ttl_seconds=CUSTOMER_DISAMBIGUATION_TTL_S,
+            )
+        return None, ChatReply(text=_format_customer_candidates(candidates, language, name))
     return matches[0], None
+
+
+async def _resolve_customer_disambiguation(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
+    pending: dict, permission_keys: list[str], language: str,
+) -> ChatReply:
+    """Consumes the pending_intent _find_one_customer_by_name stores on an
+    ambiguous match — a bare number reply here finishes whatever the
+    original request was (update/promote a customer, or create a deal
+    naming one), never re-asks the AI to re-parse a lone digit."""
+    fields = pending.get("fields") or {}
+    candidates = fields.get("candidates") or []
+    text = (message or "").strip()
+    if not text.isdigit() or not (1 <= int(text) <= len(candidates)):
+        return ChatReply(
+            text=_t(CUSTOMER_DISAMBIGUATION_INVALID, language).format(n=len(candidates))
+        )
+    chosen = candidates[int(text) - 1]
+    await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
+
+    resume_entity = fields.get("resume_entity")
+    resume_action = fields.get("resume_action")
+    resume_fields = fields.get("resume_fields") or {}
+    license_id = str(license_id)
+
+    if resume_entity == "customer":
+        needed = required_permission(resume_action or "", "customer")
+        if needed is None or needed not in set(permission_keys) or not _oa_allows(ctx.oa, needed):
+            catalog = await client.permission_catalog()
+            return ChatReply(text=suggest_what_you_can_do(
+                _filter_by_oa(permission_keys, ctx.oa), catalog, language,
+                requested_action=resume_action, requested_entity="customer",
+            ))
+        return await _apply_customer_action(
+            client, chosen_row=chosen, action=resume_action or "", fields=resume_fields,
+            ctx=ctx, license_id=license_id, language=language,
+        )
+    if resume_entity == "deal":
+        needed = required_permission(resume_action or "", "deal")
+        if needed is None or needed not in set(permission_keys) or not _oa_allows(ctx.oa, needed):
+            catalog = await client.permission_catalog()
+            return ChatReply(text=suggest_what_you_can_do(
+                _filter_by_oa(permission_keys, ctx.oa), catalog, language,
+                requested_action=resume_action, requested_entity="deal",
+            ))
+        return await _apply_deal_create(
+            client, contact=chosen, fields=resume_fields,
+            ctx=ctx, license_id=license_id, language=language,
+        )
+    # Not a shape this function ever wrote itself — never crash on it.
+    return ChatReply(text=unavailable_reply(language))
 
 
 async def _handle_customer_intent(
@@ -813,35 +902,34 @@ async def _handle_customer_intent(
 
     if action in ("update", "promote"):
         target_name = fields.get("target_name")
-        row, err = await _find_one_customer_by_name(client, license_id, target_name, language)
+        row, err = await _find_one_customer_by_name(
+            client, license_id, target_name, language,
+            ctx=ctx, resume_entity="customer", resume_action=action, resume_fields=fields,
+        )
         if err is not None:
             return err
-        if action == "promote":
-            try:
-                updated = await client.promote_customer(
-                    license_id, row["id"], actor_id=ctx.chann_uid,
-                )
-            except Exception as exc:  # noqa: BLE001
-                if _is_not_found(exc):
-                    return ChatReply(text=_t(CUSTOMER_NOT_FOUND, language).format(
-                        name=_display_name(row)
-                    ))
-                raise
-            await _remember_customer(client, ctx, updated)
-            return ChatReply(
-                text=_t(CUSTOMER_PROMOTED, language).format(name=_display_name(updated)),
-                entity_type="customer", entity_id=updated["id"], intent=intent,
-            )
-        editable = {
-            k: v for k, v in fields.items()
-            if k in ("first_name", "last_name", "phone", "email", "address", "notes")
-            and v not in (None, "")
-        }
-        if not editable:
-            return ChatReply(text=_t(CUSTOMER_NEEDS_SOMETHING, language), intent=intent)
+        return await _apply_customer_action(
+            client, chosen_row=row, action=action, fields=fields,
+            ctx=ctx, license_id=license_id, language=language,
+        )
+
+    return ChatReply(text=_pending_execution_reply(intent, language), intent=intent)
+
+
+async def _apply_customer_action(
+    client: DataClient, *, chosen_row: dict, action: str, fields: dict,
+    ctx: ResolvedContext, license_id: str, language: str,
+) -> ChatReply:
+    """The actual update/promote work, factored out of _handle_customer_intent
+    so a resumed disambiguation (9.7 follow-up: multiple customers shared a
+    name, the user picked one from a numbered list) can reach it directly
+    with the already-resolved row, instead of repeating the name lookup a
+    second time against a customer that's already been chosen."""
+    row = chosen_row
+    if action == "promote":
         try:
-            updated = await client.update_customer(
-                license_id, row["id"], editable, actor_id=ctx.chann_uid,
+            updated = await client.promote_customer(
+                license_id, row["id"], actor_id=ctx.chann_uid,
             )
         except Exception as exc:  # noqa: BLE001
             if _is_not_found(exc):
@@ -851,11 +939,31 @@ async def _handle_customer_intent(
             raise
         await _remember_customer(client, ctx, updated)
         return ChatReply(
-            text=_t(CUSTOMER_UPDATED, language).format(name=f" {_display_name(updated)} "),
-            entity_type="customer", entity_id=updated["id"], intent=intent,
+            text=_t(CUSTOMER_PROMOTED, language).format(name=_display_name(updated)),
+            entity_type="customer", entity_id=updated["id"],
         )
-
-    return ChatReply(text=_pending_execution_reply(intent, language), intent=intent)
+    editable = {
+        k: v for k, v in fields.items()
+        if k in ("first_name", "last_name", "phone", "email", "address", "notes")
+        and v not in (None, "")
+    }
+    if not editable:
+        return ChatReply(text=_t(CUSTOMER_NEEDS_SOMETHING, language))
+    try:
+        updated = await client.update_customer(
+            license_id, row["id"], editable, actor_id=ctx.chann_uid,
+        )
+    except Exception as exc:  # noqa: BLE001
+        if _is_not_found(exc):
+            return ChatReply(text=_t(CUSTOMER_NOT_FOUND, language).format(
+                name=_display_name(row)
+            ))
+        raise
+    await _remember_customer(client, ctx, updated)
+    return ChatReply(
+        text=_t(CUSTOMER_UPDATED, language).format(name=f" {_display_name(updated)} "),
+        entity_type="customer", entity_id=updated["id"],
+    )
 
 
 async def _remember_customer(client: DataClient, ctx: ResolvedContext, row: dict) -> None:
@@ -887,7 +995,6 @@ async def _handle_deal_intent(
 
     if action == "create":
         target_name = fields.get("target_name")
-        used_context = False
         if not (target_name or "").strip():
             # No name at all — fall back to whoever was just discussed,
             # rather than refusing outright. A wrong guess here would be
@@ -898,34 +1005,51 @@ async def _handle_deal_intent(
             if last_ref is None:
                 return ChatReply(text=_t(DEAL_NEEDS_TARGET_NAME, language), intent=intent)
             contact = {"id": last_ref["customer_id"], "first_name": last_ref["name"]}
-            used_context = True
-        else:
-            contact, err = await _find_one_customer_by_name(
-                client, license_id, target_name, language,
+            return await _apply_deal_create(
+                client, contact=contact, fields=fields, ctx=ctx,
+                license_id=license_id, language=language, used_context=True,
             )
-            if err is not None:
-                return err
-        try:
-            row = await client.create_deal(
-                license_id,
-                {"contact_id": contact["id"], "notes": fields.get("notes")},
-                actor_id=ctx.chann_uid,
-            )
-        except Exception as exc:  # noqa: BLE001
-            if _is_not_found(exc):
-                return ChatReply(text=_t(CUSTOMER_NOT_FOUND, language).format(
-                    name=_display_name(contact)
-                ))
-            raise
-        template = DEAL_CREATED_FROM_CONTEXT if used_context else DEAL_CREATED
-        return ChatReply(
-            text=_t(template, language).format(
-                deal_id=row["deal_id"], name=_display_name(contact),
-            ),
-            entity_type="deal", entity_id=row["id"], intent=intent,
+        contact, err = await _find_one_customer_by_name(
+            client, license_id, target_name, language,
+            ctx=ctx, resume_entity="deal", resume_action="create", resume_fields=fields,
+        )
+        if err is not None:
+            return err
+        return await _apply_deal_create(
+            client, contact=contact, fields=fields, ctx=ctx,
+            license_id=license_id, language=language,
         )
 
     return ChatReply(text=_pending_execution_reply(intent, language), intent=intent)
+
+
+async def _apply_deal_create(
+    client: DataClient, *, contact: dict, fields: dict, ctx: ResolvedContext,
+    license_id: str, language: str, used_context: bool = False,
+) -> ChatReply:
+    """The actual deal-creation work, factored out of _handle_deal_intent
+    so a resumed disambiguation (multiple customers shared a name, the
+    user picked one from a numbered list) can reach it directly with the
+    already-resolved contact, instead of repeating the name lookup."""
+    try:
+        row = await client.create_deal(
+            license_id,
+            {"contact_id": contact["id"], "notes": fields.get("notes")},
+            actor_id=ctx.chann_uid,
+        )
+    except Exception as exc:  # noqa: BLE001
+        if _is_not_found(exc):
+            return ChatReply(text=_t(CUSTOMER_NOT_FOUND, language).format(
+                name=_display_name(contact)
+            ))
+        raise
+    template = DEAL_CREATED_FROM_CONTEXT if used_context else DEAL_CREATED
+    return ChatReply(
+        text=_t(template, language).format(
+            deal_id=row["deal_id"], name=_display_name(contact),
+        ),
+        entity_type="deal", entity_id=row["id"],
+    )
 
 
 PRODUCT_SAVED = {
@@ -1297,6 +1421,21 @@ async def handle_chat_message(
     # parsing so the model can be told about it — a bare "0812345678" is not
     # parseable in isolation, only as the answer to a question that was asked.
     pending_intent = await client.get_pending_intent(ctx.chann_uid, ctx.oa)
+
+    # A bare number answering "which one did you mean?" is a closed,
+    # deterministic pattern — same reasoning as deal-stage-command and
+    # technician-invite above: matched directly, never sent through the AI
+    # parser, since a lone digit carries no meaning parse_intent could
+    # recover on its own anyway.
+    if (
+        pending_intent is not None
+        and pending_intent.get("entity") == "customer_disambiguation"
+        and (message or "").strip().isdigit()
+    ):
+        return await _resolve_customer_disambiguation(
+            client, ctx=ctx, license_id=license_id, message=message,
+            pending=pending_intent, permission_keys=permission_keys, language=language,
+        )
 
     try:
         intent = await parse_intent(

@@ -635,6 +635,31 @@ class DataClient:
             return None
         return self._unwrap(resp)
 
+    async def set_smartbrowz_token(
+        self, access_token: str, *, api_domain: str | None = None, ttl_seconds: int = 3300,
+    ) -> None:
+        resp = await self._client.put(
+            f"{self._base}/internal/v1/chat/smartbrowz-token",
+            headers=self._headers,
+            json={"access_token": access_token, "api_domain": api_domain,
+                  "ttl_seconds": ttl_seconds},
+        )
+        self._unwrap(resp)
+
+    async def get_smartbrowz_token(self) -> dict | None:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/chat/smartbrowz-token", headers=self._headers,
+        )
+        if resp.status_code == 404:
+            return None
+        return self._unwrap(resp)
+
+    async def clear_smartbrowz_token(self) -> None:
+        resp = await self._client.delete(
+            f"{self._base}/internal/v1/chat/smartbrowz-token", headers=self._headers,
+        )
+        self._unwrap(resp)
+
     # ------------------------------------------------------------ Phase 9 CRM
 
     async def create_customer(

@@ -46,6 +46,20 @@ class Settings(BaseSettings):
     catalyst_project_id: str = ""
     catalyst_environment: str = "Development"
 
+    # SmartBrowz OAuth (Master Spec 10.6) — a separate accounts-domain
+    # token exchange from the api-domain calls above. accounts_url is
+    # datacenter-specific (accounts.zoho.com / accounts.zoho.eu / etc. —
+    # whichever matches the Catalyst project's own datacenter); the wrong
+    # one will reject the refresh_token outright. client_id/client_secret
+    # come from the Catalyst API Console's Self Client; refresh_token is
+    # the one-time grant token already exchanged (never regenerated
+    # automatically — only the access_token this refresh_token produces
+    # expires and gets renewed).
+    smartbrowz_accounts_url: str = "https://accounts.zoho.com"
+    smartbrowz_client_id: str = ""
+    smartbrowz_client_secret: str = ""
+    smartbrowz_refresh_token: str = ""
+
     class Config:
         env_file = ".env"
         extra = "ignore"

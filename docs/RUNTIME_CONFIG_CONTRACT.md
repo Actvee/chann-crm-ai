@@ -52,7 +52,10 @@
 | `SMARTBROWZ_RENDER_MODE` | REQUIRED_BY_PHASE_10 | baseline: application-managed HTML -> SmartBrowz PDF; optional predefined-template mode only after verified |
 | `SMARTBROWZ_CATALYST_PROJECT_ID` | REQUIRED_BY_PHASE_10 | Zoho Catalyst project containing SmartBrowz |
 | `SMARTBROWZ_CATALYST_ORG_ID` | REQUIRED_BY_PHASE_10 | Catalyst organization identifier when required by REST integration |
-| SmartBrowz OAuth/API credential variables | REQUIRED_NOT_CONFIGURED | exact names/flow must follow the selected current Catalyst SDK/REST integration; never commit values |
+| `SMARTBROWZ_ACCOUNTS_URL` | REQUIRED_BY_PHASE_10 | datacenter-specific Zoho accounts host for the OAuth token exchange (e.g. `https://accounts.zoho.com`, `https://accounts.zoho.eu`) — must match the datacenter the Catalyst project actually lives in; the wrong one rejects the refresh_token outright |
+| `SMARTBROWZ_CLIENT_ID` | REQUIRED_BY_PHASE_10 | from the Catalyst API Console's Self Client |
+| `SMARTBROWZ_CLIENT_SECRET` | REQUIRED_BY_PHASE_10 | from the Catalyst API Console's Self Client; never commit |
+| `SMARTBROWZ_REFRESH_TOKEN` | REQUIRED_BY_PHASE_10 | one-time grant token already exchanged for a refresh_token — this is the long-lived secret; the access_token it produces is refreshed automatically (`application/chann_app/services/smartbrowz_auth.py`) and never stored outside the Data-tier Redis cache |
 | `GCS_BUCKET_NAME` | REQUIRED_BY_FILE_FEATURES | PDF/photo/signature storage |
 
 ## Data
@@ -71,7 +74,7 @@
 | `SMARTBROWZ_RENDER_MODE` | REQUIRED_BY_PHASE_10 | `html_convert` is the v1 baseline; `predefined_template` is optional after management automation is verified |
 | `SMARTBROWZ_CATALYST_PROJECT_ID` | REQUIRED_BY_PHASE_10 | Catalyst project identifier |
 | `SMARTBROWZ_CATALYST_ORG_ID` | REQUIRED_BY_PHASE_10_WHEN_REST_USED | Catalyst org identifier for REST calls when required |
-| SmartBrowz OAuth/API credentials | REQUIRED_NOT_CONFIGURED | configure outside source control using the current supported Catalyst authentication mechanism |
+| `SMARTBROWZ_ACCOUNTS_URL` / `SMARTBROWZ_CLIENT_ID` / `SMARTBROWZ_CLIENT_SECRET` / `SMARTBROWZ_REFRESH_TOKEN` | REQUIRED_BY_PHASE_10 | token-refresh mechanism already built (`smartbrowz_auth.py`) and tested against a mocked Zoho endpoint; not yet wired to a real SmartBrowz render call, which is separate, later work — see `docs/SESSION_HANDOFF.md` |
 
 Authoring rule: Word/DOCX is an input to the AI-assisted template compiler, not the runtime rendering format. Published Chann CRM template versions are immutable application records. Runtime PDF generation must be deterministic and must not call the LLM.
 

@@ -55,24 +55,163 @@ Registration) → 7 (Master Data) → 8 (Profiles) → OA-scoping/conversation-
 continuity/profile-eligibility fix → OA-aware identity resolution for
 Customer/Technician → Phase 9 (CRM core: customers/deals/storefront) →
 last-customer-reference + product chat command → last_name+phone
-validation rule + safety net → `_unwrap()` 204-body crash fix → **missing-
-field-label translation + storefront confirm-before-search UX, deployed
-and confirmed working by the owner on real LINE traffic.**
+validation rule + safety net → `_unwrap()` 204-body crash fix →
+missing-field-label translation + storefront confirm-before-search UX →
+**Phase 10 quote CRUD + document-template-engine schema, deployed and
+confirmed working by the owner on real LINE traffic** ("สร้างใบเสนอราคาจาก
+ดีล D-2026-XXXX" tested end to end, including the deal-stage-command
+collision fix).
 
-`origin/main` HEAD is **`5becf26` — `fix(phase9): translate missing-field
-labels, confirm before storefront search`**.
+`origin/main` HEAD is **`6eb29f4` — `feat(phase10): quote CRUD + document
+template engine schema`**.
 
-**In progress: Phase 10 (Quote + AI-assisted Document Template + PDF)** —
-see the section immediately below for exactly what's built vs. explicitly
-deferred. Phases 11-20 haven't been started.
+**Not yet deployed (this round):** SmartBrowz OAuth token-refresh
+infrastructure + customer-name-disambiguation numbered selection — see
+the section immediately below. Phases 11-20 haven't been started; the
+DOCX-authoring/AI-mapping/SmartBrowz-render pipeline itself (10.4-10.6)
+is still not built (needs the owner's real SmartBrowz credentials, now
+in progress — see below).
 
 ---
 
-## Uncommitted work waiting to be deployed — Phase 10, quote CRUD only
+## Uncommitted work waiting to be deployed — SmartBrowz token refresh + customer disambiguation
 
-Patch: `phase10-quotes.patch` + `phase10-quotes-deploy.sh`. **Has a real
-migration** (`0009_phase10_quotes_templates`) — the first new one since
-Phase 9's.
+Patch: `phase10-followups.patch` + `phase10-followups-deploy.sh`. Two
+independent additions on top of `6eb29f4` (the real live HEAD). No
+migration.
+
+### 1. SmartBrowz OAuth access-token management, built ahead of real credentials
+
+The owner is preparing a SmartBrowz access token + refresh token
+(Catalyst API Console Self Client). This patch builds the piece that can
+be built and fully tested *before* those credentials exist: automatic
+access-token refresh, so whenever the real SmartBrowz render adapter
+(10.4-10.6, still not built — see below) eventually needs a bearer
+token, it never has to think about expiry itself.
+
+**Architecture note, checked before building:** the Application tier has
+no direct Redis access — `REDIS_URL` is only wired into the Data tier's
+Cloud Run environment (`infrastructure/terraform/cloud_run.tf`'s
+`application_runtime_env` doesn't include it). Caching the access token
+in Application-tier process memory would mean every Cloud Run instance
+refreshing independently on its own cold start, wasting calls against
+Zoho's documented refresh-rate limit (10 access tokens per refresh_token
+per 10 minutes). So the cache lives in the Data tier instead — a new,
+deliberately **global** (not per-tenant) Redis key,
+`k_smartbrowz_token()`, since this is one shared Catalyst project
+credential serving every tenant, not something each company brings its
+own copy of.
+
+`application/chann_app/services/smartbrowz_auth.py`'s
+`SmartBrowzTokenManager`:
+- `get_access_token()` — returns the cached token if the Data tier still
+  has one, otherwise refreshes through Zoho's `/oauth/v2/token` endpoint
+  and caches the result (with a shorter TTL than the token's real
+  expiry — a safety margin, `REFRESH_SKEW_S = 120`, so an in-flight
+  request never races a token about to die).
+- `get_api_domain()` — the datacenter-specific API host Zoho returns
+  alongside the token (e.g. `https://www.zohoapis.com`); the eventual
+  SmartBrowz REST calls need to go to this domain, not a hardcoded one.
+- `invalidate()` — for a caller that gets a 401 despite a cached token
+  looking unexpired (clock skew, a token revoked out-of-band in the
+  console).
+- Missing credentials, a non-200 from Zoho, or Zoho's documented quirk
+  where an *expired/revoked* refresh_token can come back as **HTTP 200
+  with an `error` field in the body** instead of a proper 4xx — all
+  raise `SmartBrowzAuthError` with a clear message, never silently
+  produce a token-shaped string that isn't one. This matters directly for
+  10.6: "provider outage must return a clear render failure and must
+  never cause AI to fabricate a document" — the same principle applies
+  one layer down, at the token itself.
+
+**On scope, honestly:** Zoho's own docs describe the pattern
+`ZohoCatalyst.<module>.<operation>` (confirmed working for other Catalyst
+modules, e.g. `ZohoCatalyst.tables.rows.CREATE`) but say the exact scope
+names available for a given module — including SmartBrowz — are shown in
+the **Catalyst API Console's own scope picker** when generating a Self
+Client grant token, not published as a fixed list anywhere public. Not
+guessed at or hardcoded anywhere in this code: scope is fixed to whatever
+the refresh_token was originally granted for and is never re-sent on
+refresh, so nothing here needs to know the literal scope string. When
+generating the grant token, pick whatever the console shows for
+"generate PDF/screenshot" and "manage templates" — the two capabilities
+Phase 10's eventual render adapter will need — and put the resulting
+refresh_token in `SMARTBROWZ_REFRESH_TOKEN`.
+
+New config (all `REQUIRED_BY_PHASE_10`, all still unset):
+`SMARTBROWZ_ACCOUNTS_URL` (datacenter-specific — must match wherever the
+Catalyst project actually lives, e.g. `accounts.zoho.com` vs
+`accounts.zoho.eu`; the wrong one rejects the refresh_token outright),
+`SMARTBROWZ_CLIENT_ID`, `SMARTBROWZ_CLIENT_SECRET`,
+`SMARTBROWZ_REFRESH_TOKEN`.
+
+**What this patch does NOT do:** call any actual SmartBrowz PDF-generation
+endpoint. That adapter is separate work, still blocked on the same thing
+Phase 10's quote-CRUD patch already flagged — deferred so token-refresh
+correctness and the eventual render adapter aren't both being gotten
+right at the same time.
+
+New test file `tests/unit/test_smartbrowz_auth.py` — 8 tests against a
+real `httpx.MockTransport` for both the Data-tier cache calls and the
+simulated Zoho endpoint (matching `test_data_client.py`'s own reasoning:
+a hand-written fake would bypass the exact HTTP plumbing being tested).
+Covers: refresh-when-nothing-cached, reuse-cached-without-re-calling-
+Zoho, `invalidate()` forces a fresh refresh, missing credentials raise
+clearly, a non-200 from Zoho raises clearly, the HTTP-200-with-error-body
+quirk raises clearly, and the cached TTL is always shorter than the real
+expiry.
+
+### 2. Customer-name disambiguation now offers a numbered selection
+
+Requested directly: if "สร้างดีลให้สมชาย" matches several customers named
+สมชาย, the reply used to just list them as text and ask the user to "be
+more specific" — no way to simply pick one. Fixed: an ambiguous match now
+stores a `pending_intent` (`entity="customer_disambiguation"`) carrying
+the *original* action, fields, and up to 9 candidates, and shows a
+numbered list. A bare number reply is matched deterministically (same
+reasoning as the deal-stage-command and technician-invite triggers — a
+lone digit carries no AI-parseable meaning of its own, so it's handled
+before the AI parser ever runs) and completes whichever original action
+was pending — updating or promoting a customer, or creating a deal that
+named one.
+
+`_apply_customer_action` and `_apply_deal_create` factor the actual
+"do the work" logic out of `_handle_customer_intent`/`_handle_deal_intent`
+so both the normal single-match path and the resumed-after-disambiguation
+path share the same code — the disambiguation resume was written to call
+directly into the already-resolved row, never repeating the name lookup
+against a customer that's already been chosen.
+
+7 new tests: the list actually shows and sets pending state; picking a
+number completes an update, a promote, and a deal-create; an
+out-of-range number asks again without completing anything or clearing
+the pending state; resuming without the right permission is refused; a
+non-numeric reply with disambiguation pending still falls through to the
+normal AI-parsed flow rather than getting stuck demanding a number.
+
+### Validated
+
+On top of `6eb29f4` (the real live HEAD) on a clean clone: applies
+cleanly (3-way), **305 tests pass**, 0 skipped (real Postgres),
+`check-model-kwargs.py` OK, both tiers boot (data 98 routes, app 21
+paths). No migration.
+
+---
+
+## Already deployed (27 Aug 2026) — for context, not action
+
+### 10. Phase 10 — Quote CRUD + document template engine schema (`6eb29f4`)
+
+Confirmed deployed and tested by the owner on real LINE traffic:
+"สร้างใบเสนอราคาจากดีล D-2026-XXXX" creates a real quote (`Q-2026-NNNN`,
+per-tenant), and the deal-stage-command collision found while building
+this ("เสนอราคา" the stage-transition keyword vs. "ใบเสนอราคา" the quote
+noun — see below for the full story) was confirmed fixed: the genuine
+stage-transition phrase still works, and quote creation no longer gets
+silently misrouted into it.
+
+Had a real migration (`0009_phase10_quotes_templates`) — the first new
+one since Phase 9's.
 
 ### Scope decision, made explicitly rather than silently
 
@@ -179,10 +318,6 @@ isolation, cross-tenant deal reference refused cleanly).
   quote creation via chat covers the "generate a quote" runtime path, but
   *authoring* a template by chat alone is a much worse fit than a real
   upload+review UI
-
----
-
-## Already deployed (27 Aug 2026) — for context, not action
 
 ### 9. Missing-field label translation + storefront confirm-before-search UX (`5becf26`)
 

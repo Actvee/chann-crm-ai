@@ -1892,3 +1892,197 @@ class TestPhase10QuoteChat:
         )
         assert any(r[0] == "transition_deal_stage" for r in client.recorded)
         assert "proposed" in reply.text
+
+
+class TestCustomerDisambiguation:
+    """Requested directly: if "สร้างดีลให้สมชาย" matches several customers
+    named สมชาย, offer a numbered list to pick from — not just "please be
+    more specific." """
+
+    async def test_ambiguous_update_shows_a_numbered_list_and_sets_pending(self):
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "update", "entity": "customer",
+             "fields": {"target_name": "สมชาย", "phone": "0899999999"},
+             "missing": []}, ensure_ascii=False)))
+        client = FakeDataClient(
+            permission_keys=["customer.update"],
+            customers=[
+                {"id": "CUST-1", "first_name": "สมชาย", "last_name": "ใจดี",
+                 "phone": "0812345678", "email": None, "stage": "lead"},
+                {"id": "CUST-2", "first_name": "สมชาย", "last_name": "รักไทย",
+                 "phone": "0899999999", "email": None, "stage": "lead"},
+            ],
+        )
+        reply = await handle_chat_message(
+            client, message="แก้เบอร์ลูกค้าสมชาย",
+            ctx=_ctx(primary_role="sales"), ai_client=ai,
+        )
+        assert "1." in reply.text and "2." in reply.text
+        assert "ใจดี" in reply.text and "รักไทย" in reply.text
+        assert not any(r[0] == "update_customer" for r in client.recorded)
+        stored = next(r for r in client.recorded if r[0] == "set_pending_intent")
+        assert stored[3]["entity"] == "customer_disambiguation"
+        assert stored[3]["fields"]["resume_entity"] == "customer"
+        assert stored[3]["fields"]["resume_action"] == "update"
+        assert len(stored[3]["fields"]["candidates"]) == 2
+
+    async def test_picking_a_number_completes_the_original_update(self):
+        client = FakeDataClient(
+            permission_keys=["customer.update"],
+            customers=[
+                {"id": "CUST-1", "first_name": "สมชาย", "last_name": "ใจดี",
+                 "phone": "0812345678", "email": None, "stage": "lead"},
+                {"id": "CUST-2", "first_name": "สมชาย", "last_name": "รักไทย",
+                 "phone": "0800000000", "email": None, "stage": "lead"},
+            ],
+            pending_intent={
+                "action": "resolve", "entity": "customer_disambiguation",
+                "fields": {
+                    "resume_entity": "customer", "resume_action": "update",
+                    "resume_fields": {"phone": "0899999999"},
+                    "candidates": [
+                        {"id": "CUST-1", "first_name": "สมชาย", "last_name": "ใจดี",
+                         "phone": "0812345678"},
+                        {"id": "CUST-2", "first_name": "สมชาย", "last_name": "รักไทย",
+                         "phone": "0800000000"},
+                    ],
+                },
+                "missing": [],
+            },
+        )
+        reply = await handle_chat_message(
+            client, message="2", ctx=_ctx(primary_role="sales"), ai_client=None,
+        )
+        assert "รักไทย" in reply.text
+        call = next(r for r in client.recorded if r[0] == "update_customer")
+        assert call[2] == "CUST-2"
+        assert call[3] == {"phone": "0899999999"}
+        assert any(r[0] == "clear_pending_intent" for r in client.recorded)
+
+    async def test_picking_a_number_completes_the_original_promote(self):
+        client = FakeDataClient(
+            permission_keys=["customer.update"],
+            customers=[
+                {"id": "CUST-1", "first_name": "สมชาย", "last_name": "ใจดี",
+                 "phone": "0812345678", "email": None, "stage": "lead"},
+                {"id": "CUST-2", "first_name": "สมชาย", "last_name": "รักไทย",
+                 "phone": "0800000000", "email": None, "stage": "lead"},
+            ],
+            pending_intent={
+                "action": "resolve", "entity": "customer_disambiguation",
+                "fields": {
+                    "resume_entity": "customer", "resume_action": "promote",
+                    "resume_fields": {},
+                    "candidates": [
+                        {"id": "CUST-1", "first_name": "สมชาย", "last_name": "ใจดี",
+                         "phone": "0812345678"},
+                        {"id": "CUST-2", "first_name": "สมชาย", "last_name": "รักไทย",
+                         "phone": "0800000000"},
+                    ],
+                },
+                "missing": [],
+            },
+        )
+        reply = await handle_chat_message(
+            client, message="1", ctx=_ctx(primary_role="sales"), ai_client=None,
+        )
+        assert "ใจดี" in reply.text
+        call = next(r for r in client.recorded if r[0] == "promote_customer")
+        assert call[2] == "CUST-1"
+
+    async def test_picking_a_number_completes_the_original_deal_create(self):
+        client = FakeDataClient(
+            permission_keys=["deal.create"],
+            pending_intent={
+                "action": "resolve", "entity": "customer_disambiguation",
+                "fields": {
+                    "resume_entity": "deal", "resume_action": "create",
+                    "resume_fields": {"notes": None},
+                    "candidates": [
+                        {"id": "CUST-1", "first_name": "สมชาย", "last_name": "ใจดี",
+                         "phone": "0812345678"},
+                        {"id": "CUST-2", "first_name": "สมชาย", "last_name": "รักไทย",
+                         "phone": "0800000000"},
+                    ],
+                },
+                "missing": [],
+            },
+        )
+        reply = await handle_chat_message(
+            client, message="2", ctx=_ctx(primary_role="sales"), ai_client=None,
+        )
+        assert "D-2026-" in reply.text
+        assert "รักไทย" in reply.text
+        call = next(r for r in client.recorded if r[0] == "create_deal")
+        assert call[2]["contact_id"] == "CUST-2"
+
+    async def test_an_out_of_range_number_asks_again_without_completing(self):
+        client = FakeDataClient(
+            permission_keys=["customer.update"],
+            pending_intent={
+                "action": "resolve", "entity": "customer_disambiguation",
+                "fields": {
+                    "resume_entity": "customer", "resume_action": "update",
+                    "resume_fields": {"phone": "0899999999"},
+                    "candidates": [
+                        {"id": "CUST-1", "first_name": "สมชาย", "last_name": "ใจดี",
+                         "phone": "0812345678"},
+                    ],
+                },
+                "missing": [],
+            },
+        )
+        reply = await handle_chat_message(
+            client, message="9", ctx=_ctx(primary_role="sales"), ai_client=None,
+        )
+        assert "1" in reply.text
+        assert not any(r[0] == "update_customer" for r in client.recorded)
+        assert not any(r[0] == "clear_pending_intent" for r in client.recorded)
+
+    async def test_resuming_without_the_right_permission_is_refused(self):
+        client = FakeDataClient(
+            permission_keys=[],  # no customer.update
+            pending_intent={
+                "action": "resolve", "entity": "customer_disambiguation",
+                "fields": {
+                    "resume_entity": "customer", "resume_action": "update",
+                    "resume_fields": {"phone": "0899999999"},
+                    "candidates": [
+                        {"id": "CUST-1", "first_name": "สมชาย", "last_name": "ใจดี",
+                         "phone": "0812345678"},
+                    ],
+                },
+                "missing": [],
+            },
+        )
+        reply = await handle_chat_message(
+            client, message="1", ctx=_ctx(primary_role="sales"), ai_client=None,
+        )
+        assert not any(r[0] == "update_customer" for r in client.recorded)
+
+    async def test_a_non_numeric_reply_with_disambiguation_pending_falls_through_to_ai(self):
+        """Only a bare digit is treated as a selection — anything else
+        (the user changed their mind, or answered a different question
+        entirely) must still go through the normal parser, not get stuck
+        demanding a number."""
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "create", "entity": "customer",
+             "fields": {"first_name": "วิชัย", "last_name": "ดี", "phone": "0811111111"},
+             "missing": []}, ensure_ascii=False)))
+        client = FakeDataClient(
+            permission_keys=["customer.create"],
+            pending_intent={
+                "action": "resolve", "entity": "customer_disambiguation",
+                "fields": {
+                    "resume_entity": "customer", "resume_action": "update",
+                    "resume_fields": {}, "candidates": [],
+                },
+                "missing": [],
+            },
+        )
+        reply = await handle_chat_message(
+            client, message="เพิ่มลูกค้าชื่อวิชัย ดี เบอร์ 0811111111",
+            ctx=_ctx(primary_role="sales"), ai_client=ai,
+        )
+        assert "วิชัย" in reply.text
+        assert any(r[0] == "create_customer" for r in client.recorded)

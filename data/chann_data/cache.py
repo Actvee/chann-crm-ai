@@ -168,4 +168,21 @@ def k_last_customer_ref(chann_uid: str, oa: str) -> str:
     return f"last_customer_ref:{chann_uid}:{oa}"
 
 
+def k_smartbrowz_token() -> str:
+    """Phase 10 — the cached SmartBrowz OAuth access token.
+
+    Global, not per-tenant: this is one platform-level Zoho Catalyst
+    project credential shared across every tenant, not something each
+    company brings its own copy of. Cached here (Redis, via the Data
+    tier) rather than in Application-tier process memory because
+    Application-tier Cloud Run instances are stateless and recycle
+    independently — an in-memory cache there would refresh redundantly on
+    every cold start and across every concurrent instance, wasting calls
+    against Zoho's own refresh-rate limit (documented as 10 access tokens
+    per refresh token per 10 minutes). A shared cache means every
+    Application-tier instance sees the same still-valid token.
+    """
+    return "smartbrowz:access_token"
+
+
 cache = Cache()
