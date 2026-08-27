@@ -199,3 +199,36 @@ variable "application_bucket_name" {
   description = "Globally unique bucket name, required only when create_application_bucket is true."
   default     = ""
 }
+
+# Phase 10 — SmartBrowz OAuth token refresh (application/chann_app/services/
+# smartbrowz_auth.py). All default to "" — the automatic-refresh code
+# raises a clear SmartBrowzAuthError rather than silently doing nothing
+# when they're unset, so an empty default here is safe: nothing that
+# needs SmartBrowz has been built into the runtime path yet (see
+# docs/SESSION_HANDOFF.md), only the token-refresh mechanism itself.
+variable "smartbrowz_accounts_url" {
+  type        = string
+  description = "Datacenter-specific Zoho accounts host for the OAuth token exchange (e.g. https://accounts.zoho.com, https://accounts.zoho.eu) — must match wherever the Catalyst project actually lives; the wrong one rejects the refresh_token outright."
+  default     = "https://accounts.zoho.com"
+}
+
+variable "smartbrowz_client_id" {
+  type        = string
+  description = "From the Catalyst API Console's Self Client."
+  sensitive   = true
+  default     = ""
+}
+
+variable "smartbrowz_client_secret" {
+  type        = string
+  description = "From the Catalyst API Console's Self Client."
+  sensitive   = true
+  default     = ""
+}
+
+variable "smartbrowz_refresh_token" {
+  type        = string
+  description = "One-time grant token already exchanged for a refresh_token via the Self Client's Generate Code flow. The long-lived secret — the access_token it produces is refreshed automatically and never stored outside the Data-tier Redis cache."
+  sensitive   = true
+  default     = ""
+}

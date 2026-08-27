@@ -57,37 +57,133 @@ Customer/Technician → Phase 9 (CRM core: customers/deals/storefront) →
 last-customer-reference + product chat command → last_name+phone
 validation rule + safety net → `_unwrap()` 204-body crash fix →
 missing-field-label translation + storefront confirm-before-search UX →
-**Phase 10 quote CRUD + document-template-engine schema, deployed and
-confirmed working by the owner on real LINE traffic** ("สร้างใบเสนอราคาจาก
-ดีล D-2026-XXXX" tested end to end, including the deal-stage-command
-collision fix).
+Phase 10 quote CRUD + document-template-engine schema →
+**SmartBrowz OAuth token-refresh mechanism + customer-name-disambiguation
+numbered selection, deployed** ("สร้างใบเสนอราคาจากดีล D-2026-XXXX" and
+the underlying quote/deal features all confirmed working live earlier;
+this specific patch's own two features have not yet been separately
+confirmed by the owner on LINE, but the commit is live on `origin/main`).
 
-`origin/main` HEAD is **`6eb29f4` — `feat(phase10): quote CRUD + document
-template engine schema`**.
+`origin/main` HEAD is **`7a6255c` — `feat(phase10): SmartBrowz OAuth token
+refresh + customer disambiguation`**.
 
-**Not yet deployed (this round):** SmartBrowz OAuth token-refresh
-infrastructure + customer-name-disambiguation numbered selection — see
-the section immediately below. Phases 11-20 haven't been started; the
-DOCX-authoring/AI-mapping/SmartBrowz-render pipeline itself (10.4-10.6)
-is still not built (needs the owner's real SmartBrowz credentials, now
-in progress — see below).
+**🟡 Found immediately after that patch's own deploy, before any real
+SmartBrowz credentials were even in hand yet:** Terraform never actually
+wired any `SMARTBROWZ_*` variable to the Application-tier Cloud Run
+service — not even the older `pdf_renderer`/`catalyst_api_domain`/
+`catalyst_project_id` placeholder fields that predate this session. The
+token-refresh code would have deployed fine and then failed on its first
+real call, since the environment variables it reads would always be
+empty regardless of what sat in `terraform.tfvars`. See the section
+immediately below — this is now fixed, not yet deployed.
+
+The owner has since generated a real Zoho Catalyst Self Client and
+shared its access_token, refresh_token, client_id, and client_secret in
+chat. **None of these were echoed back or written into any file** — they
+need to go directly into the owner's own gitignored `terraform.tfvars`,
+never through chat, never committed. The real token response also
+confirmed two things that were previously best-guesses: the Catalyst
+project is on the US datacenter (`api_domain` came back as
+`https://www.zohoapis.com`, so `SMARTBROWZ_ACCOUNTS_URL`'s default of
+`https://accounts.zoho.com` is correct as-is), and the granted scope is
+`ZohoCatalyst.pdfshot.execute ZohoCatalyst.dataverse.execute` — the
+first is exactly what this project needs.
+
+Phases 11-20 haven't been started; the DOCX-authoring/AI-mapping/
+SmartBrowz-render pipeline itself (10.4-10.6) is still not built — that
+remains separate, later work even once real credentials are in place.
 
 ---
 
-## Uncommitted work waiting to be deployed — SmartBrowz token refresh + customer disambiguation
+## Uncommitted work waiting to be deployed — Terraform never wired the SmartBrowz variables
+
+Patch: `phase10-smartbrowz-tfwiring.patch` +
+`phase10-smartbrowz-tfwiring-deploy.sh`. On top of `7a6255c` (the real
+live HEAD). No migration — Terraform-only + doc updates.
+
+### The gap
+
+`grep`-ing the Terraform config for `smartbrowz`/`SMARTBROWZ` turned up
+**nothing at all**, checked while helping the owner register the Zoho
+Catalyst Self Client. No `variable` block existed to receive
+`SMARTBROWZ_CLIENT_ID` etc. from `terraform.tfvars`, and no line in
+`application_runtime_env` (`infrastructure/terraform/cloud_run.tf`)
+passed any of them through to the Application-tier Cloud Run service.
+`application/chann_app/services/smartbrowz_auth.py`'s automatic
+token-refresh (deployed in `7a6255c`) would therefore always see these
+as empty strings at runtime no matter what was set in `terraform.tfvars`
+— it would deploy successfully and only fail the moment something
+actually tried to use it.
+
+### The fix
+
+Added `variable "smartbrowz_accounts_url"` (default
+`https://accounts.zoho.com`, now confirmed correct against the real
+token response's `api_domain`), `variable "smartbrowz_client_id"`,
+`variable "smartbrowz_client_secret"` (`sensitive = true`),
+`variable "smartbrowz_refresh_token"` (`sensitive = true`) to
+`infrastructure/terraform/variables.tf`, and wired all four into
+`application_runtime_env` in `cloud_run.tf`. The existing
+`nonsensitive(toset(keys(local.application_runtime_env)))` pattern
+already handles sensitive values correctly (it already does this for
+`admin_secret`/`jwt_secret`/the LINE secrets), so nothing else needed to
+change there.
+
+Also updated `docs/RUNTIME_CONFIG_CONTRACT.md`'s SmartBrowz rows from
+`REQUIRED_BY_PHASE_10` (a generic future-need marker) to
+`REQUIRED_NOT_CONFIGURED_IN_TFVARS` (the Terraform side is now ready;
+only the real secret values are missing from `terraform.tfvars`), and
+recorded the confirmed datacenter and scope so nobody has to re-derive
+them from a live token response again.
+
+### What still needs to happen, in order
+
+1. This patch deploys (Terraform-only, no migration — plan should show
+   changes to the `application` Cloud Run service's env vars only).
+2. The owner adds the three real secret values to their own
+   `terraform.tfvars` directly (never through chat):
+   `smartbrowz_client_id`, `smartbrowz_client_secret`,
+   `smartbrowz_refresh_token`. `smartbrowz_accounts_url` can stay at its
+   default.
+3. `terraform plan`/`apply` again to actually push those values to the
+   live Application-tier service.
+4. Only after that does `SmartBrowzTokenManager.get_access_token()` have
+   anything real to refresh against — there's still no chat command or
+   any other runtime path that calls it yet (see the "not yet built"
+   list under Phase 10 for what's still missing before an actual PDF can
+   be generated).
+
+### Validated
+
+Terraform changes have no automated test coverage in this project
+(nothing exercises `infrastructure/terraform/*.tf`) — validated by
+grep-confirming the new variables appear in both `variables.tf` and
+`application_runtime_env`, brace-balance-checked both files, and
+confirmed the existing `nonsensitive(...)` wrapping already covers the
+new sensitive values without modification. The real `terraform plan`
+step already built into the deploy script is the first genuine check.
+Full Python test suite unaffected (no Python files touched): **305 tests
+pass**, 0 skipped, both tiers boot.
+
+---
+
 
 Patch: `phase10-followups.patch` + `phase10-followups-deploy.sh`. Two
 independent additions on top of `6eb29f4` (the real live HEAD). No
 migration.
 
-### 1. SmartBrowz OAuth access-token management, built ahead of real credentials
+## Already deployed (27 Aug 2026) — for context, not action
 
-The owner is preparing a SmartBrowz access token + refresh token
-(Catalyst API Console Self Client). This patch builds the piece that can
-be built and fully tested *before* those credentials exist: automatic
-access-token refresh, so whenever the real SmartBrowz render adapter
-(10.4-10.6, still not built — see below) eventually needs a bearer
-token, it never has to think about expiry itself.
+### 11. SmartBrowz OAuth token-refresh mechanism + customer disambiguation (`7a6255c`)
+
+#### SmartBrowz OAuth access-token management, built ahead of real credentials
+
+Built before the owner had generated real credentials — the piece that
+could be built and fully tested first: automatic access-token refresh,
+so whenever the real SmartBrowz render adapter (10.4-10.6, still not
+built) eventually needs a bearer token, it never has to think about
+expiry itself. (The owner has since generated real credentials — see
+the Terraform-wiring item above for what that surfaced.)
 
 **Architecture note, checked before building:** the Application tier has
 no direct Redis access — `REDIS_URL` is only wired into the Data tier's
@@ -161,7 +257,7 @@ clearly, a non-200 from Zoho raises clearly, the HTTP-200-with-error-body
 quirk raises clearly, and the cached TTL is always shorter than the real
 expiry.
 
-### 2. Customer-name disambiguation now offers a numbered selection
+#### Customer-name disambiguation now offers a numbered selection
 
 Requested directly: if "สร้างดีลให้สมชาย" matches several customers named
 สมชาย, the reply used to just list them as text and ask the user to "be
@@ -188,17 +284,6 @@ out-of-range number asks again without completing anything or clearing
 the pending state; resuming without the right permission is refused; a
 non-numeric reply with disambiguation pending still falls through to the
 normal AI-parsed flow rather than getting stuck demanding a number.
-
-### Validated
-
-On top of `6eb29f4` (the real live HEAD) on a clean clone: applies
-cleanly (3-way), **305 tests pass**, 0 skipped (real Postgres),
-`check-model-kwargs.py` OK, both tiers boot (data 98 routes, app 21
-paths). No migration.
-
----
-
-## Already deployed (27 Aug 2026) — for context, not action
 
 ### 10. Phase 10 — Quote CRUD + document template engine schema (`6eb29f4`)
 

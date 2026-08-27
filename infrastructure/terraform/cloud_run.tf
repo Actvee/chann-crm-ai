@@ -33,6 +33,10 @@ locals {
     OPENROUTER_API_KEY                   = var.openrouter_api_key
     OPENROUTER_MODEL                     = var.openrouter_model
     OPENROUTER_MODEL_REASONING           = var.openrouter_model_reasoning
+    SMARTBROWZ_ACCOUNTS_URL              = var.smartbrowz_accounts_url
+    SMARTBROWZ_CLIENT_ID                 = var.smartbrowz_client_id
+    SMARTBROWZ_CLIENT_SECRET             = var.smartbrowz_client_secret
+    SMARTBROWZ_REFRESH_TOKEN             = var.smartbrowz_refresh_token
   })
 
   presentation_runtime_env = merge(local.common_runtime_env, {
