@@ -35,6 +35,15 @@ from chann_app.services.identity import ResolvedContext, TenantResolution  # noq
 
 class ProfileConflictForTest(Exception):
     status_code = 409
+
+
+class ConflictForTest(Exception):
+    status_code = 409
+
+
+class NotFoundForTest(Exception):
+    status_code = 404
+
 from chann_data.permissions import (  # noqa: E402
     PERMISSION_DESCRIPTIONS,
     PERMISSION_KEYS,
@@ -60,8 +69,9 @@ class FakeDataClient:
 
     def __init__(self, *, role="sales", permission_keys=None, mapping=None,
                  pending_intent=None, customers=None, deals=None,
-                 storefront_results=None, last_customer_ref=None):
+                 storefront_results=None, last_customer_ref=None, raises=None):
         self._role = role
+        self._raises = raises
         self._last_customer_ref = last_customer_ref
         self._customers = list(customers) if customers is not None else []
         self._deals = list(deals) if deals is not None else []
@@ -121,6 +131,8 @@ class FakeDataClient:
 
     async def upsert_product(self, license_id, product_id, payload, actor_id=None):
         self.recorded.append(("upsert_product", license_id, product_id, payload, actor_id))
+        if self._raises:
+            raise self._raises
         return {
             "id": f"PROD-{product_id}", "license_id": license_id,
             "product_id": product_id, "product_name": payload["product_name"],
@@ -155,18 +167,24 @@ class FakeDataClient:
 
     async def update_customer(self, license_id, customer_id, fields, actor_id=None):
         self.recorded.append(("update_customer", license_id, customer_id, fields, actor_id))
+        if self._raises:
+            raise self._raises
         row = next(c for c in self._customers if c["id"] == customer_id)
         row.update(fields)
         return row
 
     async def promote_customer(self, license_id, customer_id, actor_id=None):
         self.recorded.append(("promote_customer", license_id, customer_id, actor_id))
+        if self._raises:
+            raise self._raises
         row = next(c for c in self._customers if c["id"] == customer_id)
         row["stage"] = "contact"
         return row
 
     async def create_deal(self, license_id, payload, actor_id=None):
         self.recorded.append(("create_deal", license_id, payload, actor_id))
+        if self._raises:
+            raise self._raises
         deal_id = f"D-2026-{self._next_deal_n:04d}"
         self._next_deal_n += 1
         row = {
@@ -271,10 +289,12 @@ class TestSlotFilling:
     async def test_complete_message_proceeds_past_slot_filling(self):
         ai = httpx.AsyncClient(transport=_ai(json.dumps(
                 {"action": "create", "entity": "customer",
-                 "fields": {"first_name": "สมชาย"}, "missing": []}, ensure_ascii=False)))
+                 "fields": {"first_name": "สมชาย", "last_name": "ใจดี",
+                            "phone": "0812345678"},
+                 "missing": []}, ensure_ascii=False)))
         reply = await handle_chat_message(
             FakeDataClient(permission_keys=["customer.create"]),
-            message="เพิ่มลูกค้าชื่อสมชาย", ctx=_ctx(), ai_client=ai,
+            message="เพิ่มลูกค้าชื่อสมชาย ใจดี เบอร์ 0812345678", ctx=_ctx(), ai_client=ai,
         )
         assert "กรุณาระบุ" not in reply.text
         assert reply.entity_type == "customer"
@@ -560,10 +580,12 @@ class TestPermissionGateIsEnforcedInCode:
     async def test_known_entity_with_permission_proceeds(self):
         ai = httpx.AsyncClient(transport=_ai(json.dumps(
             {"action": "create", "entity": "customer",
-             "fields": {"first_name": "สมชาย"}, "missing": []}, ensure_ascii=False)))
+             "fields": {"first_name": "สมชาย", "last_name": "ใจดี",
+                        "phone": "0812345678"},
+             "missing": []}, ensure_ascii=False)))
         reply = await handle_chat_message(
             FakeDataClient(permission_keys=["customer.create"]),
-            message="เพิ่มลูกค้าชื่อสมชาย", ctx=_ctx(), ai_client=ai,
+            message="เพิ่มลูกค้าชื่อสมชาย ใจดี เบอร์ 0812345678", ctx=_ctx(), ai_client=ai,
         )
         assert "สมชาย" in reply.text
         assert reply.entity_type == "customer"
@@ -956,11 +978,12 @@ class TestPhase9CustomerChat:
     async def test_create_customer_with_a_name_succeeds(self):
         ai = httpx.AsyncClient(transport=_ai(json.dumps(
             {"action": "create", "entity": "customer",
-             "fields": {"first_name": "สมชาย", "phone": "0812345678"},
+             "fields": {"first_name": "สมชาย", "last_name": "ใจดี",
+                        "phone": "0812345678"},
              "missing": []}, ensure_ascii=False)))
         client = FakeDataClient(permission_keys=["customer.create"])
         reply = await handle_chat_message(
-            client, message="เพิ่มลูกค้าชื่อสมชาย เบอร์ 0812345678",
+            client, message="เพิ่มลูกค้าชื่อสมชาย ใจดี เบอร์ 0812345678",
             ctx=_ctx(primary_role="sales"), ai_client=ai,
         )
         assert "สมชาย" in reply.text
@@ -976,6 +999,61 @@ class TestPhase9CustomerChat:
         )
         assert "กรุณาระบุ" in reply.text
         assert not any(r[0] == "create_customer" for r in client.recorded)
+
+    async def test_first_name_only_is_not_enough_to_create(self):
+        """Owner's explicit rule: last_name AND phone are both mandatory —
+        a first name alone (even with email) must not be enough, since a
+        shared first name can't reliably identify anyone later and staff
+        need a phone to actually follow up."""
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "create", "entity": "customer",
+             "fields": {"first_name": "สมชาย", "email": "somchai@example.com"},
+             "missing": []}, ensure_ascii=False)))
+        client = FakeDataClient(permission_keys=["customer.create"])
+        reply = await handle_chat_message(
+            client, message="เพิ่มลูกค้าชื่อสมชาย อีเมล somchai@example.com",
+            ctx=_ctx(primary_role="sales"), ai_client=ai,
+        )
+        assert "นามสกุลและเบอร์โทร" in reply.text
+        assert not any(r[0] == "create_customer" for r in client.recorded)
+
+    async def test_last_name_without_phone_is_not_enough(self):
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "create", "entity": "customer",
+             "fields": {"first_name": "สมชาย", "last_name": "ใจดี"},
+             "missing": []}, ensure_ascii=False)))
+        client = FakeDataClient(permission_keys=["customer.create"])
+        reply = await handle_chat_message(
+            client, message="เพิ่มลูกค้าชื่อสมชาย ใจดี",
+            ctx=_ctx(primary_role="sales"), ai_client=ai,
+        )
+        assert "นามสกุลและเบอร์โทร" in reply.text
+        assert not any(r[0] == "create_customer" for r in client.recorded)
+
+    async def test_phone_without_last_name_is_not_enough(self):
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "create", "entity": "customer",
+             "fields": {"first_name": "สมชาย", "phone": "0812345678"},
+             "missing": []}, ensure_ascii=False)))
+        client = FakeDataClient(permission_keys=["customer.create"])
+        reply = await handle_chat_message(
+            client, message="เพิ่มลูกค้าชื่อสมชาย เบอร์ 0812345678",
+            ctx=_ctx(primary_role="sales"), ai_client=ai,
+        )
+        assert "นามสกุลและเบอร์โทร" in reply.text
+        assert not any(r[0] == "create_customer" for r in client.recorded)
+
+    async def test_last_name_and_phone_together_is_enough_even_without_first_name(self):
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "create", "entity": "customer",
+             "fields": {"last_name": "ใจดี", "phone": "0812345678"},
+             "missing": []}, ensure_ascii=False)))
+        client = FakeDataClient(permission_keys=["customer.create"])
+        reply = await handle_chat_message(
+            client, message="เพิ่มลูกค้านามสกุลใจดี เบอร์ 0812345678",
+            ctx=_ctx(primary_role="sales"), ai_client=ai,
+        )
+        assert any(r[0] == "create_customer" for r in client.recorded)
 
     async def test_update_customer_by_name(self):
         ai = httpx.AsyncClient(transport=_ai(json.dumps(
@@ -1306,14 +1384,16 @@ class TestLastCustomerReference:
     async def test_creating_a_customer_remembers_them(self):
         ai = httpx.AsyncClient(transport=_ai(json.dumps(
             {"action": "create", "entity": "customer",
-             "fields": {"first_name": "สมชาย"}, "missing": []}, ensure_ascii=False)))
+             "fields": {"first_name": "สมชาย", "last_name": "ใจดี",
+                        "phone": "0812345678"},
+             "missing": []}, ensure_ascii=False)))
         client = FakeDataClient(permission_keys=["customer.create"])
         await handle_chat_message(
-            client, message="เพิ่มลูกค้าชื่อสมชาย",
+            client, message="เพิ่มลูกค้าชื่อสมชาย ใจดี เบอร์ 0812345678",
             ctx=_ctx(primary_role="sales"), ai_client=ai,
         )
         call = next(r for r in client.recorded if r[0] == "set_last_customer_ref")
-        assert call[4] == "สมชาย"
+        assert call[4] == "สมชาย ใจดี"
 
     async def test_promoting_a_customer_remembers_them(self):
         ai = httpx.AsyncClient(transport=_ai(json.dumps(
@@ -1380,3 +1460,83 @@ class TestLastCustomerReference:
         assert "เพิ่งคุยถึง" not in reply.text
         call = next(r for r in client.recorded if r[0] == "create_deal")
         assert call[2]["contact_id"] == "CUST-2"
+
+
+class TestChatNeverGoesSilentOnADataTierError:
+    """Reported live: typing a message got NO reply at all. Root cause: the
+    Data-tier calls these handlers make had no exception handling — an
+    invalid price, a race-condition not-found, or any bug at all propagated
+    all the way up uncaught, and webhook.py's main loop had no top-level
+    safety net either, so the request died before reply_text() ever ran.
+    These confirm each handler now degrades to a friendly reply instead of
+    raising; the webhook-level safety net itself is defense-in-depth and
+    isn't exercised by these (webhook.py has no dedicated test harness).
+    """
+
+    async def test_product_create_with_an_invalid_price_gets_a_friendly_reply(self):
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "create", "entity": "product",
+             "fields": {"product_id": "AC-001", "product_name": "แอร์",
+                        "unit_price": "3500 บาท"},
+             "missing": []}, ensure_ascii=False)))
+        client = FakeDataClient(
+            permission_keys=["product.manage"], raises=ConflictForTest("bad price"),
+        )
+        reply = await handle_chat_message(
+            client, message="เพิ่มสินค้าแอร์ ราคา 3500 บาท",
+            ctx=_ctx(primary_role="sales"), ai_client=ai,
+        )
+        assert reply.text  # got SOME reply, not a crash
+        assert "ไม่ถูกต้อง" in reply.text
+
+    async def test_customer_update_hitting_a_not_found_gets_a_friendly_reply(self):
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "update", "entity": "customer",
+             "fields": {"target_name": "สมชาย", "phone": "0899999999"},
+             "missing": []}, ensure_ascii=False)))
+        client = FakeDataClient(
+            permission_keys=["customer.update"],
+            customers=[{"id": "CUST-1", "first_name": "สมชาย", "last_name": None,
+                        "phone": "0812345678", "email": None, "stage": "lead"}],
+            raises=NotFoundForTest("gone"),
+        )
+        reply = await handle_chat_message(
+            client, message="แก้เบอร์ลูกค้าสมชาย",
+            ctx=_ctx(primary_role="sales"), ai_client=ai,
+        )
+        assert reply.text
+        assert "ไม่พบลูกค้า" in reply.text
+
+    async def test_customer_promote_hitting_a_not_found_gets_a_friendly_reply(self):
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "promote", "entity": "customer",
+             "fields": {"target_name": "สมชาย"}, "missing": []}, ensure_ascii=False)))
+        client = FakeDataClient(
+            permission_keys=["customer.update"],
+            customers=[{"id": "CUST-1", "first_name": "สมชาย", "last_name": None,
+                        "phone": "0812345678", "email": None, "stage": "lead"}],
+            raises=NotFoundForTest("gone"),
+        )
+        reply = await handle_chat_message(
+            client, message="ยืนยันลูกค้าสมชาย",
+            ctx=_ctx(primary_role="sales"), ai_client=ai,
+        )
+        assert reply.text
+        assert "ไม่พบลูกค้า" in reply.text
+
+    async def test_deal_create_hitting_a_not_found_gets_a_friendly_reply(self):
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "create", "entity": "deal",
+             "fields": {"target_name": "สมชาย"}, "missing": []}, ensure_ascii=False)))
+        client = FakeDataClient(
+            permission_keys=["deal.create"],
+            customers=[{"id": "CUST-1", "first_name": "สมชาย", "last_name": None,
+                        "phone": "0812345678", "email": None, "stage": "contact"}],
+            raises=NotFoundForTest("gone"),
+        )
+        reply = await handle_chat_message(
+            client, message="สร้างดีลให้สมชาย",
+            ctx=_ctx(primary_role="sales"), ai_client=ai,
+        )
+        assert reply.text
+        assert "ไม่พบลูกค้า" in reply.text

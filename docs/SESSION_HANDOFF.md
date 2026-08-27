@@ -53,98 +53,106 @@ clone.
 → 3 (Audit Log) → 4 (AI Infra) → 5 (i18n) → 6 (Chat) → 6.5 (Tenant
 Registration) → 7 (Master Data) → 8 (Profiles) → OA-scoping/conversation-
 continuity/profile-eligibility fix → OA-aware identity resolution for
-Customer/Technician → **Phase 9 (CRM core: customers/deals/storefront),
-fully deployed and confirmed working on real LINE traffic** — `terraform
-apply` succeeded (3 changed, 0 destroyed), `/health` confirmed
-`git_commit` matches, and the owner tested live: create customer, promote
-to Contact, create deal, deal stage transitions all worked end-to-end.
+Customer/Technician → Phase 9 (CRM core: customers/deals/storefront) →
+**last-customer-reference + product chat command, deployed and confirmed
+via `/health` matching `git_commit`.**
 
-`origin/main` HEAD is **`dbbe063` — `fix(phase9): env.py configparser
-crash on percent-encoded DATABASE_URL`**.
+`origin/main` HEAD is **`c4fe8b5` — `fix(phase9): remember last customer
++ wire product chat command`**.
 
 **Not started (past this point):** Phases 10-20 haven't been started.
 
 ---
 
-## Uncommitted work waiting to be deployed — two gaps found during live testing
+## Uncommitted work waiting to be deployed — validation rule + a silent-failure bug class
 
-Patch: `phase9-followups.patch` + `phase9-followups-deploy.sh`. Two small,
-independent fixes on top of `dbbe063` (the real live HEAD), found by the
-owner testing Phase 9 live traffic.
+Patch: `phase9-hardening.patch` + `phase9-hardening-deploy.sh`. Two
+independent fixes on top of `c4fe8b5` (the real live HEAD), found by the
+owner testing live traffic again right after the previous patch deployed.
 
-### 1. "สร้างดีล" with no name at all didn't know who was just discussed
+### 1. Customer creation now requires last name AND phone, not "any one field"
 
-Reported: "บันทึกสมชายเป็น Contact แล้ว" (promote succeeded) immediately
-followed by "สร้างดีล" (create a deal) with **no name in the message at
-all** — a completely natural way to talk once a customer has already been
-named once, but the chat engine had no notion of "the customer we were
-just discussing."
+Owner's explicit instruction: a first name alone (even with an email) is
+not enough to reliably identify a walk-in customer later — common first
+names collide, and phone is how staff actually follow up. Changed the
+create-customer rule from "at least one of first_name/last_name/phone/
+email" to "last_name AND phone both required." Updated the AI intent
+prompt to match, so the model asks for what's missing up front rather
+than the request failing after the fact. 5 new tests cover the boundary
+cases (first name alone, last name without phone, phone without last
+name, last name+phone with no first name at all).
 
-Root cause: `pending_intent` (Phase 6) tracks "an action still waiting on
-more info," and is deliberately **cleared** the instant an action
-completes — exactly the moment a "last discussed" reference would need to
-start existing. Reusing that key wasn't an option.
+### 2. "No reply at all" — a systemic gap in exception handling, not one bug
 
-Fixed with a new, separate Redis key: `k_last_customer_ref(chann_uid, oa)`
-(`data/chann_data/cache.py`), written whenever a customer create/update/
-promote succeeds (`_remember_customer` in `chat.py`), read as a fallback
-in deal-creation only when the message names no customer at all. An
-explicit name in the message always wins over the remembered one — the
-fallback is last-resort only, and the reply says explicitly when it was
-used ("...เพิ่งคุยถึง") rather than silently guessing, since a wrong guess
-here is worse than asking.
+Reported: typing a message got **zero reply on LINE**, with nothing
+obviously wrong. Root cause turned out to be two compounding gaps:
 
-New Data-tier endpoints (`PUT`/`GET /chat/last-customer/{oa}/{chann_uid}`),
-`DataClient.set_last_customer_ref`/`get_last_customer_ref`. 5 new tests,
-including one confirming an explicit name in the message overrides a
-stale remembered one.
+- Several handlers added across the last few patches — `create_deal`,
+  `update_customer`, `promote_customer`, and especially the newest
+  `upsert_product` — called the Data tier with **no exception handling at
+  all**. A price string with stray text (e.g. "3500 บาท" instead of a
+  clean number), or any not-found/conflict from the Data tier, propagated
+  straight up uncaught.
+- `webhook.py`'s main per-event loop had **no top-level safety net**
+  either. An uncaught exception anywhere in "decide what to reply" killed
+  the whole request before `reply_text()` ever ran — no LINE reply, and
+  nothing in the application logs pointing at why (though Cloud Run's own
+  request logs would show a 500).
 
-### 2. "เพิ่มสินค้า" (add product) via chat didn't work at all
+Fixed both layers:
+- Added try/except with friendly fallback replies to all four handlers
+  above, mirroring the pattern `create_customer` already used
+  (`_is_conflict`/`_is_not_found` against the Data tier's real HTTP status).
+- Added a broad `try/except Exception` around the entire "decide what
+  `chat` should be" block in `webhook.py`, logging the real exception
+  (`log.exception`, so the traceback is captured) and falling back to the
+  existing `unavailable_reply()` text — the same plain apology already
+  used when the AI provider itself is down. This is deliberately
+  defense-in-depth: it protects against this whole *class* of bug for
+  anything built in a future phase too, not just the four call sites
+  found and fixed directly today.
 
-Reported: typing it returned the full "here's what you can do" suggestion
-list (starting with "การอนุมัติ") instead of creating anything — looked
-like a permission problem but wasn't one.
-
-Root cause: Phase 7 built product master-data CRUD only through the
-Dashboard/internal API, **never through chat** — `entity="product"` was
-listed in `chat.py`'s `ACTION_PERMISSIONS` table (so the permission gate
-itself was fine) but had **no dispatch handler at all**, and critically,
-the AI intent prompt was **never told product's field shape** — only
-`customer`/`deal` got that treatment when Phase 9 fixed the same class of
-gap for those two entities. Without a described shape, the model most
-likely emitted a field/entity name that didn't match anything in the
-lookup table, so `required_permission()` returned `None` and the gate
-treated it as a completely unknown request — the same failure path as an
-unrecognized entity, regardless of what permission the account actually
-held.
-
-Fixed: added product's field shape (`product_id`, `product_name`, `sku`,
-`category`, `unit_price`, `description`) to the AI intent prompt, and
-wired real execution (`_handle_product_intent` in `chat.py`) using the
-already-existing `ProductRepository.upsert` via
-`DataClient.upsert_product` — idempotent on `product_id` since 7.5, so
-create and update are the same call from chat's side.
+4 new tests confirm each of the four handlers degrades to a friendly
+reply instead of raising. The webhook-level safety net itself has no
+dedicated test harness (webhook.py isn't unit-tested at all currently —
+it needs a full signed-request/reply mock that doesn't exist yet); it's
+covered by code review and the syntax/lint checks, not a runtime test.
 
 ### Validated
 
-On top of `dbbe063` (the real live HEAD) on a clean clone: applies
-cleanly (3-way), **259 tests pass**, 0 skipped (real Postgres),
+On top of `c4fe8b5` (the real live HEAD) on a clean clone: applies
+cleanly (3-way), **267 tests pass**, 0 skipped (real Postgres),
 `check-model-kwargs.py` OK, both tiers boot (data 80 routes, app 21
-paths).
-
-### Still needed before storefront (item 5 in the owner's test list) can
-### be verified
-
-The storefront "ค้นหา พัดลม" test returned no results — **not a bug**:
-the storefront searches the real `products` table, and no product named
-"พัดลม" exists in any tenant yet. This gap (#2 above) is exactly what
-blocked adding one via chat; once this patch deploys, add a product via
-chat (e.g. "เพิ่มสินค้า รหัส FAN001 ชื่อ พัดลมไอเย็น ราคา 3500") and retry
-the storefront search.
+paths). No migration.
 
 ---
 
 ## Already deployed (27 Aug 2026) — for context, not action
+
+### 6. Last-customer-reference + product chat command (`c4fe8b5`)
+
+Two independent gaps found by the owner testing Phase 9 live, after
+customer/deal CRUD and deal stage transitions were already confirmed
+working end to end.
+
+**"สร้างดีล" with no name at all didn't know who was just discussed.**
+`pending_intent` (Phase 6) is deliberately cleared the instant an action
+completes — exactly the moment a "who was this about" reference needs to
+start existing. Fixed with a new, separate Redis key,
+`k_last_customer_ref(chann_uid, oa)`, written whenever a customer create/
+update/promote succeeds, read as a fallback only when a deal-create names
+no customer at all. An explicit name always wins over the remembered one;
+the reply says explicitly when the fallback was used.
+
+**"เพิ่มสินค้า" via chat did not work at all** — returned the full
+permission-suggestion list, which looked like a permission problem but
+was not one. `entity="product"` was in `chat.py`'s `ACTION_PERMISSIONS`
+(gate was fine) but the AI intent prompt was never told product's field
+shape, and there was no chat dispatch handler at all — Phase 7 only ever
+built product CRUD through the internal API. Fixed both: added product's
+field shape to the prompt, wired real execution via the already-existing
+`ProductRepository.upsert`.
+
 
 ### 5. Phase 9 — CRM Core: Lead/Contact/Deal + Storefront (`8e4ee4c`, `dbbe063`)
 

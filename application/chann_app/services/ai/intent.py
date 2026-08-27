@@ -75,8 +75,10 @@ does not exist anywhere else the model can check against):
 
 - entity="customer" — a lead or contact record.
   action="create": fields may include first_name, last_name, phone, email,
-    address, notes. At least one of first_name/last_name/phone/email must
-    be present, or list all four as "missing".
+    address, notes. last_name AND phone are BOTH required — a first name
+    alone is not enough to reliably identify someone later, and phone is
+    how staff follow up. If either is missing, list it in "missing"
+    (e.g. ["last_name"], ["phone"], or both) rather than creating anyway.
   action="update": the message names an EXISTING customer by name (never by
     an id the user would never type) — put that name in fields.target_name,
     and put only the changed value(s) under first_name/last_name/phone/

@@ -653,6 +653,10 @@ CUSTOMER_NEEDS_SOMETHING = {
     "th": "กรุณาระบุอย่างน้อยชื่อ เบอร์โทร หรืออีเมลของลูกค้า",
     "en": "Please provide at least a name, phone, or email for the customer.",
 }
+CUSTOMER_CREATE_NEEDS_LASTNAME_AND_PHONE = {
+    "th": "กรุณาระบุนามสกุลและเบอร์โทรของลูกค้าด้วย",
+    "en": "Please also provide the customer's last name and phone number.",
+}
 CUSTOMER_UPDATED = {
     "th": "แก้ไขข้อมูลลูกค้า{name}เรียบร้อยแล้ว",
     "en": "Updated customer {name}.",
@@ -736,8 +740,14 @@ async def _handle_customer_intent(
             if k in ("first_name", "last_name", "phone", "email", "address", "notes")
             and v not in (None, "")
         }
-        if not any(editable.get(k) for k in ("first_name", "last_name", "phone", "email")):
-            return ChatReply(text=_t(CUSTOMER_NEEDS_SOMETHING, language), intent=intent)
+        # Owner's explicit rule: a walk-in customer record must have at
+        # least a last name AND a phone number — a first name alone is not
+        # enough to reliably identify someone later (very common shared
+        # first names), and a phone is how staff actually follow up.
+        if not editable.get("last_name") or not editable.get("phone"):
+            return ChatReply(
+                text=_t(CUSTOMER_CREATE_NEEDS_LASTNAME_AND_PHONE, language), intent=intent,
+            )
         try:
             row = await client.create_customer(license_id, editable, actor_id=ctx.chann_uid)
         except Exception as exc:  # noqa: BLE001
@@ -756,7 +766,16 @@ async def _handle_customer_intent(
         if err is not None:
             return err
         if action == "promote":
-            updated = await client.promote_customer(license_id, row["id"], actor_id=ctx.chann_uid)
+            try:
+                updated = await client.promote_customer(
+                    license_id, row["id"], actor_id=ctx.chann_uid,
+                )
+            except Exception as exc:  # noqa: BLE001
+                if _is_not_found(exc):
+                    return ChatReply(text=_t(CUSTOMER_NOT_FOUND, language).format(
+                        name=_display_name(row)
+                    ))
+                raise
             await _remember_customer(client, ctx, updated)
             return ChatReply(
                 text=_t(CUSTOMER_PROMOTED, language).format(name=_display_name(updated)),
@@ -769,9 +788,16 @@ async def _handle_customer_intent(
         }
         if not editable:
             return ChatReply(text=_t(CUSTOMER_NEEDS_SOMETHING, language), intent=intent)
-        updated = await client.update_customer(
-            license_id, row["id"], editable, actor_id=ctx.chann_uid,
-        )
+        try:
+            updated = await client.update_customer(
+                license_id, row["id"], editable, actor_id=ctx.chann_uid,
+            )
+        except Exception as exc:  # noqa: BLE001
+            if _is_not_found(exc):
+                return ChatReply(text=_t(CUSTOMER_NOT_FOUND, language).format(
+                    name=_display_name(row)
+                ))
+            raise
         await _remember_customer(client, ctx, updated)
         return ChatReply(
             text=_t(CUSTOMER_UPDATED, language).format(name=f" {_display_name(updated)} "),
@@ -828,11 +854,18 @@ async def _handle_deal_intent(
             )
             if err is not None:
                 return err
-        row = await client.create_deal(
-            license_id,
-            {"contact_id": contact["id"], "notes": fields.get("notes")},
-            actor_id=ctx.chann_uid,
-        )
+        try:
+            row = await client.create_deal(
+                license_id,
+                {"contact_id": contact["id"], "notes": fields.get("notes")},
+                actor_id=ctx.chann_uid,
+            )
+        except Exception as exc:  # noqa: BLE001
+            if _is_not_found(exc):
+                return ChatReply(text=_t(CUSTOMER_NOT_FOUND, language).format(
+                    name=_display_name(contact)
+                ))
+            raise
         template = DEAL_CREATED_FROM_CONTEXT if used_context else DEAL_CREATED
         return ChatReply(
             text=_t(template, language).format(
@@ -851,6 +884,11 @@ PRODUCT_SAVED = {
 PRODUCT_NEEDS_ID_AND_NAME = {
     "th": "กรุณาระบุรหัสสินค้าและชื่อสินค้า",
     "en": "Please provide both a product code and a product name.",
+}
+PRODUCT_INVALID_VALUE = {
+    "th": "ข้อมูลราคาหรือรายละเอียดสินค้าไม่ถูกต้อง กรุณาตรวจสอบอีกครั้ง (เช่น ราคาต้องเป็นตัวเลขล้วน)",
+    "en": "The price or another product value doesn't look right — please check and try again "
+          "(e.g. the price must be numbers only).",
 }
 
 
@@ -883,7 +921,12 @@ async def _handle_product_intent(
         "unit_price": fields.get("unit_price"),
         "description": fields.get("description"),
     }
-    row = await client.upsert_product(license_id, product_id, payload, actor_id=ctx.chann_uid)
+    try:
+        row = await client.upsert_product(license_id, product_id, payload, actor_id=ctx.chann_uid)
+    except Exception as exc:  # noqa: BLE001
+        if _is_conflict(exc):
+            return ChatReply(text=_t(PRODUCT_INVALID_VALUE, language), intent=intent)
+        raise
     return ChatReply(
         text=_t(PRODUCT_SAVED, language).format(name=row["product_name"], code=row["product_id"]),
         entity_type="product", entity_id=row["id"], intent=intent,

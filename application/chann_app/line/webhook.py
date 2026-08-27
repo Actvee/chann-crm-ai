@@ -20,6 +20,7 @@ from ..services.chat import (
     handle_chat_message,
     handle_reply,
 )
+from ..services.ai.intent import unavailable_reply
 from ..services.registration import handle_registration, is_unregistered
 from ..services.identity import resolve_context
 from .client import LineReplyError, reply_text
@@ -82,36 +83,52 @@ async def handle_webhook(
             # and become a Lead somewhere new. Nothing about is_unregistered
             # applies to this — there is no tenant to register against until
             # a shop is actually chosen.
-            storefront_reply = None
-            if oa == "customer" and user_text.strip():
-                storefront_reply = await maybe_handle_storefront(
-                    client, message=user_text, ctx=ctx, language="th",
-                )
+            #
+            # The whole decision below is wrapped in a broad try/except on
+            # purpose: nothing past this point had one before, which means
+            # ANY unhandled exception in any handler — a bad price string,
+            # a not-found record, a bug not yet caught — silently killed the
+            # request before reply_text() ever ran, and the person waiting
+            # in LINE got no reply at all with nothing in any log pointing
+            # at why. Reported live exactly this way. A caught, logged
+            # failure with a plain apology is always better than silence.
+            try:
+                storefront_reply = None
+                if oa == "customer" and user_text.strip():
+                    storefront_reply = await maybe_handle_storefront(
+                        client, message=user_text, ctx=ctx, language="th",
+                    )
 
-            if storefront_reply is not None:
-                chat = storefront_reply
-            elif is_unregistered(ctx):
-                # Phase 6.5: someone with no tenant gets the registration
-                # flow, not the intent parser. There is nothing to authorise
-                # against and no tenant to act in, so a model call here would
-                # spend money to reach the same dead end.
-                chat = ChatReply(
-                    text=await handle_registration(
-                        client, message=user_text, ctx=ctx, audience=oa
+                if storefront_reply is not None:
+                    chat = storefront_reply
+                elif is_unregistered(ctx):
+                    # Phase 6.5: someone with no tenant gets the registration
+                    # flow, not the intent parser. There is nothing to authorise
+                    # against and no tenant to act in, so a model call here would
+                    # spend money to reach the same dead end.
+                    chat = ChatReply(
+                        text=await handle_registration(
+                            client, message=user_text, ctx=ctx, audience=oa
+                        )
                     )
-                )
-            elif not user_text.strip():
-                chat = ChatReply(text=greet(ctx))
-            else:
-                quoted_id = _is_reply(event)
-                if quoted_id:
-                    chat = await handle_reply(
-                        client, message_id=quoted_id, reply_text=user_text, ctx=ctx
-                    )
+                elif not user_text.strip():
+                    chat = ChatReply(text=greet(ctx))
                 else:
-                    chat = await handle_chat_message(
-                        client, message=user_text, ctx=ctx
-                    )
+                    quoted_id = _is_reply(event)
+                    if quoted_id:
+                        chat = await handle_reply(
+                            client, message_id=quoted_id, reply_text=user_text, ctx=ctx
+                        )
+                    else:
+                        chat = await handle_chat_message(
+                            client, message=user_text, ctx=ctx
+                        )
+            except Exception as exc:  # noqa: BLE001
+                log.exception(
+                    "unhandled error building chat reply for oa=%s chann_uid=%s: %s",
+                    oa, ctx.chann_uid, exc,
+                )
+                chat = ChatReply(text=unavailable_reply("th"))
 
             try:
                 await reply_text(oa, event.get("replyToken", ""), chat.text)
