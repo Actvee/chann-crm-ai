@@ -118,3 +118,30 @@ async def liff_me(
         "chann_uid": identity["chann_uid"],
         "memberships": memberships,
     }
+
+
+@router.post("/platform/smartbrowz/verify-connection")
+async def smartbrowz_verify_connection(claims: dict = Depends(require_admin)):
+    """Phase 10 / Master Spec 10.6 — verify the SmartBrowz OAuth auth path
+    actually works from the deployed Application environment, before any
+    template/rendering pipeline is built on top of it. Converts one
+    trivial, fixed HTML snippet to PDF; never returns the PDF bytes
+    themselves (this proves connectivity, it is not the render adapter).
+
+    Deliberately behind require_admin, not a public/unauthenticated route
+    — every call spends a real SmartBrowz API request against the
+    project's own quota.
+    """
+    from .services.pdf.smartbrowz import (
+        SmartBrowzNotConfigured,
+        SmartBrowzRenderError,
+        verify_connection,
+    )
+
+    try:
+        result = await verify_connection()
+    except SmartBrowzNotConfigured as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
+    except SmartBrowzRenderError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+    return result

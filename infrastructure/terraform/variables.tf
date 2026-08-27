@@ -228,7 +228,39 @@ variable "smartbrowz_client_secret" {
 
 variable "smartbrowz_refresh_token" {
   type        = string
-  description = "One-time grant token already exchanged for a refresh_token via the Self Client's Generate Code flow. The long-lived secret — the access_token it produces is refreshed automatically and never stored outside the Data-tier Redis cache."
+  description = "One-time grant token already exchanged for a refresh_token via the Self Client's Generate Code flow. The long-lived secret. Used directly by the zcatalyst-sdk's own RefreshTokenCredential (which handles its own per-instance access-token caching/refresh) — not the Data-tier cache SmartBrowzTokenManager uses, a separate, lower-level utility kept for now but not wired into the actual render adapter."
   sensitive   = true
   default     = ""
+}
+
+# Phase 10 — the rest of what zcatalyst-sdk's ICatalystOptions requires to
+# initialize from OUTSIDE Catalyst (confirmed via Zoho's own "Integrate SDK
+# in Third-Party Apps" doc, and by inspecting
+# zcatalyst_sdk.types.ICatalystOptions.__required_keys__ directly): project
+# ID, ZAID ("project_key" in the SDK's own naming — a separate per-
+# environment identifier, NOT the same as project_id, obtained from
+# Project Settings -> Environments -> General in the Catalyst console),
+# API domain, and environment (Development/Production).
+variable "catalyst_project_id" {
+  type        = string
+  description = "Catalyst project ID (Project Settings -> Environments -> General)."
+  default     = ""
+}
+
+variable "catalyst_zaid" {
+  type        = string
+  description = "ZAID (Zoho Account ID) — a per-environment identifier distinct from project_id; use the Development environment's ZAID to match catalyst_environment's default."
+  default     = ""
+}
+
+variable "catalyst_api_domain" {
+  type        = string
+  description = "Catalyst's own API domain (distinct from smartbrowz_accounts_url, which is Zoho Accounts' OAuth token endpoint, not Catalyst's API)."
+  default     = "https://api.catalyst.zoho.com"
+}
+
+variable "catalyst_environment" {
+  type        = string
+  description = "Development or Production — must match which environment's ZAID (catalyst_zaid) was provided."
+  default     = "Development"
 }

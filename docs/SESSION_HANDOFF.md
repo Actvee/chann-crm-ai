@@ -57,122 +57,242 @@ Customer/Technician → Phase 9 (CRM core: customers/deals/storefront) →
 last-customer-reference + product chat command → last_name+phone
 validation rule + safety net → `_unwrap()` 204-body crash fix →
 missing-field-label translation + storefront confirm-before-search UX →
-Phase 10 quote CRUD + document-template-engine schema →
-**SmartBrowz OAuth token-refresh mechanism + customer-name-disambiguation
-numbered selection, deployed** ("สร้างใบเสนอราคาจากดีล D-2026-XXXX" and
-the underlying quote/deal features all confirmed working live earlier;
-this specific patch's own two features have not yet been separately
-confirmed by the owner on LINE, but the commit is live on `origin/main`).
+Phase 10 quote CRUD + document-template-engine schema → SmartBrowz OAuth
+token-refresh mechanism + customer-name-disambiguation numbered selection
+→ **Terraform SmartBrowz variable wiring fix, deployed and confirmed**
+(`terraform apply`: 3 changed, 0 destroyed).
 
-`origin/main` HEAD is **`7a6255c` — `feat(phase10): SmartBrowz OAuth token
-refresh + customer disambiguation`**.
+`origin/main` HEAD is **`f13154f` — `fix(phase10): wire SmartBrowz OAuth
+variables into Terraform`**.
 
-**🟡 Found immediately after that patch's own deploy, before any real
-SmartBrowz credentials were even in hand yet:** Terraform never actually
-wired any `SMARTBROWZ_*` variable to the Application-tier Cloud Run
-service — not even the older `pdf_renderer`/`catalyst_api_domain`/
-`catalyst_project_id` placeholder fields that predate this session. The
-token-refresh code would have deployed fine and then failed on its first
-real call, since the environment variables it reads would always be
-empty regardless of what sat in `terraform.tfvars`. See the section
-immediately below — this is now fixed, not yet deployed.
+**The owner has since gone all the way through real Zoho Catalyst Self
+Client + Cloud Scale Authentication setup** to obtain every credential
+the actual render adapter needs: `client_id`, `client_secret`,
+`refresh_token` (shared in chat, never echoed back or written to any
+file — must go directly into the owner's own gitignored
+`terraform.tfvars`), `project_id` (`7567000000442001`, from Project
+Settings), and — after an initial wrong turn (see below) — the
+Development environment's **ZAID** (`10127149107`, from Project Settings
+-> Environments -> General), a per-environment identifier the SDK
+requires alongside `project_id` that has nothing to do with Catalyst's
+own end-user Authentication feature despite one specific Zoho doc
+example implying otherwise.
 
-The owner has since generated a real Zoho Catalyst Self Client and
-shared its access_token, refresh_token, client_id, and client_secret in
-chat. **None of these were echoed back or written into any file** — they
-need to go directly into the owner's own gitignored `terraform.tfvars`,
-never through chat, never committed. The real token response also
-confirmed two things that were previously best-guesses: the Catalyst
-project is on the US datacenter (`api_domain` came back as
-`https://www.zohoapis.com`, so `SMARTBROWZ_ACCOUNTS_URL`'s default of
-`https://accounts.zoho.com` is correct as-is), and the granted scope is
-`ZohoCatalyst.pdfshot.execute ZohoCatalyst.dataverse.execute` — the
-first is exactly what this project needs.
-
-Phases 11-20 haven't been started; the DOCX-authoring/AI-mapping/
-SmartBrowz-render pipeline itself (10.4-10.6) is still not built — that
-remains separate, later work even once real credentials are in place.
+Phases 11-20 haven't been started. The actual render adapter now exists
+(see the section immediately below) but only as a connectivity-proving
+seam — the full DOCX-authoring/AI-mapping pipeline (10.4-10.5) is still
+not built, deliberately deferred until the render adapter itself is
+proven against real credentials in the deployed environment.
 
 ---
 
-## Uncommitted work waiting to be deployed — Terraform never wired the SmartBrowz variables
+## Uncommitted work waiting to be deployed — the real SmartBrowz render adapter, wired through PdfRenderer
 
-Patch: `phase10-smartbrowz-tfwiring.patch` +
-`phase10-smartbrowz-tfwiring-deploy.sh`. On top of `7a6255c` (the real
-live HEAD). No migration — Terraform-only + doc updates.
+Patch: `phase10-smartbrowz-renderer.patch` +
+`phase10-smartbrowz-renderer-deploy.sh`. On top of `f13154f` (the real
+live HEAD). No migration.
 
-### The gap
+### The actual render adapter now exists — properly wired through the seam Phase 1 already built
 
-`grep`-ing the Terraform config for `smartbrowz`/`SMARTBROWZ` turned up
-**nothing at all**, checked while helping the owner register the Zoho
-Catalyst Self Client. No `variable` block existed to receive
-`SMARTBROWZ_CLIENT_ID` etc. from `terraform.tfvars`, and no line in
-`application_runtime_env` (`infrastructure/terraform/cloud_run.tf`)
-passed any of them through to the Application-tier Cloud Run service.
-`application/chann_app/services/smartbrowz_auth.py`'s automatic
-token-refresh (deployed in `7a6255c`) would therefore always see these
-as empty strings at runtime no matter what was set in `terraform.tfvars`
-— it would deploy successfully and only fail the moment something
-actually tried to use it.
+Wanted to first verify SmartBrowz connectivity works before building
+anything template-related. Along the way, checking exactly HOW to call
+SmartBrowz turned into real research (Zoho does not publicly document a
+raw REST endpoint for the PDF & Screenshot component — only SDK usage),
+and writing the code turned up a real gap: I initially put the
+`zcatalyst_sdk` import directly in a new standalone module, which an
+*existing* boundary test caught immediately —
+`tests/boundary/test_tier_boundaries.py::test_domain_code_does_not_import_a_pdf_vendor_sdk`,
+which enforces ADR-021's own stated intent: "domain code depends on the
+PdfRenderer protocol, never a vendor SDK directly." Phase 1 had already
+scaffolded exactly this seam (`application/chann_app/services/pdf/base.py`
+— `PdfRenderer` Protocol, `PdfOptions`/`PdfResult` dataclasses,
+`NullPdfRenderer`, a `get_renderer(name)` factory that already had a
+`"smartbrowz"` branch stubbed as `NotImplementedError`) — it was just
+never implemented until now.
 
-### The fix
+**Fixed properly, not by loosening the test:**
+`application/chann_app/services/pdf/smartbrowz.py` is the one new file
+in the Application tier allowed to import `zcatalyst_sdk` — the test now
+has one narrow, explicit exception for exactly this path (the adapter,
+by definition, has to import the vendor SDK somewhere, or the
+abstraction could never be implemented at all; the boundary the test
+protects is that nothing *else* depends on it). `get_renderer("smartbrowz")`
+in `base.py` now returns a real `SmartBrowzPdfRenderer` instance via a
+local import (never touches `zcatalyst_sdk` itself, so `base.py` stays
+outside the boundary check).
 
-Added `variable "smartbrowz_accounts_url"` (default
-`https://accounts.zoho.com`, now confirmed correct against the real
-token response's `api_domain`), `variable "smartbrowz_client_id"`,
-`variable "smartbrowz_client_secret"` (`sensitive = true`),
-`variable "smartbrowz_refresh_token"` (`sensitive = true`) to
-`infrastructure/terraform/variables.tf`, and wired all four into
-`application_runtime_env` in `cloud_run.tf`. The existing
-`nonsensitive(toset(keys(local.application_runtime_env)))` pattern
-already handles sensitive values correctly (it already does this for
-`admin_secret`/`jwt_secret`/the LINE secrets), so nothing else needed to
-change there.
+### How the adapter actually talks to SmartBrowz
 
-Also updated `docs/RUNTIME_CONFIG_CONTRACT.md`'s SmartBrowz rows from
-`REQUIRED_BY_PHASE_10` (a generic future-need marker) to
-`REQUIRED_NOT_CONFIGURED_IN_TFVARS` (the Terraform side is now ready;
-only the real secret values are missing from `terraform.tfvars`), and
-recorded the confirmed datacenter and scope so nobody has to re-derive
-them from a live token response again.
+Uses the official `zcatalyst-sdk` PyPI package (`zcatalyst-sdk==1.4.0`,
+added to `application/requirements.txt`), initialized in Zoho's own
+documented "third-party application" mode — confirmed via their
+"Catalyst Python SDK Integration in Third-Party Applications" doc, the
+correct path for exactly this scenario (an app deployed outside
+Catalyst, authenticated via a Self Client's OAuth credentials) rather
+than guessing at an undocumented REST endpoint.
 
-### What still needs to happen, in order
+**A real, non-obvious requirement found along the way:** the SDK's
+`ICatalystOptions` needs a **ZAID** (Zoho Account ID) in addition to
+`client_id`/`client_secret`/`refresh_token`/`project_id` — confirmed
+mandatory by inspecting `zcatalyst_sdk.types.ICatalystOptions.__required_keys__`
+directly, not assumed from docs alone. First attempt at finding it went
+down the wrong path (one specific third-party-integration doc example
+happened to use Catalyst's own Authentication component to demonstrate
+retrieving a ZAID, which looked like a real prerequisite — it is not).
+The correct, much simpler location: Catalyst console -> Project Settings
+-> Environments -> General, which directly lists ZAID/API Key/Application
+URL per environment (confirmed against Zoho's own "Environment Settings"
+help page). New config: `CATALYST_ZAID` (alongside the pre-existing
+`catalyst_project_id`/`catalyst_environment`/`catalyst_api_domain`
+placeholder fields — which, it turns out, had never been wired into
+Terraform either, the exact same gap the previous patch fixed for the
+`SMARTBROWZ_*` variables; fixed now, all four `catalyst_*` fields wired
+into `application_runtime_env` in the same patch).
 
-1. This patch deploys (Terraform-only, no migration — plan should show
-   changes to the `application` Cloud Run service's env vars only).
-2. The owner adds the three real secret values to their own
-   `terraform.tfvars` directly (never through chat):
-   `smartbrowz_client_id`, `smartbrowz_client_secret`,
-   `smartbrowz_refresh_token`. `smartbrowz_accounts_url` can stay at its
-   default.
-3. `terraform plan`/`apply` again to actually push those values to the
-   live Application-tier service.
-4. Only after that does `SmartBrowzTokenManager.get_access_token()` have
-   anything real to refresh against — there's still no chat command or
-   any other runtime path that calls it yet (see the "not yet built"
-   list under Phase 10 for what's still missing before an actual PDF can
-   be generated).
+**Deliberately does NOT use `smartbrowz_auth.py`'s `SmartBrowzTokenManager`**
+(the Data-tier-cached token manager built one patch ago, before this
+adapter existed) — `zcatalyst-sdk`'s own `RefreshTokenCredential` already
+refreshes and caches an access token internally per-process (confirmed by
+reading its source: `self._cached_token`, checked against `time()` before
+refreshing). Duplicating that against the Data-tier cache as well would
+just be two caches disagreeing with each other for no real benefit at
+this project's scale — a handful of Cloud Run instances each refreshing
+independently at most once per ~55 minutes is nowhere near Zoho's
+documented rate limit (10 access tokens per refresh_token per 10
+minutes). `SmartBrowzTokenManager` is kept as-is, unused by this adapter,
+in case a future scale-up ever makes the shared-cache benefit worth the
+added complexity.
+
+### What this patch builds
+
+1. **`application/chann_app/services/pdf/smartbrowz.py`** —
+   `SmartBrowzPdfRenderer` implementing the `PdfRenderer` protocol
+   (`render()`/`preview_image()`, both wrapping the SDK's sync
+   `convert_to_pdf`/`take_screenshot` calls in `asyncio.to_thread` so
+   they never block the event loop), plus `verify_connection()` — a
+   standalone diagnostic call (fixed trivial HTML, never returns PDF
+   bytes) for 10.6's own requirement to verify the real auth path from
+   the deployed environment before building anything on top of it.
+2. **New endpoint** `POST /api/v1/platform/smartbrowz/verify-connection`
+   (`routers_admin.py`) — behind the existing `require_admin` platform-
+   admin JWT dependency (not a new, separate auth scheme; every call
+   spends a real SmartBrowz API request against the project's quota, so
+   it should not be an unauthenticated route). Returns 503 for
+   `SmartBrowzNotConfigured`, 502 for `SmartBrowzRenderError` — the two
+   look identical from outside otherwise and need completely different
+   fixes.
+3. **Terraform**: `variable "catalyst_project_id"`, `variable "catalyst_zaid"`,
+   `variable "catalyst_api_domain"`, `variable "catalyst_environment"`
+   added to `variables.tf` and wired into `application_runtime_env` in
+   `cloud_run.tf` (the same gap-fixing pattern as the previous patch, just
+   for the four `catalyst_*` fields that turned out to be missing too).
+4. **`requirements-test.txt` gap found and fixed separately, live, before
+   this patch**: the owner's Cloud Shell had `pytest==9.1.1` installed
+   globally (from something else entirely) with no `pytest-asyncio` at
+   all — every async test in this project failed to collect. This
+   project's own `requirements-test.txt` (`pytest==8.3.4`,
+   `pytest-asyncio==0.25.2`) was never being installed by any deploy
+   script's STAGE 2 — fixed directly in
+   `phase10-smartbrowz-tfwiring-deploy.sh` (already deployed) and
+   confirmed by reproducing the exact broken environment locally
+   (forced `pytest==9.1.1`, removed `pytest-asyncio`) and watching the
+   exact same collection error, then confirming the fix resolves it.
+
+### New tests
+
+`tests/unit/test_smartbrowz_pdf_renderer.py` — 5 tests, using **real
+network calls to Zoho with intentionally-fake credentials** rather than
+mocking `zcatalyst-sdk`'s internal HTTP client (it uses `requests`, not
+this project's own httpx-based `DataClient`, so the clean
+`httpx.MockTransport` injection pattern `test_smartbrowz_auth.py`/
+`test_data_client.py` use isn't available here without patching library
+internals — a real round trip with fake credentials is fast, since Zoho
+rejects immediately, and proves the actual error-handling paths this
+module depends on). Covers: missing config raises before any network
+call; fake credentials are cleanly rejected by the real endpoint; preview
+also requires config; `verify_connection()` surfaces the same typed
+errors the endpoint translates to 503/502; `get_renderer("smartbrowz")`
+returns the right adapter type.
+
+### What still needs to happen before a real PDF can be generated
+
+1. This patch deploys.
+2. The owner adds the real secret values (`smartbrowz_client_id`,
+   `smartbrowz_client_secret`, `smartbrowz_refresh_token`,
+   `catalyst_project_id`, `catalyst_zaid`) to their own gitignored
+   `terraform.tfvars` directly — never through chat, never committed.
+   `smartbrowz_accounts_url`/`catalyst_api_domain`/`catalyst_environment`
+   can all stay at their defaults (already confirmed correct: US
+   datacenter, Development environment).
+3. `terraform plan`/`apply` to push those real values to the live
+   Application-tier service.
+4. Log in via the existing `/api/v1/platform/login` (username/password —
+   see "no platform admin account exists yet" below) to get a bearer
+   token, then call `POST /api/v1/platform/smartbrowz/verify-connection`
+   with it — this is the actual 10.6 verification step, not yet
+   performed against real credentials.
+5. Only after that does building the actual quote-to-PDF pipeline (data
+   snapshot builder, a real HTML template, `generated_documents`
+   recording) make sense — still not started.
+
+### No platform admin account exists yet in this deployment
+
+Discovered while preparing to test the new endpoint (it requires
+`require_admin`, the same JWT session flow every other admin endpoint in
+this tier already uses). There is deliberately no public API to create
+one (would be a privilege-escalation surface). This project already has
+exactly the right tool for this, `database/scripts/seed_reference.py`
+(idempotent by username, reads `PLATFORM_ADMIN_BOOTSTRAP_PASSWORD` or
+falls back to a DEV-only default with a loud warning) — it was simply
+never run against the live database. It's already baked into the
+existing, already-deployed migration Cloud Run Job image
+(`database/Dockerfile` copies the whole `database/` directory, seed
+script included), so running it needs no new image build — just a
+one-off execution with the command overridden:
+
+```
+gcloud run jobs execute chann-crm-ai-dev-migrate \
+  --project=chann1-1 --region=asia-southeast1 \
+  --command=python3 --args=database/scripts/seed_reference.py \
+  --update-env-vars=APP_ENV=dev \
+  --wait
+```
+
+(Optionally add `,PLATFORM_ADMIN_BOOTSTRAP_PASSWORD=<something>` to the
+`--update-env-vars` value instead of accepting the DEV fallback
+password — either is fine for a DEV environment per the script's own
+documented reasoning.)
 
 ### Validated
 
-Terraform changes have no automated test coverage in this project
-(nothing exercises `infrastructure/terraform/*.tf`) — validated by
-grep-confirming the new variables appear in both `variables.tf` and
-`application_runtime_env`, brace-balance-checked both files, and
-confirmed the existing `nonsensitive(...)` wrapping already covers the
-new sensitive values without modification. The real `terraform plan`
-step already built into the deploy script is the first genuine check.
-Full Python test suite unaffected (no Python files touched): **305 tests
-pass**, 0 skipped, both tiers boot.
+On top of `f13154f` (the real live HEAD) on a clean clone: applies
+cleanly (3-way), **310 tests pass**, 0 skipped (real Postgres, real
+network calls to Zoho with fake credentials), `check-model-kwargs.py`
+OK, both tiers boot (data 98 routes, app 22 paths). No migration.
 
 ---
 
-
-Patch: `phase10-followups.patch` + `phase10-followups-deploy.sh`. Two
-independent additions on top of `6eb29f4` (the real live HEAD). No
-migration.
-
 ## Already deployed (27 Aug 2026) — for context, not action
+
+### 12. Terraform SmartBrowz variable wiring (`f13154f`)
+
+Confirmed deployed (`terraform apply`: 3 changed, 0 destroyed).
+`grep`-ing the Terraform config for `smartbrowz`/`SMARTBROWZ` had turned
+up nothing at all — no `variable` block to receive `SMARTBROWZ_CLIENT_ID`
+etc. from `terraform.tfvars`, no line in `application_runtime_env`
+passing any of them to the Application-tier Cloud Run service. The
+token-refresh code from the previous patch would have deployed fine and
+only failed the moment something actually tried to use it. Fixed:
+`variable "smartbrowz_accounts_url"` (default `https://accounts.zoho.com`),
+`variable "smartbrowz_client_id"`, `variable "smartbrowz_client_secret"`
+(`sensitive = true`), `variable "smartbrowz_refresh_token"`
+(`sensitive = true`) added and wired into `application_runtime_env`.
+Also caught and fixed live during this same session, separately: the
+owner's Cloud Shell had `pytest==9.1.1` with no `pytest-asyncio` at all
+(this project's `requirements-test.txt` was never installed by any
+deploy script) — every async test failed to collect; fixed in the same
+deploy script, reproduced the exact broken environment locally to
+confirm.
 
 ### 11. SmartBrowz OAuth token-refresh mechanism + customer disambiguation (`7a6255c`)
 

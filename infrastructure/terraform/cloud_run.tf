@@ -37,6 +37,10 @@ locals {
     SMARTBROWZ_CLIENT_ID                 = var.smartbrowz_client_id
     SMARTBROWZ_CLIENT_SECRET             = var.smartbrowz_client_secret
     SMARTBROWZ_REFRESH_TOKEN             = var.smartbrowz_refresh_token
+    CATALYST_PROJECT_ID                  = var.catalyst_project_id
+    CATALYST_ZAID                        = var.catalyst_zaid
+    CATALYST_API_DOMAIN                  = var.catalyst_api_domain
+    CATALYST_ENVIRONMENT                 = var.catalyst_environment
   })
 
   presentation_runtime_env = merge(local.common_runtime_env, {

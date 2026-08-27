@@ -51,4 +51,9 @@ class NullPdfRenderer:
 def get_renderer(name: str) -> PdfRenderer:
     if name == "null":
         return NullPdfRenderer()
+    if name == "smartbrowz":
+        from .smartbrowz import SmartBrowzPdfRenderer  # local import — see that
+        # module's docstring for why it, not this file, is the one allowed to
+        # import zcatalyst_sdk (the boundary test enforces this).
+        return SmartBrowzPdfRenderer()
     raise NotImplementedError(f"renderer {name!r} is not implemented until Phase 10")

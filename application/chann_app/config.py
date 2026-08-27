@@ -39,12 +39,29 @@ class Settings(BaseSettings):
     openrouter_model: str = ""
     openrouter_model_reasoning: str = ""
 
-    # PDF — Phase 10. SmartBrowz is called over REST, not the Catalyst SDK,
-    # because this tier runs on Cloud Run outside Catalyst.
+    # PDF — Phase 10. Uses the official zcatalyst-sdk Python package
+    # (confirmed by Zoho's own "Integrate SDK in Third-Party Apps" docs to
+    # support exactly this — an external app outside Catalyst, authenticated
+    # via a Self Client's OAuth credentials — no need to guess at a raw
+    # REST endpoint, which Catalyst does not publicly document for
+    # SmartBrowz specifically).
     pdf_renderer: str = "null"                  # null | smartbrowz | local_chromium
     catalyst_api_domain: str = "https://api.catalyst.zoho.com"
     catalyst_project_id: str = ""
     catalyst_environment: str = "Development"
+    # ZAID (Zoho Account ID) — a separate, mandatory field the SDK's
+    # ICatalystOptions requires alongside project_id (project_key in the
+    # SDK's own naming). Confirmed mandatory by inspecting
+    # zcatalyst_sdk.types.ICatalystOptions.__required_keys__ directly, not
+    # assumed from docs alone. It's a per-environment project identifier
+    # (Development and Production each have their own), found in the
+    # Catalyst console under Project Settings -> Environments -> General —
+    # NOT tied to setting up Catalyst's own Authentication component at
+    # all (an earlier assumption based on one specific third-party-
+    # integration doc's example, which happened to use Authentication for
+    # an unrelated reason; the "Environment Settings" help page confirms
+    # ZAID/API Key/Application URL are simply displayed there directly).
+    catalyst_zaid: str = ""
 
     # SmartBrowz OAuth (Master Spec 10.6) — a separate accounts-domain
     # token exchange from the api-domain calls above. accounts_url is
