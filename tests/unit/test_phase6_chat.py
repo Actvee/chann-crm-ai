@@ -1014,8 +1014,11 @@ class TestPhase9CustomerChat:
             client, message="เพิ่มลูกค้าชื่อสมชาย อีเมล somchai@example.com",
             ctx=_ctx(primary_role="sales"), ai_client=ai,
         )
-        assert "นามสกุลและเบอร์โทร" in reply.text
+        assert "last_name" in reply.text and "phone" in reply.text
         assert not any(r[0] == "create_customer" for r in client.recorded)
+        # sets pending_intent too, so a bare follow-up answer can complete
+        # this request instead of being parsed as a new, meaningless message
+        assert any(r[0] == "set_pending_intent" for r in client.recorded)
 
     async def test_last_name_without_phone_is_not_enough(self):
         ai = httpx.AsyncClient(transport=_ai(json.dumps(
@@ -1027,7 +1030,7 @@ class TestPhase9CustomerChat:
             client, message="เพิ่มลูกค้าชื่อสมชาย ใจดี",
             ctx=_ctx(primary_role="sales"), ai_client=ai,
         )
-        assert "นามสกุลและเบอร์โทร" in reply.text
+        assert "phone" in reply.text
         assert not any(r[0] == "create_customer" for r in client.recorded)
 
     async def test_phone_without_last_name_is_not_enough(self):
@@ -1040,7 +1043,7 @@ class TestPhase9CustomerChat:
             client, message="เพิ่มลูกค้าชื่อสมชาย เบอร์ 0812345678",
             ctx=_ctx(primary_role="sales"), ai_client=ai,
         )
-        assert "นามสกุลและเบอร์โทร" in reply.text
+        assert "last_name" in reply.text
         assert not any(r[0] == "create_customer" for r in client.recorded)
 
     async def test_last_name_and_phone_together_is_enough_even_without_first_name(self):
@@ -1054,6 +1057,65 @@ class TestPhase9CustomerChat:
             ctx=_ctx(primary_role="sales"), ai_client=ai,
         )
         assert any(r[0] == "create_customer" for r in client.recorded)
+
+    async def test_a_bare_reply_completes_a_hard_validation_refusal(self):
+        """The exact scenario asked about directly: type "เพิ่มลูกค้า
+        สมหญิง" (first name only, AI itself thought this was complete —
+        missing=[]), get told last_name is needed, then reply with JUST
+        the last name and have it actually complete the request.
+
+        This only works because the hard validation in _handle_customer_
+        intent registers its own pending_intent when it refuses — without
+        that, a bare follow-up reply would have nothing to merge against
+        and would be parsed as a brand new, meaningless message instead.
+        """
+        # Turn 1: AI thought "สมหญิง" alone was a complete request.
+        ai_1 = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "create", "entity": "customer",
+             "fields": {"first_name": "สมหญิง"}, "missing": []}, ensure_ascii=False)))
+        client = FakeDataClient(permission_keys=["customer.create"])
+        first_reply = await handle_chat_message(
+            client, message="เพิ่มลูกค้า สมหญิง",
+            ctx=_ctx(primary_role="sales"), ai_client=ai_1,
+        )
+        assert "last_name" in first_reply.text
+        assert not any(r[0] == "create_customer" for r in client.recorded)
+        stored = next(r for r in client.recorded if r[0] == "set_pending_intent")
+        assert stored[3]["missing"] == ["last_name", "phone"]
+        assert stored[3]["fields"] == {"first_name": "สมหญิง"}
+
+        # Turn 2: bare reply naming only the last name — the model, told
+        # about the pending state, merges it with what's already known.
+        ai_2 = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "create", "entity": "customer",
+             "fields": {"last_name": "ใจดี"}, "missing": ["phone"]},
+            ensure_ascii=False)))
+        client._pending = {
+            "action": "create", "entity": "customer",
+            "fields": {"first_name": "สมหญิง"}, "missing": ["last_name", "phone"],
+        }
+        second_reply = await handle_chat_message(
+            client, message="ใจดี", ctx=_ctx(primary_role="sales"), ai_client=ai_2,
+        )
+        assert "phone" in second_reply.text
+        assert not any(r[0] == "create_customer" for r in client.recorded)
+
+        # Turn 3: the phone number arrives — now everything required is
+        # present and the customer is actually created.
+        ai_3 = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "create", "entity": "customer",
+             "fields": {"phone": "0812345678"}, "missing": []})))
+        client._pending = {
+            "action": "create", "entity": "customer",
+            "fields": {"first_name": "สมหญิง", "last_name": "ใจดี"}, "missing": ["phone"],
+        }
+        third_reply = await handle_chat_message(
+            client, message="0812345678", ctx=_ctx(primary_role="sales"), ai_client=ai_3,
+        )
+        assert any(r[0] == "create_customer" for r in client.recorded)
+        call = next(r for r in client.recorded if r[0] == "create_customer")
+        assert call[2] == {"first_name": "สมหญิง", "last_name": "ใจดี", "phone": "0812345678"}
+        assert "สมหญิง" in third_reply.text
 
     async def test_update_customer_by_name(self):
         ai = httpx.AsyncClient(transport=_ai(json.dumps(

@@ -54,80 +54,119 @@ clone.
 Registration) → 7 (Master Data) → 8 (Profiles) → OA-scoping/conversation-
 continuity/profile-eligibility fix → OA-aware identity resolution for
 Customer/Technician → Phase 9 (CRM core: customers/deals/storefront) →
-**last-customer-reference + product chat command, deployed and confirmed
-via `/health` matching `git_commit`.**
+last-customer-reference + product chat command → last_name+phone
+validation rule + a silent-failure safety net.
 
-`origin/main` HEAD is **`c4fe8b5` — `fix(phase9): remember last customer
-+ wire product chat command`**.
+`origin/main` HEAD is **`50d78ab` — `fix(phase9): require last_name+phone,
+fix silent-failure bug class`**.
 
 **Not started (past this point):** Phases 10-20 haven't been started.
 
 ---
 
-## Uncommitted work waiting to be deployed — validation rule + a silent-failure bug class
+## 🔴 Uncommitted work waiting to be deployed — a critical, long-standing bug
 
-Patch: `phase9-hardening.patch` + `phase9-hardening-deploy.sh`. Two
-independent fixes on top of `c4fe8b5` (the real live HEAD), found by the
-owner testing live traffic again right after the previous patch deployed.
+Patch: `phase9-unwrap-fix.patch` + `phase9-unwrap-fix-deploy.sh`. Found
+**immediately** after the safety-net patch above deployed: the owner tried
+"เพิ่มลูกค้า สมหญิง" and "เพิ่มสินค้า..." and got "ขออภัย ระบบไม่พร้อม
+ใช้งาน" (the AI-unavailable fallback text) on both — looked like an
+OpenRouter outage, but the real Cloud Run logs told a completely different
+story:
 
-### 1. Customer creation now requires last name AND phone, not "any one field"
+```
+File ".../data_client.py", line 259, in _unwrap
+    return resp.json()
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+```
 
-Owner's explicit instruction: a first name alone (even with an email) is
-not enough to reliably identify a walk-in customer later — common first
-names collide, and phone is how staff actually follow up. Changed the
-create-customer rule from "at least one of first_name/last_name/phone/
-email" to "last_name AND phone both required." Updated the AI intent
-prompt to match, so the model asks for what's missing up front rather
-than the request failing after the fact. 5 new tests cover the boundary
-cases (first name alone, last name without phone, phone without last
-name, last name+phone with no first name at all).
+### Root cause — and why it went unnoticed for so long
 
-### 2. "No reply at all" — a systemic gap in exception handling, not one bug
+`DataClient._unwrap()` called `resp.json()` unconditionally on every
+successful response, including a bare `204 No Content` — which by HTTP
+definition has an empty body, so parsing it as JSON always raises. This
+affected **every single call** to `set_pending_intent`, `clear_pending_intent`,
+and `set_last_customer_ref` — all three of the Phase 9 conversation-state
+endpoints, none of which have ever worked correctly since they were first
+built.
 
-Reported: typing a message got **zero reply on LINE**, with nothing
-obviously wrong. Root cause turned out to be two compounding gaps:
+It went unnoticed for so long because it had always failed *silently*:
+before the webhook-level exception-logging safety net (deployed one patch
+ago, in `50d78ab`), an uncaught exception here just killed the request with
+no reply and nothing in the logs pointing at why. The safety net didn't
+introduce this bug — it's what finally made a bug that had been live since
+Phase 6 visible for the first time. The newer, stricter last_name+phone
+validation rule (same patch) then made it manifest on nearly *every*
+message, since far more messages now hit the "missing fields →
+set_pending_intent" path than before.
 
-- Several handlers added across the last few patches — `create_deal`,
-  `update_customer`, `promote_customer`, and especially the newest
-  `upsert_product` — called the Data tier with **no exception handling at
-  all**. A price string with stray text (e.g. "3500 บาท" instead of a
-  clean number), or any not-found/conflict from the Data tier, propagated
-  straight up uncaught.
-- `webhook.py`'s main per-event loop had **no top-level safety net**
-  either. An uncaught exception anywhere in "decide what to reply" killed
-  the whole request before `reply_text()` ever ran — no LINE reply, and
-  nothing in the application logs pointing at why (though Cloud Run's own
-  request logs would show a 500).
+### The fix
 
-Fixed both layers:
-- Added try/except with friendly fallback replies to all four handlers
-  above, mirroring the pattern `create_customer` already used
-  (`_is_conflict`/`_is_not_found` against the Data tier's real HTTP status).
-- Added a broad `try/except Exception` around the entire "decide what
-  `chat` should be" block in `webhook.py`, logging the real exception
-  (`log.exception`, so the traceback is captured) and falling back to the
-  existing `unavailable_reply()` text — the same plain apology already
-  used when the AI provider itself is down. This is deliberately
-  defense-in-depth: it protects against this whole *class* of bug for
-  anything built in a future phase too, not just the four call sites
-  found and fixed directly today.
+One-line fix in the one shared place: `_unwrap()` now returns `None` for
+`204` or any response with an empty body, instead of trying to parse it.
+This is the correct general fix for all 9 endpoints in this codebase that
+return `204` (only 3 were confirmed broken via live traffic; the other 6 —
+`delete_role`, `delete_setting`, `delete_sales_group`, and similar
+Dashboard/admin-only actions — were never exercised through chat, so
+whether they'd hit the same crash in practice was never observed, but the
+fix covers them too since the bug was in the shared unwrapping code, not
+any one endpoint).
 
-4 new tests confirm each of the four handlers degrades to a friendly
-reply instead of raising. The webhook-level safety net itself has no
-dedicated test harness (webhook.py isn't unit-tested at all currently —
-it needs a full signed-request/reply mock that doesn't exist yet); it's
-covered by code review and the syntax/lint checks, not a runtime test.
+Confirmed the regression test actually catches the bug: reverted `_unwrap`
+to the broken version locally and watched it raise the *exact* same
+`JSONDecodeError` from the production log, before restoring the fix.
+`FakeDataClient` (used throughout `tests/unit/test_phase6_chat.py`) never
+exercises the real `DataClient._unwrap` at all — it's a hand-written
+stand-in that returns plain Python objects, bypassing httpx entirely. A new
+file, `tests/unit/test_data_client.py`, exists specifically to cover the
+real HTTP-unwrapping path the fake bypasses.
+
+### Also fixed in this patch: hard-validation refusals now support continuity
+
+Asked directly by the owner: if "เพิ่มลูกค้า สมหญิง" gets refused for
+missing `last_name`+`phone`, can a follow-up reply with just the last name
+complete it? Answer was **no, not yet** — the hard validation in
+`_handle_customer_intent` (added in the previous patch) refused with a
+static message but never registered a `pending_intent`, so a bare
+follow-up reply had nothing to merge against and would have been parsed as
+a new, meaningless message instead.
+
+Fixed: the hard-validation refusal now calls `set_pending_intent` itself,
+using the same `ask_for_missing()` wording the rest of the system already
+uses, so it participates in the exact same slot-filling continuity Phase 6
+built. A 3-turn regression test proves the full flow: name only → asks for
+last name → reply with just the last name → asks for phone → reply with
+just the phone → customer actually created with all three fields merged.
 
 ### Validated
 
-On top of `c4fe8b5` (the real live HEAD) on a clean clone: applies
-cleanly (3-way), **267 tests pass**, 0 skipped (real Postgres),
-`check-model-kwargs.py` OK, both tiers boot (data 80 routes, app 21
-paths). No migration.
+On top of `50d78ab` (the real live HEAD) on a clean clone: applies cleanly
+(3-way), **272 tests pass**, 0 skipped (real Postgres), `check-model-kwargs.py`
+OK, both tiers boot (data 80 routes, app 21 paths). No migration.
+
+**This is a high-priority deploy** — it fixes a bug that has silently
+broken conversation continuity since Phase 6 and now manifests on
+essentially every message that doesn't arrive complete in one shot.
 
 ---
 
 ## Already deployed (27 Aug 2026) — for context, not action
+
+### 7. last_name+phone validation + silent-failure safety net (`50d78ab`)
+
+Two fixes, confirmed deployed via `/health` matching `git_commit`.
+Customer creation now requires `last_name` AND `phone` (not "any one of
+four fields") per explicit owner instruction — a first name alone doesn't
+reliably identify a walk-in customer later, and phone is how staff follow
+up. Separately, several handlers added across recent patches
+(`create_deal`, `update_customer`, `promote_customer`, `upsert_product`)
+had no exception handling at all, and `webhook.py`'s main loop had no
+top-level safety net either — an uncaught exception anywhere in "decide
+what to reply" killed the whole request silently. Fixed both layers: added
+try/except to all four handlers, and a broad `try/except` around the
+whole decision block in `webhook.py`, logging the real exception and
+falling back to a plain apology. This safety net is what surfaced the
+`_unwrap` bug documented above for the first time — see that section for
+what it actually was.
 
 ### 6. Last-customer-reference + product chat command (`c4fe8b5`)
 
@@ -423,6 +462,16 @@ tests/unit/test_phase6_chat.py               ← +13 tests
 
 ## Patterns worth reusing (all proven in this codebase)
 
+- **A hand-written `FakeDataClient` is not a substitute for testing the real
+  HTTP client.** `_unwrap()`'s `204`-body bug went undetected through every
+  Phase 6/9 patch because `FakeDataClient` (used throughout
+  `tests/unit/test_phase6_chat.py`) never calls the real `DataClient` at
+  all — it's a hand-written stand-in returning plain Python objects,
+  bypassing httpx entirely. A small, separate test file
+  (`tests/unit/test_data_client.py`) that exercises `DataClient` against a
+  real `httpx.MockTransport` is what actually caught this. If a bug can
+  only manifest in the wiring between two tiers, a fake that skips that
+  wiring can never catch it, however thorough the tests built on top of it.
 - **A real local Postgres catches things a mocked one can't.** Two earlier
   sessions validated Phase 8/6 patches with integration tests *skipped*
   (no `TEST_DATABASE_URL` available in the sandbox) and shipped clean. This

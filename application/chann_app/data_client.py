@@ -256,6 +256,15 @@ class DataClient:
             except Exception:
                 detail = resp.text
             raise DataTierError(resp.status_code, detail)
+        # 204 No Content is a valid, deliberate success response (every
+        # endpoint that only stores/deletes state uses it) — by HTTP
+        # definition its body is empty, so calling .json() on it always
+        # raises JSONDecodeError. This crashed EVERY call to
+        # set_pending_intent/clear_pending_intent/set_last_customer_ref
+        # silently until the webhook-level exception logging added
+        # alongside this fix made it visible for the first time.
+        if resp.status_code == 204 or not resp.content:
+            return None
         return resp.json()
 
     async def aclose(self) -> None:

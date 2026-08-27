@@ -653,10 +653,6 @@ CUSTOMER_NEEDS_SOMETHING = {
     "th": "กรุณาระบุอย่างน้อยชื่อ เบอร์โทร หรืออีเมลของลูกค้า",
     "en": "Please provide at least a name, phone, or email for the customer.",
 }
-CUSTOMER_CREATE_NEEDS_LASTNAME_AND_PHONE = {
-    "th": "กรุณาระบุนามสกุลและเบอร์โทรของลูกค้าด้วย",
-    "en": "Please also provide the customer's last name and phone number.",
-}
 CUSTOMER_UPDATED = {
     "th": "แก้ไขข้อมูลลูกค้า{name}เรียบร้อยแล้ว",
     "en": "Updated customer {name}.",
@@ -744,10 +740,23 @@ async def _handle_customer_intent(
         # least a last name AND a phone number — a first name alone is not
         # enough to reliably identify someone later (very common shared
         # first names), and a phone is how staff actually follow up.
-        if not editable.get("last_name") or not editable.get("phone"):
-            return ChatReply(
-                text=_t(CUSTOMER_CREATE_NEEDS_LASTNAME_AND_PHONE, language), intent=intent,
+        #
+        # This check exists precisely because the AI's own "missing" list
+        # cannot be trusted to always catch it — but when it doesn't, the
+        # conversation must still continue naturally: register a
+        # pending_intent here too, the same as spec 6.4's generic
+        # slot-filling path does, so a bare follow-up answer ("ใจดี") is
+        # understood as completing THIS request rather than parsed as a
+        # new, meaningless message. Without this, the hard check would
+        # silently break the exact continuity Phase 6 was built to provide.
+        still_missing = [f for f in ("last_name", "phone") if not editable.get(f)]
+        if still_missing:
+            await client.set_pending_intent(
+                ctx.chann_uid, ctx.oa,
+                action="create", entity="customer", fields=editable,
+                missing=still_missing, ttl_seconds=PENDING_INTENT_TTL_S,
             )
+            return ChatReply(text=ask_for_missing(still_missing, language), intent=intent)
         try:
             row = await client.create_customer(license_id, editable, actor_id=ctx.chann_uid)
         except Exception as exc:  # noqa: BLE001
