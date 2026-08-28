@@ -61,6 +61,7 @@ from ..repositories.phase9 import (
     StorefrontRepository,
 )
 from ..repositories.phase10 import (
+    CompanyProfileRepository,
     DocumentTemplateRepository,
     GeneratedDocumentRepository,
     Phase10Conflict,
@@ -86,6 +87,8 @@ from ..repositories.phase6 import (
 )
 from ..schemas import (
     AuditLogOut,
+    CompanyProfileIn,
+    CompanyProfileOut,
     CustomerIn,
     CustomerOut,
     DealIn,
@@ -2403,3 +2406,85 @@ def get_generated_document(
             status_code=status.HTTP_404_NOT_FOUND, detail="generated document not found"
         )
     return GeneratedDocumentOut.model_validate(row, from_attributes=True)
+
+
+# --------------------------------------------------------- Phase 10 company
+
+
+def _company_profile_out(row) -> CompanyProfileOut:
+    missing = CompanyProfileRepository.missing_for_documents(row)
+    return CompanyProfileOut(
+        legal_name=row.legal_name,
+        company_name=row.company_name,
+        tax_id=row.tax_id,
+        company_address=row.company_address,
+        company_phone=row.company_phone,
+        company_email=row.company_email,
+        vat_rate=row.vat_rate,
+        is_document_ready=not missing,
+        missing_for_documents=missing,
+    )
+
+
+@router.get("/licenses/{license_id}/company-profile", response_model=CompanyProfileOut)
+def get_company_profile(license_id: uuid.UUID, session: Session = Depends(get_session)):
+    row = CompanyProfileRepository(session).get(TenantScope(license_id=license_id))
+    if row is None:
+        raise HTTPException(status_code=404, detail="license not found")
+    return _company_profile_out(row)
+
+
+@router.patch("/licenses/{license_id}/company-profile", response_model=CompanyProfileOut)
+def patch_company_profile(
+    license_id: uuid.UUID,
+    payload: CompanyProfileIn,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    """Partial update — only fields actually sent are changed.
+
+    `exclude_unset` (not `exclude_none`) is what makes "clear this field"
+    expressible: an explicitly-sent null clears, an omitted key is left
+    alone. For vat_rate those are genuinely different intentions.
+    """
+    scope = TenantScope(license_id=license_id)
+    repo = CompanyProfileRepository(session)
+    try:
+        existing = repo.get(scope)
+        if existing is None:
+            raise HTTPException(status_code=404, detail="license not found")
+        tracked = (
+            "legal_name", "tax_id", "company_address",
+            "company_phone", "company_email", "vat_rate",
+        )
+        before = {f: getattr(existing, f) for f in tracked}
+        row = repo.update(scope, payload.model_dump(exclude_unset=True))
+        after = {f: getattr(row, f) for f in tracked}
+        AuditRepository(session).write(
+            license_id=license_id,
+            entity_type="company_profile",
+            entity_id=row.id,
+            actor_type="user",
+            actor_id=x_actor_id or None,
+            action="update",
+            # Decimal/None don't serialise into the audit JSON cleanly, and a
+            # tax ID does not belong in a diff blob any more than it has to.
+            field_changes=diff_fields(
+                {k: (str(v) if v is not None else None) for k, v in before.items()},
+                {k: (str(v) if v is not None else None) for k, v in after.items()},
+            ),
+        )
+        session.commit()
+        return _company_profile_out(row)
+    except HTTPException:
+        session.rollback()
+        raise
+    except ValueError as exc:
+        session.rollback()
+        raise HTTPException(status_code=422, detail=str(exc))
+    except LookupError:
+        session.rollback()
+        raise HTTPException(status_code=404, detail="license not found")
+    except Exception as exc:
+        session.rollback()
+        raise _phase2_http_error(exc)

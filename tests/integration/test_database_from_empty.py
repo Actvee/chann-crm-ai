@@ -2619,3 +2619,223 @@ class TestPhase10QuoteAndTemplateEngine:
             tmpl_repo = DocumentTemplateRepository(session)
             assert tmpl_repo.get_template(scope_a, tmpl_b_id) is None
             assert tmpl_repo.get_template(scope_b, tmpl_b_id) is not None
+
+
+class TestPhase10CompanyProfile:
+    """Phase 10 — the issuing company's legal identity on documents.
+
+    A Thai quote/invoice must carry the issuing company's tax ID and
+    address. `licenses` carried neither before migration 0010, so a
+    document rendered from it would have been legally incomplete no
+    matter how good the template was.
+    """
+
+    def test_company_profile_update_and_readiness(self, migrated_db):
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import ChannIdentity
+        from decimal import Decimal
+
+        from chann_data.repositories.phase10 import CompanyProfileRepository
+        from chann_data.repositories.phase65 import RegistrationRepository
+        from chann_data.repositories.tenant_scope import TenantScope
+
+        with Session(migrated_db) as session:
+            session.add(ChannIdentity(
+                chann_uid="CHN-P10CP-001", line_user_id="line-p10cp-001", primary_role="sales",
+            ))
+            session.commit()
+
+        with Session(migrated_db) as session:
+            lic = RegistrationRepository(session).create_license(
+                company_name="Doc Co", created_by_chann_uid="CHN-P10CP-001",
+            )
+            license_id = lic.id
+            session.commit()
+
+        scope = TenantScope(license_id=license_id)
+
+        # A freshly registered tenant is NOT document-ready — this is the
+        # state every existing tenant is in after migration 0010, and the
+        # renderer has to refuse rather than emit a blank tax ID.
+        with Session(migrated_db) as session:
+            repo = CompanyProfileRepository(session)
+            row = repo.get(scope)
+            assert repo.missing_for_documents(row) == ["tax_id", "company_address"]
+            assert repo.is_document_ready(row) is False
+
+        with Session(migrated_db) as session:
+            repo = CompanyProfileRepository(session)
+            row = repo.update(scope, {
+                "legal_name": "Doc Co., Ltd.",
+                "tax_id": "0105558123456",
+                "company_address": "99/1 ถนนสุขุมวิท กรุงเทพฯ 10110",
+                "vat_rate": Decimal("0.07"),
+            })
+            assert repo.is_document_ready(row) is True
+            session.commit()
+
+        # company_name is untouched by a document-identity update: the shop's
+        # chat/storefront display name and its registered legal name are
+        # different things and must not overwrite each other.
+        with Session(migrated_db) as session:
+            row = CompanyProfileRepository(session).get(scope)
+            assert row.company_name == "Doc Co"
+            assert row.legal_name == "Doc Co., Ltd."
+            assert row.vat_rate == Decimal("0.0700")
+
+    def test_partial_update_leaves_omitted_fields_alone(self, migrated_db):
+        """An omitted key must not be treated as null. Sending only a phone
+        number should never silently wipe the tax ID."""
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import ChannIdentity
+        from decimal import Decimal
+
+        from chann_data.repositories.phase10 import CompanyProfileRepository
+        from chann_data.repositories.phase65 import RegistrationRepository
+        from chann_data.repositories.tenant_scope import TenantScope
+
+        with Session(migrated_db) as session:
+            session.add(ChannIdentity(
+                chann_uid="CHN-P10CP-002", line_user_id="line-p10cp-002", primary_role="sales",
+            ))
+            session.commit()
+
+        with Session(migrated_db) as session:
+            lic = RegistrationRepository(session).create_license(
+                company_name="Partial Co", created_by_chann_uid="CHN-P10CP-002",
+            )
+            license_id = lic.id
+            session.commit()
+
+        scope = TenantScope(license_id=license_id)
+
+        with Session(migrated_db) as session:
+            CompanyProfileRepository(session).update(scope, {
+                "tax_id": "0105558123456", "company_address": "123 Road",
+            })
+            session.commit()
+
+        with Session(migrated_db) as session:
+            repo = CompanyProfileRepository(session)
+            row = repo.update(scope, {"company_phone": "021234567"})
+            assert row.tax_id == "0105558123456"
+            assert row.company_address == "123 Road"
+            assert row.company_phone == "021234567"
+            session.commit()
+
+    def test_invalid_tax_id_and_vat_rate_are_refused(self, migrated_db):
+        """Both refusals matter for the same reason: a malformed value that
+        reaches a rendered document is worse than a failed update, because
+        the document goes to a customer and looks authoritative."""
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import ChannIdentity
+        from decimal import Decimal
+
+        from chann_data.repositories.phase10 import CompanyProfileRepository
+        from chann_data.repositories.phase65 import RegistrationRepository
+        from chann_data.repositories.tenant_scope import TenantScope
+
+        with Session(migrated_db) as session:
+            session.add(ChannIdentity(
+                chann_uid="CHN-P10CP-003", line_user_id="line-p10cp-003", primary_role="sales",
+            ))
+            session.commit()
+
+        with Session(migrated_db) as session:
+            lic = RegistrationRepository(session).create_license(
+                company_name="Invalid Co", created_by_chann_uid="CHN-P10CP-003",
+            )
+            license_id = lic.id
+            session.commit()
+
+        scope = TenantScope(license_id=license_id)
+
+        for bad_tax_id in ("12345", "010555812345X", "0105558123456789"):
+            with Session(migrated_db) as session:
+                with pytest.raises(ValueError, match="13 digits"):
+                    CompanyProfileRepository(session).update(scope, {"tax_id": bad_tax_id})
+                session.rollback()
+
+        # 7 instead of 0.07 — the mistake that would silently render a 700%
+        # VAT line rather than fail.
+        with Session(migrated_db) as session:
+            with pytest.raises(ValueError, match="fraction"):
+                CompanyProfileRepository(session).update(scope, {"vat_rate": Decimal("7")})
+            session.rollback()
+
+    def test_blank_and_whitespace_are_treated_as_missing(self, migrated_db):
+        """A tax_id of "   " is not a tax ID. If whitespace counted as
+        present, a document could claim to be complete while showing an
+        empty box where the TIN belongs."""
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import ChannIdentity
+        from decimal import Decimal
+
+        from chann_data.repositories.phase10 import CompanyProfileRepository
+        from chann_data.repositories.phase65 import RegistrationRepository
+        from chann_data.repositories.tenant_scope import TenantScope
+
+        with Session(migrated_db) as session:
+            session.add(ChannIdentity(
+                chann_uid="CHN-P10CP-004", line_user_id="line-p10cp-004", primary_role="sales",
+            ))
+            session.commit()
+
+        with Session(migrated_db) as session:
+            lic = RegistrationRepository(session).create_license(
+                company_name="Blank Co", created_by_chann_uid="CHN-P10CP-004",
+            )
+            license_id = lic.id
+            session.commit()
+
+        scope = TenantScope(license_id=license_id)
+
+        with Session(migrated_db) as session:
+            repo = CompanyProfileRepository(session)
+            # "   " is stripped to None by update(), so it never even reaches
+            # the 13-digit check — it is an absent value, not a malformed one.
+            row = repo.update(scope, {"tax_id": "   ", "company_address": "  "})
+            assert row.tax_id is None
+            assert repo.missing_for_documents(row) == ["tax_id", "company_address"]
+            session.commit()
+
+    def test_multi_tenant_company_profile_isolation(self, migrated_db):
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import ChannIdentity
+        from decimal import Decimal
+
+        from chann_data.repositories.phase10 import CompanyProfileRepository
+        from chann_data.repositories.phase65 import RegistrationRepository
+        from chann_data.repositories.tenant_scope import TenantScope
+
+        with Session(migrated_db) as session:
+            session.add_all([
+                ChannIdentity(
+                    chann_uid="CHN-P10CP-A", line_user_id="line-p10cp-a", primary_role="sales",
+                ),
+                ChannIdentity(
+                    chann_uid="CHN-P10CP-B", line_user_id="line-p10cp-b", primary_role="sales",
+                ),
+            ])
+            session.commit()
+
+        with Session(migrated_db) as session:
+            reg = RegistrationRepository(session)
+            a = reg.create_license(company_name="Iso A", created_by_chann_uid="CHN-P10CP-A")
+            b = reg.create_license(company_name="Iso B", created_by_chann_uid="CHN-P10CP-B")
+            scope_a, scope_b = TenantScope(license_id=a.id), TenantScope(license_id=b.id)
+            session.commit()
+
+        with Session(migrated_db) as session:
+            CompanyProfileRepository(session).update(scope_a, {"tax_id": "0105558123456"})
+            session.commit()
+
+        with Session(migrated_db) as session:
+            repo = CompanyProfileRepository(session)
+            assert repo.get(scope_a).tax_id == "0105558123456"
+            assert repo.get(scope_b).tax_id is None

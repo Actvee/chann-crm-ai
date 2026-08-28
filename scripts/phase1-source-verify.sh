@@ -71,17 +71,35 @@ run POSTGRES_START docker run -d --name "${POSTGRES_CONTAINER}" \
   -e POSTGRES_USER=chann -e POSTGRES_PASSWORD=chann \
   -e POSTGRES_DB=chann_crm_ai_test -P postgres:16-alpine
 
-for _ in $(seq 1 60); do
+# 180s, not 60s. Started cold and idle this container is ready in ~4s, but
+# by this point in the script we have just installed four requirements files
+# and run the whole boundary+unit suite, and on a small Cloud Shell VM that
+# leaves enough I/O contention for first-time initdb to blow straight past a
+# 60s budget. That produced a POSTGRES_READY failure that looked like a
+# broken container but reproduced as "perfectly healthy" the moment it was
+# run by hand — so the timeout, not Postgres, was the bug.
+POSTGRES_READY_TIMEOUT_S="${CHANN_POSTGRES_READY_TIMEOUT_S:-180}"
+postgres_ready_after=""
+for elapsed in $(seq 1 "${POSTGRES_READY_TIMEOUT_S}"); do
   if docker exec "${POSTGRES_CONTAINER}" pg_isready -U chann >/dev/null 2>&1; then
+    postgres_ready_after="${elapsed}"
     break
   fi
   sleep 1
 done
-docker exec "${POSTGRES_CONTAINER}" pg_isready -U chann >/dev/null 2>&1 || {
-  log "CHECK=POSTGRES_READY STATUS=FAIL"
+if [[ -z "${postgres_ready_after}" ]]; then
+  # Print what actually went wrong instead of only the verdict. A silent
+  # FAIL here previously cost a full diagnostic round trip to establish
+  # something the container's own logs already said.
+  log "CHECK=POSTGRES_READY STATUS=FAIL WAITED_S=${POSTGRES_READY_TIMEOUT_S}"
+  log "--- container state ---"
+  docker ps -a --filter "name=${POSTGRES_CONTAINER}" \
+    --format "{{.Names}} | {{.Status}}" 2>&1 | tee -a "${RESULT_FILE}" || true
+  log "--- container logs (tail) ---"
+  docker logs "${POSTGRES_CONTAINER}" 2>&1 | tail -30 | tee -a "${RESULT_FILE}" || true
   exit 11
-}
-log "CHECK=POSTGRES_READY STATUS=PASS"
+fi
+log "CHECK=POSTGRES_READY STATUS=PASS AFTER_S=${postgres_ready_after}"
 
 POSTGRES_PORT="$(docker port "${POSTGRES_CONTAINER}" 5432/tcp | awk -F: 'NR==1{print $NF}')"
 export TEST_DATABASE_URL="postgresql+psycopg://chann:chann@127.0.0.1:${POSTGRES_PORT}/chann_crm_ai_test"

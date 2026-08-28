@@ -27,7 +27,14 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..models import Deal, DocumentTemplate, DocumentTemplateVersion, GeneratedDocument, Quote
+from ..models import (
+    Deal,
+    DocumentTemplate,
+    DocumentTemplateVersion,
+    GeneratedDocument,
+    License,
+    Quote,
+)
 from .tenant_scope import TenantScope
 
 QUOTE_STATUSES = frozenset({"draft", "sent", "accepted", "rejected", "expired"})
@@ -327,3 +334,84 @@ class GeneratedDocumentRepository:
                 ).order_by(GeneratedDocument.generated_at.desc())
             ).scalars()
         )
+
+
+# Everything a Thai tax document legally has to carry about the issuing
+# company. vat_rate is deliberately NOT here: a tenant that is not
+# VAT-registered is a legitimate, complete state, not a missing field.
+REQUIRED_DOCUMENT_FIELDS = ("tax_id", "company_address")
+
+
+class CompanyProfileRepository:
+    """Phase 10 — the issuing company's identity as it appears on
+    customer-facing documents.
+
+    Split out from the Phase 6.5 registration repository on purpose: that
+    one owns creating a tenant, this one owns the much later, much rarer
+    act of a tenant filling in its legal details before its first real
+    document goes out. They change for different reasons.
+    """
+
+    def __init__(self, session: Session):
+        self._s = session
+
+    def get(self, scope: TenantScope) -> License | None:
+        return self._s.execute(
+            select(License).where(License.id == scope.license_id)
+        ).scalars().first()
+
+    @staticmethod
+    def missing_for_documents(row: License) -> list[str]:
+        """Which legally-required fields are still blank.
+
+        Whitespace counts as blank: a tax_id of " " is not a tax ID, and
+        letting one through would put a visually-empty field on a document
+        that claims to be complete.
+        """
+        missing = []
+        for field in REQUIRED_DOCUMENT_FIELDS:
+            value = getattr(row, field, None)
+            if value is None or not str(value).strip():
+                missing.append(field)
+        return missing
+
+    @classmethod
+    def is_document_ready(cls, row: License) -> bool:
+        return not cls.missing_for_documents(row)
+
+    def update(self, scope: TenantScope, fields: dict) -> License:
+        """Partial update. Only keys actually present in `fields` are
+        touched, so an explicit None clears a value while an omitted key
+        leaves it alone — the distinction matters for vat_rate, where
+        "cleared" means "no longer VAT-registered" rather than "unknown".
+        """
+        row = self.get(scope)
+        if row is None:
+            raise LookupError("license not found")
+
+        allowed = {
+            "legal_name", "tax_id", "company_address",
+            "company_phone", "company_email", "vat_rate",
+        }
+        for key, value in fields.items():
+            if key not in allowed:
+                continue
+            if isinstance(value, str):
+                value = value.strip() or None
+            setattr(row, key, value)
+
+        if row.tax_id is not None:
+            digits = row.tax_id.strip()
+            # Validated here rather than only at the API edge so no caller
+            # can write a malformed one. 13 digits exactly, per Thai TIN.
+            if not (digits.isdigit() and len(digits) == 13):
+                raise ValueError("tax_id must be exactly 13 digits")
+            row.tax_id = digits
+
+        if row.vat_rate is not None and not (0 <= row.vat_rate <= 1):
+            # A fraction, not a percentage — 7% is 0.07. Someone passing 7
+            # would otherwise silently produce a 700% VAT line.
+            raise ValueError("vat_rate must be a fraction between 0 and 1 (0.07 = 7%)")
+
+        self._s.flush()
+        return row

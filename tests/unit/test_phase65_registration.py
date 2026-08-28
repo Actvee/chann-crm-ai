@@ -268,6 +268,34 @@ class TestSchemaHeadGuard:
             "bump it in the same commit as the new migration"
         )
 
+    def test_every_revision_id_fits_alembic_version_column(self):
+        """Alembic's own `alembic_version.version_num` is VARCHAR(32).
+
+        A longer revision id creates the migration file, imports fine,
+        passes every static check, and then fails at the very last
+        statement of `alembic upgrade head` — the UPDATE that stamps the
+        new version — taking down every integration test at once with an
+        error (`value too long for type character varying(32)`) that
+        names neither the migration nor the id that caused it. That is
+        exactly what happened when `0010_phase10_company_document_identity`
+        (38 chars) was first written. Caught here in milliseconds, with
+        no database, instead of ~8 minutes into a full verify run.
+        """
+        import re
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[2]
+        too_long = []
+        for f in sorted((root / "database/alembic/versions").glob("*.py")):
+            rev = re.search(r'^revision = "([^"]+)"', f.read_text(encoding="utf-8"), re.M).group(1)
+            if len(rev) > 32:
+                too_long.append((f.name, rev, len(rev)))
+
+        assert not too_long, (
+            "revision id longer than alembic_version.version_num VARCHAR(32): "
+            + ", ".join(f"{name}: {rev!r} is {n} chars" for name, rev, n in too_long)
+        )
+
 
 class TestTechnicianOAHasNoCreateCompanyOption:
     """Technician OA is a distinct persona from Sales OA, even for the same

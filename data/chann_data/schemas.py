@@ -247,6 +247,47 @@ class LicenseOut(BaseModel):
     created_by_chann_uid: str | None
 
 
+class CompanyProfileOut(BaseModel):
+    """Phase 10 — the issuing company's identity as it appears on a
+    customer-facing document.
+
+    Deliberately separate from LicenseOut: this is the tenant's own legal
+    identity for documents, not the operational license record, and the two
+    are read in completely different situations. Keeping them apart also
+    means adding a document field later never widens what LicenseOut leaks
+    into every caller that only wanted a status.
+    """
+
+    legal_name: str | None
+    company_name: str
+    tax_id: str | None
+    company_address: str | None
+    company_phone: str | None
+    company_email: str | None
+    # Fraction, e.g. 0.07 for 7%. None = not VAT-registered (no VAT line at
+    # all on the document), which is not the same as 0.
+    vat_rate: Decimal | None
+    # True when everything a Thai tax document legally requires is present.
+    # Computed here rather than left to each caller so "can we render?" has
+    # exactly one answer in the codebase.
+    is_document_ready: bool
+    missing_for_documents: list[str]
+
+
+class CompanyProfileIn(BaseModel):
+    """All fields optional — this is a partial update. Sending a field
+    explicitly as null clears it; omitting it leaves it unchanged. That
+    distinction matters for vat_rate, where null ("we deregistered from
+    VAT") is a real, intentional value rather than an absence."""
+
+    legal_name: str | None = None
+    tax_id: str | None = None
+    company_address: str | None = None
+    company_phone: str | None = None
+    company_email: str | None = None
+    vat_rate: Decimal | None = None
+
+
 class ShopOut(BaseModel):
     """Public projection — company_name and company_code ONLY.
 

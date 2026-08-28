@@ -103,6 +103,27 @@ class License(TimestampMixin, Base):
     # meant to cap *creation*, not lifetime ownership.
     created_by_chann_uid: Mapped[str | None] = mapped_column(String(32), index=True)
 
+    # --- Phase 10 — what a customer-facing document legally has to show ---
+    # `company_name` above is the shop's display name (used in chat and the
+    # storefront); `legal_name` is the registered entity name that belongs on
+    # a tax document, which is not always the same string. Falls back to
+    # company_name when a tenant hasn't supplied one.
+    legal_name: Mapped[str | None] = mapped_column(String(255))
+    # Thai TIN is exactly 13 digits. Deliberately String, not an integer:
+    # it is an identifier, never arithmetic, and leading zeros are significant.
+    tax_id: Mapped[str | None] = mapped_column(String(13))
+    company_address: Mapped[str | None] = mapped_column(Text)
+    company_phone: Mapped[str | None] = mapped_column(String(32))
+    company_email: Mapped[str | None] = mapped_column(String(255))
+    # Stored as a fraction (0.0700 = 7%). NULL means "this tenant is not
+    # VAT-registered" — a different state from 0%, and one where the document
+    # should carry no VAT line at all rather than a zero one. Per-tenant
+    # because not every Thai SMB is registered, and the rate itself is a
+    # policy value that has changed before and can change again; freezing it
+    # into each document's data_snapshot at render time is what keeps an old
+    # document reproducible after a rate change.
+    vat_rate: Mapped[object | None] = mapped_column(Numeric(5, 4))
+
     members: Mapped[list["LicenseMember"]] = relationship(back_populates="license")
 
 
