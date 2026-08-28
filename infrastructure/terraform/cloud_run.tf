@@ -52,7 +52,7 @@ locals {
     # already correctly configured) rather than adding a second Terraform
     # variable that would just have to be kept in sync with the same
     # underlying datacenter domain.
-    X_ZOHO_CATALYST_ACCOUNTS_URL         = var.smartbrowz_accounts_url
+    X_ZOHO_CATALYST_ACCOUNTS_URL = var.smartbrowz_accounts_url
     # Same class of gap as X_ZOHO_CATALYST_ACCOUNTS_URL above: zcatalyst-sdk
     # builds every non-OAuth API request URL (including SmartBrowz's own
     # /convert endpoint) against this exact env var
@@ -67,7 +67,7 @@ locals {
     # Apps" page uses this literal domain in its own code sample) — the
     # same real value catalyst_api_domain already defaults to, reused here
     # rather than adding a third Terraform variable for the same domain.
-    X_ZOHO_CATALYST_CONSOLE_URL          = var.catalyst_api_domain
+    X_ZOHO_CATALYST_CONSOLE_URL = var.catalyst_api_domain
   })
 
   presentation_runtime_env = merge(local.common_runtime_env, {

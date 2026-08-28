@@ -34,7 +34,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 
+import requests
 import zcatalyst_sdk
 from zcatalyst_sdk import credentials
 from zcatalyst_sdk.exceptions import CatalystAppError, CatalystError
@@ -46,6 +48,52 @@ from .base import PdfOptions, PdfResult
 log = logging.getLogger(__name__)
 
 _APP_NAME = "ChannCRMSmartBrowz"
+
+# --- Workaround for a genuine zcatalyst-sdk==1.4.0 bug, confirmed directly ---
+# Every request the SDK makes joins its own base_url with a path literal that
+# already starts with "/" (e.g. credentials.py's RefreshTokenCredential.token()
+# calls requester.request(path='/oauth/v2/token', ...)), and _http_client.py's
+# HttpClient.request() unconditionally inserts another "/" between base_url
+# and path: `url = url or (self._base_url + URL_SEPARATOR + path)`. The result
+# is always a doubled slash right after the host, e.g.
+# "https://accounts.zoho.com//oauth/v2/token" — regardless of what any of our
+# own env vars are set to. No newer zcatalyst-sdk release exists on PyPI as of
+# this writing (1.4.0 is latest) that fixes this.
+#
+# Confirmed directly, not guessed: curl to .../oauth/v2/token (single slash)
+# -> 200 (Zoho's normal invalid_client rejection for a bad token); curl to
+# .../ /oauth/v2/token (double slash, exactly what the SDK sends) -> 404 with
+# a generic "Zoho Accounts" HTML roadblock page, which is what
+# DefaultHttpResponse.response_json then fails to parse as JSON — surfacing
+# in our own code as SmartBrowzRenderError("... UNPARSABLE_RESPONSE ...").
+#
+# Fixed at the actual network boundary (requests.Session.request) rather than
+# by re-implementing any of the SDK's own internal URL-building logic: this
+# way the fix holds regardless of which internal code path inside the SDK
+# produced the doubled slash, and survives any zcatalyst-sdk point release
+# that changes those internals without changing this outward symptom. Scoped
+# to collapsing repeated slashes only in the path portion of the URL, never
+# the "://" scheme separator.
+_ORIGINAL_SESSION_REQUEST = requests.Session.request
+
+
+def _collapse_duplicate_path_slashes(url: str) -> str:
+    match = re.match(r"^(https?://[^/]+)(/.*)$", url)
+    if not match:
+        return url
+    host, rest = match.groups()
+    return host + re.sub(r"/{2,}", "/", rest)
+
+
+def _patched_session_request(self, method, url, *args, **kwargs):
+    return _ORIGINAL_SESSION_REQUEST(
+        self, method, _collapse_duplicate_path_slashes(url), *args, **kwargs
+    )
+
+
+if not getattr(requests.Session.request, "_chann_dedup_slash_patch", False):
+    _patched_session_request._chann_dedup_slash_patch = True  # guard against double-patching
+    requests.Session.request = _patched_session_request
 
 
 class SmartBrowzNotConfigured(RuntimeError):

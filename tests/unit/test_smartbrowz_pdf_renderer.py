@@ -120,3 +120,54 @@ class TestSmartBrowzPdfRenderer:
         renderer = get_renderer("smartbrowz")
         assert isinstance(renderer, SmartBrowzPdfRenderer)
         assert renderer.name == "smartbrowz"
+
+
+class TestDuplicateSlashWorkaround:
+    """zcatalyst-sdk==1.4.0 has a real, confirmed bug: every request it
+    makes joins its own base_url with a path literal that already starts
+    with "/" (e.g. credentials.py's RefreshTokenCredential.token() calls
+    requester.request(path='/oauth/v2/token', ...)), and
+    _http_client.py's HttpClient.request() unconditionally inserts
+    another "/" between them — producing a doubled slash right after the
+    host on every single call (e.g.
+    https://accounts.zoho.com//oauth/v2/token). Confirmed directly
+    against the real endpoint, not guessed: a single-slash request
+    returns 200 (Zoho's normal invalid_client rejection for a bad
+    token); the exact doubled-slash request the SDK actually sends
+    returns 404 with a generic "Zoho Accounts" HTML roadblock page,
+    which DefaultHttpResponse.response_json then fails to parse as
+    JSON — surfacing in our own code as a confusing
+    SmartBrowzRenderError("... UNPARSABLE_RESPONSE ...") that looks
+    like a provider outage or bad credentials but is neither. No newer
+    zcatalyst-sdk release fixing this exists on PyPI as of this
+    writing (1.4.0 is latest), so smartbrowz.py works around it at the
+    actual network boundary instead of waiting on an upstream fix.
+    """
+
+    def test_collapse_duplicate_path_slashes_fixes_the_known_sdk_bug(self):
+        from chann_app.services.pdf.smartbrowz import _collapse_duplicate_path_slashes
+
+        assert (
+            _collapse_duplicate_path_slashes("https://accounts.zoho.com//oauth/v2/token")
+            == "https://accounts.zoho.com/oauth/v2/token"
+        )
+
+    def test_already_single_slash_urls_pass_through_unchanged(self):
+        from chann_app.services.pdf.smartbrowz import _collapse_duplicate_path_slashes
+
+        url = "https://api.catalyst.zoho.com/browser360/v1/project/123/convert"
+        assert _collapse_duplicate_path_slashes(url) == url
+
+    def test_the_https_scheme_separator_itself_is_never_touched(self):
+        from chann_app.services.pdf.smartbrowz import _collapse_duplicate_path_slashes
+
+        assert _collapse_duplicate_path_slashes("https://example.com") == "https://example.com"
+
+    def test_requests_session_is_actually_patched(self):
+        """Not just that the pure helper function works in isolation —
+        this confirms the monkeypatch is really installed on
+        requests.Session, which is the part that actually protects
+        every real zcatalyst-sdk call made through this module."""
+        import requests
+
+        assert getattr(requests.Session.request, "_chann_dedup_slash_patch", False) is True
