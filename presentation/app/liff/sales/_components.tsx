@@ -1,7 +1,7 @@
 "use client";
 
 import Script from "next/script";
-import { ReactNode } from "react";
+import { ReactNode, useEffect, useState } from "react";
 
 import { LanguageSwitcher } from "@/lib/i18n/LanguageSwitcher";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
@@ -36,9 +36,62 @@ export function AppShell({
   children: ReactNode;
 }) {
   const { t } = useLanguage();
+  // Recomputed on a tick rather than once: liff's own state changes as the
+  // SDK loads and initialises, and a value captured at first render would
+  // always read "sdk=missing".
+  const [diagnostics, setDiagnostics] = useState("");
+  useEffect(() => {
+    const update = () => setDiagnostics(liffDiagnostics());
+    update();
+    const timer = setInterval(update, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Start on window.liff appearing, not only on next/script's onReady.
+  //
+  // onReady is a single callback with no retry: if it does not fire — the
+  // script 404s, the CDN is slow, the callback is missed on a re-mount —
+  // initialise is simply never called, the status stays on its opening
+  // message and the page spins forever with no error to report. Polling for
+  // the global the script defines is independent of that callback firing,
+  // and the guard makes a double-start harmless if it does fire too.
+  useEffect(() => {
+    let started = false;
+    const begin = () => {
+      if (started) return;
+      started = true;
+      onReady();
+    };
+    if (typeof window !== "undefined" && (window as { liff?: unknown }).liff) {
+      begin();
+      return;
+    }
+    const poll = setInterval(() => {
+      if ((window as { liff?: unknown }).liff) {
+        clearInterval(poll);
+        begin();
+      }
+    }, 200);
+    // If the SDK never arrives, say so rather than spinning indefinitely.
+    const giveUp = setTimeout(() => {
+      clearInterval(poll);
+      if (!started) onSdkError();
+    }, 20_000);
+    return () => {
+      clearInterval(poll);
+      clearTimeout(giveUp);
+    };
+    // Deliberately once on mount: onReady/onSdkError are recreated every
+    // render by the pages, and depending on them would restart the sequence
+    // on each state change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   return (
     <>
-      <Script src={LIFF_SDK_SRC} strategy="afterInteractive" onReady={onReady} onError={onSdkError} />
+      {/* Loads the SDK; startup is driven by the poll above rather than
+          by onReady, for the reason given there. */}
+      <Script src={LIFF_SDK_SRC} strategy="afterInteractive" onError={onSdkError} />
       <div className="shell">
         <header className="topbar">
           {/* Plain anchor rather than next/link: each page
@@ -68,17 +121,17 @@ export function AppShell({
           {status ? (
             <p className="status" data-tone={statusTone} aria-live="polite">
               {status}
-              {/* Only on failure: when a page cannot start, the single most
-                  useful thing to show is what LIFF actually reported, not a
-                  friendlier restatement of "it did not work". */}
-              {statusTone === "error" && (
-                <span
-                  className="code"
-                  style={{ display: "block", marginTop: 6, fontSize: 11.5 }}
-                >
-                  {liffDiagnostics()}
-                </span>
-              )}
+              {/* Shown whenever the page has not finished starting, not only
+                  after an error. An earlier version only showed this on
+                  failure, which is exactly no help when the symptom is a
+                  spinner that never resolves and therefore never produces
+                  one. */}
+              <span
+                className="code"
+                style={{ display: "block", marginTop: 6, fontSize: 11.5 }}
+              >
+                {diagnostics}
+              </span>
             </p>
           ) : (
             // Kept in the tree even when empty so screen readers keep

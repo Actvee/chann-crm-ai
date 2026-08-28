@@ -90,6 +90,28 @@ export function liffDiagnostics(): string {
   return parts.join(" · ");
 }
 
+/**
+ * Every await in the startup path is wrapped in this.
+ *
+ * A hang is the worst possible failure here: the page shows a spinner
+ * forever, no error is raised, and the diagnostics below never appear — so
+ * there is nothing to report except "it did not load". A timeout converts
+ * that into a specific, visible failure naming the step that stalled.
+ */
+async function withTimeout<T>(label: string, ms: number, work: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms / 1000}s`)), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 /** Returns the ID token and memberships, or throws with a message worth showing. */
 export async function initLiffSession(
   liffId: string,
@@ -110,7 +132,7 @@ export async function initLiffSession(
   // Login is still supported in an external browser, just triggered
   // explicitly below with a redirectUri pointing back at the page the
   // person actually asked for.
-  await liff.init({ liffId });
+  await withTimeout("liff.init", 15_000, liff.init({ liffId }));
   if (!liff.isLoggedIn()) {
     if (liff.isInClient()) {
       // Inside the LINE app the user is always logged in, so this is a real
@@ -123,9 +145,11 @@ export async function initLiffSession(
   const idToken = liff.getIDToken();
   if (!idToken) throw new Error("LIFF did not return an ID token");
 
-  const response = await fetch("/api/liff/sales/me", {
-    headers: { "X-Liff-ID-Token": idToken },
-  });
+  const response = await withTimeout(
+    "/api/liff/sales/me",
+    15_000,
+    fetch("/api/liff/sales/me", { headers: { "X-Liff-ID-Token": idToken } }),
+  );
   if (!response.ok) throw new Error(`authentication failed (${response.status})`);
   const me = (await response.json()) as { memberships: Membership[] };
   return { token: idToken, memberships: me.memberships };

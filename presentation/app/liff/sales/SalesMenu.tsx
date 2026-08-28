@@ -38,6 +38,10 @@ export default function SalesMenu() {
   const [redirecting, setRedirecting] = useState(false);
 
   useEffect(() => {
+    // Runs immediately and does not wait for the SDK: liff.state is a plain
+    // query parameter, so following it needs no LIFF at all. Waiting for
+    // the SDK here would delay every deep link behind a script download for
+    // no reason, and would strand the link entirely if that download failed.
     if (followLiffState(BASE_PATH)) setRedirecting(true);
   }, []);
   const titles: Record<string, string> = {
