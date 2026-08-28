@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import re
 
+from decimal import Decimal
+
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel, Field
 
@@ -261,5 +263,68 @@ async def platform_break_glass_transfer(
         raise HTTPException(status_code=403, detail="permission required: platform.admin.break_glass")
     try:
         return await client.force_transfer_owner(license_id, payload.target_chann_uid, actor_id=claims.get("sub"))
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+# ------------------------------------------------- Phase 10 company profile
+
+
+class CompanyProfileWriteIn(BaseModel):
+    """Every field optional — this is a partial update.
+
+    `vat_rate_percent` is taken as a PERCENT here (7 means 7%) even though
+    the database stores a fraction, because that is what a person types and
+    what the UI shows. The conversion happens in one place, below, rather
+    than being left to each caller to remember.
+    """
+
+    legal_name: str | None = None
+    tax_id: str | None = None
+    company_address: str | None = None
+    company_phone: str | None = None
+    company_email: str | None = None
+    vat_rate_percent: Decimal | None = Field(default=None, ge=0, le=100)
+
+
+@router.get("/licenses/{license_id}/company-profile")
+async def get_company_profile(
+    license_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    _require_same_tenant(principal, license_id)
+    principal.require("setting.manage")
+    try:
+        return await client.get_company_profile(license_id)
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.patch("/licenses/{license_id}/company-profile")
+async def patch_company_profile(
+    license_id: str,
+    payload: CompanyProfileWriteIn,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """`setting.manage`, not a broader key: this is the tenant's own legal
+    identity on documents that go to customers, so a member who can create
+    a quote still must not be able to change the tax ID printed on it."""
+    _require_same_tenant(principal, license_id)
+    principal.require("setting.manage")
+
+    # exclude_unset, so omitting a key leaves it alone while sending an
+    # explicit null clears it. That distinction is the whole point for
+    # vat_rate, where cleared means "no longer VAT-registered".
+    body = payload.model_dump(exclude_unset=True)
+    if "vat_rate_percent" in body:
+        percent = body.pop("vat_rate_percent")
+        body["vat_rate"] = None if percent is None else percent / Decimal(100)
+
+    try:
+        return await client.update_company_profile(
+            license_id, body, actor_id=principal.chann_uid
+        )
     except DataTierError as exc:
         raise _propagate(exc)

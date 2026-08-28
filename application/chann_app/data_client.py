@@ -116,6 +116,26 @@ class DataClient:
         )
         return self._unwrap(resp)
 
+    # ---------------------------------------------------------- Phase 10
+    # Company identity as it appears on customer-facing documents.
+
+    async def get_company_profile(self, license_id: str) -> dict:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/company-profile",
+            headers=self._headers,
+        )
+        return self._unwrap(resp)
+
+    async def update_company_profile(
+        self, license_id: str, payload: dict, actor_id: str | None = None
+    ) -> dict:
+        resp = await self._client.patch(
+            f"{self._base}/internal/v1/licenses/{license_id}/company-profile",
+            headers=self._headers_for(actor_id),
+            json=payload,
+        )
+        return self._unwrap(resp)
+
     async def create_role(self, license_id: str, payload: dict, actor_id: str | None = None) -> dict:
         resp = await self._client.post(
             f"{self._base}/internal/v1/licenses/{license_id}/roles",

@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
 
 from ..data_client import DataClient
 from .ai.client import AIUnavailable, AINotConfigured
@@ -244,6 +245,224 @@ def _parse_deal_stage_command(message: str) -> tuple[str, str] | None:
     ):
         return match.group(0).upper(), "proposed"
     return None
+
+
+# ------------------------------------------------- Phase 10 company profile
+#
+# Deterministic, trigger-matched — never routed through the AI parser, for
+# the same reason deal-stage commands aren't: these values end up printed on
+# a legal document a customer receives. A hallucinated or "helpfully
+# corrected" tax ID is far worse than a command that simply isn't
+# recognised, and the field set here is small and closed.
+
+COMPANY_FIELD_TRIGGERS: list[tuple[tuple[str, ...], str]] = [
+    # Longest/most specific first: "ตั้งชื่อบริษัท" must not be swallowed by
+    # a shorter prefix, and "เลขผู้เสียภาษี" contains no other trigger.
+    (("ตั้งเลขผู้เสียภาษี", "เลขผู้เสียภาษี", "เลขภาษี", "tax id", "taxid"), "tax_id"),
+    (("ตั้งที่อยู่บริษัท", "ที่อยู่บริษัท", "company address"), "company_address"),
+    (("ตั้งชื่อนิติบุคคล", "ชื่อนิติบุคคล", "legal name"), "legal_name"),
+    (("ตั้งอีเมลบริษัท", "อีเมลบริษัท", "company email"), "company_email"),
+    (("ตั้งเบอร์บริษัท", "เบอร์บริษัท", "โทรบริษัท", "company phone"), "company_phone"),
+    (("ตั้งภาษีมูลค่าเพิ่ม", "ภาษีมูลค่าเพิ่ม", "ตั้งแวต", "vat"), "vat_rate"),
+]
+
+# "ไม่จด VAT" has to be checked before the plain "vat" trigger above, or the
+# negative form gets read as an attempt to set a rate — the same substring
+# trap that made every lost deal look won in Phase 9.
+COMPANY_NO_VAT_PHRASES = ("ไม่จดvat", "ไม่จดแวต", "ไม่ได้จดvat", "ไม่จดภาษีมูลค่าเพิ่ม", "not vat registered")
+
+COMPANY_VIEW_PHRASES = ("ข้อมูลบริษัท", "ดูข้อมูลบริษัท", "company profile", "company info")
+
+COMPANY_PROFILE_LABELS = {
+    "legal_name": {"th": "ชื่อนิติบุคคล", "en": "Legal name"},
+    "tax_id": {"th": "เลขผู้เสียภาษี", "en": "Tax ID"},
+    "company_address": {"th": "ที่อยู่บริษัท", "en": "Company address"},
+    "company_phone": {"th": "เบอร์โทรบริษัท", "en": "Company phone"},
+    "company_email": {"th": "อีเมลบริษัท", "en": "Company email"},
+    "vat_rate": {"th": "ภาษีมูลค่าเพิ่ม", "en": "VAT rate"},
+}
+
+COMPANY_UPDATED = {
+    "th": "บันทึก{label}เรียบร้อยแล้ว",
+    "en": "{label} saved.",
+}
+COMPANY_NEEDS_VALUE = {
+    "th": "กรุณาระบุ{label}ต่อท้ายคำสั่งด้วย เช่น \"ตั้งเลขผู้เสียภาษี 0105558123456\"",
+    "en": "Please include the {label} after the command.",
+}
+COMPANY_BAD_TAX_ID = {
+    "th": "เลขผู้เสียภาษีต้องเป็นตัวเลข 13 หลักพอดี",
+    "en": "A tax ID must be exactly 13 digits.",
+}
+COMPANY_BAD_VAT = {
+    "th": "อัตราภาษีต้องอยู่ระหว่าง 0 ถึง 100 เช่น \"ตั้งภาษีมูลค่าเพิ่ม 7%\"",
+    "en": "The VAT rate must be between 0 and 100, e.g. 7%.",
+}
+COMPANY_NO_VAT_SAVED = {
+    "th": "บันทึกแล้วว่าบริษัทนี้ไม่ได้จดภาษีมูลค่าเพิ่ม เอกสารจะไม่แสดงบรรทัด VAT",
+    "en": "Recorded as not VAT-registered. Documents will show no VAT line.",
+}
+COMPANY_DENIED = {
+    "th": "การแก้ไขข้อมูลบริษัทต้องมีสิทธิ์ setting.manage",
+    "en": "Editing company details requires the setting.manage permission.",
+}
+COMPANY_READY = {
+    "th": "ข้อมูลครบพร้อมออกเอกสารแล้ว",
+    "en": "Ready to issue documents.",
+}
+COMPANY_MISSING = {
+    "th": "ยังขาด: {fields} — ต้องกรอกให้ครบก่อนออกใบเสนอราคา",
+    "en": "Still missing: {fields} — required before issuing a quote.",
+}
+COMPANY_NOT_SET = {"th": "(ยังไม่ได้ตั้ง)", "en": "(not set)"}
+COMPANY_SAVE_FAILED = {
+    "th": "ขออภัย ไม่สามารถบันทึกข้อมูลบริษัทได้ในขณะนี้ กรุณาลองใหม่อีกครั้ง",
+    "en": "Sorry, the company details could not be saved right now. Please try again.",
+}
+
+
+def _parse_company_profile_command(message: str) -> tuple[str, str] | None:
+    """Returns (field, raw_value) or None.
+
+    Deliberately returns None rather than guessing when a trigger appears
+    with nothing after it — the caller turns that into a "please include
+    the value" prompt, which is honest, instead of writing a blank.
+    """
+    text = (message or "").strip()
+    if not text:
+        return None
+    lowered = text.lower()
+    compact = lowered.replace(" ", "")
+
+    if any(p.replace(" ", "") in compact for p in COMPANY_NO_VAT_PHRASES):
+        return "vat_rate", ""
+
+    for triggers, field in COMPANY_FIELD_TRIGGERS:
+        for trigger in triggers:
+            index = lowered.find(trigger.lower())
+            if index == -1:
+                continue
+            value = text[index + len(trigger):].strip()
+            # Strip a leading connector so "ตั้งที่อยู่บริษัทเป็น 99/1" and
+            # "ตั้งที่อยู่บริษัท คือ 99/1" both yield just the address.
+            for lead in ("เป็น", "คือ", ":", "=", "is"):
+                if value.lower().startswith(lead):
+                    value = value[len(lead):].strip()
+            return field, value
+    return None
+
+
+def _is_company_profile_view(message: str) -> bool:
+    compact = (message or "").strip().lower().replace(" ", "")
+    if not compact:
+        return False
+    # Exact-ish match only: a longer sentence that merely contains the words
+    # is more likely to be an edit command, which the parser above handles.
+    return any(compact == p.replace(" ", "") for p in COMPANY_VIEW_PHRASES)
+
+
+def _format_company_profile(profile: dict, language: str) -> str:
+    lines = []
+    for field, labels in COMPANY_PROFILE_LABELS.items():
+        raw = profile.get(field)
+        if field == "vat_rate":
+            shown = (
+                _t(COMPANY_NOT_SET, language) if raw in (None, "")
+                else f"{Decimal(str(raw)) * 100:g}%"
+            )
+        else:
+            shown = raw if raw else _t(COMPANY_NOT_SET, language)
+        lines.append(f"{_t(labels, language)}: {shown}")
+
+    missing = profile.get("missing_for_documents") or []
+    if missing:
+        names = ", ".join(
+            _t(COMPANY_PROFILE_LABELS.get(f, {"th": f, "en": f}), language) for f in missing
+        )
+        lines.append("")
+        lines.append(_t(COMPANY_MISSING, language).format(fields=names))
+    else:
+        lines.append("")
+        lines.append(_t(COMPANY_READY, language))
+    return "\n".join(lines)
+
+
+async def _handle_company_profile_view(
+    client: DataClient, *, license_id, permission_keys: list[str], language: str,
+) -> ChatReply:
+    if "setting.manage" not in set(permission_keys):
+        return ChatReply(text=_t(COMPANY_DENIED, language))
+    try:
+        profile = await client.get_company_profile(str(license_id))
+    except Exception:
+        log.exception("company profile read failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    return ChatReply(text=_format_company_profile(profile, language))
+
+
+async def _handle_company_profile_command(
+    client: DataClient, *, license_id, field: str, raw_value: str,
+    permission_keys: list[str], language: str, actor_id: str,
+) -> ChatReply:
+    if "setting.manage" not in set(permission_keys):
+        return ChatReply(text=_t(COMPANY_DENIED, language))
+
+    label = _t(COMPANY_PROFILE_LABELS[field], language)
+
+    if field == "vat_rate":
+        if not raw_value:
+            # The "ไม่จด VAT" path: NULL, meaning no VAT line at all — a
+            # different thing from a 0% rate.
+            payload: dict = {"vat_rate": None}
+            success_text = _t(COMPANY_NO_VAT_SAVED, language)
+        else:
+            digits = raw_value.replace("%", "").replace("เปอร์เซ็นต์", "").strip()
+            try:
+                percent = Decimal(digits)
+            except (InvalidOperation, ValueError):
+                return ChatReply(text=_t(COMPANY_BAD_VAT, language))
+            if not (0 <= percent <= 100):
+                return ChatReply(text=_t(COMPANY_BAD_VAT, language))
+            # Typed as a percent, stored as a fraction.
+            payload = {"vat_rate": str(percent / Decimal(100))}
+            success_text = _t(COMPANY_UPDATED, language).format(label=label)
+    else:
+        if not raw_value:
+            return ChatReply(text=_t(COMPANY_NEEDS_VALUE, language).format(label=label))
+        if field == "tax_id":
+            digits = "".join(ch for ch in raw_value if ch.isdigit())
+            if len(digits) != 13:
+                return ChatReply(text=_t(COMPANY_BAD_TAX_ID, language))
+            raw_value = digits
+        payload = {field: raw_value}
+        success_text = _t(COMPANY_UPDATED, language).format(label=label)
+
+    try:
+        profile = await client.update_company_profile(
+            str(license_id), payload, actor_id=actor_id
+        )
+    except Exception as exc:  # noqa: BLE001
+        # The Data tier validates these too (tax_id length, vat_rate range)
+        # and answers 422. Surfacing that as the same specific message the
+        # local check would have given keeps one rule with one wording,
+        # rather than a vague failure for the same mistake caught one layer
+        # further in.
+        if getattr(exc, "status_code", None) == 422 or "422" in str(exc):
+            return ChatReply(
+                text=_t(COMPANY_BAD_TAX_ID if field == "tax_id" else COMPANY_BAD_VAT, language)
+            )
+        log.exception("company profile update failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    missing = profile.get("missing_for_documents") or []
+    if missing:
+        names = ", ".join(
+            _t(COMPANY_PROFILE_LABELS.get(f, {"th": f, "en": f}), language) for f in missing
+        )
+        success_text += "\n" + _t(COMPANY_MISSING, language).format(fields=names)
+    else:
+        success_text += "\n" + _t(COMPANY_READY, language)
+    return ChatReply(text=success_text)
 
 
 DEAL_STAGE_UPDATED = {
@@ -1397,6 +1616,25 @@ async def handle_chat_message(
     if ctx.oa == "sales" and _is_technician_invite_request(message):
         return await _handle_technician_invite_request(
             client, ctx=ctx, permission_keys=permission_keys, language=language,
+        )
+
+    # Company identity (Phase 10) — same closed-pattern reasoning, and one
+    # step stronger: these values are printed on a legal document the
+    # customer receives, so they must never pass through a model that could
+    # "correct" a tax ID. Sales OA only, since this is a company-management
+    # action with no meaning on the Customer or Technician channels.
+    if ctx.oa == "sales" and _is_company_profile_view(message):
+        return await _handle_company_profile_view(
+            client, license_id=license_id, permission_keys=permission_keys,
+            language=language,
+        )
+
+    company_cmd = _parse_company_profile_command(message) if ctx.oa == "sales" else None
+    if company_cmd is not None:
+        company_field, company_value = company_cmd
+        return await _handle_company_profile_command(
+            client, license_id=license_id, field=company_field, raw_value=company_value,
+            permission_keys=permission_keys, language=language, actor_id=ctx.chann_uid,
         )
 
     # Same reasoning: deal stage transitions (9.6) are a closed, deterministic

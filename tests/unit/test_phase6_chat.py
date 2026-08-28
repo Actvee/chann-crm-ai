@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sys
+from decimal import Decimal
 from pathlib import Path
 
 import httpx
@@ -70,7 +71,7 @@ class FakeDataClient:
     def __init__(self, *, role="sales", permission_keys=None, mapping=None,
                  pending_intent=None, customers=None, deals=None,
                  storefront_results=None, last_customer_ref=None, raises=None,
-                 quotes=None):
+                 quotes=None, company_profile=None):
         self._role = role
         self._raises = raises
         self._last_customer_ref = last_customer_ref
@@ -84,7 +85,51 @@ class FakeDataClient:
             permission_keys if permission_keys is not None else ["customer.read"]
         )
         self._mapping = mapping
+        # Phase 10 company identity. Defaults to a brand-new tenant: nothing
+        # filled in, so not document-ready — the state every existing tenant
+        # is in immediately after migration 0010.
+        self._company_profile = dict(company_profile) if company_profile is not None else {
+            "legal_name": None,
+            "company_name": "Test Co",
+            "tax_id": None,
+            "company_address": None,
+            "company_phone": None,
+            "company_email": None,
+            "vat_rate": None,
+        }
         self.recorded: list[tuple] = []
+
+    @staticmethod
+    def _company_missing(profile: dict) -> list[str]:
+        return [
+            f for f in ("tax_id", "company_address")
+            if not (profile.get(f) or "").strip()
+        ]
+
+    def _company_out(self) -> dict:
+        missing = self._company_missing(self._company_profile)
+        return {
+            **self._company_profile,
+            "is_document_ready": not missing,
+            "missing_for_documents": missing,
+        }
+
+    async def get_company_profile(self, license_id):
+        self.recorded.append(("get_company_profile", license_id))
+        return self._company_out()
+
+    async def update_company_profile(self, license_id, payload, actor_id=None):
+        self.recorded.append(("update_company_profile", license_id, dict(payload)))
+        if self._raises:
+            raise self._raises
+        # Mirrors the Data tier's own validation so a test that sends a bad
+        # value here fails the same way production would, instead of quietly
+        # accepting something the real repository would reject.
+        tax_id = payload.get("tax_id")
+        if tax_id is not None and not (tax_id.isdigit() and len(tax_id) == 13):
+            raise RuntimeError("data tier said 422: tax_id must be exactly 13 digits")
+        self._company_profile.update(payload)
+        return self._company_out()
 
     async def authorization_context(self, license_id, chann_uid):
         return {
@@ -2086,3 +2131,141 @@ class TestCustomerDisambiguation:
         )
         assert "วิชัย" in reply.text
         assert any(r[0] == "create_customer" for r in client.recorded)
+
+
+class TestPhase10CompanyProfileChat:
+    """Phase 10 — setting the company's legal identity through chat.
+
+    These commands are matched deterministically and never sent to the AI
+    parser, for a stronger version of the reason deal-stage commands aren't:
+    the values land on a tax document a customer receives. A model that
+    "helpfully corrects" a tax ID would produce a legally wrong document
+    that still looks authoritative.
+    """
+
+    async def test_view_shows_current_state_and_what_is_missing(self):
+        client = FakeDataClient(permission_keys=["setting.manage"])
+        reply = await handle_chat_message(
+            client, message="ข้อมูลบริษัท", ctx=_ctx(),
+        )
+        assert "เลขผู้เสียภาษี" in reply.text
+        assert "ยังไม่ได้ตั้ง" in reply.text
+        assert "ยังขาด" in reply.text
+        assert ("get_company_profile", "L1") in [
+            (r[0], r[1]) for r in client.recorded if r[0] == "get_company_profile"
+        ] or any(r[0] == "get_company_profile" for r in client.recorded)
+
+    async def test_setting_tax_id_saves_digits_only(self):
+        client = FakeDataClient(permission_keys=["setting.manage"])
+        reply = await handle_chat_message(
+            client, message="ตั้งเลขผู้เสียภาษี 0105558123456", ctx=_ctx(),
+        )
+        assert "เรียบร้อย" in reply.text
+        writes = [r for r in client.recorded if r[0] == "update_company_profile"]
+        assert writes and writes[-1][2] == {"tax_id": "0105558123456"}
+
+    async def test_tax_id_with_dashes_is_normalised_not_refused(self):
+        """A person copying a TIN off a document will include separators.
+        Stripping them is safe (the value is digits either way); refusing
+        would be a worse experience for no gain in correctness."""
+        client = FakeDataClient(permission_keys=["setting.manage"])
+        await handle_chat_message(
+            client, message="ตั้งเลขผู้เสียภาษี 0-1055-58123-45-6", ctx=_ctx(),
+        )
+        writes = [r for r in client.recorded if r[0] == "update_company_profile"]
+        assert writes[-1][2] == {"tax_id": "0105558123456"}
+
+    async def test_wrong_length_tax_id_is_refused_before_any_write(self):
+        client = FakeDataClient(permission_keys=["setting.manage"])
+        reply = await handle_chat_message(
+            client, message="ตั้งเลขผู้เสียภาษี 12345", ctx=_ctx(),
+        )
+        assert "13 หลัก" in reply.text
+        assert not [r for r in client.recorded if r[0] == "update_company_profile"]
+
+    async def test_vat_is_typed_as_percent_and_stored_as_a_fraction(self):
+        """7% must never be stored as 7. The conversion happens once, here —
+        the alternative is a 700% VAT line on a real customer document."""
+        client = FakeDataClient(permission_keys=["setting.manage"])
+        await handle_chat_message(
+            client, message="ตั้งภาษีมูลค่าเพิ่ม 7%", ctx=_ctx(),
+        )
+        writes = [r for r in client.recorded if r[0] == "update_company_profile"]
+        assert Decimal(writes[-1][2]["vat_rate"]) == Decimal("0.07")
+
+    async def test_not_vat_registered_clears_the_rate_rather_than_zeroing_it(self):
+        """NULL and 0 are different: NULL means the document carries no VAT
+        line at all, 0 means a line reading 0%."""
+        client = FakeDataClient(
+            permission_keys=["setting.manage"],
+            company_profile={
+                "legal_name": None, "company_name": "Test Co", "tax_id": None,
+                "company_address": None, "company_phone": None,
+                "company_email": None, "vat_rate": "0.07",
+            },
+        )
+        reply = await handle_chat_message(client, message="ไม่จด VAT", ctx=_ctx())
+        writes = [r for r in client.recorded if r[0] == "update_company_profile"]
+        assert writes[-1][2] == {"vat_rate": None}
+        assert "ไม่ได้จด" in reply.text
+
+    async def test_negative_vat_phrase_is_not_swallowed_by_the_vat_trigger(self):
+        """Same substring trap that made every lost deal look won in Phase 9:
+        'ไม่จด VAT' contains 'vat', so the negative form has to be matched
+        first or it reads as an attempt to set a rate."""
+        from chann_app.services.chat import _parse_company_profile_command
+
+        assert _parse_company_profile_command("ไม่จด VAT") == ("vat_rate", "")
+        assert _parse_company_profile_command("ตั้งภาษีมูลค่าเพิ่ม 7%") == ("vat_rate", "7%")
+
+    async def test_out_of_range_vat_is_refused(self):
+        client = FakeDataClient(permission_keys=["setting.manage"])
+        reply = await handle_chat_message(
+            client, message="ตั้งภาษีมูลค่าเพิ่ม 700%", ctx=_ctx(),
+        )
+        assert "0 ถึง 100" in reply.text
+        assert not [r for r in client.recorded if r[0] == "update_company_profile"]
+
+    async def test_trigger_with_no_value_asks_instead_of_writing_blank(self):
+        client = FakeDataClient(permission_keys=["setting.manage"])
+        reply = await handle_chat_message(
+            client, message="ตั้งเลขผู้เสียภาษี", ctx=_ctx(),
+        )
+        assert "กรุณาระบุ" in reply.text
+        assert not [r for r in client.recorded if r[0] == "update_company_profile"]
+
+    async def test_requires_setting_manage_not_merely_membership(self):
+        """A member who can create a quote still must not be able to change
+        the tax ID printed on it."""
+        client = FakeDataClient(permission_keys=["quote.create", "customer.read"])
+        reply = await handle_chat_message(
+            client, message="ตั้งเลขผู้เสียภาษี 0105558123456", ctx=_ctx(),
+        )
+        assert "setting.manage" in reply.text
+        assert not [r for r in client.recorded if r[0] == "update_company_profile"]
+
+    async def test_not_offered_outside_sales_oa(self):
+        """Company management has no meaning on the Customer or Technician
+        channels — the message must fall through to normal handling rather
+        than being treated as a company command there."""
+        client = FakeDataClient(permission_keys=["setting.manage"])
+        reply = await handle_chat_message(
+            client, message="ตั้งเลขผู้เสียภาษี 0105558123456",
+            ctx=_ctx(oa="technician"),
+        )
+        assert not [r for r in client.recorded if r[0] == "update_company_profile"]
+        assert "เรียบร้อย" not in reply.text
+
+    async def test_completing_the_last_required_field_reports_ready(self):
+        client = FakeDataClient(
+            permission_keys=["setting.manage"],
+            company_profile={
+                "legal_name": None, "company_name": "Test Co",
+                "tax_id": "0105558123456", "company_address": None,
+                "company_phone": None, "company_email": None, "vat_rate": None,
+            },
+        )
+        reply = await handle_chat_message(
+            client, message="ตั้งที่อยู่บริษัท 99/1 ถนนสุขุมวิท กรุงเทพฯ", ctx=_ctx(),
+        )
+        assert "พร้อมออกเอกสาร" in reply.text
