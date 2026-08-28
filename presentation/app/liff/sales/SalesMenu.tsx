@@ -1,12 +1,14 @@
 "use client";
 
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import Script from "next/script";
 import { useEffect, useState } from "react";
 
 import { LanguageSwitcher } from "@/lib/i18n/LanguageSwitcher";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
-import { LIFF_SDK_SRC, followLiffState } from "./_lib";
+import { LIFF_SDK_SRC, liffStateTarget } from "./_lib";
 
 /**
  * The Sales dashboard index — the page every other one links back to.
@@ -36,14 +38,23 @@ export default function SalesMenu() {
   // "open dashboard" button always landed on the menu regardless of which
   // list it was tapped from.
   const [redirecting, setRedirecting] = useState(false);
+  const router = useRouter();
 
   useEffect(() => {
-    // Runs immediately and does not wait for the SDK: liff.state is a plain
-    // query parameter, so following it needs no LIFF at all. Waiting for
-    // the SDK here would delay every deep link behind a script download for
-    // no reason, and would strand the link entirely if that download failed.
-    if (followLiffState(BASE_PATH)) setRedirecting(true);
-  }, []);
+    // Read immediately without waiting for the SDK: liff.state is a plain
+    // query parameter, so following it needs no LIFF at all. Waiting would
+    // delay every deep link behind a script download, and strand it
+    // entirely if that download failed.
+    //
+    // router.replace, not window.location: the LIFF session lives in the
+    // document LINE opened, and a full page load would throw it away right
+    // as the person arrives.
+    const target = liffStateTarget(BASE_PATH);
+    if (target) {
+      setRedirecting(true);
+      router.replace(target);
+    }
+  }, [router]);
   const titles: Record<string, string> = {
     customers: t.customer.title,
     deals: t.deal.title,
@@ -79,14 +90,18 @@ export default function SalesMenu() {
         <ul className="tiles">
           {SECTIONS.map((section) => (
             <li key={section.key}>
-              {/* A plain anchor, not next/link: these pages each initialise
-                  LIFF on load, and a full navigation guarantees a clean
-                  init rather than depending on the SDK surviving a
-                  client-side route change inside the LINE webview. */}
-              <a className="tile" href={section.href}>
+              {/* Client-side navigation, NOT a plain anchor.
+                  A LIFF session exists only in the page LINE opened through
+                  a LIFF URL. A full page load starts a fresh document with
+                  no LIFF context at all — measured directly:
+                  inClient=true but loggedIn=false — so every sub-page then
+                  failed to authenticate. An earlier change to plain
+                  anchors, made to "guarantee a clean init", is what caused
+                  that. Staying in one document keeps the session. */}
+              <Link className="tile" href={section.href}>
                 <h2>{titles[section.key]}</h2>
                 <p>{t.dashboard.sections[section.key]}</p>
-              </a>
+              </Link>
             </li>
           ))}
         </ul>

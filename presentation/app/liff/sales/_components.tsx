@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import Script from "next/script";
 import { ReactNode, useEffect, useState } from "react";
 
@@ -105,9 +106,9 @@ export function AppShell({
                LIFF on load, and a full navigation guarantees a clean init
                instead of relying on the SDK surviving a client-side route
                change inside the LINE webview. */
-            <a className="backlink" href={back} aria-label={t.dashboard.back}>
+            <Link className="backlink" href={back} aria-label={t.dashboard.back}>
               ←
-            </a>
+            </Link>
           )}
           <h1>{title}</h1>
           {/* The switcher lives in the bar so it is reachable from every

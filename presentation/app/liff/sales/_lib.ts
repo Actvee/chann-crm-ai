@@ -30,8 +30,10 @@ export function getLiff(): LiffApi | undefined {
 export const LIFF_SDK_SRC =
   "https://static.line-scdn.net/liff/edge/versions/2.29.2/sdk.js";
 
+export const SALES_BASE_PATH = "/liff/sales";
+
 /**
- * Resolve a `liff.state` deep link, if one is present.
+ * The in-app path a `liff.state` deep link is asking for, or null.
  *
  * Opening https://liff.line.me/{id}/customers does NOT load that path
  * directly: LINE loads the app's endpoint URL with the rest of the path in
@@ -39,19 +41,53 @@ export const LIFF_SDK_SRC =
  * remainder itself. The menu never did that, so every deep link from chat
  * landed on the menu and stopped there.
  *
- * Returns true when it has started a navigation, so the caller can stop.
+ * Returns a path for the caller to navigate CLIENT-SIDE rather than
+ * navigating itself. A full page load would discard the LIFF session that
+ * only exists in the document LINE opened — the exact bug this pairing of
+ * functions was written to fix.
  */
-export function followLiffState(basePath: string): boolean {
-  if (typeof window === "undefined") return false;
+export function liffStateTarget(basePath: string = SALES_BASE_PATH): string | null {
+  if (typeof window === "undefined") return null;
   const state = new URLSearchParams(window.location.search).get("liff.state");
-  if (!state) return false;
-  // Only ever navigate within this app's own path. A liff.state is
-  // attacker-supplyable via a crafted link, and following an absolute URL
-  // from it would be an open redirect.
+  if (!state) return null;
+  // Only ever navigate within this app's own path. liff.state is
+  // attacker-supplyable via a crafted link, so following an absolute URL
+  // out of it would be an open redirect.
   const target = state.startsWith("/") ? state : `/${state}`;
-  if (target.startsWith("//")) return false;
-  window.location.replace(`${basePath}${target}`);
+  if (target.startsWith("//") || target.includes("://")) return null;
+  return `${basePath}${target}`;
+}
+
+// One-shot marker so a re-entry that still yields no session fails visibly
+// instead of looping between LINE and this app forever.
+const REENTRY_FLAG = "chann.liff.reentered";
+
+/**
+ * Re-open the current page through its LIFF URL so LINE establishes a
+ * session, and report whether a navigation was started.
+ *
+ * Needed because a LIFF session lives only in the document LINE opened via
+ * a LIFF URL. Landing on a sub-path any other way — a bookmark, a rich-menu
+ * link, a full page load — gives inClient=true with loggedIn=false, which
+ * is precisely what was measured on the customers page. Rather than fail,
+ * go back out through LIFF once and come back with a session.
+ */
+export function reenterThroughLiff(liffId: string): boolean {
+  if (typeof window === "undefined" || !liffId) return false;
+  if (sessionStorage.getItem(REENTRY_FLAG)) return false;
+  const subPath = window.location.pathname.startsWith(SALES_BASE_PATH)
+    ? window.location.pathname.slice(SALES_BASE_PATH.length).replace(/^\//, "")
+    : "";
+  sessionStorage.setItem(REENTRY_FLAG, "1");
+  window.location.replace(
+    subPath ? `https://liff.line.me/${liffId}/${subPath}` : `https://liff.line.me/${liffId}`,
+  );
   return true;
+}
+
+/** Clears the re-entry marker once a session is in hand. */
+export function clearReentryFlag(): void {
+  if (typeof window !== "undefined") sessionStorage.removeItem(REENTRY_FLAG);
 }
 
 export function proxyHeaders(token: string, licenseId: string): HeadersInit {
@@ -135,13 +171,19 @@ export async function initLiffSession(
   await withTimeout("liff.init", 15_000, liff.init({ liffId }));
   if (!liff.isLoggedIn()) {
     if (liff.isInClient()) {
-      // Inside the LINE app the user is always logged in, so this is a real
-      // fault worth surfacing rather than papering over with a redirect.
-      throw new Error("LINE session unavailable — close this page and reopen it from the menu");
+      // In the LINE app with no session means this document was not opened
+      // through a LIFF URL. Re-enter through one; the flag makes this at
+      // most a single attempt.
+      if (reenterThroughLiff(liffId)) return { token: "", memberships: [] };
+      throw new Error(
+        "LINE session unavailable even after reopening through LIFF — " +
+        "check the LIFF app's endpoint URL",
+      );
     }
     liff.login({ redirectUri: window.location.href });
     return { token: "", memberships: [] };
   }
+  clearReentryFlag();
   const idToken = liff.getIDToken();
   if (!idToken) throw new Error("LIFF did not return an ID token");
 
