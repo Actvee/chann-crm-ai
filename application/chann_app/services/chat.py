@@ -838,6 +838,26 @@ def _truncation_note(shown: int, total: int, language: str, section: str) -> str
     return note + _t(LIST_SEE_ALL_NO_LINK, language)
 
 
+def _list_card(
+    *, title: str, rows: list[dict], section: str, language: str,
+    shown: int, total: int,
+) -> dict:
+    """The structured form of a list reply.
+
+    Each row carries its own action, which is the fix for a real problem in
+    the first version: a single "view details" quick reply had to guess
+    which record was meant, and guessing the first one is wrong more often
+    than not.
+    """
+    note = f"{shown}/{total}" if total > shown else str(total)
+    card = {"title": title, "rows": rows, "note": note}
+    url = dashboard_link(section)
+    if url:
+        card["footer_label"] = _t(OPEN_DASHBOARD, language)
+        card["footer_url"] = url
+    return card
+
+
 def _dashboard_button(section: str, language: str) -> tuple[str, str] | None:
     """The (label, url) pair for a dashboard quick-reply button.
 
@@ -892,12 +912,33 @@ async def _handle_customer_list(
     text = "\n".join(lines) + _truncation_note(len(shown), len(customers), language, "customers")
     return ChatReply(
         text=text,
+        # Quick replies are now only "what to say next" — navigation moved
+        # into the card, where a row's button knows which row it belongs to.
         quick_replies=[
-            ("ดูรายละเอียด", f"ข้อมูลลูกค้า {shown[0].get('customer_id')}"),
             ("ค้นหาลูกค้า", "ค้นหาลูกค้า "),
             ("รายการดีล", "รายการดีล"),
         ],
         quick_reply_url=_dashboard_button("customers", language),
+        list_card=_list_card(
+            title="ลูกค้า", section="customers", language=language,
+            shown=len(shown), total=len(customers),
+            rows=[
+                {
+                    "title": _customer_name(c),
+                    "subtitle": " · ".join(
+                        p for p in (
+                            str(c.get("customer_id") or ""),
+                            _label(CUSTOMER_STAGE_LABELS, c.get("stage"), language),
+                            str(c.get("phone") or ""),
+                        ) if p
+                    ),
+                    "stage": c.get("stage"),
+                    "action_label": "ดู",
+                    "action_text": f"ข้อมูลลูกค้า {c.get('customer_id')}",
+                }
+                for c in shown
+            ],
+        ),
     )
 
 
@@ -981,11 +1022,30 @@ async def _handle_deal_list(
     return ChatReply(
         text=text,
         quick_replies=[
-            ("ดูรายละเอียด", f"ข้อมูลดีล {shown[0].get('deal_id')}"),
             ("ดีลที่ยังไม่ปิด", "ดีลที่ยังไม่ปิด"),
             ("รายชื่อลูกค้า", "รายชื่อลูกค้า"),
         ],
         quick_reply_url=_dashboard_button("deals", language),
+        list_card=_list_card(
+            title="ดีลที่ยังไม่ปิด" if open_only else "ดีล",
+            section="deals", language=language,
+            shown=len(shown), total=len(deals),
+            rows=[
+                {
+                    "title": str(d.get("deal_id") or "-"),
+                    "subtitle": " · ".join(
+                        p for p in (
+                            _label(DEAL_STAGE_LABELS, d.get("stage"), language),
+                            f"{len(d.get('products') or [])} รายการ" if d.get("products") else "",
+                        ) if p
+                    ),
+                    "stage": d.get("stage"),
+                    "action_label": "ดู",
+                    "action_text": f"ข้อมูลดีล {d.get('deal_id')}",
+                }
+                for d in shown
+            ],
+        ),
     )
 
 
@@ -1075,6 +1135,23 @@ async def _handle_product_list(
         text=text,
         quick_replies=[("รายการดีล", "รายการดีล")],
         quick_reply_url=_dashboard_button("products", language),
+        list_card=_list_card(
+            title="สินค้า", section="products", language=language,
+            shown=len(shown), total=len(products),
+            rows=[
+                {
+                    "title": str(p.get("name") or "-"),
+                    "subtitle": " · ".join(
+                        x for x in (
+                            str(p.get("sku") or ""),
+                            f"{Decimal(str(p['unit_price'])):,.2f}"
+                            if p.get("unit_price") not in (None, "") else "",
+                        ) if x
+                    ),
+                }
+                for p in shown
+            ],
+        ),
     )
 
 
@@ -1106,8 +1183,25 @@ async def _handle_quote_list(
     text = "\n".join(lines) + _truncation_note(len(shown), len(quotes), language, "quotes")
     return ChatReply(
         text=text,
-        quick_replies=[("ออกเอกสาร", f"ออกเอกสาร {shown[0].get('quote_id')}")],
+        quick_replies=[("รายการดีล", "รายการดีล")],
         quick_reply_url=_dashboard_button("quotes", language),
+        list_card=_list_card(
+            title="ใบเสนอราคา", section="quotes", language=language,
+            shown=len(shown), total=len(quotes),
+            rows=[
+                {
+                    "title": str(q.get("quote_id") or "-"),
+                    "subtitle": _label(QUOTE_STATUS_LABELS, q.get("status"), language)
+                    + (" · มีเอกสารแล้ว" if q.get("generated_document_id") else ""),
+                    "stage": q.get("status"),
+                    # Issuing is the action a quote list exists for, and it
+                    # is per-row for the same reason viewing is.
+                    "action_label": "ออกเอกสาร",
+                    "action_text": f"ออกเอกสาร {q.get('quote_id')}",
+                }
+                for q in shown
+            ],
+        ),
     )
 
 
@@ -1293,6 +1387,12 @@ class ChatReply:
     # because there is only ever one destination worth offering: the
     # dashboard page showing the same thing the reply just summarised.
     quick_reply_url: tuple[str, str] | None = None
+    # Phase 10 — a structured list the channel may render richly (LINE turns
+    # this into a Flex bubble with per-row buttons). Deliberately not LINE's
+    # JSON: this module stays channel-agnostic, and `text` remains a
+    # complete answer on its own so any channel that cannot render a card,
+    # and every notification preview, still says something useful.
+    list_card: dict | None = None
 
 
 def greet(ctx: ResolvedContext, language: str = "th") -> str:

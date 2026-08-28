@@ -1,27 +1,16 @@
 "use client";
 
-import Script from "next/script";
 import { useCallback, useEffect, useState } from "react";
 
-type Membership = { license_id: string; license_code: string; company_name: string };
+import { AppShell, Badge, CompanyPicker, Count, Empty } from "../_components";
+import { Membership, initLiffSession, proxyHeaders } from "../_lib";
 
 type Quote = {
   id: string;
   quote_id: string;
   status: string;
-  created_at: string;
+  generated_document_id?: string | null;
 };
-
-type LiffApi = {
-  init(config: { liffId: string; withLoginOnExternalBrowser: boolean }): Promise<void>;
-  isLoggedIn(): boolean;
-  login(): void;
-  getIDToken(): string | null;
-};
-
-function getLiff(): LiffApi | undefined {
-  return (window as Window & { liff?: LiffApi }).liff;
-}
 
 const STATUS_LABELS: Record<string, string> = {
   draft: "ร่าง",
@@ -36,213 +25,174 @@ export default function QuoteList({ liffId }: { liffId: string }) {
   const [memberships, setMemberships] = useState<Membership[]>([]);
   const [licenseId, setLicenseId] = useState("");
   const [quotes, setQuotes] = useState<Quote[]>([]);
-  const [status, setStatus] = useState("กำลังเริ่ม LIFF…");
+  const [status, setStatus] = useState("กำลังเปิด…");
+  const [tone, setTone] = useState<"ok" | "error" | undefined>();
   const [busyId, setBusyId] = useState("");
 
-  const headers = useCallback(
-    () => ({
-      "Content-Type": "application/json",
-      "X-Liff-ID-Token": token,
-      "X-Liff-Audience": "sales",
-      "X-License-Id": licenseId,
-    }),
-    [token, licenseId],
-  );
+  const say = useCallback((message: string, kind?: "ok" | "error") => {
+    setStatus(message);
+    setTone(kind);
+  }, []);
 
-  const loadQuotes = useCallback(async () => {
+  const load = useCallback(async () => {
     if (!token || !licenseId) return;
     const response = await fetch(`/api/phase2/licenses/${licenseId}/quotes`, {
-      headers: headers(),
+      headers: proxyHeaders(token, licenseId),
     });
-    if (!response.ok) throw new Error(`โหลดใบเสนอราคาไม่สำเร็จ (${response.status})`);
+    if (!response.ok) {
+      throw new Error(
+        response.status === 403
+          ? "คุณไม่มีสิทธิ์ดูใบเสนอราคา"
+          : `โหลดใบเสนอราคาไม่สำเร็จ (${response.status})`,
+      );
+    }
     setQuotes((await response.json()) as Quote[]);
-    setStatus("");
-  }, [headers, licenseId, token]);
+    say("");
+  }, [licenseId, say, token]);
 
   useEffect(() => {
     if (!token || !licenseId) return;
-    void loadQuotes().catch((error: unknown) =>
-      setStatus(error instanceof Error ? error.message : "โหลดใบเสนอราคาไม่สำเร็จ"),
+    void load().catch((error: unknown) =>
+      say(error instanceof Error ? error.message : "โหลดใบเสนอราคาไม่สำเร็จ", "error"),
     );
-  }, [licenseId, loadQuotes, token]);
+  }, [licenseId, load, say, token]);
 
   const initialize = useCallback(async () => {
-    const liff = getLiff();
-    if (!liffId || !liff) {
-      setStatus("NEXT_PUBLIC_LIFF_SALES_ID is REQUIRED_NOT_CONFIGURED");
-      return;
-    }
     try {
-      await liff.init({ liffId, withLoginOnExternalBrowser: true });
-      if (!liff.isLoggedIn()) {
-        liff.login();
-        return;
-      }
-      const idToken = liff.getIDToken();
-      if (!idToken) throw new Error("LIFF did not return an ID token");
-      const response = await fetch("/api/liff/sales/me", {
-        headers: { "X-Liff-ID-Token": idToken },
-      });
-      if (!response.ok) throw new Error(`authentication failed (${response.status})`);
-      const me = (await response.json()) as { memberships: Membership[] };
-      setToken(idToken);
-      setMemberships(me.memberships);
-      setLicenseId(me.memberships[0]?.license_id ?? "");
-      if (!me.memberships.length) setStatus("ยังไม่พบบริษัทที่ผูกไว้");
+      const session = await initLiffSession(liffId);
+      if (!session.token) return;
+      setToken(session.token);
+      setMemberships(session.memberships);
+      setLicenseId(session.memberships[0]?.license_id ?? "");
+      if (!session.memberships.length) say("ยังไม่พบบริษัทที่ผูกไว้", "error");
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "LIFF initialization failed");
+      say(error instanceof Error ? error.message : "เปิดหน้านี้ไม่สำเร็จ", "error");
     }
-  }, [liffId]);
+  }, [liffId, say]);
 
-  async function openPdf(quote: Quote) {
+  async function detail(response: Response): Promise<string> {
+    try {
+      return ((await response.clone().json()) as { detail?: string }).detail ?? "";
+    } catch {
+      return "";
+    }
+  }
+
+  async function preview(quote: Quote) {
     setBusyId(quote.id);
-    setStatus(`กำลังสร้าง PDF ของ ${quote.quote_id}…`);
+    say(`กำลังสร้างตัวอย่าง ${quote.quote_id}…`);
     try {
       const response = await fetch(
         `/api/phase2/licenses/${licenseId}/quotes/${quote.id}/pdf`,
-        { headers: headers() },
+        { headers: proxyHeaders(token, licenseId) },
       );
       if (!response.ok) {
-        // 409 carries the specific reason (which company fields are still
-        // blank), which is far more useful than a status code alone.
-        let detail = "";
-        try {
-          detail = ((await response.json()) as { detail?: string }).detail ?? "";
-        } catch {
-          detail = "";
-        }
-        if (response.status === 409) {
-          setStatus(`ยังออกเอกสารไม่ได้: ${detail} — กรอกข้อมูลบริษัทให้ครบก่อน`);
-        } else if (response.status === 503) {
-          setStatus("ยังไม่ได้ตั้งค่าตัวสร้าง PDF (SmartBrowz)");
-        } else {
-          setStatus(`สร้าง PDF ไม่สำเร็จ (${response.status}) ${detail}`);
-        }
+        const reason = await detail(response);
+        say(
+          response.status === 409
+            ? `ยังออกเอกสารไม่ได้ ${reason} — กรอกข้อมูลบริษัทให้ครบก่อน`
+            : `สร้างตัวอย่างไม่สำเร็จ (${response.status}) ${reason}`,
+          "error",
+        );
         return;
       }
-      // Opened as a blob rather than navigating to the URL: the request
-      // needs LIFF auth headers, which a plain <a href> cannot send.
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
+      // Opened as a blob rather than as a link: the request needs LIFF auth
+      // headers, which a plain anchor cannot send.
+      const url = URL.createObjectURL(await response.blob());
       window.open(url, "_blank");
-      // Revoked on a delay so the new tab has time to read it; revoking
-      // immediately races the browser and shows a blank tab.
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
-      setStatus(`เปิด PDF ของ ${quote.quote_id} แล้ว`);
+      say(`เปิดตัวอย่าง ${quote.quote_id} แล้ว`, "ok");
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "สร้าง PDF ไม่สำเร็จ");
+      say(error instanceof Error ? error.message : "สร้างตัวอย่างไม่สำเร็จ", "error");
     } finally {
       setBusyId("");
     }
   }
 
   async function issue(quote: Quote) {
+    const already = Boolean(quote.generated_document_id);
     if (
       !window.confirm(
-        `ออกเอกสารสำหรับ ${quote.quote_id}?\n\n` +
-          "เอกสารที่ออกแล้วจะถูกเก็บถาวรและบันทึกเป็นหลักฐานว่าลูกค้าได้รับไฟล์นี้",
+        already
+          ? `${quote.quote_id} มีเอกสารที่ออกไปแล้ว\n\nการออกใหม่จะสร้างเอกสารอีกฉบับ ต้องการทำต่อหรือไม่`
+          : `ออกเอกสารสำหรับ ${quote.quote_id}?\n\nเอกสารจะถูกเก็บถาวรพร้อมบันทึกหลักฐานว่าลูกค้าได้รับไฟล์ฉบับใด`,
       )
     ) {
       return;
     }
     setBusyId(quote.id);
-    setStatus(`กำลังออกเอกสาร ${quote.quote_id}…`);
+    say(`กำลังออกเอกสาร ${quote.quote_id}…`);
     try {
       const response = await fetch(
-        `/api/phase2/licenses/${licenseId}/quotes/${quote.id}/issue`,
-        { method: "POST", headers: headers() },
+        `/api/phase2/licenses/${licenseId}/quotes/${quote.id}/issue?allow_reissue=${already}`,
+        { method: "POST", headers: proxyHeaders(token, licenseId) },
       );
-      let detail = "";
-      try {
-        detail = ((await response.clone().json()) as { detail?: string }).detail ?? "";
-      } catch {
-        detail = "";
-      }
+      const reason = await detail(response);
       if (!response.ok) {
-        if (response.status === 409) {
-          setStatus(`ยังออกเอกสารไม่ได้: ${detail} — กรอกข้อมูลบริษัทให้ครบก่อน`);
-        } else if (response.status === 503) {
-          setStatus(`ยังไม่พร้อมออกเอกสาร: ${detail}`);
-        } else {
-          setStatus(`ออกเอกสารไม่สำเร็จ (${response.status}) ${detail}`);
-        }
+        say(
+          response.status === 409
+            ? `ยังออกเอกสารไม่ได้ ${reason}`
+            : `ออกเอกสารไม่สำเร็จ (${response.status}) ${reason}`,
+          "error",
+        );
         return;
       }
       const issued = (await response.json()) as { sha256?: string };
-      setStatus(
-        `ออกเอกสาร ${quote.quote_id} เรียบร้อย — SHA-256: ${(issued.sha256 ?? "").slice(0, 16)}…`,
+      say(
+        `ออกเอกสาร ${quote.quote_id} แล้ว · SHA-256 ${(issued.sha256 ?? "").slice(0, 12)}…`,
+        "ok",
       );
-      await loadQuotes();
+      await load();
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "ออกเอกสารไม่สำเร็จ");
+      say(error instanceof Error ? error.message : "ออกเอกสารไม่สำเร็จ", "error");
     } finally {
       setBusyId("");
     }
   }
 
   return (
-    <main style={{ maxWidth: 720, margin: "0 auto", padding: 24 }}>
-      <Script
-        src="https://static.line-scdn.net/liff/edge/versions/2.29.2/sdk.js"
-        strategy="afterInteractive"
-        onReady={() => void initialize()}
-        onError={() => setStatus("LIFF SDK load failed")}
-      />
-      <h1>ใบเสนอราคา</h1>
-      <p aria-live="polite">{status}</p>
+    <AppShell
+      title="ใบเสนอราคา"
+      liffId={liffId}
+      onReady={() => void initialize()}
+      onSdkError={() => say("โหลด LIFF ไม่สำเร็จ", "error")}
+      status={status}
+      statusTone={tone}
+    >
+      <CompanyPicker memberships={memberships} licenseId={licenseId} onChange={setLicenseId} />
 
-      {memberships.length > 1 && (
-        <label>
-          บริษัท
-          <select value={licenseId} onChange={(event) => setLicenseId(event.target.value)}>
-            {memberships.map((membership) => (
-              <option key={membership.license_id} value={membership.license_id}>
-                {membership.company_name} ({membership.license_code})
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
+      <Count shown={quotes.length} total={quotes.length} />
 
       {quotes.length === 0 ? (
-        <p style={{ color: "#666" }}>
-          ยังไม่มีใบเสนอราคา — สร้างผ่านแชทได้ด้วย &ldquo;สร้างใบเสนอราคาจากดีล D-2026-0001&rdquo;
-        </p>
+        <Empty message="ยังไม่มีใบเสนอราคา สร้างได้ในแชทด้วยข้อความ “สร้างใบเสนอราคาจากดีล D-2026-0001”" />
       ) : (
-        <ul style={{ listStyle: "none", padding: 0, display: "grid", gap: 8 }}>
+        <ul className="list">
           {quotes.map((quote) => (
-            <li
-              key={quote.id}
-              style={{
-                border: "1px solid #ddd",
-                borderRadius: 6,
-                padding: 12,
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                gap: 12,
-              }}
-            >
-              <div>
-                <strong>{quote.quote_id}</strong>
-                <div style={{ color: "#666", fontSize: 13 }}>
-                  {STATUS_LABELS[quote.status] ?? quote.status}
-                </div>
+            <li key={quote.id} className="card" data-stage={quote.status}>
+              <div className="card-title">
+                <span className="code">{quote.quote_id}</span>
+                <Badge stage={quote.status} label={STATUS_LABELS[quote.status] ?? quote.status} />
               </div>
-              <div style={{ display: "flex", gap: 8 }}>
+              <div className="card-meta">
+                {quote.generated_document_id ? "ออกเอกสารแล้ว" : "ยังไม่ได้ออกเอกสาร"}
+              </div>
+              <div className="card-actions">
                 <button
                   type="button"
-                  onClick={() => void openPdf(quote)}
-                  disabled={busyId === quote.id || !licenseId}
+                  className="btn"
+                  onClick={() => void preview(quote)}
+                  disabled={busyId === quote.id}
                 >
                   {busyId === quote.id ? "กำลังทำงาน…" : "ดูตัวอย่าง"}
                 </button>
                 <button
                   type="button"
+                  className="btn"
+                  data-variant={quote.generated_document_id ? undefined : "primary"}
                   onClick={() => void issue(quote)}
-                  disabled={busyId === quote.id || !licenseId}
+                  disabled={busyId === quote.id}
                 >
-                  ออกเอกสาร
+                  {quote.generated_document_id ? "ออกเอกสารใหม่" : "ออกเอกสาร"}
                 </button>
               </div>
             </li>
@@ -250,11 +200,10 @@ export default function QuoteList({ liffId }: { liffId: string }) {
         </ul>
       )}
 
-      <p style={{ fontSize: 13, color: "#888", marginTop: 24 }}>
-        &ldquo;ดูตัวอย่าง&rdquo; สร้าง PDF เพื่อตรวจทานเท่านั้น ไม่บันทึกอะไร ·
-        &ldquo;ออกเอกสาร&rdquo; จะเก็บไฟล์ถาวรพร้อมบันทึกหลักฐาน SHA-256
-        ว่าลูกค้าได้รับไฟล์ฉบับใด
+      <p className="footnote">
+        ดูตัวอย่างเป็นการสร้าง PDF เพื่อตรวจทานเท่านั้น ไม่บันทึกอะไร ·
+        ออกเอกสารจะเก็บไฟล์ถาวรพร้อมบันทึก SHA-256 ว่าลูกค้าได้รับไฟล์ฉบับใด
       </p>
-    </main>
+    </AppShell>
   );
 }

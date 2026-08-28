@@ -198,6 +198,10 @@ class FakeDataClient:
         self.recorded.append(("create_customer", license_id, payload, actor_id))
         row = {
             "id": f"CUST-{len(self._customers) + 1}", "license_id": license_id,
+            # The Data tier always assigns a human-facing code, so a fake
+            # that omits it hides bugs in anything that addresses a customer
+            # by code — which is how every chat command refers to one.
+            "customer_id": f"C-2026-{len(self._customers) + 1:04d}",
             "customer_chann_uid": None, "stage": "lead", "owner_member_id": None,
             "first_name": payload.get("first_name"), "last_name": payload.get("last_name"),
             "phone": payload.get("phone"), "email": payload.get("email"),
@@ -2544,3 +2548,100 @@ class TestPhase10DashboardHandoff:
             assert chat.dashboard_link("customers") is None
         finally:
             settings.liff_sales_id = original
+
+
+class TestPhase10ListCards:
+    """Per-row actions, and navigation that is not a quick reply.
+
+    The first version put one "ดูรายละเอียด" quick reply on a list and
+    pointed it at the first row — a guess that is wrong more often than
+    right — and put the dashboard link in the quick replies, which are
+    "what to say next" and vanish once tapped. Both moved into a card:
+    rows carry their own buttons, and the one persistent destination is a
+    footer button.
+    """
+
+    async def test_every_row_gets_its_own_action(self, monkeypatch):
+        import chann_app.services.chat as chat
+
+        monkeypatch.setattr(chat, "dashboard_link", lambda section: None)
+        client = FakeDataClient(permission_keys=["customer.read"])
+        for index, name in enumerate(("สมชาย", "สมหญิง", "สมศรี")):
+            await client.create_customer("L1", {
+                "first_name": name, "last_name": "ทดสอบ", "phone": f"08000000{index:02d}",
+            })
+        reply = await handle_chat_message(client, message="รายชื่อลูกค้า", ctx=_ctx())
+
+        rows = reply.list_card["rows"]
+        assert len(rows) == 3
+        targets = [row["action_text"] for row in rows]
+        assert len(set(targets)) == 3, "each row must point at its own record"
+        assert not any(
+            "ดูรายละเอียด" in label for label, _ in reply.quick_replies
+        ), "row navigation belongs on the row, not in a shared quick reply"
+
+    async def test_the_dashboard_link_is_a_card_footer_not_a_quick_reply(self, monkeypatch):
+        import chann_app.services.chat as chat
+
+        monkeypatch.setattr(chat, "dashboard_link", lambda section: f"https://liff.line.me/X/{section}")
+        client = FakeDataClient(permission_keys=["deal.read"])
+        customer = await client.create_customer("L1", {"first_name": "ก", "last_name": "ข"})
+        await client.create_deal("L1", {"contact_id": customer["id"]})
+        reply = await handle_chat_message(client, message="รายการดีล", ctx=_ctx())
+
+        assert reply.list_card["footer_url"] == "https://liff.line.me/X/deals"
+        assert reply.quick_replies, "quick replies stay, but only for what to say next"
+
+    async def test_the_plain_text_is_still_a_complete_answer(self, monkeypatch):
+        """The text becomes the Flex alt text, so it is what a notification
+        preview shows and what any client that cannot render Flex gets."""
+        import chann_app.services.chat as chat
+
+        monkeypatch.setattr(chat, "dashboard_link", lambda section: None)
+        client = FakeDataClient(permission_keys=["customer.read"])
+        await client.create_customer("L1", {
+            "first_name": "สมชาย", "last_name": "ใจดี", "phone": "0812345678",
+        })
+        reply = await handle_chat_message(client, message="รายชื่อลูกค้า", ctx=_ctx())
+        assert "สมชาย ใจดี" in reply.text
+
+    def test_a_full_bubble_stays_inside_line_s_size_limit(self):
+        """LINE rejects a bubble over 10KB outright, and the failure is a
+        send error the user sees as silence."""
+        import json
+
+        from chann_app.line.client import MAX_FLEX_ROWS, flex_list_message
+
+        message = flex_list_message(
+            alt_text="x" * 300,
+            title="ลูกค้ามุ่งหวังที่ต้องติดตามภายในสัปดาห์นี้",
+            rows=[
+                {
+                    "title": f"ลูกค้าตัวอย่างชื่อยาวมากรายที่ {i}",
+                    "subtitle": f"C-2026-{i:04d} · ลูกค้ามุ่งหวัง · 08{i:08d}",
+                    "stage": "lead",
+                    "action_label": "ดู",
+                    "action_text": f"ข้อมูลลูกค้า C-2026-{i:04d}",
+                }
+                for i in range(MAX_FLEX_ROWS)
+            ],
+            footer_label="เปิดแดชบอร์ด",
+            footer_url="https://liff.line.me/1234567890-abcdefgh/liff/sales/customers",
+            note="10/240",
+        )
+        size = len(json.dumps(message, ensure_ascii=False).encode("utf-8"))
+        assert size < 10_000, f"bubble is {size} bytes, over LINE's 10KB limit"
+
+    def test_extra_rows_are_dropped_rather_than_breaking_the_send(self):
+        from chann_app.line.client import MAX_FLEX_ROWS, flex_list_message
+
+        message = flex_list_message(
+            alt_text="x", title="ดีล",
+            rows=[{"title": f"D-{i}"} for i in range(MAX_FLEX_ROWS + 15)],
+        )
+        separators = [
+            c for c in message["contents"]["body"]["contents"]
+            if c.get("type") == "separator"
+        ]
+        # One separator under the header plus one between each pair of rows.
+        assert len(separators) == MAX_FLEX_ROWS

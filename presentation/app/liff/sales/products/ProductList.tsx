@@ -1,32 +1,30 @@
 "use client";
 
-import Script from "next/script";
 import { useCallback, useEffect, useState } from "react";
 
-import {
-  LIFF_SDK_SRC,
-  Membership,
-  initLiffSession,
-  proxyHeaders,
-} from "../_lib";
+import { AppShell, CompanyPicker, Count, Empty } from "../_components";
+import { Membership, initLiffSession, proxyHeaders } from "../_lib";
 
-type Row = Record<string, unknown>;
-
-const STAGE_LABELS: Record<string, string> = {
-  lead: "ลูกค้ามุ่งหวัง",
-  contact: "ลูกค้า",
-  new: "ใหม่",
-  proposed: "เสนอราคาแล้ว",
-  won: "สำเร็จ",
-  lost: "ไม่สำเร็จ",
+type Product = {
+  id: string;
+  sku?: string | null;
+  name?: string | null;
+  unit_price?: string | number | null;
 };
 
 export default function ProductList({ liffId }: { liffId: string }) {
   const [token, setToken] = useState("");
   const [memberships, setMemberships] = useState<Membership[]>([]);
   const [licenseId, setLicenseId] = useState("");
-  const [rows, setRows] = useState<Row[]>([]);
-  const [status, setStatus] = useState("กำลังเริ่ม LIFF…");
+  const [products, setProducts] = useState<Product[]>([]);
+  const [status, setStatus] = useState("กำลังเปิด…");
+  const [tone, setTone] = useState<"ok" | "error" | undefined>();
+  const [query, setQuery] = useState("");
+
+  const say = useCallback((message: string, kind?: "ok" | "error") => {
+    setStatus(message);
+    setTone(kind);
+  }, []);
 
   const load = useCallback(async () => {
     if (!token || !licenseId) return;
@@ -36,20 +34,20 @@ export default function ProductList({ liffId }: { liffId: string }) {
     if (!response.ok) {
       throw new Error(
         response.status === 403
-          ? "คุณไม่มีสิทธิ์ดูข้อมูลนี้"
-          : `โหลดข้อมูลไม่สำเร็จ (${response.status})`,
+          ? "คุณไม่มีสิทธิ์ดูสินค้า"
+          : `โหลดสินค้าไม่สำเร็จ (${response.status})`,
       );
     }
-    setRows((await response.json()) as Row[]);
-    setStatus("");
-  }, [licenseId, token]);
+    setProducts((await response.json()) as Product[]);
+    say("");
+  }, [licenseId, say, token]);
 
   useEffect(() => {
     if (!token || !licenseId) return;
     void load().catch((error: unknown) =>
-      setStatus(error instanceof Error ? error.message : "โหลดข้อมูลไม่สำเร็จ"),
+      say(error instanceof Error ? error.message : "โหลดสินค้าไม่สำเร็จ", "error"),
     );
-  }, [licenseId, load, token]);
+  }, [licenseId, load, say, token]);
 
   const initialize = useCallback(async () => {
     try {
@@ -58,51 +56,70 @@ export default function ProductList({ liffId }: { liffId: string }) {
       setToken(session.token);
       setMemberships(session.memberships);
       setLicenseId(session.memberships[0]?.license_id ?? "");
-      if (!session.memberships.length) setStatus("ยังไม่พบบริษัทที่ผูกไว้");
+      if (!session.memberships.length) say("ยังไม่พบบริษัทที่ผูกไว้", "error");
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "LIFF initialization failed");
+      say(error instanceof Error ? error.message : "เปิดหน้านี้ไม่สำเร็จ", "error");
     }
-  }, [liffId]);
+  }, [liffId, say]);
+
+  const needle = query.trim().toLowerCase();
+  const visible = needle
+    ? products.filter((product) =>
+        [product.name, product.sku]
+          .map((value) => String(value ?? "").toLowerCase())
+          .some((value) => value.includes(needle)),
+      )
+    : products;
 
   return (
-    <main style={{ maxWidth: 720, margin: "0 auto", padding: 24 }}>
-      <Script
-        src={LIFF_SDK_SRC}
-        strategy="afterInteractive"
-        onReady={() => void initialize()}
-        onError={() => setStatus("LIFF SDK load failed")}
-      />
-      <h1>สินค้า</h1>
-      <p aria-live="polite">{status}</p>
+    <AppShell
+      title="สินค้า"
+      liffId={liffId}
+      onReady={() => void initialize()}
+      onSdkError={() => say("โหลด LIFF ไม่สำเร็จ", "error")}
+      status={status}
+      statusTone={tone}
+    >
+      <CompanyPicker memberships={memberships} licenseId={licenseId} onChange={setLicenseId} />
 
-      {memberships.length > 1 && (
-        <label>
-          บริษัท
-          <select value={licenseId} onChange={(event) => setLicenseId(event.target.value)}>
-            {memberships.map((membership) => (
-              <option key={membership.license_id} value={membership.license_id}>
-                {membership.company_name} ({membership.license_code})
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
+      <label className="field">
+        <span>ค้นหา</span>
+        <input
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="ชื่อสินค้า หรือรหัสสินค้า"
+          type="search"
+        />
+      </label>
 
-      {rows.length === 0 ? (
-        <p style={{ color: "#666" }}>ยังไม่มีสินค้า — เพิ่มผ่านแชทได้ด้วย &ldquo;สร้างสินค้า&rdquo;</p>
+      <Count shown={visible.length} total={products.length} />
+
+      {visible.length === 0 ? (
+        <Empty
+          message={
+            products.length === 0
+              ? "ยังไม่มีสินค้า เพิ่มได้ในแชทด้วยข้อความ “สร้างสินค้า”"
+              : `ไม่พบสินค้าที่ตรงกับ “${query}”`
+          }
+        />
       ) : (
-        <ul style={{ listStyle: "none", padding: 0, display: "grid", gap: 8 }}>
-          {rows.map((row, index) => (
-            <li
-              key={String(row.id ?? index)}
-              style={{ border: "1px solid #ddd", borderRadius: 6, padding: 12 }}
-            >
-              <strong>{`${String(row.sku ?? "-")} · ${String(row.name ?? "-")}`}</strong>
-              <div style={{ color: "#666", fontSize: 13 }}>{row.unit_price != null ? `${Number(row.unit_price).toLocaleString("th-TH", { minimumFractionDigits: 2 })} บาท` : "ยังไม่ได้ตั้งราคา"}</div>
+        <ul className="list">
+          {visible.map((product) => (
+            <li key={product.id} className="card">
+              <div className="card-title">{product.name ?? "—"}</div>
+              <div className="card-meta">
+                <span className="code">{product.sku ?? "ไม่มีรหัส"}</span>
+                {product.unit_price != null && product.unit_price !== ""
+                  ? ` · ${Number(product.unit_price).toLocaleString("th-TH", {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })} บาท`
+                  : " · ยังไม่ได้ตั้งราคา"}
+              </div>
             </li>
           ))}
         </ul>
       )}
-    </main>
+    </AppShell>
   );
 }

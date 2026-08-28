@@ -1,3 +1,5 @@
+import "./globals.css";
+
 import { LanguageProvider } from "@/lib/i18n/LanguageProvider";
 
 export const metadata = {
@@ -10,7 +12,20 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   // once the stored preference is known — see the hydration note in that file.
   return (
     <html lang="th">
-      <body style={{ fontFamily: "system-ui, sans-serif", margin: 0 }}>
+      <head>
+        {/* Thai text set in a Latin-first system font gets mismatched
+            line heights and clipped upper vowels. IBM Plex Sans Thai is
+            the face this project's own progress report already uses, so
+            the app and its reporting read as one product. */}
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        <link
+          href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+          rel="stylesheet"
+        />
+        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+      </head>
+      <body>
         <LanguageProvider>{children}</LanguageProvider>
       </body>
     </html>

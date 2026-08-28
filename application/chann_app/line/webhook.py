@@ -25,6 +25,7 @@ from ..services.registration import handle_registration, is_unregistered
 from ..services.identity import resolve_context
 from .client import (
     LineReplyError,
+    flex_list_message,
     quick_reply_item,
     quick_reply_uri,
     reply_messages,
@@ -137,23 +138,34 @@ async def handle_webhook(
                 chat = ChatReply(text=unavailable_reply("th"))
 
             try:
-                await reply_messages(
-                    oa,
-                    event.get("replyToken", ""),
-                    [text_message(
-                        chat.text,
-                        quick_reply=(
-                            [
-                                quick_reply_item(label, send)
-                                for label, send in (chat.quick_replies or [])
-                            ]
-                            + (
-                                [quick_reply_uri(*chat.quick_reply_url)]
-                                if chat.quick_reply_url else []
-                            )
-                        ) or None,
-                    )],
-                )
+                quick_reply_items = (
+                    [
+                        quick_reply_item(label, send)
+                        for label, send in (chat.quick_replies or [])
+                    ]
+                    + (
+                        # Only when there is no card: the card carries its
+                        # own footer button to the same place, and offering
+                        # it twice in one reply is clutter.
+                        [quick_reply_uri(*chat.quick_reply_url)]
+                        if chat.quick_reply_url and not chat.list_card else []
+                    )
+                ) or None
+
+                if chat.list_card:
+                    message = flex_list_message(
+                        # The plain text is the alt text, so the chat list
+                        # preview and any client that cannot render Flex
+                        # still get the full answer.
+                        alt_text=chat.text,
+                        **chat.list_card,
+                    )
+                    if quick_reply_items:
+                        message["quickReply"] = {"items": quick_reply_items}
+                else:
+                    message = text_message(chat.text, quick_reply=quick_reply_items)
+
+                await reply_messages(oa, event.get("replyToken", ""), [message])
             except LineReplyError as exc:
                 log.error("LINE reply failed for oa=%s: %s", oa, exc)
                 raise HTTPException(

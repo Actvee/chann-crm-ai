@@ -148,3 +148,133 @@ async def push_messages(
         {"to": to_line_user_id, "messages": messages[:MAX_MESSAGES_PER_REQUEST]},
         client, "push",
     )
+
+
+# ------------------------------------------------------- Flex list bubble
+
+# LINE rejects a bubble whose JSON exceeds 10KB. Ten rows of a code, a
+# label and a button sits well inside that, and ten is also about what a
+# person can read without scrolling past the reply to find the next
+# message — so the same number serves both limits.
+MAX_FLEX_ROWS = 10
+
+_STAGE_COLOURS = {
+    "new": "#7C89A3",
+    "lead": "#7C89A3",
+    "draft": "#7C89A3",
+    "proposed": "#3F5EA8",
+    "sent": "#3F5EA8",
+    "won": "#2E8B62",
+    "accepted": "#2E8B62",
+    "contact": "#2E8B62",
+    "lost": "#B4646C",
+    "rejected": "#B4646C",
+}
+
+
+def _flex_row(row: dict) -> dict:
+    """One line of a list bubble: title, optional badge, own action button.
+
+    The button belongs to the row rather than the bubble because a single
+    "view details" quick reply has to guess which record the person meant,
+    and guessing the first one is wrong more often than not.
+    """
+    left = [
+        {
+            "type": "text", "text": str(row.get("title") or "-"),
+            "size": "sm", "weight": "bold", "color": "#1A2030",
+            "wrap": False, "flex": 1,
+        },
+    ]
+    if row.get("subtitle"):
+        # Stage is carried by the subtitle's colour rather than by a drawn
+        # rail. Two richer versions were tried first — a nested spacer box,
+        # then a gradient background — and both rendered correctly but pushed
+        # ten rows of Thai text past LINE's 10KB bubble limit, which fails
+        # the entire send and shows the user nothing at all. Colour on text
+        # that already exists costs nothing and reads just as fast.
+        left.append({
+            "type": "text", "text": str(row["subtitle"]),
+            "size": "xs", "wrap": False, "margin": "xs",
+            "color": _STAGE_COLOURS.get(str(row.get("stage") or "").lower(), "#5A6478"),
+        })
+
+    contents = [
+        {"type": "box", "layout": "vertical", "contents": left, "flex": 5},
+    ]
+    if row.get("action_label") and row.get("action_text"):
+        contents.append({
+            "type": "button",
+            "action": {
+                "type": "message",
+                "label": str(row["action_label"])[:20],
+                "text": str(row["action_text"]),
+            },
+            "style": "link",
+            "height": "sm",
+            "flex": 2,
+        })
+
+    box = {
+        "type": "box", "layout": "horizontal", "contents": contents,
+        "alignItems": "center", "paddingAll": "sm",
+    }
+    return box
+
+
+def flex_list_message(
+    *, alt_text: str, title: str, rows: list[dict],
+    footer_label: str | None = None, footer_url: str | None = None,
+    note: str | None = None,
+) -> dict:
+    """A list as a Flex bubble.
+
+    Rows carry their own buttons and the footer carries the one persistent
+    destination (the dashboard). Quick replies are then free to be what
+    they are good at — what to say next — instead of doubling as
+    navigation, which is what made an earlier version confusing.
+    """
+    body: list[dict] = [
+        {
+            "type": "box", "layout": "horizontal",
+            "contents": [
+                {
+                    "type": "text", "text": title, "weight": "bold",
+                    "size": "md", "color": "#1A2030", "flex": 3,
+                },
+            ] + ([
+                {
+                    "type": "text", "text": note, "size": "xs",
+                    "color": "#8B93A3", "align": "end", "gravity": "center", "flex": 2,
+                }
+            ] if note else []),
+        },
+        {"type": "separator", "margin": "md", "color": "#E5E0D8"},
+    ]
+    for row in rows[:MAX_FLEX_ROWS]:
+        body.append(_flex_row(row))
+        body.append({"type": "separator", "color": "#F0ECE5"})
+    if body and body[-1].get("type") == "separator":
+        body.pop()
+
+    bubble: dict = {
+        "type": "bubble",
+        "body": {
+            "type": "box", "layout": "vertical", "contents": body,
+            "paddingAll": "md", "backgroundColor": "#FFFFFF", "spacing": "none",
+        },
+    }
+    if footer_label and footer_url:
+        bubble["footer"] = {
+            "type": "box", "layout": "vertical",
+            "contents": [{
+                "type": "button",
+                "action": {"type": "uri", "label": footer_label[:20], "uri": footer_url},
+                "style": "primary", "height": "sm", "color": "#E0A422",
+            }],
+            "paddingAll": "md",
+        }
+
+    # alt_text is what shows in the chat list and in notifications, and is
+    # the whole message for anyone using a client that cannot render Flex.
+    return {"type": "flex", "altText": alt_text[:400], "contents": bubble}

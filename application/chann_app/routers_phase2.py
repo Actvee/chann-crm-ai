@@ -442,6 +442,7 @@ async def render_quote_pdf(
 async def issue_quote(
     license_id: str,
     quote_id: str,
+    allow_reissue: bool = False,
     principal: TenantPrincipal = Depends(get_tenant_principal),
     client: DataClient = Depends(get_data_client),
 ):
@@ -453,7 +454,7 @@ async def issue_quote(
     """
     from .services.documents.snapshot import QuoteNotRenderable
     from .services.pdf.smartbrowz import SmartBrowzNotConfigured, SmartBrowzRenderError
-    from .services.quote_issue import issue_quote_document
+    from .services.quote_issue import QuoteAlreadyIssued, issue_quote_document
     from .services.storage.base import DocumentStoreError, DocumentStoreNotConfigured
 
     _require_same_tenant(principal, license_id)
@@ -477,7 +478,13 @@ async def issue_quote(
         document = await issue_quote_document(
             client, license_id=license_id, quote=quote, deal=deal,
             customer=customer, company=company, actor_id=principal.chann_uid,
+            allow_reissue=allow_reissue,
         )
+    except QuoteAlreadyIssued as exc:
+        # 409 with a distinct message: the caller can retry with
+        # allow_reissue once a human has confirmed, which is not true of the
+        # other 409 (incomplete company data) that needs data entry first.
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
     except QuoteNotRenderable as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
     except SmartBrowzNotConfigured as exc:

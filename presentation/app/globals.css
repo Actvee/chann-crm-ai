@@ -1,0 +1,532 @@
+/* Chann CRM — Sales dashboard
+ *
+ * Continues the visual language the project already established in its own
+ * progress report: IBM Plex Sans Thai for text, IBM Plex Mono for anything
+ * that is data (deal codes, tax IDs, money), and a status bar as the way
+ * state is read at a glance rather than word by word.
+ *
+ * Built for one-handed use inside the LINE in-app browser: a salesperson is
+ * usually standing in front of a customer, so tap targets are large, the
+ * type is set bigger than a desktop app would need, and the most important
+ * thing on a row — what stage it is at — is encoded as a colour rail that
+ * survives being glanced at.
+ *
+ * No CSS framework: the presentation tier has zero styling dependencies and
+ * adding one would mean a build change for six pages. Plain CSS with custom
+ * properties does the job and keeps the bundle honest.
+ */
+
+:root {
+  /* Warm paper rather than pure white: pure white in a phone browser under
+     Thai daylight is genuinely hard to look at for long. */
+  --paper: #faf7f2;
+  --surface: #ffffff;
+  --ink: #1a2030;
+  --ink-soft: #5a6478;
+  --ink-faint: #8b93a3;
+  --line: #e5e0d8;
+  --line-strong: #cfc8bc;
+
+  /* Marigold. Used only for the primary action on a screen — one accent,
+     one job, so "the yellow thing" always means "the main thing to do". */
+  --accent: #e0a422;
+  --accent-ink: #3d2c05;
+  --accent-soft: #fdf4de;
+
+  /* Stage colours double as the row rail. Ordered so the pipeline reads
+     left to right the way it actually progresses. */
+  --stage-new: #7c89a3;
+  --stage-proposed: #3f5ea8;
+  --stage-won: #2e8b62;
+  --stage-lost: #b4646c;
+  --stage-neutral: #a9a396;
+
+  --danger: #b4342c;
+  --danger-soft: #fdeceb;
+  --ok: #2e8b62;
+  --ok-soft: #e8f5ee;
+
+  --radius: 10px;
+  --radius-sm: 6px;
+
+  --shadow: 0 1px 2px rgba(26, 32, 48, 0.06), 0 1px 8px rgba(26, 32, 48, 0.04);
+
+  --font-text: "IBM Plex Sans Thai", "Noto Sans Thai", system-ui, sans-serif;
+  --font-data: "IBM Plex Mono", ui-monospace, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-text);
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  /* Stops iOS zooming when a text input is focused, which otherwise breaks
+     the layout mid-typing inside the LINE webview. */
+  -webkit-text-size-adjust: 100%;
+}
+
+/* ---------------------------------------------------------------- shell */
+
+.shell {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 0 0 96px;
+}
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  background: rgba(250, 247, 242, 0.94);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--line);
+}
+
+.topbar h1 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* Back to the menu. Every page has one, because the LINE webview has no
+   browser chrome of its own — without this a person who taps into Deals is
+   stuck there until they close the whole window. */
+.backlink {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  text-decoration: none;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.backlink:active {
+  background: var(--paper);
+}
+
+.page {
+  padding: 16px;
+}
+
+/* --------------------------------------------------------------- status */
+
+.status {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--ink-soft);
+}
+
+.status:empty {
+  display: none;
+}
+
+.status[data-tone="ok"] {
+  background: var(--ok-soft);
+  border-color: #bfe0cd;
+  color: #1f5f43;
+}
+
+.status[data-tone="error"] {
+  background: var(--danger-soft);
+  border-color: #f0c4c1;
+  color: var(--danger);
+}
+
+/* ---------------------------------------------------------------- cards */
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.card {
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 14px 14px 14px 20px;
+  overflow: hidden;
+}
+
+/* The signature: a stage rail down the left edge. Scanning twenty rows you
+   see the shape of the pipeline before reading a single word, which is the
+   question a salesperson actually opens this page to answer. */
+.card::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: var(--stage-neutral);
+}
+
+.card[data-stage="new"]::before {
+  background: var(--stage-new);
+}
+.card[data-stage="proposed"]::before,
+.card[data-stage="sent"]::before {
+  background: var(--stage-proposed);
+}
+.card[data-stage="won"]::before,
+.card[data-stage="accepted"]::before,
+.card[data-stage="contact"]::before {
+  background: var(--stage-won);
+}
+.card[data-stage="lost"]::before,
+.card[data-stage="rejected"]::before {
+  background: var(--stage-lost);
+}
+.card[data-stage="lead"]::before,
+.card[data-stage="draft"]::before {
+  background: var(--stage-new);
+}
+
+.card-title {
+  font-weight: 600;
+  font-size: 16px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* Codes, money and tax IDs are data: mono aligns the digits so two rows can
+   be compared by eye, which proportional type actively prevents. */
+.code {
+  font-family: var(--font-data);
+  font-size: 13px;
+  color: var(--ink-soft);
+  letter-spacing: -0.01em;
+}
+
+.card-meta {
+  margin-top: 4px;
+  font-size: 14px;
+  color: var(--ink-soft);
+}
+
+.card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+/* --------------------------------------------------------------- badges */
+
+.badge {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.5;
+  background: #eef0f4;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.badge[data-stage="new"],
+.badge[data-stage="lead"],
+.badge[data-stage="draft"] {
+  background: #edeff4;
+  color: #4d5872;
+}
+.badge[data-stage="proposed"],
+.badge[data-stage="sent"] {
+  background: #e8edfa;
+  color: #2f4c8f;
+}
+.badge[data-stage="won"],
+.badge[data-stage="accepted"],
+.badge[data-stage="contact"] {
+  background: var(--ok-soft);
+  color: #1f5f43;
+}
+.badge[data-stage="lost"],
+.badge[data-stage="rejected"] {
+  background: #fbeced;
+  color: #8f3b43;
+}
+
+/* -------------------------------------------------------------- buttons */
+
+.btn {
+  font: inherit;
+  font-size: 14.5px;
+  font-weight: 500;
+  padding: 9px 14px;
+  /* 40px minimum height: this is tapped with a thumb, often while holding
+     something else. */
+  min-height: 40px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.btn[data-variant="primary"] {
+  background: var(--accent);
+  border-color: #c8901a;
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+.btn[data-variant="quiet"] {
+  border-color: transparent;
+  background: transparent;
+  color: var(--ink-soft);
+  padding-left: 6px;
+  padding-right: 6px;
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--stage-proposed);
+  outline-offset: 2px;
+}
+
+/* --------------------------------------------------------------- fields */
+
+.field {
+  display: block;
+  margin-bottom: 14px;
+}
+
+.field > span {
+  display: block;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--ink-soft);
+  margin-bottom: 5px;
+}
+
+.field input,
+.field textarea,
+.field select {
+  font: inherit;
+  /* 16px exactly: anything smaller makes iOS Safari zoom on focus. */
+  font-size: 16px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.field input:focus,
+.field textarea:focus,
+.field select:focus {
+  outline: 2px solid var(--stage-proposed);
+  outline-offset: -1px;
+  border-color: var(--stage-proposed);
+}
+
+.field .hint {
+  display: block;
+  margin-top: 5px;
+  font-size: 13px;
+  color: var(--ink-faint);
+  font-weight: 400;
+}
+
+.field-mono input {
+  font-family: var(--font-data);
+  letter-spacing: 0.02em;
+}
+
+fieldset.group {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 14px;
+  margin: 0 0 14px;
+}
+
+fieldset.group legend {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink-soft);
+  padding: 0 6px;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 15px;
+}
+
+.check input {
+  width: 20px;
+  height: 20px;
+  flex: none;
+}
+
+/* ----------------------------------------------------------- empty/menu */
+
+.empty {
+  text-align: center;
+  padding: 36px 20px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius);
+  color: var(--ink-soft);
+  background: var(--surface);
+}
+
+.empty p {
+  margin: 0 0 14px;
+}
+
+/* Menu tiles on the index. Two columns even on a narrow phone: six items in
+   one column pushes the last one below the fold, and the whole point of the
+   page is seeing everything available at once. */
+.tiles {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+}
+
+.tile {
+  display: block;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 16px 14px;
+  text-decoration: none;
+  color: inherit;
+  box-shadow: var(--shadow);
+  min-height: 104px;
+}
+
+.tile:active {
+  background: var(--accent-soft);
+}
+
+.tile h2 {
+  margin: 0 0 4px;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.tile p {
+  margin: 0;
+  font-size: 13.5px;
+  color: var(--ink-soft);
+  line-height: 1.45;
+}
+
+.tile[aria-disabled="true"] {
+  opacity: 0.55;
+  box-shadow: none;
+}
+
+/* --------------------------------------------------- readiness callout */
+
+.callout {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  margin-bottom: 16px;
+  font-size: 14.5px;
+}
+
+.callout[data-tone="ok"] {
+  background: var(--ok-soft);
+  border-color: #bfe0cd;
+  color: #1f5f43;
+}
+
+.callout[data-tone="warn"] {
+  background: var(--danger-soft);
+  border-color: #f0c4c1;
+  color: #8f3b43;
+}
+
+.callout .dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  margin-top: 7px;
+  flex: none;
+  background: currentColor;
+}
+
+.count {
+  font-family: var(--font-data);
+  font-size: 13px;
+  color: var(--ink-faint);
+  margin: 0 0 12px;
+}
+
+.footnote {
+  margin-top: 22px;
+  font-size: 13px;
+  color: var(--ink-faint);
+  line-height: 1.5;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+  .btn:active:not(:disabled) {
+    transform: none;
+  }
+}
