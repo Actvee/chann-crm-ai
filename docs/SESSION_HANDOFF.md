@@ -1,16 +1,26 @@
-# Session Handoff — 27 Aug 2026
+# Session Handoff — 28 Aug 2026
 
-Written because the conversation doing Phases 3-9 hit its context limit
-several times across the day. This is what the next AI session needs to
-pick up cleanly — read this before `docs/CHANN_CRM_AI_MASTER_SPEC.md`, not
+Written because the conversations doing Phases 3-10 repeatedly hit their
+context limits. This is what the next AI session needs to pick up
+cleanly — read this before `docs/CHANN_CRM_AI_MASTER_SPEC.md`, not
 instead of it.
 
-Supersedes the earlier 27 Aug 2026 version of this file (written mid-day,
-before Phase 9 existed).
+Supersedes all earlier versions of this file.
+
+**⚠️ Read this before trusting any older copy of this file you may have
+been handed.** A previous session wrote an updated version of this
+handoff (describing `2cc6fb8` as HEAD, and correcting a stale
+"Uncommitted work waiting to be deployed" heading) but **never actually
+committed it** — the repo kept carrying the older text saying HEAD was
+`f13154f`, while a newer copy circulated as a loose file outside git.
+That is exactly the failure mode this project's own `git add -A` +
+`git status` rule exists to prevent, and it has now bitten the handoff
+document itself. If a copy of this file disagrees with `git log`, trust
+`git log`.
 
 ---
 
-## 🔴 DO THIS FIRST — secret rotation, and the leak is still LIVE in HEAD
+## 🔴 Secret rotation — DEFERRED BY THE OWNER until the end of the project
 
 `envs/dev/terraform.tfvars.bak-<timestamp>` files were committed 7 times in
 August 2026 (a deploy-script bug — the `.gitignore` rule for
@@ -32,8 +42,8 @@ Verify with:
 git ls-files 'infrastructure/terraform/envs/*/terraform.tfvars.bak-*'
 ```
 
-The commit described under "Uncommitted work" below removes them from the
-index. That fixes HEAD only — **it does not remove them from history.**
+A later commit removed them from the index. That fixes HEAD only — **it
+does not remove them from history.**
 
 **Rotate before anything else, in this order:**
 1. `openrouter_api_key` — the only one with direct ongoing cost exposure
@@ -59,38 +69,203 @@ validation rule + safety net → `_unwrap()` 204-body crash fix →
 missing-field-label translation + storefront confirm-before-search UX →
 Phase 10 quote CRUD + document-template-engine schema → SmartBrowz OAuth
 token-refresh mechanism + customer-name-disambiguation numbered selection
-→ **Terraform SmartBrowz variable wiring fix, deployed and confirmed**
-(`terraform apply`: 3 changed, 0 destroyed).
+→ Terraform SmartBrowz variable wiring (`f13154f`) → real SmartBrowz
+render adapter via the PdfRenderer seam (`2cc6fb8`) → **SmartBrowz
+end-to-end connectivity actually proven from the deployed environment
+(`abd8f93`)**.
 
-`origin/main` HEAD is **`f13154f` — `fix(phase10): wire SmartBrowz OAuth
-variables into Terraform`**.
+`origin/main` HEAD is **`abd8f93` — `fix(phase10): work around
+zcatalyst-sdk 1.4.0 double-slash URL bug`**.
 
-**The owner has since gone all the way through real Zoho Catalyst Self
-Client + Cloud Scale Authentication setup** to obtain every credential
-the actual render adapter needs: `client_id`, `client_secret`,
-`refresh_token` (shared in chat, never echoed back or written to any
-file — must go directly into the owner's own gitignored
-`terraform.tfvars`), `project_id` (`7567000000442001`, from Project
-Settings), and — after an initial wrong turn (see below) — the
-Development environment's **ZAID** (`10127149107`, from Project Settings
--> Environments -> General), a per-environment identifier the SDK
-requires alongside `project_id` that has nothing to do with Catalyst's
-own end-user Authentication feature despite one specific Zoho doc
-example implying otherwise.
+### ✅ Master Spec 10.6 is DONE — verified, not assumed (28 Aug 2026)
 
-Phases 11-20 haven't been started. The actual render adapter now exists
-(see the section immediately below) but only as a connectivity-proving
-seam — the full DOCX-authoring/AI-mapping pipeline (10.4-10.5) is still
-not built, deliberately deferred until the render adapter itself is
-proven against real credentials in the deployed environment.
+This was the open blocker every earlier version of this file described
+as "not yet performed". It has now been performed, against real
+credentials, from the real deployed Cloud Run environment:
+
+```
+POST /api/v1/platform/smartbrowz/verify-connection
+-> 200 {"ok":true,"output_size":10571}   (~8s)
+```
+
+A real PDF (10,571 bytes) came back from Zoho SmartBrowz. `/health` on
+both the application and data tiers reports
+`git_commit=abd8f93508488c86155d8db3a0f721e8fc746fc4`,
+`platform_version=phase10-smartbrowz-dev-abd8f93-20260828`,
+`required_not_configured=[]`, and the data tier additionally reports
+`database=up`, `cache=up`, `schema_state=up-to-date`,
+`migration_head=expected_migration_head=0009_phase10_quotes_templates`.
+
+**Getting there required fixing three real, separate defects** — none of
+which were bad credentials, and all three of which produced the *same*
+misleading symptom, so none could be diagnosed by reading the error
+message:
+
+1. **`X_ZOHO_CATALYST_ACCOUNTS_URL` was never wired.** `zcatalyst-sdk`
+   reads its OAuth accounts endpoint from that exact env var name
+   (`zcatalyst_sdk/_constants.py`), defaulting to
+   `https://accounts.localzoho.com` — a stub/local-dev domain, not a
+   real Zoho endpoint. This project's own `SMARTBROWZ_ACCOUNTS_URL` was
+   correctly set the whole time but is read only by
+   `smartbrowz_auth.py`'s `SmartBrowzTokenManager`, which the SDK-based
+   adapter deliberately does not use. Symptom: `SSLCertVerificationError`
+   retried for minutes, looking like a network/VPC problem.
+2. **`X_ZOHO_CATALYST_CONSOLE_URL` was never wired either.** Same class
+   of gap: the SDK builds every non-OAuth API URL (including SmartBrowz's
+   own `/convert`) from that env var, defaulting to
+   `https://console.catalyst.localzoho.com`. Note
+   `ICatalystOptions.project_domain` (fed from `catalyst_api_domain`) is
+   **not** used for this — it only affects the SDK's CLI-local-dev path
+   (`IS_LOCAL == "true"`), which this deployment never sets. Zoho's own
+   published third-party-integration sample uses
+   `https://api.catalyst.zoho.com`, which is what `catalyst_api_domain`
+   already defaulted to, so both env vars now reuse the existing
+   variables rather than adding new ones.
+3. **A genuine bug in `zcatalyst-sdk==1.4.0` itself.** Every request the
+   SDK makes joins its `base_url` with a path literal that already
+   starts with `/`, and `_http_client.py` unconditionally inserts
+   another `/` between them:
+   `url = url or (self._base_url + URL_SEPARATOR + path)`. The result is
+   always a doubled slash right after the host, e.g.
+   `https://accounts.zoho.com//oauth/v2/token`, **regardless of what any
+   env var is set to**. Confirmed directly rather than inferred: a
+   single-slash `curl` to that endpoint returns 200 (Zoho's normal
+   `invalid_client` rejection for a fake token); the exact doubled-slash
+   URL the SDK actually sends returns **404 with a generic "Zoho
+   Accounts" HTML roadblock page**, which
+   `DefaultHttpResponse.response_json` then fails to parse — surfacing
+   in our code as `SmartBrowzRenderError("... UNPARSABLE_RESPONSE ...")`,
+   which reads like a provider outage or bad credentials and is neither.
+   1.4.0 is the newest release on PyPI; no upstream fix exists. Worked
+   around in `services/pdf/smartbrowz.py` by collapsing repeated slashes
+   in the path portion (never the `://` separator) at the
+   `requests.Session.request` boundary, so the fix holds regardless of
+   which SDK-internal code path produced the doubled slash. 4 regression
+   tests lock this down.
+
+**How this was diagnosed, since the method generalises:** the SDK raises
+inside `DefaultHttpResponse.__init__`, so calling code never sees the
+real status or body. Throwaway Cloud Run Jobs built from the *exact same
+image digest as the live service*, with the same VPC connector and
+egress settings, were used to (a) prove raw TLS to `accounts.zoho.com`
+worked (`verified_ok=true`), (b) prove plain `requests.post` to the real
+OAuth endpoint worked (`status=200 {"error":"invalid_client"}`), and
+finally (c) monkeypatch `requests.Session.request` to print the outgoing
+URL — which is what exposed the doubled slash. All diagnostic jobs were
+deleted afterwards. If a vendor SDK ever swallows a response again, this
+is the pattern: same image, same network, patch at the boundary, print
+the request.
+
+### Also resolved this session
+
+- **A platform admin account now exists.** The blocked
+  `gcloud run jobs execute ... --command=python3` invocation from the
+  previous session failed because **`--command` is not a flag on
+  `gcloud run jobs execute` at all** — only `--args`,
+  `--update-env-vars`, `--tasks`, `--task-timeout` and `--container` can
+  be overridden per-execution; `--command` exists only on
+  `create`/`update`. Since `database/Dockerfile` sets `CMD` and no
+  `ENTRYPOINT`, overriding `--args` replaces the whole argv. Working
+  form (note gcloud's custom-delimiter syntax, needed because `--args`
+  splits on commas):
+
+  ```bash
+  gcloud run jobs execute chann-crm-ai-dev-migrate \
+    --project=chann1-1 --region=asia-southeast1 \
+    --args='^|^sh|-c|python3 database/scripts/seed_reference.py' \
+    --update-env-vars=PLATFORM_ADMIN_BOOTSTRAP_PASSWORD=<value>,PLATFORM_ADMIN_USERNAME=admin \
+    --wait
+  ```
+
+  `seed_reference.py` needs no `PYTHONPATH` or `cd` — it computes
+  `sys.path` from `__file__`. It defaults `APP_ENV` to `"dev"`, which is
+  why the job having only `DATABASE_URL` in its env was fine.
+
+  **A trap worth knowing:** the script is idempotent *by username*, so
+  when an `admin` row already exists it prints
+  `platform_admin[admin] exists — unchanged` and **silently ignores the
+  password you just supplied**. That happened here — an account existed
+  from some earlier run with an unknown password, and the DEV fallback
+  (`changeme123`) did not work either. There is deliberately no reset
+  path in the seed script; the password was reset with a one-off script
+  run through the same job image (`argon2.PasswordHasher().hash()` onto
+  `PlatformAdmin.password_hash`). If you ever need this again, remember
+  it is **not** idempotent the way the seed script is — it overwrites
+  unconditionally.
+
+  Side effect worth noting: that seed run also created the missing
+  `technician` role for licenses `COV9URCZ` and `DEVCO002` (the
+  `create_invite()` self-heal from `ecf0724` working as designed).
+
+- **`platform_version` is finally correct.** The long-standing cosmetic
+  bug (deploy scripts updated `git_commit` but never `platform_version`,
+  leaving a string dated 19 Aug) is fixed — both are now set in
+  `envs/dev/terraform.tfvars` and confirmed live. Note the underlying
+  deploy-script bug is only *worked around by hand* here; a future
+  deploy script should still update both.
+
+- **Image-digest drift closed.** The fix was first deployed with
+  `gcloud run deploy --source`, which builds into a separate,
+  auto-created `cloud-run-source-deploy` Artifact Registry repo and
+  **does not update `image_digests` in `terraform.tfvars`** — meaning
+  the next `terraform apply` for any unrelated reason would have
+  silently reverted the application tier to the buggy image. The image
+  was rebuilt into `chann1-dev` (`docker build` + `docker push`),
+  `image_digests["application"]` updated to
+  `@sha256:d9c812f3d5617ad2baf74db45fa785d6faa04a25e8286392d677b1d2bc3c3eab`,
+  applied through Terraform, and `verify-connection` re-run against the
+  locally-built image to confirm it behaves identically. The
+  `cloud-run-source-deploy` repo was then deleted. **Do not deploy with
+  `--source` again** — it bypasses this project's digest-pinning
+  discipline (`release-manifest.py` rejects tag-pinned artifacts) and
+  creates exactly this drift.
+
+### Persistent Terraform plan noise (not a problem)
+
+Every `terraform plan` shows all three Cloud Run services with
+`- scaling { manual_instance_count = 0 -> null; min_instance_count = 0
+-> null }`. `cloud_run.tf` only ever sets `min_instance_count`, so this
+is the provider reconciling a computed field. It is safe and has been
+applied repeatedly with no effect. Don't spend time on it.
+
+Phases 11-20 haven't been started. The render adapter is proven but is
+still only a connectivity seam — the full DOCX-authoring/AI-mapping
+pipeline (10.4-10.5) is not built.
 
 ---
 
-## Uncommitted work waiting to be deployed — the real SmartBrowz render adapter, wired through PdfRenderer
+## Immediate next actions (in order)
 
-Patch: `phase10-smartbrowz-renderer.patch` +
-`phase10-smartbrowz-renderer-deploy.sh`. On top of `f13154f` (the real
-live HEAD). No migration.
+1. **Build the real quote-to-PDF pipeline.** This is now unblocked for
+   the first time: a data snapshot builder, an actual HTML template, and
+   `generated_documents` recording (the audit-trail table already exists
+   from `6eb29f4`). `GCS_BUCKET_NAME` is still unprovisioned and will be
+   needed for storing generated PDFs.
+2. DOCX upload + parsing, AI-assisted field mapping (spec 10.5's
+   Intermediate Template Model), HTML compilation from it.
+3. The Presentation-tier upload/mapping-review/preview/publish UI (10.2).
+4. Fix the deploy scripts to update `platform_version` alongside
+   `git_commit` (the by-hand fix above does not fix the script).
+5. **Secret rotation — explicitly deferred by the owner until the end of
+   the project.** See the section at the top of this file. The exposure
+   has grown since it was first recorded: beyond the 7 committed
+   `.bak-*` files, the SmartBrowz client secret and refresh token, the
+   `admin_secret`, and the current platform-admin password have all
+   since appeared in AI chat transcripts. This is a recorded, accepted
+   decision, not an oversight — do not re-litigate it every session, but
+   do not let it be forgotten at project end either. One convenience
+   now exists that did not before: after rotating the SmartBrowz
+   credentials, `terraform apply` + `verify-connection` confirms the new
+   values in about a minute.
+
+---
+
+## Already deployed (`2cc6fb8`) — the real SmartBrowz render adapter, wired through PdfRenderer
+
+Deployed on top of `f13154f`. No migration. (This section was titled
+"Uncommitted work waiting to be deployed" for a while after it had
+already shipped — see the warning at the top of this file about the
+correction never being committed.)
 
 ### The actual render adapter now exists — properly wired through the seam Phase 1 already built
 
@@ -968,6 +1143,29 @@ tests/unit/test_phase6_chat.py               ← +13 tests
 - **`git apply --3way`, not plain `git apply`.** Plain apply needs exact
   context and fails outright on trivial drift; `--3way` merges against the
   blobs already in the repo. Two separate sessions lost time to this.
+- **When a vendor SDK swallows the error, reproduce it in a throwaway
+  Cloud Run Job built from the live service's exact image digest**, with
+  the same VPC connector and egress, then monkeypatch the library's own
+  network boundary (`requests.Session.request`) to print the outgoing
+  URL. Three separate SmartBrowz defects all produced one identical,
+  useless error message (`UNPARSABLE_RESPONSE`); none was diagnosable by
+  reading it. Working outward from "is TCP/TLS fine?" to "is plain
+  `requests` fine?" to "what URL is actually being sent?" isolated each
+  one. Delete the diagnostic job afterwards — and never put real secrets
+  in one you intend to leave lying around.
+- **A library's env-var name is not your config's env-var name.** Two
+  bugs in a row here were the same shape: a correctly-set project
+  variable (`SMARTBROWZ_ACCOUNTS_URL`, `catalyst_api_domain`) that the
+  vendor SDK simply never reads, because it reads
+  `X_ZOHO_CATALYST_ACCOUNTS_URL` / `X_ZOHO_CATALYST_CONSOLE_URL`
+  instead. `grep` the installed package for `environ`/`getenv` before
+  assuming your config reaches it.
+- **`gcloud run deploy --source` bypasses this project's release
+  discipline.** It builds into an auto-created
+  `cloud-run-source-deploy` repo and leaves `image_digests` in
+  `terraform.tfvars` pointing at the old image, so the next
+  `terraform apply` silently reverts the deploy. Build into
+  `chann1-dev`, update the digest, and go through Terraform.
 - **`git apply --reverse --check` to detect "already applied"** — file
   existence is not a version check and has silently skipped a corrected
   patch at least twice here.
