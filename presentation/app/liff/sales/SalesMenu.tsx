@@ -1,14 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import Script from "next/script";
 import { useEffect, useState } from "react";
 
 import { LanguageSwitcher } from "@/lib/i18n/LanguageSwitcher";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
-import { LIFF_SDK_SRC, liffStateTarget } from "./_lib";
+import { LIFF_SDK_SRC, consumeLiffRedirect } from "./_lib";
 
 /**
  * The Sales dashboard index — the page every other one links back to.
@@ -28,33 +27,29 @@ const SECTIONS = [
   { href: "/liff/sales/roles", key: "roles" },
 ] as const;
 
-const BASE_PATH = "/liff/sales";
-
-export default function SalesMenu() {
+export default function SalesMenu({ liffId }: { liffId: string }) {
   const { t } = useLanguage();
-  // Deep links from chat arrive here, not at the page they name: LINE loads
-  // the LIFF app's endpoint URL and leaves the rest of the path in a
-  // `liff.state` query parameter for the page to follow. Without this the
-  // "open dashboard" button always landed on the menu regardless of which
-  // list it was tapped from.
+  // A deep link lands here with BOTH a `liff.state` naming the real
+  // destination and a `code` that liff.init() must exchange for a token.
+  //
+  // Do not navigate on liff.state directly. An earlier version did, and it
+  // moved the page to the target path before init() had consumed the code —
+  // so the token was never obtained, LIFF requested authorisation again,
+  // came back with a fresh code, and the same navigation threw that one away
+  // too. The Cloud Run access log showed the cycle plainly: a different
+  // `code=` value every ~700ms, forever.
+  //
+  // liff.init() handles liff.state itself: it exchanges the code, stores the
+  // session, and then redirects to the target. All this page has to do is
+  // call it and stay out of the way.
   const [redirecting, setRedirecting] = useState(false);
-  const router = useRouter();
 
   useEffect(() => {
-    // Read immediately without waiting for the SDK: liff.state is a plain
-    // query parameter, so following it needs no LIFF at all. Waiting would
-    // delay every deep link behind a script download, and strand it
-    // entirely if that download failed.
-    //
-    // router.replace, not window.location: the LIFF session lives in the
-    // document LINE opened, and a full page load would throw it away right
-    // as the person arrives.
-    const target = liffStateTarget(BASE_PATH);
-    if (target) {
-      setRedirecting(true);
-      router.replace(target);
-    }
-  }, [router]);
+    if (typeof window === "undefined") return;
+    if (!new URLSearchParams(window.location.search).has("liff.state")) return;
+    setRedirecting(true);
+    void consumeLiffRedirect(liffId);
+  }, [liffId]);
   const titles: Record<string, string> = {
     customers: t.customer.title,
     deals: t.deal.title,

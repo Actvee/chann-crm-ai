@@ -37,29 +37,25 @@ export const SALES_BASE_PATH = "/liff/sales";
 let lastInitError = "";
 
 /**
- * The in-app path a `liff.state` deep link is asking for, or null.
+ * Let liff.init() complete a deep-link redirect.
  *
- * Opening https://liff.line.me/{id}/customers does NOT load that path
- * directly: LINE loads the app's endpoint URL with the rest of the path in
- * a `liff.state` query parameter, and expects the page to navigate the
- * remainder itself. The menu never did that, so every deep link from chat
- * landed on the menu and stopped there.
+ * LINE loads the LIFF app's endpoint URL with the real destination in a
+ * `liff.state` parameter and an authorisation `code` alongside it.
+ * liff.init() exchanges that code, stores the session, and navigates to
+ * the destination on its own.
  *
- * Returns a path for the caller to navigate CLIENT-SIDE rather than
- * navigating itself. A full page load would discard the LIFF session that
- * only exists in the document LINE opened — the exact bug this pairing of
- * functions was written to fix.
+ * Reading liff.state and navigating manually — which this file used to do —
+ * discards the code before it can be exchanged, and LIFF then loops
+ * requesting a new one indefinitely.
  */
-export function liffStateTarget(basePath: string = SALES_BASE_PATH): string | null {
-  if (typeof window === "undefined") return null;
-  const state = new URLSearchParams(window.location.search).get("liff.state");
-  if (!state) return null;
-  // Only ever navigate within this app's own path. liff.state is
-  // attacker-supplyable via a crafted link, so following an absolute URL
-  // out of it would be an open redirect.
-  const target = state.startsWith("/") ? state : `/${state}`;
-  if (target.startsWith("//") || target.includes("://")) return null;
-  return `${basePath}${target}`;
+export async function consumeLiffRedirect(liffId: string): Promise<void> {
+  const liff = getLiff();
+  if (!liff || !liffId) return;
+  try {
+    await liff.init({ liffId });
+  } catch (error) {
+    lastInitError = error instanceof Error ? error.message : String(error);
+  }
 }
 
 export function proxyHeaders(token: string, licenseId: string): HeadersInit {
