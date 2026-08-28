@@ -6,7 +6,7 @@ import { ReactNode } from "react";
 import { LanguageSwitcher } from "@/lib/i18n/LanguageSwitcher";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
-import { LIFF_SDK_SRC, Membership } from "./_lib";
+import { LIFF_SDK_SRC, Membership, liffDiagnostics } from "./_lib";
 
 /**
  * The shell every Sales dashboard page sits in.
@@ -68,6 +68,17 @@ export function AppShell({
           {status ? (
             <p className="status" data-tone={statusTone} aria-live="polite">
               {status}
+              {/* Only on failure: when a page cannot start, the single most
+                  useful thing to show is what LIFF actually reported, not a
+                  friendlier restatement of "it did not work". */}
+              {statusTone === "error" && (
+                <span
+                  className="code"
+                  style={{ display: "block", marginTop: 6, fontSize: 11.5 }}
+                >
+                  {liffDiagnostics()}
+                </span>
+              )}
             </p>
           ) : (
             // Kept in the tree even when empty so screen readers keep

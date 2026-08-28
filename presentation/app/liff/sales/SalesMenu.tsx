@@ -1,7 +1,12 @@
 "use client";
 
+import Script from "next/script";
+import { useEffect, useState } from "react";
+
 import { LanguageSwitcher } from "@/lib/i18n/LanguageSwitcher";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
+
+import { LIFF_SDK_SRC, followLiffState } from "./_lib";
 
 /**
  * The Sales dashboard index — the page every other one links back to.
@@ -21,8 +26,20 @@ const SECTIONS = [
   { href: "/liff/sales/roles", key: "roles" },
 ] as const;
 
+const BASE_PATH = "/liff/sales";
+
 export default function SalesMenu() {
   const { t } = useLanguage();
+  // Deep links from chat arrive here, not at the page they name: LINE loads
+  // the LIFF app's endpoint URL and leaves the rest of the path in a
+  // `liff.state` query parameter for the page to follow. Without this the
+  // "open dashboard" button always landed on the menu regardless of which
+  // list it was tapped from.
+  const [redirecting, setRedirecting] = useState(false);
+
+  useEffect(() => {
+    if (followLiffState(BASE_PATH)) setRedirecting(true);
+  }, []);
   const titles: Record<string, string> = {
     customers: t.customer.title,
     deals: t.deal.title,
@@ -32,8 +49,18 @@ export default function SalesMenu() {
     roles: t.role.title,
   };
 
+  if (redirecting) {
+    // A blank frame for the instant before the navigation commits. Showing
+    // the menu here would flash the wrong page on every deep link.
+    return <div className="shell" />;
+  }
+
   return (
     <div className="shell">
+      {/* The SDK is loaded even though this page needs no session, because
+          liff.state has to be read before anything else can happen and the
+          SDK sets up the LIFF context the sub-pages then rely on. */}
+      <Script src={LIFF_SDK_SRC} strategy="afterInteractive" />
       <header className="topbar">
         <h1>{t.dashboard.menuTitle}</h1>
         <div style={{ marginLeft: "auto" }}>

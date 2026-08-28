@@ -16,7 +16,7 @@ export type Membership = {
 };
 
 type LiffApi = {
-  init(config: { liffId: string; withLoginOnExternalBrowser: boolean }): Promise<void>;
+  init(config: { liffId: string; withLoginOnExternalBrowser?: boolean }): Promise<void>;
   isLoggedIn(): boolean;
   isInClient(): boolean;
   login(config?: { redirectUri?: string }): void;
@@ -30,6 +30,30 @@ export function getLiff(): LiffApi | undefined {
 export const LIFF_SDK_SRC =
   "https://static.line-scdn.net/liff/edge/versions/2.29.2/sdk.js";
 
+/**
+ * Resolve a `liff.state` deep link, if one is present.
+ *
+ * Opening https://liff.line.me/{id}/customers does NOT load that path
+ * directly: LINE loads the app's endpoint URL with the rest of the path in
+ * a `liff.state` query parameter, and expects the page to navigate the
+ * remainder itself. The menu never did that, so every deep link from chat
+ * landed on the menu and stopped there.
+ *
+ * Returns true when it has started a navigation, so the caller can stop.
+ */
+export function followLiffState(basePath: string): boolean {
+  if (typeof window === "undefined") return false;
+  const state = new URLSearchParams(window.location.search).get("liff.state");
+  if (!state) return false;
+  // Only ever navigate within this app's own path. A liff.state is
+  // attacker-supplyable via a crafted link, and following an absolute URL
+  // from it would be an open redirect.
+  const target = state.startsWith("/") ? state : `/${state}`;
+  if (target.startsWith("//")) return false;
+  window.location.replace(`${basePath}${target}`);
+  return true;
+}
+
 export function proxyHeaders(token: string, licenseId: string): HeadersInit {
   return {
     "Content-Type": "application/json",
@@ -37,6 +61,33 @@ export function proxyHeaders(token: string, licenseId: string): HeadersInit {
     "X-Liff-Audience": "sales",
     "X-License-Id": licenseId,
   };
+}
+
+/**
+ * A one-line description of where LIFF thinks it is.
+ *
+ * Exists because three separate causes of "the page bounced back to the
+ * menu" were diagnosed by guessing, and only the third guess was right.
+ * Surfacing the actual state costs one line on screen and turns the next
+ * occurrence into a fact instead of another round of inference.
+ */
+export function liffDiagnostics(): string {
+  if (typeof window === "undefined") return "";
+  const liff = getLiff();
+  const parts = [
+    `path=${window.location.pathname}`,
+    `sdk=${liff ? "loaded" : "missing"}`,
+  ];
+  if (liff) {
+    try {
+      parts.push(`inClient=${liff.isInClient()}`, `loggedIn=${liff.isLoggedIn()}`);
+    } catch {
+      parts.push("state=uninitialised");
+    }
+  }
+  const state = new URLSearchParams(window.location.search).get("liff.state");
+  if (state) parts.push(`liff.state=${state}`);
+  return parts.join(" · ");
 }
 
 /** Returns the ID token and memberships, or throws with a message worth showing. */
@@ -47,19 +98,25 @@ export async function initLiffSession(
   if (!liffId || !liff) {
     throw new Error("NEXT_PUBLIC_LIFF_SALES_ID is REQUIRED_NOT_CONFIGURED");
   }
-  await liff.init({ liffId, withLoginOnExternalBrowser: true });
+  // withLoginOnExternalBrowser is deliberately NOT set.
+  //
+  // With it on, liff.init() performs the login redirect ITSELF whenever it
+  // decides the user is not logged in — and that redirect goes to the LIFF
+  // app's configured endpoint URL, which is the menu. Every sub-page
+  // therefore loaded, redirected, and landed back on the menu, which looked
+  // exactly like the links were broken. The menu itself never did this
+  // because it does not call liff.init() at all.
+  //
+  // Login is still supported in an external browser, just triggered
+  // explicitly below with a redirectUri pointing back at the page the
+  // person actually asked for.
+  await liff.init({ liffId });
   if (!liff.isLoggedIn()) {
-    // Inside the LINE app the user is always logged in, so reaching here
-    // means something else is wrong. Calling login() anyway is what made
-    // every dashboard page bounce back to the menu: login() redirects to
-    // the LIFF app's configured endpoint URL, which is the index — so a
-    // tap on "Deals" loaded the deals page, failed this check, and got
-    // sent straight back, looking like the link simply did not work.
     if (liff.isInClient()) {
-      throw new Error("เซสชัน LINE หมดอายุ ปิดหน้านี้แล้วเปิดใหม่จากเมนู");
+      // Inside the LINE app the user is always logged in, so this is a real
+      // fault worth surfacing rather than papering over with a redirect.
+      throw new Error("LINE session unavailable — close this page and reopen it from the menu");
     }
-    // In an external browser logging in IS the right move, but send the
-    // person back to the page they asked for rather than the endpoint.
     liff.login({ redirectUri: window.location.href });
     return { token: "", memberships: [] };
   }
