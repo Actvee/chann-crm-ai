@@ -41,6 +41,33 @@ locals {
     CATALYST_ZAID                        = var.catalyst_zaid
     CATALYST_API_DOMAIN                  = var.catalyst_api_domain
     CATALYST_ENVIRONMENT                 = var.catalyst_environment
+    # zcatalyst-sdk reads its OAuth accounts endpoint from this exact env
+    # var name (zcatalyst_sdk/_constants.py: env_override("X_ZOHO_CATALYST_ACCOUNTS_URL",
+    # "https://accounts.localzoho.com")) — a stub/local-dev default, NOT
+    # accounts.zoho.com. SMARTBROWZ_ACCOUNTS_URL above is read by this
+    # project's own settings but was never actually consumed by the
+    # zcatalyst_sdk-based adapter (services/pdf/smartbrowz.py), which only
+    # talks to the SDK's own hardcoded default unless this exact env var is
+    # set. Reusing var.smartbrowz_accounts_url here (same real value,
+    # already correctly configured) rather than adding a second Terraform
+    # variable that would just have to be kept in sync with the same
+    # underlying datacenter domain.
+    X_ZOHO_CATALYST_ACCOUNTS_URL         = var.smartbrowz_accounts_url
+    # Same class of gap as X_ZOHO_CATALYST_ACCOUNTS_URL above: zcatalyst-sdk
+    # builds every non-OAuth API request URL (including SmartBrowz's own
+    # /convert endpoint) against this exact env var
+    # (zcatalyst_sdk/_constants.py: env_override("X_ZOHO_CATALYST_CONSOLE_URL",
+    # "https://console.catalyst.localzoho.com")) — again a stub/local-dev
+    # default, not a real Zoho domain. ICatalystOptions's own project_domain
+    # field (-> catalyst_api_domain here) is NOT used for this — it only
+    # affects the SDK's CLI-local-dev code path (IS_LOCAL == "true"), which
+    # this deployment never sets. https://api.catalyst.zoho.com is Zoho's
+    # own officially documented value for this exact third-party-app
+    # scenario (docs.catalyst.zoho.com Python SDK "Integrate in Third-Party
+    # Apps" page uses this literal domain in its own code sample) — the
+    # same real value catalyst_api_domain already defaults to, reused here
+    # rather than adding a third Terraform variable for the same domain.
+    X_ZOHO_CATALYST_CONSOLE_URL          = var.catalyst_api_domain
   })
 
   presentation_runtime_env = merge(local.common_runtime_env, {
