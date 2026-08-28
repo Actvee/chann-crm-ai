@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { AppShell, CompanyPicker, Count, Empty } from "../_components";
+import { useLanguage } from "@/lib/i18n/LanguageProvider";
+
 import { Membership, initLiffSession, proxyHeaders } from "../_lib";
 
 type Product = {
@@ -13,11 +15,12 @@ type Product = {
 };
 
 export default function ProductList({ liffId }: { liffId: string }) {
+  const { t } = useLanguage();
   const [token, setToken] = useState("");
   const [memberships, setMemberships] = useState<Membership[]>([]);
   const [licenseId, setLicenseId] = useState("");
   const [products, setProducts] = useState<Product[]>([]);
-  const [status, setStatus] = useState("กำลังเปิด…");
+  const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
   const [query, setQuery] = useState("");
 
@@ -34,8 +37,8 @@ export default function ProductList({ liffId }: { liffId: string }) {
     if (!response.ok) {
       throw new Error(
         response.status === 403
-          ? "คุณไม่มีสิทธิ์ดูสินค้า"
-          : `โหลดสินค้าไม่สำเร็จ (${response.status})`,
+          ? t.dashboard.noPermission
+          : `${t.dashboard.loadFailed} (${response.status})`,
       );
     }
     setProducts((await response.json()) as Product[]);
@@ -45,7 +48,7 @@ export default function ProductList({ liffId }: { liffId: string }) {
   useEffect(() => {
     if (!token || !licenseId) return;
     void load().catch((error: unknown) =>
-      say(error instanceof Error ? error.message : "โหลดสินค้าไม่สำเร็จ", "error"),
+      say(error instanceof Error ? error.message : t.dashboard.loadFailed, "error"),
     );
   }, [licenseId, load, say, token]);
 
@@ -56,9 +59,9 @@ export default function ProductList({ liffId }: { liffId: string }) {
       setToken(session.token);
       setMemberships(session.memberships);
       setLicenseId(session.memberships[0]?.license_id ?? "");
-      if (!session.memberships.length) say("ยังไม่พบบริษัทที่ผูกไว้", "error");
+      if (!session.memberships.length) say(t.liff.noCompany, "error");
     } catch (error) {
-      say(error instanceof Error ? error.message : "เปิดหน้านี้ไม่สำเร็จ", "error");
+      say(error instanceof Error ? error.message : t.dashboard.openFailed, "error");
     }
   }, [liffId, say]);
 
@@ -73,21 +76,21 @@ export default function ProductList({ liffId }: { liffId: string }) {
 
   return (
     <AppShell
-      title="สินค้า"
+      title={t.product.title}
       liffId={liffId}
       onReady={() => void initialize()}
-      onSdkError={() => say("โหลด LIFF ไม่สำเร็จ", "error")}
+      onSdkError={() => say(t.liff.sdkLoadFailed, "error")}
       status={status}
       statusTone={tone}
     >
       <CompanyPicker memberships={memberships} licenseId={licenseId} onChange={setLicenseId} />
 
       <label className="field">
-        <span>ค้นหา</span>
+        <span>{t.dashboard.search}</span>
         <input
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="ชื่อสินค้า หรือรหัสสินค้า"
+          placeholder={t.dashboard.products.searchHint}
           type="search"
         />
       </label>
@@ -98,8 +101,8 @@ export default function ProductList({ liffId }: { liffId: string }) {
         <Empty
           message={
             products.length === 0
-              ? "ยังไม่มีสินค้า เพิ่มได้ในแชทด้วยข้อความ “สร้างสินค้า”"
-              : `ไม่พบสินค้าที่ตรงกับ “${query}”`
+              ? t.dashboard.products.empty
+              : `${t.dashboard.products.noMatch}: “${query}”`
           }
         />
       ) : (
@@ -108,13 +111,13 @@ export default function ProductList({ liffId }: { liffId: string }) {
             <li key={product.id} className="card">
               <div className="card-title">{product.name ?? "—"}</div>
               <div className="card-meta">
-                <span className="code">{product.sku ?? "ไม่มีรหัส"}</span>
+                <span className="code">{product.sku ?? t.dashboard.products.noSku}</span>
                 {product.unit_price != null && product.unit_price !== ""
                   ? ` · ${Number(product.unit_price).toLocaleString("th-TH", {
                       minimumFractionDigits: 2,
                       maximumFractionDigits: 2,
-                    })} บาท`
-                  : " · ยังไม่ได้ตั้งราคา"}
+                    })}`
+                  : ` · ${t.dashboard.products.noPrice}`}
               </div>
             </li>
           ))}

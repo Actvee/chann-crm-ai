@@ -3,6 +3,8 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 
 import { AppShell, CompanyPicker } from "../_components";
+import { useLanguage } from "@/lib/i18n/LanguageProvider";
+
 import { Membership, initLiffSession, proxyHeaders } from "../_lib";
 
 type Profile = {
@@ -17,21 +19,23 @@ type Profile = {
   missing_for_documents: string[];
 };
 
-const FIELD_LABELS: Record<string, string> = {
-  legal_name: "ชื่อนิติบุคคล",
-  tax_id: "เลขผู้เสียภาษี",
-  company_address: "ที่อยู่บริษัท",
-  company_phone: "เบอร์โทรบริษัท",
-  company_email: "อีเมลบริษัท",
-  vat_rate: "ภาษีมูลค่าเพิ่ม",
-};
-
 export default function CompanyProfile({ liffId }: { liffId: string }) {
+  const { t } = useLanguage();
+  const c = t.dashboard.companyProfile;
+  const fieldLabel = (field: string) =>
+    ({
+      legal_name: c.legalName,
+      tax_id: c.taxId,
+      company_address: c.address,
+      company_phone: c.phone,
+      company_email: c.email,
+      vat_rate: c.vat,
+    })[field] ?? field;
   const [token, setToken] = useState("");
   const [memberships, setMemberships] = useState<Membership[]>([]);
   const [licenseId, setLicenseId] = useState("");
   const [profile, setProfile] = useState<Profile | null>(null);
-  const [status, setStatus] = useState("กำลังเปิด…");
+  const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
   const [saving, setSaving] = useState(false);
 
@@ -75,8 +79,8 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
     if (!response.ok) {
       throw new Error(
         response.status === 403
-          ? "ต้องมีสิทธิ์ setting.manage จึงจะแก้ข้อมูลบริษัทได้"
-          : `โหลดข้อมูลบริษัทไม่สำเร็จ (${response.status})`,
+          ? c.settingDenied
+          : `${t.dashboard.loadFailed} (${response.status})`,
       );
     }
     applyProfile((await response.json()) as Profile);
@@ -86,7 +90,7 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
   useEffect(() => {
     if (!token || !licenseId) return;
     void load().catch((error: unknown) =>
-      say(error instanceof Error ? error.message : "โหลดข้อมูลบริษัทไม่สำเร็จ", "error"),
+      say(error instanceof Error ? error.message : t.dashboard.loadFailed, "error"),
     );
   }, [licenseId, load, say, token]);
 
@@ -97,9 +101,9 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
       setToken(session.token);
       setMemberships(session.memberships);
       setLicenseId(session.memberships[0]?.license_id ?? "");
-      if (!session.memberships.length) say("ยังไม่พบบริษัทที่ผูกไว้", "error");
+      if (!session.memberships.length) say(t.liff.noCompany, "error");
     } catch (error) {
-      say(error instanceof Error ? error.message : "เปิดหน้านี้ไม่สำเร็จ", "error");
+      say(error instanceof Error ? error.message : t.dashboard.openFailed, "error");
     }
   }, [liffId, say]);
 
@@ -107,12 +111,12 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
     event.preventDefault();
     const digits = taxId.replace(/\D/g, "");
     if (digits && digits.length !== 13) {
-      say("เลขผู้เสียภาษีต้องเป็นตัวเลข 13 หลักพอดี", "error");
+      say(c.taxIdInvalid, "error");
       return;
     }
 
     setSaving(true);
-    say("กำลังบันทึก…");
+    say(t.dashboard.saving);
     try {
       // An explicit null clears a field, which is how "no longer
       // VAT-registered" is expressed — distinct from omitting the key.
@@ -131,16 +135,16 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
       if (!response.ok) {
         say(
           response.status === 422
-            ? "ข้อมูลไม่ถูกต้อง ตรวจเลขผู้เสียภาษี (13 หลัก) และอัตราภาษี (0–100)"
-            : `บันทึกไม่สำเร็จ (${response.status})`,
+            ? c.invalid
+            : `${t.common.error} (${response.status})`,
           "error",
         );
         return;
       }
       applyProfile((await response.json()) as Profile);
-      say("บันทึกข้อมูลบริษัทแล้ว", "ok");
+      say(t.dashboard.saved, "ok");
     } catch (error) {
-      say(error instanceof Error ? error.message : "บันทึกไม่สำเร็จ", "error");
+      say(error instanceof Error ? error.message : t.common.error, "error");
     } finally {
       setSaving(false);
     }
@@ -148,10 +152,10 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
 
   return (
     <AppShell
-      title="ข้อมูลบริษัท"
+      title={t.dashboard.companyTitle}
       liffId={liffId}
       onReady={() => void initialize()}
-      onSdkError={() => say("โหลด LIFF ไม่สำเร็จ", "error")}
+      onSdkError={() => say(t.liff.sdkLoadFailed, "error")}
       status={status}
       statusTone={tone}
     >
@@ -162,59 +166,60 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
           <span className="dot" />
           <span>
             {profile.is_document_ready
-              ? "ข้อมูลครบ ออกใบเสนอราคาได้แล้ว"
-              : `ยังออกเอกสารไม่ได้ ต้องกรอก ${profile.missing_for_documents
-                  .map((field) => FIELD_LABELS[field] ?? field)
-                  .join(" และ ")} ก่อน`}
+              ? c.ready
+              : c.missing.replace(
+                  "{fields}",
+                  profile.missing_for_documents.map(fieldLabel).join(", "),
+                )}
           </span>
         </div>
       )}
 
       <form onSubmit={save}>
         <label className="field">
-          <span>ชื่อร้าน</span>
+          <span>{c.shopName}</span>
           <input value={profile?.company_name ?? ""} disabled />
-          <span className="hint">ชื่อที่ใช้ในแชทและหน้าร้าน ไม่ใช่ชื่อบนเอกสาร</span>
+          <span className="hint">{c.shopNameHint}</span>
         </label>
 
         <label className="field">
-          <span>ชื่อนิติบุคคล</span>
+          <span>{c.legalName}</span>
           <input
             value={legalName}
             onChange={(event) => setLegalName(event.target.value)}
-            placeholder="บริษัท ตัวอย่าง จำกัด"
+            placeholder="Example Co., Ltd."
           />
-          <span className="hint">ชื่อที่จะพิมพ์บนใบเสนอราคา</span>
+          <span className="hint">{c.legalNameHint}</span>
         </label>
 
         <label className="field field-mono">
-          <span>เลขผู้เสียภาษี · จำเป็น</span>
+          <span>{`${c.taxId} · ${c.required}`}</span>
           <input
             value={taxId}
             onChange={(event) => setTaxId(event.target.value)}
             inputMode="numeric"
             placeholder="0105558123456"
           />
-          <span className="hint">13 หลัก</span>
+          <span className="hint">{c.taxIdHint}</span>
         </label>
 
         <label className="field">
-          <span>ที่อยู่บริษัท · จำเป็น</span>
+          <span>{`${c.address} · ${c.required}`}</span>
           <textarea
             value={address}
             onChange={(event) => setAddress(event.target.value)}
             rows={3}
-            placeholder="99/1 ถนนสุขุมวิท แขวงคลองเตย เขตคลองเตย กรุงเทพฯ 10110"
+            placeholder="99/1 Sukhumvit Rd, Bangkok 10110"
           />
         </label>
 
         <label className="field">
-          <span>เบอร์โทรบริษัท</span>
+          <span>{c.phone}</span>
           <input value={phone} onChange={(event) => setPhone(event.target.value)} inputMode="tel" />
         </label>
 
         <label className="field">
-          <span>อีเมลบริษัท</span>
+          <span>{c.email}</span>
           <input
             type="email"
             value={email}
@@ -223,18 +228,18 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
         </label>
 
         <fieldset className="group">
-          <legend>ภาษีมูลค่าเพิ่ม</legend>
+          <legend>{c.vat}</legend>
           <label className="check">
             <input
               type="checkbox"
               checked={vatRegistered}
               onChange={(event) => setVatRegistered(event.target.checked)}
             />
-            บริษัทนี้จดทะเบียนภาษีมูลค่าเพิ่ม
+            {c.vatRegistered}
           </label>
           {vatRegistered && (
             <label className="field field-mono" style={{ marginTop: 12, marginBottom: 0 }}>
-              <span>อัตรา (%)</span>
+              <span>{c.vatRate}</span>
               <input
                 value={vatPercent}
                 onChange={(event) => setVatPercent(event.target.value)}
@@ -244,12 +249,12 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
             </label>
           )}
           <p className="hint" style={{ marginTop: 10 }}>
-            ถ้าไม่ได้จด VAT เอกสารจะไม่แสดงบรรทัดภาษีเลย ซึ่งต่างจากการตั้งอัตราเป็น 0%
+            {c.vatNote}
           </p>
         </fieldset>
 
         <button type="submit" className="btn" data-variant="primary" disabled={!licenseId || saving}>
-          {saving ? "กำลังบันทึก…" : "บันทึก"}
+          {saving ? t.dashboard.saving : t.common.save}
         </button>
       </form>
     </AppShell>

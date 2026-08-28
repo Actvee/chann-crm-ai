@@ -48,6 +48,44 @@ class CustomerRepository:
     def __init__(self, session: Session):
         self._s = session
 
+    def _unique_customer_code(self, scope: TenantScope) -> str:
+        """Allocate the next C-YYYY-NNNN for this tenant.
+
+        Scoped to the license, unlike _unique_deal_id which searches
+        platform-wide: every tenant should see its own customers numbered
+        from 1, and global numbering would both look broken to a new tenant
+        and disclose the platform's total volume.
+
+        Retries on collision rather than locking a counter row, matching the
+        pattern already used for deal, license and invite codes. The unique
+        constraint on (license_id, customer_id) is what actually guarantees
+        correctness under a race; this loop just avoids the error.
+        """
+        year = datetime.now(timezone.utc).year
+        prefix = f"C-{year}-"
+        for _ in range(50):
+            existing = self._s.execute(
+                select(Customer.customer_id).where(
+                    Customer.license_id == scope.license_id,
+                    Customer.customer_id.like(f"{prefix}%"),
+                )
+            ).scalars().all()
+            used = {
+                int(code.rsplit("-", 1)[1])
+                for code in existing
+                if code.rsplit("-", 1)[1].isdigit()
+            }
+            candidate = f"{prefix}{(max(used) + 1) if used else 1:04d}"
+            clash = self._s.execute(
+                select(Customer.id).where(
+                    Customer.license_id == scope.license_id,
+                    Customer.customer_id == candidate,
+                )
+            ).first()
+            if clash is None:
+                return candidate
+        raise Phase9Conflict("could not allocate a unique customer_id")
+
     def create(
         self, scope: TenantScope, *,
         first_name: str | None = None, last_name: str | None = None,
@@ -70,6 +108,7 @@ class CustomerRepository:
                 raise Phase9Conflict("this identity is already a customer of this tenant")
         row = Customer(
             id=uuid.uuid4(), license_id=scope.license_id,
+            customer_id=self._unique_customer_code(scope),
             customer_chann_uid=customer_chann_uid, stage=stage,
             owner_member_id=owner_member_id,
             first_name=first_name, last_name=last_name, phone=phone,
@@ -153,7 +192,7 @@ class DealRepository:
 
         row = Deal(
             id=uuid.uuid4(), license_id=scope.license_id,
-            deal_id=self._unique_deal_id(), contact_id=contact_id,
+            deal_id=self._unique_deal_id(scope), contact_id=contact_id,
             stage="new", owner_member_id=owner_member_id, notes=notes,
         )
         self._s.add(row)
@@ -167,23 +206,32 @@ class DealRepository:
             )
         return row
 
-    def _unique_deal_id(self) -> str:
-        """Global, not per-tenant (see Deal's docstring in models.py).
+    def _unique_deal_id(self, scope: TenantScope) -> str:
+        """Per-tenant, matching quote_id and customer_id (see Deal's
+        docstring in models.py for why this departs from the spec).
+
         Retries on a collision rather than locking a counter row — deal
         creation is not so frequent that a handful of retries costs
         anything noticeable, and this mirrors the retry pattern already used
-        for license/invite codes in phase65.py.
+        for license/invite codes in phase65.py. The unique constraint on
+        (license_id, deal_id) is what actually guarantees correctness under
+        a race; the loop just avoids surfacing the error.
         """
         year = datetime.now(timezone.utc).year
         for _ in range(50):
             existing = self._s.execute(
-                select(Deal.deal_id).where(Deal.deal_id.like(f"D-{year}-%"))
+                select(Deal.deal_id).where(
+                    Deal.license_id == scope.license_id,
+                    Deal.deal_id.like(f"D-{year}-%"),
+                )
             ).scalars().all()
             used = {int(code.rsplit("-", 1)[1]) for code in existing if code.rsplit("-", 1)[1].isdigit()}
             next_n = (max(used) + 1) if used else 1
             candidate = f"D-{year}-{next_n:04d}"
             clash = self._s.execute(
-                select(Deal.id).where(Deal.deal_id == candidate)
+                select(Deal.id).where(
+                    Deal.license_id == scope.license_id, Deal.deal_id == candidate,
+                )
             ).first()
             if clash is None:
                 return candidate

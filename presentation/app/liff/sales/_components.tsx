@@ -1,8 +1,10 @@
 "use client";
 
-import Link from "next/link";
 import Script from "next/script";
 import { ReactNode } from "react";
+
+import { LanguageSwitcher } from "@/lib/i18n/LanguageSwitcher";
+import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { LIFF_SDK_SRC, Membership } from "./_lib";
 
@@ -33,17 +35,34 @@ export function AppShell({
   statusTone?: "ok" | "error";
   children: ReactNode;
 }) {
+  const { t } = useLanguage();
   return (
     <>
       <Script src={LIFF_SDK_SRC} strategy="afterInteractive" onReady={onReady} onError={onSdkError} />
       <div className="shell">
         <header className="topbar">
+          {/* Plain anchor rather than next/link: each page
+              initialises LIFF on load, and a full navigation
+              guarantees a clean init instead of relying on the SDK
+              surviving a client-side route change inside the LINE
+              webview — which is what made every tap bounce back to
+              the menu. */}
           {back && (
-            <Link className="backlink" href={back} aria-label="กลับไปหน้าเมนู">
+            /* Plain anchor rather than next/link: each page initialises
+               LIFF on load, and a full navigation guarantees a clean init
+               instead of relying on the SDK surviving a client-side route
+               change inside the LINE webview. */
+            <a className="backlink" href={back} aria-label={t.dashboard.back}>
               ←
-            </Link>
+            </a>
           )}
           <h1>{title}</h1>
+          {/* The switcher lives in the bar so it is reachable from every
+              page, which is what Phase 5 asks for — a language choice that
+              only exists on one screen is not a language choice. */}
+          <div style={{ marginLeft: "auto" }}>
+            <LanguageSwitcher />
+          </div>
         </header>
         <div className="page">
           {status ? (
@@ -74,12 +93,13 @@ export function CompanyPicker({
   licenseId: string;
   onChange: (id: string) => void;
 }) {
+  const { t } = useLanguage();
   // One company is the normal case and a select with a single option is
   // noise, so it only appears when there is a real choice to make.
   if (memberships.length <= 1) return null;
   return (
     <label className="field">
-      <span>บริษัท</span>
+      <span>{t.dashboard.company}</span>
       <select value={licenseId} onChange={(event) => onChange(event.target.value)}>
         {memberships.map((membership) => (
           <option key={membership.license_id} value={membership.license_id}>
@@ -110,10 +130,15 @@ export function Empty({ message, action }: { message: string; action?: ReactNode
 }
 
 export function Count({ shown, total }: { shown: number; total: number }) {
+  const { t } = useLanguage();
   if (!total) return null;
   return (
     <p className="count">
-      {shown === total ? `${total} รายการ` : `${shown} จาก ${total} รายการ`}
+      {shown === total
+        ? t.dashboard.itemCount.replace("{total}", String(total))
+        : t.dashboard.itemCountOf
+            .replace("{shown}", String(shown))
+            .replace("{total}", String(total))}
     </p>
   );
 }

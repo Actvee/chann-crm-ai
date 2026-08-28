@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { AppShell, Badge, CompanyPicker, Count, Empty } from "../_components";
+import { useLanguage } from "@/lib/i18n/LanguageProvider";
+
 import { Membership, initLiffSession, proxyHeaders } from "../_lib";
 
 type Deal = {
@@ -11,13 +13,6 @@ type Deal = {
   stage: string;
   notes?: string | null;
   products?: unknown[];
-};
-
-const STAGE_LABELS: Record<string, string> = {
-  new: "ใหม่",
-  proposed: "เสนอราคาแล้ว",
-  won: "สำเร็จ",
-  lost: "ไม่สำเร็จ",
 };
 
 // Only the moves the Phase 9 state machine actually permits. Offering "won"
@@ -31,11 +26,14 @@ const NEXT_STAGES: Record<string, string[]> = {
 };
 
 export default function DealList({ liffId }: { liffId: string }) {
+  const { t } = useLanguage();
+  const stageLabel = (stage: string) =>
+    (t.deal.stage as Record<string, string>)[stage] ?? stage;
   const [token, setToken] = useState("");
   const [memberships, setMemberships] = useState<Membership[]>([]);
   const [licenseId, setLicenseId] = useState("");
   const [deals, setDeals] = useState<Deal[]>([]);
-  const [status, setStatus] = useState("กำลังเปิด…");
+  const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
   const [busyId, setBusyId] = useState("");
   const [openOnly, setOpenOnly] = useState(false);
@@ -53,8 +51,8 @@ export default function DealList({ liffId }: { liffId: string }) {
     if (!response.ok) {
       throw new Error(
         response.status === 403
-          ? "คุณไม่มีสิทธิ์ดูดีล"
-          : `โหลดดีลไม่สำเร็จ (${response.status})`,
+          ? t.dashboard.noPermission
+          : `${t.dashboard.loadFailed} (${response.status})`,
       );
     }
     setDeals((await response.json()) as Deal[]);
@@ -64,7 +62,7 @@ export default function DealList({ liffId }: { liffId: string }) {
   useEffect(() => {
     if (!token || !licenseId) return;
     void load().catch((error: unknown) =>
-      say(error instanceof Error ? error.message : "โหลดดีลไม่สำเร็จ", "error"),
+      say(error instanceof Error ? error.message : t.dashboard.loadFailed, "error"),
     );
   }, [licenseId, load, say, token]);
 
@@ -75,15 +73,15 @@ export default function DealList({ liffId }: { liffId: string }) {
       setToken(session.token);
       setMemberships(session.memberships);
       setLicenseId(session.memberships[0]?.license_id ?? "");
-      if (!session.memberships.length) say("ยังไม่พบบริษัทที่ผูกไว้", "error");
+      if (!session.memberships.length) say(t.liff.noCompany, "error");
     } catch (error) {
-      say(error instanceof Error ? error.message : "เปิดหน้านี้ไม่สำเร็จ", "error");
+      say(error instanceof Error ? error.message : t.dashboard.openFailed, "error");
     }
   }, [liffId, say]);
 
   async function setStage(deal: Deal, stage: string) {
     setBusyId(deal.id);
-    say(`กำลังเปลี่ยนสถานะ ${deal.deal_id}…`);
+    say(t.dashboard.working);
     try {
       const response = await fetch(
         `/api/phase2/licenses/${licenseId}/deals/${deal.id}/stage`,
@@ -96,16 +94,16 @@ export default function DealList({ liffId }: { liffId: string }) {
       if (!response.ok) {
         say(
           response.status === 403
-            ? "คุณไม่มีสิทธิ์เปลี่ยนสถานะดีล"
-            : `เปลี่ยนสถานะไม่สำเร็จ (${response.status})`,
+            ? t.dashboard.deals.stageDenied
+            : `${t.common.error} (${response.status})`,
           "error",
         );
         return;
       }
-      say(`${deal.deal_id} เปลี่ยนเป็น ${STAGE_LABELS[stage] ?? stage} แล้ว`, "ok");
+      say(`${deal.deal_id} → ${stageLabel(stage)}`, "ok");
       await load();
     } catch (error) {
-      say(error instanceof Error ? error.message : "เปลี่ยนสถานะไม่สำเร็จ", "error");
+      say(error instanceof Error ? error.message : t.common.error, "error");
     } finally {
       setBusyId("");
     }
@@ -120,10 +118,10 @@ export default function DealList({ liffId }: { liffId: string }) {
 
   return (
     <AppShell
-      title="ดีล"
+      title={t.deal.title}
       liffId={liffId}
       onReady={() => void initialize()}
-      onSdkError={() => say("โหลด LIFF ไม่สำเร็จ", "error")}
+      onSdkError={() => say(t.liff.sdkLoadFailed, "error")}
       status={status}
       statusTone={tone}
     >
@@ -136,7 +134,7 @@ export default function DealList({ liffId }: { liffId: string }) {
           data-variant={openOnly ? undefined : "primary"}
           onClick={() => setOpenOnly(false)}
         >
-          ทั้งหมด
+          {t.dashboard.deals.all}
         </button>
         <button
           type="button"
@@ -144,7 +142,7 @@ export default function DealList({ liffId }: { liffId: string }) {
           data-variant={openOnly ? "primary" : undefined}
           onClick={() => setOpenOnly(true)}
         >
-          ยังไม่ปิด
+          {t.dashboard.deals.openOnly}
         </button>
       </div>
 
@@ -154,8 +152,8 @@ export default function DealList({ liffId }: { liffId: string }) {
         <Empty
           message={
             deals.length === 0
-              ? "ยังไม่มีดีล สร้างได้ในแชทด้วยข้อความ “สร้างดีล”"
-              : "ไม่มีดีลที่ยังไม่ปิด"
+              ? t.dashboard.deals.empty
+              : t.dashboard.deals.noOpen
           }
         />
       ) : (
@@ -164,12 +162,14 @@ export default function DealList({ liffId }: { liffId: string }) {
             <li key={deal.id} className="card" data-stage={deal.stage}>
               <div className="card-title">
                 <span className="code">{deal.deal_id}</span>
-                <Badge stage={deal.stage} label={STAGE_LABELS[deal.stage] ?? deal.stage} />
+                <Badge stage={deal.stage} label={stageLabel(deal.stage)} />
               </div>
               <div className="card-meta">
                 {(deal.products?.length ?? 0) > 0
-                  ? `${deal.products?.length} รายการสินค้า`
-                  : "ยังไม่มีรายการสินค้า"}
+                  ? t.dashboard.deals.lineItems.replace(
+                      "{count}", String(deal.products?.length ?? 0),
+                    )
+                  : t.dashboard.deals.noLineItems}
                 {deal.notes ? ` · ${deal.notes}` : ""}
               </div>
               {NEXT_STAGES[deal.stage]?.length ? (
@@ -184,8 +184,8 @@ export default function DealList({ liffId }: { liffId: string }) {
                       disabled={busyId === deal.id}
                     >
                       {busyId === deal.id
-                        ? "กำลังบันทึก…"
-                        : `เปลี่ยนเป็น ${STAGE_LABELS[stage] ?? stage}`}
+                        ? t.dashboard.saving
+                        : t.dashboard.deals.changeTo.replace("{stage}", stageLabel(stage))}
                     </button>
                   ))}
                 </div>

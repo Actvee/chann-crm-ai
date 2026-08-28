@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { AppShell, Badge, CompanyPicker, Count, Empty } from "../_components";
+import { useLanguage } from "@/lib/i18n/LanguageProvider";
+
 import { Membership, initLiffSession, proxyHeaders } from "../_lib";
 
 type Quote = {
@@ -12,20 +14,15 @@ type Quote = {
   generated_document_id?: string | null;
 };
 
-const STATUS_LABELS: Record<string, string> = {
-  draft: "ร่าง",
-  sent: "ส่งแล้ว",
-  accepted: "ตอบรับแล้ว",
-  rejected: "ปฏิเสธ",
-  expired: "หมดอายุ",
-};
-
 export default function QuoteList({ liffId }: { liffId: string }) {
+  const { t } = useLanguage();
+  const statusLabel = (status: string) =>
+    (t.quote.status as Record<string, string>)[status] ?? status;
   const [token, setToken] = useState("");
   const [memberships, setMemberships] = useState<Membership[]>([]);
   const [licenseId, setLicenseId] = useState("");
   const [quotes, setQuotes] = useState<Quote[]>([]);
-  const [status, setStatus] = useState("กำลังเปิด…");
+  const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
   const [busyId, setBusyId] = useState("");
 
@@ -42,8 +39,8 @@ export default function QuoteList({ liffId }: { liffId: string }) {
     if (!response.ok) {
       throw new Error(
         response.status === 403
-          ? "คุณไม่มีสิทธิ์ดูใบเสนอราคา"
-          : `โหลดใบเสนอราคาไม่สำเร็จ (${response.status})`,
+          ? t.dashboard.noPermission
+          : `${t.dashboard.loadFailed} (${response.status})`,
       );
     }
     setQuotes((await response.json()) as Quote[]);
@@ -53,7 +50,7 @@ export default function QuoteList({ liffId }: { liffId: string }) {
   useEffect(() => {
     if (!token || !licenseId) return;
     void load().catch((error: unknown) =>
-      say(error instanceof Error ? error.message : "โหลดใบเสนอราคาไม่สำเร็จ", "error"),
+      say(error instanceof Error ? error.message : t.dashboard.loadFailed, "error"),
     );
   }, [licenseId, load, say, token]);
 
@@ -64,9 +61,9 @@ export default function QuoteList({ liffId }: { liffId: string }) {
       setToken(session.token);
       setMemberships(session.memberships);
       setLicenseId(session.memberships[0]?.license_id ?? "");
-      if (!session.memberships.length) say("ยังไม่พบบริษัทที่ผูกไว้", "error");
+      if (!session.memberships.length) say(t.liff.noCompany, "error");
     } catch (error) {
-      say(error instanceof Error ? error.message : "เปิดหน้านี้ไม่สำเร็จ", "error");
+      say(error instanceof Error ? error.message : t.dashboard.openFailed, "error");
     }
   }, [liffId, say]);
 
@@ -80,7 +77,7 @@ export default function QuoteList({ liffId }: { liffId: string }) {
 
   async function preview(quote: Quote) {
     setBusyId(quote.id);
-    say(`กำลังสร้างตัวอย่าง ${quote.quote_id}…`);
+    say(t.dashboard.working);
     try {
       const response = await fetch(
         `/api/phase2/licenses/${licenseId}/quotes/${quote.id}/pdf`,
@@ -90,8 +87,8 @@ export default function QuoteList({ liffId }: { liffId: string }) {
         const reason = await detail(response);
         say(
           response.status === 409
-            ? `ยังออกเอกสารไม่ได้ ${reason} — กรอกข้อมูลบริษัทให้ครบก่อน`
-            : `สร้างตัวอย่างไม่สำเร็จ (${response.status}) ${reason}`,
+            ? `${t.dashboard.quotes.incomplete} ${reason}`
+            : `${t.common.error} (${response.status}) ${reason}`,
           "error",
         );
         return;
@@ -101,9 +98,9 @@ export default function QuoteList({ liffId }: { liffId: string }) {
       const url = URL.createObjectURL(await response.blob());
       window.open(url, "_blank");
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
-      say(`เปิดตัวอย่าง ${quote.quote_id} แล้ว`, "ok");
+      say(`${quote.quote_id} — ${t.dashboard.quotes.preview}`, "ok");
     } catch (error) {
-      say(error instanceof Error ? error.message : "สร้างตัวอย่างไม่สำเร็จ", "error");
+      say(error instanceof Error ? error.message : t.common.error, "error");
     } finally {
       setBusyId("");
     }
@@ -114,14 +111,14 @@ export default function QuoteList({ liffId }: { liffId: string }) {
     if (
       !window.confirm(
         already
-          ? `${quote.quote_id} มีเอกสารที่ออกไปแล้ว\n\nการออกใหม่จะสร้างเอกสารอีกฉบับ ต้องการทำต่อหรือไม่`
-          : `ออกเอกสารสำหรับ ${quote.quote_id}?\n\nเอกสารจะถูกเก็บถาวรพร้อมบันทึกหลักฐานว่าลูกค้าได้รับไฟล์ฉบับใด`,
+          ? t.dashboard.quotes.confirmReissue.replace("{code}", quote.quote_id)
+          : t.dashboard.quotes.confirmIssue.replace("{code}", quote.quote_id),
       )
     ) {
       return;
     }
     setBusyId(quote.id);
-    say(`กำลังออกเอกสาร ${quote.quote_id}…`);
+    say(t.dashboard.working);
     try {
       const response = await fetch(
         `/api/phase2/licenses/${licenseId}/quotes/${quote.id}/issue?allow_reissue=${already}`,
@@ -131,20 +128,20 @@ export default function QuoteList({ liffId }: { liffId: string }) {
       if (!response.ok) {
         say(
           response.status === 409
-            ? `ยังออกเอกสารไม่ได้ ${reason}`
-            : `ออกเอกสารไม่สำเร็จ (${response.status}) ${reason}`,
+            ? `${t.dashboard.quotes.incomplete} ${reason}`
+            : `${t.common.error} (${response.status}) ${reason}`,
           "error",
         );
         return;
       }
       const issued = (await response.json()) as { sha256?: string };
       say(
-        `ออกเอกสาร ${quote.quote_id} แล้ว · SHA-256 ${(issued.sha256 ?? "").slice(0, 12)}…`,
+        `${quote.quote_id} — ${t.dashboard.quotes.issued} · SHA-256 ${(issued.sha256 ?? "").slice(0, 12)}…`,
         "ok",
       );
       await load();
     } catch (error) {
-      say(error instanceof Error ? error.message : "ออกเอกสารไม่สำเร็จ", "error");
+      say(error instanceof Error ? error.message : t.common.error, "error");
     } finally {
       setBusyId("");
     }
@@ -152,10 +149,10 @@ export default function QuoteList({ liffId }: { liffId: string }) {
 
   return (
     <AppShell
-      title="ใบเสนอราคา"
+      title={t.quote.title}
       liffId={liffId}
       onReady={() => void initialize()}
-      onSdkError={() => say("โหลด LIFF ไม่สำเร็จ", "error")}
+      onSdkError={() => say(t.liff.sdkLoadFailed, "error")}
       status={status}
       statusTone={tone}
     >
@@ -164,17 +161,19 @@ export default function QuoteList({ liffId }: { liffId: string }) {
       <Count shown={quotes.length} total={quotes.length} />
 
       {quotes.length === 0 ? (
-        <Empty message="ยังไม่มีใบเสนอราคา สร้างได้ในแชทด้วยข้อความ “สร้างใบเสนอราคาจากดีล D-2026-0001”" />
+        <Empty message={t.dashboard.quotes.empty} />
       ) : (
         <ul className="list">
           {quotes.map((quote) => (
             <li key={quote.id} className="card" data-stage={quote.status}>
               <div className="card-title">
                 <span className="code">{quote.quote_id}</span>
-                <Badge stage={quote.status} label={STATUS_LABELS[quote.status] ?? quote.status} />
+                <Badge stage={quote.status} label={statusLabel(quote.status)} />
               </div>
               <div className="card-meta">
-                {quote.generated_document_id ? "ออกเอกสารแล้ว" : "ยังไม่ได้ออกเอกสาร"}
+                {quote.generated_document_id
+                  ? t.dashboard.quotes.issued
+                  : t.dashboard.quotes.notIssued}
               </div>
               <div className="card-actions">
                 <button
@@ -183,7 +182,7 @@ export default function QuoteList({ liffId }: { liffId: string }) {
                   onClick={() => void preview(quote)}
                   disabled={busyId === quote.id}
                 >
-                  {busyId === quote.id ? "กำลังทำงาน…" : "ดูตัวอย่าง"}
+                  {busyId === quote.id ? t.dashboard.working : t.dashboard.quotes.preview}
                 </button>
                 <button
                   type="button"
@@ -192,7 +191,9 @@ export default function QuoteList({ liffId }: { liffId: string }) {
                   onClick={() => void issue(quote)}
                   disabled={busyId === quote.id}
                 >
-                  {quote.generated_document_id ? "ออกเอกสารใหม่" : "ออกเอกสาร"}
+                  {quote.generated_document_id
+                    ? t.dashboard.quotes.reissue
+                    : t.dashboard.quotes.issue}
                 </button>
               </div>
             </li>
@@ -200,10 +201,7 @@ export default function QuoteList({ liffId }: { liffId: string }) {
         </ul>
       )}
 
-      <p className="footnote">
-        ดูตัวอย่างเป็นการสร้าง PDF เพื่อตรวจทานเท่านั้น ไม่บันทึกอะไร ·
-        ออกเอกสารจะเก็บไฟล์ถาวรพร้อมบันทึก SHA-256 ว่าลูกค้าได้รับไฟล์ฉบับใด
-      </p>
+      <p className="footnote">{t.dashboard.quotes.note}</p>
     </AppShell>
   );
 }

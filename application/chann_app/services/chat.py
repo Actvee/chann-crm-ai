@@ -704,15 +704,21 @@ async def _handle_quote_issue(
 # longer wall of text.
 LIST_LIMIT = 10
 
-# Dashboard paths, resolved to liff.line.me deep links so a tap opens
-# inside LINE with the session already established.
+# Deep-link sub-paths, RELATIVE to the LIFF app's configured endpoint URL.
+#
+# This is the part that is easy to get wrong and did get wrong: LINE
+# resolves https://liff.line.me/{id}/{path} by APPENDING {path} to the
+# endpoint URL. The Sales endpoint is already .../liff/sales, so a link
+# built with the full "/liff/sales/customers" resolved to
+# .../liff/sales/liff/sales/customers — a page that does not exist. Only
+# the part after the endpoint belongs here.
 DASHBOARD_PATHS = {
-    "customers": "/liff/sales/customers",
-    "deals": "/liff/sales/deals",
-    "products": "/liff/sales/products",
-    "quotes": "/liff/sales/quotes",
-    "company": "/liff/sales/company",
-    "index": "/liff/sales",
+    "customers": "customers",
+    "deals": "deals",
+    "products": "products",
+    "quotes": "quotes",
+    "company": "company",
+    "index": "",
 }
 
 
@@ -728,9 +734,9 @@ def dashboard_link(section: str) -> str | None:
 
     liff_id = (settings.liff_sales_id or "").strip()
     path = DASHBOARD_PATHS.get(section)
-    if not liff_id or not path:
+    if not liff_id or path is None:
         return None
-    return f"https://liff.line.me/{liff_id}{path}"
+    return f"https://liff.line.me/{liff_id}/{path}" if path else f"https://liff.line.me/{liff_id}"
 
 CUSTOMER_LIST_PHRASES = ("รายชื่อลูกค้า", "รายการลูกค้า", "ดูลูกค้า", "ลูกค้าทั้งหมด", "customer list")
 DEAL_LIST_PHRASES = ("รายการดีล", "รายชื่อดีล", "ดูดีล", "ดีลทั้งหมด", "deal list")

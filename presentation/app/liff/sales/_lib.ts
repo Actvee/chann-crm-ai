@@ -18,7 +18,8 @@ export type Membership = {
 type LiffApi = {
   init(config: { liffId: string; withLoginOnExternalBrowser: boolean }): Promise<void>;
   isLoggedIn(): boolean;
-  login(): void;
+  isInClient(): boolean;
+  login(config?: { redirectUri?: string }): void;
   getIDToken(): string | null;
 };
 
@@ -48,9 +49,18 @@ export async function initLiffSession(
   }
   await liff.init({ liffId, withLoginOnExternalBrowser: true });
   if (!liff.isLoggedIn()) {
-    liff.login();
-    // login() navigates away; nothing after this runs in practice, but the
-    // caller still needs a well-typed value rather than undefined.
+    // Inside the LINE app the user is always logged in, so reaching here
+    // means something else is wrong. Calling login() anyway is what made
+    // every dashboard page bounce back to the menu: login() redirects to
+    // the LIFF app's configured endpoint URL, which is the index — so a
+    // tap on "Deals" loaded the deals page, failed this check, and got
+    // sent straight back, looking like the link simply did not work.
+    if (liff.isInClient()) {
+      throw new Error("เซสชัน LINE หมดอายุ ปิดหน้านี้แล้วเปิดใหม่จากเมนู");
+    }
+    // In an external browser logging in IS the right move, but send the
+    // person back to the page they asked for rather than the endpoint.
+    liff.login({ redirectUri: window.location.href });
     return { token: "", memberships: [] };
   }
   const idToken = liff.getIDToken();

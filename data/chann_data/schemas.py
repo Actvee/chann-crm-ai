@@ -488,6 +488,7 @@ class CustomerIn(BaseModel):
 class CustomerOut(BaseModel):
     id: uuid.UUID
     license_id: uuid.UUID
+    customer_id: str
     customer_chann_uid: str | None
     stage: str
     owner_member_id: uuid.UUID | None

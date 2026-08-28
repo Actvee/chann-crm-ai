@@ -520,13 +520,25 @@ class Customer(TimestampMixin, Base):
     """
 
     __tablename__ = "customers"
-    __table_args__ = (UniqueConstraint("license_id", "customer_chann_uid"),)
+    __table_args__ = (
+        UniqueConstraint("license_id", "customer_chann_uid"),
+        UniqueConstraint("license_id", "customer_id", name="uq_customers_license_customer_id"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
     license_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("licenses.id", ondelete="RESTRICT"),
         nullable=False, index=True,
     )
+    # The code a person uses to refer to this customer, e.g. C-2026-0001.
+    # Deals and quotes always had one; customers did not, which made them
+    # the one entity that could be listed but never referred to afterwards.
+    #
+    # Numbered per license, unlike deal_id which is unique platform-wide.
+    # That difference is deliberate: global numbering would give a new
+    # tenant's first customer a code like C-2026-0847, which looks broken
+    # and quietly discloses how much the whole platform is being used.
+    customer_id: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     customer_chann_uid: Mapped[str | None] = mapped_column(
         String(32), ForeignKey("chann_identities.chann_uid", ondelete="RESTRICT"),
     )
@@ -546,22 +558,36 @@ class Customer(TimestampMixin, Base):
 class Deal(TimestampMixin, Base):
     """Phase 9 (Master Spec 9.3/9.6).
 
-    `deal_id` is globally unique, not per-tenant — the spec marks it plainly
-    `UNIQUE NOT NULL` with no "แยกต่อบริษัท" ("separated per company") note,
-    unlike quotes.quote_id in Phase 10 which explicitly carries that
-    qualifier. Treated as deliberate: a deal code is an internal reference
-    shown to staff, not a customer-facing document number the way a quote or
-    invoice is.
+    `deal_id` is per-tenant, matching quotes.quote_id and customers.
+    customer_id.
+
+    This is a deliberate, owner-approved departure from the Master Spec,
+    which marks deal_id plainly `UNIQUE NOT NULL` with no "แยกต่อบริษัท"
+    ("separated per company") qualifier — a qualifier it does give
+    quotes.quote_id. An earlier reading treated that difference as
+    intentional, on the grounds that a deal code is an internal staff
+    reference rather than a customer-facing document number.
+
+    Changed because global numbering means a newly registered tenant's very
+    first deal is called something like D-2026-0847: it looks broken to that
+    tenant, and it quietly discloses how much the platform as a whole is
+    being used. Consistency across the three codes a person actually types
+    (C-, D-, Q-) was judged worth more than the one benefit global numbering
+    had, which was letting cross-tenant support talk about a deal without
+    naming its tenant — still possible via the UUID.
     """
 
     __tablename__ = "deals"
+    __table_args__ = (
+        UniqueConstraint("license_id", "deal_id", name="uq_deals_license_deal_id"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
     license_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("licenses.id", ondelete="RESTRICT"),
         nullable=False, index=True,
     )
-    deal_id: Mapped[str] = mapped_column(String(32), unique=True, nullable=False)
+    deal_id: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     contact_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("customers.id", ondelete="RESTRICT"), nullable=False,
     )

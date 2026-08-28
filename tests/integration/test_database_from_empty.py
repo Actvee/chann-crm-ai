@@ -3038,3 +3038,183 @@ class TestPhase9DealEditing:
                 DealRepository(session).update(scope_b, deal_a, {"notes": "x"})
             with _pytest.raises(Phase9NotFound):
                 DealRepository(session).remove_product(scope_b, deal_a, deal_a)
+
+
+class TestPhase9CustomerCode:
+    """Customers now carry a human-facing code, like deals and quotes.
+
+    They did not before, which made them the one entity that could be
+    listed but never referred to afterwards: a list row's button had
+    nothing to put in the message and sent the literal string "None".
+    """
+
+    def _tenant(self, migrated_db, suffix):
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import ChannIdentity
+        from chann_data.repositories.phase65 import RegistrationRepository
+        from chann_data.repositories.tenant_scope import TenantScope
+
+        with Session(migrated_db) as session:
+            session.add(ChannIdentity(
+                chann_uid=f"CHN-CC-{suffix}", line_user_id=f"line-cc-{suffix}",
+                primary_role="sales",
+            ))
+            session.commit()
+        with Session(migrated_db) as session:
+            lic = RegistrationRepository(session).create_license(
+                company_name=f"Code {suffix}", created_by_chann_uid=f"CHN-CC-{suffix}",
+            )
+            session.commit()
+            return TenantScope(license_id=lic.id)
+
+    def test_codes_are_assigned_and_increment(self, migrated_db):
+        from sqlalchemy.orm import Session
+
+        from chann_data.repositories.phase9 import CustomerRepository
+
+        scope = self._tenant(migrated_db, "A")
+        codes = []
+        for index in range(3):
+            with Session(migrated_db) as session:
+                row = CustomerRepository(session).create(
+                    scope, first_name=f"ก{index}", last_name="ข", phone=f"08000000{index:02d}",
+                )
+                codes.append(row.customer_id)
+                session.commit()
+
+        assert all(code.startswith("C-") for code in codes)
+        assert codes == sorted(codes), "codes should increase with creation order"
+        assert len(set(codes)) == 3
+
+    def test_each_tenant_numbers_from_one(self, migrated_db):
+        """Per-license, unlike deal_id which is unique platform-wide. Global
+        numbering would give a new tenant's first customer a code like
+        C-2026-0847 — which looks broken, and quietly discloses how much the
+        whole platform is being used."""
+        from sqlalchemy.orm import Session
+
+        from chann_data.repositories.phase9 import CustomerRepository
+
+        a = self._tenant(migrated_db, "B")
+        b = self._tenant(migrated_db, "C")
+
+        with Session(migrated_db) as session:
+            repo = CustomerRepository(session)
+            for index in range(4):
+                repo.create(scope := a, first_name=f"A{index}", last_name="x",
+                            phone=f"08100000{index:02d}")
+            session.commit()
+
+        with Session(migrated_db) as session:
+            first_of_b = CustomerRepository(session).create(
+                b, first_name="B0", last_name="x", phone="0820000000",
+            )
+            session.commit()
+            assert first_of_b.customer_id.endswith("-0001"), (
+                f"second tenant started at {first_of_b.customer_id}"
+            )
+
+    def test_the_same_code_may_exist_in_two_tenants(self, migrated_db):
+        from sqlalchemy.orm import Session
+
+        from chann_data.repositories.phase9 import CustomerRepository
+
+        a = self._tenant(migrated_db, "D")
+        b = self._tenant(migrated_db, "E")
+        with Session(migrated_db) as session:
+            repo = CustomerRepository(session)
+            one = repo.create(a, first_name="A", last_name="x", phone="0830000000")
+            two = repo.create(b, first_name="B", last_name="x", phone="0840000000")
+            session.commit()
+            assert one.customer_id == two.customer_id
+
+
+class TestPhase9DealCodeIsPerTenant:
+    """Deal codes are now numbered per tenant, like quotes and customers.
+
+    An owner-approved departure from the Master Spec, which marks deal_id
+    plainly UNIQUE while giving quote_id an explicit "per company"
+    qualifier. Global numbering meant a newly registered tenant's first
+    deal was called something like D-2026-0847 — visibly broken to that
+    tenant, and a quiet disclosure of platform-wide volume.
+    """
+
+    def _tenant_with_customer(self, migrated_db, suffix):
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import ChannIdentity
+        from chann_data.repositories.phase65 import RegistrationRepository
+        from chann_data.repositories.phase9 import CustomerRepository
+        from chann_data.repositories.tenant_scope import TenantScope
+
+        with Session(migrated_db) as session:
+            session.add(ChannIdentity(
+                chann_uid=f"CHN-DC-{suffix}", line_user_id=f"line-dc-{suffix}",
+                primary_role="sales",
+            ))
+            session.commit()
+        with Session(migrated_db) as session:
+            lic = RegistrationRepository(session).create_license(
+                company_name=f"DealCode {suffix}", created_by_chann_uid=f"CHN-DC-{suffix}",
+            )
+            session.commit()
+            scope = TenantScope(license_id=lic.id)
+        with Session(migrated_db) as session:
+            customer = CustomerRepository(session).create(
+                scope, first_name="ก", last_name="ข", phone=f"09{ord(suffix):08d}",
+            )
+            session.commit()
+            return scope, customer.id
+
+    def test_each_tenant_numbers_deals_from_one(self, migrated_db):
+        from sqlalchemy.orm import Session
+
+        from chann_data.repositories.phase9 import DealRepository
+
+        a, customer_a = self._tenant_with_customer(migrated_db, "A")
+        b, customer_b = self._tenant_with_customer(migrated_db, "B")
+
+        with Session(migrated_db) as session:
+            repo = DealRepository(session)
+            for _ in range(3):
+                repo.create(a, contact_id=customer_a)
+            session.commit()
+
+        with Session(migrated_db) as session:
+            first_of_b = DealRepository(session).create(b, contact_id=customer_b)
+            session.commit()
+            assert first_of_b.deal_id.endswith("-0001"), (
+                f"second tenant started at {first_of_b.deal_id}, so numbering "
+                "is still global"
+            )
+
+    def test_the_same_deal_code_may_exist_in_two_tenants(self, migrated_db):
+        """The point of the change: what used to be a uniqueness violation
+        is now the expected outcome."""
+        from sqlalchemy.orm import Session
+
+        from chann_data.repositories.phase9 import DealRepository
+
+        a, customer_a = self._tenant_with_customer(migrated_db, "C")
+        b, customer_b = self._tenant_with_customer(migrated_db, "D")
+
+        with Session(migrated_db) as session:
+            repo = DealRepository(session)
+            one = repo.create(a, contact_id=customer_a)
+            two = repo.create(b, contact_id=customer_b)
+            session.commit()
+            assert one.deal_id == two.deal_id
+
+    def test_a_deal_code_is_still_unique_inside_one_tenant(self, migrated_db):
+        from sqlalchemy.orm import Session
+
+        from chann_data.repositories.phase9 import DealRepository
+
+        scope, customer = self._tenant_with_customer(migrated_db, "E")
+        with Session(migrated_db) as session:
+            repo = DealRepository(session)
+            codes = [repo.create(scope, contact_id=customer).deal_id for _ in range(5)]
+            session.commit()
+        assert len(set(codes)) == 5
+        assert codes == sorted(codes)

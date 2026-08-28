@@ -198,9 +198,11 @@ class FakeDataClient:
         self.recorded.append(("create_customer", license_id, payload, actor_id))
         row = {
             "id": f"CUST-{len(self._customers) + 1}", "license_id": license_id,
-            # The Data tier always assigns a human-facing code, so a fake
-            # that omits it hides bugs in anything that addresses a customer
-            # by code — which is how every chat command refers to one.
+            # Mirrors the real per-license C-YYYY-NNNN allocation added in
+            # migration 0011. An earlier version of this fake invented the
+            # field to make a test pass while the real customers table had
+            # no such column at all — so the tests were green and the
+            # button in production sent the literal string "None".
             "customer_id": f"C-2026-{len(self._customers) + 1:04d}",
             "customer_chann_uid": None, "stage": "lead", "owner_member_id": None,
             "first_name": payload.get("first_name"), "last_name": payload.get("last_name"),
@@ -2533,17 +2535,34 @@ class TestPhase10DashboardHandoff:
         assert "liff.line.me" not in reply.text
         assert "25" in reply.text, "the total is still worth saying"
 
-    def test_deep_links_point_at_liff_not_the_raw_host(self):
-        """A Cloud Run URL would open an external browser with no LIFF
-        context, and every dashboard page would fail its token check."""
+    def test_deep_links_are_relative_to_the_liff_endpoint(self):
+        """Two things this pins down, both learned the hard way.
+
+        A Cloud Run URL would open an external browser with no LIFF context,
+        so every dashboard page would fail its token check — hence
+        liff.line.me.
+
+        And LINE resolves the deep link by APPENDING the path to the LIFF
+        app's configured endpoint URL. That endpoint is already
+        .../liff/sales, so a link built with the full "/liff/sales/customers"
+        resolved to .../liff/sales/liff/sales/customers and simply did not
+        exist. Only the part after the endpoint belongs in the link.
+        """
         import chann_app.services.chat as chat
         from chann_app.config import settings
 
         original = settings.liff_sales_id
         try:
             settings.liff_sales_id = "1234567890-abcdefgh"
-            url = chat.dashboard_link("customers")
-            assert url == "https://liff.line.me/1234567890-abcdefgh/liff/sales/customers"
+            assert (
+                chat.dashboard_link("customers")
+                == "https://liff.line.me/1234567890-abcdefgh/customers"
+            )
+            # The index is the endpoint itself, so it carries no sub-path.
+            assert (
+                chat.dashboard_link("index")
+                == "https://liff.line.me/1234567890-abcdefgh"
+            )
             settings.liff_sales_id = ""
             assert chat.dashboard_link("customers") is None
         finally:

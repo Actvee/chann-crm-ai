@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { AppShell, Badge, CompanyPicker, Count, Empty } from "../_components";
+import { useLanguage } from "@/lib/i18n/LanguageProvider";
+
 import { Membership, initLiffSession, proxyHeaders } from "../_lib";
 
 type Customer = {
@@ -15,21 +17,21 @@ type Customer = {
   email?: string | null;
 };
 
-const STAGE_LABELS: Record<string, string> = {
-  lead: "ลูกค้ามุ่งหวัง",
-  contact: "ลูกค้า",
-};
-
 function fullName(customer: Customer): string {
   return [customer.first_name, customer.last_name].filter(Boolean).join(" ") || "—";
 }
 
 export default function CustomerList({ liffId }: { liffId: string }) {
+  const { t } = useLanguage();
+  // Customer stages are only two, and both already have names in the
+  // dictionary under their own sections.
+  const stageLabel = (stage: string) =>
+    stage === "contact" ? t.customer.title : t.customer.lead;
   const [token, setToken] = useState("");
   const [memberships, setMemberships] = useState<Membership[]>([]);
   const [licenseId, setLicenseId] = useState("");
   const [customers, setCustomers] = useState<Customer[]>([]);
-  const [status, setStatus] = useState("กำลังเปิด…");
+  const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
   const [busyId, setBusyId] = useState("");
   const [query, setQuery] = useState("");
@@ -47,8 +49,8 @@ export default function CustomerList({ liffId }: { liffId: string }) {
     if (!response.ok) {
       throw new Error(
         response.status === 403
-          ? "คุณไม่มีสิทธิ์ดูลูกค้า"
-          : `โหลดรายชื่อลูกค้าไม่สำเร็จ (${response.status})`,
+          ? t.dashboard.noPermission
+          : `${t.dashboard.loadFailed} (${response.status})`,
       );
     }
     setCustomers((await response.json()) as Customer[]);
@@ -58,7 +60,7 @@ export default function CustomerList({ liffId }: { liffId: string }) {
   useEffect(() => {
     if (!token || !licenseId) return;
     void load().catch((error: unknown) =>
-      say(error instanceof Error ? error.message : "โหลดรายชื่อลูกค้าไม่สำเร็จ", "error"),
+      say(error instanceof Error ? error.message : t.dashboard.loadFailed, "error"),
     );
   }, [licenseId, load, say, token]);
 
@@ -69,15 +71,15 @@ export default function CustomerList({ liffId }: { liffId: string }) {
       setToken(session.token);
       setMemberships(session.memberships);
       setLicenseId(session.memberships[0]?.license_id ?? "");
-      if (!session.memberships.length) say("ยังไม่พบบริษัทที่ผูกไว้", "error");
+      if (!session.memberships.length) say(t.liff.noCompany, "error");
     } catch (error) {
-      say(error instanceof Error ? error.message : "เปิดหน้านี้ไม่สำเร็จ", "error");
+      say(error instanceof Error ? error.message : t.dashboard.openFailed, "error");
     }
   }, [liffId, say]);
 
   async function promote(customer: Customer) {
     setBusyId(customer.id);
-    say(`กำลังยืนยัน ${fullName(customer)} เป็นลูกค้า…`);
+    say(t.dashboard.working);
     try {
       const response = await fetch(
         `/api/phase2/licenses/${licenseId}/customers/${customer.id}/promote`,
@@ -86,16 +88,16 @@ export default function CustomerList({ liffId }: { liffId: string }) {
       if (!response.ok) {
         say(
           response.status === 403
-            ? "คุณไม่มีสิทธิ์ยืนยันลูกค้า"
-            : `ยืนยันไม่สำเร็จ (${response.status})`,
+            ? t.dashboard.customers.promoteDenied
+            : `${t.common.error} (${response.status})`,
           "error",
         );
         return;
       }
-      say(`${fullName(customer)} เป็นลูกค้าแล้ว`, "ok");
+      say(`${fullName(customer)} — ${t.dashboard.customers.promoted}`, "ok");
       await load();
     } catch (error) {
-      say(error instanceof Error ? error.message : "ยืนยันไม่สำเร็จ", "error");
+      say(error instanceof Error ? error.message : t.common.error, "error");
     } finally {
       setBusyId("");
     }
@@ -115,21 +117,21 @@ export default function CustomerList({ liffId }: { liffId: string }) {
 
   return (
     <AppShell
-      title="ลูกค้า"
+      title={t.customer.title}
       liffId={liffId}
       onReady={() => void initialize()}
-      onSdkError={() => say("โหลด LIFF ไม่สำเร็จ", "error")}
+      onSdkError={() => say(t.liff.sdkLoadFailed, "error")}
       status={status}
       statusTone={tone}
     >
       <CompanyPicker memberships={memberships} licenseId={licenseId} onChange={setLicenseId} />
 
       <label className="field">
-        <span>ค้นหา</span>
+        <span>{t.dashboard.search}</span>
         <input
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="ชื่อ เบอร์โทร หรือรหัสลูกค้า"
+          placeholder={t.dashboard.customers.searchHint}
           type="search"
         />
       </label>
@@ -140,8 +142,8 @@ export default function CustomerList({ liffId }: { liffId: string }) {
         <Empty
           message={
             customers.length === 0
-              ? "ยังไม่มีลูกค้า เพิ่มได้ในแชทด้วยข้อความ “สร้างลูกค้า”"
-              : `ไม่พบลูกค้าที่ตรงกับ “${query}”`
+              ? t.dashboard.customers.empty
+              : `${t.dashboard.customers.noMatch}: “${query}”`
           }
         />
       ) : (
@@ -150,10 +152,7 @@ export default function CustomerList({ liffId }: { liffId: string }) {
             <li key={customer.id} className="card" data-stage={customer.stage}>
               <div className="card-title">
                 {fullName(customer)}
-                <Badge
-                  stage={customer.stage}
-                  label={STAGE_LABELS[customer.stage] ?? customer.stage}
-                />
+                <Badge stage={customer.stage} label={stageLabel(customer.stage)} />
               </div>
               <div className="card-meta">
                 <span className="code">{customer.customer_id}</span>
@@ -169,7 +168,7 @@ export default function CustomerList({ liffId }: { liffId: string }) {
                     onClick={() => void promote(customer)}
                     disabled={busyId === customer.id}
                   >
-                    {busyId === customer.id ? "กำลังบันทึก…" : "ยืนยันเป็นลูกค้า"}
+                    {busyId === customer.id ? t.dashboard.saving : t.dashboard.customers.promote}
                   </button>
                 </div>
               )}
