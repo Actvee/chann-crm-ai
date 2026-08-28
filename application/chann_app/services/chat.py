@@ -321,8 +321,15 @@ COMPANY_SAVE_FAILED = {
 }
 
 
+def _strip_leading_connector(value: str) -> str:
+    for lead in ("เป็น", "คือ", ":", "=", "is"):
+        if value.lower().startswith(lead):
+            return value[len(lead):].strip()
+    return value
+
+
 def _parse_company_profile_command(message: str) -> tuple[str, str] | None:
-    """Returns (field, raw_value) or None.
+    """Single field. Returns (field, raw_value) or None.
 
     Deliberately returns None rather than guessing when a trigger appears
     with nothing after it — the caller turns that into a "please include
@@ -342,14 +349,74 @@ def _parse_company_profile_command(message: str) -> tuple[str, str] | None:
             index = lowered.find(trigger.lower())
             if index == -1:
                 continue
-            value = text[index + len(trigger):].strip()
-            # Strip a leading connector so "ตั้งที่อยู่บริษัทเป็น 99/1" and
-            # "ตั้งที่อยู่บริษัท คือ 99/1" both yield just the address.
-            for lead in ("เป็น", "คือ", ":", "=", "is"):
-                if value.lower().startswith(lead):
-                    value = value[len(lead):].strip()
-            return field, value
+            return field, _strip_leading_connector(text[index + len(trigger):].strip())
     return None
+
+
+def _explicit_trigger_positions(line: str) -> list[tuple[int, int, str]]:
+    """Every "ตั้ง…"-prefixed trigger in one line, as (start, end, field).
+
+    Only the explicit `ตั้ง` forms are used as split points, never the bare
+    nouns. A bare noun is a legitimate substring of a real value — Bangkok
+    has a district literally called เขตภาษีเจริญ, so splitting an address on
+    "ภาษี" would silently cut it in half and file the remainder as a VAT
+    rate. Nobody writes "ตั้งภาษีมูลค่าเพิ่ม" inside their street address,
+    so the explicit form is safe to treat as a boundary.
+    """
+    lowered = line.lower()
+    found: list[tuple[int, int, str]] = []
+    for triggers, field in COMPANY_FIELD_TRIGGERS:
+        for trigger in triggers:
+            if not trigger.startswith("ตั้ง"):
+                continue
+            start = lowered.find(trigger.lower())
+            if start == -1:
+                continue
+            found.append((start, start + len(trigger), field))
+            break
+    return sorted(found)
+
+
+def _parse_company_profile_commands(message: str) -> list[tuple[str, str]]:
+    """Zero or more (field, raw_value), so several fields can be set in one
+    message — the thing a person actually wants when first filling this in.
+
+    Two shapes are accepted, both deterministic:
+
+      * one field per line (newline-separated), which is unambiguous
+        whatever the values contain; and
+      * several `ตั้ง…` commands on a single line, split at those explicit
+        markers only.
+
+    Later mentions of the same field win, matching how the rest of this
+    engine treats a correction typed in the same breath.
+    """
+    text = (message or "").strip()
+    if not text:
+        return []
+
+    results: dict[str, str] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+
+        positions = _explicit_trigger_positions(line)
+        if len(positions) < 2:
+            # One command (or none) on this line — the single-field parser
+            # already handles the whole-line case, including "ไม่จด VAT".
+            parsed = _parse_company_profile_command(line)
+            if parsed is not None:
+                results[parsed[0]] = parsed[1]
+            continue
+
+        # Several explicit commands share this line: each value runs from the
+        # end of its own trigger to the start of the next one.
+        for index, (_, end, field) in enumerate(positions):
+            stop = positions[index + 1][0] if index + 1 < len(positions) else len(line)
+            results[field] = _strip_leading_connector(line[end:stop].strip())
+
+    return list(results.items())
 
 
 def _is_company_profile_view(message: str) -> bool:
@@ -400,42 +467,72 @@ async def _handle_company_profile_view(
     return ChatReply(text=_format_company_profile(profile, language))
 
 
-async def _handle_company_profile_command(
-    client: DataClient, *, license_id, field: str, raw_value: str,
-    permission_keys: list[str], language: str, actor_id: str,
-) -> ChatReply:
-    if "setting.manage" not in set(permission_keys):
-        return ChatReply(text=_t(COMPANY_DENIED, language))
+def _company_field_to_payload(field: str, raw_value: str, language: str) -> tuple[dict, str] | str:
+    """Validate one field. Returns (payload_fragment, success_line) on
+    success, or an error string to show the user.
 
+    Validation lives here, before anything is sent, so a message setting
+    three fields where one is malformed writes none of them. A partial
+    write would leave the tenant believing the whole message was applied.
+    """
     label = _t(COMPANY_PROFILE_LABELS[field], language)
 
     if field == "vat_rate":
         if not raw_value:
             # The "ไม่จด VAT" path: NULL, meaning no VAT line at all — a
             # different thing from a 0% rate.
-            payload: dict = {"vat_rate": None}
-            success_text = _t(COMPANY_NO_VAT_SAVED, language)
-        else:
-            digits = raw_value.replace("%", "").replace("เปอร์เซ็นต์", "").strip()
-            try:
-                percent = Decimal(digits)
-            except (InvalidOperation, ValueError):
-                return ChatReply(text=_t(COMPANY_BAD_VAT, language))
-            if not (0 <= percent <= 100):
-                return ChatReply(text=_t(COMPANY_BAD_VAT, language))
-            # Typed as a percent, stored as a fraction.
-            payload = {"vat_rate": str(percent / Decimal(100))}
-            success_text = _t(COMPANY_UPDATED, language).format(label=label)
-    else:
-        if not raw_value:
-            return ChatReply(text=_t(COMPANY_NEEDS_VALUE, language).format(label=label))
-        if field == "tax_id":
-            digits = "".join(ch for ch in raw_value if ch.isdigit())
-            if len(digits) != 13:
-                return ChatReply(text=_t(COMPANY_BAD_TAX_ID, language))
-            raw_value = digits
-        payload = {field: raw_value}
-        success_text = _t(COMPANY_UPDATED, language).format(label=label)
+            return {"vat_rate": None}, _t(COMPANY_NO_VAT_SAVED, language)
+        digits = raw_value.replace("%", "").replace("เปอร์เซ็นต์", "").strip()
+        try:
+            percent = Decimal(digits)
+        except (InvalidOperation, ValueError):
+            return _t(COMPANY_BAD_VAT, language)
+        if not (0 <= percent <= 100):
+            return _t(COMPANY_BAD_VAT, language)
+        # Typed as a percent, stored as a fraction.
+        return (
+            {"vat_rate": str(percent / Decimal(100))},
+            _t(COMPANY_UPDATED, language).format(label=label),
+        )
+
+    if not raw_value:
+        return _t(COMPANY_NEEDS_VALUE, language).format(label=label)
+
+    if field == "tax_id":
+        digits = "".join(ch for ch in raw_value if ch.isdigit())
+        if len(digits) != 13:
+            return _t(COMPANY_BAD_TAX_ID, language)
+        raw_value = digits
+
+    return {field: raw_value}, _t(COMPANY_UPDATED, language).format(label=label)
+
+
+async def _handle_company_profile_command(
+    client: DataClient, *, license_id, updates: list[tuple[str, str]],
+    permission_keys: list[str], language: str, actor_id: str,
+) -> ChatReply:
+    """Applies one or several fields in a single write.
+
+    All-or-nothing on purpose: every field is validated first, and one bad
+    value refuses the whole message. Writing the two good fields out of
+    three and reporting an error for the third reads as "it failed" while
+    having silently changed the company's details.
+    """
+    if "setting.manage" not in set(permission_keys):
+        return ChatReply(text=_t(COMPANY_DENIED, language))
+
+    payload: dict = {}
+    success_lines: list[str] = []
+    for field, raw_value in updates:
+        outcome = _company_field_to_payload(field, raw_value, language)
+        if isinstance(outcome, str):
+            return ChatReply(text=outcome)
+        fragment, line = outcome
+        payload.update(fragment)
+        success_lines.append(line)
+
+    if not payload:
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
 
     try:
         profile = await client.update_company_profile(
@@ -448,21 +545,23 @@ async def _handle_company_profile_command(
         # rather than a vague failure for the same mistake caught one layer
         # further in.
         if getattr(exc, "status_code", None) == 422 or "422" in str(exc):
+            fields = {f for f, _ in updates}
             return ChatReply(
-                text=_t(COMPANY_BAD_TAX_ID if field == "tax_id" else COMPANY_BAD_VAT, language)
+                text=_t(COMPANY_BAD_TAX_ID if "tax_id" in fields else COMPANY_BAD_VAT, language)
             )
         log.exception("company profile update failed")
         return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
 
+    text = "\n".join(success_lines)
     missing = profile.get("missing_for_documents") or []
     if missing:
         names = ", ".join(
             _t(COMPANY_PROFILE_LABELS.get(f, {"th": f, "en": f}), language) for f in missing
         )
-        success_text += "\n" + _t(COMPANY_MISSING, language).format(fields=names)
+        text += "\n" + _t(COMPANY_MISSING, language).format(fields=names)
     else:
-        success_text += "\n" + _t(COMPANY_READY, language)
-    return ChatReply(text=success_text)
+        text += "\n" + _t(COMPANY_READY, language)
+    return ChatReply(text=text)
 
 
 DEAL_STAGE_UPDATED = {
@@ -1629,11 +1728,12 @@ async def handle_chat_message(
             language=language,
         )
 
-    company_cmd = _parse_company_profile_command(message) if ctx.oa == "sales" else None
-    if company_cmd is not None:
-        company_field, company_value = company_cmd
+    company_updates = (
+        _parse_company_profile_commands(message) if ctx.oa == "sales" else []
+    )
+    if company_updates:
         return await _handle_company_profile_command(
-            client, license_id=license_id, field=company_field, raw_value=company_value,
+            client, license_id=license_id, updates=company_updates,
             permission_keys=permission_keys, language=language, actor_id=ctx.chann_uid,
         )
 

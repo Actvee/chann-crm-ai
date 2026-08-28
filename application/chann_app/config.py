@@ -77,6 +77,16 @@ class Settings(BaseSettings):
     smartbrowz_client_secret: str = ""
     smartbrowz_refresh_token: str = ""
 
+    # Object storage for generated documents (Master Spec 10.3).
+    # Empty means storage is not configured: the document store factory
+    # returns NullDocumentStore, which refuses loudly rather than letting a
+    # generated_documents row be written with nowhere to point.
+    # Authentication is Application Default Credentials — on Cloud Run that
+    # is the attached service account, so there is deliberately no key or
+    # secret here to configure or leak.
+    gcs_bucket_name: str = ""
+    gcp_project_id: str = ""
+
     class Config:
         env_file = ".env"
         extra = "ignore"

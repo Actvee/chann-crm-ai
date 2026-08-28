@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 
+import hashlib
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
@@ -328,3 +329,171 @@ async def patch_company_profile(
         )
     except DataTierError as exc:
         raise _propagate(exc)
+
+
+# --------------------------------------------- Phase 10 quote PDF rendering
+
+
+@router.get("/licenses/{license_id}/quotes")
+async def list_quotes(
+    license_id: str,
+    status_filter: str | None = None,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    _require_same_tenant(principal, license_id)
+    principal.require("quote.read")
+    try:
+        return await client.list_quotes(license_id, status_filter)
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.get("/licenses/{license_id}/quotes/{quote_id}/pdf")
+async def render_quote_pdf(
+    license_id: str,
+    quote_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Render a quote to PDF and return the bytes.
+
+    Deliberately does NOT write a `generated_documents` row. That table's
+    whole purpose is proving which file a customer actually received, and
+    its `output_path` is NOT NULL because a row without a stored object
+    cannot prove anything. Object storage is not provisioned yet
+    (`create_application_bucket` is false), so recording here would mean
+    writing an audit row that points at nothing — worse than not recording,
+    because it would look authoritative later.
+
+    So this endpoint is the review/preview path: it renders the real
+    document, through the real provider, from the real frozen snapshot, and
+    hands it straight to the person who asked. Issuing (store + record +
+    move the quote's status) is the separate step that storage unblocks.
+    """
+    from fastapi.responses import Response
+
+    from .services.documents.html import render_quote_html
+    from .services.documents.snapshot import QuoteNotRenderable, build_quote_snapshot
+    from .services.pdf.base import PdfOptions, get_renderer
+    from .services.pdf.smartbrowz import SmartBrowzNotConfigured, SmartBrowzRenderError
+
+    _require_same_tenant(principal, license_id)
+    principal.require("quote.read")
+
+    try:
+        quote = await client.get_quote(license_id, quote_id)
+        if quote is None:
+            raise HTTPException(status_code=404, detail="quote not found")
+        deal = await client.get_deal(license_id, str(quote["deal_id"]))
+        if deal is None:
+            raise HTTPException(status_code=404, detail="deal not found")
+        customer = await client.get_customer(license_id, str(deal["contact_id"]))
+        if customer is None:
+            raise HTTPException(status_code=404, detail="customer not found")
+        company = await client.get_company_profile(license_id)
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+    try:
+        snapshot = build_quote_snapshot(
+            quote=quote, deal=deal, customer=customer, company=company,
+        )
+    except QuoteNotRenderable as exc:
+        # 409, not 500: nothing is broken, the tenant has not finished
+        # filling in details only they can supply. The message names the
+        # missing fields so the reply can say what to do next.
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+
+    renderer = get_renderer("smartbrowz")
+    try:
+        result = await renderer.render(
+            render_quote_html(snapshot), PdfOptions(),
+            idempotency_key=f"quote:{license_id}:{quote_id}",
+        )
+    except SmartBrowzNotConfigured as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
+    except SmartBrowzRenderError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+
+    if not result.content:
+        # A render that "succeeded" with no bytes must fail loudly rather
+        # than return an empty file the caller might send to a customer.
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="renderer returned no document content",
+        )
+
+    return Response(
+        content=result.content,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition":
+                f'inline; filename="{quote.get("quote_id") or quote_id}.pdf"',
+            # The digest of exactly these bytes, so the reviewer can match a
+            # downloaded file against what the server produced even though
+            # nothing is recorded yet.
+            "X-Document-Sha256": hashlib.sha256(result.content).hexdigest(),
+        },
+    )
+
+
+@router.post("/licenses/{license_id}/quotes/{quote_id}/issue")
+async def issue_quote(
+    license_id: str,
+    quote_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Render, store and record a quote as an issued document.
+
+    `quote.update`, not `quote.read`: unlike the preview above this changes
+    state — it puts an immutable object in storage and writes an audit row
+    asserting the customer was sent exactly those bytes.
+    """
+    from .services.documents.snapshot import QuoteNotRenderable
+    from .services.pdf.smartbrowz import SmartBrowzNotConfigured, SmartBrowzRenderError
+    from .services.quote_issue import issue_quote_document
+    from .services.storage.base import DocumentStoreError, DocumentStoreNotConfigured
+
+    _require_same_tenant(principal, license_id)
+    principal.require("quote.update")
+
+    try:
+        quote = await client.get_quote(license_id, quote_id)
+        if quote is None:
+            raise HTTPException(status_code=404, detail="quote not found")
+        deal = await client.get_deal(license_id, str(quote["deal_id"]))
+        if deal is None:
+            raise HTTPException(status_code=404, detail="deal not found")
+        customer = await client.get_customer(license_id, str(deal["contact_id"]))
+        if customer is None:
+            raise HTTPException(status_code=404, detail="customer not found")
+        company = await client.get_company_profile(license_id)
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+    try:
+        document = await issue_quote_document(
+            client, license_id=license_id, quote=quote, deal=deal,
+            customer=customer, company=company, actor_id=principal.chann_uid,
+        )
+    except QuoteNotRenderable as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    except SmartBrowzNotConfigured as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
+    except DocumentStoreNotConfigured as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
+    except SmartBrowzRenderError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+    except DocumentStoreError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+    return {
+        "generated_document_id": document.get("id"),
+        "output_path": document.get("output_path"),
+        "sha256": document.get("sha256"),
+        "renderer": document.get("renderer"),
+    }

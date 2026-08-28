@@ -2269,3 +2269,89 @@ class TestPhase10CompanyProfileChat:
             client, message="ตั้งที่อยู่บริษัท 99/1 ถนนสุขุมวิท กรุงเทพฯ", ctx=_ctx(),
         )
         assert "พร้อมออกเอกสาร" in reply.text
+
+
+class TestPhase10CompanyProfileMultiField:
+    """Several fields in one message — what a person actually does the first
+    time they fill this in, rather than sending five separate messages."""
+
+    async def test_several_commands_on_one_line(self):
+        client = FakeDataClient(permission_keys=["setting.manage"])
+        reply = await handle_chat_message(
+            client,
+            message=(
+                "ตั้งเลขผู้เสียภาษี 0105558123456 "
+                "ตั้งที่อยู่บริษัท 99/1 ถนนสุขุมวิท กรุงเทพฯ "
+                "ตั้งภาษีมูลค่าเพิ่ม 7%"
+            ),
+            ctx=_ctx(),
+        )
+        writes = [r for r in client.recorded if r[0] == "update_company_profile"]
+        # One write, not three: the whole message is one atomic change.
+        assert len(writes) == 1
+        assert writes[0][2] == {
+            "tax_id": "0105558123456",
+            "company_address": "99/1 ถนนสุขุมวิท กรุงเทพฯ",
+            "vat_rate": "0.07",
+        }
+        assert "พร้อมออกเอกสาร" in reply.text
+
+    async def test_one_field_per_line(self):
+        client = FakeDataClient(permission_keys=["setting.manage"])
+        await handle_chat_message(
+            client,
+            message="ตั้งเลขผู้เสียภาษี 0105558123456\nตั้งที่อยู่บริษัท 99/1 ถนนสุขุมวิท\nไม่จด VAT",
+            ctx=_ctx(),
+        )
+        writes = [r for r in client.recorded if r[0] == "update_company_profile"]
+        assert len(writes) == 1
+        assert writes[0][2] == {
+            "tax_id": "0105558123456",
+            "company_address": "99/1 ถนนสุขุมวิท",
+            "vat_rate": None,
+        }
+
+    async def test_an_address_containing_a_bare_trigger_word_is_not_split(self):
+        """เขตภาษีเจริญ is a real Bangkok district. Splitting on the bare noun
+        "ภาษี" would cut the address in half and file the tail as a VAT rate,
+        so only the explicit ตั้ง… forms are ever used as boundaries."""
+        client = FakeDataClient(permission_keys=["setting.manage"])
+        await handle_chat_message(
+            client,
+            message="ตั้งที่อยู่บริษัท 99/1 เขตภาษีเจริญ กรุงเทพฯ 10160",
+            ctx=_ctx(),
+        )
+        writes = [r for r in client.recorded if r[0] == "update_company_profile"]
+        assert writes[0][2] == {"company_address": "99/1 เขตภาษีเจริญ กรุงเทพฯ 10160"}
+
+    async def test_one_bad_field_refuses_the_whole_message(self):
+        """A partial write is worse than no write: the reply would read as a
+        failure while the company's details had in fact already changed."""
+        client = FakeDataClient(permission_keys=["setting.manage"])
+        reply = await handle_chat_message(
+            client,
+            message="ตั้งเลขผู้เสียภาษี 12345 ตั้งที่อยู่บริษัท 99/1 ถนนสุขุมวิท",
+            ctx=_ctx(),
+        )
+        assert "13 หลัก" in reply.text
+        assert not [r for r in client.recorded if r[0] == "update_company_profile"]
+
+    async def test_a_repeated_field_takes_the_last_value(self):
+        client = FakeDataClient(permission_keys=["setting.manage"])
+        await handle_chat_message(
+            client,
+            message="ตั้งเบอร์บริษัท 021111111\nตั้งเบอร์บริษัท 022222222",
+            ctx=_ctx(),
+        )
+        writes = [r for r in client.recorded if r[0] == "update_company_profile"]
+        assert writes[0][2] == {"company_phone": "022222222"}
+
+    async def test_every_field_reports_its_own_confirmation_line(self):
+        client = FakeDataClient(permission_keys=["setting.manage"])
+        reply = await handle_chat_message(
+            client,
+            message="ตั้งชื่อนิติบุคคล บริษัท ทดสอบ จำกัด ตั้งเบอร์บริษัท 021234567",
+            ctx=_ctx(),
+        )
+        assert "ชื่อนิติบุคคล" in reply.text
+        assert "เบอร์โทรบริษัท" in reply.text

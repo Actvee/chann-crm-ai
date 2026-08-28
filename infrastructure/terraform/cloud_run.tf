@@ -68,6 +68,13 @@ locals {
     # same real value catalyst_api_domain already defaults to, reused here
     # rather than adding a third Terraform variable for the same domain.
     X_ZOHO_CATALYST_CONSOLE_URL = var.catalyst_api_domain
+    # Object storage for generated documents (Master Spec 10.3). Empty when
+    # create_application_bucket is false, which makes the Application tier's
+    # document-store factory return NullDocumentStore — issuing a document
+    # then fails with a clear "storage is not configured" instead of writing
+    # a generated_documents row that points at nothing.
+    GCS_BUCKET_NAME = var.create_application_bucket ? var.application_bucket_name : ""
+    GCP_PROJECT_ID  = var.project_id
   })
 
   presentation_runtime_env = merge(local.common_runtime_env, {
