@@ -87,6 +87,18 @@ class Settings(BaseSettings):
     gcs_bucket_name: str = ""
     gcp_project_id: str = ""
 
+    # Deep links from chat into the dashboard (Phase 10).
+    #
+    # The LIFF id, not the Cloud Run hostname: https://liff.line.me/<id>/<path>
+    # opens inside the LINE app with the session already established, so a
+    # tap from a chat reply lands on an authenticated page. A raw Cloud Run
+    # URL would open an external browser with no LIFF context, and every
+    # dashboard page would immediately fail its ID-token check.
+    #
+    # Empty is a supported state: chat then simply omits the link rather
+    # than emitting a broken one.
+    liff_sales_id: str = ""
+
     class Config:
         env_file = ".env"
         extra = "ignore"

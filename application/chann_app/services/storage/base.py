@@ -47,11 +47,19 @@ class DocumentStore(Protocol):
     async def put(self, *, key: str, content: bytes, content_type: str) -> StoredDocument:
         ...
 
+    async def signed_url(self, *, path: str, expires_seconds: int) -> str:
+        ...
+
 
 class NullDocumentStore:
     name = "null"
 
     async def put(self, *, key: str, content: bytes, content_type: str) -> StoredDocument:
+        raise DocumentStoreNotConfigured(
+            "document storage is not configured — GCS_BUCKET_NAME is unset"
+        )
+
+    async def signed_url(self, *, path: str, expires_seconds: int) -> str:
         raise DocumentStoreNotConfigured(
             "document storage is not configured — GCS_BUCKET_NAME is unset"
         )

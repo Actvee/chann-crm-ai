@@ -75,6 +75,11 @@ locals {
     # a generated_documents row that points at nothing.
     GCS_BUCKET_NAME = var.create_application_bucket ? var.application_bucket_name : ""
     GCP_PROJECT_ID  = var.project_id
+    # The Application tier builds https://liff.line.me/<id>/<path> deep links
+    # so a chat reply can hand off to the dashboard. Same value the
+    # Presentation tier already gets as NEXT_PUBLIC_LIFF_SALES_ID; it is a
+    # public identifier, not a secret.
+    LIFF_SALES_ID = var.liff_ids.sales
   })
 
   presentation_runtime_env = merge(local.common_runtime_env, {

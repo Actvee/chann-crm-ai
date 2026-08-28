@@ -19,6 +19,9 @@ from decimal import Decimal, InvalidOperation
 
 from ..data_client import DataClient
 from .ai.client import AIUnavailable, AINotConfigured
+# Reused rather than reimplemented on purpose: what a salesperson reads
+# in chat must never disagree with what the customer receives on the PDF.
+from .documents.snapshot import build_line_items
 from .ai.intent import parse_intent, unavailable_reply
 from .identity import ResolvedContext, TenantResolution
 from .registration import COMPANY_CODE_RE
@@ -564,6 +567,550 @@ async def _handle_company_profile_command(
     return ChatReply(text=text)
 
 
+# ------------------------------------------------ Phase 10 issue a quote
+
+QUOTE_ISSUE_TRIGGERS = ("ออกเอกสาร", "ออกใบเสนอราคา", "issue quote")
+# Re-issuing is legitimate after a real correction, but must be asked for.
+QUOTE_REISSUE_PHRASES = ("ออกเอกสารใหม่", "ออกซ้ำ", "reissue")
+
+# 7 days: long enough that a customer who opens the message over a weekend
+# still gets the file, short enough that a link forwarded on has stopped
+# working well before the quote itself is stale.
+QUOTE_LINK_TTL_SECONDS = 7 * 24 * 3600
+
+QUOTE_ISSUED = {
+    "th": "ออกเอกสาร {quote_id} เรียบร้อยแล้ว\nลิงก์ดาวน์โหลด (ใช้ได้ 7 วัน):\n{url}\n\nSHA-256: {sha}",
+    "en": "Issued {quote_id}.\nDownload link (valid 7 days):\n{url}\n\nSHA-256: {sha}",
+}
+QUOTE_ISSUED_NO_LINK = {
+    "th": "ออกเอกสาร {quote_id} เรียบร้อยแล้ว แต่สร้างลิงก์ดาวน์โหลดไม่สำเร็จ — เปิดจากหน้าแดชบอร์ดแทนได้\nSHA-256: {sha}",
+    "en": "Issued {quote_id}, but could not create a download link — use the dashboard instead.\nSHA-256: {sha}",
+}
+QUOTE_ALREADY_ISSUED = {
+    "th": "ใบเสนอราคา {quote_id} มีเอกสารที่ออกไปแล้ว ถ้าต้องการออกฉบับใหม่พิมพ์ \"ออกเอกสารใหม่ {quote_id}\"",
+    "en": "Quote {quote_id} already has an issued document. To issue another, say \"reissue {quote_id}\".",
+}
+QUOTE_COMPANY_INCOMPLETE = {
+    "th": "ยังออกเอกสารไม่ได้ — ข้อมูลบริษัทไม่ครบ ({detail})\nพิมพ์ \"ข้อมูลบริษัท\" เพื่อดูว่าขาดอะไร",
+    "en": "Cannot issue yet — the company profile is incomplete ({detail}).",
+}
+QUOTE_ISSUE_FAILED = {
+    "th": "ออกเอกสารไม่สำเร็จ: {detail}",
+    "en": "Could not issue the document: {detail}",
+}
+
+
+async def _handle_quote_issue(
+    client: DataClient, *, license_id, code: str, permission_keys: list[str],
+    language: str, actor_id: str, allow_reissue: bool,
+) -> ChatReply:
+    from .documents.snapshot import QuoteNotRenderable
+    from .quote_issue import QuoteAlreadyIssued, issue_quote_document
+    from .storage.base import (
+        DocumentStoreError, DocumentStoreNotConfigured, get_document_store,
+    )
+
+    if "quote.update" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    if not code:
+        return ChatReply(text=_t(SEARCH_NEEDS_TERM, language))
+
+    license_id = str(license_id)
+    try:
+        quotes = await client.list_quotes(license_id)
+    except Exception:
+        log.exception("quote lookup failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    wanted = code.strip().lower()
+    quote = next((q for q in quotes if str(q.get("quote_id") or "").lower() == wanted), None)
+    if quote is None:
+        return ChatReply(
+            text=_t(NOT_FOUND_BY_CODE, language).format(
+                what="ใบเสนอราคา" if language == "th" else "quote", code=code
+            )
+        )
+
+    try:
+        deal = await client.get_deal(license_id, str(quote["deal_id"]))
+        customer = await client.get_customer(license_id, str(deal["contact_id"]))
+        company = await client.get_company_profile(license_id)
+        document = await issue_quote_document(
+            client, license_id=license_id, quote=quote, deal=deal, customer=customer,
+            company=company, actor_id=actor_id, allow_reissue=allow_reissue,
+        )
+    except QuoteAlreadyIssued:
+        return ChatReply(
+            text=_t(QUOTE_ALREADY_ISSUED, language).format(quote_id=quote.get("quote_id")),
+            quick_replies=[("ออกเอกสารใหม่", f"ออกเอกสารใหม่ {quote.get('quote_id')}")],
+        )
+    except QuoteNotRenderable as exc:
+        return ChatReply(
+            text=_t(QUOTE_COMPANY_INCOMPLETE, language).format(detail=str(exc)),
+            quick_replies=[("ดูข้อมูลบริษัท", "ข้อมูลบริษัท")],
+        )
+    except DocumentStoreNotConfigured as exc:
+        return ChatReply(text=_t(QUOTE_ISSUE_FAILED, language).format(detail=str(exc)))
+    except Exception as exc:  # noqa: BLE001
+        log.exception("quote issue failed")
+        return ChatReply(text=_t(QUOTE_ISSUE_FAILED, language).format(detail=str(exc)[:160]))
+
+    sha = str(document.get("sha256") or "")[:16]
+    # The document exists either way at this point. A signing failure must
+    # therefore never read as "issuing failed" — it is a delivery problem
+    # with a working fallback, and saying otherwise would invite a re-issue
+    # that duplicates a real customer-facing file.
+    try:
+        url = await get_document_store().signed_url(
+            path=str(document.get("output_path") or ""),
+            expires_seconds=QUOTE_LINK_TTL_SECONDS,
+        )
+    except (DocumentStoreError, DocumentStoreNotConfigured):
+        log.exception("issued document could not be signed for delivery")
+        return ChatReply(
+            text=_t(QUOTE_ISSUED_NO_LINK, language).format(
+                quote_id=quote.get("quote_id"), sha=sha
+            ),
+            entity_type="quote", entity_id=str(quote.get("id") or ""),
+        )
+
+    return ChatReply(
+        text=_t(QUOTE_ISSUED, language).format(
+            quote_id=quote.get("quote_id"), url=url, sha=sha
+        ),
+        entity_type="quote",
+        entity_id=str(quote.get("id") or ""),
+        quick_replies=[("รายการใบเสนอราคา", "รายการใบเสนอราคา")],
+    )
+
+
+# ------------------------------------------- Phase 10 list / detail views
+#
+# Master Spec 9.2 lists these, and every phase so far shipped only the
+# `create` half of each entity: ACTION_PERMISSIONS already registers
+# ("read", "customer") and ("read", "deal"), but no handler implemented
+# them, so "ดูรายชื่อลูกค้า" passed the permission gate and then fell
+# through to nothing. These are the reads that make the rest usable —
+# without them a salesperson can enter data all day and never see it back.
+#
+# Matched deterministically, like the other closed-vocabulary commands:
+# the point of a list command is that it always works, and routing "ดู
+# รายชื่อลูกค้า" through a model that might mis-parse it to a create is a
+# bad trade for no benefit.
+
+# Ten is what fits in a LINE bubble without the person having to scroll
+# past the reply to find the next message. Beyond that the list stops being
+# readable in chat, so the answer is a link to the dashboard rather than a
+# longer wall of text.
+LIST_LIMIT = 10
+
+# Dashboard paths, resolved to liff.line.me deep links so a tap opens
+# inside LINE with the session already established.
+DASHBOARD_PATHS = {
+    "customers": "/liff/sales/customers",
+    "deals": "/liff/sales/deals",
+    "products": "/liff/sales/products",
+    "quotes": "/liff/sales/quotes",
+    "company": "/liff/sales/company",
+    "index": "/liff/sales",
+}
+
+
+def dashboard_link(section: str) -> str | None:
+    """A LIFF deep link to a dashboard page, or None when no LIFF id is
+    configured.
+
+    Returning None rather than a half-formed URL is deliberate: a link that
+    opens an error page is worse than no link, because the person taps it,
+    waits, and ends up somewhere broken instead of just reading the list.
+    """
+    from ..config import settings
+
+    liff_id = (settings.liff_sales_id or "").strip()
+    path = DASHBOARD_PATHS.get(section)
+    if not liff_id or not path:
+        return None
+    return f"https://liff.line.me/{liff_id}{path}"
+
+CUSTOMER_LIST_PHRASES = ("รายชื่อลูกค้า", "รายการลูกค้า", "ดูลูกค้า", "ลูกค้าทั้งหมด", "customer list")
+DEAL_LIST_PHRASES = ("รายการดีล", "รายชื่อดีล", "ดูดีล", "ดีลทั้งหมด", "deal list")
+DEAL_OPEN_PHRASES = ("ดีลที่ยังไม่ปิด", "ดีลค้าง", "ดีลเปิดอยู่", "open deals")
+PRODUCT_LIST_PHRASES = ("รายการสินค้า", "รายชื่อสินค้า", "ดูสินค้า", "สินค้าทั้งหมด", "product list")
+QUOTE_LIST_PHRASES = ("รายการใบเสนอราคา", "ใบเสนอราคาทั้งหมด", "ดูใบเสนอราคา", "quote list")
+
+CUSTOMER_SEARCH_TRIGGERS = ("ค้นหาลูกค้า", "หาลูกค้า", "find customer")
+CUSTOMER_DETAIL_TRIGGERS = ("ข้อมูลลูกค้า", "รายละเอียดลูกค้า", "customer detail")
+DEAL_DETAIL_TRIGGERS = ("ข้อมูลดีล", "รายละเอียดดีล", "deal detail")
+
+EMPTY_LIST = {
+    "th": "ยังไม่มี{what}ในระบบ",
+    "en": "No {what} yet.",
+}
+LIST_TRUNCATED = {
+    "th": "\n\nแสดง {shown} จากทั้งหมด {total} รายการ",
+    "en": "\n\nShowing {shown} of {total}.",
+}
+LIST_SEE_ALL = {
+    "th": "\nดูทั้งหมดในแดชบอร์ด:\n{url}",
+    "en": "\nSee all in the dashboard:\n{url}",
+}
+LIST_SEE_ALL_NO_LINK = {
+    "th": "\n(ยังเปิดแดชบอร์ดไม่ได้ — ยังไม่ได้ตั้งค่า LIFF)",
+    "en": "\n(dashboard unavailable — LIFF is not configured)",
+}
+OPEN_DASHBOARD = {"th": "เปิดแดชบอร์ด", "en": "Open dashboard"}
+NOT_FOUND_BY_CODE = {
+    "th": "ไม่พบ{what}รหัส {code}",
+    "en": "No {what} with code {code}.",
+}
+SEARCH_NEEDS_TERM = {
+    "th": "พิมพ์ชื่อที่ต้องการค้นหาต่อท้ายด้วย เช่น \"ค้นหาลูกค้า สมชาย\"",
+    "en": "Add a name to search for, e.g. \"find customer Somchai\".",
+}
+SEARCH_NO_MATCH = {
+    "th": "ไม่พบลูกค้าที่ตรงกับ \"{term}\"",
+    "en": "No customer matching \"{term}\".",
+}
+
+DEAL_STAGE_LABELS = {
+    "new": {"th": "ใหม่", "en": "new"},
+    "proposed": {"th": "เสนอราคาแล้ว", "en": "proposed"},
+    "won": {"th": "สำเร็จ", "en": "won"},
+    "lost": {"th": "ไม่สำเร็จ", "en": "lost"},
+}
+CUSTOMER_STAGE_LABELS = {
+    "lead": {"th": "ลูกค้ามุ่งหวัง", "en": "lead"},
+    "contact": {"th": "ลูกค้า", "en": "contact"},
+}
+QUOTE_STATUS_LABELS = {
+    "draft": {"th": "ร่าง", "en": "draft"},
+    "sent": {"th": "ส่งแล้ว", "en": "sent"},
+    "accepted": {"th": "ตอบรับแล้ว", "en": "accepted"},
+    "rejected": {"th": "ปฏิเสธ", "en": "rejected"},
+    "expired": {"th": "หมดอายุ", "en": "expired"},
+}
+
+
+def _label(table: dict, key, language: str) -> str:
+    entry = table.get(str(key or "").lower())
+    return _t(entry, language) if entry else str(key or "")
+
+
+def _matches_phrase(message: str, phrases: tuple[str, ...]) -> bool:
+    compact = (message or "").strip().lower().replace(" ", "")
+    return bool(compact) and any(compact == p.replace(" ", "") for p in phrases)
+
+
+def _parse_after_trigger(message: str, triggers: tuple[str, ...]) -> str | None:
+    """The text following a trigger, or None if no trigger matched.
+
+    An empty string is a real result meaning "trigger present, nothing
+    after it" — the caller turns that into a prompt rather than guessing.
+    """
+    text = (message or "").strip()
+    lowered = text.lower()
+    for trigger in triggers:
+        index = lowered.find(trigger.lower())
+        if index == -1:
+            continue
+        return _strip_leading_connector(text[index + len(trigger):].strip())
+    return None
+
+
+def _customer_name(customer: dict) -> str:
+    parts = [customer.get("first_name") or "", customer.get("last_name") or ""]
+    return " ".join(p for p in parts if p).strip() or "-"
+
+
+def _truncation_note(shown: int, total: int, language: str, section: str) -> str:
+    """What to append when a list did not fit.
+
+    Says the real total either way — knowing there are 240 customers is
+    useful even when the link cannot be built — and adds the deep link only
+    when there is one to add.
+    """
+    if total <= shown:
+        return ""
+    note = _t(LIST_TRUNCATED, language).format(shown=shown, total=total)
+    url = dashboard_link(section)
+    if url:
+        return note + _t(LIST_SEE_ALL, language).format(url=url)
+    return note + _t(LIST_SEE_ALL_NO_LINK, language)
+
+
+def _dashboard_button(section: str, language: str) -> tuple[str, str] | None:
+    """The (label, url) pair for a dashboard quick-reply button.
+
+    A uri action rather than a message action: tapping opens the page
+    immediately instead of sending a message that the bot has to answer
+    with a link the person then taps again.
+    """
+    url = dashboard_link(section)
+    return (_t(OPEN_DASHBOARD, language), url) if url else None
+
+
+async def _handle_customer_list(
+    client: DataClient, *, license_id, permission_keys: list[str], language: str,
+    search_term: str | None = None,
+) -> ChatReply:
+    if "customer.read" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    try:
+        customers = await client.list_customers(str(license_id))
+    except Exception:
+        log.exception("customer list failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    if search_term:
+        needle = search_term.lower()
+        # Filtered here rather than in a Data-tier query: the tenant-scoped
+        # list is already fetched, the volumes at SMB scale are small, and
+        # adding a search endpoint for this would be a schema change for no
+        # behavioural gain. Revisit if a tenant ever has thousands.
+        customers = [
+            c for c in customers
+            if needle in _customer_name(c).lower()
+            or needle in str(c.get("phone") or "")
+            or needle in str(c.get("customer_id") or "").lower()
+        ]
+        if not customers:
+            return ChatReply(text=_t(SEARCH_NO_MATCH, language).format(term=search_term))
+
+    if not customers:
+        return ChatReply(
+            text=_t(EMPTY_LIST, language).format(what="ลูกค้า" if language == "th" else "customers"),
+            quick_replies=[("เพิ่มลูกค้าใหม่", "สร้างลูกค้า")],
+        )
+
+    shown = customers[:LIST_LIMIT]
+    lines = [
+        f"{c.get('customer_id') or '-'} · {_customer_name(c)}"
+        f" · {_label(CUSTOMER_STAGE_LABELS, c.get('stage'), language)}"
+        + (f" · {c.get('phone')}" if c.get("phone") else "")
+        for c in shown
+    ]
+    text = "\n".join(lines) + _truncation_note(len(shown), len(customers), language, "customers")
+    return ChatReply(
+        text=text,
+        quick_replies=[
+            ("ดูรายละเอียด", f"ข้อมูลลูกค้า {shown[0].get('customer_id')}"),
+            ("ค้นหาลูกค้า", "ค้นหาลูกค้า "),
+            ("รายการดีล", "รายการดีล"),
+        ],
+        quick_reply_url=_dashboard_button("customers", language),
+    )
+
+
+async def _handle_customer_detail(
+    client: DataClient, *, license_id, code: str, permission_keys: list[str], language: str,
+) -> ChatReply:
+    if "customer.read" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    if not code:
+        return ChatReply(text=_t(SEARCH_NEEDS_TERM, language))
+    try:
+        customers = await client.list_customers(str(license_id))
+    except Exception:
+        log.exception("customer detail failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    wanted = code.strip().lower()
+    customer = next(
+        (c for c in customers if str(c.get("customer_id") or "").lower() == wanted), None
+    )
+    if customer is None:
+        return ChatReply(
+            text=_t(NOT_FOUND_BY_CODE, language).format(
+                what="ลูกค้า" if language == "th" else "customer", code=code
+            )
+        )
+
+    rows = [
+        f"{customer.get('customer_id')} · {_customer_name(customer)}",
+        f"สถานะ: {_label(CUSTOMER_STAGE_LABELS, customer.get('stage'), language)}",
+    ]
+    for field_name, label in (
+        ("phone", "โทร"), ("email", "อีเมล"), ("address", "ที่อยู่"), ("notes", "บันทึก"),
+    ):
+        if customer.get(field_name):
+            rows.append(f"{label}: {customer[field_name]}")
+
+    return ChatReply(
+        text="\n".join(rows),
+        entity_type="customer",
+        entity_id=str(customer.get("id") or ""),
+        quick_replies=[
+            ("สร้างดีล", f"สร้างดีลให้ {_customer_name(customer)}"),
+            ("รายชื่อลูกค้า", "รายชื่อลูกค้า"),
+        ],
+    )
+
+
+async def _handle_deal_list(
+    client: DataClient, *, license_id, permission_keys: list[str], language: str,
+    open_only: bool = False,
+) -> ChatReply:
+    if "deal.read" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    try:
+        deals = await client.list_deals(str(license_id))
+    except Exception:
+        log.exception("deal list failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    if open_only:
+        # "Open" means not yet resolved either way. Filtering on the two
+        # terminal stages rather than listing the open ones means a stage
+        # added later is treated as open by default, which is the safer
+        # direction to be wrong in for a work queue.
+        deals = [d for d in deals if str(d.get("stage") or "").lower() not in ("won", "lost")]
+
+    if not deals:
+        return ChatReply(
+            text=_t(EMPTY_LIST, language).format(what="ดีล" if language == "th" else "deals"),
+            quick_replies=[("สร้างดีล", "สร้างดีล")],
+        )
+
+    shown = deals[:LIST_LIMIT]
+    lines = [
+        f"{d.get('deal_id') or '-'} · {_label(DEAL_STAGE_LABELS, d.get('stage'), language)}"
+        + (f" · {len(d.get('products') or [])} รายการ" if d.get("products") else "")
+        for d in shown
+    ]
+    text = "\n".join(lines) + _truncation_note(len(shown), len(deals), language, "deals")
+    return ChatReply(
+        text=text,
+        quick_replies=[
+            ("ดูรายละเอียด", f"ข้อมูลดีล {shown[0].get('deal_id')}"),
+            ("ดีลที่ยังไม่ปิด", "ดีลที่ยังไม่ปิด"),
+            ("รายชื่อลูกค้า", "รายชื่อลูกค้า"),
+        ],
+        quick_reply_url=_dashboard_button("deals", language),
+    )
+
+
+async def _handle_deal_detail(
+    client: DataClient, *, license_id, code: str, permission_keys: list[str], language: str,
+) -> ChatReply:
+    if "deal.read" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    if not code:
+        return ChatReply(text=_t(SEARCH_NEEDS_TERM, language))
+    try:
+        deals = await client.list_deals(str(license_id))
+    except Exception:
+        log.exception("deal detail failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    wanted = code.strip().lower()
+    deal = next((d for d in deals if str(d.get("deal_id") or "").lower() == wanted), None)
+    if deal is None:
+        return ChatReply(
+            text=_t(NOT_FOUND_BY_CODE, language).format(
+                what="ดีล" if language == "th" else "deal", code=code
+            )
+        )
+
+    rows = [
+        f"{deal.get('deal_id')} · {_label(DEAL_STAGE_LABELS, deal.get('stage'), language)}",
+    ]
+    if deal.get("notes"):
+        rows.append(f"บันทึก: {deal['notes']}")
+
+    products = deal.get("products") or []
+    if products:
+        rows.append("")
+        rows.append("รายการสินค้า:")
+        # The same deterministic arithmetic the document uses, so what a
+        # salesperson reads in chat can never disagree with what the
+        # customer receives on the PDF.
+        items = build_line_items(products)
+        for item in items:
+            rows.append(
+                f"  {item['line_no']}. {item['product_name']}"
+                f" × {item['qty']} = {Decimal(item['line_total']):,.2f}"
+            )
+        subtotal = sum(Decimal(i["line_total"]) for i in items)
+        rows.append(f"รวม: {subtotal:,.2f} บาท (ยังไม่รวมภาษี)")
+    else:
+        rows.append("ยังไม่มีรายการสินค้าในดีลนี้")
+
+    return ChatReply(
+        text="\n".join(rows),
+        entity_type="deal",
+        entity_id=str(deal.get("id") or ""),
+        quick_replies=[
+            ("สร้างใบเสนอราคา", f"สร้างใบเสนอราคาจากดีล {deal.get('deal_id')}"),
+            ("รายการดีล", "รายการดีล"),
+        ],
+        quick_reply_url=_dashboard_button("deals", language),
+    )
+
+
+async def _handle_product_list(
+    client: DataClient, *, license_id, permission_keys: list[str], language: str,
+) -> ChatReply:
+    if "product.manage" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    try:
+        products = await client.list_products(str(license_id))
+    except Exception:
+        log.exception("product list failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    if not products:
+        return ChatReply(
+            text=_t(EMPTY_LIST, language).format(what="สินค้า" if language == "th" else "products"),
+            quick_replies=[("เพิ่มสินค้า", "สร้างสินค้า")],
+        )
+
+    shown = products[:LIST_LIMIT]
+    lines = []
+    for p in shown:
+        price = p.get("unit_price")
+        price_text = f" · {Decimal(str(price)):,.2f}" if price not in (None, "") else ""
+        lines.append(f"{p.get('sku') or '-'} · {p.get('name') or '-'}{price_text}")
+    text = "\n".join(lines) + _truncation_note(len(shown), len(products), language, "products")
+    return ChatReply(
+        text=text,
+        quick_replies=[("รายการดีล", "รายการดีล")],
+        quick_reply_url=_dashboard_button("products", language),
+    )
+
+
+async def _handle_quote_list(
+    client: DataClient, *, license_id, permission_keys: list[str], language: str,
+) -> ChatReply:
+    if "quote.read" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    try:
+        quotes = await client.list_quotes(str(license_id))
+    except Exception:
+        log.exception("quote list failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    if not quotes:
+        return ChatReply(
+            text=_t(EMPTY_LIST, language).format(
+                what="ใบเสนอราคา" if language == "th" else "quotes"
+            ),
+            quick_replies=[("รายการดีล", "รายการดีล")],
+        )
+
+    shown = quotes[:LIST_LIMIT]
+    lines = [
+        f"{q.get('quote_id') or '-'} · {_label(QUOTE_STATUS_LABELS, q.get('status'), language)}"
+        + (" · มีเอกสารแล้ว" if q.get("generated_document_id") else "")
+        for q in shown
+    ]
+    text = "\n".join(lines) + _truncation_note(len(shown), len(quotes), language, "quotes")
+    return ChatReply(
+        text=text,
+        quick_replies=[("ออกเอกสาร", f"ออกเอกสาร {shown[0].get('quote_id')}")],
+        quick_reply_url=_dashboard_button("quotes", language),
+    )
+
+
 DEAL_STAGE_UPDATED = {
     "th": "อัปเดตดีล {deal_id} เป็นสถานะ {stage} เรียบร้อยแล้ว",
     "en": "Deal {deal_id} is now {stage}.",
@@ -735,6 +1282,17 @@ class ChatReply:
     entity_type: str | None = None
     entity_id: str | None = None
     intent: dict | None = field(default=None, repr=False)
+    # Phase 10 — suggested next actions, rendered as LINE quick-reply
+    # buttons. Plain (label, text_to_send) pairs rather than LINE's wire
+    # format, so this module stays a channel-agnostic domain layer and the
+    # LINE adapter owns the JSON shape. A caller on another channel can
+    # render the same list however it likes, or ignore it.
+    quick_replies: list[tuple[str, str]] = field(default_factory=list)
+    # A single (label, url) button that opens a link directly, kept apart
+    # from quick_replies because it is a different LINE action type and
+    # because there is only ever one destination worth offering: the
+    # dashboard page showing the same thing the reply just summarised.
+    quick_reply_url: tuple[str, str] | None = None
 
 
 def greet(ctx: ResolvedContext, language: str = "th") -> str:
@@ -1716,6 +2274,77 @@ async def handle_chat_message(
         return await _handle_technician_invite_request(
             client, ctx=ctx, permission_keys=permission_keys, language=language,
         )
+
+    # Phase 10 list/detail reads (Master Spec 9.2). Checked before the AI
+    # path and before pending-intent: these are complete requests in
+    # themselves, never a slot-filling answer, and a person asking to see
+    # their customer list should get it even mid-conversation.
+    if ctx.oa == "sales":
+        if _matches_phrase(message, CUSTOMER_LIST_PHRASES):
+            return await _handle_customer_list(
+                client, license_id=license_id, permission_keys=permission_keys,
+                language=language,
+            )
+        if _matches_phrase(message, DEAL_OPEN_PHRASES):
+            return await _handle_deal_list(
+                client, license_id=license_id, permission_keys=permission_keys,
+                language=language, open_only=True,
+            )
+        if _matches_phrase(message, DEAL_LIST_PHRASES):
+            return await _handle_deal_list(
+                client, license_id=license_id, permission_keys=permission_keys,
+                language=language,
+            )
+        if _matches_phrase(message, PRODUCT_LIST_PHRASES):
+            return await _handle_product_list(
+                client, license_id=license_id, permission_keys=permission_keys,
+                language=language,
+            )
+        if _matches_phrase(message, QUOTE_LIST_PHRASES):
+            return await _handle_quote_list(
+                client, license_id=license_id, permission_keys=permission_keys,
+                language=language,
+            )
+
+        search_term = _parse_after_trigger(message, CUSTOMER_SEARCH_TRIGGERS)
+        if search_term is not None:
+            if not search_term:
+                return ChatReply(text=_t(SEARCH_NEEDS_TERM, language))
+            return await _handle_customer_list(
+                client, license_id=license_id, permission_keys=permission_keys,
+                language=language, search_term=search_term,
+            )
+
+        customer_code = _parse_after_trigger(message, CUSTOMER_DETAIL_TRIGGERS)
+        if customer_code is not None:
+            return await _handle_customer_detail(
+                client, license_id=license_id, code=customer_code,
+                permission_keys=permission_keys, language=language,
+            )
+
+        # Re-issue checked first: "ออกเอกสารใหม่" contains "ออกเอกสาร", the
+        # same substring trap as ไม่สำเร็จ/สำเร็จ in Phase 9.
+        reissue_code = _parse_after_trigger(message, QUOTE_REISSUE_PHRASES)
+        if reissue_code is not None:
+            return await _handle_quote_issue(
+                client, license_id=license_id, code=reissue_code,
+                permission_keys=permission_keys, language=language,
+                actor_id=ctx.chann_uid, allow_reissue=True,
+            )
+        issue_code = _parse_after_trigger(message, QUOTE_ISSUE_TRIGGERS)
+        if issue_code is not None:
+            return await _handle_quote_issue(
+                client, license_id=license_id, code=issue_code,
+                permission_keys=permission_keys, language=language,
+                actor_id=ctx.chann_uid, allow_reissue=False,
+            )
+
+        deal_code = _parse_after_trigger(message, DEAL_DETAIL_TRIGGERS)
+        if deal_code is not None:
+            return await _handle_deal_detail(
+                client, license_id=license_id, code=deal_code,
+                permission_keys=permission_keys, language=language,
+            )
 
     # Company identity (Phase 10) — same closed-pattern reasoning, and one
     # step stronger: these values are printed on a legal document the

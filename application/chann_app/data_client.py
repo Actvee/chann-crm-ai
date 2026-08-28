@@ -770,6 +770,26 @@ class DataClient:
         )
         return self._unwrap(resp)
 
+    async def update_deal(
+        self, license_id: str, deal_id: str, fields: dict, actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.patch(
+            f"{self._base}/internal/v1/licenses/{license_id}/deals/{deal_id}",
+            headers=self._headers_for(actor_id), json=fields,
+        )
+        return self._unwrap(resp)
+
+    async def remove_deal_product(
+        self, license_id: str, deal_id: str, deal_product_id: str,
+        actor_id: str | None = None,
+    ) -> None:
+        resp = await self._client.delete(
+            f"{self._base}/internal/v1/licenses/{license_id}"
+            f"/deals/{deal_id}/products/{deal_product_id}",
+            headers=self._headers_for(actor_id),
+        )
+        self._unwrap(resp)
+
     async def transition_deal_stage(
         self, license_id: str, deal_id: str, stage: str, *,
         allow_reopen: bool = False, actor_id: str | None = None,
@@ -911,6 +931,16 @@ class DataClient:
             f"{self._base}/internal/v1/licenses/{license_id}"
             f"/document-template-versions/{version_id}/archive",
             headers=self._headers_for(actor_id),
+        )
+        return self._unwrap(resp)
+
+    async def link_quote_document(
+        self, license_id: str, quote_id: str, document_id: str,
+        actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/quotes/{quote_id}/document",
+            headers=self._headers_for(actor_id), params={"document_id": document_id},
         )
         return self._unwrap(resp)
 

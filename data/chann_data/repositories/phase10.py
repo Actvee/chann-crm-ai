@@ -113,6 +113,30 @@ class QuoteRepository:
             select(Quote).where(Quote.id == quote_id, Quote.license_id == scope.license_id)
         ).scalars().first()
 
+    def link_document(
+        self, scope: TenantScope, quote_id: uuid.UUID, document_id: uuid.UUID,
+    ) -> Quote:
+        """Point a quote at the document that was generated for it.
+
+        Tenant-scoped on both sides: the quote must belong to this license,
+        and so must the document, so a caller cannot attach another
+        tenant's document to its own quote.
+        """
+        row = self.get(scope, quote_id)
+        if row is None:
+            raise Phase10NotFound("quote not found")
+        document = self._s.execute(
+            select(GeneratedDocument).where(
+                GeneratedDocument.id == document_id,
+                GeneratedDocument.license_id == scope.license_id,
+            )
+        ).scalars().first()
+        if document is None:
+            raise Phase10NotFound("generated document not found")
+        row.generated_document_id = document.id
+        self._s.flush()
+        return row
+
     def list_for_license(self, scope: TenantScope, *, status: str | None = None) -> list[Quote]:
         query = select(Quote).where(Quote.license_id == scope.license_id)
         if status:

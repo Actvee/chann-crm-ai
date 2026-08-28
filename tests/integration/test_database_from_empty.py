@@ -2839,3 +2839,202 @@ class TestPhase10CompanyProfile:
             repo = CompanyProfileRepository(session)
             assert repo.get(scope_a).tax_id == "0105558123456"
             assert repo.get(scope_b).tax_id is None
+
+
+class TestPhase10QuoteDocumentLink:
+    """A quote must be able to name the document that was issued for it.
+
+    generated_document_id existed on the schema from the start but nothing
+    ever wrote it, so an issued quote had no way back to its own evidence.
+    """
+
+    def _tenant(self, migrated_db, suffix):
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import ChannIdentity
+        from chann_data.repositories.phase65 import RegistrationRepository
+
+        with Session(migrated_db) as session:
+            session.add(ChannIdentity(
+                chann_uid=f"CHN-QDL-{suffix}", line_user_id=f"line-qdl-{suffix}",
+                primary_role="sales",
+            ))
+            session.commit()
+        with Session(migrated_db) as session:
+            lic = RegistrationRepository(session).create_license(
+                company_name=f"Doc Link {suffix}", created_by_chann_uid=f"CHN-QDL-{suffix}",
+            )
+            session.commit()
+            return lic.id
+
+    def _quote_with_document(self, migrated_db, license_id, session_factory):
+        from chann_data.repositories.phase10 import (
+            DocumentTemplateRepository, GeneratedDocumentRepository, QuoteRepository,
+        )
+        from chann_data.repositories.phase9 import CustomerRepository, DealRepository
+        from chann_data.repositories.tenant_scope import TenantScope
+
+        scope = TenantScope(license_id=license_id)
+        with session_factory() as session:
+            customer = CustomerRepository(session).create(
+                scope, first_name="ก", last_name="ข", phone="0800000000",
+            )
+            deal = DealRepository(session).create(scope, contact_id=customer.id)
+            quote = QuoteRepository(session).create(scope, deal_id=deal.id)
+            template = DocumentTemplateRepository(session).create_template(
+                scope, document_type="quote", template_code="T1", template_name="T1",
+            )
+            version = DocumentTemplateRepository(session).create_draft_version(
+                scope, template.id, source_docx_path="builtin://none",
+                intermediate_model={}, mapping_schema={},
+                compiled_template_path="builtin://quote/v1",
+            )
+            session.commit()
+            quote_id, version_id = quote.id, version.id
+
+        with session_factory() as session:
+            document = GeneratedDocumentRepository(session).record(
+                scope, document_type="quote", source_entity_type="quote",
+                source_entity_id=quote_id, template_version_id=version_id,
+                data_snapshot={"totals": {"grand_total": "1.00"}},
+                output_path="gs://bucket/documents/x.pdf", sha256="a" * 64,
+            )
+            session.commit()
+            return quote_id, document.id
+
+    def test_link_document_points_the_quote_at_its_evidence(self, migrated_db):
+        from sqlalchemy.orm import Session
+
+        from chann_data.repositories.phase10 import QuoteRepository
+        from chann_data.repositories.tenant_scope import TenantScope
+
+        license_id = self._tenant(migrated_db, "A")
+        factory = lambda: Session(migrated_db)  # noqa: E731
+        quote_id, document_id = self._quote_with_document(migrated_db, license_id, factory)
+        scope = TenantScope(license_id=license_id)
+
+        with Session(migrated_db) as session:
+            QuoteRepository(session).link_document(scope, quote_id, document_id)
+            session.commit()
+
+        with Session(migrated_db) as session:
+            assert QuoteRepository(session).get(scope, quote_id).generated_document_id == document_id
+
+    def test_a_document_from_another_tenant_cannot_be_attached(self, migrated_db):
+        """Both sides are scoped: without the document-side check a caller
+        could point its own quote at someone else's evidence."""
+        import pytest as _pytest
+        from sqlalchemy.orm import Session
+
+        from chann_data.repositories.phase10 import Phase10NotFound, QuoteRepository
+        from chann_data.repositories.tenant_scope import TenantScope
+
+        a = self._tenant(migrated_db, "B")
+        b = self._tenant(migrated_db, "C")
+        factory = lambda: Session(migrated_db)  # noqa: E731
+        quote_a, _ = self._quote_with_document(migrated_db, a, factory)
+        _, document_b = self._quote_with_document(migrated_db, b, factory)
+
+        with Session(migrated_db) as session:
+            with _pytest.raises(Phase10NotFound):
+                QuoteRepository(session).link_document(
+                    TenantScope(license_id=a), quote_a, document_b,
+                )
+
+
+class TestPhase9DealEditing:
+    """Editing a deal and removing a line item — the writes the dashboard
+    needs and chat had no way to express either."""
+
+    def _deal(self, migrated_db, suffix):
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import ChannIdentity
+        from chann_data.repositories.phase65 import RegistrationRepository
+        from chann_data.repositories.phase9 import CustomerRepository, DealRepository
+        from chann_data.repositories.tenant_scope import TenantScope
+
+        with Session(migrated_db) as session:
+            session.add(ChannIdentity(
+                chann_uid=f"CHN-DE-{suffix}", line_user_id=f"line-de-{suffix}",
+                primary_role="sales",
+            ))
+            session.commit()
+        with Session(migrated_db) as session:
+            lic = RegistrationRepository(session).create_license(
+                company_name=f"Edit {suffix}", created_by_chann_uid=f"CHN-DE-{suffix}",
+            )
+            session.commit()
+            license_id = lic.id
+        scope = TenantScope(license_id=license_id)
+        with Session(migrated_db) as session:
+            customer = CustomerRepository(session).create(
+                scope, first_name="ก", last_name="ข", phone="0800000000",
+            )
+            deal = DealRepository(session).create(scope, contact_id=customer.id)
+            session.commit()
+            return scope, deal.id
+
+    def test_update_changes_notes_but_never_the_stage(self, migrated_db):
+        """Stage has its own transition method with the state machine and
+        the reopen permission behind it. A generic patch that could set it
+        would make that machine advisory rather than enforced."""
+        from sqlalchemy.orm import Session
+
+        from chann_data.repositories.phase9 import DealRepository
+
+        scope, deal_id = self._deal(migrated_db, "A")
+        with Session(migrated_db) as session:
+            DealRepository(session).update(
+                scope, deal_id, {"notes": "ลูกค้าขอส่วนลด", "stage": "won"},
+            )
+            session.commit()
+        with Session(migrated_db) as session:
+            row = DealRepository(session).get(scope, deal_id)
+            assert row.notes == "ลูกค้าขอส่วนลด"
+            assert row.stage == "new", "stage must not be settable through update()"
+
+    def test_remove_product_takes_the_line_off_the_deal(self, migrated_db):
+        from sqlalchemy.orm import Session
+
+        from chann_data.repositories.phase9 import DealRepository
+
+        scope, deal_id = self._deal(migrated_db, "B")
+        with Session(migrated_db) as session:
+            repo = DealRepository(session)
+            keep = repo.add_product(
+                scope, deal_id, product_id=None, product_name="พัดลม",
+                quoted_unit_price="1250", qty=2,
+            )
+            drop = repo.add_product(
+                scope, deal_id, product_id=None, product_name="ใส่ผิด",
+                quoted_unit_price="1", qty=1,
+            )
+            session.commit()
+            keep_id, drop_id = keep.id, drop.id
+
+        with Session(migrated_db) as session:
+            removed = DealRepository(session).remove_product(scope, deal_id, drop_id)
+            # Returned so the caller can name it: the row is gone afterwards,
+            # so the audit entry is the only record of what was removed.
+            assert removed.product_name == "ใส่ผิด"
+            session.commit()
+
+        with Session(migrated_db) as session:
+            remaining = DealRepository(session).products_of(deal_id)
+            assert [p.id for p in remaining] == [keep_id]
+
+    def test_another_tenants_deal_cannot_be_edited_or_stripped(self, migrated_db):
+        import pytest as _pytest
+        from sqlalchemy.orm import Session
+
+        from chann_data.repositories.phase9 import DealRepository, Phase9NotFound
+
+        scope_a, deal_a = self._deal(migrated_db, "C")
+        scope_b, _ = self._deal(migrated_db, "D")
+
+        with Session(migrated_db) as session:
+            with _pytest.raises(Phase9NotFound):
+                DealRepository(session).update(scope_b, deal_a, {"notes": "x"})
+            with _pytest.raises(Phase9NotFound):
+                DealRepository(session).remove_product(scope_b, deal_a, deal_a)

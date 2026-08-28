@@ -249,6 +249,17 @@ class FakeDataClient:
             return [d for d in self._deals if d["stage"] == stage]
         return list(self._deals)
 
+    async def list_products(self, license_id, *args, **kwargs):
+        self.recorded.append(("list_products", license_id))
+        return list(getattr(self, "_products", []))
+
+    async def list_quotes(self, license_id, status=None):
+        self.recorded.append(("list_quotes", license_id, status))
+        quotes = list(getattr(self, "_quotes", []))
+        if status:
+            return [q for q in quotes if q["status"] == status]
+        return quotes
+
     async def transition_deal_stage(self, license_id, deal_id, stage, *,
                                      allow_reopen=False, actor_id=None):
         self.recorded.append(
@@ -653,13 +664,20 @@ class TestPermissionGateIsEnforcedInCode:
         assert reply.entity_type == "customer"
 
     async def test_action_aliases_are_normalised(self):
-        """The model uses view/list/read interchangeably; all must resolve."""
+        """The model uses view/list/read interchangeably; all must resolve.
+
+        The message deliberately is NOT one of the Phase 10 list triggers
+        ("ดูลูกค้า", "รายชื่อลูกค้า", ...): those are matched
+        deterministically before the AI is consulted at all, so using one
+        here would exercise the list handler and never reach the alias
+        normalisation this test exists to check.
+        """
         for action in ("view", "list", "read", "show", "get"):
             ai = httpx.AsyncClient(transport=_ai(json.dumps(
                 {"action": action, "entity": "customer", "fields": {}, "missing": []})))
             reply = await handle_chat_message(
                 FakeDataClient(permission_keys=["customer.read"]),
-                message="ดูลูกค้า", ctx=_ctx(), ai_client=ai,
+                message="อยากทราบข้อมูลของลูกค้ารายนี้หน่อย", ctx=_ctx(), ai_client=ai,
             )
             assert "เข้าใจแล้ว" in reply.text, f"action={action} was not normalised"
 
@@ -2355,3 +2373,174 @@ class TestPhase10CompanyProfileMultiField:
         )
         assert "ชื่อนิติบุคคล" in reply.text
         assert "เบอร์โทรบริษัท" in reply.text
+
+
+class TestPhase10ListAndDetailViews:
+    """Master Spec 9.2's read side, which every earlier phase skipped.
+
+    ACTION_PERMISSIONS already registered ("read", "customer") and
+    ("read", "deal"), but no handler implemented them — so a list request
+    passed the permission gate and then fell through to nothing. Without
+    these a salesperson can enter data all day and never see it back.
+    """
+
+    async def test_customer_list_shows_code_name_stage_and_phone(self):
+        client = FakeDataClient(permission_keys=["customer.read"])
+        await client.create_customer("L1", {
+            "first_name": "สมชาย", "last_name": "ใจดี", "phone": "0812345678",
+        })
+        reply = await handle_chat_message(client, message="รายชื่อลูกค้า", ctx=_ctx())
+        assert "สมชาย ใจดี" in reply.text
+        assert "0812345678" in reply.text
+        assert reply.quick_replies, "a list should offer an obvious next action"
+
+    async def test_empty_list_says_so_and_offers_to_create(self):
+        client = FakeDataClient(permission_keys=["customer.read"])
+        reply = await handle_chat_message(client, message="รายชื่อลูกค้า", ctx=_ctx())
+        assert "ยังไม่มี" in reply.text
+        assert any("เพิ่มลูกค้า" in label for label, _ in reply.quick_replies)
+
+    async def test_customer_search_filters_by_name(self):
+        client = FakeDataClient(permission_keys=["customer.read"])
+        await client.create_customer("L1", {"first_name": "สมชาย", "last_name": "ใจดี"})
+        await client.create_customer("L1", {"first_name": "สมหญิง", "last_name": "รักดี"})
+        reply = await handle_chat_message(client, message="ค้นหาลูกค้า สมหญิง", ctx=_ctx())
+        assert "สมหญิง" in reply.text
+        assert "สมชาย" not in reply.text
+
+    async def test_search_with_no_term_asks_rather_than_listing_everything(self):
+        client = FakeDataClient(permission_keys=["customer.read"])
+        reply = await handle_chat_message(client, message="ค้นหาลูกค้า", ctx=_ctx())
+        assert "พิมพ์ชื่อ" in reply.text
+
+    async def test_deal_detail_shows_line_items_and_a_subtotal(self):
+        """The arithmetic is the same build_line_items the PDF uses, so what
+        a salesperson reads in chat can never disagree with what the
+        customer receives."""
+        client = FakeDataClient(permission_keys=["deal.read"])
+        customer = await client.create_customer("L1", {"first_name": "สมชาย", "last_name": "ใจดี"})
+        deal = await client.create_deal("L1", {"contact_id": customer["id"]})
+        deal["products"] = [
+            {"product_name": "พัดลม", "qty": 3, "quoted_unit_price": "1250.00"},
+        ]
+        reply = await handle_chat_message(
+            client, message=f"ข้อมูลดีล {deal['deal_id']}", ctx=_ctx(),
+        )
+        assert "พัดลม" in reply.text
+        assert "3,750.00" in reply.text
+
+    async def test_open_deals_excludes_the_terminal_stages(self):
+        client = FakeDataClient(permission_keys=["deal.read"])
+        customer = await client.create_customer("L1", {"first_name": "ก", "last_name": "ข"})
+        open_deal = await client.create_deal("L1", {"contact_id": customer["id"]})
+        closed = await client.create_deal("L1", {"contact_id": customer["id"]})
+        closed["stage"] = "won"
+        reply = await handle_chat_message(client, message="ดีลที่ยังไม่ปิด", ctx=_ctx())
+        assert open_deal["deal_id"] in reply.text
+        assert closed["deal_id"] not in reply.text
+
+    async def test_unknown_code_says_not_found_rather_than_guessing(self):
+        client = FakeDataClient(permission_keys=["deal.read"])
+        reply = await handle_chat_message(client, message="ข้อมูลดีล D-9999-9999", ctx=_ctx())
+        assert "ไม่พบ" in reply.text
+
+    async def test_reads_require_the_matching_read_permission(self):
+        client = FakeDataClient(permission_keys=["customer.create"])
+        reply = await handle_chat_message(client, message="รายชื่อลูกค้า", ctx=_ctx())
+        assert "สิทธิ์" in reply.text
+        assert not [r for r in client.recorded if r[0] == "list_customers"]
+
+    async def test_list_commands_are_sales_oa_only(self):
+        client = FakeDataClient(permission_keys=["customer.read"])
+        reply = await handle_chat_message(
+            client, message="รายชื่อลูกค้า", ctx=_ctx(oa="technician"),
+        )
+        assert not [r for r in client.recorded if r[0] == "list_customers"]
+
+    async def test_reissue_is_matched_before_the_plain_issue_trigger(self):
+        """"ออกเอกสารใหม่" contains "ออกเอกสาร" — the same substring trap
+        that made every lost deal look won in Phase 9."""
+        from chann_app.services.chat import (
+            QUOTE_ISSUE_TRIGGERS, QUOTE_REISSUE_PHRASES, _parse_after_trigger,
+        )
+
+        assert _parse_after_trigger("ออกเอกสารใหม่ Q-1", QUOTE_REISSUE_PHRASES) == "Q-1"
+        assert _parse_after_trigger("ออกเอกสาร Q-1", QUOTE_REISSUE_PHRASES) is None
+        assert _parse_after_trigger("ออกเอกสาร Q-1", QUOTE_ISSUE_TRIGGERS) == "Q-1"
+
+
+class TestPhase10DashboardHandoff:
+    """A list that does not fit in a chat bubble has to go somewhere.
+
+    Ten rows is roughly what a person can read without scrolling past the
+    reply; beyond that, a longer wall of text is worse than a link. The
+    link is a LIFF deep link so the tap lands on an authenticated page
+    inside LINE rather than an external browser with no session.
+    """
+
+    def _many_customers(self, client, n):
+        import asyncio
+
+        async def make():
+            for i in range(n):
+                await client.create_customer("L1", {
+                    "first_name": f"ลูกค้า{i:03d}", "last_name": "ทดสอบ",
+                    "phone": f"08{i:08d}",
+                })
+        asyncio.get_event_loop()
+        return make()
+
+    async def test_a_long_list_reports_the_real_total_and_links_onward(self, monkeypatch):
+        import chann_app.services.chat as chat
+
+        monkeypatch.setattr(chat, "dashboard_link", lambda section: f"https://liff.line.me/X/{section}")
+        client = FakeDataClient(permission_keys=["customer.read"])
+        await self._many_customers(client, 25)
+        reply = await handle_chat_message(client, message="รายชื่อลูกค้า", ctx=_ctx())
+
+        assert "25" in reply.text, "the real total matters even when truncated"
+        assert reply.text.count("\n") <= 20, "the bubble must stay readable"
+        assert "liff.line.me" in reply.text
+        assert reply.quick_reply_url is not None
+
+    async def test_a_short_list_still_offers_the_dashboard(self, monkeypatch):
+        """The escape hatch is not only for overflow — someone may want the
+        full page to act on a record, not just read it."""
+        import chann_app.services.chat as chat
+
+        monkeypatch.setattr(chat, "dashboard_link", lambda section: f"https://liff.line.me/X/{section}")
+        client = FakeDataClient(permission_keys=["customer.read"])
+        await self._many_customers(client, 2)
+        reply = await handle_chat_message(client, message="รายชื่อลูกค้า", ctx=_ctx())
+        assert reply.quick_reply_url is not None
+        # No truncation note, because nothing was truncated.
+        assert "liff.line.me" not in reply.text
+
+    async def test_no_liff_configured_means_no_broken_link(self, monkeypatch):
+        """A link that opens an error page is worse than no link: the person
+        taps, waits, and lands somewhere broken instead of reading."""
+        import chann_app.services.chat as chat
+
+        monkeypatch.setattr(chat, "dashboard_link", lambda section: None)
+        client = FakeDataClient(permission_keys=["customer.read"])
+        await self._many_customers(client, 25)
+        reply = await handle_chat_message(client, message="รายชื่อลูกค้า", ctx=_ctx())
+        assert reply.quick_reply_url is None
+        assert "liff.line.me" not in reply.text
+        assert "25" in reply.text, "the total is still worth saying"
+
+    def test_deep_links_point_at_liff_not_the_raw_host(self):
+        """A Cloud Run URL would open an external browser with no LIFF
+        context, and every dashboard page would fail its token check."""
+        import chann_app.services.chat as chat
+        from chann_app.config import settings
+
+        original = settings.liff_sales_id
+        try:
+            settings.liff_sales_id = "1234567890-abcdefgh"
+            url = chat.dashboard_link("customers")
+            assert url == "https://liff.line.me/1234567890-abcdefgh/liff/sales/customers"
+            settings.liff_sales_id = ""
+            assert chat.dashboard_link("customers") is None
+        finally:
+            settings.liff_sales_id = original

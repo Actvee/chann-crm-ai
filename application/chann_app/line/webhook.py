@@ -23,7 +23,13 @@ from ..services.chat import (
 from ..services.ai.intent import unavailable_reply
 from ..services.registration import handle_registration, is_unregistered
 from ..services.identity import resolve_context
-from .client import LineReplyError, reply_text
+from .client import (
+    LineReplyError,
+    quick_reply_item,
+    quick_reply_uri,
+    reply_messages,
+    text_message,
+)
 from .signature import verify_signature
 
 log = logging.getLogger(__name__)
@@ -131,7 +137,23 @@ async def handle_webhook(
                 chat = ChatReply(text=unavailable_reply("th"))
 
             try:
-                await reply_text(oa, event.get("replyToken", ""), chat.text)
+                await reply_messages(
+                    oa,
+                    event.get("replyToken", ""),
+                    [text_message(
+                        chat.text,
+                        quick_reply=(
+                            [
+                                quick_reply_item(label, send)
+                                for label, send in (chat.quick_replies or [])
+                            ]
+                            + (
+                                [quick_reply_uri(*chat.quick_reply_url)]
+                                if chat.quick_reply_url else []
+                            )
+                        ) or None,
+                    )],
+                )
             except LineReplyError as exc:
                 log.error("LINE reply failed for oa=%s: %s", oa, exc)
                 raise HTTPException(

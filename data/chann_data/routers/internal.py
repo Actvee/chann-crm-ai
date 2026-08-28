@@ -2488,3 +2488,124 @@ def patch_company_profile(
     except Exception as exc:
         session.rollback()
         raise _phase2_http_error(exc)
+
+
+@router.post(
+    "/licenses/{license_id}/quotes/{quote_id}/document", response_model=QuoteOut,
+)
+def link_quote_document(
+    license_id: uuid.UUID,
+    quote_id: uuid.UUID,
+    document_id: uuid.UUID,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    """Phase 10 — record which generated document belongs to this quote."""
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = QuoteRepository(session).link_document(scope, quote_id, document_id)
+        AuditRepository(session).write(
+            license_id=license_id,
+            entity_type="quote",
+            entity_id=row.id,
+            actor_type="user",
+            actor_id=x_actor_id or None,
+            action="link_document",
+            field_changes=diff_fields(
+                {"generated_document_id": None},
+                {"generated_document_id": str(document_id)},
+            ),
+        )
+        session.commit()
+        session.refresh(row)
+        return row
+    except Phase10NotFound as exc:
+        session.rollback()
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        session.rollback()
+        raise _phase2_http_error(exc)
+
+
+@router.patch("/licenses/{license_id}/deals/{deal_id}", response_model=DealOut)
+def update_deal(
+    license_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    payload: dict,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    """Phase 9/10 — edit a deal's own attributes.
+
+    Stage changes go through the dedicated /stage endpoint, which owns the
+    state machine and the reopen permission; this must not become a way
+    around it.
+    """
+    scope = TenantScope(license_id=license_id)
+    repo = DealRepository(session)
+    try:
+        existing = repo.get(scope, deal_id)
+        if existing is None:
+            raise HTTPException(status_code=404, detail="deal not found")
+        tracked = ("notes", "owner_member_id")
+        before = {f: getattr(existing, f) for f in tracked}
+        row = repo.update(scope, deal_id, payload)
+        after = {f: getattr(row, f) for f in tracked}
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="deal", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="update",
+            field_changes=diff_fields(
+                {k: (str(v) if v is not None else None) for k, v in before.items()},
+                {k: (str(v) if v is not None else None) for k, v in after.items()},
+            ),
+        )
+        session.commit()
+        session.refresh(row)
+        return row
+    except HTTPException:
+        session.rollback()
+        raise
+    except Phase9NotFound as exc:
+        session.rollback()
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        session.rollback()
+        raise _phase2_http_error(exc)
+
+
+@router.delete(
+    "/licenses/{license_id}/deals/{deal_id}/products/{deal_product_id}",
+    status_code=204,
+)
+def remove_deal_product(
+    license_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    deal_product_id: uuid.UUID,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    """Phase 9 — take a line item off a deal.
+
+    Audited with the product's name rather than only its id: a deleted row
+    cannot be looked up afterwards, so the audit entry is the only place
+    that will ever say what was removed.
+    """
+    scope = TenantScope(license_id=license_id)
+    try:
+        removed = DealRepository(session).remove_product(scope, deal_id, deal_product_id)
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="deal", entity_id=deal_id,
+            actor_type="user", actor_id=x_actor_id or None, action="remove_product",
+            field_changes=diff_fields(
+                {"product_name": removed.product_name, "qty": str(removed.qty)},
+                {"product_name": None, "qty": None},
+            ),
+        )
+        session.commit()
+        return None
+    except Phase9NotFound as exc:
+        session.rollback()
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        session.rollback()
+        raise _phase2_http_error(exc)

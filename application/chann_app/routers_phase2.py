@@ -497,3 +497,201 @@ async def issue_quote(
         "sha256": document.get("sha256"),
         "renderer": document.get("renderer"),
     }
+
+
+# ------------------------------------------------ Phase 10 dashboard reads
+#
+# Read-only projections for the LIFF dashboards. Master Spec 9.2 listed
+# these from the start; every earlier phase shipped only the chat side.
+
+
+@router.get("/licenses/{license_id}/customers")
+async def list_customers(
+    license_id: str,
+    stage: str | None = None,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    _require_same_tenant(principal, license_id)
+    principal.require("customer.read")
+    try:
+        return await client.list_customers(license_id, stage)
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.get("/licenses/{license_id}/deals")
+async def list_deals(
+    license_id: str,
+    stage: str | None = None,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    _require_same_tenant(principal, license_id)
+    principal.require("deal.read")
+    try:
+        return await client.list_deals(license_id, stage)
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.get("/licenses/{license_id}/products")
+async def list_products(
+    license_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    _require_same_tenant(principal, license_id)
+    principal.require("product.manage")
+    try:
+        return await client.list_products(license_id)
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+# ----------------------------------------------- Phase 10 dashboard writes
+#
+# The dashboard has to be able to DO the things chat can do, not just show
+# them. Each of these is the same domain call the chat handler makes, behind
+# the same permission — two front doors onto one set of rules, never two
+# implementations of the rules.
+
+
+class DealStageWriteIn(BaseModel):
+    stage: str
+    allow_reopen: bool = False
+
+
+@router.post("/licenses/{license_id}/deals/{deal_id}/stage")
+async def set_deal_stage(
+    license_id: str,
+    deal_id: str,
+    payload: DealStageWriteIn,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Move a deal along the stage machine.
+
+    Reopening a closed deal needs deal.reopen on top of deal.update — the
+    same rule chat enforces. Checked here rather than delegated, because
+    the Data tier takes allow_reopen as a parameter and would happily obey
+    a caller that simply set it.
+    """
+    _require_same_tenant(principal, license_id)
+    principal.require("deal.update")
+    if payload.allow_reopen:
+        principal.require("deal.reopen")
+    try:
+        return await client.transition_deal_stage(
+            license_id, deal_id, payload.stage,
+            allow_reopen=payload.allow_reopen, actor_id=principal.chann_uid,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+class DealWriteIn(BaseModel):
+    notes: str | None = None
+
+
+@router.patch("/licenses/{license_id}/deals/{deal_id}")
+async def update_deal(
+    license_id: str,
+    deal_id: str,
+    payload: DealWriteIn,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    _require_same_tenant(principal, license_id)
+    principal.require("deal.update")
+    try:
+        return await client.update_deal(
+            license_id, deal_id, payload.model_dump(exclude_unset=True),
+            actor_id=principal.chann_uid,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.delete("/licenses/{license_id}/deals/{deal_id}/products/{deal_product_id}")
+async def remove_deal_product(
+    license_id: str,
+    deal_id: str,
+    deal_product_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    _require_same_tenant(principal, license_id)
+    principal.require("deal.update")
+    try:
+        await client.remove_deal_product(
+            license_id, deal_id, deal_product_id, actor_id=principal.chann_uid,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+    return {"removed": True}
+
+
+class CustomerWriteIn(BaseModel):
+    first_name: str | None = None
+    last_name: str | None = None
+    phone: str | None = None
+    email: str | None = None
+    address: str | None = None
+    notes: str | None = None
+
+
+@router.patch("/licenses/{license_id}/customers/{customer_id}")
+async def update_customer(
+    license_id: str,
+    customer_id: str,
+    payload: CustomerWriteIn,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    _require_same_tenant(principal, license_id)
+    principal.require("customer.update")
+    try:
+        return await client.update_customer(
+            license_id, customer_id, payload.model_dump(exclude_unset=True),
+            actor_id=principal.chann_uid,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.post("/licenses/{license_id}/customers/{customer_id}/promote")
+async def promote_customer(
+    license_id: str,
+    customer_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Lead -> contact (spec 9.5). customer.update-level, matching chat:
+    the spec defines no separate permission for confirming a lead."""
+    _require_same_tenant(principal, license_id)
+    principal.require("customer.update")
+    try:
+        return await client.promote_customer(
+            license_id, customer_id, actor_id=principal.chann_uid,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.get("/licenses/{license_id}/deals/{deal_id}")
+async def get_deal(
+    license_id: str,
+    deal_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    _require_same_tenant(principal, license_id)
+    principal.require("deal.read")
+    try:
+        deal = await client.get_deal(license_id, deal_id)
+    except DataTierError as exc:
+        raise _propagate(exc)
+    if deal is None:
+        raise HTTPException(status_code=404, detail="deal not found")
+    return deal

@@ -224,6 +224,54 @@ class DealRepository:
         self._s.flush()
         return row
 
+    def remove_product(
+        self, scope: TenantScope, deal_id: uuid.UUID, deal_product_id: uuid.UUID,
+    ) -> DealProduct:
+        """Take a line item off a deal.
+
+        The deal is fetched through the tenant-scoped getter first, so a
+        caller cannot delete a line item by guessing its id: the row has to
+        hang off a deal that belongs to this license. Returns the removed
+        row so the caller can name it in an audit entry and in the reply —
+        "removed พัดลม" is a far better confirmation than "removed item 2".
+        """
+        deal = self.get(scope, deal_id)
+        if deal is None:
+            raise Phase9NotFound("deal not found in this tenant")
+        row = self._s.execute(
+            select(DealProduct).where(
+                DealProduct.id == deal_product_id, DealProduct.deal_id == deal_id,
+            )
+        ).scalars().first()
+        if row is None:
+            raise Phase9NotFound("deal product not found on this deal")
+        self._s.delete(row)
+        self._s.flush()
+        return row
+
+    def update(
+        self, scope: TenantScope, deal_id: uuid.UUID, fields: dict,
+    ) -> Deal:
+        """Partial update of a deal's own attributes.
+
+        Stage is deliberately NOT settable here: it has its own transition
+        method with the state machine and the reopen permission behind it,
+        and letting a generic patch bypass that would make the machine
+        advisory rather than enforced.
+        """
+        row = self.get(scope, deal_id)
+        if row is None:
+            raise Phase9NotFound("deal not found in this tenant")
+        allowed = {"notes", "owner_member_id"}
+        for key, value in fields.items():
+            if key not in allowed:
+                continue
+            if isinstance(value, str):
+                value = value.strip() or None
+            setattr(row, key, value)
+        self._s.flush()
+        return row
+
     def products_of(self, deal_id: uuid.UUID) -> list[DealProduct]:
         return list(
             self._s.execute(

@@ -21,12 +21,23 @@ from __future__ import annotations
 from decimal import Decimal
 from html import escape
 
-# Thai-capable font stack. A PDF renderer without a Thai font produces
-# boxes, and the failure is silent — the render "succeeds" and the document
-# is unreadable, which is worse than an error.
+# A PDF renderer without a Thai font produces boxes, and the failure is
+# silent: the render "succeeds", the bytes are a valid PDF, and only a
+# human looking at the document would ever notice. Relying on the renderer
+# having a Thai font installed is therefore not good enough — the exact
+# same class of bug was caught by eye in scripts/setup-richmenu.py.
+#
+# So the font is fetched by the renderer rather than assumed. Noto Sans
+# Thai is served by Google Fonts, which the SmartBrowz browser can reach.
+# The local names stay in the stack ahead of it so an environment that
+# does have the font skips the download entirely.
+_FONT_IMPORT = (
+    "@import url('https://fonts.googleapis.com/css2"
+    "?family=Noto+Sans+Thai:wght@400;600;700&display=swap');"
+)
 _FONT_STACK = (
     "'Noto Sans Thai', 'Sarabun', 'IBM Plex Sans Thai', "
-    "'Leelawadee UI', 'Tahoma', sans-serif"
+    "'Garuda', 'Leelawadee UI', 'Tahoma', sans-serif"
 )
 
 
@@ -106,6 +117,7 @@ def render_quote_html(snapshot: dict) -> str:
 <meta charset="utf-8">
 <title>ใบเสนอราคา {escape(quote["quote_id"])}</title>
 <style>
+  {_FONT_IMPORT}
   @page {{ size: A4; margin: 18mm 16mm; }}
   * {{ box-sizing: border-box; }}
   body {{ font-family: {_FONT_STACK}; font-size: 13px; color: #111; margin: 0; }}

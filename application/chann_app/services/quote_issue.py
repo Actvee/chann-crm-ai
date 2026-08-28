@@ -128,9 +128,19 @@ async def _ensure_builtin_template_version(
     return version_id
 
 
+class QuoteAlreadyIssued(RuntimeError):
+    """This quote already has a generated document.
+
+    Raised rather than silently producing a second one: two documents with
+    different digests for the same quote makes "which file did the customer
+    receive" unanswerable, which is the exact question the audit trail
+    exists to answer.
+    """
+
+
 async def issue_quote_document(
     client: DataClient, *, license_id: str, quote: dict, deal: dict, customer: dict,
-    company: dict, actor_id: str | None = None,
+    company: dict, actor_id: str | None = None, allow_reissue: bool = False,
 ) -> dict:
     """Render, store and record. Returns the generated_documents row.
 
@@ -140,6 +150,16 @@ async def issue_quote_document(
     DocumentStoreError (storage). Nothing is caught and softened here — a
     document that could not be produced must never look like one that was.
     """
+    if quote.get("generated_document_id") and not allow_reissue:
+        # Not a hard error — re-issuing after a genuine correction is
+        # legitimate — but never the silent default. Two documents with
+        # different digests for one quote is exactly the ambiguity
+        # generated_documents exists to prevent, so the second one has to
+        # be asked for explicitly.
+        raise QuoteAlreadyIssued(
+            f"quote {quote.get('quote_id')} already has an issued document"
+        )
+
     issued_at = datetime.now(timezone.utc)
     snapshot = build_quote_snapshot(
         quote=quote, deal=deal, customer=customer, company=company, issued_at=issued_at,
@@ -170,7 +190,7 @@ async def issue_quote_document(
         client, license_id, actor_id=actor_id
     )
 
-    return await client.record_generated_document(
+    document = await client.record_generated_document(
         license_id,
         {
             "document_type": "quote",
@@ -184,3 +204,32 @@ async def issue_quote_document(
         },
         actor_id=actor_id,
     )
+
+    # Link the quote to its document and move it out of draft. Done after
+    # the record exists, so a failure here leaves a complete, findable
+    # document rather than a quote claiming a document that was never
+    # written. Failures are logged and swallowed for the same reason: the
+    # document IS issued at this point, and telling the caller it failed
+    # would invite a re-issue that duplicates a real customer-facing file.
+    try:
+        await client.link_quote_document(
+            license_id, str(quote["id"]), str(document["id"]), actor_id=actor_id
+        )
+    except Exception:
+        log.exception(
+            "document %s was issued for quote %s but linking it back failed",
+            document.get("id"), quote.get("quote_id"),
+        )
+
+    if str(quote.get("status") or "").lower() == "draft":
+        try:
+            await client.transition_quote_status(
+                license_id, str(quote["id"]), "sent", actor_id=actor_id
+            )
+        except Exception:
+            log.exception(
+                "document issued for quote %s but the status transition failed",
+                quote.get("quote_id"),
+            )
+
+    return document
