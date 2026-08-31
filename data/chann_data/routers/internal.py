@@ -2753,6 +2753,7 @@ def delete_note(
 @router.get("/licenses", response_model=list[LicenseOut])
 def list_licenses(
     status: str | None = None,
+    exclude_status: str | None = None,
     session: Session = Depends(get_session),
 ):
     """Every tenant, for platform-wide scheduled work.
@@ -2765,4 +2766,10 @@ def list_licenses(
     query = select(License)
     if status:
         query = query.where(License.status == status)
+    if exclude_status:
+        # Excluding is usually what a caller means: a tenant's license
+        # defaults to "trial", so an include-filter on "active" quietly
+        # matches nothing, and any status added later would be excluded by
+        # an include-list without anyone noticing.
+        query = query.where(License.status != exclude_status)
     return list(session.execute(query.order_by(License.created_at)).scalars())

@@ -49,6 +49,34 @@ def _format_when(due_time) -> str:
     return f" เวลา {parsed.hour:02d}:{parsed.minute:02d} น."
 
 
+def _coerce_date(value) -> date | None:
+    """A `date` from whatever the wire actually carried, or None.
+
+    Returns None rather than raising so one malformed row cannot stop every
+    other tenant's reminders — the caller logs the offending value and its
+    type, which is what would have identified a real production failure
+    here immediately instead of after several wrong guesses.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        # Handles "2026-09-01" and "2026-09-01T00:00:00[+07:00]" alike.
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
+    except ValueError:
+        pass
+    try:
+        return date.fromisoformat(text[:10])
+    except ValueError:
+        return None
+
+
 async def sweep_due_follow_ups(client: DataClient, *, days: int = 0) -> dict:
     """Push a LINE reminder for every follow-up due within `days`.
 
@@ -61,7 +89,14 @@ async def sweep_due_follow_ups(client: DataClient, *, days: int = 0) -> dict:
     summary = {"tenants": 0, "due": 0, "sent": 0, "skipped": 0, "failed": 0}
 
     try:
-        licenses = await client.list_licenses(status="active")
+        # NOT status="active": a new tenant's license defaults to "trial"
+        # (see License.status), so filtering on "active" silently swept
+        # zero tenants — the sweep would have reported a clean
+        # {"tenants": 0} and looked like it worked. Excluding "suspended"
+        # matches how phase65.py already selects usable tenants elsewhere,
+        # and treats any status added later as active by default, which is
+        # the safer direction for a reminder nobody would otherwise send.
+        licenses = await client.list_licenses(exclude_status="suspended")
     except Exception:
         log.exception("reminder sweep could not list tenants")
         raise
@@ -80,10 +115,23 @@ async def sweep_due_follow_ups(client: DataClient, *, days: int = 0) -> dict:
             # due_follow_ups takes a day count, so filter to the exact day
             # here: a sweep for "today" should not announce Friday's work on
             # Wednesday and then again on Friday.
-            raw_date = str(item.get("due_date") or "")
-            try:
-                item_date = date.fromisoformat(raw_date)
-            except ValueError:
+            #
+            # Parsed defensively rather than assuming one wire format. A
+            # production TypeError comparing str to date happened here with
+            # code that looked correct in isolation and could not be
+            # reproduced locally from any obvious input — so this no longer
+            # assumes the Data tier always sends a bare "YYYY-MM-DD". It
+            # accepts a date, a datetime, and an ISO string with or without
+            # a time part, and logs anything it still cannot read instead of
+            # crashing the whole sweep for every other tenant.
+            item_date = _coerce_date(item.get("due_date"))
+            if item_date is None:
+                log.warning(
+                    "skipping follow-up %s in %s: unreadable due_date %r (%s)",
+                    item.get("id"), license_id,
+                    item.get("due_date"), type(item.get("due_date")).__name__,
+                )
+                summary["skipped"] += 1
                 continue
             if item_date > today + timedelta(days=days):
                 continue

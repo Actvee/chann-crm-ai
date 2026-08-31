@@ -384,10 +384,17 @@ class DataClient:
         )
         return self._unwrap(resp)
 
-    async def list_licenses(self, status: str | None = None) -> list[dict]:
-        params = {"status": status} if status else None
+    async def list_licenses(
+        self, status: str | None = None, exclude_status: str | None = None,
+    ) -> list[dict]:
+        params: dict = {}
+        if status:
+            params["status"] = status
+        if exclude_status:
+            params["exclude_status"] = exclude_status
         resp = await self._client.get(
-            f"{self._base}/internal/v1/licenses", headers=self._headers, params=params,
+            f"{self._base}/internal/v1/licenses", headers=self._headers,
+            params=params or None,
         )
         return self._unwrap(resp)
 
