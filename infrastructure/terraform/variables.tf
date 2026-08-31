@@ -122,6 +122,13 @@ variable "admin_secret" {
   default     = ""
 }
 
+variable "reminder_sweep_secret" {
+  type        = string
+  description = "Static machine-to-machine secret for Cloud Scheduler to call POST /api/v1/platform/reminders/sweep. Deliberately not the platform-admin JWT/session flow — see application/chann_app/routers_admin.py:require_scheduler for why."
+  sensitive   = true
+  default     = ""
+}
+
 variable "jwt_secret" {
   type        = string
   description = "Platform Admin JWT signing secret."

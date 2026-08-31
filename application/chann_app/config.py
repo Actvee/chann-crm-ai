@@ -15,6 +15,20 @@ class Settings(BaseSettings):
     data_base_url: str = "http://localhost:8081"
     admin_secret: str = ""                      # shared with Data Tier
 
+    # A separate, single-purpose secret for Cloud Scheduler to call the
+    # reminder sweep. Deliberately NOT the platform-admin JWT/session flow:
+    # that flow is built for a person logging in through a browser and
+    # issues short-lived, session-tracked tokens (see require_admin's
+    # get_platform_admin_session check) — reusing it for a service that
+    # calls in once a day forever would mean either a token that never
+    # expires (defeating the point of the session table) or a cron job that
+    # re-authenticates itself, neither of which this endpoint's caller
+    # needs. A static shared secret, checked with a constant-time compare
+    # exactly like ADMIN_SECRET already is between tiers, is deliberately
+    # the same class of credential this project already trusts for a
+    # machine-to-machine call.
+    reminder_sweep_secret: str = ""
+
     # LINE — three platform-level OAs (ADR-004)
     line_customer_channel_secret: str = ""
     line_customer_channel_access_token: str = ""

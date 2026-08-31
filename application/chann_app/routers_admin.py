@@ -1,6 +1,7 @@
 """Platform Admin login + a LIFF-guarded example route."""
 from __future__ import annotations
 
+import hmac
 import uuid
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
@@ -147,17 +148,35 @@ async def smartbrowz_verify_connection(claims: dict = Depends(require_admin)):
     return result
 
 
+async def require_scheduler(x_sweep_secret: str = Header(default="")) -> None:
+    """Auth for the reminder sweep only — see config.reminder_sweep_secret
+    for why this is a separate, static, machine-to-machine credential
+    rather than reusing require_admin's session-backed JWT flow.
+    """
+    if not settings.reminder_sweep_secret:
+        # Refuses rather than allowing through: an unconfigured secret must
+        # never mean "no check", since that would make this endpoint
+        # unintentionally public the moment someone forgets to set it.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="REMINDER_SWEEP_SECRET is REQUIRED_NOT_CONFIGURED",
+        )
+    if not hmac.compare_digest(x_sweep_secret, settings.reminder_sweep_secret):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid sweep secret")
+
+
 @router.post("/platform/reminders/sweep")
 async def run_reminder_sweep(
     days: int = 0,
-    claims: dict = Depends(require_admin),
+    _: None = Depends(require_scheduler),
     client: DataClient = Depends(get_data_client),
 ):
     """Push today's due follow-ups to their owners (Master Spec 6.7).
 
-    Called by Cloud Scheduler each morning. Behind require_admin like every
-    other platform route: an unauthenticated version would let anyone make
-    the platform send LINE messages to every tenant.
+    Called by Cloud Scheduler each morning, authenticated by a static
+    shared secret rather than require_admin — see require_scheduler above.
+    An unauthenticated version would let anyone make the platform send LINE
+    messages to every tenant on demand.
 
     Returns the sweep's own summary so a failing schedule is visible in the
     Scheduler job's history rather than only in logs.

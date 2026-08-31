@@ -80,6 +80,10 @@ locals {
     # Presentation tier already gets as NEXT_PUBLIC_LIFF_SALES_ID; it is a
     # public identifier, not a secret.
     LIFF_SALES_ID = var.liff_ids.sales
+    # Empty by default: the sweep endpoint refuses every call rather than
+    # allowing them through when this is unset (see require_scheduler),
+    # so leaving it blank is safe, not silently insecure.
+    REMINDER_SWEEP_SECRET = var.reminder_sweep_secret
   })
 
   presentation_runtime_env = merge(local.common_runtime_env, {
