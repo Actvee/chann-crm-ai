@@ -22,7 +22,7 @@ log = logging.getLogger(__name__)
 # symptom was a generic 500 the moment a user touched that table. A health
 # check that cannot see a schema/code mismatch reports health it has not
 # actually verified.
-EXPECTED_MIGRATION_HEAD = "0016_service_reports"
+EXPECTED_MIGRATION_HEAD = "0017_audit_actions"
 
 
 def _schema_state() -> tuple[str, str | None]:

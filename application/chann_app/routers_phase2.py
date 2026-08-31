@@ -1069,3 +1069,189 @@ async def permissions_catalog(
         return await client.permission_catalog()
     except DataTierError as exc:
         raise _propagate(exc)
+
+
+# ------------------------------------------------------- creating records
+#
+# The dashboard could edit everything and create nothing: customers, deals,
+# quotes and tickets all had a PATCH and no POST, so a shop had to open
+# LINE to add anything at all. Chat is the primary interface by design, but
+# "primary" is not "only" — someone entering ten products or copying a
+# customer list wants a form.
+
+
+class CustomerCreateIn(BaseModel):
+    first_name: str | None = None
+    last_name: str
+    phone: str
+    email: str | None = None
+    address: str | None = None
+    notes: str | None = None
+    stage: str = "lead"
+
+
+@router.post("/licenses/{license_id}/customers", status_code=201)
+async def create_customer(
+    license_id: str,
+    payload: CustomerCreateIn,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """last_name and phone are required by the Data tier (Phase 9): a
+    contact you cannot ring is not a contact, and one first name is not
+    enough to tell two customers apart."""
+    _require_same_tenant(principal, license_id)
+    principal.require("customer.create")
+    try:
+        return await client.create_customer(
+            license_id, payload.model_dump(exclude_none=True),
+            actor_id=principal.chann_uid,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+class DealCreateIn(BaseModel):
+    contact_id: str
+    notes: str | None = None
+
+
+@router.post("/licenses/{license_id}/deals", status_code=201)
+async def create_deal(
+    license_id: str,
+    payload: DealCreateIn,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    _require_same_tenant(principal, license_id)
+    principal.require("deal.create")
+    try:
+        return await client.create_deal(
+            license_id, payload.model_dump(exclude_none=True),
+            actor_id=principal.chann_uid,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+class DealProductIn(BaseModel):
+    product_name: str
+    quoted_unit_price: str | float
+    qty: int = 1
+    product_id: str | None = None
+    notes: str | None = None
+
+
+@router.post("/licenses/{license_id}/deals/{deal_id}/products", status_code=201)
+async def add_deal_product(
+    license_id: str,
+    deal_id: str,
+    payload: DealProductIn,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Line items, which a quote now requires at least one of.
+
+    Without this the dashboard could delete a line item but never add one,
+    so a deal that lost its last product could not be quoted again from
+    the dashboard at all.
+    """
+    _require_same_tenant(principal, license_id)
+    principal.require("deal.update")
+    try:
+        return await client.add_deal_product(
+            license_id, deal_id, payload.model_dump(exclude_none=True),
+            actor_id=principal.chann_uid,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+class QuoteCreateIn(BaseModel):
+    deal_id: str
+
+
+@router.post("/licenses/{license_id}/quotes", status_code=201)
+async def create_quote(
+    license_id: str,
+    payload: QuoteCreateIn,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    _require_same_tenant(principal, license_id)
+    principal.require("quote.create")
+    try:
+        return await client.create_quote(
+            license_id, payload.model_dump(), actor_id=principal.chann_uid,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+class TicketCreateIn(BaseModel):
+    issue_description: str
+    customer_name: str | None = None
+    customer_phone: str | None = None
+    contact_id: str | None = None
+    service_address: str | None = None
+    serial_number: str | None = None
+    scheduled_date: str | None = None
+    scheduled_time: str | None = None
+    visibility: str = "public"
+
+
+@router.post("/licenses/{license_id}/tickets", status_code=201)
+async def create_ticket(
+    license_id: str,
+    payload: TicketCreateIn,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """CS logging a fault reported by phone or in person — which is how
+    most of them still arrive."""
+    _require_same_tenant(principal, license_id)
+    principal.require("ticket.create")
+    try:
+        return await client.create_ticket(
+            license_id, payload.model_dump(exclude_none=True),
+            actor_id=principal.chann_uid,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.post("/licenses/{license_id}/tickets/{ticket_id}/assign")
+async def assign_ticket_from_dashboard(
+    license_id: str,
+    ticket_id: str,
+    payload: dict,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Dispatch from the queue the dispatcher is already looking at,
+    instead of switching to LINE to type a code they can see on screen."""
+    _require_same_tenant(principal, license_id)
+    principal.require("ticket.update")
+    try:
+        return await client.assign_ticket(
+            license_id, ticket_id,
+            target_type=str(payload.get("target_type") or ""),
+            target_ref=str(payload.get("target_ref") or ""),
+            actor_id=principal.chann_uid,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.get("/licenses/{license_id}/technician-teams")
+async def list_technician_teams(
+    license_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    _require_same_tenant(principal, license_id)
+    principal.require("ticket.read")
+    try:
+        return await client.list_technician_teams(license_id)
+    except DataTierError as exc:
+        raise _propagate(exc)

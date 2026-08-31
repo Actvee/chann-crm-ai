@@ -7,6 +7,7 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..audit_actions import AUDIT_ACTIONS
 from ..models import AuditLog
 
 
@@ -36,6 +37,24 @@ class AuditRepository:
         ai_reasoning: str | None = None,
         cross_tenant: bool = False,
     ) -> AuditLog:
+        # Checked here rather than left to the database. The CHECK
+        # constraint fires at flush, inside the caller's transaction, and
+        # takes the change being audited down with it — which is how
+        # issuing a quote came to render a PDF, store it, record it, and
+        # then silently unwind all three because "link_document" was not
+        # in the allowed list.
+        #
+        # Raising the same class the repositories already raise means the
+        # caller's error handling reports it as a refusal it can name,
+        # instead of a CheckViolation surfacing as an opaque 409.
+        if action not in AUDIT_ACTIONS:
+            raise ValueError(
+                f"unknown audit action {action!r} — add it to "
+                "chann_data.audit_actions.AUDIT_ACTIONS and to a migration "
+                "widening ck_audit_log_action, or the write that triggers it "
+                "will roll back"
+            )
+
         row = AuditLog(
             id=uuid.uuid4(),
             license_id=license_id,
