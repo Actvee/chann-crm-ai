@@ -165,7 +165,9 @@ async def handle_webhook(
                 else:
                     message = text_message(chat.text, quick_reply=quick_reply_items)
 
-                await reply_messages(oa, event.get("replyToken", ""), [message])
+                sent_ids = await reply_messages(
+                    oa, event.get("replyToken", ""), [message]
+                )
             except LineReplyError as exc:
                 log.error("LINE reply failed for oa=%s: %s", oa, exc)
                 raise HTTPException(
@@ -173,16 +175,25 @@ async def handle_webhook(
                     detail=str(exc),
                 )
 
-            # The mapping can only be written once a message exists to map.
-            # reply_text does not return the sent message ID, so the entity is
-            # bound to the message the user sent — enough for a reply-to-reply
-            # to resolve, and it never invents an ID we do not have.
+            # Both the message we just sent AND the one the person sent.
+            #
+            # The bot's message is the one that matters: people reply to
+            # the answer they are looking at, not to their own question.
+            # Only the inbound id used to be recorded — because the send
+            # discarded LINE's response — so replying to a bot message
+            # always answered "ไม่พบข้อความต้นฉบับที่ตอบกลับ", which is
+            # what made the whole reply-to feature unusable.
+            #
+            # The inbound id is kept too: it costs one row and makes a
+            # reply-to-your-own-message resolve as well.
             if chat.entity_type and chat.entity_id and ctx.license_id:
                 inbound_id = (event.get("message") or {}).get("id")
-                if inbound_id:
+                for message_id in [*(sent_ids or []), inbound_id]:
+                    if not message_id:
+                        continue
                     try:
                         await client.record_message_entity(
-                            str(ctx.license_id), inbound_id,
+                            str(ctx.license_id), str(message_id),
                             chat.entity_type, chat.entity_id,
                         )
                     except Exception as exc:  # noqa: BLE001

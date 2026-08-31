@@ -558,6 +558,110 @@ class ServiceTicket(TimestampMixin, Base):
     )
 
 
+class QuoteProduct(Base):
+    """A line on a quote.
+
+    COPIED from the deal when the quote is created, and independent
+    afterwards. A quote used to read the deal's products live, which made
+    two quotes on one deal necessarily identical and let an edit to the
+    deal silently rewrite every draft quote already under discussion.
+
+    The deal records what the customer is buying; each quote records what
+    they were OFFERED, which is a different thing and outlives the
+    negotiation.
+    """
+
+    __tablename__ = "quote_products"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    license_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("licenses.id", ondelete="RESTRICT"),
+        nullable=False, index=True,
+    )
+    quote_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("quotes.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    product_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("products.id", ondelete="SET NULL")
+    )
+    product_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    quoted_unit_price: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    qty: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    notes: Mapped[str | None] = mapped_column(Text)
+    # A quote is read top to bottom, so the order is part of the document
+    # rather than whatever the database returns.
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class Warranty(TimestampMixin, Base):
+    """Master Spec 7.5 — a registered product and its cover.
+
+    The row that makes a serial number meaningful. Without it a customer
+    reporting a fault has to know which shop they bought from and describe
+    the product in prose; with it, one serial identifies the product, the
+    shop and the entitlement at once — which is how someone holding a
+    broken appliance actually thinks about it.
+
+    product_name is copied alongside product_id because a product record
+    can be renamed or archived years after a certificate was issued, and
+    the paper in the customer's hand says what it said on the day.
+    """
+
+    __tablename__ = "warranties"
+    __table_args__ = (
+        UniqueConstraint("license_id", "warranty_number", name="uq_warranties_license_number"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    license_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("licenses.id", ondelete="RESTRICT"),
+        nullable=False, index=True,
+    )
+    warranty_number: Mapped[str] = mapped_column(String(32), nullable=False)
+    customer_chann_uid: Mapped[str | None] = mapped_column(String(32))
+    contact_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("customers.id", ondelete="SET NULL")
+    )
+    product_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("products.id", ondelete="RESTRICT")
+    )
+    product_name: Mapped[str | None] = mapped_column(String(255))
+    serial_number: Mapped[str] = mapped_column(String(128), nullable=False)
+    warranty_start: Mapped[date] = mapped_column(Date, nullable=False)
+    warranty_end: Mapped[date] = mapped_column(Date, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
+    pdf_path: Mapped[str | None] = mapped_column(String(512))
+    generated_document_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("generated_documents.id", ondelete="SET NULL")
+    )
+
+
+class UserDisplayPreference(Base):
+    """Master Spec 16.3 — how one person wants to be spoken to.
+
+    Keyed on chann_uid, not on a membership: 16.5 requires the preference
+    to follow the PERSON across every company they deal with. Someone who
+    reads English at one shop reads English at all of them.
+    """
+
+    __tablename__ = "user_display_preferences"
+
+    chann_uid: Mapped[str] = mapped_column(
+        String(32), ForeignKey("chann_identities.chann_uid", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    date_format: Mapped[str] = mapped_column(String(16), nullable=False, default="dd/mm/yyyy")
+    language: Mapped[str] = mapped_column(String(8), nullable=False, default="th")
+    timezone: Mapped[str] = mapped_column(String(64), nullable=False, default="Asia/Bangkok")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class ServiceReport(TimestampMixin, Base):
     """Phase 13 (Master Spec 13.3) — what the technician found and did.
 
@@ -824,6 +928,10 @@ class DealProduct(Base):
     quoted_unit_price: Mapped[object] = mapped_column(Numeric(18, 2), nullable=False)
     qty: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     notes: Mapped[str | None] = mapped_column(Text)
+    # Explicit, because created_at cannot order these: Postgres'
+    # now() is fixed for a transaction, so lines added in one message
+    # all share a timestamp and sort arbitrarily.
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

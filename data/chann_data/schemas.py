@@ -794,6 +794,32 @@ class QuoteIn(BaseModel):
     owner_member_id: uuid.UUID | None = None
 
 
+class QuoteProductIn(BaseModel):
+    product_name: str
+    quoted_unit_price: Decimal | str | float
+    qty: int = 1
+    product_id: uuid.UUID | None = None
+    notes: str | None = None
+
+
+class QuoteProductPatchIn(BaseModel):
+    product_name: str | None = None
+    quoted_unit_price: Decimal | str | float | None = None
+    qty: int | None = None
+    notes: str | None = None
+
+
+class QuoteProductOut(BaseModel):
+    id: uuid.UUID
+    quote_id: uuid.UUID
+    product_id: uuid.UUID | None
+    product_name: str
+    quoted_unit_price: Decimal
+    qty: int
+    notes: str | None
+    position: int
+
+
 class QuoteOut(BaseModel):
     id: uuid.UUID
     license_id: uuid.UUID
@@ -804,6 +830,10 @@ class QuoteOut(BaseModel):
     owner_member_id: uuid.UUID | None
     created_at: datetime
     updated_at: datetime
+    # Included so rendering a document is one fetch. The renderer reads
+    # the QUOTE's lines, and a second round trip to get them would be a
+    # chance for the two to disagree.
+    products: list[QuoteProductOut] = []
 
 
 class QuoteStatusIn(BaseModel):

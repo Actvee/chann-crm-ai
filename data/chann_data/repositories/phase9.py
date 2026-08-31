@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..models import Customer, Deal, DealProduct, License, Product
@@ -263,10 +263,14 @@ class DealRepository:
             raise Phase9Conflict("product_name is required")
         if qty < 1:
             raise Phase9Conflict("qty must be at least 1")
+        last = self._s.execute(
+            select(func.max(DealProduct.position)).where(DealProduct.deal_id == deal_id)
+        ).scalar()
         row = DealProduct(
             id=uuid.uuid4(), deal_id=deal_id, product_id=product_id,
             product_name=product_name, quoted_unit_price=_decimal(quoted_unit_price),
             qty=qty, notes=notes,
+            position=(last + 1) if last is not None else 0,
         )
         self._s.add(row)
         self._s.flush()
@@ -324,7 +328,12 @@ class DealRepository:
         return list(
             self._s.execute(
                 select(DealProduct).where(DealProduct.deal_id == deal_id)
-                .order_by(DealProduct.created_at.asc())
+                # id breaks the tie: created_at is a timestamp, and two
+                # lines added in the same message share it, so ordering on
+                # it alone let a deal's contents reorder between reads —
+                # and a quote copied from it inherit a different order
+                # each time.
+                .order_by(DealProduct.position.asc(), DealProduct.created_at.asc())
             ).scalars()
         )
 

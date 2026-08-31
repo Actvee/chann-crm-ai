@@ -1041,6 +1041,169 @@ async def _handle_work_list(
     return ChatReply(text="\n".join(lines))
 
 
+# ------------------------------- Phase 7.5 / 16 serial-first customer flow
+#
+# What a customer actually has when something breaks is the sticker on the
+# machine. They do not know a product code, they may not remember which
+# branch they bought from, and asking them to look either up before they
+# can report a fault is the friction this phase removes.
+#
+# A serial identifies the product, the shop AND the entitlement at once.
+
+SERIAL_REGISTER_TRIGGERS = ("ลงทะเบียนสินค้า", "ลงทะเบียนรับประกัน", "register product")
+SERIAL_LOOKUP_TRIGGERS = ("ค้นหาซีเรียล", "เช็คประกัน", "ตรวจสอบประกัน", "check warranty")
+
+# Serial numbers vary wildly by manufacturer, so this is loose on purpose:
+# anything alphanumeric of a plausible length. Being strict here would
+# reject real serials and there is nothing to gain — an unknown serial
+# simply finds nothing.
+SERIAL_RE = re.compile(r"\b([A-Z0-9][A-Z0-9\-]{4,31})\b", re.IGNORECASE)
+
+WARRANTY_REGISTERED = {
+    "th": "ลงทะเบียนรับประกันแล้วครับ\n{number} · {product}\nคุ้มครองถึง {end}",
+    "en": "Registered.\n{number} · {product}\nCovered until {end}",
+}
+WARRANTY_NEEDS_SERIAL = {
+    "th": "ขอหมายเลขเครื่อง (serial) ที่อยู่บนตัวสินค้าด้วยครับ",
+    "en": "What is the serial number on the unit?",
+}
+WARRANTY_FOUND = {
+    "th": "{number} · {product}\nสถานะ: {status}\nคุ้มครองถึง {end}",
+    "en": "{number} · {product}\nStatus: {status}\nCovered until {end}",
+}
+WARRANTY_NOT_FOUND_HERE = {
+    "th": "ไม่พบการลงทะเบียนของหมายเลข {serial} ที่ร้านนี้",
+    "en": "No registration for {serial} at this shop.",
+}
+SERIAL_SHOPS_FOUND = {
+    "th": "หมายเลข {serial} ลงทะเบียนไว้ที่:\n{shops}\n\nพิมพ์รหัสร้านเพื่อติดต่อร้านนั้น",
+    "en": "Serial {serial} is registered at:\n{shops}\n\nType a shop code to reach them.",
+}
+SERIAL_NO_SHOP = {
+    "th": "ไม่พบหมายเลข {serial} ในระบบครับ ลองตรวจสอบตัวเลขอีกครั้ง หรือติดต่อร้านที่ซื้อโดยตรง",
+    "en": "Serial {serial} is not registered anywhere. Check the number, or contact the shop you bought from.",
+}
+
+
+async def _handle_warranty_register(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
+    language: str,
+) -> ChatReply:
+    """A customer registering the thing they bought."""
+    match = SERIAL_RE.search(message or "")
+    if not match:
+        return ChatReply(text=_t(WARRANTY_NEEDS_SERIAL, language))
+    serial = match.group(1).upper()
+
+    license_id = str(license_id)
+    try:
+        # The product, if the serial or the message names one we know.
+        # Optional by design: the customer has the sticker, not the
+        # catalogue, and refusing over that loses the registration.
+        products = await client.list_products(license_id)
+    except Exception:
+        products = []
+    lowered = (message or "").lower()
+    product = next(
+        (p for p in products
+         if str(p.get("product_name") or "").lower() in lowered
+         or str(p.get("product_id") or "").lower() in lowered),
+        None,
+    )
+
+    try:
+        row = await client.register_warranty(
+            license_id,
+            {
+                "serial_number": serial,
+                "customer_chann_uid": ctx.chann_uid,
+                "product_id": str(product["id"]) if product else None,
+                "product_name": (product or {}).get("product_name"),
+            },
+            actor_id=ctx.chann_uid,
+        )
+    except DataTierError as exc:
+        # Already registered is a normal thing to hit — someone checking
+        # rather than registering — so it reads as information, not error.
+        return ChatReply(text=str(exc.detail))
+    except Exception:
+        log.exception("warranty registration failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    return ChatReply(
+        text=_t(WARRANTY_REGISTERED, language).format(
+            number=row.get("warranty_number"),
+            product=row.get("product_name") or serial,
+            end=row.get("warranty_end"),
+        ),
+        entity_type="warranty", entity_id=str(row.get("id") or ""),
+        quick_replies=[("แจ้งซ่อม", "แจ้งซ่อม")],
+    )
+
+
+async def _handle_serial_enquiry(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
+    language: str,
+) -> ChatReply:
+    """A serial the customer typed: check cover here, or find the shop.
+
+    Looks inside this tenant first. Only when the serial is unknown HERE
+    does it cross the boundary — the cross-tenant query is a fallback for
+    "I don't know who I bought this from", not the normal path.
+    """
+    match = SERIAL_RE.search(message or "")
+    if not match:
+        return ChatReply(text=_t(WARRANTY_NEEDS_SERIAL, language))
+    serial = match.group(1).upper()
+
+    if license_id:
+        try:
+            here = await client.list_warranties(str(license_id), serial_number=serial)
+        except Exception:
+            log.exception("warranty lookup failed")
+            here = []
+        if here:
+            row = here[0]
+            return ChatReply(
+                text=_t(WARRANTY_FOUND, language).format(
+                    number=row.get("warranty_number"),
+                    product=row.get("product_name") or serial,
+                    status=row.get("status"),
+                    end=row.get("warranty_end"),
+                ),
+                entity_type="warranty", entity_id=str(row.get("id") or ""),
+                quick_replies=[("แจ้งซ่อม", "แจ้งซ่อม")],
+            )
+
+    # 16.4: not here, so ask the platform which shop has it.
+    try:
+        result = await client.lookup_serial(serial, actor_chann_uid=ctx.chann_uid)
+    except Exception:
+        log.exception("cross-tenant serial lookup failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    matches = result.get("matches") or []
+    if not matches:
+        return ChatReply(text=_t(SERIAL_NO_SHOP, language).format(serial=serial))
+
+    if len(matches) == 1 and license_id:
+        # Registered, but at a different shop from the one they are
+        # talking to. Saying so plainly is better than a bare "not found"
+        # that leaves them thinking the record is gone.
+        shop = matches[0]
+        return ChatReply(
+            text=_t(SERIAL_SHOPS_FOUND, language).format(
+                serial=serial,
+                shops=f"· {shop['company_name']} — {shop['company_code']}",
+            )
+        )
+
+    shops = "\n".join(
+        f"· {m['company_name']} — {m['company_code']}" for m in matches[:5]
+    )
+    return ChatReply(text=_t(SERIAL_SHOPS_FOUND, language).format(serial=serial, shops=shops))
+
+
 # ------------------------------------------- Phase 12 customer fault report
 #
 # The half of 12.4 that was missing: "ลูกค้าแจ้งซ่อม (แชทหรือ LIFF) → สร้าง
@@ -2858,6 +3021,11 @@ async def _handle_customer_detail(
             client, ctx, entity_type="customer",
             entity_id=customer["id"], code=customer["customer_id"],
         )
+        # BOTH refs. They are separate keys for good reasons (see
+        # cache.k_last_entity_ref), but viewing a customer wrote only the
+        # generic one — so "สร้างดีล" straight after opening a customer
+        # asked which customer, seconds after showing them.
+        await _remember_customer(client, ctx, customer)
 
     rows = [
         f"{customer.get('customer_id')} · {_customer_name(customer)}",
@@ -2877,6 +3045,428 @@ async def _handle_customer_detail(
             ("สร้างดีล", f"สร้างดีลให้ {_customer_name(customer)}"),
             ("รายชื่อลูกค้า", "รายชื่อลูกค้า"),
         ],
+    )
+
+
+# The system writes this text itself, on a quick-reply button, in a shape
+# it chose — so sending it back through a model to be interpreted is
+# strange in principle and fragile in practice: it fails when the AI is
+# down, fails when the AI labels the entity differently, and spends a
+# model call on every tap of a button whose meaning was never in doubt.
+DEAL_CREATE_TRIGGERS = ("สร้างดีลให้", "เปิดดีลให้", "สร้างดีลกับ", "create deal for")
+
+
+DEAL_PRODUCT_ADD_TRIGGERS = (
+    "เพิ่มสินค้าเข้าดีล", "ใส่สินค้าเข้าดีล", "เพิ่มสินค้า", "ใส่สินค้า",
+    "add product to deal",
+)
+
+# "พัดลม 2 ตัว ราคา 1500" / "FAN001 x2 1500" — quantity and price pulled
+# out wherever they appear, because nobody types a fixed field order.
+# Anchored to a counting word, and only where one is present. An earlier
+# version matched any bare number, which ate the "18" out of
+# "พัดลมตั้งพื้น 18 นิ้ว 2 ตัว" and left the product called
+# "พัดลมตั้งพื้น นิ้ว" — model numbers and sizes live inside product
+# names constantly, so a number alone can never mean a quantity.
+_QTY_RE = re.compile(r"(?:x|×|จำนวน)\s*(\d+)|(\d+)\s*(?:ตัว|ชิ้น|อัน|เครื่อง|ชุด)\b", re.I)
+_PRICE_RE = re.compile(r"(?:ราคา|@|฿)\s*([\d,]+(?:\.\d{1,2})?)", re.I)
+
+DEAL_PRODUCT_ADDED = {
+    "th": "เพิ่ม {name} × {qty} ราคา {price} เข้าดีล {deal_id} แล้ว\nรวม {total}",
+    "en": "Added {name} × {qty} at {price} to {deal_id}. Total {total}",
+}
+DEAL_PRODUCT_NEEDS_DEAL = {
+    "th": "เพิ่มสินค้าเข้าดีลไหนครับ พิมพ์ \"เพิ่มสินค้า <ชื่อ> เข้าดีล D-2026-0001\"",
+    "en": 'Which deal? Type "add product <name> to deal D-2026-0001".',
+}
+DEAL_PRODUCT_NEEDS_NAME = {
+    "th": "ระบุชื่อสินค้าและราคาด้วยครับ เช่น \"เพิ่มสินค้า พัดลม 2 ตัว ราคา 1500\"",
+    "en": 'Name and price please, e.g. "add product fan 2 at 1500".',
+}
+DEAL_PRODUCT_AMBIGUOUS = {
+    "th": "มีสินค้าหลายรายการที่ตรงกับ \"{name}\" เลือกอันไหนครับ\n{options}",
+    "en": 'Several products match "{name}" — which one?\n{options}',
+}
+
+DEAL_PRODUCT_NEEDS_PRICE = {
+    "th": "สินค้า \"{name}\" ราคาเท่าไหร่ครับ",
+    "en": 'What is the price for "{name}"?',
+}
+
+
+def _distinguishing_part(name: str, others: list[str]) -> str:
+    """What makes this option different from the ones beside it.
+
+    Four products called "พัดลมตั้งพื้น 16/18/20/22 นิ้ว" produce four
+    buttons that are identical once LINE truncates them to 20 characters.
+    Dropping the shared prefix keeps the digits — the only part anyone is
+    reading.
+    """
+    rest = [o for o in others if o and o != name]
+    if not rest:
+        return name
+
+    shared = 0
+    for index, char in enumerate(name):
+        if all(index < len(o) and o[index] == char for o in rest):
+            shared = index + 1
+        else:
+            break
+
+    # Back off to the last space before the divergence. "16 นิ้ว" and
+    # "18 นิ้ว" share everything up to the "1", so cutting at the raw
+    # divergence point produces "6 นิ้ว" and "8 นิ้ว" — which are not the
+    # sizes and would have someone order the wrong fan.
+    boundary = name.rfind(" ", 0, shared)
+    trimmed = name[boundary + 1:].lstrip() if boundary >= 0 else name[shared:].lstrip()
+    if not trimmed or len(trimmed) < 2:
+        return name
+    return trimmed
+
+
+async def _handle_deal_product_add(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
+    trigger: str, permission_keys: list[str], language: str,
+) -> ChatReply:
+    """Put a line item on a deal, from chat.
+
+    Needed the moment quoting started requiring one: the refusal told
+    people to add a product and there was no way to do it here, which is
+    worse than the original confusion — they now knew what to do and
+    still could not do it.
+
+    Falls back to the deal just discussed, like quoting does. Price comes
+    from the catalogue when the product is one we know, so "เพิ่มสินค้า
+    FAN001" is enough for a shop that has set its prices up.
+    """
+    if "deal.update" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+
+    license_id = str(license_id)
+    text = (message or "")
+
+    deal_code = None
+    match = re.search(r"\b(D-\d{4}-\d{4})\b", text, re.IGNORECASE)
+    if match:
+        deal_code = match.group(1).upper()
+        text = text.replace(match.group(1), " ")
+    else:
+        last_ref = await client.get_last_entity_ref(ctx.chann_uid, ctx.oa)
+        if last_ref and last_ref.get("entity_type") == "deal":
+            deal_code = str(last_ref.get("code") or "")
+    if not deal_code:
+        return ChatReply(text=_t(DEAL_PRODUCT_NEEDS_DEAL, language))
+
+    # Strip the trigger and the joining words, leaving the product itself.
+    lowered = text.lower()
+    index = lowered.find(trigger.lower())
+    if index >= 0:
+        text = text[index + len(trigger):]
+    for word in ("เข้าดีล", "ในดีล", "ให้ดีล", "to deal", "เข้า"):
+        text = text.replace(word, " ")
+
+    qty = 1
+    qty_match = _QTY_RE.search(text)
+    price = None
+    price_match = _PRICE_RE.search(text)
+    if price_match:
+        price = price_match.group(1).replace(",", "")
+        text = text.replace(price_match.group(0), " ")
+    if qty_match:
+        qty = max(1, int(qty_match.group(1) or qty_match.group(2)))
+        text = text.replace(qty_match.group(0), " ")
+
+    name = " ".join(text.split()).strip(" :·-,")
+    if not name:
+        return ChatReply(text=_t(DEAL_PRODUCT_NEEDS_NAME, language))
+
+    try:
+        deals = await client.list_deals(license_id)
+        deal = next(
+            (d for d in deals if str(d.get("deal_id", "")).upper() == deal_code), None,
+        )
+        if deal is None:
+            return ChatReply(
+                text=_t(QUOTE_DEAL_NOT_FOUND, language).format(deal_id=deal_code)
+            )
+
+        product = None
+        if price is None:
+            # Look it up rather than asking: a shop that has entered its
+            # catalogue should not have to retype prices it already knows.
+            try:
+                products = await client.list_products(license_id)
+            except Exception:
+                products = []
+            needle = name.lower()
+
+            # Exact first — a product code or a full name is an unambiguous
+            # answer and must not be beaten by a partial match on something
+            # else.
+            exact = [
+                p for p in products
+                if str(p.get("product_id") or "").lower() == needle
+                or str(p.get("product_name") or "").lower() == needle
+            ]
+            # Then partial, because "พัดลม" is what someone types and
+            # "พัดลมตั้งพื้น 16 นิ้ว" is what the catalogue calls it.
+            # Requiring the full name would mean reading it off a screen
+            # and copying it, which is the work chat is meant to remove.
+            candidates = exact or [
+                p for p in products
+                if needle in str(p.get("product_name") or "").lower()
+                or needle in str(p.get("product_id") or "").lower()
+            ]
+
+            if len(candidates) > 1:
+                # Several models of the same thing at different prices.
+                # Picking one silently puts the wrong price on a document
+                # that goes to a customer — the one place a quiet guess is
+                # least acceptable.
+                shown = candidates[:LIST_LIMIT]
+                lines = "\n".join(
+                    f"· {c.get('product_name')}"
+                    + (f" — {Decimal(str(c['unit_price'])):,.2f}"
+                       if c.get("unit_price") is not None else "")
+                    for c in shown
+                )
+                return ChatReply(
+                    text=_t(DEAL_PRODUCT_AMBIGUOUS, language).format(
+                        name=name, options=lines,
+                    ),
+                    # Labels drop the part every candidate shares. These
+                    # buttons exist to tell near-identical products apart,
+                    # and LINE's 20-character limit would otherwise cut off
+                    # the only bit that differs — leaving four buttons all
+                    # reading "พัดลมตั้งพื้น 16…".
+                    quick_replies=[
+                        (
+                            _distinguishing_part(
+                                str(c.get("product_name") or ""),
+                                [str(o.get("product_name") or "") for o in shown],
+                            ),
+                            f"เพิ่มสินค้า {c.get('product_name')} "
+                            f"{qty} ตัว เข้าดีล {deal_code}",
+                        )
+                        for c in shown[:4]
+                    ],
+                )
+
+            product = candidates[0] if candidates else None
+            if product and product.get("unit_price") is not None:
+                price = str(product["unit_price"])
+                name = str(product.get("product_name") or name)
+
+        if price is None:
+            return ChatReply(text=_t(DEAL_PRODUCT_NEEDS_PRICE, language).format(name=name))
+
+        row = await client.add_deal_product(
+            license_id, str(deal["id"]),
+            {
+                "product_name": name,
+                "quoted_unit_price": price,
+                "qty": qty,
+                "product_id": str(product["id"]) if product else None,
+            },
+            actor_id=ctx.chann_uid,
+        )
+    except Exception:
+        log.exception("adding a product to a deal failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    await _remember_entity(
+        client, ctx, entity_type="deal", entity_id=str(deal["id"]), code=deal_code,
+    )
+    unit = Decimal(str(row.get("quoted_unit_price") or price))
+    return ChatReply(
+        text=_t(DEAL_PRODUCT_ADDED, language).format(
+            name=row.get("product_name") or name, qty=qty, deal_id=deal_code,
+            price=f"{unit:,.2f}", total=f"{unit * qty:,.2f}",
+        ),
+        entity_type="deal", entity_id=str(deal["id"]),
+        quick_replies=[("สร้างใบเสนอราคา", f"สร้างใบเสนอราคาจากดีล {deal_code}")],
+    )
+
+
+QUOTE_CREATE_TRIGGERS = (
+    "สร้างใบเสนอราคา", "ออกใบเสนอราคา", "ทำใบเสนอราคา", "create quote",
+)
+
+QUOTE_NEEDS_DEAL = {
+    "th": "สร้างใบเสนอราคาจากดีลไหนครับ พิมพ์ \"สร้างใบเสนอราคาจากดีล D-2026-0001\"",
+    "en": 'Which deal? Type "create quote from deal D-2026-0001".',
+}
+QUOTE_DEAL_EMPTY = {
+    "th": "ดีล {deal_id} ยังไม่มีสินค้า เพิ่มสินค้าก่อนแล้วค่อยออกใบเสนอราคา\nพิมพ์ \"ข้อมูลดีล {deal_id}\" เพื่อดูรายละเอียด",
+    "en": "Deal {deal_id} has no products yet — add one before quoting.",
+}
+
+
+async def _handle_quote_create_direct(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
+    permission_keys: list[str], language: str,
+) -> ChatReply:
+    """Create a quote from a named deal, or from the deal just discussed.
+
+    Deterministic for the same reason deal creation is: the quick-reply
+    button writes this text itself. And it falls back to context because
+    quoting is what someone does immediately after making a deal — being
+    asked which one, seconds after being told which one, reads as the
+    system not paying attention.
+    """
+    if "quote.create" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+
+    license_id = str(license_id)
+    deal_code = None
+    match = re.search(r"\b(D-\d{4}-\d{4})\b", message or "", re.IGNORECASE)
+    if match:
+        deal_code = match.group(1).upper()
+    else:
+        last_ref = await client.get_last_entity_ref(ctx.chann_uid, ctx.oa)
+        if last_ref and last_ref.get("entity_type") == "deal":
+            deal_code = str(last_ref.get("code") or "")
+
+    if not deal_code:
+        return ChatReply(text=_t(QUOTE_NEEDS_DEAL, language))
+
+    try:
+        deals = await client.list_deals(license_id)
+        deal = next(
+            (d for d in deals if str(d.get("deal_id", "")).upper() == deal_code), None,
+        )
+        if deal is None:
+            return ChatReply(
+                text=_t(QUOTE_DEAL_NOT_FOUND, language).format(deal_id=deal_code)
+            )
+        row = await client.create_quote(
+            license_id, {"deal_id": deal["id"]}, actor_id=ctx.chann_uid,
+        )
+    except DataTierError as exc:
+        # The "no products" rule, said in terms the person can act on
+        # rather than as a raw conflict from the data tier.
+        if "no products" in str(exc.detail).lower():
+            return ChatReply(
+                text=_t(QUOTE_DEAL_EMPTY, language).format(deal_id=deal_code),
+                quick_replies=[("ดูข้อมูลดีล", f"ข้อมูลดีล {deal_code}")],
+            )
+        if _is_not_found(exc):
+            # The deal vanished between listing and creating, or the list
+            # call itself failed. Either way "not found" is the honest
+            # answer and the generic save-failed message is not.
+            return ChatReply(
+                text=_t(QUOTE_DEAL_NOT_FOUND, language).format(deal_id=deal_code)
+            )
+        log.exception("quote creation failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    except Exception as exc:  # noqa: BLE001
+        if _is_not_found(exc):
+            return ChatReply(
+                text=_t(QUOTE_DEAL_NOT_FOUND, language).format(deal_id=deal_code)
+            )
+        log.exception("quote creation failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    await _remember_entity(
+        client, ctx, entity_type="quote", entity_id=row["id"], code=row["quote_id"],
+    )
+    return ChatReply(
+        text=_t(QUOTE_CREATED, language).format(
+            quote_id=row["quote_id"], deal_id=deal_code,
+        ),
+        entity_type="quote", entity_id=str(row["id"]),
+        quick_replies=[("ออกเอกสาร", f"ออกเอกสาร {row['quote_id']}")],
+    )
+
+
+# "เปิดดีล" is deliberately NOT here: "เปิดดีล D-2026-0001 ใหม่" means
+# REOPEN a closed deal, which is a different action with a different
+# permission. Eight tests caught it the moment it was added — the same
+# substring trap as ไม่สำเร็จ/สำเร็จ, ออกเอกสารใหม่/ออกเอกสาร and
+# ตั้งกฎมอบหมาย/มอบหมาย before it.
+DEAL_CREATE_BARE_TRIGGERS = ("สร้างดีล", "create deal")
+
+# "สร้างดีลและเพิ่มสินค้าพัดลม 2 ตัว" — one sentence, two actions, which
+# is how people talk. The conjunction is where the second one starts.
+_DEAL_CONJUNCTION_RE = re.compile(
+    r"(?:\s*(?:และ|แล้ว|พร้อม|,|\+|and)\s*)(เพิ่มสินค้า|ใส่สินค้า|add product)",
+    re.IGNORECASE,
+)
+
+def _after_deal_conjunction(message: str) -> str | None:
+    """The second half of a compound instruction, if there is one.
+
+    Returned as text rather than parsed here, so the add-product handler
+    stays the single place that knows how to read a product line — one
+    parser, one set of quirks, one thing to fix.
+    """
+    match = _DEAL_CONJUNCTION_RE.search(message or "")
+    return message[match.start(1):].strip() if match else None
+
+
+async def _handle_deal_create_direct(
+    client: DataClient, *, ctx: ResolvedContext, license_id, name: str | None,
+    permission_keys: list[str], language: str, rest: str | None = None,
+) -> ChatReply:
+    """Create a deal, then optionally act on it in the same breath.
+
+    Reuses the same resolver and creation helper the AI path uses, so the
+    two cannot drift; the only difference is how the customer was found.
+
+    `name=None` means "the customer we were just looking at" — the record
+    someone opened seconds ago is almost always the one they mean.
+    """
+    if "deal.create" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+
+    license_id = str(license_id)
+
+    if name:
+        contact, problem = await _find_one_customer_by_name(
+            client, license_id, name, language,
+            ctx=ctx, resume_entity="deal", resume_action="create", resume_fields={},
+        )
+        if problem is not None:
+            return problem
+        if contact is None:
+            return ChatReply(
+                text=_t(DEAL_CUSTOMER_NOT_FOUND, language).format(name=name)
+            )
+        used_context = False
+    else:
+        # last_customer_ref, not last_entity_ref: the AI path has used it
+        # for exactly this since Phase 9, and a second mechanism for "the
+        # customer we were just discussing" would drift from the first and
+        # give different answers to the same question.
+        last_ref = await client.get_last_customer_ref(ctx.chann_uid, ctx.oa)
+        if last_ref is None:
+            return ChatReply(text=_t(DEAL_NEEDS_TARGET_NAME, language))
+        contact = {"id": last_ref["customer_id"], "first_name": last_ref["name"]}
+        used_context = True
+
+    reply = await _apply_deal_create(
+        client, contact=contact, fields={}, ctx=ctx,
+        license_id=license_id, language=language, used_context=used_context,
+    )
+
+    if not rest or not reply.entity_id:
+        return reply
+
+    # The deal exists; now do the second half against it. Its own reply is
+    # returned, prefixed with the first — one message describing both
+    # things, because that is how the person asked for them.
+    follow_on = await _handle_deal_product_add(
+        client, ctx=ctx, license_id=license_id, message=rest,
+        trigger=next(
+            (t for t in DEAL_PRODUCT_ADD_TRIGGERS if t in rest.lower()), "เพิ่มสินค้า",
+        ),
+        permission_keys=permission_keys, language=language,
+    )
+    return ChatReply(
+        text=f"{reply.text}\n{follow_on.text}",
+        entity_type=follow_on.entity_type or reply.entity_type,
+        entity_id=follow_on.entity_id or reply.entity_id,
+        quick_replies=follow_on.quick_replies,
     )
 
 
@@ -4116,6 +4706,14 @@ async def _apply_deal_create(
                 name=_display_name(contact)
             ))
         raise
+    # Remember it. The very next thing someone does after creating a deal
+    # is quote it, and without this "สร้างใบเสนอราคา" had no idea which
+    # deal was meant — it fell through to the AI, which had no idea
+    # either, and the person got a list of permissions.
+    await _remember_entity(
+        client, ctx, entity_type="deal", entity_id=row["id"], code=row["deal_id"],
+    )
+
     template = DEAL_CREATED_FROM_CONTEXT if used_context else DEAL_CREATED
     return ChatReply(
         text=_t(template, language).format(
@@ -4576,6 +5174,16 @@ async def handle_chat_message(
         # (Phase 8 — self-edit is always permitted). Catching everything as
         # a fault report turned "แก้เบอร์เป็น 08..." into a repair job,
         # which a test caught immediately.
+        if any(t in message.lower() for t in SERIAL_REGISTER_TRIGGERS):
+            return await _handle_warranty_register(
+                client, ctx=ctx, license_id=license_id, message=message,
+                language=language,
+            )
+        if any(t in message.lower() for t in SERIAL_LOOKUP_TRIGGERS):
+            return await _handle_serial_enquiry(
+                client, ctx=ctx, license_id=license_id, message=message,
+                language=language,
+            )
         if not _looks_like_profile_edit(message):
             return await _handle_customer_report(
                 client, ctx=ctx, license_id=license_id, message=message,
@@ -4634,6 +5242,62 @@ async def handle_chat_message(
                 client, license_id=license_id, permission_keys=permission_keys,
                 language=language,
             )
+        # "เพิ่มสินค้า" is genuinely ambiguous: it means "put a line item
+        # on a deal" AND "add a product to the catalogue", which need
+        # different permissions and do different things. Caught by a test
+        # the moment this trigger was added.
+        #
+        # Resolved by whether a deal is in play — named in the message, or
+        # the one just being discussed. Someone who has just opened a deal
+        # and says "เพิ่มสินค้า พัดลม ราคา 500" means that deal; someone
+        # with no deal in context is building their catalogue.
+        product_trigger = next(
+            (t for t in DEAL_PRODUCT_ADD_TRIGGERS if t in message.lower()), None,
+        )
+        if product_trigger and not re.search(
+            r"\b(D-\d{4}-\d{4})\b", message or "", re.IGNORECASE
+        ):
+            last_ref = await client.get_last_entity_ref(ctx.chann_uid, ctx.oa)
+            if not (last_ref and last_ref.get("entity_type") == "deal"):
+                product_trigger = None
+        if product_trigger:
+            return await _handle_deal_product_add(
+                client, ctx=ctx, license_id=license_id, message=message,
+                trigger=product_trigger, permission_keys=permission_keys,
+                language=language,
+            )
+
+        if any(t in message.lower() for t in QUOTE_CREATE_TRIGGERS):
+            return await _handle_quote_create_direct(
+                client, ctx=ctx, license_id=license_id, message=message,
+                permission_keys=permission_keys, language=language,
+            )
+
+        create_for = _parse_after_trigger(message, DEAL_CREATE_TRIGGERS)
+        if create_for:
+            return await _handle_deal_create_direct(
+                client, ctx=ctx, license_id=license_id, name=create_for,
+                permission_keys=permission_keys, language=language,
+                rest=_after_deal_conjunction(message),
+            )
+        # "สร้างดีล" on its own, right after looking at a customer. Naming
+        # them again immediately after being shown their record is the kind
+        # of repetition that makes a chat product feel like a form.
+        #
+        # Taken ONLY when the context is actually there. Refusing here when
+        # it is not would be a regression: the AI path can still pull a
+        # name out of a longer sentence, and short-circuiting it took that
+        # away — caught by an existing test.
+        if any(t in message.lower() for t in DEAL_CREATE_BARE_TRIGGERS) and not re.search(
+            r"\b(D-\d{4}-\d{4})\b", message or "", re.IGNORECASE
+        ):
+            if await client.get_last_customer_ref(ctx.chann_uid, ctx.oa):
+                return await _handle_deal_create_direct(
+                    client, ctx=ctx, license_id=license_id, name=None,
+                    permission_keys=permission_keys, language=language,
+                    rest=_after_deal_conjunction(message),
+                )
+
         # Checked before the bare list phrases: "ดูดีลของจุใจ" contains
         # "ดูดีล", and matching the shorter form first would list every deal
         # in the tenant instead of that customer's.

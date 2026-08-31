@@ -156,7 +156,14 @@ def build_quote_snapshot(
             "company profile is incomplete: " + ", ".join(missing)
         )
 
-    line_items = build_line_items(deal.get("products") or [])
+    # The QUOTE's lines, not the deal's. A quote owns its line items from
+    # the moment it is created, so that a discount agreed on one offer
+    # does not silently apply to the deal and every other quote made from
+    # it. Falls back to the deal only for quotes created before that was
+    # true and never backfilled.
+    line_items = build_line_items(
+        quote.get("products") or deal.get("products") or []
+    )
     totals = compute_totals(line_items, company.get("vat_rate"))
     stamped_at = issued_at or datetime.now(timezone.utc)
 

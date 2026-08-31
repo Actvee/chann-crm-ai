@@ -67,6 +67,8 @@ export default function DealDetail({
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
   const [busy, setBusy] = useState(false);
+  const [addingProduct, setAddingProduct] = useState(false);
+  const [newProduct, setNewProduct] = useState({ name: "", qty: "1", price: "" });
 
   const say = useCallback((message: string, kind?: "ok" | "error") => {
     setStatus(message);
@@ -152,6 +154,46 @@ export default function DealDetail({
     }
     say(t.dashboard.saved, "ok");
     await load();
+  }
+
+  async function addProduct() {
+    // A quote now requires at least one line item, so a deal page that
+    // could only DELETE them left a deal that lost its last product
+    // permanently unquotable from the dashboard.
+    if (!newProduct.name.trim() || !newProduct.price.trim()) {
+      say(t.dashboard.deals.needsNameAndPrice, "error");
+      return;
+    }
+    setBusy(true);
+    try {
+      const response = await fetch(
+        `/api/phase2/licenses/${licenseId}/deals/${dealId}/products`,
+        {
+          method: "POST",
+          headers: proxyHeaders(token, licenseId),
+          body: JSON.stringify({
+            product_name: newProduct.name.trim(),
+            quoted_unit_price: newProduct.price.trim(),
+            qty: Number(newProduct.qty) || 1,
+          }),
+        },
+      );
+      if (!response.ok) {
+        say(
+          response.status === 403
+            ? t.dashboard.noPermission
+            : `${t.common.error} (${response.status})`,
+          "error",
+        );
+        return;
+      }
+      say(t.dashboard.saved, "ok");
+      setNewProduct({ name: "", qty: "1", price: "" });
+      setAddingProduct(false);
+      await load();
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function setStage(stage: string) {
@@ -266,6 +308,84 @@ export default function DealDetail({
               { name: "notes", label: t.dashboard.fields.notes, editable: true, type: "textarea" },
             ]}
           />
+
+          {canEdit && (
+            <section className="section" style={{ margin: "16px 0" }}>
+              <div className="section-head">
+                <h2>{t.dashboard.deals.addProduct}</h2>
+                {!addingProduct && (
+                  <button
+                    type="button"
+                    className="btn"
+                    data-variant="primary"
+                    onClick={() => setAddingProduct(true)}
+                  >
+                    {t.dashboard.deals.addProduct}
+                  </button>
+                )}
+              </div>
+              {addingProduct && (
+                <dl className="fields">
+                  <div className="field-row">
+                    <dt>{t.product.title}</dt>
+                    <dd>
+                      <input
+                        value={newProduct.name}
+                        onChange={(event) =>
+                          setNewProduct({ ...newProduct, name: event.target.value })
+                        }
+                      />
+                    </dd>
+                  </div>
+                  <div className="field-row">
+                    <dt>{t.dashboard.deals.qty}</dt>
+                    <dd>
+                      <input
+                        inputMode="numeric"
+                        value={newProduct.qty}
+                        onChange={(event) =>
+                          setNewProduct({ ...newProduct, qty: event.target.value })
+                        }
+                      />
+                    </dd>
+                  </div>
+                  <div className="field-row">
+                    <dt>{t.dashboard.products.price}</dt>
+                    <dd>
+                      <input
+                        inputMode="decimal"
+                        value={newProduct.price}
+                        placeholder="0.00"
+                        onChange={(event) =>
+                          setNewProduct({ ...newProduct, price: event.target.value })
+                        }
+                      />
+                    </dd>
+                  </div>
+                  <div className="actions">
+                    <button
+                      type="button"
+                      className="btn"
+                      data-variant="quiet"
+                      onClick={() => setAddingProduct(false)}
+                      disabled={busy}
+                    >
+                      {t.common.cancel}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn"
+                      data-variant="primary"
+                      onClick={() => void addProduct()}
+                      disabled={busy}
+                    >
+                      {busy ? t.dashboard.saving : t.common.save}
+                    </button>
+                  </div>
+                </dl>
+              )}
+            </section>
+          )}
 
           <RelatedHeading
             title={t.dashboard.deals.lineItems.replace("{count}", "")}

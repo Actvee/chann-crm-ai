@@ -394,6 +394,45 @@ class DataClient:
         )
         return self._unwrap(resp)
 
+    async def register_warranty(
+        self, license_id: str, payload: dict, actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/warranties",
+            headers=self._headers_for(actor_id), json=payload,
+        )
+        return self._unwrap(resp)
+
+    async def list_warranties(
+        self, license_id: str, serial_number: str | None = None,
+        customer_chann_uid: str | None = None,
+    ) -> list[dict]:
+        params = {}
+        if serial_number:
+            params["serial_number"] = serial_number
+        if customer_chann_uid:
+            params["customer_chann_uid"] = customer_chann_uid
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/warranties",
+            headers=self._headers, params=params or None,
+        )
+        return self._unwrap(resp)
+
+    async def lookup_serial(
+        self, serial_number: str, actor_chann_uid: str = "",
+    ) -> dict:
+        """Which shops registered this serial (16.4).
+
+        Not license-scoped, unlike every other call here — that is the
+        point. The Data tier audits it with cross_tenant=true.
+        """
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/warranties/lookup",
+            headers=self._headers,
+            params={"serial_number": serial_number, "actor_chann_uid": actor_chann_uid},
+        )
+        return self._unwrap(resp)
+
     async def create_ticket(
         self, license_id: str, payload: dict, actor_id: str | None = None,
     ) -> dict:
@@ -1208,6 +1247,46 @@ class DataClient:
             headers=self._headers_for(actor_id),
         )
         return self._unwrap(resp)
+
+    async def list_quote_products(self, license_id: str, quote_id: str) -> list[dict]:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/quotes/{quote_id}/products",
+            headers=self._headers,
+        )
+        return self._unwrap(resp)
+
+    async def add_quote_product(
+        self, license_id: str, quote_id: str, payload: dict,
+        actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/quotes/{quote_id}/products",
+            headers=self._headers_for(actor_id), json=payload,
+        )
+        return self._unwrap(resp)
+
+    async def update_quote_product(
+        self, license_id: str, quote_id: str, line_id: str, fields: dict,
+        actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.patch(
+            f"{self._base}/internal/v1/licenses/{license_id}"
+            f"/quotes/{quote_id}/products/{line_id}",
+            headers=self._headers_for(actor_id), json=fields,
+        )
+        return self._unwrap(resp)
+
+    async def remove_quote_product(
+        self, license_id: str, quote_id: str, line_id: str,
+        actor_id: str | None = None,
+    ) -> None:
+        resp = await self._client.delete(
+            f"{self._base}/internal/v1/licenses/{license_id}"
+            f"/quotes/{quote_id}/products/{line_id}",
+            headers=self._headers_for(actor_id),
+        )
+        if resp.status_code >= 400:
+            self._unwrap(resp)
 
     async def link_quote_document(
         self, license_id: str, quote_id: str, document_id: str,

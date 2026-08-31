@@ -24,12 +24,15 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from decimal import Decimal, InvalidOperation
+
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..models import (
     Deal,
     DealProduct,
+    QuoteProduct,
     DocumentTemplate,
     DocumentTemplateVersion,
     GeneratedDocument,
@@ -91,7 +94,142 @@ class QuoteRepository:
         )
         self._s.add(row)
         self._s.flush()
+
+        # Copy, don't reference. From here the quote is its own document:
+        # editing the deal will not rewrite a quote already under
+        # discussion, and two quotes on one deal can differ — which is
+        # what happens the first time a customer changes their mind.
+        source = self._s.execute(
+            select(DealProduct)
+            .where(DealProduct.deal_id == deal_id)
+            .order_by(DealProduct.position.asc(), DealProduct.created_at.asc())
+        ).scalars().all()
+        for position, item in enumerate(source):
+            self._s.add(QuoteProduct(
+                id=uuid.uuid4(),
+                license_id=scope.license_id,
+                quote_id=row.id,
+                product_id=item.product_id,
+                product_name=item.product_name,
+                quoted_unit_price=item.quoted_unit_price,
+                qty=item.qty,
+                notes=item.notes,
+                position=position,
+            ))
+        self._s.flush()
         return row
+
+    # ------------------------------------------------------- quote lines
+
+    def list_products(self, scope: TenantScope, quote_id: uuid.UUID) -> list[QuoteProduct]:
+        return list(
+            self._s.execute(
+                select(QuoteProduct)
+                .where(
+                    QuoteProduct.license_id == scope.license_id,
+                    QuoteProduct.quote_id == quote_id,
+                )
+                .order_by(QuoteProduct.position, QuoteProduct.created_at)
+            ).scalars()
+        )
+
+    def _editable(self, scope: TenantScope, quote_id: uuid.UUID) -> Quote:
+        row = self.get(scope, quote_id)
+        if row is None:
+            raise Phase10NotFound("quote not found in this tenant")
+        if row.status != "draft":
+            # An issued quote is a document a customer is holding. Changing
+            # what it says after the fact, without a new version, is how
+            # two people end up quoting different numbers from the same
+            # reference.
+            raise Phase10Conflict(
+                f"quote {row.quote_id} is {row.status} and can no longer be edited"
+            )
+        return row
+
+    def add_product(
+        self, scope: TenantScope, quote_id: uuid.UUID, *,
+        product_name: str, quoted_unit_price, qty: int = 1,
+        product_id: uuid.UUID | None = None, notes: str | None = None,
+    ) -> QuoteProduct:
+        self._editable(scope, quote_id)
+        name = (product_name or "").strip()
+        if not name:
+            raise Phase10Conflict("a line needs a product name")
+        try:
+            price = Decimal(str(quoted_unit_price))
+        except (InvalidOperation, TypeError, ValueError):
+            raise Phase10Conflict(f"invalid price: {quoted_unit_price!r}")
+        if price < 0:
+            raise Phase10Conflict("a price cannot be negative")
+
+        last = self._s.execute(
+            select(func.max(QuoteProduct.position)).where(
+                QuoteProduct.quote_id == quote_id
+            )
+        ).scalar()
+        row = QuoteProduct(
+            id=uuid.uuid4(), license_id=scope.license_id, quote_id=quote_id,
+            product_id=product_id, product_name=name, quoted_unit_price=price,
+            qty=max(1, int(qty)), notes=notes,
+            position=(last + 1) if last is not None else 0,
+        )
+        self._s.add(row)
+        self._s.flush()
+        return row
+
+    def update_product(
+        self, scope: TenantScope, quote_id: uuid.UUID, line_id: uuid.UUID, fields: dict,
+    ) -> QuoteProduct:
+        """Change a line — the price a customer negotiated, or the count.
+
+        This is the whole point of quotes owning their lines: "ลดให้
+        เหลือ 1,400" applies to THIS offer, not to the deal and every
+        other quote made from it.
+        """
+        self._editable(scope, quote_id)
+        row = self._s.execute(
+            select(QuoteProduct).where(
+                QuoteProduct.id == line_id,
+                QuoteProduct.quote_id == quote_id,
+                QuoteProduct.license_id == scope.license_id,
+            )
+        ).scalars().first()
+        if row is None:
+            raise Phase10NotFound("line not found on this quote")
+
+        if "quoted_unit_price" in fields and fields["quoted_unit_price"] is not None:
+            try:
+                price = Decimal(str(fields["quoted_unit_price"]))
+            except (InvalidOperation, TypeError, ValueError):
+                raise Phase10Conflict(f"invalid price: {fields['quoted_unit_price']!r}")
+            if price < 0:
+                raise Phase10Conflict("a price cannot be negative")
+            row.quoted_unit_price = price
+        if "qty" in fields and fields["qty"] is not None:
+            row.qty = max(1, int(fields["qty"]))
+        if "product_name" in fields and str(fields["product_name"] or "").strip():
+            row.product_name = str(fields["product_name"]).strip()
+        if "notes" in fields:
+            row.notes = fields["notes"]
+        self._s.flush()
+        return row
+
+    def remove_product(
+        self, scope: TenantScope, quote_id: uuid.UUID, line_id: uuid.UUID,
+    ) -> None:
+        self._editable(scope, quote_id)
+        row = self._s.execute(
+            select(QuoteProduct).where(
+                QuoteProduct.id == line_id,
+                QuoteProduct.quote_id == quote_id,
+                QuoteProduct.license_id == scope.license_id,
+            )
+        ).scalars().first()
+        if row is None:
+            raise Phase10NotFound("line not found on this quote")
+        self._s.delete(row)
+        self._s.flush()
 
     def _unique_quote_id(self, license_id: uuid.UUID) -> str:
         """Per-tenant, unlike Deal.deal_id — see Quote's docstring in

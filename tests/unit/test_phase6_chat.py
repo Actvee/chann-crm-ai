@@ -183,6 +183,14 @@ class FakeDataClient:
     async def get_member(self, license_id, chann_uid):
         return {"id": "member-1", "chann_uid": chann_uid, "role": "technician"}
 
+    async def add_deal_product(self, license_id, deal_id, payload, actor_id=None):
+        self.recorded.append(("add_deal_product", license_id, deal_id, payload))
+        row = {"id": f"dp-{len(self.recorded)}", "deal_id": deal_id, **payload}
+        for deal in getattr(self, "_deals", []):
+            if deal["id"] == deal_id:
+                deal.setdefault("products", []).append(row)
+        return row
+
     async def create_ticket(self, license_id, payload, actor_id=None):
         self.recorded.append(("create_ticket", license_id, payload, actor_id))
         row = {
@@ -2001,7 +2009,9 @@ class TestPhase10QuoteChat:
             client, message="สร้างใบเสนอราคา",
             ctx=_ctx(primary_role="sales"), ai_client=ai,
         )
-        assert "กรุณาระบุรหัสดีล" in reply.text
+        # Wording changed when this path stopped going through the AI;
+        # what matters is that it asks which deal rather than refusing.
+        assert "ดีลไหน" in reply.text
         assert not any(r[0] == "create_quote" for r in client.recorded)
 
     async def test_create_quote_for_a_deal_code_that_does_not_exist(self):
@@ -3700,3 +3710,472 @@ class TestCustomerGreeting:
             client, message="สวัสดีครับ แอร์เสียครับ", ctx=_ctx(oa="customer"),
         )
         assert [r for r in client.recorded if r[0] == "create_ticket"]
+
+
+class TestDealCreationWithoutTheAI:
+    """The quick-reply button says "สร้างดีลให้ จุใจ มาติกา" — text the
+    system wrote itself, in a shape it chose.
+
+    Routing that through a model to be interpreted is strange in principle
+    and fragile in practice: it failed when the AI was unavailable, and it
+    spent a model call on every tap of a button whose meaning was never in
+    doubt.
+    """
+
+    async def test_the_quick_reply_creates_a_deal_with_no_ai_at_all(self):
+        client = FakeDataClient(permission_keys=["deal.create", "customer.read"])
+        customer = await client.create_customer("L1", {
+            "first_name": "จุใจ", "last_name": "มาติกา", "phone": "0659635642",
+        })
+        # No ai_client passed: if this path still needed one it would fail
+        # here exactly as it did in production.
+        reply = await handle_chat_message(
+            client, message="สร้างดีลให้ จุใจ มาติกา", ctx=_ctx(),
+        )
+        created = [r for r in client.recorded if r[0] == "create_deal"]
+        assert len(created) == 1
+        assert created[0][2]["contact_id"] == customer["id"]
+        assert "D-2026-" in reply.text
+
+    async def test_an_unknown_name_says_so_rather_than_failing_silently(self):
+        client = FakeDataClient(permission_keys=["deal.create", "customer.read"])
+        reply = await handle_chat_message(
+            client, message="สร้างดีลให้ ไม่มีคนนี้", ctx=_ctx(),
+        )
+        assert not [r for r in client.recorded if r[0] == "create_deal"]
+        assert "ไม่พบลูกค้า" in reply.text
+
+    async def test_it_still_requires_deal_create(self):
+        client = FakeDataClient(permission_keys=["customer.read"])
+        await client.create_customer("L1", {
+            "first_name": "จุใจ", "last_name": "มาติกา", "phone": "0659635642",
+        })
+        reply = await handle_chat_message(
+            client, message="สร้างดีลให้ จุใจ มาติกา", ctx=_ctx(),
+        )
+        assert not [r for r in client.recorded if r[0] == "create_deal"]
+        assert "สิทธิ์" in reply.text
+
+    async def test_two_customers_with_one_name_still_asks(self):
+        """The deterministic path must not lose the disambiguation the AI
+        path had — a deal on the wrong person's account is worse than a
+        question."""
+        client = FakeDataClient(permission_keys=["deal.create", "customer.read"])
+        await client.create_customer("L1", {
+            "first_name": "สมชาย", "last_name": "ก", "phone": "0810000001",
+        })
+        await client.create_customer("L1", {
+            "first_name": "สมชาย", "last_name": "ข", "phone": "0810000002",
+        })
+        await handle_chat_message(client, message="สร้างดีลให้ สมชาย", ctx=_ctx())
+        assert not [r for r in client.recorded if r[0] == "create_deal"]
+
+
+class TestQuoteCreationFollowsTheDeal:
+    """The exact sequence a salesperson performed and reported:
+
+        ข้อมูลลูกค้า C-2026-0007
+        สร้างดีลให้ นาคี มีทรัพย์      → D-2026-0006 created
+        สร้างใบเสนอราคา                → "คุณสามารถทำสิ่งเหล่านี้ได้:"
+
+    Quoting is what happens seconds after a deal is made. Being asked
+    which deal, immediately after being told which deal, reads as the
+    system not paying attention — and here it did not even ask, it
+    listed permissions.
+    """
+
+    async def _client(self):
+        client = FakeDataClient(permission_keys=[
+            "deal.create", "deal.read", "quote.create", "customer.read",
+        ])
+        await client.create_customer("L1", {
+            "first_name": "นาคี", "last_name": "มีทรัพย์", "phone": "0465316666",
+        })
+        return client
+
+    async def test_quoting_right_after_creating_a_deal_uses_that_deal(self):
+        client = await self._client()
+        await handle_chat_message(client, message="สร้างดีลให้ นาคี มีทรัพย์", ctx=_ctx())
+        reply = await handle_chat_message(client, message="สร้างใบเสนอราคา", ctx=_ctx())
+
+        created = [r for r in client.recorded if r[0] == "create_quote"]
+        assert len(created) == 1
+        assert "Q-2026-" in reply.text
+
+    async def test_it_works_with_no_ai_at_all(self):
+        """The quick-reply button writes this text itself; interpreting it
+        with a model is what broke when the model answered differently."""
+        client = await self._client()
+        await handle_chat_message(client, message="สร้างดีลให้ นาคี มีทรัพย์", ctx=_ctx())
+        # No ai_client passed.
+        await handle_chat_message(client, message="สร้างใบเสนอราคา", ctx=_ctx())
+        assert [r for r in client.recorded if r[0] == "create_quote"]
+
+    async def test_an_explicit_deal_code_still_wins(self):
+        client = await self._client()
+        await handle_chat_message(client, message="สร้างดีลให้ นาคี มีทรัพย์", ctx=_ctx())
+        second = await client.create_deal("L1", {"contact_id": client._customers[0]["id"]})
+        await handle_chat_message(
+            client, message=f"สร้างใบเสนอราคาจากดีล {second['deal_id']}", ctx=_ctx(),
+        )
+        created = [r for r in client.recorded if r[0] == "create_quote"]
+        assert created[-1][2]["deal_id"] == second["id"]
+
+    async def test_with_no_deal_at_all_it_asks_rather_than_listing_permissions(self):
+        client = await self._client()
+        reply = await handle_chat_message(client, message="สร้างใบเสนอราคา", ctx=_ctx())
+        assert not [r for r in client.recorded if r[0] == "create_quote"]
+        assert "ดีลไหน" in reply.text
+
+    async def test_it_still_requires_quote_create(self):
+        client = FakeDataClient(permission_keys=["deal.read"])
+        reply = await handle_chat_message(client, message="สร้างใบเสนอราคา", ctx=_ctx())
+        assert "สิทธิ์" in reply.text
+
+
+class TestAddingProductsToADeal:
+    """The refusal told people to add a product, and there was no way to
+    do it in chat.
+
+    That is worse than the confusion it replaced: they now knew exactly
+    what to do and still could not do it.
+    """
+
+    async def _with_deal(self):
+        client = FakeDataClient(permission_keys=[
+            "deal.create", "deal.read", "deal.update", "quote.create",
+            "customer.read", "product.manage",
+        ])
+        await client.create_customer("L1", {
+            "first_name": "นาคี", "last_name": "มีทรัพย์", "phone": "0465316666",
+        })
+        await handle_chat_message(client, message="สร้างดีลให้ นาคี มีทรัพย์", ctx=_ctx())
+        return client
+
+    async def test_name_quantity_and_price_are_read_from_one_sentence(self):
+        client = await self._with_deal()
+        reply = await handle_chat_message(
+            client, message="เพิ่มสินค้า พัดลม 2 ตัว ราคา 1500", ctx=_ctx(),
+        )
+        added = [r for r in client.recorded if r[0] == "add_deal_product"]
+        assert len(added) == 1
+        assert added[0][3]["product_name"] == "พัดลม"
+        assert added[0][3]["qty"] == 2
+        assert str(added[0][3]["quoted_unit_price"]) == "1500"
+        assert "3,000.00" in reply.text
+
+    async def test_it_uses_the_deal_just_created(self):
+        """Nobody types a deal code they were shown ten seconds ago."""
+        client = await self._with_deal()
+        await handle_chat_message(
+            client, message="เพิ่มสินค้า พัดลม ราคา 500", ctx=_ctx(),
+        )
+        assert [r for r in client.recorded if r[0] == "add_deal_product"]
+
+    async def test_a_known_product_needs_no_price(self):
+        """A shop that has entered its catalogue should not retype prices
+        it has already given us."""
+        client = await self._with_deal()
+        client._products = [{
+            "id": "p1", "product_id": "FAN001", "product_name": "พัดลมตั้งพื้น",
+            "unit_price": "1200.00",
+        }]
+        await handle_chat_message(client, message="เพิ่มสินค้า FAN001", ctx=_ctx())
+        added = [r for r in client.recorded if r[0] == "add_deal_product"]
+        assert added[-1][3]["product_name"] == "พัดลมตั้งพื้น"
+        assert str(added[-1][3]["quoted_unit_price"]) == "1200.00"
+
+    async def test_an_unknown_product_with_no_price_asks_for_one(self):
+        client = await self._with_deal()
+        reply = await handle_chat_message(
+            client, message="เพิ่มสินค้า อะไรสักอย่าง", ctx=_ctx(),
+        )
+        assert not [r for r in client.recorded if r[0] == "add_deal_product"]
+        assert "ราคาเท่าไหร่" in reply.text
+
+    async def test_the_whole_journey_needs_no_codes_typed(self):
+        """Create a deal, add a product, quote it — the sequence the
+        salesperson tried and could not finish."""
+        client = await self._with_deal()
+        await handle_chat_message(
+            client, message="เพิ่มสินค้า พัดลม 2 ตัว ราคา 1500", ctx=_ctx(),
+        )
+        reply = await handle_chat_message(client, message="สร้างใบเสนอราคา", ctx=_ctx())
+        assert [r for r in client.recorded if r[0] == "create_quote"]
+        assert "Q-2026-" in reply.text
+
+    async def test_it_requires_deal_update(self):
+        """With an explicit deal code, so this is unambiguously the
+        line-item path rather than catalogue creation."""
+        client = FakeDataClient(permission_keys=["deal.read"])
+        reply = await handle_chat_message(
+            client, message="เพิ่มสินค้า พัดลม ราคา 500 เข้าดีล D-2026-0001",
+            ctx=_ctx(),
+        )
+        assert not [r for r in client.recorded if r[0] == "add_deal_product"]
+        assert "สิทธิ์" in reply.text
+
+    async def test_with_no_deal_in_play_it_is_catalogue_creation_instead(self):
+        """"เพิ่มสินค้า" means two different things. Someone with no deal
+        open is building their catalogue, not quoting — and the two need
+        different permissions, so guessing wrong locks people out of one
+        of them."""
+        client = FakeDataClient(permission_keys=["deal.update"])
+        reply = await handle_chat_message(
+            client, message="เพิ่มสินค้าแอร์ ราคา 3500 บาท", ctx=_ctx(),
+        )
+        # Routed away from the line-item path. Where it goes next is the
+        # catalogue flow, which parses free text with the AI — not this
+        # test's concern, and asserting on it here would make this fail
+        # for unrelated reasons.
+        assert not [r for r in client.recorded if r[0] == "add_deal_product"]
+        assert reply.text
+
+
+class TestCompoundInstructions:
+    """"ดูข้อมูลลูกค้า แล้วสร้างดีลและเพิ่มสินค้าพัดลม 2 ตัว" — one
+    sentence, two actions, no codes retyped.
+
+    That is how people talk. Splitting it into three exchanges, each
+    naming something the system just told them, is what makes a chat
+    product feel like a form with extra steps.
+    """
+
+    async def _viewing_a_customer(self):
+        client = FakeDataClient(permission_keys=[
+            "customer.read", "deal.create", "deal.read", "deal.update",
+            "quote.create", "product.manage",
+        ])
+        customer = await client.create_customer("L1", {
+            "first_name": "นาคี", "last_name": "มีทรัพย์", "phone": "0465316666",
+        })
+        client._products = [{
+            "id": "p1", "product_id": "FAN001", "product_name": "พัดลม",
+            "unit_price": "1500.00",
+        }]
+        await handle_chat_message(
+            client, message=f"ข้อมูลลูกค้า {customer['customer_id']}", ctx=_ctx(),
+        )
+        return client, customer
+
+    async def test_create_deal_alone_uses_the_customer_just_viewed(self):
+        client, customer = await self._viewing_a_customer()
+        await handle_chat_message(client, message="สร้างดีล", ctx=_ctx())
+        created = [r for r in client.recorded if r[0] == "create_deal"]
+        assert len(created) == 1
+        assert created[0][2]["contact_id"] == customer["id"]
+
+    async def test_one_sentence_creates_the_deal_and_adds_the_product(self):
+        client, _ = await self._viewing_a_customer()
+        reply = await handle_chat_message(
+            client, message="สร้างดีลและเพิ่มสินค้าพัดลม 2 ตัว", ctx=_ctx(),
+        )
+        assert [r for r in client.recorded if r[0] == "create_deal"]
+        added = [r for r in client.recorded if r[0] == "add_deal_product"]
+        assert added and added[0][3]["qty"] == 2
+        # Both outcomes reported, because both were asked for.
+        assert "D-2026-" in reply.text
+        assert "พัดลม" in reply.text
+
+    async def test_the_whole_sequence_needs_no_identifiers(self):
+        client, _ = await self._viewing_a_customer()
+        await handle_chat_message(
+            client, message="สร้างดีลและเพิ่มสินค้าพัดลม 2 ตัว", ctx=_ctx(),
+        )
+        reply = await handle_chat_message(client, message="สร้างใบเสนอราคา", ctx=_ctx())
+        assert "Q-2026-" in reply.text
+
+    async def test_with_nothing_in_context_it_defers_instead_of_refusing(self):
+        """Context is a shortcut, not a gate.
+
+        With no customer in play the deterministic path must step aside
+        and let the AI try — it can still pull a name out of a longer
+        sentence. Short-circuiting to a refusal here removed that, which
+        an existing test caught immediately.
+        """
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "create", "entity": "deal",
+             "fields": {"target_name": "สมชาย"}, "missing": []}, ensure_ascii=False)))
+        client = FakeDataClient(permission_keys=["deal.create", "customer.read"])
+        await client.create_customer("L1", {
+            "first_name": "สมชาย", "last_name": "ใจดี", "phone": "0810000000",
+        })
+        reply = await handle_chat_message(
+            client, message="สร้างดีล", ctx=_ctx(), ai_client=ai,
+        )
+        # The AI path resolved it, so a deal exists.
+        assert [r for r in client.recorded if r[0] == "create_deal"]
+        assert "D-2026-" in reply.text
+
+    async def test_an_explicit_name_still_overrides_the_context(self):
+        client, _ = await self._viewing_a_customer()
+        other = await client.create_customer("L1", {
+            "first_name": "สมชาย", "last_name": "ใจดี", "phone": "0810000000",
+        })
+        await handle_chat_message(client, message="สร้างดีลให้ สมชาย ใจดี", ctx=_ctx())
+        created = [r for r in client.recorded if r[0] == "create_deal"]
+        assert created[-1][2]["contact_id"] == other["id"]
+
+    async def test_a_failed_second_half_does_not_hide_the_first(self):
+        """The deal was created. If the product line cannot be read, the
+        person must still be told the deal exists — otherwise they create
+        a second one."""
+        client, _ = await self._viewing_a_customer()
+        reply = await handle_chat_message(
+            client, message="สร้างดีลและเพิ่มสินค้าอะไรก็ไม่รู้", ctx=_ctx(),
+        )
+        assert [r for r in client.recorded if r[0] == "create_deal"]
+        assert "D-2026-" in reply.text
+
+
+class TestProductNamesAreNotUnique:
+    """A shop sells พัดลม in four sizes at four prices.
+
+    Picking one silently puts the wrong price on a document that goes to
+    a customer, which is the single worst place for a quiet guess.
+    """
+
+    async def _with_deal_and_catalogue(self):
+        client = FakeDataClient(permission_keys=[
+            "deal.create", "deal.read", "deal.update", "customer.read",
+            "product.manage",
+        ])
+        await client.create_customer("L1", {
+            "first_name": "นาคี", "last_name": "มีทรัพย์", "phone": "0465316666",
+        })
+        client._products = [
+            {"id": "p1", "product_id": "FAN16",
+             "product_name": "พัดลมตั้งพื้น 16 นิ้ว", "unit_price": "1500.00"},
+            {"id": "p2", "product_id": "FAN18",
+             "product_name": "พัดลมตั้งพื้น 18 นิ้ว", "unit_price": "1900.00"},
+        ]
+        await handle_chat_message(client, message="สร้างดีลให้ นาคี มีทรัพย์", ctx=_ctx())
+        return client
+
+    async def test_an_ambiguous_name_lists_the_options_with_prices(self):
+        client = await self._with_deal_and_catalogue()
+        reply = await handle_chat_message(
+            client, message="เพิ่มสินค้า พัดลม 2 ตัว", ctx=_ctx(),
+        )
+        assert not [r for r in client.recorded if r[0] == "add_deal_product"]
+        assert "16 นิ้ว" in reply.text and "18 นิ้ว" in reply.text
+        # Prices shown, because the price is what distinguishes them.
+        assert "1,500.00" in reply.text and "1,900.00" in reply.text
+        assert reply.quick_replies
+
+    async def test_a_partial_name_still_works_when_only_one_matches(self):
+        """Typing the full catalogue name means reading it off a screen and
+        copying it — the work chat exists to remove."""
+        client = await self._with_deal_and_catalogue()
+        await handle_chat_message(
+            client, message="เพิ่มสินค้า 18 นิ้ว 2 ตัว", ctx=_ctx(),
+        )
+        added = [r for r in client.recorded if r[0] == "add_deal_product"]
+        assert added and str(added[-1][3]["quoted_unit_price"]) == "1900.00"
+
+    async def test_a_model_number_inside_the_name_is_not_read_as_a_quantity(self):
+        """"พัดลมตั้งพื้น 18 นิ้ว 2 ตัว" is two of the 18-inch model, not
+        eighteen of anything. Sizes and model numbers live inside product
+        names constantly."""
+        client = await self._with_deal_and_catalogue()
+        await handle_chat_message(
+            client, message="เพิ่มสินค้า พัดลมตั้งพื้น 18 นิ้ว 2 ตัว", ctx=_ctx(),
+        )
+        added = [r for r in client.recorded if r[0] == "add_deal_product"]
+        assert added[-1][3]["qty"] == 2
+        assert added[-1][3]["product_name"] == "พัดลมตั้งพื้น 18 นิ้ว"
+
+    async def test_a_product_code_is_exact_and_never_ambiguous(self):
+        client = await self._with_deal_and_catalogue()
+        await handle_chat_message(client, message="เพิ่มสินค้า FAN16 x3", ctx=_ctx())
+        added = [r for r in client.recorded if r[0] == "add_deal_product"]
+        assert added[-1][3]["qty"] == 3
+        assert str(added[-1][3]["quoted_unit_price"]) == "1500.00"
+
+    async def test_an_exact_name_beats_a_partial_match_on_another_product(self):
+        """A full name is an unambiguous answer and must not be dragged
+        into a choice by something it happens to be a prefix of."""
+        client = await self._with_deal_and_catalogue()
+        client._products.append({
+            "id": "p3", "product_id": "FAN16PRO",
+            "product_name": "พัดลมตั้งพื้น 16 นิ้ว รุ่นพิเศษ", "unit_price": "2200.00",
+        })
+        await handle_chat_message(
+            client, message="เพิ่มสินค้า พัดลมตั้งพื้น 16 นิ้ว 1 ตัว", ctx=_ctx(),
+        )
+        added = [r for r in client.recorded if r[0] == "add_deal_product"]
+        assert str(added[-1][3]["quoted_unit_price"]) == "1500.00"
+
+
+class TestChoosingBetweenSimilarProducts:
+    """LINE truncates button labels at 20 characters.
+
+    Four products called "พัดลมตั้งพื้น 16/18/20/22 นิ้ว" all truncate to
+    the same string, so the buttons meant to tell them apart become four
+    identical buttons.
+    """
+
+    def test_labels_show_what_differs(self):
+        from chann_app.services.chat import _distinguishing_part
+
+        names = ["พัดลมตั้งพื้น 16 นิ้ว", "พัดลมตั้งพื้น 18 นิ้ว"]
+        assert [_distinguishing_part(n, names) for n in names] == [
+            "16 นิ้ว", "18 นิ้ว",
+        ]
+
+    def test_it_cuts_at_a_word_boundary_not_mid_number(self):
+        """"16" and "18" share the "1". Cutting at the raw divergence gives
+        "6 นิ้ว" and "8 นิ้ว" — not the sizes, and someone orders the wrong
+        fan."""
+        from chann_app.services.chat import _distinguishing_part
+
+        names = ["แอร์ 12000 BTU", "แอร์ 18000 BTU"]
+        assert _distinguishing_part(names[0], names) == "12000 BTU"
+
+    def test_a_lone_option_keeps_its_whole_name(self):
+        from chann_app.services.chat import _distinguishing_part
+
+        assert _distinguishing_part("พัดลม", ["พัดลม"]) == "พัดลม"
+
+    def test_truncation_breaks_on_a_boundary_with_an_ellipsis(self):
+        from chann_app.line.client import _fit_label
+
+        long_name = "พัดลมตั้งพื้น 18 นิ้ว รุ่นพิเศษ"
+        fitted = _fit_label(long_name)
+        assert len(fitted) <= 20
+        # An ellipsis reads as "there is more"; a hard cut reads as a typo.
+        assert fitted.endswith("…")
+
+    def test_a_short_label_is_untouched(self):
+        from chann_app.line.client import _fit_label
+
+        assert _fit_label("ดูข้อมูล") == "ดูข้อมูล"
+
+    async def test_picking_a_button_adds_that_exact_product(self):
+        """End to end: the button's text is a real command, so tapping it
+        must land on the product it names and not the other one."""
+        client = FakeDataClient(permission_keys=[
+            "deal.create", "deal.read", "deal.update", "customer.read",
+            "product.manage",
+        ])
+        await client.create_customer("L1", {
+            "first_name": "นาคี", "last_name": "มีทรัพย์", "phone": "0465316666",
+        })
+        client._products = [
+            {"id": "p1", "product_id": "FAN16",
+             "product_name": "พัดลมตั้งพื้น 16 นิ้ว", "unit_price": "1500.00"},
+            {"id": "p2", "product_id": "FAN18",
+             "product_name": "พัดลมตั้งพื้น 18 นิ้ว", "unit_price": "1900.00"},
+        ]
+        await handle_chat_message(client, message="สร้างดีลให้ นาคี มีทรัพย์", ctx=_ctx())
+        offer = await handle_chat_message(
+            client, message="เพิ่มสินค้า พัดลม 2 ตัว", ctx=_ctx(),
+        )
+        # Tap the second button.
+        await handle_chat_message(client, message=offer.quick_replies[1][1], ctx=_ctx())
+
+        added = [r for r in client.recorded if r[0] == "add_deal_product"]
+        assert len(added) == 1
+        assert added[0][3]["product_name"] == "พัดลมตั้งพื้น 18 นิ้ว"
+        # The quantity from the original message survives the round trip.
+        assert added[0][3]["qty"] == 2

@@ -1255,3 +1255,99 @@ async def list_technician_teams(
         return await client.list_technician_teams(license_id)
     except DataTierError as exc:
         raise _propagate(exc)
+
+
+# --------------------------------------------------------- quote line items
+
+
+class QuoteLineIn(BaseModel):
+    product_name: str
+    quoted_unit_price: str | float
+    qty: int = 1
+    notes: str | None = None
+
+
+class QuoteLinePatchIn(BaseModel):
+    product_name: str | None = None
+    quoted_unit_price: str | float | None = None
+    qty: int | None = None
+    notes: str | None = None
+
+
+@router.get("/licenses/{license_id}/quotes/{quote_id}/products")
+async def list_quote_products(
+    license_id: str,
+    quote_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    _require_same_tenant(principal, license_id)
+    principal.require("quote.read")
+    try:
+        return await client.list_quote_products(license_id, quote_id)
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.post("/licenses/{license_id}/quotes/{quote_id}/products", status_code=201)
+async def add_quote_product(
+    license_id: str,
+    quote_id: str,
+    payload: QuoteLineIn,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Add a line to THIS quote only.
+
+    The deal keeps what the customer is buying; the quote keeps what they
+    were offered. Adding a sweetener to one offer must not rewrite either.
+    """
+    _require_same_tenant(principal, license_id)
+    principal.require("quote.update")
+    try:
+        return await client.add_quote_product(
+            license_id, quote_id, payload.model_dump(exclude_none=True),
+            actor_id=principal.chann_uid,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.patch("/licenses/{license_id}/quotes/{quote_id}/products/{line_id}")
+async def update_quote_product(
+    license_id: str,
+    quote_id: str,
+    line_id: str,
+    payload: QuoteLinePatchIn,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    _require_same_tenant(principal, license_id)
+    principal.require("quote.update")
+    try:
+        return await client.update_quote_product(
+            license_id, quote_id, line_id, payload.model_dump(exclude_unset=True),
+            actor_id=principal.chann_uid,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.delete(
+    "/licenses/{license_id}/quotes/{quote_id}/products/{line_id}", status_code=204,
+)
+async def remove_quote_product(
+    license_id: str,
+    quote_id: str,
+    line_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    _require_same_tenant(principal, license_id)
+    principal.require("quote.update")
+    try:
+        await client.remove_quote_product(
+            license_id, quote_id, line_id, actor_id=principal.chann_uid,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)

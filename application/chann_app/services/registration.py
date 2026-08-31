@@ -27,6 +27,10 @@ log = logging.getLogger(__name__)
 INVITE_CODE_RE = re.compile(r"^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{10}$")
 CUSTOMER_PENDING_TTL_S = 3600
 
+# Loose on purpose: serial formats vary wildly by manufacturer, and being
+# strict would reject real ones. An unknown serial simply finds nothing.
+SERIAL_RE = re.compile(r"\b([A-Z0-9][A-Z0-9\-]{5,31})\b", re.IGNORECASE)
+
 COMPANY_CODE_RE = re.compile(r"^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{8}$")
 
 WELCOME = {
@@ -272,6 +276,57 @@ async def _handle_customer(
             )
             return linked + follow_up
         return linked
+
+    # A serial number identifies the shop without the customer knowing
+    # which one it is (16.4). This is the case the shop-code question was
+    # always a poor substitute for: someone whose air conditioner has
+    # failed has the sticker on the machine, not a code they were never
+    # given.
+    serial_match = SERIAL_RE.search(text)
+    if serial_match:
+        serial = serial_match.group(1).upper()
+        try:
+            result = await client.lookup_serial(serial, actor_chann_uid=ctx.chann_uid)
+        except Exception:
+            log.exception("cross-tenant serial lookup failed during registration")
+            result = {}
+        matches = result.get("matches") or []
+
+        if len(matches) == 1:
+            # Exactly one shop registered it, so bind straight to them.
+            # Asking someone to confirm the only possible answer is a
+            # question with no purpose.
+            shop = matches[0]
+            try:
+                link = await client.link_customer(
+                    chann_uid=ctx.chann_uid, company_code=str(shop["company_code"]),
+                )
+            except Exception:
+                log.exception("could not link a customer found by serial")
+                link = None
+            if link is not None:
+                name = link.get("company_name", shop.get("company_name", ""))
+                if language == "en":
+                    return (
+                        f'Serial {serial} is registered at "{name}".\n'
+                        "You are now connected to them — describe the fault and "
+                        "I will pass it on."
+                    )
+                return (
+                    f"หมายเลข {serial} ลงทะเบียนไว้ที่ \"{name}\"\n"
+                    "เชื่อมต่อให้แล้วครับ พิมพ์อาการที่เสียมาได้เลย"
+                )
+
+        if len(matches) > 1:
+            listed = "\n".join(
+                f"• {m['company_name']} — {m['company_code']}" for m in matches[:5]
+            )
+            header = (
+                f"หมายเลข {serial} พบที่หลายร้าน พิมพ์รหัสร้านที่คุณซื้อ:"
+                if language != "en"
+                else f"Serial {serial} is registered at several shops — type the code:"
+            )
+            return f"{header}\n{listed}"
 
     if len(text) >= 2:
         shops = await client.search_shops(text)

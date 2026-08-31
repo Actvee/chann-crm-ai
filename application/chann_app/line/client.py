@@ -7,7 +7,12 @@ know the wire shape, and every existing call site stays correct.
 """
 from __future__ import annotations
 
+import logging
+import uuid
+
 import httpx
+
+log = logging.getLogger(__name__)
 
 from ..config import channel_access_token
 
@@ -49,8 +54,29 @@ def quick_reply_uri(label: str, url: str) -> dict:
     """
     return {
         "type": "action",
-        "action": {"type": "uri", "label": label[:20], "uri": url},
+        "action": {"type": "uri", "label": _fit_label(label), "uri": url},
     }
+
+
+def _fit_label(label: str, limit: int = 20) -> str:
+    """A label inside LINE's 20-character button limit.
+
+    Cut on a word boundary with an ellipsis rather than mid-word. A button
+    reading "พัดลมตั้งพื้น 16 นิ้" looks like a typo, and on a list of
+    near-identical products the truncated tail is often the only thing
+    telling them apart — which is exactly when the button is being shown.
+    """
+    label = (label or "").strip()
+    if len(label) <= limit:
+        return label
+    head = label[: limit - 1]
+    space = head.rfind(" ")
+    # Only break on a space when it leaves something readable. Thai does
+    # not space between words, so many labels have no break at all and
+    # fall back to a hard cut with the ellipsis still making it obvious.
+    if space >= limit // 2:
+        head = head[:space]
+    return head.rstrip() + "…"
 
 
 def quick_reply_item(label: str, text: str | None = None) -> dict:
@@ -59,13 +85,24 @@ def quick_reply_item(label: str, text: str | None = None) -> dict:
     it, defaulting to the label."""
     return {
         "type": "action",
-        "action": {"type": "message", "label": label[:20], "text": text or label},
+        "action": {"type": "message", "label": _fit_label(label), "text": text or label},
     }
 
 
 async def _send(
     url: str, oa: str, payload: dict, client: httpx.AsyncClient | None, what: str,
-) -> None:
+) -> list[str]:
+    """Send, and return the ids of the messages LINE actually created.
+
+    The response used to be discarded, which quietly broke replying: a
+    reply is bound to the message a person taps, and people tap the BOT's
+    message, not their own. Without these ids the mapping could only ever
+    be written against the inbound message, so "reply to this and say
+    ออกเอกสาร" answered "ไม่พบข้อความต้นฉบับที่ตอบกลับ" every time.
+
+    LINE returns sentMessages only when the request carries a retry key,
+    so one is generated per call.
+    """
     access_token = channel_access_token(oa)
     if not access_token:
         raise LineReplyError(f"LINE_{oa.upper()}_CHANNEL_ACCESS_TOKEN is REQUIRED_NOT_CONFIGURED")
@@ -74,12 +111,28 @@ async def _send(
     client = client or httpx.AsyncClient(timeout=10.0)
     try:
         response = await client.post(
-            url, headers={"Authorization": f"Bearer {access_token}"}, json=payload,
+            url,
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                # Required for LINE to return sentMessages. Also makes the
+                # send idempotent, which matters because a webhook that
+                # times out is retried by LINE.
+                "X-Line-Retry-Key": str(uuid.uuid4()),
+            },
+            json=payload,
         )
         if response.status_code >= 400:
             raise LineReplyError(
                 f"LINE {what} failed: {response.status_code} {response.text[:200]}"
             )
+        try:
+            sent = (response.json() or {}).get("sentMessages") or []
+            return [str(m.get("id")) for m in sent if m.get("id")]
+        except Exception:
+            # A send that succeeded but whose body could not be read is
+            # still a successful send; only the reply mapping is lost.
+            log.warning("LINE %s succeeded but sentMessages could not be read", what)
+            return []
     finally:
         if owns_client:
             await client.aclose()
@@ -90,12 +143,12 @@ async def reply_messages(
     reply_token: str,
     messages: list[dict],
     client: httpx.AsyncClient | None = None,
-) -> None:
+) -> list[str]:
     if not reply_token:
         raise LineReplyError("LINE event has no replyToken")
     if not messages:
         raise LineReplyError("reply requires at least one message")
-    await _send(
+    return await _send(
         LINE_REPLY_URL, oa,
         {"replyToken": reply_token, "messages": messages[:MAX_MESSAGES_PER_REQUEST]},
         client, "reply",
@@ -107,8 +160,8 @@ async def reply_text(
     reply_token: str,
     text: str,
     client: httpx.AsyncClient | None = None,
-) -> None:
-    await reply_messages(oa, reply_token, [text_message(text)], client)
+) -> list[str]:
+    return await reply_messages(oa, reply_token, [text_message(text)], client)
 
 
 async def push_text(
@@ -207,7 +260,7 @@ def _flex_row(row: dict) -> dict:
             "type": "button",
             "action": {
                 "type": "message",
-                "label": str(row["action_label"])[:20],
+                "label": _fit_label(str(row["action_label"])),
                 "text": str(row["action_text"]),
             },
             "style": "link",

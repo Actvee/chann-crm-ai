@@ -65,6 +65,12 @@ from ..repositories.phase9 import (
     StorefrontRepository,
 )
 from ..repositories.phase11 import AssignmentRuleRepository
+from ..repositories.phase16 import (
+    DisplayPreferenceRepository,
+    WarrantyConflict,
+    WarrantyNotFound,
+    WarrantyRepository,
+)
 from ..repositories.phase13 import (
     CheckoutBlocked,
     FieldServiceRepository,
@@ -170,6 +176,9 @@ from ..schemas import (
     CheckOutIn,
     ReportStatusIn,
     ServiceReportOut,
+    QuoteProductIn,
+    QuoteProductOut,
+    QuoteProductPatchIn,
     TicketAssignIn,
     TicketIn,
     TicketMemberActionIn,
@@ -3447,3 +3456,242 @@ def list_technician_team_members(
         TenantScope(license_id=license_id), team_id=team_id,
     )
     return rows
+
+
+# ------------------------------------------- Phase 7.5 / 16 warranties
+
+
+def _warranty_error(exc: Exception):
+    if isinstance(exc, WarrantyNotFound):
+        return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, WarrantyConflict):
+        return HTTPException(status_code=409, detail=str(exc))
+    return _phase2_http_error(exc)
+
+
+@router.post("/licenses/{license_id}/warranties", status_code=201)
+def register_warranty(
+    license_id: uuid.UUID,
+    payload: dict,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = WarrantyRepository(session).register(
+            scope,
+            serial_number=str(payload.get("serial_number") or ""),
+            product_id=(
+                uuid.UUID(payload["product_id"]) if payload.get("product_id") else None
+            ),
+            product_name=payload.get("product_name"),
+            customer_chann_uid=payload.get("customer_chann_uid"),
+            contact_id=(
+                uuid.UUID(payload["contact_id"]) if payload.get("contact_id") else None
+            ),
+            warranty_start=(
+                date.fromisoformat(payload["warranty_start"])
+                if payload.get("warranty_start") else None
+            ),
+            warranty_months=payload.get("warranty_months"),
+        )
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="warranty", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="create",
+            field_changes=diff_fields({}, {"serial_number": row.serial_number}),
+        )
+        session.commit()
+        session.refresh(row)
+        return {
+            "id": str(row.id), "warranty_number": row.warranty_number,
+            "serial_number": row.serial_number, "product_name": row.product_name,
+            "warranty_start": row.warranty_start.isoformat(),
+            "warranty_end": row.warranty_end.isoformat(), "status": row.status,
+        }
+    except Exception as exc:
+        session.rollback()
+        raise _warranty_error(exc)
+
+
+@router.get("/licenses/{license_id}/warranties")
+def list_warranties(
+    license_id: uuid.UUID,
+    serial_number: str | None = None,
+    customer_chann_uid: str | None = None,
+    session: Session = Depends(get_session),
+):
+    scope = TenantScope(license_id=license_id)
+    repo = WarrantyRepository(session)
+    if serial_number:
+        row = repo.by_serial(scope, serial_number)
+        rows = [row] if row else []
+    elif customer_chann_uid:
+        rows = repo.for_customer(scope, customer_chann_uid)
+    else:
+        rows = repo.list_for_license(scope)
+    return [
+        {
+            "id": str(r.id), "warranty_number": r.warranty_number,
+            "serial_number": r.serial_number, "product_name": r.product_name,
+            "customer_chann_uid": r.customer_chann_uid,
+            "warranty_start": r.warranty_start.isoformat(),
+            "warranty_end": r.warranty_end.isoformat(), "status": r.status,
+        }
+        for r in rows
+    ]
+
+
+@router.get("/warranties/lookup")
+def lookup_serial_across_tenants(
+    serial_number: str,
+    actor_chann_uid: str = "",
+    session: Session = Depends(get_session),
+):
+    """16.4 — which shops have registered this serial.
+
+    The one query in this system that deliberately crosses the tenant
+    boundary, because "my thing is broken, who do I talk to" cannot be
+    answered inside a single tenant.
+
+    Returns only what identifies a shop. Audited with cross_tenant=true on
+    every call, which is what that column exists for.
+    """
+    repo = WarrantyRepository(session)
+    matches = repo.find_shops_by_serial(serial_number)
+
+    # Audited whether or not anything was found: a search that returns
+    # nothing is still someone asking about a serial, and an audit trail
+    # with only the hits in it cannot answer "who went looking".
+    AuditRepository(session).write(
+        license_id=None,
+        entity_type="warranty_lookup",
+        entity_id=uuid.uuid4(),
+        actor_type="user",
+        actor_id=actor_chann_uid or None,
+        action="cross_tenant_lookup",
+        cross_tenant=True,
+        field_changes=diff_fields(
+            {}, {"serial_number": serial_number, "matches": len(matches)},
+        ),
+    )
+    session.commit()
+    return {"serial_number": serial_number, "matches": matches}
+
+
+@router.get("/identities/{chann_uid}/display-preferences")
+def get_display_preferences(chann_uid: str, session: Session = Depends(get_session)):
+    return DisplayPreferenceRepository(session).get(chann_uid)
+
+
+@router.put("/identities/{chann_uid}/display-preferences")
+def set_display_preferences(
+    chann_uid: str, payload: dict, session: Session = Depends(get_session),
+):
+    try:
+        result = DisplayPreferenceRepository(session).upsert(chann_uid, payload)
+        session.commit()
+        return result
+    except Exception as exc:
+        session.rollback()
+        raise _phase2_http_error(exc)
+
+
+# ------------------------------------------------- Phase 10 quote lines
+#
+# A quote owns its lines from creation, copied from the deal. Editing them
+# changes THIS offer only — the deal, and every other quote made from it,
+# are untouched. That is what makes "ลดให้เหลือ 1,400" a safe thing to say.
+
+
+@router.get(
+    "/licenses/{license_id}/quotes/{quote_id}/products",
+    response_model=list[QuoteProductOut],
+)
+def list_quote_products(
+    license_id: uuid.UUID, quote_id: uuid.UUID, session: Session = Depends(get_session),
+):
+    return QuoteRepository(session).list_products(
+        TenantScope(license_id=license_id), quote_id,
+    )
+
+
+@router.post(
+    "/licenses/{license_id}/quotes/{quote_id}/products",
+    response_model=QuoteProductOut, status_code=201,
+)
+def add_quote_product(
+    license_id: uuid.UUID,
+    quote_id: uuid.UUID,
+    payload: QuoteProductIn,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = QuoteRepository(session).add_product(
+            scope, quote_id, **payload.model_dump(),
+        )
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="quote", entity_id=quote_id,
+            actor_type="user", actor_id=x_actor_id or None, action="update",
+            field_changes=diff_fields({}, {"added_line": row.product_name}),
+        )
+        session.commit()
+        session.refresh(row)
+        return row
+    except Exception as exc:
+        session.rollback()
+        raise _phase10_http_error(exc)
+
+
+@router.patch(
+    "/licenses/{license_id}/quotes/{quote_id}/products/{line_id}",
+    response_model=QuoteProductOut,
+)
+def update_quote_product(
+    license_id: uuid.UUID,
+    quote_id: uuid.UUID,
+    line_id: uuid.UUID,
+    payload: QuoteProductPatchIn,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = QuoteRepository(session).update_product(
+            scope, quote_id, line_id, payload.model_dump(exclude_unset=True),
+        )
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="quote", entity_id=quote_id,
+            actor_type="user", actor_id=x_actor_id or None, action="update",
+            field_changes=diff_fields({}, payload.model_dump(exclude_unset=True)),
+        )
+        session.commit()
+        session.refresh(row)
+        return row
+    except Exception as exc:
+        session.rollback()
+        raise _phase10_http_error(exc)
+
+
+@router.delete(
+    "/licenses/{license_id}/quotes/{quote_id}/products/{line_id}", status_code=204,
+)
+def remove_quote_product(
+    license_id: uuid.UUID,
+    quote_id: uuid.UUID,
+    line_id: uuid.UUID,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        QuoteRepository(session).remove_product(scope, quote_id, line_id)
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="quote", entity_id=quote_id,
+            actor_type="user", actor_id=x_actor_id or None, action="remove_product",
+        )
+        session.commit()
+    except Exception as exc:
+        session.rollback()
+        raise _phase10_http_error(exc)

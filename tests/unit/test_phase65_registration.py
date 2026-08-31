@@ -27,6 +27,10 @@ from chann_app.services.registration import (  # noqa: E402
 
 class FakeRegClient:
     """Records calls so tests can assert the AI was never involved."""
+    async def lookup_serial(self, serial_number, actor_chann_uid=""):
+        return {"serial_number": serial_number,
+                "matches": list(getattr(self, "serial_matches", []))}
+
     async def set_pending_intent(self, chann_uid, oa, **kwargs):
         self.pending = {"oa": oa, **kwargs}
 
@@ -359,3 +363,54 @@ class TestTechnicianOAHasNoCreateCompanyOption:
             client, message="ZZZZZZZZZZ", ctx=_ctx(oa="technician"), audience="technician",
         )
         assert "ไม่พบรหัสนี้" in reply
+
+
+class TestSerialFirstOnboarding:
+    """A customer whose appliance has failed has the sticker on the
+    machine, not a shop code they were never given.
+
+    Phase 16.4 in the place it matters most: before they are linked to
+    anyone, when the alternative is asking them to look up a code.
+    """
+
+    async def test_a_serial_known_at_one_shop_links_straight_to_it(self):
+        client = FakeRegClient(shops=[])
+        client.serial_matches = [
+            {"license_id": "lic-1", "company_name": "ร้านแอร์ดี",
+             "company_code": "ACME01", "product_name": "แอร์", "warranty_end": None,
+             "warranty_number": "W-2026-0001", "status": "active"},
+        ]
+        reply = await handle_registration(
+            client, message="ABC123456", ctx=_ctx(), audience="customer",
+        )
+        # The name comes from the link that was actually made, not from
+        # the lookup result — the authoritative one is the row we wrote.
+        assert "ลงทะเบียนไว้ที่" in reply
+        assert "ABC123456" in reply
+        # Confirming the only possible answer is a question with no purpose.
+        assert "พิมพ์รหัสร้าน" not in reply
+
+    async def test_a_serial_at_several_shops_asks_which(self):
+        client = FakeRegClient(shops=[])
+        client.serial_matches = [
+            {"license_id": "lic-1", "company_name": "ร้าน ก", "company_code": "AAA111",
+             "product_name": None, "warranty_end": None,
+             "warranty_number": "W-1", "status": "active"},
+            {"license_id": "lic-2", "company_name": "ร้าน ข", "company_code": "BBB222",
+             "product_name": None, "warranty_end": None,
+             "warranty_number": "W-2", "status": "active"},
+        ]
+        reply = await handle_registration(
+            client, message="SHARED12345", ctx=_ctx(), audience="customer",
+        )
+        assert "AAA111" in reply and "BBB222" in reply
+
+    async def test_an_unknown_serial_falls_back_to_the_normal_flow(self):
+        """It must not dead-end: a serial nobody registered is just text,
+        and the shop-name path still applies."""
+        client = FakeRegClient(shops=[])
+        client.serial_matches = []
+        reply = await handle_registration(
+            client, message="ZZZZ99999", ctx=_ctx(), audience="customer",
+        )
+        assert "ชื่อร้าน" in reply or "ยินดีต้อนรับ" in reply
