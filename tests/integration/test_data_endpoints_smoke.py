@@ -196,3 +196,95 @@ class TestDataTierEndpointsExecute:
             f"/internal/v1/licenses/{uuid.uuid4()}/customers", headers=headers,
         )
         assert response.status_code != 500, response.text
+
+
+class TestFollowUpOwnership:
+    """A reminder has to reach a person.
+
+    The sweep read `owner_chann_uid` off the follow-up — a field that never
+    existed on FollowUpOut, which only carried `owner_member_id`. And chat
+    created follow-ups without any owner at all. Together those meant a
+    reminder could be set, found by the sweep as due, and then skipped for
+    having nobody to tell: {"due": 1, "sent": 0, "skipped": 1} in
+    production.
+    """
+
+    def test_the_creator_becomes_the_owner_when_none_is_given(self, api, tenant, migrated_db):
+        """Chat sends no owner_member_id, only an actor header. Without the
+        default, every reminder set through chat was ownerless."""
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import LicenseMember
+
+        client, headers = api
+        with Session(migrated_db) as session:
+            member = session.execute(
+                LicenseMember.__table__.select().where(
+                    LicenseMember.license_id == tenant["license_id"]
+                )
+            ).first()
+        assert member is not None, "fixture tenant should have an owner member"
+
+        response = client.post(
+            f"/internal/v1/licenses/{tenant['license_id']}/follow-ups",
+            headers={**headers, "X-Actor-Id": "CHN-SMOKE-1"},
+            json={
+                "entity_type": "deal",
+                "entity_id": tenant["deal_id"],
+                "due_date": "2026-09-01",
+            },
+        )
+        assert response.status_code == 201, response.text
+        assert response.json()["owner_member_id"] is not None
+
+    def test_due_follow_ups_resolve_the_owner_to_a_person(self, api, tenant):
+        """owner_member_id is useless to anything that sends a message; the
+        endpoint resolves it to the chann_uid the notifier actually needs."""
+        client, headers = api
+        client.post(
+            f"/internal/v1/licenses/{tenant['license_id']}/follow-ups",
+            headers={**headers, "X-Actor-Id": "CHN-SMOKE-1"},
+            json={
+                "entity_type": "deal",
+                "entity_id": tenant["deal_id"],
+                "due_date": "2026-09-01",
+            },
+        )
+        response = client.get(
+            f"/internal/v1/licenses/{tenant['license_id']}/follow-ups/due",
+            headers=headers, params={"days": 3650},
+        )
+        assert response.status_code == 200, response.text
+        rows = response.json()
+        assert rows, "the follow-up just created should be due within 10 years"
+        assert any(r.get("owner_chann_uid") == "CHN-SMOKE-1" for r in rows), (
+            f"no row resolved an owner: {rows}"
+        )
+
+    def test_an_explicit_owner_is_not_overridden_by_the_actor(self, api, tenant, migrated_db):
+        """The default only fills a gap — a caller that names an owner means
+        it."""
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import LicenseMember
+
+        client, headers = api
+        with Session(migrated_db) as session:
+            member_id = session.execute(
+                LicenseMember.__table__.select().where(
+                    LicenseMember.license_id == tenant["license_id"]
+                )
+            ).first()[0]
+
+        response = client.post(
+            f"/internal/v1/licenses/{tenant['license_id']}/follow-ups",
+            headers={**headers, "X-Actor-Id": "CHN-SOMEONE-ELSE"},
+            json={
+                "entity_type": "deal",
+                "entity_id": tenant["deal_id"],
+                "due_date": "2026-09-02",
+                "owner_member_id": str(member_id),
+            },
+        )
+        assert response.status_code == 201, response.text
+        assert response.json()["owner_member_id"] == str(member_id)

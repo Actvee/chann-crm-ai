@@ -248,6 +248,12 @@ class FollowUpOut(BaseModel):
     due_time: time | None
     status: str
     owner_member_id: uuid.UUID | None
+    # The owner as a person, resolved from owner_member_id. Anything that
+    # notifies someone needs a chann_uid, not a membership row id, and
+    # making every caller do that lookup itself is how the reminder sweep
+    # ended up reading a field that never existed and silently skipping
+    # every follow-up it found.
+    owner_chann_uid: str | None = None
     notes: str | None
     created_at: datetime
     updated_at: datetime

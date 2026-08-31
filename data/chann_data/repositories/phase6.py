@@ -14,7 +14,7 @@ from datetime import date, time, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..models import FollowUp, LineMessageEntityMap, Note, Notification
+from ..models import FollowUp, LicenseMember, LineMessageEntityMap, Note, Notification
 from .tenant_scope import TenantScope
 
 FOLLOW_UP_STATUSES = frozenset({"pending", "completed", "cancelled"})
@@ -247,6 +247,20 @@ class FollowUpRepository:
             stmt = stmt.where(FollowUp.entity_id == entity_id)
         stmt = stmt.order_by(FollowUp.due_date.asc()).limit(limit)
         return list(self._s.execute(stmt).scalars())
+
+    def owner_chann_uids(self, member_ids: list[uuid.UUID]) -> dict[uuid.UUID, str]:
+        """member id -> chann_uid, for a batch of follow-ups.
+
+        One query for the whole batch rather than one per row: a sweep
+        across every tenant would otherwise issue a query per reminder.
+        """
+        ids = [m for m in member_ids if m]
+        if not ids:
+            return {}
+        rows = self._s.execute(
+            select(LicenseMember.id, LicenseMember.chann_uid).where(LicenseMember.id.in_(ids))
+        ).all()
+        return {row[0]: row[1] for row in rows}
 
     def due_within(
         self, scope: TenantScope, *, days: int = 1, today: date | None = None

@@ -28,7 +28,7 @@ from ..cache import (
 )
 from ..config import settings
 from ..db import get_session
-from ..models import License
+from ..models import License, LicenseMember
 from ..repositories.tenant_scope import (
     CrossTenantAccessDenied,
     IdentityRepository,
@@ -960,13 +960,28 @@ def create_follow_up(
 ):
     scope = TenantScope(license_id=license_id)
     try:
+        owner_member_id = payload.owner_member_id
+        if owner_member_id is None and x_actor_id:
+            # Default the owner to whoever set the reminder. Without this a
+            # follow-up created through chat had no owner at all, so the
+            # sweep found it, could not name anyone to tell, and skipped
+            # it — a reminder that exists and reaches nobody.
+            member = session.execute(
+                select(LicenseMember).where(
+                    LicenseMember.license_id == license_id,
+                    LicenseMember.chann_uid == x_actor_id,
+                )
+            ).scalars().first()
+            if member is not None:
+                owner_member_id = member.id
+
         row = FollowUpRepository(session).create(
             scope,
             entity_type=payload.entity_type,
             entity_id=payload.entity_id,
             due_date=payload.due_date,
             due_time=payload.due_time,
-            owner_member_id=payload.owner_member_id,
+            owner_member_id=owner_member_id,
             notes=payload.notes,
         )
         AuditRepository(session).write(
@@ -1012,8 +1027,18 @@ def list_due_follow_ups(
 ):
     """Drives the 1-day-ahead reminder sweep (6.7). Includes overdue rows."""
     scope = TenantScope(license_id=license_id)
-    rows = FollowUpRepository(session).due_within(scope, days=days)
-    return [FollowUpOut.model_validate(r, from_attributes=True) for r in rows]
+    repo = FollowUpRepository(session)
+    rows = repo.due_within(scope, days=days)
+    # Resolved here, once for the batch: every consumer of this endpoint
+    # wants to notify a person, and none of them can do anything with a
+    # membership row id on its own.
+    owners = repo.owner_chann_uids([r.owner_member_id for r in rows])
+    out = []
+    for row in rows:
+        item = FollowUpOut.model_validate(row, from_attributes=True)
+        item.owner_chann_uid = owners.get(row.owner_member_id)
+        out.append(item)
+    return out
 
 
 @router.patch(
