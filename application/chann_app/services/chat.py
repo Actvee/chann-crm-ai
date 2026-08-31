@@ -1053,6 +1053,47 @@ async def _handle_work_list(
 # completeness is enforced and demanding it up front turns a person
 # reporting a broken appliance into a form to fill in.
 
+GREETING_PHRASES = (
+    "สวัสดี", "หวัดดี", "ดีครับ", "ดีค่ะ", "hello", "hi", "สอบถาม", "ขอสอบถาม",
+)
+
+CUSTOMER_GREETING = {
+    "th": (
+        "สวัสดีครับ\n\n"
+        "แจ้งซ่อมได้เลย พิมพ์อาการที่เสียมา เช่น \"แอร์ไม่เย็น\"\n"
+        "หรือพิมพ์ \"งานของฉัน\" เพื่อดูสถานะงานที่แจ้งไว้"
+    ),
+    "en": (
+        "Hello.\n\n"
+        "To report a fault, just describe it — e.g. \"air con not cooling\".\n"
+        'Type "my jobs" to check something you already reported.'
+    ),
+}
+
+def _is_only_a_greeting(text: str) -> bool:
+    """True when the message is a greeting and nothing else.
+
+    Length matters as much as the words. "สวัสดีครับ" is someone saying
+    hello; "สวัสดีครับ แอร์เสียครับ" is someone being polite before
+    reporting a fault, and treating the second as a greeting would discard
+    the reason they wrote.
+    """
+    stripped = (text or "").strip().lower().rstrip("!?. ")
+    if not stripped:
+        return True
+    for greeting in GREETING_PHRASES:
+        if stripped.startswith(greeting):
+            # Whatever follows the greeting, minus the usual polite
+            # particles, is the real message — if anything is left, it is
+            # not just a greeting.
+            rest = stripped[len(greeting):].strip()
+            for particle in ("ครับ", "ค่ะ", "คะ", "จ้า", "ครับผม", "there"):
+                rest = rest.replace(particle, "")
+            if len(rest.strip()) < 3:
+                return True
+    return False
+
+
 CUSTOMER_REPORT_HINTS = (
     "เสีย", "ไม่ทำงาน", "พัง", "ซ่อม", "แจ้งซ่อม", "มีปัญหา", "ใช้ไม่ได้",
     "ไม่เย็น", "น้ำรั่ว", "รั่ว", "เสียงดัง", "broken", "not working", "repair",
@@ -1231,11 +1272,17 @@ async def _handle_customer_report(
         ]
         return ChatReply(text="\n".join(lines))
 
-    # A new report. Deliberately generous about what counts: someone
-    # typing "แอร์ไม่เย็นเลยครับ" is reporting a fault, and making them
-    # find a magic word first is the thing chat is supposed to avoid.
-    if len(text) < 3:
-        return ChatReply(text=_t(REPORT_NONE, language))
+    # A greeting is not a fault report. "สวัสดี" came back as
+    # 'รับเรื่องแล้วครับ: "สวัสดี"' — a repair job opened because someone
+    # said hello, which is both wrong and slightly insulting.
+    #
+    # Answered with what this account can do, which is also the moment
+    # someone is most likely to read it.
+    if _is_only_a_greeting(text) or len(text) < 3:
+        return ChatReply(
+            text=_t(CUSTOMER_GREETING, language),
+            quick_replies=[("ดูสถานะงาน", "งานของฉัน"), ("วิธีใช้", "วิธีใช้")],
+        )
 
     try:
         profile = await client.get_profile(ctx.chann_uid)

@@ -3670,3 +3670,33 @@ class TestDispatchTargets:
         )
         assert not [r for r in client.recorded if r[0] == "assign_ticket"]
         assert "หลายคน" in reply.text
+
+
+class TestCustomerGreeting:
+    """"สวัสดี" came back as 'รับเรื่องแล้วครับ: "สวัสดี"' — a repair job
+    opened because someone said hello. Wrong, and slightly insulting."""
+
+    async def test_a_greeting_does_not_open_a_repair_job(self):
+        client = FakeDataClient(permission_keys=[])
+        reply = await handle_chat_message(
+            client, message="สวัสดีครับ", ctx=_ctx(oa="customer"),
+        )
+        assert not [r for r in client.recorded if r[0] == "create_ticket"]
+        assert "แจ้งซ่อม" in reply.text
+
+    async def test_a_real_fault_still_opens_one(self):
+        """The greeting filter must not have swallowed the actual feature."""
+        client = FakeDataClient(permission_keys=[])
+        await handle_chat_message(
+            client, message="แอร์ไม่เย็น", ctx=_ctx(oa="customer"),
+        )
+        assert [r for r in client.recorded if r[0] == "create_ticket"]
+
+    async def test_a_greeting_with_a_fault_attached_is_still_a_fault(self):
+        """"สวัสดีครับ แอร์เสีย" is a person being polite, not a person
+        saying hello."""
+        client = FakeDataClient(permission_keys=[])
+        await handle_chat_message(
+            client, message="สวัสดีครับ แอร์เสียครับ", ctx=_ctx(oa="customer"),
+        )
+        assert [r for r in client.recorded if r[0] == "create_ticket"]

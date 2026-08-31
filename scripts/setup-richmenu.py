@@ -52,6 +52,19 @@ TILE_W, TILE_H = WIDTH // COLS, HEIGHT // ROWS
 # Every label is also the text the tile sends, so a person can see what
 # they could have typed. That is how anyone learns the chat commands: the
 # menu is the discoverable half of a chat-first product.
+def _liff_url(env_name: str, path: str = "") -> str | None:
+    """A LIFF deep link, or None when that app is not configured.
+
+    None rather than a broken link: a rich menu button that opens an error
+    page is worse than one that is absent, because the person taps it,
+    waits, and concludes the product is broken.
+    """
+    liff_id = os.environ.get(env_name, "").strip()
+    if not liff_id:
+        return None
+    return f"https://liff.line.me/{liff_id}{path}"
+
+
 TILE_SETS = {
     "sales": [
         ("รายชื่อลูกค้า", "รายชื่อลูกค้า"),
@@ -59,7 +72,10 @@ TILE_SETS = {
         ("งานซ่อม", "รายการงาน"),
         ("ใบเสนอราคา", "รายการใบเสนอราคา"),
         ("งานวันนี้", "งานวันนี้"),
-        ("วิธีใช้", "วิธีใช้"),
+        # The dashboard's only entry point. Typing cannot open a web view,
+        # so without this tile the LIFF pages are unreachable except from
+        # a link the bot happened to send earlier.
+        ("แดชบอร์ด", "LIFF_SALES_ID:"),
     ],
     "technician": [
         ("งานของฉัน", "งานของฉัน"),
@@ -67,7 +83,7 @@ TILE_SETS = {
         ("เช็คอิน", "เช็คอิน "),
         ("ปิดงาน", "ปิดงาน "),
         ("งานวันนี้", "งานวันนี้"),
-        ("วิธีใช้", "วิธีใช้"),
+        ("แดชบอร์ด", "LIFF_TECHNICIAN_ID:/tickets"),
     ],
     # Four tiles, not six: a customer does two things here, and padding
     # the menu with buttons that explain themselves would make the two
@@ -76,7 +92,7 @@ TILE_SETS = {
         ("แจ้งซ่อม", "แจ้งซ่อม"),
         ("ดูสถานะงาน", "งานของฉัน"),
         ("วิธีใช้", "วิธีใช้"),
-        ("ติดต่อร้าน", "ติดต่อร้าน"),
+        ("แดชบอร์ด", "LIFF_CUSTOMER_ID:/tickets"),
     ],
 }
 
@@ -206,7 +222,15 @@ def menu_definition() -> dict:
             # still reads as a conversation and the same command can be
             # typed by hand next time. A postback would leave an invisible
             # cause for a visible reply.
-            "action": {"type": "message", "label": label[:20], "text": message},
+            # A tile is either a message — so the person can see what they
+            # could have typed — or a link into the LIFF dashboard, which
+            # has no typed equivalent. No message opens a web view, so the
+            # menu is the ONLY way in.
+            "action": (
+                {"type": "uri", "label": label[:20], "uri": message}
+                if str(message).startswith("https://")
+                else {"type": "message", "label": label[:20], "text": message}
+            ),
         })
     return {
         "size": {"width": WIDTH, "height": HEIGHT},
@@ -245,7 +269,19 @@ def main() -> int:
         return 2
 
     global TILES
-    TILES = TILE_SETS[oa]
+    resolved = []
+    for label, message in TILE_SETS[oa]:
+        if message.startswith("LIFF_"):
+            env_name, _, path = message.partition(":")
+            url = _liff_url(env_name, path)
+            if url is None:
+                # Drop the tile rather than ship a dead button.
+                print(f"skipping {label!r}: {env_name} is not set", file=sys.stderr)
+                continue
+            resolved.append((label, url))
+        else:
+            resolved.append((label, message))
+    TILES = resolved
 
     env_name = f"LINE_{oa.upper()}_CHANNEL_ACCESS_TOKEN"
     token = os.environ.get(env_name, "").strip()

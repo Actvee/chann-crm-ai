@@ -91,6 +91,35 @@ JOINED = {
     "en": 'Joined "{name}" — your role is {role}',
 }
 
+# What to do next, appended at the moment someone is guaranteed to be
+# reading. "เข้าร่วมเรียบร้อย" followed by silence leaves a technician
+# holding a phone with no idea what to type — which is how a chat-first
+# product loses the person it has just onboarded.
+JOINED_NEXT = {
+    "technician": {
+        "th": (
+            "\n\nเริ่มใช้งานได้เลย:\n"
+            "· \"งานของฉัน\" — ดูงานที่ได้รับมอบหมาย\n"
+            "· \"รายการงาน\" — ดูงานที่เปิดรับ\n"
+            "· \"เช็คอิน\" — เมื่อถึงหน้างาน\n"
+            "· \"ปิดงาน\" — เมื่อทำเสร็จ (ระบบจะถามรายละเอียดให้)\n\n"
+            "พิมพ์ \"วิธีใช้\" ได้ตลอดเวลา"
+        ),
+        "en": (
+            "\n\nTo get started:\n"
+            '· "my jobs" — what you have been given\n'
+            '· "tickets" — what is open to take\n'
+            '· "check in" — when you arrive\n'
+            '· "check out" — when you are done\n\n'
+            'Type "help" any time.'
+        ),
+    },
+    "default": {
+        "th": "\n\nพิมพ์ \"วิธีใช้\" เพื่อดูคำสั่งที่ใช้ได้",
+        "en": '\n\nType "help" to see what you can do.',
+    },
+}
+
 LINKED = {
     "th": "ผูกกับร้าน \"{name}\" เรียบร้อย ครั้งต่อไปไม่ต้องพิมพ์รหัสอีก",
     "en": 'Linked to "{name}". You will not need the code again.',
@@ -215,7 +244,13 @@ async def _handle_customer(
             if _is_not_found(exc) or _is_conflict(exc):
                 return _t(BAD_CODE, language)
             raise
-        linked = _t(LINKED, language).format(name=link.get("company_name", ""))
+        linked = _t(LINKED, language).format(
+            name=link.get("company_name", "")
+        ) + (
+            "\n\nแจ้งซ่อมได้เลย พิมพ์อาการที่เสียมา หรือพิมพ์ \"งานของฉัน\" เพื่อดูสถานะ"
+            if language != "en"
+            else '\n\nTo report a fault, just describe it. Type "my jobs" to check one.'
+        )
 
         # Deliver whatever they said before they were linked. Making
         # someone repeat themselves after they have already explained a
@@ -317,9 +352,10 @@ async def _redeem_invite_reply(
         if _is_not_found(exc) or _is_conflict(exc):
             return _t(BAD_CODE, language)
         raise
+    role = str(member.get("role", ""))
     return _t(JOINED, language).format(
-        name=member.get("company_name", ""), role=member.get("role", "")
-    )
+        name=member.get("company_name", ""), role=role,
+    ) + _t(JOINED_NEXT.get(role, JOINED_NEXT["default"]), language)
 
 
 def _is_conflict(exc: Exception) -> bool:

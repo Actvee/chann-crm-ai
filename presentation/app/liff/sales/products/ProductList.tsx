@@ -7,11 +7,21 @@ import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { Membership, fetchPermissions, initLiffSession, proxyHeaders } from "../_lib";
 
+// Mirrors ProductOut exactly. The earlier version declared `name`, which
+// the API has never returned — it sends `product_name` — so every row
+// rendered its fallback dash while the price beside it worked fine.
+//
+// TypeScript cannot catch this: the shape is asserted on a JSON response,
+// so a field that does not exist is simply undefined at runtime. The only
+// defence is writing the type from the schema rather than from memory.
 type Product = {
   id: string;
+  product_id: string;
+  product_name: string;
   sku?: string | null;
-  name?: string | null;
+  category?: string | null;
   unit_price?: string | number | null;
+  description?: string | null;
 };
 
 export default function ProductList({ liffId }: { liffId: string }) {
@@ -77,7 +87,7 @@ export default function ProductList({ liffId }: { liffId: string }) {
   const needle = query.trim().toLowerCase();
   const visible = needle
     ? products.filter((product) =>
-        [product.name, product.sku]
+        [product.product_name, product.product_id, product.sku]
           .map((value) => String(value ?? "").toLowerCase())
           .some((value) => value.includes(needle)),
       )
@@ -221,9 +231,11 @@ export default function ProductList({ liffId }: { liffId: string }) {
         <ul className="list">
           {visible.map((product) => (
             <li key={product.id} className="card">
-              <div className="card-title">{product.name ?? "—"}</div>
+              <div className="card-title">{product.product_name || "—"}</div>
               <div className="card-meta">
-                <span className="code">{product.sku ?? t.dashboard.products.noSku}</span>
+                <span className="code">
+                  {product.product_id || product.sku || t.dashboard.products.noSku}
+                </span>
                 {product.unit_price != null && product.unit_price !== ""
                   ? ` · ${Number(product.unit_price).toLocaleString("th-TH", {
                       minimumFractionDigits: 2,
