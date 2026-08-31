@@ -2786,3 +2786,100 @@ class TestNoteAndReminderContextFallback:
         client._last_entity_ref = None  # simulates TTL expiry
         reply = await handle_chat_message(client, message="บันทึกว่าตามต่อ", ctx=_ctx())
         assert not [r for r in client.recorded if r[0] == "create_note"]
+
+
+class TestWorkListShowsNames:
+    """"งานวันนี้" listed the literal word "customer"/"deal" on every row,
+    since due_follow_ups returns only entity_type and a UUID. Reported live
+    as unreadable — every row looked identical."""
+
+    async def test_a_customer_follow_up_shows_the_customer_s_name(self):
+        client = FakeDataClient(permission_keys=["followup.read", "customer.read"])
+        customer = await client.create_customer("L1", {
+            "first_name": "สมชาย", "last_name": "ใจดี", "phone": "0812345678",
+        })
+        client._follow_ups = [{
+            "id": "FU-1", "entity_type": "customer", "entity_id": customer["id"],
+            "due_date": "2026-08-29", "due_time": None, "notes": None,
+        }]
+        reply = await handle_chat_message(client, message="งานวันนี้", ctx=_ctx())
+        assert "สมชาย ใจดี" in reply.text
+        assert customer["customer_id"] in reply.text
+        # The raw word must not appear as a stand-in for a name.
+        assert " customer" not in reply.text and "· customer" not in reply.text
+
+    async def test_a_deal_follow_up_shows_the_deal_code(self):
+        client = FakeDataClient(permission_keys=["followup.read", "deal.read"])
+        customer = await client.create_customer("L1", {"first_name": "ก", "last_name": "ข"})
+        deal = await client.create_deal("L1", {"contact_id": customer["id"]})
+        client._follow_ups = [{
+            "id": "FU-2", "entity_type": "deal", "entity_id": deal["id"],
+            "due_date": "2026-08-29", "due_time": "14:00:00", "notes": "ปิดการขาย",
+        }]
+        reply = await handle_chat_message(client, message="งานวันนี้", ctx=_ctx())
+        assert deal["deal_id"] in reply.text
+        assert "14:00" in reply.text
+        assert "ปิดการขาย" in reply.text
+
+    async def test_an_unresolvable_row_falls_back_to_the_type_not_a_crash(self):
+        """One bad row in a work list must not blank out the whole reply."""
+        client = FakeDataClient(permission_keys=["followup.read", "customer.read"])
+        client._follow_ups = [{
+            "id": "FU-3", "entity_type": "customer", "entity_id": "does-not-exist",
+            "due_date": "2026-08-29", "due_time": None, "notes": None,
+        }]
+        reply = await handle_chat_message(client, message="งานวันนี้", ctx=_ctx())
+        assert "customer" in reply.text  # falls back to the bare type
+
+
+class TestAIRoutedNotes:
+    """A free-text remark with no trigger word — "ลูกค้าสนใจเรื่องการซื้อบ้าน"
+    — matches none of NOTE_TRIGGERS and used to fall through to the generic
+    "not available yet" stub despite note.create existing since Phase 6.
+    """
+
+    async def test_a_freetext_remark_with_no_trigger_word_is_saved_as_a_note(self):
+        client = FakeDataClient(permission_keys=["customer.read", "note.create"])
+        customer = await client.create_customer("L1", {
+            "first_name": "สมชาย", "last_name": "ใจดี", "phone": "0812345678",
+        })
+        await handle_chat_message(
+            client, message=f"ข้อมูลลูกค้า {customer['customer_id']}", ctx=_ctx(),
+        )
+        ai = httpx.AsyncClient(transport=_ai(json.dumps({
+            "action": "create", "entity": "note",
+            "fields": {"body": "ลูกค้าสนใจเรื่องการซื้อบ้าน"}, "missing": [],
+        })))
+        reply = await handle_chat_message(
+            client, message="ลูกค้าสนใจเรื่องการซื้อบ้าน", ctx=_ctx(), ai_client=ai,
+        )
+        writes = [r for r in client.recorded if r[0] == "create_note"]
+        assert len(writes) == 1
+        assert writes[0][2]["entity_id"] == customer["id"]
+        assert writes[0][2]["body"] == "ลูกค้าสนใจเรื่องการซื้อบ้าน"
+        assert customer["customer_id"] in reply.text
+
+    async def test_an_ai_routed_note_still_prefers_an_explicit_code(self):
+        client = FakeDataClient(permission_keys=["customer.read", "note.create"])
+        a = await client.create_customer("L1", {"first_name": "ก", "last_name": "1", "phone": "0810000001"})
+        b = await client.create_customer("L1", {"first_name": "ข", "last_name": "2", "phone": "0810000002"})
+        await handle_chat_message(client, message=f"ข้อมูลลูกค้า {a['customer_id']}", ctx=_ctx())
+
+        ai = httpx.AsyncClient(transport=_ai(json.dumps({
+            "action": "create", "entity": "note",
+            "fields": {"body": "ปิดการขายแล้ว", "entity_code": b["customer_id"]},
+            "missing": [],
+        })))
+        await handle_chat_message(client, message="ปิดการขายแล้วสำหรับลูกค้าคนที่สอง", ctx=_ctx(), ai_client=ai)
+        writes = [r for r in client.recorded if r[0] == "create_note"]
+        assert writes[0][2]["entity_id"] == b["id"]
+
+    async def test_no_context_and_a_freetext_note_asks_rather_than_guessing(self):
+        client = FakeDataClient(permission_keys=["note.create"])
+        ai = httpx.AsyncClient(transport=_ai(json.dumps({
+            "action": "create", "entity": "note",
+            "fields": {"body": "สนใจเรื่องนี้"}, "missing": [],
+        })))
+        reply = await handle_chat_message(client, message="สนใจเรื่องนี้", ctx=_ctx(), ai_client=ai)
+        assert not [r for r in client.recorded if r[0] == "create_note"]
+        assert "ระบุรหัส" in reply.text or "เปิดดู" in reply.text

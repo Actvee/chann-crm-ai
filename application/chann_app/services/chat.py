@@ -737,6 +737,59 @@ async def _handle_note_create(
     )
 
 
+async def _handle_note_intent(
+    client: DataClient, *, intent: dict, ctx: ResolvedContext, license_id, language: str,
+) -> ChatReply:
+    """The AI-routed path into the same note.create the deterministic
+    triggers use, for free-text remarks with no trigger word at all —
+    "ลูกค้าสนใจเรื่องการซื้อบ้าน" names no field to change and matches none
+    of NOTE_TRIGGERS, so without this it fell through to the generic "not
+    available yet" stub despite note.create having existed since Phase 6.
+
+    Reuses _resolve_target_or_context rather than a separate lookup, so a
+    note routed here resolves against an explicit code or the record just
+    viewed exactly like one routed by a trigger word does.
+    """
+    fields = intent.get("fields") or {}
+    body = (fields.get("body") or "").strip()
+    if not body:
+        return ChatReply(text=_t(NOTE_NEEDS_TARGET, language))
+
+    license_id = str(license_id)
+    # entity_code is optional in the prompt on purpose: the model is told to
+    # omit it rather than invent one, so a message that names no code always
+    # falls through to context here — never to a guess.
+    lookup_message = fields.get("entity_code") or ""
+    try:
+        target = await _resolve_target_or_context(client, ctx, license_id, lookup_message)
+    except _TargetNotFound as exc:
+        return ChatReply(
+            text=_t(NOT_FOUND_BY_CODE, language).format(what=exc.entity_type, code=exc.code)
+        )
+    if target is None:
+        return ChatReply(text=_t(NOTE_NEEDS_TARGET, language))
+    entity_type, entity_id, code = target
+
+    try:
+        await client.create_note(
+            license_id,
+            {"entity_type": entity_type, "entity_id": entity_id, "body": body},
+            actor_id=ctx.chann_uid,
+        )
+    except Exception:
+        log.exception("note create failed (AI-routed)")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    return ChatReply(
+        text=_t(NOTE_SAVED, language).format(code=code),
+        entity_type=entity_type, entity_id=entity_id,
+        quick_replies=[
+            ("ดูบันทึกทั้งหมด", f"ดูบันทึก {code}"),
+            ("ตั้งเตือน", f"เตือน {code} พรุ่งนี้"),
+        ],
+    )
+
+
 async def _handle_note_list(
     client: DataClient, *, license_id, message: str,
     permission_keys: list[str], language: str,
@@ -827,6 +880,38 @@ async def _handle_reminder_create(
     )
 
 
+async def _describe_entity_by_id(
+    client: DataClient, license_id: str, entity_type: str, entity_id: str,
+) -> str:
+    """A human-readable name for a record, given its type and id.
+
+    _resolve_entity looks records up BY CODE because that is what a typed
+    command gives it; a follow-up row only carries entity_id (a UUID), so
+    this is the id-keyed counterpart. Falls back to the bare code (or the
+    type, as a last resort) rather than raising: a work list is a summary
+    view, and one unresolvable row should not blank out the whole list.
+    """
+    try:
+        if entity_type == "customer":
+            rows = await client.list_customers(license_id)
+            row = next((r for r in rows if str(r.get("id")) == str(entity_id)), None)
+            if row:
+                return f"{_customer_name(row)} ({row.get('customer_id')})"
+        elif entity_type == "deal":
+            rows = await client.list_deals(license_id)
+            row = next((r for r in rows if str(r.get("id")) == str(entity_id)), None)
+            if row:
+                return str(row.get("deal_id") or entity_type)
+        elif entity_type == "quote":
+            rows = await client.list_quotes(license_id)
+            row = next((r for r in rows if str(r.get("id")) == str(entity_id)), None)
+            if row:
+                return str(row.get("quote_id") or entity_type)
+    except Exception:
+        log.exception("could not describe entity %s/%s for a work list", entity_type, entity_id)
+    return entity_type
+
+
 async def _handle_work_list(
     client: DataClient, *, license_id, permission_keys: list[str], language: str,
     days: int,
@@ -858,8 +943,14 @@ async def _handle_work_list(
                 clock = " " + format_thai_time(time.fromisoformat(str(raw_time)))
             except ValueError:
                 clock = f" {raw_time}"
+        # A name, not the bare word "customer"/"deal" repeated on every row —
+        # reported live as unreadable, since every row looked identical.
+        who = await _describe_entity_by_id(
+            client, str(license_id), str(item.get("entity_type") or ""),
+            str(item.get("entity_id") or ""),
+        )
         note = item.get("notes")
-        lines.append(f"· {shown}{clock} · {item.get('entity_type')}" + (f" · {note}" if note else ""))
+        lines.append(f"· {shown}{clock} · {who}" + (f" · {note}" if note else ""))
     return ChatReply(text="\n".join(lines))
 
 
@@ -2979,6 +3070,10 @@ async def handle_chat_message(
         )
     if intent.get("entity") == "quote":
         return await _handle_quote_intent(
+            client, intent=intent, ctx=ctx, license_id=license_id, language=language,
+        )
+    if intent.get("entity") == "note":
+        return await _handle_note_intent(
             client, intent=intent, ctx=ctx, license_id=license_id, language=language,
         )
 
