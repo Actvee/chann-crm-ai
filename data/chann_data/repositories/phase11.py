@@ -115,6 +115,30 @@ class AssignmentRuleRepository:
             for member, _link in rows
         ]
 
+    def team_members_by_id(
+        self, scope: TenantScope, *, team_id: uuid.UUID,
+    ) -> list[LicenseMember]:
+        """Members of a team, as ORM rows for a response model.
+
+        By id rather than by name, unlike team_members above: a caller that
+        already holds the team id should not have to round-trip through a
+        name that a tenant may have chosen to be ambiguous.
+        """
+        rows = self._s.execute(
+            select(LicenseMember)
+            .join(
+                TechnicianTeamMember,
+                TechnicianTeamMember.member_id == LicenseMember.id,
+            )
+            .where(
+                TechnicianTeamMember.license_id == scope.license_id,
+                TechnicianTeamMember.team_id == team_id,
+                LicenseMember.status == "active",
+            )
+            .order_by(LicenseMember.id)
+        ).scalars()
+        return list(rows)
+
     def active_members(self, scope: TenantScope, *, role: str | None = None) -> list[dict]:
         query = select(LicenseMember).where(
             LicenseMember.license_id == scope.license_id,

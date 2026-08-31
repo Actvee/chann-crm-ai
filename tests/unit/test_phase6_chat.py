@@ -183,6 +183,51 @@ class FakeDataClient:
     async def get_member(self, license_id, chann_uid):
         return {"id": "member-1", "chann_uid": chann_uid, "role": "technician"}
 
+    async def create_ticket(self, license_id, payload, actor_id=None):
+        self.recorded.append(("create_ticket", license_id, payload, actor_id))
+        row = {
+            "id": f"tk-{len(getattr(self, '_tickets', [])) + 1}",
+            "ticket_number": f"T-2026-{len(getattr(self, '_tickets', [])) + 1:04d}",
+            "status": "open", **payload,
+        }
+        if not hasattr(self, "_tickets"):
+            self._tickets = []
+        self._tickets.append(row)
+        return row
+
+    async def update_ticket(self, license_id, ticket_id, fields, actor_id=None):
+        self.recorded.append(("update_ticket", license_id, ticket_id, fields))
+        for row in getattr(self, "_tickets", []):
+            if row["id"] == ticket_id:
+                row.update(fields)
+                return row
+        return {"id": ticket_id, **fields}
+
+    async def execute_assignment(self, license_id, *, scope, entity_type, entity_id, context=None, actor_id=None):
+        self.recorded.append(("execute_assignment", license_id, scope, entity_id))
+        return dict(getattr(self, "_assignment_outcome", {"member_id": None, "reason": "no rule"}))
+
+    async def set_ticket_status(self, license_id, ticket_id, status, actor_id=None):
+        self.recorded.append(("set_ticket_status", license_id, ticket_id, status))
+        for row in getattr(self, "_tickets", []):
+            if row["id"] == ticket_id:
+                row["status"] = status
+        return {"id": ticket_id, "status": status}
+
+    async def get_ticket(self, license_id, ticket_id):
+        return next(
+            (t for t in getattr(self, "_tickets", []) if t["id"] == ticket_id), None,
+        )
+
+    async def get_profile(self, chann_uid):
+        return getattr(self, "_profiles", {}).get(chann_uid)
+
+    async def list_members(self, license_id):
+        return list(getattr(self, "_members", []))
+
+    async def list_team_members(self, license_id, team_id):
+        return list(getattr(self, "_team_members", []))
+
     async def list_tickets(self, license_id, status=None, visible_to=None):
         self.recorded.append(("list_tickets", license_id, visible_to))
         return list(getattr(self, "_tickets", []))
@@ -3303,19 +3348,53 @@ class TestFieldServiceChat:
         assert parse_service_report("ปิดงาน T-2026-0001") == {}
         assert parse_service_report("") == {}
 
-    async def test_closing_without_a_report_is_refused_by_name(self):
+    async def test_closing_with_nothing_written_asks_rather_than_refusing(self):
+        """A technician who types "ปิดงาน" does not know the พบ:/แก้: format,
+        and a format error teaches them nothing — they are standing in a
+        customer's house holding a phone. The gate still holds; they are
+        walked through it instead."""
         client = FakeDataClient(permission_keys=["ticket.update"])
         client._tickets = [{
             "id": "tk-1", "ticket_number": "T-2026-0001", "status": "in_progress",
+            "assigned_to_ref": "member-1",
         }]
-        client._checkout_error = {
-            "error": "checkout_blocked", "missing": ["ปัญหาที่พบ", "สิ่งที่แก้ไข"],
-        }
         reply = await handle_chat_message(
             client, message="ปิดงาน T-2026-0001", ctx=_ctx(),
         )
-        assert "ปัญหาที่พบ" in reply.text
-        assert "สิ่งที่แก้ไข" in reply.text
+        assert "พบปัญหาอะไร" in reply.text
+        # Nothing closed yet — the report does not exist until it is filled.
+        assert not [r for r in client.recorded if r[0] == "check_out_ticket"]
+
+    async def test_the_guided_answers_become_the_report(self):
+        client = FakeDataClient(permission_keys=["ticket.update"])
+        client._tickets = [{
+            "id": "tk-1", "ticket_number": "T-2026-0001", "status": "in_progress",
+            "assigned_to_ref": "member-1",
+        }]
+        await handle_chat_message(client, message="ปิดงาน T-2026-0001", ctx=_ctx())
+        second = await handle_chat_message(client, message="คอมเพรสเซอร์รั่ว", ctx=_ctx())
+        assert "แก้ไขอะไร" in second.text
+        await handle_chat_message(client, message="เปลี่ยนคอมใหม่", ctx=_ctx())
+
+        calls = [r for r in client.recorded if r[0] == "check_out_ticket"]
+        assert len(calls) == 1
+        assert calls[0][3] == {
+            "found_issue": "คอมเพรสเซอร์รั่ว", "work_done": "เปลี่ยนคอมใหม่",
+        }
+
+    def test_the_guided_fields_match_the_gate(self):
+        """The questions asked and the fields the Data tier requires have to
+        be the same two, or someone answers everything and is still
+        refused."""
+        import sys
+        from pathlib import Path as _Path
+
+        sys.path.insert(0, str(_Path(__file__).resolve().parents[2] / "data"))
+        from chann_data.repositories.phase13 import REPORT_REQUIRED
+
+        from chann_app.services.chat import REPORT_REQUIRED_FIELDS
+
+        assert [f for f, _ in REPORT_REQUIRED_FIELDS] == [f for f, _ in REPORT_REQUIRED]
 
     async def test_closing_with_a_report_succeeds(self):
         client = FakeDataClient(permission_keys=["ticket.update"])
@@ -3350,3 +3429,244 @@ class TestFieldServiceChat:
             client, message="เช็คอิน T-2026-0001", ctx=_ctx(),
         )
         assert "สิทธิ์" in reply.text
+
+
+class TestTechnicianDoesNotRetypeCodes:
+    """A technician has one job open at a time in practice.
+
+    Making them read a code off an earlier message and retype it —
+    one-handed, in someone's hallway — is the friction that gets a step
+    skipped and a report never written.
+    """
+
+    def _client(self, tickets):
+        client = FakeDataClient(permission_keys=["ticket.update"])
+        client._tickets = tickets
+        return client
+
+    async def test_closing_infers_the_one_job_in_progress(self):
+        client = self._client([{
+            "id": "tk-1", "ticket_number": "T-2026-0001", "status": "in_progress",
+            "assigned_to_ref": "member-1",
+        }])
+        await handle_chat_message(
+            client, message="ปิดงาน\nพบ: คอมรั่ว\nแก้: เปลี่ยนคอม", ctx=_ctx(),
+        )
+        calls = [r for r in client.recorded if r[0] == "check_out_ticket"]
+        assert len(calls) == 1
+        assert calls[0][2] == "tk-1"
+
+    async def test_checking_in_infers_the_one_assigned_job(self):
+        client = self._client([{
+            "id": "tk-9", "ticket_number": "T-2026-0009", "status": "assigned",
+            "assigned_to_ref": "member-1",
+        }])
+        await handle_chat_message(client, message="เช็คอิน", ctx=_ctx())
+        calls = [r for r in client.recorded if r[0] == "check_in_ticket"]
+        assert len(calls) == 1
+        assert calls[0][2] == "tk-9"
+
+    async def test_two_open_jobs_asks_rather_than_guessing(self):
+        """Guessing would file a report against the wrong customer."""
+        client = self._client([
+            {"id": "tk-1", "ticket_number": "T-2026-0001", "status": "in_progress",
+             "assigned_to_ref": "member-1"},
+            {"id": "tk-2", "ticket_number": "T-2026-0002", "status": "in_progress",
+             "assigned_to_ref": "member-1"},
+        ])
+        reply = await handle_chat_message(
+            client, message="ปิดงาน\nพบ: ก\nแก้: ข", ctx=_ctx(),
+        )
+        assert not [r for r in client.recorded if r[0] == "check_out_ticket"]
+        assert "เลขงาน" in reply.text
+
+    async def test_an_explicit_code_still_wins(self):
+        client = self._client([
+            {"id": "tk-1", "ticket_number": "T-2026-0001", "status": "in_progress",
+             "assigned_to_ref": "member-1"},
+            {"id": "tk-2", "ticket_number": "T-2026-0002", "status": "in_progress",
+             "assigned_to_ref": "member-1"},
+        ])
+        await handle_chat_message(
+            client, message="ปิดงาน T-2026-0002\nพบ: ก\nแก้: ข", ctx=_ctx(),
+        )
+        calls = [r for r in client.recorded if r[0] == "check_out_ticket"]
+        assert calls[0][2] == "tk-2"
+
+    async def test_someone_elses_job_is_never_inferred(self):
+        """Only the technician's OWN assigned work is a candidate."""
+        client = self._client([{
+            "id": "tk-1", "ticket_number": "T-2026-0001", "status": "in_progress",
+            "assigned_to_ref": "someone-else",
+        }])
+        reply = await handle_chat_message(
+            client, message="ปิดงาน\nพบ: ก\nแก้: ข", ctx=_ctx(),
+        )
+        assert not [r for r in client.recorded if r[0] == "check_out_ticket"]
+        assert "เลขงาน" in reply.text
+
+
+class TestCustomerFaultReport:
+    """Phase 12.4's first step, which was missing entirely: a customer
+    reporting a fault. Everything else in Phases 12 and 13 operates on
+    tickets that nothing could create."""
+
+    async def test_a_described_fault_becomes_a_ticket(self):
+        client = FakeDataClient(permission_keys=[])
+        reply = await handle_chat_message(
+            client, message="แอร์ไม่เย็น มีน้ำหยด", ctx=_ctx(oa="customer"),
+        )
+        created = [r for r in client.recorded if r[0] == "create_ticket"]
+        assert len(created) == 1
+        assert created[0][2]["issue_description"] == "แอร์ไม่เย็น มีน้ำหยด"
+        # Accepted on the first message, then the details are chased.
+        assert "ที่อยู่" in reply.text
+
+    async def test_the_address_answer_is_saved_against_the_ticket(self):
+        client = FakeDataClient(permission_keys=[])
+        await handle_chat_message(
+            client, message="แอร์ไม่เย็น", ctx=_ctx(oa="customer"),
+        )
+        reply = await handle_chat_message(
+            client, message="99/1 ถนนสุขุมวิท", ctx=_ctx(oa="customer"),
+        )
+        updates = [r for r in client.recorded if r[0] == "update_ticket"]
+        assert updates[-1][3]["service_address"] == "99/1 ถนนสุขุมวิท"
+        assert "วันไหน" in reply.text
+
+    async def test_a_customer_can_still_edit_their_own_profile(self):
+        """The customer branch catches everything as a fault report unless
+        it is clearly a profile edit — caught by an existing test when it
+        turned "แก้เบอร์เป็น 08..." into a repair job."""
+        ai = httpx.AsyncClient(transport=_ai(json.dumps({
+            "action": "update", "entity": "profile",
+            "fields": {"phone": "0812345678"}, "missing": [],
+        })))
+        client = FakeDataClient(permission_keys=[])
+        await handle_chat_message(
+            client, message="แก้เบอร์เป็น 0812345678",
+            ctx=_ctx(oa="customer"), ai_client=ai,
+        )
+        assert not [r for r in client.recorded if r[0] == "create_ticket"]
+
+    async def test_customer_help_does_not_create_a_ticket(self):
+        client = FakeDataClient(permission_keys=[])
+        reply = await handle_chat_message(
+            client, message="วิธีใช้", ctx=_ctx(oa="customer"),
+        )
+        assert not [r for r in client.recorded if r[0] == "create_ticket"]
+        assert "แจ้งซ่อม" in reply.text
+
+
+class TestCustomerCanChangeTheirMind:
+    """A customer whose plans change and who cannot say so simply will not
+    be there — which costs the shop a visit and the customer their day."""
+
+    def _client(self):
+        client = FakeDataClient(permission_keys=[])
+        client._tickets = [{
+            "id": "tk-1", "ticket_number": "T-2026-0001", "status": "assigned",
+            "customer_chann_uid": "CHN-S-000001", "scheduled_date": "2026-09-04",
+            "assigned_to_ref": "member-1",
+        }]
+        client._members = [
+            {"id": "member-1", "chann_uid": "CHN-TECH", "role": "technician",
+             "status": "active"},
+        ]
+        return client
+
+    async def test_cancelling_the_only_open_job_needs_no_code(self):
+        client = self._client()
+        reply = await handle_chat_message(
+            client, message="ยกเลิกงาน", ctx=_ctx(oa="customer"),
+        )
+        calls = [r for r in client.recorded if r[0] == "set_ticket_status"]
+        assert calls and calls[0][3] == "cancelled"
+        assert "T-2026-0001" in reply.text
+
+    async def test_rescheduling_reads_a_thai_date(self):
+        client = self._client()
+        await handle_chat_message(
+            client, message="เลื่อนนัดเป็นวันศุกร์ บ่าย 2",
+            ctx=_ctx(oa="customer"),
+        )
+        updates = [r for r in client.recorded if r[0] == "update_ticket"]
+        assert updates, "the appointment was not moved"
+        assert updates[-1][3]["scheduled_time"] == "14:00:00"
+
+    async def test_a_finished_job_cannot_be_cancelled(self):
+        client = self._client()
+        client._tickets[0]["status"] = "completed"
+        reply = await handle_chat_message(
+            client, message="ยกเลิกงาน T-2026-0001",
+            ctx=_ctx(oa="customer"),
+        )
+        assert not [r for r in client.recorded if r[0] == "set_ticket_status"]
+        assert "ปิดไปแล้ว" in reply.text
+
+    async def test_another_customers_job_is_not_touchable(self):
+        client = self._client()
+        client._tickets[0]["customer_chann_uid"] = "CHN-SOMEONE-ELSE"
+        reply = await handle_chat_message(
+            client, message="ยกเลิกงาน", ctx=_ctx(oa="customer"),
+        )
+        assert not [r for r in client.recorded if r[0] == "set_ticket_status"]
+        assert "ไม่มีงาน" in reply.text
+
+
+class TestDispatchTargets:
+    """A shop with three technicians has no teams, and telling them to
+    create one before they can dispatch anything is bureaucracy the
+    product invented."""
+
+    async def test_a_ticket_can_go_to_a_named_person(self):
+        client = FakeDataClient(permission_keys=["ticket.update"])
+        client._tickets = [{
+            "id": "tk-1", "ticket_number": "T-2026-0001", "status": "open",
+        }]
+        client._teams = [{"id": "team-1", "team_name": "ทีมแอร์"}]
+        client._members = [
+            {"id": "m1", "chann_uid": "CHN-A", "role": "technician", "status": "active"},
+        ]
+        client._profiles = {"CHN-A": {"first_name": "สมชาย", "last_name": "ใจดี"}}
+        await handle_chat_message(
+            client, message="มอบหมาย T-2026-0001 ให้สมชาย", ctx=_ctx(),
+        )
+        calls = [r for r in client.recorded if r[0] == "assign_ticket"]
+        assert calls and calls[0][3] == "technician"
+        assert calls[0][4] == "m1"
+
+    async def test_automatic_asks_the_assignment_engine(self):
+        """Phase 11 existed and nothing ever called it — 12.5 says the gate
+        checks completeness and then the RULE decides who."""
+        client = FakeDataClient(permission_keys=["ticket.update"])
+        client._tickets = [{
+            "id": "tk-1", "ticket_number": "T-2026-0001", "status": "open",
+        }]
+        client._assignment_outcome = {
+            "member_id": "m9", "reason": "selected by least_load; load 1/5",
+        }
+        reply = await handle_chat_message(
+            client, message="มอบหมาย T-2026-0001 ให้อัตโนมัติ", ctx=_ctx(),
+        )
+        assert [r for r in client.recorded if r[0] == "execute_assignment"]
+        assert "least_load" in reply.text
+
+    async def test_two_people_with_the_same_name_asks(self):
+        client = FakeDataClient(permission_keys=["ticket.update"])
+        client._tickets = [{
+            "id": "tk-1", "ticket_number": "T-2026-0001", "status": "open",
+        }]
+        client._members = [
+            {"id": "m1", "chann_uid": "CHN-A", "role": "technician", "status": "active"},
+            {"id": "m2", "chann_uid": "CHN-B", "role": "technician", "status": "active"},
+        ]
+        client._profiles = {
+            "CHN-A": {"first_name": "สมชาย", "last_name": "ก"},
+            "CHN-B": {"first_name": "สมชาย", "last_name": "ข"},
+        }
+        reply = await handle_chat_message(
+            client, message="มอบหมาย T-2026-0001 ให้สมชาย", ctx=_ctx(),
+        )
+        assert not [r for r in client.recorded if r[0] == "assign_ticket"]
+        assert "หลายคน" in reply.text

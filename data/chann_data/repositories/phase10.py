@@ -29,6 +29,7 @@ from sqlalchemy.orm import Session
 
 from ..models import (
     Deal,
+    DealProduct,
     DocumentTemplate,
     DocumentTemplateVersion,
     GeneratedDocument,
@@ -70,6 +71,18 @@ class QuoteRepository:
         ).scalars().first()
         if deal is None:
             raise Phase10NotFound("deal not found in this tenant")
+
+        # A quote with nothing on it is a document that says a customer
+        # owes zero. It renders, it gets sent, and the first person to
+        # notice is the customer — so the deal has to have at least one
+        # line item before a quote can exist for it.
+        line_items = self._s.execute(
+            select(DealProduct.id).where(DealProduct.deal_id == deal_id).limit(1)
+        ).first()
+        if line_items is None:
+            raise Phase10Conflict(
+                "this deal has no products yet — add at least one before quoting"
+            )
 
         row = Quote(
             id=uuid.uuid4(), license_id=scope.license_id,

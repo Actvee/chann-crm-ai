@@ -2385,7 +2385,15 @@ class TestPhase10QuoteAndTemplateEngine:
 
         with Session(migrated_db) as session:
             cust = CustomerRepository(session).create(scope, first_name="ลูกค้า", phone="0812345678")
-            deal = DealRepository(session).create(scope, contact_id=cust.id)
+            deal_repo = DealRepository(session)
+            deal = deal_repo.create(scope, contact_id=cust.id)
+            # A quote needs something to quote. An empty one renders a
+            # document saying the customer owes zero, and the first person
+            # to notice is the customer.
+            deal_repo.add_product(
+                scope, deal.id, product_id=None, product_name="สินค้าทดสอบ",
+                quoted_unit_price="1000.00", qty=1,
+            )
             deal_id = deal.id
             session.commit()
 
@@ -2561,7 +2569,13 @@ class TestPhase10QuoteAndTemplateEngine:
 
         with Session(migrated_db) as session:
             cust_a = CustomerRepository(session).create(scope_a, first_name="ลูกค้า A")
-            deal_a = DealRepository(session).create(scope_a, contact_id=cust_a.id)
+            deal_repo = DealRepository(session)
+            deal_a = deal_repo.create(scope_a, contact_id=cust_a.id)
+            # A quote needs a line item — see QuoteRepository.create.
+            deal_repo.add_product(
+                scope_a, deal_a.id, product_id=None, product_name="สินค้า A",
+                quoted_unit_price="1000.00", qty=1,
+            )
             deal_a_id = deal_a.id
             session.commit()
 
@@ -2864,7 +2878,13 @@ class TestPhase10QuoteDocumentLink:
             customer = CustomerRepository(session).create(
                 scope, first_name="ก", last_name="ข", phone="0800000000",
             )
-            deal = DealRepository(session).create(scope, contact_id=customer.id)
+            deal_repo = DealRepository(session)
+            deal = deal_repo.create(scope, contact_id=customer.id)
+            # A quote needs a line item — see QuoteRepository.create.
+            deal_repo.add_product(
+                scope, deal.id, product_id=None, product_name="สินค้าทดสอบ",
+                quoted_unit_price="1000.00", qty=1,
+            )
             quote = QuoteRepository(session).create(scope, deal_id=deal.id)
             template = DocumentTemplateRepository(session).create_template(
                 scope, document_type="quote", template_code="T1", template_name="T1",

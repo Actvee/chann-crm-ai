@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { AppShell, Badge, CompanyPicker, Count, Empty } from "../_components";
@@ -86,6 +87,26 @@ export default function QuoteList({ liffId }: { liffId: string }) {
     }
   }
 
+  async function openDocumentById(quoteId: string, documentId: string) {
+    try {
+      const response = await fetch(
+        `/api/phase2/licenses/${licenseId}/documents/${documentId}`,
+        { headers: proxyHeaders(token, licenseId) },
+      );
+      if (!response.ok) return;
+      const url = URL.createObjectURL(await response.blob());
+      setDocUrls((current) => {
+        const previous = current[quoteId];
+        if (previous) URL.revokeObjectURL(previous);
+        return { ...current, [quoteId]: url };
+      });
+    } catch {
+      // The document exists; only the immediate preview failed. The
+      // "view document" button on the row is the fallback, so this must
+      // not surface as a failure to issue.
+    }
+  }
+
   async function openDocument(quote: Quote) {
     setBusyId(quote.id);
     say(t.dashboard.working);
@@ -158,16 +179,24 @@ export default function QuoteList({ liffId }: { liffId: string }) {
         );
         return;
       }
-      const issued = (await response.json()) as { sha256?: string };
+      const issued = (await response.json()) as {
+        sha256?: string;
+        generated_document_id?: string;
+      };
       say(
         `${quote.quote_id} — ${t.dashboard.quotes.issued} · SHA-256 ${(issued.sha256 ?? "").slice(0, 12)}…`,
         "ok",
       );
       await load();
-      // Open it. Issuing a document and then saying only "status: sent" —
-      // which is what happened before — leaves the person with no way to
-      // see the thing they just made, and no reason to believe it exists.
-      await openDocument({ ...quote, generated_document_id: "just-issued" });
+
+      // Fetch by DOCUMENT id, straight from the issue response, rather
+      // than by quote id. Going back through the quote depends on the
+      // quote→document link having been written and read back in time;
+      // when that lagged or failed, the person who had just issued a
+      // document was told there wasn't one.
+      if (issued.generated_document_id) {
+        await openDocumentById(quote.id, String(issued.generated_document_id));
+      }
     } catch (error) {
       say(error instanceof Error ? error.message : t.common.error, "error");
     } finally {
@@ -194,6 +223,10 @@ export default function QuoteList({ liffId }: { liffId: string }) {
         <ul className="list">
           {quotes.map((quote) => (
             <li key={quote.id} className="card" data-stage={quote.status}>
+              <Link
+                className="row-link"
+                href={`/liff/sales/quotes/${quote.id}`}
+              >
               <div className="card-title">
                 <span className="code">{quote.quote_id}</span>
                 <Badge stage={quote.status} label={statusLabel(quote.status)} />
@@ -203,6 +236,7 @@ export default function QuoteList({ liffId }: { liffId: string }) {
                   ? t.dashboard.quotes.issued
                   : t.dashboard.quotes.notIssued}
               </div>
+              </Link>
               {docUrls[quote.id] && (
                 <p style={{ margin: "10px 0 0" }}>
                   <a

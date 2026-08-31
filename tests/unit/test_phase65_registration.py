@@ -27,6 +27,15 @@ from chann_app.services.registration import (  # noqa: E402
 
 class FakeRegClient:
     """Records calls so tests can assert the AI was never involved."""
+    async def set_pending_intent(self, chann_uid, oa, **kwargs):
+        self.pending = {"oa": oa, **kwargs}
+
+    async def get_pending_intent(self, chann_uid, oa):
+        return getattr(self, "pending", None)
+
+    async def clear_pending_intent(self, chann_uid, oa):
+        self.pending = None
+
 
     def __init__(self, *, created=None, member=None, link=None, shops=None, raises=None):
         self._created = created or {
@@ -225,12 +234,28 @@ class TestCustomerRegistration:
         assert "create_license" not in client.calls
         assert "สร้างบริษัท" not in reply
 
-    async def test_no_match_explains_what_to_type(self):
+    async def test_no_match_keeps_what_the_person_said(self):
+        """Someone who scanned a QR code at a shop and typed "แอร์เสีย" was
+        answered with a demand for a shop code they have never seen, and
+        their message was discarded.
+
+        The reply now repeats it back — so they can see it was not lost —
+        and asks for the shop's NAME, which they know, rather than its
+        code, which they do not.
+        """
         client = FakeRegClient(shops=[])
         reply = await handle_registration(
-            client, message="zz", ctx=_ctx(), audience="customer"
+            client, message="แอร์ไม่เย็น", ctx=_ctx(), audience="customer"
         )
-        assert "รหัสร้าน" in reply
+        assert "แอร์ไม่เย็น" in reply, "the customer's own words were dropped"
+        assert "ชื่อร้าน" in reply
+
+    async def test_an_empty_first_message_gets_a_welcome_not_an_instruction(self):
+        client = FakeRegClient(shops=[])
+        reply = await handle_registration(
+            client, message="", ctx=_ctx(), audience="customer"
+        )
+        assert "ยินดีต้อนรับ" in reply
 
 
 class TestSchemaHeadGuard:

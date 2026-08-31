@@ -3428,3 +3428,22 @@ def set_service_report_status(
     except Exception as exc:
         session.rollback()
         raise _field_service_error(exc)
+
+
+@router.get(
+    "/licenses/{license_id}/technician-teams/{team_id}/members",
+    response_model=list[MemberOut],
+)
+def list_technician_team_members(
+    license_id: uuid.UUID, team_id: uuid.UUID, session: Session = Depends(get_session),
+):
+    """Who is on a team.
+
+    Needed to notify a team about a ticket: 12.4's team flow is that any
+    member may take it, so telling only the lead would make the others'
+    ability to claim it useless.
+    """
+    rows = AssignmentRuleRepository(session).team_members_by_id(
+        TenantScope(license_id=license_id), team_id=team_id,
+    )
+    return rows

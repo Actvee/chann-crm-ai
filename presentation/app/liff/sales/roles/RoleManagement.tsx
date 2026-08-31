@@ -13,6 +13,12 @@ type Role = {
   is_owner: boolean;
   permission_keys: string[];
 };
+
+type CatalogEntry = {
+  key: string;
+  group?: string | null;
+  label?: { th?: string; en?: string } | null;
+};
 type LiffApi = {
   init(config: { liffId: string; withLoginOnExternalBrowser: boolean }): Promise<void>;
   isLoggedIn(): boolean;
@@ -31,7 +37,11 @@ export default function RoleManagement({ liffId }: { liffId: string }) {
   const [licenseId, setLicenseId] = useState("");
   const [roles, setRoles] = useState<Role[]>([]);
   const [roleName, setRoleName] = useState("");
-  const [permissionText, setPermissionText] = useState("");
+  // A set, not a comma-separated string. The old textarea required a shop
+  // owner to know that "customer.read" exists and to spell it exactly; a
+  // typo granted nothing and said nothing.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
   const [editingRoleName, setEditingRoleName] = useState("");
   const [settingKey, setSettingKey] = useState("");
   const [settingValue, setSettingValue] = useState("");
@@ -54,6 +64,21 @@ export default function RoleManagement({ liffId }: { liffId: string }) {
     });
     if (!response.ok) throw new Error(`โหลด Permission Matrix ไม่สำเร็จ (${response.status})`);
     setRoles((await response.json()) as Role[]);
+
+    // Loaded alongside the roles: the catalogue is platform-wide and does
+    // not change while someone is editing, so once is enough.
+    try {
+      const catalogResponse = await fetch("/api/phase2/permissions/catalog", {
+        headers: headers(),
+      });
+      if (catalogResponse.ok) {
+        setCatalog((await catalogResponse.json()) as CatalogEntry[]);
+      }
+    } catch {
+      // A missing catalogue leaves the form with nothing to pick, which is
+      // visible. A hardcoded fallback list would be worse: it would drift
+      // from what the server actually enforces.
+    }
   }, [headers, licenseId, token]);
 
   useEffect(() => {
@@ -93,10 +118,7 @@ export default function RoleManagement({ liffId }: { liffId: string }) {
 
   async function saveRole(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const permissionKeys = permissionText
-      .split(",")
-      .map((key) => key.trim())
-      .filter(Boolean);
+    const permissionKeys = Array.from(selected);
     const target = editingRoleName
       ? `/api/phase2/licenses/${licenseId}/roles/${encodeURIComponent(editingRoleName)}`
       : `/api/phase2/licenses/${licenseId}/roles`;
@@ -110,7 +132,7 @@ export default function RoleManagement({ liffId }: { liffId: string }) {
       return;
     }
     setRoleName("");
-    setPermissionText("");
+    setSelected(new Set());
     setEditingRoleName("");
     setStatus(`${editingRoleName ? "แก้" : "สร้าง"} role สำเร็จ`);
     await loadRoles();
@@ -119,14 +141,14 @@ export default function RoleManagement({ liffId }: { liffId: string }) {
   function editRole(role: Role) {
     setEditingRoleName(role.role_name);
     setRoleName(role.role_name);
-    setPermissionText(role.permission_keys.join(", "));
+    setSelected(new Set(role.permission_keys));
     setStatus(`กำลังแก้ role ${role.role_name}`);
   }
 
   function cancelEdit() {
     setEditingRoleName("");
     setRoleName("");
-    setPermissionText("");
+    setSelected(new Set());
     setStatus("ยกเลิกการแก้ role แล้ว");
   }
 
@@ -208,15 +230,78 @@ export default function RoleManagement({ liffId }: { liffId: string }) {
           {t.role.roleName}
           <input value={roleName} onChange={(event) => setRoleName(event.target.value)} required />
         </label>
-        <label>
-          {t.role.permissionKeys}
-          <textarea
-            value={permissionText}
-            onChange={(event) => setPermissionText(event.target.value)}
-            placeholder="customer.read, deal.create"
-            required
-          />
-        </label>
+        <fieldset style={{ border: "1px solid var(--line)", borderRadius: 8, padding: 12 }}>
+          <legend style={{ fontSize: 13.5, color: "var(--ink-soft)" }}>
+            {t.role.permissionKeys}
+          </legend>
+          {catalog.length === 0 ? (
+            <p className="card-meta">{t.role.catalogUnavailable}</p>
+          ) : (
+            Object.entries(
+              catalog.reduce<Record<string, CatalogEntry[]>>((groups, entry) => {
+                // Platform-admin keys are never a tenant's to grant.
+                if (entry.key.startsWith("platform.admin.")) return groups;
+                const group = entry.group ?? "general";
+                groups[group] = [...(groups[group] ?? []), entry];
+                return groups;
+              }, {}),
+            ).map(([group, entries]) => (
+              <div key={group} style={{ marginBottom: 10 }}>
+                <p
+                  style={{
+                    margin: "6px 0 4px",
+                    fontSize: 12.5,
+                    color: "var(--ink-faint)",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.04em",
+                  }}
+                >
+                  {group}
+                </p>
+                {entries.map((entry) => (
+                  <label
+                    key={entry.key}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 10,
+                      // 40px so it is a real tap target on a phone, not a
+                      // 13px checkbox someone has to aim at.
+                      minHeight: 40,
+                      fontSize: 15,
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selected.has(entry.key)}
+                      style={{ width: 20, height: 20, flex: "none" }}
+                      onChange={(event) => {
+                        const next = new Set(selected);
+                        if (event.target.checked) next.add(entry.key);
+                        else next.delete(entry.key);
+                        setSelected(next);
+                      }}
+                    />
+                    <span>
+                      {entry.label?.th ?? entry.key}
+                      {/* The key itself, quietly. Someone reading the API
+                          docs or a support thread needs to connect the two. */}
+                      <span
+                        className="code"
+                        style={{ marginLeft: 6, fontSize: 11.5, opacity: 0.6 }}
+                      >
+                        {entry.key}
+                      </span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            ))
+          )}
+          <p className="card-meta" style={{ marginTop: 8 }}>
+            {t.role.selectedCount.replace("{count}", String(selected.size))}
+          </p>
+        </fieldset>
         <div style={{ display: "flex", gap: 8 }}>
           <button type="submit" disabled={!licenseId}>
             {editingRoleName ? "บันทึกการแก้ไข" : "สร้าง role"}

@@ -757,6 +757,53 @@ async def download_document(
     )
 
 
+@router.get("/licenses/{license_id}/documents/{document_id}")
+async def get_document_bytes(
+    license_id: str,
+    document_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """A stored document by its own id.
+
+    Addressed by document rather than by quote so the caller does not
+    depend on the quote→document link having been written and read back
+    first. When that lagged, someone who had just issued a document was
+    told there was not one.
+    """
+    from fastapi.responses import Response
+
+    from .services.storage.base import (
+        DocumentStoreError, DocumentStoreNotConfigured, get_document_store,
+    )
+
+    _require_same_tenant(principal, license_id)
+    principal.require("quote.read")
+
+    try:
+        document = await client.get_generated_document(license_id, document_id)
+    except DataTierError as exc:
+        raise _propagate(exc)
+    if document is None:
+        raise HTTPException(status_code=404, detail="document not found")
+
+    try:
+        content = await get_document_store().get(path=str(document.get("output_path") or ""))
+    except DocumentStoreNotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except DocumentStoreError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    return Response(
+        content=content,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": 'inline; filename="document.pdf"',
+            "X-Document-Sha256": str(document.get("sha256") or ""),
+        },
+    )
+
+
 @router.get("/licenses/{license_id}/quotes/{quote_id}/document")
 async def get_quote_document(
     license_id: str,
@@ -834,3 +881,191 @@ async def my_permissions(
         "is_owner": principal.is_owner,
         "permission_keys": sorted(principal.permission_keys),
     }
+
+
+# ------------------------------------------------------------ products (write)
+
+
+class ProductIn(BaseModel):
+    product_id: str
+    product_name: str
+    sku: str | None = None
+    category: str | None = None
+    unit_price: str | float | None = None
+    description: str | None = None
+
+
+@router.put("/licenses/{license_id}/products/{product_id}")
+async def upsert_product(
+    license_id: str,
+    product_id: str,
+    payload: ProductIn,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Create or update a product from the dashboard.
+
+    The list endpoint has existed since Phase 7 with no way to add
+    anything, so the catalogue could only be built through chat — which is
+    fine for one product and miserable for twenty.
+    """
+    _require_same_tenant(principal, license_id)
+    principal.require("product.manage")
+    try:
+        return await client.upsert_product(
+            license_id, product_id, payload.model_dump(exclude_none=True),
+            actor_id=principal.chann_uid,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+# ------------------------------------------------------------------- tickets
+#
+# Phase 12/13 built these in the Data tier and nowhere else, so every
+# dashboard call returned 404 through the proxy. The Data tier is not
+# reachable from a browser — everything the dashboard uses has to exist
+# here too.
+
+
+@router.get("/licenses/{license_id}/tickets")
+async def list_tickets(
+    license_id: str,
+    status: str | None = None,
+    visible_to: str | None = None,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    _require_same_tenant(principal, license_id)
+    principal.require("ticket.read")
+    try:
+        return await client.list_tickets(license_id, status=status, visible_to=visible_to)
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.get("/licenses/{license_id}/tickets/{ticket_id}/dispatch-check")
+async def ticket_dispatch_check(
+    license_id: str,
+    ticket_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    _require_same_tenant(principal, license_id)
+    principal.require("ticket.read")
+    try:
+        return await client.ticket_dispatch_check(license_id, ticket_id)
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.post("/licenses/{license_id}/tickets/{ticket_id}/claim")
+async def claim_ticket(
+    license_id: str,
+    ticket_id: str,
+    payload: dict,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    _require_same_tenant(principal, license_id)
+    principal.require("ticket.update")
+    try:
+        return await client.claim_ticket(
+            license_id, ticket_id, str(payload.get("member_id") or ""),
+            actor_id=principal.chann_uid,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.post("/licenses/{license_id}/tickets/{ticket_id}/check-in")
+async def check_in_ticket(
+    license_id: str,
+    ticket_id: str,
+    payload: dict,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    _require_same_tenant(principal, license_id)
+    principal.require("ticket.update")
+    try:
+        return await client.check_in_ticket(
+            license_id, ticket_id,
+            member_id=str(payload.get("member_id") or ""),
+            gps_lat=payload.get("gps_lat"), gps_lng=payload.get("gps_lng"),
+            photo_url=payload.get("photo_url"),
+            actor_id=principal.chann_uid,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.get("/licenses/{license_id}/service-reports")
+async def list_service_reports(
+    license_id: str,
+    status: str | None = None,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    _require_same_tenant(principal, license_id)
+    principal.require("ticket.read")
+    try:
+        return await client.list_service_reports(license_id, status=status)
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+# -------------------------------------------------------------------- quotes
+
+
+@router.get("/licenses/{license_id}/quotes/{quote_id}")
+async def get_quote_detail(
+    license_id: str,
+    quote_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """One quote with the deal and line items behind it.
+
+    A quote row on its own says almost nothing — a code, a status and a
+    deal id. What someone opening it wants to know is what is ON it, which
+    lives on the deal.
+    """
+    _require_same_tenant(principal, license_id)
+    principal.require("quote.read")
+    try:
+        quote = await client.get_quote(license_id, quote_id)
+        if quote is None:
+            raise HTTPException(status_code=404, detail="quote not found")
+        deal = await client.get_deal(license_id, str(quote["deal_id"]))
+        customer = None
+        if deal and deal.get("contact_id"):
+            customers = await client.list_customers(license_id)
+            customer = next(
+                (c for c in customers if str(c.get("id")) == str(deal["contact_id"])), None,
+            )
+        return {"quote": quote, "deal": deal, "customer": customer}
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.get("/permissions/catalog")
+async def permissions_catalog(
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Every permission, with its human label and group.
+
+    The roles page needs it to offer a pick-list. Without it the only way
+    to grant a permission was to type its key into a textarea — a shop
+    owner had to know that "customer.read" exists and spell it exactly,
+    and a typo silently granted nothing.
+
+    Behind a tenant principal but not a specific permission: knowing which
+    capabilities the platform has is not itself sensitive, and anyone who
+    can reach this is already a member of a tenant.
+    """
+    try:
+        return await client.permission_catalog()
+    except DataTierError as exc:
+        raise _propagate(exc)

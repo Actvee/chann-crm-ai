@@ -25,6 +25,8 @@ log = logging.getLogger(__name__)
 # 8. Matching on shape lets someone paste a code with no command word, which
 # is what people actually do.
 INVITE_CODE_RE = re.compile(r"^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{10}$")
+CUSTOMER_PENDING_TTL_S = 3600
+
 COMPANY_CODE_RE = re.compile(r"^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{8}$")
 
 WELCOME = {
@@ -213,7 +215,28 @@ async def _handle_customer(
             if _is_not_found(exc) or _is_conflict(exc):
                 return _t(BAD_CODE, language)
             raise
-        return _t(LINKED, language).format(name=link.get("company_name", ""))
+        linked = _t(LINKED, language).format(name=link.get("company_name", ""))
+
+        # Deliver whatever they said before they were linked. Making
+        # someone repeat themselves after they have already explained a
+        # problem is how a chat product loses people.
+        try:
+            pending = await client.get_pending_intent(ctx.chann_uid, "customer")
+        except Exception:
+            pending = None
+        held = ((pending or {}).get("fields") or {}).get("message")
+        if held and (pending or {}).get("entity") == "pending_customer_message":
+            try:
+                await client.clear_pending_intent(ctx.chann_uid, "customer")
+            except Exception:
+                log.exception("could not clear a held customer message")
+            follow_up = (
+                f'\n\nส่งเรื่อง "{held[:80]}" ให้ทางร้านแล้วครับ'
+                if language != "en"
+                else f'\n\nI have passed on: "{held[:80]}"'
+            )
+            return linked + follow_up
+        return linked
 
     if len(text) >= 2:
         shops = await client.search_shops(text)
@@ -228,10 +251,53 @@ async def _handle_customer(
             )
             return f"{header}\n{lines}"
 
+    # Nothing matched. What the person typed is almost certainly not a
+    # shop name — it is what they actually wanted to say, usually a fault.
+    #
+    # The old reply here was "พิมพ์รหัสร้าน หรือชื่อร้านเพื่อค้นหา", which
+    # asks for a code they have never seen, does not explain why, and
+    # throws away what they just wrote. Someone who scanned a QR code at a
+    # shop and typed "แอร์เสีย" got a demand for paperwork.
+    #
+    # Their message is kept and repeated back, so they can see it was not
+    # lost, and the question is asked in terms they can answer: the shop's
+    # NAME, which they know, rather than its code, which they do not.
+    if text and not COMPANY_CODE_RE.match(text.upper()):
+        # Best-effort: holding the message is a courtesy, and a cache
+        # failure must not stop a person who is trying to report a fault
+        # from getting an answer at all.
+        try:
+            await client.set_pending_intent(
+                ctx.chann_uid, "customer",
+                action="report", entity="pending_customer_message",
+                fields={"message": text[:500]}, missing=["company"],
+                ttl_seconds=CUSTOMER_PENDING_TTL_S,
+            )
+        except Exception:
+            log.exception("could not hold a customer's message while unlinked")
+        if language == "en":
+            return (
+                f'Got it: "{text[:80]}"\n\n'
+                "This account serves several shops, so I do not yet know which "
+                "one you are contacting.\n"
+                "Type the shop's name and I will pass your message straight on."
+            )
+        return (
+            f"รับเรื่องแล้วครับ: \"{text[:80]}\"\n\n"
+            "บัญชีนี้ดูแลหลายร้าน ผมยังไม่ทราบว่าคุณติดต่อร้านไหน\n"
+            "พิมพ์ชื่อร้านมาได้เลย แล้วผมจะส่งเรื่องให้ทางร้านทันที"
+        )
+
+    if language == "en":
+        return (
+            "Welcome.\n"
+            "This account serves several shops. Type the name of the shop you "
+            "are contacting, or its code if you have one."
+        )
     return (
-        "พิมพ์รหัสร้าน หรือชื่อร้านเพื่อค้นหา"
-        if language != "en"
-        else "Type a shop code, or a shop name to search"
+        "ยินดีต้อนรับครับ\n"
+        "บัญชีนี้ดูแลหลายร้าน พิมพ์ชื่อร้านที่คุณติดต่อมาได้เลย "
+        "หรือถ้ามีรหัสร้านก็พิมพ์รหัสได้"
     )
 
 

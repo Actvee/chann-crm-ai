@@ -19,6 +19,7 @@ from datetime import date, datetime, time, timezone, timedelta
 from decimal import Decimal, InvalidOperation
 
 from ..data_client import DataClient, DataTierError
+from .notify import send_notification
 from .ai.client import AIUnavailable, AINotConfigured
 # Reused rather than reimplemented on purpose: what a salesperson reads
 # in chat must never disagree with what the customer receives on the PDF.
@@ -157,6 +158,12 @@ TECHNICIAN_INVITE_TRIGGERS = (
     "ขอรหัสเชิญช่าง",
     "สร้างรหัสเชิญช่าง",
     "เชิญช่าง",
+    # The short forms people actually type. Reported live: "เพิ่มช่าง" got
+    # no match and fell through to the permission list, which reads as
+    # "you cannot do that" for something they very much can.
+    "เพิ่มช่าง",
+    "เพิ่มทีมช่าง",
+    "add technician",
     "invite technician",
     "technician invite code",
 )
@@ -1034,6 +1041,464 @@ async def _handle_work_list(
     return ChatReply(text="\n".join(lines))
 
 
+# ------------------------------------------- Phase 12 customer fault report
+#
+# The half of 12.4 that was missing: "ลูกค้าแจ้งซ่อม (แชทหรือ LIFF) → สร้าง
+# ticket". Everything else in Phase 12 and 13 — dispatch, claim, check-in,
+# the report — operates on tickets that nothing could create.
+#
+# A fault report is accepted on the FIRST message, with only a description.
+# Address, phone and appointment are chased afterwards, by CS or by the
+# follow-up questions below, because the dispatch gate is where
+# completeness is enforced and demanding it up front turns a person
+# reporting a broken appliance into a form to fill in.
+
+CUSTOMER_REPORT_HINTS = (
+    "เสีย", "ไม่ทำงาน", "พัง", "ซ่อม", "แจ้งซ่อม", "มีปัญหา", "ใช้ไม่ได้",
+    "ไม่เย็น", "น้ำรั่ว", "รั่ว", "เสียงดัง", "broken", "not working", "repair",
+)
+
+REPORT_TAKEN = {
+    "th": "รับแจ้งแล้วครับ เลขงาน {code}\n\"{issue}\"\n\nขอที่อยู่ที่จะให้ช่างไปด้วยครับ",
+    "en": "Logged as {code}.\n\"{issue}\"\n\nWhat address should the technician go to?",
+}
+REPORT_ADDRESS_SAVED = {
+    "th": "บันทึกที่อยู่แล้วครับ\nสะดวกให้ช่างไปวันไหน เวลาไหนครับ",
+    "en": "Address saved. When would suit you for the visit?",
+}
+REPORT_SCHEDULED = {
+    "th": "นัดวันที่ {date}{time} แล้วครับ\nทางร้านจะจัดช่างและติดต่อกลับ",
+    "en": "Booked for {date}{time}. The shop will assign a technician and get back to you.",
+}
+REPORT_STATUS_LINE = {
+    "th": "{code} · {status}{when}",
+    "en": "{code} · {status}{when}",
+}
+REPORT_NONE = {
+    "th": "ยังไม่มีงานแจ้งซ่อมครับ พิมพ์อาการที่เสียมาได้เลย",
+    "en": "No open jobs. Just describe the problem and I will log it.",
+}
+
+CUSTOMER_TICKET_TTL_S = 3600
+CHECKOUT_DRAFT_TTL_S = 3600
+
+# Asked in this order, one at a time. Same two fields the Data tier's gate
+# requires — kept in step by test, not by hope.
+REPORT_REQUIRED_FIELDS = (
+    ("found_issue", "ปัญหาที่พบ"),
+    ("work_done", "สิ่งที่แก้ไข"),
+)
+
+REPORT_QUESTIONS = {
+    "found_issue": {
+        "th": "พบปัญหาอะไรครับ",
+        "en": "What did you find?",
+    },
+    "work_done": {
+        "th": "แก้ไขอะไรไปบ้างครับ",
+        "en": "What did you do about it?",
+    },
+}
+
+CHECKOUT_STARTED = {
+    "th": "ปิดงาน {code}",
+    "en": "Closing {code}",
+}
+
+
+# Phrases that mean "change my own details" rather than "something is
+# broken". Kept narrow: anything not clearly a profile edit is treated as
+# a fault report, because that is what a customer messaging a repair shop
+# is overwhelmingly doing.
+_PROFILE_EDIT_HINTS = (
+    "แก้เบอร์", "เปลี่ยนเบอร์", "แก้ชื่อ", "เปลี่ยนชื่อ", "แก้อีเมล",
+    "เปลี่ยนอีเมล", "แก้ที่อยู่ของฉัน", "ข้อมูลส่วนตัว", "โปรไฟล์",
+    "my profile", "change my",
+)
+
+
+def _looks_like_profile_edit(message: str) -> bool:
+    lowered = (message or "").lower()
+    return any(hint in lowered for hint in _PROFILE_EDIT_HINTS)
+
+
+async def _handle_customer_report(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
+    language: str,
+) -> ChatReply:
+    """A customer reporting a fault, or answering the follow-up questions.
+
+    No permission check: a customer is not a tenant member and holds no
+    permission keys at all. The tenant boundary is the shop they are linked
+    to, which is what license_id already is here.
+    """
+    license_id = str(license_id)
+    text = (message or "").strip()
+
+    # An in-flight report waiting for its address or its appointment. Held
+    # in the same Redis slot as every other multi-turn exchange.
+    try:
+        pending = await client.get_pending_intent(ctx.chann_uid, ctx.oa)
+    except Exception:
+        pending = None
+
+    if pending and pending.get("entity") == "customer_ticket":
+        ticket_id = (pending.get("fields") or {}).get("ticket_id")
+        awaiting = pending.get("missing") or []
+
+        if ticket_id and "address" in awaiting:
+            try:
+                await client.update_ticket(
+                    license_id, str(ticket_id), {"service_address": text},
+                    actor_id=ctx.chann_uid,
+                )
+                await client.set_pending_intent(
+                    ctx.chann_uid, ctx.oa,
+                    action="report", entity="customer_ticket",
+                    fields={"ticket_id": ticket_id}, missing=["schedule"],
+                    ttl_seconds=CUSTOMER_TICKET_TTL_S,
+                )
+            except Exception:
+                log.exception("could not save a customer's address")
+                return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+            return ChatReply(text=_t(REPORT_ADDRESS_SAVED, language))
+
+        if ticket_id and "schedule" in awaiting:
+            from .thai_datetime import (
+                format_thai_date, format_thai_time, parse_thai_date, parse_thai_time,
+            )
+
+            today = datetime.now(BANGKOK_TZ).date()
+            due_date = parse_thai_date(text, today)
+            if due_date is None:
+                return ChatReply(text=_t(REMINDER_NEEDS_DATE, language))
+            due_time = parse_thai_time(text)
+            fields: dict = {"scheduled_date": due_date.isoformat()}
+            if due_time is not None:
+                fields["scheduled_time"] = due_time.isoformat()
+            try:
+                await client.update_ticket(
+                    license_id, str(ticket_id), fields, actor_id=ctx.chann_uid,
+                )
+                await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
+            except Exception:
+                log.exception("could not save a customer's appointment")
+                return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+            # The shop finds out now, not when someone happens to look.
+            await _notify_new_ticket(client, license_id, str(ticket_id), language)
+            return ChatReply(
+                text=_t(REPORT_SCHEDULED, language).format(
+                    date=format_thai_date(due_date),
+                    time=f" {format_thai_time(due_time)}" if due_time else "",
+                )
+            )
+
+    # Changing or cancelling an appointment. A customer whose plans change
+    # and who cannot say so will simply not be there when the technician
+    # arrives — which costs the shop a visit and the customer their day.
+    if _matches_phrase(message, CUSTOMER_CANCEL_PHRASES) or any(
+        w in text.lower() for w in CUSTOMER_CANCEL_TRIGGERS
+    ):
+        return await _handle_customer_amend(
+            client, ctx=ctx, license_id=license_id, message=text,
+            language=language, cancel=True,
+        )
+    if any(w in text.lower() for w in CUSTOMER_RESCHEDULE_TRIGGERS):
+        return await _handle_customer_amend(
+            client, ctx=ctx, license_id=license_id, message=text,
+            language=language, cancel=False,
+        )
+
+    # "งานของฉัน" from a customer means their own reports, not a
+    # technician's queue.
+    if _matches_phrase(message, TICKET_MINE_PHRASES + TICKET_LIST_PHRASES):
+        try:
+            tickets = await client.list_tickets(license_id)
+        except Exception:
+            log.exception("customer ticket list failed")
+            return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+        mine = [t for t in tickets if t.get("customer_chann_uid") == ctx.chann_uid]
+        if not mine:
+            return ChatReply(text=_t(REPORT_NONE, language))
+        lines = [
+            _t(REPORT_STATUS_LINE, language).format(
+                code=t.get("ticket_number"),
+                status=_label(TICKET_STATUS_LABELS, t.get("status"), language),
+                when=f" · {t.get('scheduled_date')}" if t.get("scheduled_date") else "",
+            )
+            for t in mine[:LIST_LIMIT]
+        ]
+        return ChatReply(text="\n".join(lines))
+
+    # A new report. Deliberately generous about what counts: someone
+    # typing "แอร์ไม่เย็นเลยครับ" is reporting a fault, and making them
+    # find a magic word first is the thing chat is supposed to avoid.
+    if len(text) < 3:
+        return ChatReply(text=_t(REPORT_NONE, language))
+
+    try:
+        profile = await client.get_profile(ctx.chann_uid)
+    except Exception:
+        profile = None
+
+    try:
+        ticket = await client.create_ticket(
+            license_id,
+            {
+                "issue_description": text,
+                "customer_chann_uid": ctx.chann_uid,
+                # Prefilled from the profile where it exists — a customer
+                # who registered once should not retype their phone number
+                # every time something breaks.
+                "customer_name": " ".join(
+                    p for p in (
+                        (profile or {}).get("first_name"), (profile or {}).get("last_name"),
+                    ) if p
+                ) or ctx.display_name,
+                "customer_phone": (profile or {}).get("phone"),
+            },
+            actor_id=ctx.chann_uid,
+        )
+        await client.set_pending_intent(
+            ctx.chann_uid, ctx.oa,
+            action="report", entity="customer_ticket",
+            fields={"ticket_id": str(ticket["id"])}, missing=["address"],
+            ttl_seconds=CUSTOMER_TICKET_TTL_S,
+        )
+    except Exception:
+        log.exception("customer fault report failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    return ChatReply(
+        text=_t(REPORT_TAKEN, language).format(
+            code=ticket.get("ticket_number"), issue=text[:80],
+        ),
+        entity_type="service_ticket", entity_id=str(ticket.get("id") or ""),
+    )
+
+
+CUSTOMER_CANCEL_PHRASES = ("ยกเลิก", "ไม่เอาแล้ว", "cancel")
+CUSTOMER_CANCEL_TRIGGERS = ("ยกเลิกงาน", "ยกเลิกนัด", "cancel job")
+CUSTOMER_RESCHEDULE_TRIGGERS = ("เลื่อนนัด", "เปลี่ยนวัน", "เลื่อน", "reschedule")
+
+AMEND_NO_OPEN_JOB = {
+    "th": "ไม่มีงานที่นัดไว้อยู่ครับ",
+    "en": "You have no scheduled job right now.",
+}
+AMEND_PICK_ONE = {
+    "th": "มีงานอยู่หลายรายการ ระบุเลขงานด้วยครับ เช่น \"เลื่อนนัด T-2026-0001 วันศุกร์\"",
+    "en": "You have several jobs — include the number.",
+}
+AMEND_CANCELLED = {
+    "th": "ยกเลิกงาน {code} แล้วครับ ทางร้านจะรับทราบ",
+    "en": "Cancelled {code}. The shop has been told.",
+}
+AMEND_RESCHEDULED = {
+    "th": "เลื่อนนัด {code} เป็นวันที่ {date}{time} แล้วครับ",
+    "en": "Moved {code} to {date}{time}.",
+}
+AMEND_ALREADY_DONE = {
+    "th": "งาน {code} ปิดไปแล้ว แก้ไขไม่ได้ครับ ถ้ามีปัญหาเพิ่มเติมแจ้งใหม่ได้เลย",
+    "en": "{code} is already closed. Report a new fault if something is still wrong.",
+}
+
+
+async def _handle_customer_amend(
+    client: DataClient, *, ctx: ResolvedContext, license_id: str, message: str,
+    language: str, cancel: bool,
+) -> ChatReply:
+    """A customer moving or cancelling their own appointment."""
+    from .thai_datetime import (
+        format_thai_date, format_thai_time, parse_thai_date, parse_thai_time,
+    )
+
+    try:
+        tickets = await client.list_tickets(license_id)
+    except Exception:
+        log.exception("could not read a customer's tickets")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    mine = [
+        t for t in tickets
+        if t.get("customer_chann_uid") == ctx.chann_uid
+        and str(t.get("status")) not in ("completed", "cancelled")
+    ]
+
+    match = TICKET_CODE_RE.search(message or "")
+    if match:
+        code = match.group(1).upper()
+        ticket = next(
+            (t for t in mine if str(t.get("ticket_number", "")).upper() == code), None,
+        )
+        if ticket is None:
+            # Might exist but be finished — worth saying, since "not found"
+            # for a job they remember reporting is confusing.
+            closed = next(
+                (t for t in tickets
+                 if str(t.get("ticket_number", "")).upper() == code
+                 and t.get("customer_chann_uid") == ctx.chann_uid), None,
+            )
+            if closed:
+                return ChatReply(text=_t(AMEND_ALREADY_DONE, language).format(code=code))
+            return ChatReply(
+                text=_t(NOT_FOUND_BY_CODE, language).format(what="งาน", code=code)
+            )
+    elif len(mine) == 1:
+        ticket = mine[0]
+    elif not mine:
+        return ChatReply(text=_t(AMEND_NO_OPEN_JOB, language))
+    else:
+        return ChatReply(text=_t(AMEND_PICK_ONE, language))
+
+    code = str(ticket.get("ticket_number") or "")
+    ticket_id = str(ticket.get("id") or "")
+
+    if cancel:
+        try:
+            await client.set_ticket_status(
+                license_id, ticket_id, "cancelled", actor_id=ctx.chann_uid,
+            )
+        except Exception:
+            log.exception("customer cancellation failed")
+            return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+        # The shop finds out now. A cancellation nobody is told about is a
+        # technician driving to an empty house.
+        await _notify_ticket_change(
+            client, license_id, ticket_id,
+            f"ลูกค้ายกเลิกงาน {code}", language,
+        )
+        return ChatReply(text=_t(AMEND_CANCELLED, language).format(code=code))
+
+    today = datetime.now(BANGKOK_TZ).date()
+    due_date = parse_thai_date(message, today)
+    if due_date is None:
+        return ChatReply(text=_t(REMINDER_NEEDS_DATE, language))
+    due_time = parse_thai_time(message)
+    fields: dict = {"scheduled_date": due_date.isoformat()}
+    if due_time is not None:
+        fields["scheduled_time"] = due_time.isoformat()
+    try:
+        await client.update_ticket(license_id, ticket_id, fields, actor_id=ctx.chann_uid)
+    except Exception:
+        log.exception("customer reschedule failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    when = format_thai_date(due_date) + (
+        f" {format_thai_time(due_time)}" if due_time else ""
+    )
+    await _notify_ticket_change(
+        client, license_id, ticket_id, f"ลูกค้าเลื่อนนัด {code} เป็น {when}", language,
+    )
+    return ChatReply(
+        text=_t(AMEND_RESCHEDULED, language).format(
+            code=code, date=format_thai_date(due_date),
+            time=f" {format_thai_time(due_time)}" if due_time else "",
+        )
+    )
+
+
+async def _notify_ticket_change(
+    client: DataClient, license_id: str, ticket_id: str, text: str, language: str,
+) -> None:
+    """Tell the shop, and the assigned technician, that a job changed.
+
+    The technician especially: a cancellation they are not told about is a
+    drive to an empty house.
+    """
+    try:
+        ticket = await client.get_ticket(license_id, ticket_id)
+        members = await client.list_members(license_id)
+    except Exception:
+        log.exception("could not announce a ticket change")
+        return
+
+    targets = {
+        str(m.get("chann_uid"))
+        for m in members
+        if str(m.get("role") or "").lower() in ("owner", "admin")
+        and str(m.get("status") or "active") == "active"
+    }
+    assignee_ref = str((ticket or {}).get("assigned_to_ref") or "")
+    for member in members:
+        if str(member.get("id")) == assignee_ref and member.get("chann_uid"):
+            targets.add(str(member["chann_uid"]))
+
+    for chann_uid in targets:
+        if not chann_uid:
+            continue
+        try:
+            line_target = await client.line_target_of(chann_uid)
+            await send_notification(
+                client,
+                license_id=license_id,
+                target_chann_uid=chann_uid,
+                target_line_user_id=line_target,
+                type="ticket_changed",
+                message=text,
+                entity_type="service_ticket",
+                entity_id=ticket_id,
+                oa="sales",
+            )
+        except Exception:
+            log.exception("could not notify %s about a ticket change", chann_uid)
+
+
+async def _notify_new_ticket(
+    client: DataClient, license_id: str, ticket_id: str, language: str,
+) -> None:
+    """Tell the shop a job has come in.
+
+    Without this a ticket sits in the database until somebody opens the
+    dashboard for unrelated reasons — which for a fault report means the
+    customer is waiting and nobody knows.
+
+    Best-effort: a notification failure must not undo a report the
+    customer has already been told was accepted.
+    """
+    try:
+        ticket = await client.get_ticket(license_id, ticket_id)
+        if ticket is None:
+            return
+        members = await client.list_members(license_id)
+    except Exception:
+        log.exception("could not notify anyone about ticket %s", ticket_id)
+        return
+
+    # Owners and admins: the people whose job it is to dispatch. Notifying
+    # every member would put a customer's address in front of technicians
+    # who have not been given the job.
+    targets = [
+        m for m in members
+        if str(m.get("role") or "").lower() in ("owner", "admin")
+        and str(m.get("status") or "active") == "active"
+    ]
+    text = (
+        f"แจ้งซ่อมใหม่ {ticket.get('ticket_number')}\n"
+        f"{ticket.get('customer_name') or '—'}\n"
+        f"{ticket.get('issue_description') or ''}"
+    )
+    for member in targets:
+        chann_uid = str(member.get("chann_uid") or "")
+        if not chann_uid:
+            continue
+        try:
+            line_target = await client.line_target_of(chann_uid)
+            await send_notification(
+                client,
+                license_id=license_id,
+                target_chann_uid=chann_uid,
+                target_line_user_id=line_target,
+                type="ticket_created",
+                message=text,
+                entity_type="service_ticket",
+                entity_id=ticket_id,
+                oa="sales",
+            )
+        except Exception:
+            log.exception("could not notify %s about a new ticket", chann_uid)
+
+
 # ------------------------------------------------ Phase 13 field service
 
 CHECKIN_TRIGGERS = ("เช็คอิน", "เช็กอิน", "ถึงหน้างาน", "check in", "checkin")
@@ -1097,6 +1562,49 @@ async def _resolve_ticket_for_member(
     return member, ticket
 
 
+async def _ticket_for_action(
+    client: DataClient, license_id: str, ctx: ResolvedContext, message: str,
+    *, prefer_status: tuple[str, ...] = (),
+) -> tuple[dict | None, dict | None, bool]:
+    """(member, ticket, was_inferred) for a check-in or check-out.
+
+    A technician has one job open at a time in practice, and making them
+    read a code off a previous message and retype it — one-handed, in
+    someone's hallway — is the kind of friction that gets a step skipped
+    and a report never written.
+
+    An explicit code always wins. Inference only happens when exactly ONE
+    ticket fits: two candidates means asking is the only honest option,
+    since guessing would file a report against the wrong customer.
+    """
+    member = await client.get_member(license_id, ctx.chann_uid)
+    if member is None:
+        return None, None, False
+
+    tickets = await client.list_tickets(license_id, visible_to=str(member["id"]))
+
+    match = TICKET_CODE_RE.search(message or "")
+    if match:
+        code = match.group(1).upper()
+        return (
+            member,
+            next(
+                (t for t in tickets if str(t.get("ticket_number", "")).upper() == code),
+                None,
+            ),
+            False,
+        )
+
+    mine = [
+        t for t in tickets
+        if str(t.get("assigned_to_ref") or "") == str(member["id"])
+        and str(t.get("status") or "") in (prefer_status or ("assigned", "in_progress"))
+    ]
+    if len(mine) == 1:
+        return member, mine[0], True
+    return member, None, False
+
+
 async def _handle_check_in(
     client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
     permission_keys: list[str], language: str,
@@ -1104,18 +1612,14 @@ async def _handle_check_in(
     if "ticket.update" not in set(permission_keys):
         return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
 
-    match = TICKET_CODE_RE.search(message or "")
-    if not match:
-        return ChatReply(text=_t(TICKET_NEEDS_CODE, language))
-    code = match.group(1).upper()
-
     license_id = str(license_id)
     try:
-        member, ticket = await _resolve_ticket_for_member(client, license_id, ctx, code)
+        member, ticket, inferred = await _ticket_for_action(
+            client, license_id, ctx, message, prefer_status=("assigned",),
+        )
         if member is None or ticket is None:
-            return ChatReply(
-                text=_t(NOT_FOUND_BY_CODE, language).format(what="งาน", code=code)
-            )
+            return ChatReply(text=_t(TICKET_PICK_ONE, language))
+        code = str(ticket.get("ticket_number") or "")
         # No GPS from a text message. The LIFF page sends coordinates; chat
         # records the arrival without pretending to a location it does not
         # have, which is better than storing one that is wrong.
@@ -1149,18 +1653,86 @@ async def _handle_check_out(
     if "ticket.update" not in set(permission_keys):
         return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
 
-    match = TICKET_CODE_RE.search(message or "")
-    if not match:
-        return ChatReply(text=_t(TICKET_NEEDS_CODE, language))
-    code = match.group(1).upper()
+    license_id = str(license_id)
+
+    # A report being built one answer at a time. Someone typing "ปิดงาน"
+    # with nothing else does not know the พบ:/แก้: format, and answering
+    # them with a format error teaches nothing — they are standing in a
+    # customer's house holding a phone.
+    try:
+        pending = await client.get_pending_intent(ctx.chann_uid, ctx.oa)
+    except Exception:
+        pending = None
+
+    if pending and pending.get("entity") == "service_report":
+        fields = dict((pending.get("fields") or {}))
+        awaiting = list(pending.get("missing") or [])
+        if awaiting:
+            fields[awaiting[0]] = (message or "").strip()
+            awaiting = awaiting[1:]
+        ticket_id = fields.pop("ticket_id", None)
+        code = str(fields.pop("code", ""))
+
+        if awaiting:
+            try:
+                await client.set_pending_intent(
+                    ctx.chann_uid, ctx.oa,
+                    action="report", entity="service_report",
+                    fields={**fields, "ticket_id": ticket_id, "code": code},
+                    missing=awaiting, ttl_seconds=CHECKOUT_DRAFT_TTL_S,
+                )
+            except Exception:
+                log.exception("could not hold a partial service report")
+            return ChatReply(text=_t(REPORT_QUESTIONS[awaiting[0]], language))
+
+        try:
+            member = await client.get_member(license_id, ctx.chann_uid)
+            result = await client.check_out_ticket(
+                license_id, str(ticket_id),
+                member_id=str((member or {}).get("id") or ""),
+                report_data=fields, actor_id=ctx.chann_uid,
+            )
+            await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
+        except DataTierError as exc:
+            return ChatReply(text=_t(CHECKIN_FAILED, language).format(detail=exc.detail))
+        except Exception:
+            log.exception("check-out failed")
+            return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+        return ChatReply(
+            text=_t(CHECKOUT_DONE, language).format(
+                code=code, report=result.get("report_id") or "",
+            ),
+            entity_type="service_report", entity_id=str(result.get("id") or ""),
+        )
 
     report_data = parse_service_report(message)
-    license_id = str(license_id)
     try:
-        member, ticket = await _resolve_ticket_for_member(client, license_id, ctx, code)
+        member, ticket, inferred = await _ticket_for_action(
+            client, license_id, ctx, message, prefer_status=("in_progress", "assigned"),
+        )
         if member is None or ticket is None:
+            return ChatReply(text=_t(TICKET_PICK_ONE, language))
+        code = str(ticket.get("ticket_number") or "")
+
+        # Nothing written yet: ask, rather than refuse. The gate still
+        # holds — the check-out simply does not happen until the answers
+        # are in — but the person is walked through it instead of being
+        # handed a format.
+        missing = [f for f, _ in REPORT_REQUIRED_FIELDS if not report_data.get(f)]
+        if missing:
+            try:
+                await client.set_pending_intent(
+                    ctx.chann_uid, ctx.oa,
+                    action="report", entity="service_report",
+                    fields={**report_data, "ticket_id": str(ticket["id"]), "code": code},
+                    missing=missing, ttl_seconds=CHECKOUT_DRAFT_TTL_S,
+                )
+            except Exception:
+                log.exception("could not start a guided service report")
+                return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
             return ChatReply(
-                text=_t(NOT_FOUND_BY_CODE, language).format(what="งาน", code=code)
+                text=_t(CHECKOUT_STARTED, language).format(code=code)
+                + "\n" + _t(REPORT_QUESTIONS[missing[0]], language)
             )
         result = await client.check_out_ticket(
             license_id, str(ticket["id"]),
@@ -1209,6 +1781,11 @@ TICKET_STATUS_LABELS = {
 }
 
 TICKET_EMPTY = {"th": "ยังไม่มีงานซ่อม", "en": "No service tickets yet."}
+TICKET_PICK_ONE = {
+    "th": "ไม่แน่ใจว่างานไหนครับ พิมพ์เลขงานด้วย เช่น \"ปิดงาน T-2026-0001\"\n(พิมพ์ \"งานของฉัน\" เพื่อดูเลขงาน)",
+    "en": "Not sure which job — include the number, e.g. \"check out T-2026-0001\".",
+}
+
 TICKET_NEEDS_CODE = {
     "th": "ระบุเลขงานด้วย เช่น \"มอบหมาย T-2026-0001 ให้ทีม AC\"",
     "en": "Include the ticket number, e.g. \"assign T-2026-0001 to AC Team\".",
@@ -1350,6 +1927,16 @@ async def _handle_ticket_assign(
                 text=_t(NOT_FOUND_BY_CODE, language).format(what="งาน", code=code)
             )
 
+        # "อัตโนมัติ" hands the choice to the Phase 11 engine, which is
+        # what 12.5 describes: the dispatch gate checks completeness, then
+        # the assignment rule decides WHO. Without this the engine existed
+        # and nothing ever called it.
+        if target_text.lower() in AUTO_ASSIGN_WORDS:
+            return await _assign_ticket_automatically(
+                client, ctx=ctx, license_id=license_id, ticket=ticket,
+                code=code, language=language,
+            )
+
         teams = await client.list_technician_teams(license_id)
         team = next(
             (t for t in teams
@@ -1358,7 +1945,18 @@ async def _handle_ticket_assign(
         if team is not None:
             target_type, target_ref, label = "technician_team", str(team["id"]), target_text
         else:
-            return ChatReply(text=_t(TICKET_NEEDS_TARGET, language))
+            # A person, by name. Teams are the common case but a shop with
+            # three technicians has no teams at all, and telling them to
+            # create one before they can dispatch anything is bureaucracy
+            # the product invented.
+            person = await _find_member_by_name(client, license_id, target_text)
+            if person is None:
+                return ChatReply(text=_t(TICKET_NEEDS_TARGET, language))
+            if person == "ambiguous":
+                return ChatReply(text=_t(TICKET_TARGET_AMBIGUOUS, language))
+            target_type = "technician"
+            target_ref = str(person["id"])
+            label = str(person.get("display_name") or person.get("chann_uid") or target_text)
 
         result = await client.assign_ticket(
             license_id, str(ticket["id"]),
@@ -1381,10 +1979,193 @@ async def _handle_ticket_assign(
         log.exception("ticket assign failed")
         return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
 
+    # Tell the people who now have to do it. Without this a dispatched
+    # ticket is only visible to someone who happens to open the dashboard,
+    # which for a job with an appointment time is too late to be useful.
+    await _notify_assigned_ticket(client, license_id, result, label, language)
+
     return ChatReply(
         text=_t(TICKET_ASSIGNED, language).format(code=code, target=label),
         entity_type="service_ticket", entity_id=str(result.get("id") or ""),
     )
+
+
+AUTO_ASSIGN_WORDS = ("อัตโนมัติ", "ออโต้", "auto", "automatic")
+
+TICKET_TARGET_AMBIGUOUS = {
+    "th": "มีช่างหลายคนที่ชื่อตรงกัน ระบุให้ชัดขึ้นหรือมอบหมายให้ทีมแทน",
+    "en": "Several technicians match that name — be more specific, or assign to a team.",
+}
+TICKET_AUTO_ASSIGNED = {
+    "th": "มอบหมาย {code} ให้ {name} แล้ว (เลือกโดยกฎมอบหมาย)\n{reason}",
+    "en": "Assigned {code} to {name} by rule.\n{reason}",
+}
+TICKET_AUTO_FAILED = {
+    "th": "เลือกช่างอัตโนมัติไม่ได้: {reason}\nลองระบุทีมหรือชื่อช่างแทน",
+    "en": "Could not choose automatically: {reason}",
+}
+
+
+async def _find_member_by_name(client: DataClient, license_id: str, name: str):
+    """A member whose profile name matches, "ambiguous", or None.
+
+    Matching on the profile rather than chann_uid: a CS person dispatching
+    a job types "สมชาย", not an internal identifier they have never seen.
+    """
+    needle = (name or "").strip().lower()
+    if len(needle) < 2:
+        return None
+    try:
+        members = await client.list_members(license_id)
+    except Exception:
+        log.exception("could not list members to resolve an assignment target")
+        return None
+
+    matches = []
+    for member in members:
+        if str(member.get("status") or "active") != "active":
+            continue
+        try:
+            profile = await client.get_profile(str(member.get("chann_uid") or ""))
+        except Exception:
+            profile = None
+        display = " ".join(
+            p for p in (
+                (profile or {}).get("first_name"), (profile or {}).get("last_name"),
+            ) if p
+        ).strip()
+        if needle in display.lower() or needle == str(member.get("chann_uid") or "").lower():
+            matches.append({**member, "display_name": display})
+
+    if not matches:
+        return None
+    # Two people called สมชาย is not a reason to pick one — the job would
+    # go to the wrong person's day.
+    return matches[0] if len(matches) == 1 else "ambiguous"
+
+
+async def _assign_ticket_automatically(
+    client: DataClient, *, ctx: ResolvedContext, license_id: str, ticket: dict,
+    code: str, language: str,
+) -> ChatReply:
+    """Let the Phase 11 engine choose, then dispatch to whoever it picked.
+
+    The engine runs inside the Data tier's lock and returns a member id
+    plus its reasoning; this only carries the result through the same
+    dispatch gate an explicit assignment goes through, so "automatic" can
+    never bypass the completeness check.
+    """
+    try:
+        outcome = await client.execute_assignment(
+            license_id, scope="technician",
+            entity_type="service_ticket", entity_id=str(ticket["id"]),
+            context={
+                "product": {
+                    "category": ticket.get("product_category"),
+                    "name": ticket.get("product_name"),
+                },
+                "ticket": {"serial_number": ticket.get("serial_number")},
+            },
+            actor_id=ctx.chann_uid,
+        )
+    except Exception:
+        log.exception("automatic assignment failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    member_id = outcome.get("member_id")
+    if not member_id:
+        return ChatReply(
+            text=_t(TICKET_AUTO_FAILED, language).format(
+                reason=outcome.get("reason") or ""
+            )
+        )
+
+    try:
+        result = await client.assign_ticket(
+            license_id, str(ticket["id"]),
+            target_type="technician", target_ref=str(member_id),
+            actor_id=ctx.chann_uid,
+        )
+    except DataTierError as exc:
+        detail = exc.structured or {}
+        if detail.get("error") == "dispatch_blocked":
+            return ChatReply(
+                text=_t(TICKET_DISPATCH_BLOCKED, language).format(
+                    missing=", ".join(detail.get("missing") or [])
+                )
+            )
+        log.exception("automatic assignment could not be applied")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    person = await _find_member_by_name(client, license_id, str(member_id))
+    name = (
+        person.get("display_name") if isinstance(person, dict) else None
+    ) or str(member_id)[:8]
+
+    await _notify_assigned_ticket(client, license_id, result, name, language)
+    return ChatReply(
+        text=_t(TICKET_AUTO_ASSIGNED, language).format(
+            code=code, name=name, reason=outcome.get("reason") or "",
+        ),
+        entity_type="service_ticket", entity_id=str(result.get("id") or ""),
+    )
+
+
+async def _notify_assigned_ticket(
+    client: DataClient, license_id: str, ticket: dict, target_label: str,
+    language: str,
+) -> None:
+    """Notify whoever a ticket was just given to.
+
+    A team assignment goes to every member of that team, because 12.4's
+    team flow is that any of them may take it — telling only the lead
+    would make the others' ability to claim it useless.
+
+    Best-effort: the assignment succeeded, and failing to announce it must
+    not undo that.
+    """
+    target_type = str(ticket.get("assigned_target_type") or "")
+    target_ref = str(ticket.get("assigned_to_ref") or "")
+    if not target_ref:
+        return
+
+    try:
+        if target_type == "technician_team":
+            members = await client.list_team_members(license_id, target_ref)
+        else:
+            members = [m for m in await client.list_members(license_id)
+                       if str(m.get("id")) == target_ref]
+    except Exception:
+        log.exception("could not resolve who to notify for a ticket assignment")
+        return
+
+    text = (
+        f"งานใหม่ {ticket.get('ticket_number')} ({target_label})\n"
+        f"{ticket.get('customer_name') or '—'}\n"
+        f"{ticket.get('service_address') or '—'}\n"
+        f"{ticket.get('issue_description') or ''}"
+    )
+    for member in members:
+        chann_uid = str(member.get("chann_uid") or "")
+        if not chann_uid:
+            continue
+        try:
+            line_target = await client.line_target_of(chann_uid)
+            await send_notification(
+                client,
+                license_id=license_id,
+                target_chann_uid=chann_uid,
+                target_line_user_id=line_target,
+                type="ticket_assigned",
+                message=text,
+                entity_type="service_ticket",
+                entity_id=str(ticket.get("id") or ""),
+                # The technician OA, not sales: this is the channel they
+                # actually work in.
+                oa="technician",
+            )
+        except Exception:
+            log.exception("could not notify %s about an assignment", chann_uid)
 
 
 async def _handle_ticket_claim(
@@ -2593,6 +3374,21 @@ def ask_for_missing(missing: list[str], language: str = "th") -> str:
     return _t(ASK_MISSING, language).format(fields=labels)
 
 
+CUSTOMER_HELP = {
+    "th": (
+        "พิมพ์คุยได้เลยครับ\n\n"
+        "· แจ้งซ่อม — พิมพ์อาการที่เสียมาได้เลย เช่น \"แอร์ไม่เย็น\"\n"
+        "· ดูสถานะงาน — พิมพ์ \"งานของฉัน\"\n\n"
+        "ผมจะถามที่อยู่และวันเวลาที่สะดวกต่อ แล้วส่งเรื่องให้ทางร้าน"
+    ),
+    "en": (
+        "Just type.\n\n"
+        "· Report a fault — describe the problem, e.g. \"air con not cooling\"\n"
+        "· Check a job — type \"my jobs\"\n\n"
+        "I will ask for an address and a time, then pass it to the shop."
+    ),
+}
+
 HELP_TRIGGERS = (
     "ช่วยเหลือ", "วิธีใช้", "ใช้ยังไง", "ทำอะไรได้บ้าง", "คำสั่ง",
     "help", "how to use", "commands", "?",
@@ -2624,6 +3420,19 @@ HELP_SECTIONS = (
         ("followup.create", "เตือน D-2026-0001 พรุ่งนี้", "ตั้งเตือน"),
         ("followup.create", "นัดดูสินค้าวันศุกร์ บ่าย 2", "นัดหมายพร้อมเวลา"),
         ("followup.read", "งานวันนี้", "ดูงานที่ต้องทำ"),
+    )),
+    ("งานซ่อม", (
+        ("ticket.read", "รายการงาน", "ดูงานซ่อมทั้งหมด"),
+        ("ticket.read", "งานของฉัน", "เฉพาะงานที่รับไว้"),
+        ("ticket.update", "มอบหมาย T-2026-0001 ให้ทีม AC", "จ่ายงานให้ทีมช่าง"),
+        ("ticket.update", "รับงาน T-2026-0001", "ช่างกดรับงาน"),
+        ("ticket.update", "เช็คอิน T-2026-0001", "แจ้งว่าถึงหน้างานแล้ว"),
+        ("ticket.update", "ปิดงาน T-2026-0001\nพบ: ...\nแก้: ...", "ปิดงานพร้อมรายงาน"),
+    )),
+    ("ทีมงาน", (
+        ("member.manage", "เพิ่มช่าง", "ขอรหัสเชิญให้ช่างเข้าร่วมบริษัท"),
+        ("setting.manage", "ตั้งกฎมอบหมาย ช่างแอร์ให้ทีม AC วันละ 5 งาน", "ตั้งกฎจ่ายงานอัตโนมัติ"),
+        ("setting.manage", "ดูกฎมอบหมาย", "ดูกฎที่ตั้งไว้"),
     )),
     ("ตั้งค่า", (
         ("setting.manage", "ข้อมูลบริษัท", "ดูข้อมูลที่พิมพ์บนเอกสาร"),
@@ -3662,6 +4471,20 @@ async def handle_chat_message(
                 client, ctx=ctx, license_id=license_id,
                 permission_keys=permission_keys, language=language,
             )
+        # A guided report in progress takes priority over every trigger.
+        # The answer to "พบปัญหาอะไรครับ" is "คอมเพรสเซอร์รั่ว" — which
+        # contains no command word at all, so without this it fell through
+        # to the AI parser and the report was silently abandoned.
+        try:
+            in_progress = await client.get_pending_intent(ctx.chann_uid, ctx.oa)
+        except Exception:
+            in_progress = None
+        if in_progress and in_progress.get("entity") == "service_report":
+            return await _handle_check_out(
+                client, ctx=ctx, license_id=license_id, message=message,
+                permission_keys=permission_keys, language=language,
+            )
+
         # Check-in/out before claim: "ปิดงาน" and "รับงาน" are different
         # actions on the same ticket, and the shorter claim trigger must
         # not swallow a close.
@@ -3687,6 +4510,28 @@ async def handle_chat_message(
             return await _handle_ticket_assign(
                 client, ctx=ctx, license_id=license_id, message=message,
                 trigger=assign_trigger, permission_keys=permission_keys,
+                language=language,
+            )
+
+    # Customer OA. A customer is not a tenant member and holds no
+    # permission keys at all, so every branch below would refuse them —
+    # which is why this comes first and why it does not check permissions.
+    # Their boundary is the shop they are linked to, which license_id
+    # already is.
+    if ctx.oa == "customer":
+        if _matches_phrase(message, HELP_TRIGGERS):
+            return ChatReply(
+                text=_t(CUSTOMER_HELP, language),
+                quick_replies=[("งานของฉัน", "งานของฉัน")],
+            )
+        # Editing your own profile is a customer's other legitimate reason
+        # to type here, and it is allowed regardless of permissions
+        # (Phase 8 — self-edit is always permitted). Catching everything as
+        # a fault report turned "แก้เบอร์เป็น 08..." into a repair job,
+        # which a test caught immediately.
+        if not _looks_like_profile_edit(message):
+            return await _handle_customer_report(
+                client, ctx=ctx, license_id=license_id, message=message,
                 language=language,
             )
 

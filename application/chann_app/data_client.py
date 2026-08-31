@@ -403,6 +403,40 @@ class DataClient:
         )
         return self._unwrap(resp)
 
+    async def list_team_members(self, license_id: str, team_id: str) -> list[dict]:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}"
+            f"/technician-teams/{team_id}/members",
+            headers=self._headers,
+        )
+        return self._unwrap(resp)
+
+    async def set_ticket_status(
+        self, license_id: str, ticket_id: str, status: str,
+        actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.patch(
+            f"{self._base}/internal/v1/licenses/{license_id}/tickets/{ticket_id}/status",
+            headers=self._headers_for(actor_id), json={"status": status},
+        )
+        return self._unwrap(resp)
+
+    async def get_ticket(self, license_id: str, ticket_id: str) -> dict | None:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/tickets/{ticket_id}",
+            headers=self._headers,
+        )
+        if resp.status_code == 404:
+            return None
+        return self._unwrap(resp)
+
+    async def list_members(self, license_id: str) -> list[dict]:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/members",
+            headers=self._headers,
+        )
+        return self._unwrap(resp)
+
     async def list_tickets(
         self, license_id: str, status: str | None = None,
         visible_to: str | None = None,

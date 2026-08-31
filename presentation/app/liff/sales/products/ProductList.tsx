@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import { AppShell, CompanyPicker, Count, Empty } from "../_components";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
-import { Membership, initLiffSession, proxyHeaders } from "../_lib";
+import { Membership, fetchPermissions, initLiffSession, proxyHeaders } from "../_lib";
 
 type Product = {
   id: string;
@@ -20,6 +20,12 @@ export default function ProductList({ liffId }: { liffId: string }) {
   const [memberships, setMemberships] = useState<Membership[]>([]);
   const [licenseId, setLicenseId] = useState("");
   const [products, setProducts] = useState<Product[]>([]);
+  const [permissions, setPermissions] = useState<Set<string>>(new Set());
+  const [adding, setAdding] = useState(false);
+  const [draft, setDraft] = useState({
+    product_id: "", product_name: "", unit_price: "", category: "",
+  });
+  const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
   const [query, setQuery] = useState("");
@@ -59,6 +65,9 @@ export default function ProductList({ liffId }: { liffId: string }) {
       setToken(session.token);
       setMemberships(session.memberships);
       setLicenseId(session.memberships[0]?.license_id ?? "");
+      setPermissions(
+        await fetchPermissions(session.token, session.memberships[0]?.license_id ?? ""),
+      );
       if (!session.memberships.length) say(t.liff.noCompany, "error");
     } catch (error) {
       say(error instanceof Error ? error.message : t.dashboard.openFailed, "error");
@@ -73,6 +82,47 @@ export default function ProductList({ liffId }: { liffId: string }) {
           .some((value) => value.includes(needle)),
       )
     : products;
+
+  async function saveProduct() {
+    // Both are required by the Data tier. Catching it here means the
+    // person is told which field, rather than getting a 4xx naming a key
+    // they never saw.
+    if (!draft.product_id.trim() || !draft.product_name.trim()) {
+      say(t.dashboard.products.needsCodeAndName, "error");
+      return;
+    }
+    setSaving(true);
+    try {
+      const response = await fetch(
+        `/api/phase2/licenses/${licenseId}/products/${encodeURIComponent(draft.product_id.trim())}`,
+        {
+          method: "PUT",
+          headers: proxyHeaders(token, licenseId),
+          body: JSON.stringify({
+            product_id: draft.product_id.trim(),
+            product_name: draft.product_name.trim(),
+            unit_price: draft.unit_price.trim() || null,
+            category: draft.category.trim() || null,
+          }),
+        },
+      );
+      if (!response.ok) {
+        say(
+          response.status === 403
+            ? t.dashboard.noPermission
+            : `${t.common.error} (${response.status})`,
+          "error",
+        );
+        return;
+      }
+      say(t.dashboard.saved, "ok");
+      setDraft({ product_id: "", product_name: "", unit_price: "", category: "" });
+      setAdding(false);
+      await load();
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <AppShell
@@ -96,6 +146,68 @@ export default function ProductList({ liffId }: { liffId: string }) {
       </label>
 
       <Count shown={visible.length} total={products.length} />
+
+      {permissions.has("product.manage") && (
+        <section className="section" style={{ margin: "12px 0 16px" }}>
+          <div className="section-head">
+            <h2>{t.dashboard.products.add}</h2>
+            {!adding && (
+              <button
+                type="button"
+                className="btn"
+                data-variant="primary"
+                onClick={() => setAdding(true)}
+              >
+                {t.dashboard.products.add}
+              </button>
+            )}
+          </div>
+          {adding && (
+            <dl className="fields">
+              {([
+                ["product_id", t.dashboard.products.code, "FAN001"],
+                ["product_name", t.product.title, ""],
+                ["unit_price", t.dashboard.products.price, "0.00"],
+                ["category", t.dashboard.products.category, ""],
+              ] as const).map(([field, label, placeholder]) => (
+                <div className="field-row" key={field}>
+                  <dt>{label}</dt>
+                  <dd>
+                    <input
+                      value={draft[field]}
+                      placeholder={placeholder}
+                      inputMode={field === "unit_price" ? "decimal" : undefined}
+                      onChange={(event) =>
+                        setDraft({ ...draft, [field]: event.target.value })
+                      }
+                    />
+                  </dd>
+                </div>
+              ))}
+              <div className="actions">
+                <button
+                  type="button"
+                  className="btn"
+                  data-variant="quiet"
+                  onClick={() => setAdding(false)}
+                  disabled={saving}
+                >
+                  {t.common.cancel}
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  data-variant="primary"
+                  onClick={() => void saveProduct()}
+                  disabled={saving}
+                >
+                  {saving ? t.dashboard.saving : t.common.save}
+                </button>
+              </div>
+            </dl>
+          )}
+        </section>
+      )}
 
       {visible.length === 0 ? (
         <Empty

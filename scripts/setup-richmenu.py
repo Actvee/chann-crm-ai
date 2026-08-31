@@ -19,6 +19,8 @@ a rich menu whose picture disagrees with its behaviour is worse than none.
 
 Usage:
     LINE_SALES_CHANNEL_ACCESS_TOKEN=... python3 scripts/setup-richmenu.py
+    LINE_TECHNICIAN_CHANNEL_ACCESS_TOKEN=... python3 scripts/setup-richmenu.py --oa technician
+    LINE_CUSTOMER_CHANNEL_ACCESS_TOKEN=... python3 scripts/setup-richmenu.py --oa customer
     LINE_SALES_CHANNEL_ACCESS_TOKEN=... python3 scripts/setup-richmenu.py --delete
 
 Requires: pillow, requests  (pip install pillow requests)
@@ -43,14 +45,42 @@ COLS, ROWS = 3, 2
 TILE_W, TILE_H = WIDTH // COLS, HEIGHT // ROWS
 
 # (label shown on the tile, message sent when tapped)
-TILES = [
-    ("รายชื่อลูกค้า", "รายชื่อลูกค้า"),
-    ("รายการดีล", "รายการดีล"),
-    ("ดีลที่ยังไม่ปิด", "ดีลที่ยังไม่ปิด"),
-    ("ใบเสนอราคา", "รายการใบเสนอราคา"),
-    ("รายการสินค้า", "รายการสินค้า"),
-    ("ข้อมูลบริษัท", "ข้อมูลบริษัท"),
-]
+# One tile set per OA. The three audiences do genuinely different work —
+# a customer has no deals and a technician has no products — and a shared
+# menu would mean most of everyone's buttons did nothing for them.
+#
+# Every label is also the text the tile sends, so a person can see what
+# they could have typed. That is how anyone learns the chat commands: the
+# menu is the discoverable half of a chat-first product.
+TILE_SETS = {
+    "sales": [
+        ("รายชื่อลูกค้า", "รายชื่อลูกค้า"),
+        ("รายการดีล", "รายการดีล"),
+        ("งานซ่อม", "รายการงาน"),
+        ("ใบเสนอราคา", "รายการใบเสนอราคา"),
+        ("งานวันนี้", "งานวันนี้"),
+        ("วิธีใช้", "วิธีใช้"),
+    ],
+    "technician": [
+        ("งานของฉัน", "งานของฉัน"),
+        ("งานที่เปิดรับ", "รายการงาน"),
+        ("เช็คอิน", "เช็คอิน "),
+        ("ปิดงาน", "ปิดงาน "),
+        ("งานวันนี้", "งานวันนี้"),
+        ("วิธีใช้", "วิธีใช้"),
+    ],
+    # Four tiles, not six: a customer does two things here, and padding
+    # the menu with buttons that explain themselves would make the two
+    # that matter harder to find.
+    "customer": [
+        ("แจ้งซ่อม", "แจ้งซ่อม"),
+        ("ดูสถานะงาน", "งานของฉัน"),
+        ("วิธีใช้", "วิธีใช้"),
+        ("ติดต่อร้าน", "ติดต่อร้าน"),
+    ],
+}
+
+TILES = TILE_SETS["sales"]
 
 BACKGROUND = (17, 24, 39)
 TILE_FILL = (31, 41, 55)
@@ -203,11 +233,24 @@ def delete_existing(token: str) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--delete", action="store_true", help="remove all rich menus and stop")
+    parser.add_argument(
+        "--oa", default="sales",
+        help="which OA to configure: sales, technician or customer",
+    )
     args = parser.parse_args()
 
-    token = os.environ.get("LINE_SALES_CHANNEL_ACCESS_TOKEN", "").strip()
+    oa = (args.oa or "sales").lower()
+    if oa not in TILE_SETS:
+        print(f"unknown OA {oa!r}; expected one of: {', '.join(TILE_SETS)}", file=sys.stderr)
+        return 2
+
+    global TILES
+    TILES = TILE_SETS[oa]
+
+    env_name = f"LINE_{oa.upper()}_CHANNEL_ACCESS_TOKEN"
+    token = os.environ.get(env_name, "").strip()
     if not token:
-        print("LINE_SALES_CHANNEL_ACCESS_TOKEN is required", file=sys.stderr)
+        print(f"{env_name} is required", file=sys.stderr)
         return 2
 
     # Rendered before anything is deleted or created on LINE's side, so a
