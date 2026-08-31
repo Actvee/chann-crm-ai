@@ -591,8 +591,8 @@ NOTE_SAVED = {
     "en": "Noted against {code}.",
 }
 NOTE_NEEDS_TARGET = {
-    "th": "ระบุด้วยว่าบันทึกกับใครหรือดีลไหน เช่น \"บันทึกว่า C-2026-0001 ลูกค้าขอส่วนลด\"",
-    "en": "Say which record the note is about, e.g. \"note C-2026-0001 asked for a discount\".",
+    "th": "ระบุรหัสด้วยว่าบันทึกกับใคร เช่น \"บันทึกว่า C-2026-0001 ลูกค้าขอส่วนลด\" หรือเปิดดูข้อมูลลูกค้า/ดีลนั้นก่อนแล้วค่อยพิมพ์บันทึกตาม",
+    "en": "Say which record the note is about, e.g. \"note C-2026-0001 asked for a discount\", or open that record first.",
 }
 NOTE_EMPTY = {
     "th": "ยังไม่มีบันทึกของ {code}",
@@ -607,8 +607,8 @@ REMINDER_NEEDS_DATE = {
     "en": "Could not read the date. Try: \"remind D-2026-0001 tomorrow\" or \"remind D-2026-0001 15 มี.ค. 14:00\".",
 }
 REMINDER_NEEDS_TARGET = {
-    "th": "ระบุด้วยว่าเตือนเรื่องอะไร เช่น \"เตือน D-2026-0001 พรุ่งนี้\"",
-    "en": "Say what the reminder is about, e.g. \"remind D-2026-0001 tomorrow\".",
+    "th": "ระบุรหัสด้วยว่าเตือนเรื่องอะไร เช่น \"เตือน D-2026-0001 พรุ่งนี้\" หรือเปิดดูข้อมูลลูกค้า/ดีลนั้นก่อนแล้วค่อยพิมพ์เตือนตาม",
+    "en": "Say what the reminder is about, e.g. \"remind D-2026-0001 tomorrow\", or open that record first.",
 }
 WORK_EMPTY = {
     "th": "ไม่มีงานที่ต้องติดตามในช่วงนี้",
@@ -648,19 +648,68 @@ async def _resolve_entity(client: DataClient, license_id: str, entity_type: str,
     return next((r for r in rows if str(r.get("quote_id", "")).upper() == code), None)
 
 
+class _TargetNotFound(Exception):
+    """An explicit code was given but does not resolve to a real record —
+    distinct from no code being given at all, so the reply can say "not
+    found" rather than the more general "please specify"."""
+
+    def __init__(self, entity_type: str, code: str):
+        self.entity_type = entity_type
+        self.code = code
+
+
+async def _resolve_target_or_context(
+    client: DataClient, ctx: ResolvedContext, license_id: str, message: str,
+) -> tuple[str, str, str] | None:
+    """(entity_type, entity_id, code) from an explicit code in the message,
+    or from "the record we were just looking at" when there is none.
+
+    Reported live: "ข้อมูลลูกค้า C-2026-0001" followed immediately by
+    "นัดประชุมพรุ่งนี้ตอน 9 โมงเช้า" with no code at all — refusing that
+    reads as the system not noticing the record it had just shown.
+
+    Returns None only when NO code was given and there is nothing recent to
+    fall back on. A code that IS given but does not resolve raises
+    _TargetNotFound, so the caller can tell the two situations apart in its
+    reply. The fallback only fires when a real, recent reference exists
+    (see cache.k_last_entity_ref), and the caller always names the record
+    it used, so a stale guess is caught immediately rather than discovered
+    later.
+    """
+    found = _find_entity_code(message)
+    if found is not None:
+        entity_type, code = found
+        row = await _resolve_entity(client, license_id, entity_type, code)
+        if row is None:
+            raise _TargetNotFound(entity_type, code)
+        return entity_type, str(row["id"]), code
+
+    last_ref = await client.get_last_entity_ref(ctx.chann_uid, ctx.oa)
+    if last_ref is None:
+        return None
+    return last_ref["entity_type"], last_ref["entity_id"], last_ref["code"]
+
+
 async def _handle_note_create(
-    client: DataClient, *, license_id, message: str, trigger: str,
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str, trigger: str,
     permission_keys: list[str], language: str, actor_id: str,
 ) -> ChatReply:
     if "note.create" not in set(permission_keys):
         return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
 
-    found = _find_entity_code(message)
-    if found is None:
+    license_id = str(license_id)
+    try:
+        target = await _resolve_target_or_context(client, ctx, license_id, message)
+    except _TargetNotFound as exc:
+        return ChatReply(
+            text=_t(NOT_FOUND_BY_CODE, language).format(what=exc.entity_type, code=exc.code)
+        )
+    if target is None:
         return ChatReply(text=_t(NOTE_NEEDS_TARGET, language))
-    entity_type, code = found
+    entity_type, entity_id, code = target
 
-    # The note body is everything after the trigger, minus the code itself.
+    # The note body is everything after the trigger, minus the code itself
+    # (there may be none at all, when the target came from context).
     lowered = message.lower()
     index = lowered.find(trigger.lower())
     body = message[index + len(trigger):] if index >= 0 else message
@@ -668,16 +717,10 @@ async def _handle_note_create(
     if not body:
         return ChatReply(text=_t(NOTE_NEEDS_TARGET, language))
 
-    license_id = str(license_id)
     try:
-        row = await _resolve_entity(client, license_id, entity_type, code)
-        if row is None:
-            return ChatReply(
-                text=_t(NOT_FOUND_BY_CODE, language).format(what=entity_type, code=code)
-            )
         await client.create_note(
             license_id,
-            {"entity_type": entity_type, "entity_id": str(row["id"]), "body": body},
+            {"entity_type": entity_type, "entity_id": entity_id, "body": body},
             actor_id=actor_id,
         )
     except Exception:
@@ -686,7 +729,7 @@ async def _handle_note_create(
 
     return ChatReply(
         text=_t(NOTE_SAVED, language).format(code=code),
-        entity_type=entity_type, entity_id=str(row["id"]),
+        entity_type=entity_type, entity_id=entity_id,
         quick_replies=[
             ("ดูบันทึกทั้งหมด", f"ดูบันทึก {code}"),
             ("ตั้งเตือน", f"เตือน {code} พรุ่งนี้"),
@@ -729,7 +772,7 @@ async def _handle_note_list(
 
 
 async def _handle_reminder_create(
-    client: DataClient, *, license_id, message: str,
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
     permission_keys: list[str], language: str, actor_id: str,
 ) -> ChatReply:
     from .thai_datetime import format_thai_date, format_thai_time, parse_thai_date, parse_thai_time
@@ -737,10 +780,16 @@ async def _handle_reminder_create(
     if "followup.create" not in set(permission_keys):
         return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
 
-    found = _find_entity_code(message)
-    if found is None:
+    license_id = str(license_id)
+    try:
+        target = await _resolve_target_or_context(client, ctx, license_id, message)
+    except _TargetNotFound as exc:
+        return ChatReply(
+            text=_t(NOT_FOUND_BY_CODE, language).format(what=exc.entity_type, code=exc.code)
+        )
+    if target is None:
         return ChatReply(text=_t(REMINDER_NEEDS_TARGET, language))
-    entity_type, code = found
+    entity_type, entity_id, code = target
 
     # Parse against the tenant's own day, not UTC: at 23:00 in Bangkok, UTC
     # is still yesterday, and "พรุ่งนี้" would land on today.
@@ -750,16 +799,10 @@ async def _handle_reminder_create(
         return ChatReply(text=_t(REMINDER_NEEDS_DATE, language))
     due_time = parse_thai_time(message)
 
-    license_id = str(license_id)
     try:
-        row = await _resolve_entity(client, license_id, entity_type, code)
-        if row is None:
-            return ChatReply(
-                text=_t(NOT_FOUND_BY_CODE, language).format(what=entity_type, code=code)
-            )
         payload = {
             "entity_type": entity_type,
-            "entity_id": str(row["id"]),
+            "entity_id": entity_id,
             "due_date": due_date.isoformat(),
         }
         if due_time is not None:
@@ -771,13 +814,15 @@ async def _handle_reminder_create(
 
     # The resolved date and time are echoed back deliberately: the parse is
     # a best reading of free text, and showing what it decided is how the
-    # person catches a misread before it matters.
+    # person catches a misread before it matters. The code is echoed too,
+    # for exactly the same reason when the target came from context rather
+    # than being typed.
     time_text = f" {format_thai_time(due_time)}" if due_time else ""
     return ChatReply(
         text=_t(REMINDER_SAVED, language).format(
             code=code, date=format_thai_date(due_date), time=time_text,
         ),
-        entity_type=entity_type, entity_id=str(row["id"]),
+        entity_type=entity_type, entity_id=entity_id,
         quick_replies=[("งานวันนี้", "งานวันนี้")],
     )
 
@@ -1201,6 +1246,7 @@ async def _handle_customer_list(
 
 async def _handle_customer_detail(
     client: DataClient, *, license_id, code: str, permission_keys: list[str], language: str,
+    ctx: ResolvedContext | None = None,
 ) -> ChatReply:
     if "customer.read" not in set(permission_keys):
         return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
@@ -1221,6 +1267,12 @@ async def _handle_customer_detail(
             text=_t(NOT_FOUND_BY_CODE, language).format(
                 what="ลูกค้า" if language == "th" else "customer", code=code
             )
+        )
+
+    if ctx is not None:
+        await _remember_entity(
+            client, ctx, entity_type="customer",
+            entity_id=customer["id"], code=customer["customer_id"],
         )
 
     rows = [
@@ -1308,6 +1360,7 @@ async def _handle_deal_list(
 
 async def _handle_deal_detail(
     client: DataClient, *, license_id, code: str, permission_keys: list[str], language: str,
+    ctx: ResolvedContext | None = None,
 ) -> ChatReply:
     if "deal.read" not in set(permission_keys):
         return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
@@ -1326,6 +1379,11 @@ async def _handle_deal_detail(
             text=_t(NOT_FOUND_BY_CODE, language).format(
                 what="ดีล" if language == "th" else "deal", code=code
             )
+        )
+
+    if ctx is not None:
+        await _remember_entity(
+            client, ctx, entity_type="deal", entity_id=deal["id"], code=deal["deal_id"],
         )
 
     rows = [
@@ -2216,6 +2274,27 @@ async def _remember_customer(client: DataClient, ctx: ResolvedContext, row: dict
     )
 
 
+LAST_ENTITY_REF_TTL_S = 600
+
+
+async def _remember_entity(
+    client: DataClient, ctx: ResolvedContext, *, entity_type: str, entity_id, code: str,
+) -> None:
+    """Records "the record we were just looking at" — generalises
+    _remember_customer to deals and quotes, for notes and reminders. See
+    cache.k_last_entity_ref for why this is a separate key from
+    last_customer_ref rather than reusing it."""
+    try:
+        await client.set_last_entity_ref(
+            ctx.chann_uid, ctx.oa, entity_type=entity_type, entity_id=str(entity_id),
+            code=code, ttl_seconds=LAST_ENTITY_REF_TTL_S,
+        )
+    except Exception:
+        # Best-effort: failing to cache "what we were just looking at" must
+        # never break the detail view that triggered it.
+        log.exception("failed to remember last entity ref")
+
+
 LAST_CUSTOMER_REF_TTL_S = 600
 
 DEAL_CREATED_FROM_CONTEXT = {
@@ -2660,13 +2739,13 @@ async def handle_chat_message(
         note_trigger = next((t for t in NOTE_TRIGGERS if t in message.lower()), None)
         if note_trigger:
             return await _handle_note_create(
-                client, license_id=license_id, message=message, trigger=note_trigger,
+                client, ctx=ctx, license_id=license_id, message=message, trigger=note_trigger,
                 permission_keys=permission_keys, language=language,
                 actor_id=ctx.chann_uid,
             )
         if any(t in message.lower() for t in REMINDER_TRIGGERS):
             return await _handle_reminder_create(
-                client, license_id=license_id, message=message,
+                client, ctx=ctx, license_id=license_id, message=message,
                 permission_keys=permission_keys, language=language,
                 actor_id=ctx.chann_uid,
             )
@@ -2715,7 +2794,7 @@ async def handle_chat_message(
         if customer_code is not None:
             return await _handle_customer_detail(
                 client, license_id=license_id, code=customer_code,
-                permission_keys=permission_keys, language=language,
+                permission_keys=permission_keys, language=language, ctx=ctx,
             )
 
         # Re-issue checked first: "ออกเอกสารใหม่" contains "ออกเอกสาร", the
@@ -2739,7 +2818,7 @@ async def handle_chat_message(
         if deal_code is not None:
             return await _handle_deal_detail(
                 client, license_id=license_id, code=deal_code,
-                permission_keys=permission_keys, language=language,
+                permission_keys=permission_keys, language=language, ctx=ctx,
             )
 
     # Company identity (Phase 10) — same closed-pattern reasoning, and one

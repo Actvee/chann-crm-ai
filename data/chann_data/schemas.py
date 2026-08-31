@@ -496,6 +496,19 @@ class LastCustomerRefOut(BaseModel):
     name: str
 
 
+class LastEntityRefIn(BaseModel):
+    entity_type: str
+    entity_id: str
+    code: str
+    ttl_seconds: int = 600
+
+
+class LastEntityRefOut(BaseModel):
+    entity_type: str
+    entity_id: str
+    code: str
+
+
 # ---------------------------------------------------------------- Phase 9 CRM
 
 

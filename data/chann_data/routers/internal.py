@@ -19,6 +19,7 @@ from ..cache import (
     k_admin_session,
     k_identity,
     k_last_customer_ref,
+    k_last_entity_ref,
     k_member,
     k_pending_intent,
     k_permissions,
@@ -121,6 +122,8 @@ from ..schemas import (
     PendingIntentOut,
     LastCustomerRefIn,
     LastCustomerRefOut,
+    LastEntityRefIn,
+    LastEntityRefOut,
     ProfileEditCheckOut,
     ProfileOut,
     ProfileUpdateIn,
@@ -1742,6 +1745,32 @@ def get_last_customer_ref(oa: str, chann_uid: str):
             status_code=status.HTTP_404_NOT_FOUND, detail="no recent customer reference"
         )
     return LastCustomerRefOut(**raw)
+
+
+@router.put("/chat/last-entity/{oa}/{chann_uid}", status_code=204)
+def set_last_entity_ref(oa: str, chann_uid: str, payload: LastEntityRefIn):
+    """Generalises set_last_customer_ref to any entity, for notes and
+    reminders — see cache.k_last_entity_ref for why this is a separate key
+    from last_customer_ref rather than replacing it."""
+    cache.set(
+        k_last_entity_ref(chann_uid, oa),
+        {
+            "entity_type": payload.entity_type,
+            "entity_id": payload.entity_id,
+            "code": payload.code,
+        },
+        payload.ttl_seconds,
+    )
+
+
+@router.get("/chat/last-entity/{oa}/{chann_uid}", response_model=LastEntityRefOut)
+def get_last_entity_ref(oa: str, chann_uid: str):
+    raw = cache.get_or_load(k_last_entity_ref(chann_uid, oa), ttl_s=0, loader=lambda: None)
+    if raw is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="no recent entity reference"
+        )
+    return LastEntityRefOut(**raw)
 
 
 @router.put("/chat/smartbrowz-token", status_code=204)

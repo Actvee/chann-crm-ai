@@ -168,6 +168,28 @@ def k_last_customer_ref(chann_uid: str, oa: str) -> str:
     return f"last_customer_ref:{chann_uid}:{oa}"
 
 
+def k_last_entity_ref(chann_uid: str, oa: str) -> str:
+    """Phase 6 follow-up — "which record was this conversation just
+    looking at?"
+
+    The same gap k_last_customer_ref closed for deal creation, generalised:
+    reported live as "ข้อมูลลูกค้า ..." followed immediately by "นัดประชุม
+    พรุ่งนี้ตอน 9 โมงเช้า" with no code at all. Forcing a code every time a
+    person has just been looking straight at the record in question reads
+    as the system not noticing what it just showed.
+
+    Deliberately separate from k_last_customer_ref rather than replacing
+    it: that key is customer-specific and feeds the deal-creation flow
+    with fields the general form below does not carry (a bare display
+    name, not a typed code). This one is generic across customer/deal/
+    quote and is read by notes and reminders.
+
+    Same (chann_uid, oa) scoping and same Redis-not-Postgres reasoning as
+    pending_intent.
+    """
+    return f"last_entity_ref:{chann_uid}:{oa}"
+
+
 def k_smartbrowz_token() -> str:
     """Phase 10 — the cached SmartBrowz OAuth access token.
 

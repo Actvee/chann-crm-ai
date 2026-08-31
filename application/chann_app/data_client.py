@@ -671,6 +671,29 @@ class DataClient:
         )
         self._unwrap(resp)
 
+    async def set_last_entity_ref(
+        self, chann_uid: str, oa: str, *, entity_type: str, entity_id: str,
+        code: str, ttl_seconds: int = 600,
+    ) -> None:
+        resp = await self._client.put(
+            f"{self._base}/internal/v1/chat/last-entity/{oa}/{chann_uid}",
+            headers=self._headers,
+            json={
+                "entity_type": entity_type, "entity_id": entity_id,
+                "code": code, "ttl_seconds": ttl_seconds,
+            },
+        )
+        self._unwrap(resp)
+
+    async def get_last_entity_ref(self, chann_uid: str, oa: str) -> dict | None:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/chat/last-entity/{oa}/{chann_uid}",
+            headers=self._headers,
+        )
+        if resp.status_code == 404:
+            return None
+        return self._unwrap(resp)
+
     async def set_last_customer_ref(
         self, chann_uid: str, oa: str, *, customer_id: str, name: str,
         ttl_seconds: int = 600,

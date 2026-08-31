@@ -176,6 +176,48 @@ class FakeDataClient:
         self.recorded.append(("get_last_customer_ref", chann_uid, oa))
         return self._last_customer_ref
 
+    async def set_last_entity_ref(self, chann_uid, oa, *, entity_type, entity_id, code, ttl_seconds=600):
+        self._last_entity_ref = {"entity_type": entity_type, "entity_id": entity_id, "code": code}
+        self.recorded.append(("set_last_entity_ref", chann_uid, oa, entity_type, entity_id, code))
+
+    async def get_last_entity_ref(self, chann_uid, oa):
+        self.recorded.append(("get_last_entity_ref", chann_uid, oa))
+        return getattr(self, "_last_entity_ref", None)
+
+    async def create_note(self, license_id, payload, actor_id=None):
+        self.recorded.append(("create_note", license_id, payload, actor_id))
+        if self._raises:
+            raise self._raises
+        row = {
+            "id": f"NOTE-{len(getattr(self, '_notes', [])) + 1}", "license_id": license_id,
+            **payload, "author_chann_uid": actor_id,
+        }
+        if not hasattr(self, "_notes"):
+            self._notes = []
+        self._notes.append(row)
+        return row
+
+    async def list_notes(self, license_id, entity_type, entity_id, limit=50):
+        self.recorded.append(("list_notes", license_id, entity_type, entity_id))
+        return [
+            n for n in getattr(self, "_notes", [])
+            if n["entity_type"] == entity_type and n["entity_id"] == entity_id
+        ]
+
+    async def create_follow_up(self, license_id, payload, actor_id=None):
+        self.recorded.append(("create_follow_up", license_id, payload, actor_id))
+        if self._raises:
+            raise self._raises
+        row = {"id": f"FU-{len(getattr(self, '_follow_ups', [])) + 1}", **payload, "status": "pending"}
+        if not hasattr(self, "_follow_ups"):
+            self._follow_ups = []
+        self._follow_ups.append(row)
+        return row
+
+    async def due_follow_ups(self, license_id, days=1):
+        self.recorded.append(("due_follow_ups", license_id, days))
+        return list(getattr(self, "_follow_ups", []))
+
     async def upsert_product(self, license_id, product_id, payload, actor_id=None):
         self.recorded.append(("upsert_product", license_id, product_id, payload, actor_id))
         if self._raises:
@@ -2664,3 +2706,83 @@ class TestPhase10ListCards:
         ]
         # One separator under the header plus one between each pair of rows.
         assert len(separators) == MAX_FLEX_ROWS
+
+
+class TestNoteAndReminderContextFallback:
+    """A note or reminder with no code falls back to the record just looked
+    at, rather than refusing.
+
+    Reported live: "ข้อมูลลูกค้า C-2026-0001" followed immediately by
+    "นัดประชุมพรุ่งนี้ตอน 9 โมงเช้า" with no code at all. Refusing that read
+    as the system not noticing the record it had just shown.
+    """
+
+    async def test_reminder_falls_back_to_the_customer_just_viewed(self):
+        client = FakeDataClient(permission_keys=["customer.read", "followup.create"])
+        customer = await client.create_customer("L1", {
+            "first_name": "สมชาย", "last_name": "ใจดี", "phone": "0812345678",
+        })
+        await handle_chat_message(
+            client, message=f"ข้อมูลลูกค้า {customer['customer_id']}", ctx=_ctx(),
+        )
+        reply = await handle_chat_message(
+            client, message="นัดประชุมพรุ่งนี้ตอน 9 โมงเช้า", ctx=_ctx(),
+        )
+        assert customer["customer_id"] in reply.text
+        writes = [r for r in client.recorded if r[0] == "create_follow_up"]
+        assert len(writes) == 1
+        assert writes[0][2]["entity_id"] == customer["id"]
+
+    async def test_note_falls_back_to_the_deal_just_viewed(self):
+        client = FakeDataClient(permission_keys=["deal.read", "note.create"])
+        customer = await client.create_customer("L1", {"first_name": "ก", "last_name": "ข"})
+        deal = await client.create_deal("L1", {"contact_id": customer["id"]})
+        await handle_chat_message(client, message=f"ข้อมูลดีล {deal['deal_id']}", ctx=_ctx())
+        reply = await handle_chat_message(client, message="บันทึกว่าลูกค้าขอส่วนลด", ctx=_ctx())
+        assert deal["deal_id"] in reply.text
+        writes = [r for r in client.recorded if r[0] == "create_note"]
+        assert len(writes) == 1
+        assert writes[0][2]["entity_id"] == deal["id"]
+        assert writes[0][2]["body"] == "ลูกค้าขอส่วนลด"
+
+    async def test_an_explicit_code_always_wins_over_context(self):
+        """Viewing one deal and then naming a different one must never
+        attach the note to the one on screen."""
+        client = FakeDataClient(permission_keys=["deal.read", "note.create"])
+        customer = await client.create_customer("L1", {"first_name": "ก", "last_name": "ข"})
+        deal_a = await client.create_deal("L1", {"contact_id": customer["id"]})
+        deal_b = await client.create_deal("L1", {"contact_id": customer["id"]})
+        await handle_chat_message(client, message=f"ข้อมูลดีล {deal_a['deal_id']}", ctx=_ctx())
+        await handle_chat_message(
+            client, message=f"บันทึกว่า {deal_b['deal_id']} ปิดการขายแล้ว", ctx=_ctx(),
+        )
+        writes = [r for r in client.recorded if r[0] == "create_note"]
+        assert writes[0][2]["entity_id"] == deal_b["id"]
+
+    async def test_no_context_and_no_code_still_asks(self):
+        """With nothing recently viewed, the honest answer is still to ask —
+        never to guess at random."""
+        client = FakeDataClient(permission_keys=["note.create"])
+        reply = await handle_chat_message(client, message="บันทึกว่าลูกค้าขอส่วนลด", ctx=_ctx())
+        assert "ระบุรหัส" in reply.text or "เปิดดู" in reply.text
+        assert not [r for r in client.recorded if r[0] == "create_note"]
+
+    async def test_an_explicit_but_unknown_code_says_not_found_not_please_specify(self):
+        """A wrong code and no code at all are different mistakes and need
+        different replies — conflating them was a real bug caught while
+        wiring the fallback in."""
+        client = FakeDataClient(permission_keys=["deal.read", "note.create"])
+        reply = await handle_chat_message(
+            client, message="บันทึกว่า D-9999-9999 ตรวจสอบราคา", ctx=_ctx(),
+        )
+        assert "ไม่พบ" in reply.text
+        assert "ระบุรหัส" not in reply.text
+
+    async def test_context_expires_and_falls_back_to_asking(self):
+        """The cached reference is meant to be short-lived — a stale one
+        from an hour-old conversation should not silently reattach to
+        whatever was last looked at."""
+        client = FakeDataClient(permission_keys=["note.create"])
+        client._last_entity_ref = None  # simulates TTL expiry
+        reply = await handle_chat_message(client, message="บันทึกว่าตามต่อ", ctx=_ctx())
+        assert not [r for r in client.recorded if r[0] == "create_note"]
