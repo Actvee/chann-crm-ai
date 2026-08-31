@@ -63,6 +63,8 @@ class _FakeClient:
         self.line_targets: dict[str, str | None] = {
             "CHN-1": "Uline1", "CHN-2": "Uline2",
         }
+        self.customers: list[dict] = []
+        self.deals: list[dict] = []
 
     async def list_licenses(self, status=None, exclude_status=None):
         self.list_calls.append({"status": status, "exclude_status": exclude_status})
@@ -83,6 +85,15 @@ class _FakeClient:
     async def line_target_of(self, chann_uid):
         self.line_lookups.append(chann_uid)
         return self.line_targets.get(chann_uid)
+
+    async def list_customers(self, license_id, stage=None):
+        return list(self.customers)
+
+    async def list_deals(self, license_id, stage=None):
+        return list(self.deals)
+
+    async def list_quotes(self, license_id, status=None):
+        return []
 
 
 @pytest.fixture
@@ -263,3 +274,86 @@ class TestActualDelivery:
         summary = await sweep_due_follow_ups(client)
         assert summary["sent"] == 1
         assert client.pushed[0]["target_line_user_id"] is None
+
+
+class TestReminderMessageContent:
+    """What the message actually says.
+
+    Every reminder used to read "เตือนงานวันนี้: customer" — the entity type
+    as a fallback, because notes were never stored and nothing resolved the
+    record to a name. It was true, delivered, counted as sent, and told the
+    salesperson nothing about who or what.
+
+    Nothing in this suite checked the message body until that reached a real
+    user, which is why these assert on text rather than on counters.
+    """
+
+    async def test_a_customer_reminder_names_the_customer(self, no_line_push):
+        today = datetime.now(BANGKOK).date()
+        client = _FakeClient(
+            licenses=[{"id": "lic-1", "status": "trial", "created_by_chann_uid": "CHN-1"}],
+            due_by_license={"lic-1": [{
+                "id": "fu-1", "entity_type": "customer", "entity_id": "cust-1",
+                "due_date": today.isoformat(), "due_time": None, "notes": None,
+            }]},
+        )
+        client.customers = [{
+            "id": "cust-1", "customer_id": "C-2026-0005",
+            "first_name": "จุใจ", "last_name": "มาติกา",
+        }]
+        await sweep_due_follow_ups(client)
+        message = client.pushed[0]["message"]
+        assert "จุใจ มาติกา" in message
+        assert "C-2026-0005" in message
+        assert message.strip() != "เตือนงานวันนี้: customer"
+
+    async def test_the_subject_the_person_typed_is_included(self, no_line_push):
+        """"นัดดูสินค้า" is the whole point of the reminder; a date alone
+        does not tell anyone what to do."""
+        today = datetime.now(BANGKOK).date()
+        client = _FakeClient(
+            licenses=[{"id": "lic-1", "status": "trial", "created_by_chann_uid": "CHN-1"}],
+            due_by_license={"lic-1": [{
+                "id": "fu-1", "entity_type": "customer", "entity_id": "cust-1",
+                "due_date": today.isoformat(), "due_time": "15:00:00",
+                "notes": "ดูสินค้า",
+            }]},
+        )
+        client.customers = [{
+            "id": "cust-1", "customer_id": "C-2026-0005",
+            "first_name": "จุใจ", "last_name": "มาติกา",
+        }]
+        await sweep_due_follow_ups(client)
+        message = client.pushed[0]["message"]
+        assert "ดูสินค้า" in message
+        assert "15:00" in message
+        assert "จุใจ" in message
+
+    async def test_a_deal_reminder_names_the_deal_code(self, no_line_push):
+        today = datetime.now(BANGKOK).date()
+        client = _FakeClient(
+            licenses=[{"id": "lic-1", "status": "trial", "created_by_chann_uid": "CHN-1"}],
+            due_by_license={"lic-1": [{
+                "id": "fu-1", "entity_type": "deal", "entity_id": "deal-1",
+                "due_date": today.isoformat(), "due_time": None, "notes": None,
+            }]},
+        )
+        client.deals = [{"id": "deal-1", "deal_id": "D-2026-0003"}]
+        await sweep_due_follow_ups(client)
+        assert "D-2026-0003" in client.pushed[0]["message"]
+
+    async def test_an_unresolvable_record_still_sends_something_readable(self, no_line_push):
+        """A reminder that says less is still worth sending — but it must
+        not crash, and it must not be blank."""
+        today = datetime.now(BANGKOK).date()
+        client = _FakeClient(
+            licenses=[{"id": "lic-1", "status": "trial", "created_by_chann_uid": "CHN-1"}],
+            due_by_license={"lic-1": [{
+                "id": "fu-1", "entity_type": "customer", "entity_id": "gone",
+                "due_date": today.isoformat(), "due_time": None, "notes": None,
+            }]},
+        )
+        await sweep_due_follow_ups(client)
+        message = client.pushed[0]["message"]
+        assert message.strip()
+        assert "ลูกค้า" in message

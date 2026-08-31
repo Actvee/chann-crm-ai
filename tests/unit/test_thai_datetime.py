@@ -134,3 +134,44 @@ class TestFormatting:
     def test_times_are_shown_with_the_thai_hour_marker(self):
         assert format_thai_time(time(14, 0)) == "14:00 น."
         assert format_thai_time(None) == ""
+
+
+class TestReminderSubject:
+    """What a reminder is ABOUT, pulled out of the message that set it.
+
+    "นัดดูสินค้าวันนี้ตอน 3 โมง" used to be reduced to a date and a time,
+    with the actual instruction thrown away — so the reminder that arrived
+    could only name the record type. The date is stored structurally, so it
+    is stripped here rather than repeated in the text.
+    """
+
+    def _subject(self, message):
+        from chann_app.services.chat import _reminder_subject
+
+        return _reminder_subject(message, "")
+
+    def test_the_instruction_survives_the_date_and_time(self):
+        assert self._subject("นัดดูสินค้าวันนี้ตอน 3 โมง") == "ดูสินค้า"
+        assert self._subject("นัดโทรหาวันนี้") == "โทรหา"
+
+    def test_a_longer_subject_after_the_date_is_kept(self):
+        assert self._subject(
+            "เตือน D-2026-0001 พรุ่งนี้ บ่าย 2 ประชุมสรุปราคา"
+        ) == "ประชุมสรุปราคา"
+
+    def test_a_bare_reminder_has_no_subject(self):
+        """Empty is a correct answer: the caller then names the record
+        instead, rather than inventing a subject nobody typed."""
+        assert self._subject("เตือน C-2026-0005 วันนี้") == ""
+
+    def test_a_weekday_does_not_leave_the_word_day_behind(self):
+        """Stripping "วัน" before "ศุกร์" left "วัน" as the subject — caught
+        while writing these, and the reason weekday names are removed
+        first."""
+        assert self._subject("เตือนวันศุกร์") == ""
+
+    def test_a_named_month_is_not_mistaken_for_a_subject(self):
+        assert self._subject("นัดประชุมวันจันทร์ 15 มีนาคม") == "ประชุม"
+
+    def test_a_single_stray_character_is_not_a_subject(self):
+        assert self._subject("เตือน ก วันนี้") == ""

@@ -34,8 +34,14 @@ BANGKOK_TZ = timezone(timedelta(hours=7))
 REMINDER_TYPE = "followup_due"
 
 REMINDER_TEXT = {
-    "th": "เตือนงานวันนี้: {what}{when}",
-    "en": "Due today: {what}{when}",
+    "th": "เตือนงานวันนี้{when}\n{who}{what}",
+    "en": "Due today{when}\n{who}{what}",
+}
+
+ENTITY_LABEL = {
+    "customer": {"th": "ลูกค้า", "en": "Customer"},
+    "deal": {"th": "ดีล", "en": "Deal"},
+    "quote": {"th": "ใบเสนอราคา", "en": "Quote"},
 }
 
 
@@ -75,6 +81,48 @@ def _coerce_date(value) -> date | None:
         return date.fromisoformat(text[:10])
     except ValueError:
         return None
+
+
+async def _describe_entity(
+    client: DataClient, license_id: str, entity_type: str, entity_id: str,
+) -> str:
+    """A person or record a reminder is about, named the way its owner would
+    name it.
+
+    Mirrors chat.py's _describe_entity_by_id, which fixed the identical
+    "every row just says customer" problem in the work list. Kept as its own
+    copy rather than imported across the seam: reminders.py is a background
+    service and must not depend on the chat module's import graph.
+
+    Falls back to the type label rather than raising — a reminder that says
+    less is still worth sending.
+    """
+    label = ENTITY_LABEL.get(entity_type, {}).get("th", entity_type)
+    try:
+        if entity_type == "customer":
+            rows = await client.list_customers(license_id)
+            row = next((r for r in rows if str(r.get("id")) == entity_id), None)
+            if row:
+                name = " ".join(
+                    p for p in (row.get("first_name"), row.get("last_name")) if p
+                ).strip()
+                code = row.get("customer_id") or ""
+                return f"{label} {name} ({code})" if name else f"{label} {code}"
+        elif entity_type == "deal":
+            rows = await client.list_deals(license_id)
+            row = next((r for r in rows if str(r.get("id")) == entity_id), None)
+            if row:
+                return f"{label} {row.get('deal_id') or ''}".strip()
+        elif entity_type == "quote":
+            rows = await client.list_quotes(license_id)
+            row = next((r for r in rows if str(r.get("id")) == entity_id), None)
+            if row:
+                return f"{label} {row.get('quote_id') or ''}".strip()
+    except Exception:
+        log.exception(
+            "could not describe %s/%s for a reminder", entity_type, entity_id
+        )
+    return label
 
 
 async def sweep_due_follow_ups(client: DataClient, *, days: int = 0) -> dict:
@@ -144,10 +192,20 @@ async def sweep_due_follow_ups(client: DataClient, *, days: int = 0) -> dict:
                 summary["skipped"] += 1
                 continue
 
-            what = item.get("notes") or f"{item.get('entity_type')}"
-            text = REMINDER_TEXT["th"].format(
-                what=what, when=_format_when(item.get("due_time")),
+            # Name the record, not its type. "customer" on its own is true
+            # and useless — it was what every reminder said before this,
+            # because notes were never stored and entity_type was the
+            # fallback.
+            entity_type = str(item.get("entity_type") or "")
+            who = await _describe_entity(
+                client, license_id, entity_type, str(item.get("entity_id") or ""),
             )
+            # The subject the person typed, when there was one. A reminder
+            # with no subject still names the record, which is the minimum
+            # useful thing to say.
+            subject = (item.get("notes") or "").strip()
+            what = f"\n{subject}" if subject else ""
+            when = _format_when(item.get("due_time"))
 
             # Resolved, not left as None: send_notification treats a missing
             # LINE target as "record it for the dashboard and stop", which is
@@ -166,10 +224,8 @@ async def sweep_due_follow_ups(client: DataClient, *, days: int = 0) -> dict:
                     target_chann_uid=str(owner),
                     target_line_user_id=line_target,
                     type=REMINDER_TYPE,
-                    message=text,
-                    message_en=REMINDER_TEXT["en"].format(
-                        what=what, when=_format_when(item.get("due_time")),
-                    ),
+                    message=REMINDER_TEXT["th"].format(who=who, what=what, when=when),
+                    message_en=REMINDER_TEXT["en"].format(who=who, what=what, when=when),
                     entity_type=str(item.get("entity_type") or ""),
                     entity_id=str(item.get("entity_id") or ""),
                     oa="sales",

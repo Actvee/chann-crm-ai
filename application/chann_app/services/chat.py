@@ -824,6 +824,50 @@ async def _handle_note_list(
     return ChatReply(text="\n".join(lines))
 
 
+# Words that only tell us WHEN, not WHAT. Stripped so a reminder's subject
+# reads as the thing to do rather than repeating the date the reminder
+# already carries in its own field.
+_WHEN_ONLY_WORDS = (
+    "วันนี้", "พรุ่งนี้", "มะรืนนี้", "มะรืน", "สัปดาห์หน้า", "อาทิตย์หน้า",
+    "เดือนหน้า", "ตอน", "เวลา", "วันที่", "หน้า", "น.",
+    # "วัน" last, after the weekday names have been removed: stripping it
+    # first would turn "วันศุกร์" into "ศุกร์" and leave the leftover "วัน"
+    # behind as a subject, which is what happened before this line existed.
+    "วัน",
+)
+
+
+def _reminder_subject(message: str, code: str) -> str:
+    """What the reminder is ABOUT, from the message that set it.
+
+    Best-effort and deliberately conservative: strips the trigger word, the
+    record code, and the date/time expression, and returns whatever is left
+    only if something meaningful remains. An empty result is fine — the
+    caller falls back to naming the record — but a reminder that can quote
+    the person's own words is far more use than one that cannot.
+    """
+    from .thai_datetime import _THAI_MONTHS, _THAI_WEEKDAYS
+
+    text = ENTITY_CODE_RE.sub("", message or "")
+    for trigger in REMINDER_TRIGGERS + QUOTE_REISSUE_PHRASES:
+        text = text.replace(trigger, " ")
+    # Digits and separators belong to the date/time, which is stored
+    # structurally; keeping them here would duplicate it in the text.
+    text = re.sub(r"\d{1,4}[:./-]?\d{0,2}", " ", text)
+    for word in (
+        # Weekdays and months FIRST: "วัน" is in _WHEN_ONLY_WORDS and would
+        # otherwise split "วันศุกร์" before "ศุกร์" itself is removed.
+        tuple(_THAI_WEEKDAYS)
+        + tuple(_THAI_MONTHS)
+        + ("โมงเช้า", "โมง", "ทุ่ม", "เช้า", "สาย", "เที่ยง", "บ่าย", "เย็น", "ค่ำ")
+        + _WHEN_ONLY_WORDS
+    ):
+        text = text.replace(word, " ")
+    subject = " ".join(text.split()).strip(" ·-:")
+    # One stray character is noise, not a subject.
+    return subject if len(subject) >= 3 else ""
+
+
 async def _handle_reminder_create(
     client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
     permission_keys: list[str], language: str, actor_id: str,
@@ -860,6 +904,13 @@ async def _handle_reminder_create(
         }
         if due_time is not None:
             payload["due_time"] = due_time.isoformat()
+        # Keep what the person actually asked to be reminded about. Without
+        # this, "นัดดูสินค้าวันนี้ตอน 3 โมง" was reduced to a date and a
+        # time, and the reminder that arrived days later could only say
+        # "customer" — true, and useless.
+        subject = _reminder_subject(message, code)
+        if subject:
+            payload["notes"] = subject
         await client.create_follow_up(license_id, payload, actor_id=actor_id)
     except Exception:
         log.exception("reminder create failed")
