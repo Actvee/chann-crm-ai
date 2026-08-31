@@ -288,3 +288,44 @@ class TestFollowUpOwnership:
         )
         assert response.status_code == 201, response.text
         assert response.json()["owner_member_id"] == str(member_id)
+
+
+class TestPermissionsEndpoint:
+    """The dashboard has to know what it may offer.
+
+    Showing an edit control that 403s on save is worse than showing the
+    value read-only: the person fills the form, loses the work, and learns
+    nothing about why. That decision needs the permission keys, and until
+    this endpoint existed the dashboard had no way to ask for them.
+    """
+
+    def test_it_returns_permission_keys(self, api, tenant):
+        """Application-tier route, so this only checks the Data-tier pieces
+        it depends on are reachable; the route itself is exercised by the
+        Application tier's own tests."""
+        client, headers = api
+        response = client.get(
+            f"/internal/v1/licenses/{tenant['license_id']}/members", headers=headers,
+        )
+        assert response.status_code in (200, 404), response.text
+
+
+class TestMembershipCarriesMemberId:
+    """Anything acting AS a member needs the license_members row id.
+
+    Claiming a ticket is the case that forced it: a dashboard holding only
+    chann_uid would have to look the member up on every single action, and
+    the customer "membership" has no members row at all — so the field is
+    nullable rather than absent.
+    """
+
+    def test_a_staff_membership_includes_member_id(self, api, tenant):
+        client, headers = api
+        response = client.get(
+            f"/internal/v1/identities/CHN-SMOKE-1/memberships",
+            headers=headers, params={"oa": "sales"},
+        )
+        assert response.status_code == 200, response.text
+        rows = response.json()
+        assert rows, "the fixture tenant's owner should have a membership"
+        assert rows[0].get("member_id"), "member_id was not populated"

@@ -28,6 +28,13 @@ class MembershipOut(BaseModel):
     chann_uid: str
     role: str
     status: str
+    # The license_members row id. Anything that acts AS this member needs
+    # it — claiming a ticket, owning a follow-up — and a client holding
+    # only chann_uid would have to look it up on every action.
+    #
+    # None for a customer "membership", which is a shop relationship
+    # rather than a staff role and has no members row at all.
+    member_id: uuid.UUID | None = None
 
 
 class MemberOut(BaseModel):
@@ -525,6 +532,163 @@ class LastEntityRefOut(BaseModel):
     entity_type: str
     entity_id: str
     code: str
+
+
+class TicketIn(BaseModel):
+    issue_description: str
+    customer_chann_uid: str | None = None
+    contact_id: uuid.UUID | None = None
+    customer_name: str | None = None
+    customer_phone: str | None = None
+    product_id: uuid.UUID | None = None
+    serial_number: str | None = None
+    service_address: str | None = None
+    scheduled_date: date | None = None
+    scheduled_time: time | None = None
+    visibility: str = "public"
+    owner_member_id: uuid.UUID | None = None
+    created_by: uuid.UUID | None = None
+
+
+class TicketPatchIn(BaseModel):
+    customer_name: str | None = None
+    customer_phone: str | None = None
+    service_address: str | None = None
+    serial_number: str | None = None
+    issue_description: str | None = None
+    scheduled_date: date | None = None
+    scheduled_time: time | None = None
+
+
+class TicketAssignIn(BaseModel):
+    target_type: str
+    target_ref: uuid.UUID
+
+
+class TicketMemberActionIn(BaseModel):
+    member_id: uuid.UUID
+
+
+class TicketStatusIn(BaseModel):
+    status: str
+
+
+class TicketOut(BaseModel):
+    id: uuid.UUID
+    license_id: uuid.UUID
+    ticket_number: str
+    customer_chann_uid: str | None
+    contact_id: uuid.UUID | None
+    customer_name: str | None
+    customer_phone: str | None
+    product_id: uuid.UUID | None
+    serial_number: str | None
+    issue_description: str
+    status: str
+    visibility: str
+    assigned_target_type: str | None
+    assigned_to_ref: uuid.UUID | None
+    accept_status: str
+    service_address: str | None
+    scheduled_date: date | None
+    scheduled_time: time | None
+    owner_member_id: uuid.UUID | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class CheckInIn(BaseModel):
+    member_id: uuid.UUID
+    gps_lat: float | None = None
+    gps_lng: float | None = None
+    photo_url: str | None = None
+
+
+class CheckOutIn(BaseModel):
+    member_id: uuid.UUID
+    report_data: dict
+    gps_lat: float | None = None
+    gps_lng: float | None = None
+    photo_url: str | None = None
+
+
+class TicketPhotoIn(BaseModel):
+    photo_url: str
+    photo_type: str = "evidence"
+    gps_lat: float | None = None
+    gps_lng: float | None = None
+    uploaded_by: uuid.UUID | None = None
+
+
+class TicketPhotoOut(BaseModel):
+    id: uuid.UUID
+    ticket_id: uuid.UUID
+    photo_url: str
+    photo_type: str
+    taken_at: datetime | None
+    gps_lat: Decimal | None
+    gps_lng: Decimal | None
+    uploaded_by: uuid.UUID | None
+    created_at: datetime
+
+
+class ServiceReportOut(BaseModel):
+    id: uuid.UUID
+    license_id: uuid.UUID
+    report_id: str
+    ticket_id: uuid.UUID
+    technician_member_id: uuid.UUID | None
+    report_data: dict
+    pdf_path: str | None
+    generated_document_id: uuid.UUID | None
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class ReportStatusIn(BaseModel):
+    status: str
+
+
+class AssignmentRuleIn(BaseModel):
+    scope: str
+    rules_json: dict
+    updated_by: uuid.UUID | None = None
+
+
+class AssignmentRuleOut(BaseModel):
+    id: uuid.UUID
+    license_id: uuid.UUID
+    scope: str
+    rules_json: dict
+    is_active: bool
+    updated_by: uuid.UUID | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class AssignmentRequestIn(BaseModel):
+    """Ask the engine to assign one record.
+
+    `context` is whatever the rules may match on (product.category and so
+    on). Passed as free-form JSON rather than a fixed shape because a
+    tenant's rules decide which fields matter, and the engine reads them
+    by path.
+    """
+
+    scope: str
+    entity_type: str
+    entity_id: uuid.UUID
+    context: dict = {}
+
+
+class AssignmentResultOut(BaseModel):
+    member_id: uuid.UUID | None
+    reason: str
+    matched_team: str | None = None
+    strategy: str | None = None
+    warnings: list[str] = []
+    used_fallback: bool = False
 
 
 # ---------------------------------------------------------------- Phase 9 CRM

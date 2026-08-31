@@ -810,3 +810,27 @@ async def get_quote_document(
             "X-Document-Sha256": str(document.get("sha256") or ""),
         },
     )
+
+
+@router.get("/licenses/{license_id}/me/permissions")
+async def my_permissions(
+    license_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+):
+    """What this person may do in this tenant.
+
+    The dashboard needs it to decide which fields are editable. Showing an
+    edit control that will 403 on save is worse than showing the value as
+    read-only: the person fills the form, loses the work, and learns nothing
+    about why.
+
+    Returns the keys the principal already carries — no extra lookup, and no
+    role name, since two tenants can both have a role called "sales" with
+    entirely different permissions.
+    """
+    _require_same_tenant(principal, license_id)
+    return {
+        "chann_uid": principal.chann_uid,
+        "is_owner": principal.is_owner,
+        "permission_keys": sorted(principal.permission_keys),
+    }

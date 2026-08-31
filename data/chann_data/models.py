@@ -8,6 +8,7 @@ Columns marked "placed early" are required by a later phase but are created
 now because the Master Spec explicitly says so.
 """
 import uuid
+from decimal import Decimal
 from datetime import date, datetime, time
 
 from sqlalchemy import (
@@ -498,6 +499,170 @@ class SalesGroupMember(Base):
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class ServiceTicket(TimestampMixin, Base):
+    """Phase 12 (Master Spec 12.3) — a reported fault and the visit to fix it.
+
+    Deliberately no separate work_orders table (12.1). A ticket IS the unit
+    of work; splitting the report from the job would mean keeping two rows
+    in step for a distinction nobody in an SMB would ever act on.
+
+    `assigned_target_type` + `assigned_to_ref` point at either a member or
+    a team, with no foreign key on the ref. Two nullable FKs would permit a
+    row pointing at both at once, which means nothing; the pair means
+    exactly one, and the repository enforces that.
+
+    customer_name/customer_phone are copied onto the ticket rather than
+    read through contact_id. The dispatch gate checks what a technician
+    will be told for THIS visit, and a customer record edited next month
+    must not retroactively change what was dispatched.
+    """
+
+    __tablename__ = "service_tickets"
+    __table_args__ = (
+        UniqueConstraint("license_id", "ticket_number", name="uq_service_tickets_license_number"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    license_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("licenses.id", ondelete="RESTRICT"),
+        nullable=False, index=True,
+    )
+    ticket_number: Mapped[str] = mapped_column(String(32), nullable=False)
+    customer_chann_uid: Mapped[str | None] = mapped_column(String(32))
+    contact_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("customers.id", ondelete="SET NULL")
+    )
+    customer_name: Mapped[str | None] = mapped_column(String(255))
+    customer_phone: Mapped[str | None] = mapped_column(String(32))
+    product_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("products.id", ondelete="SET NULL")
+    )
+    serial_number: Mapped[str | None] = mapped_column(String(128))
+    issue_description: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="open")
+    visibility: Mapped[str] = mapped_column(String(32), nullable=False, default="public")
+    assigned_target_type: Mapped[str | None] = mapped_column(String(32))
+    assigned_to_ref: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    accept_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    service_address: Mapped[str | None] = mapped_column(Text)
+    scheduled_date: Mapped[date | None] = mapped_column(Date)
+    scheduled_time: Mapped[time | None] = mapped_column(Time)
+    owner_member_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("license_members.id", ondelete="RESTRICT")
+    )
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("license_members.id", ondelete="RESTRICT")
+    )
+
+
+class ServiceReport(TimestampMixin, Base):
+    """Phase 13 (Master Spec 13.3) — what the technician found and did.
+
+    `report_data` is JSONB rather than columns because the fields a report
+    needs differ by trade: an air-conditioning report and a plumbing one
+    share almost nothing, and a column per field would mean a migration
+    every time a tenant wanted one more.
+
+    No separate template table — 13.3 requires the generic
+    document_templates/document_template_versions from Phase 10 with
+    document_type='service_report'. A second versioning model would be the
+    same problem solved twice, and the copies would drift.
+    """
+
+    __tablename__ = "service_reports"
+    __table_args__ = (
+        UniqueConstraint("license_id", "report_id", name="uq_service_reports_license_report"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    license_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("licenses.id", ondelete="RESTRICT"),
+        nullable=False, index=True,
+    )
+    report_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    ticket_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("service_tickets.id", ondelete="RESTRICT"),
+        nullable=False, index=True,
+    )
+    technician_member_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("license_members.id", ondelete="RESTRICT")
+    )
+    report_data: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    pdf_path: Mapped[str | None] = mapped_column(String(512))
+    generated_document_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("generated_documents.id", ondelete="SET NULL")
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft")
+
+
+class TicketPhoto(Base):
+    """Phase 13 (Master Spec 13.3) — evidence from a visit.
+
+    GPS lives on the photo, not the ticket. A check-in and a check-out
+    happen in the same place hours apart, and one pair of columns on the
+    ticket could record only one of them — which is the one that matters
+    when a customer disputes whether anyone turned up.
+
+    Coordinates are Numeric, not float: seven decimals is about a
+    centimetre, and float rounding on something that may be evidence is a
+    loss nobody can account for later.
+    """
+
+    __tablename__ = "ticket_photos"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    license_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("licenses.id", ondelete="RESTRICT"),
+        nullable=False, index=True,
+    )
+    ticket_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("service_tickets.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    photo_url: Mapped[str] = mapped_column(String(512), nullable=False)
+    photo_type: Mapped[str] = mapped_column(String(32), nullable=False, default="evidence")
+    taken_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    gps_lat: Mapped[Decimal | None] = mapped_column(Numeric(10, 7))
+    gps_lng: Mapped[Decimal | None] = mapped_column(Numeric(10, 7))
+    uploaded_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("license_members.id", ondelete="RESTRICT")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class AssignmentRule(TimestampMixin, Base):
+    """Phase 11 (Master Spec 11.3) — how work is handed to a person.
+
+    `rules_json` is written once, at configuration time, by the AI turning
+    a typed policy into structured criteria; the runtime engine only ever
+    READS it. That split is the whole point of the phase: an assignment
+    that changed depending on what a model felt like today would be
+    impossible to explain to the person who did not get the job.
+
+    Superseded rules are kept with is_active=false rather than deleted —
+    a rule that assigned work last month is part of why those records look
+    the way they do, and the audit trail references it. A partial unique
+    index keeps exactly one ACTIVE rule per (license, scope), because two
+    would make assignment depend on row order.
+    """
+
+    __tablename__ = "assignment_rules"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    license_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("licenses.id", ondelete="RESTRICT"),
+        nullable=False, index=True,
+    )
+    scope: Mapped[str] = mapped_column(String(32), nullable=False)
+    rules_json: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("license_members.id", ondelete="RESTRICT")
     )
 
 

@@ -29,6 +29,7 @@ from ..cache import (
 )
 from ..config import settings
 from ..db import get_session
+from .. import assignment_engine
 from ..models import ChannIdentity, License, LicenseMember
 from ..repositories.tenant_scope import (
     CrossTenantAccessDenied,
@@ -62,6 +63,19 @@ from ..repositories.phase9 import (
     Phase9Conflict,
     Phase9NotFound,
     StorefrontRepository,
+)
+from ..repositories.phase11 import AssignmentRuleRepository
+from ..repositories.phase13 import (
+    CheckoutBlocked,
+    FieldServiceRepository,
+    ReportConflict,
+    ReportNotFound,
+)
+from ..repositories.phase12 import (
+    DispatchBlocked,
+    ServiceTicketRepository,
+    TicketConflict,
+    TicketNotFound,
 )
 from ..repositories.phase10 import (
     CompanyProfileRepository,
@@ -146,8 +160,24 @@ from ..schemas import (
     InviteOut,
     InviteRedeemIn,
     LicenseCreateIn,
+    AssignmentRequestIn,
+    AssignmentResultOut,
+    AssignmentRuleIn,
+    AssignmentRuleOut,
     LicenseOut,
     LineTargetOut,
+    CheckInIn,
+    CheckOutIn,
+    ReportStatusIn,
+    ServiceReportOut,
+    TicketAssignIn,
+    TicketIn,
+    TicketMemberActionIn,
+    TicketOut,
+    TicketPhotoIn,
+    TicketPhotoOut,
+    TicketPatchIn,
+    TicketStatusIn,
     LicenseStatusIn,
     MessageEntityMapIn,
     ShopOut,
@@ -321,6 +351,7 @@ def list_memberships(
     members = MemberRepository(session).memberships_of(chann_uid, oa=oa)
     return [
         MembershipOut(
+            member_id=m.id,
             license_id=m.license_id,
             license_code=m.license.license_code,
             company_name=m.license.company_name,
@@ -2838,3 +2869,562 @@ def announced_today(
         scope, type=type, on_day=on_day or date.today(),
     )
     return {"entity_ids": [str(i) for i in ids]}
+
+
+# ------------------------------------------------------ Phase 11 assignment
+
+
+@router.get(
+    "/licenses/{license_id}/assignment-rules", response_model=list[AssignmentRuleOut],
+)
+def list_assignment_rules(
+    license_id: uuid.UUID, session: Session = Depends(get_session),
+):
+    return AssignmentRuleRepository(session).list_for_license(
+        TenantScope(license_id=license_id)
+    )
+
+
+@router.put(
+    "/licenses/{license_id}/assignment-rules", response_model=AssignmentRuleOut,
+)
+def upsert_assignment_rule(
+    license_id: uuid.UUID,
+    payload: AssignmentRuleIn,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    """Replace the active rule for a scope.
+
+    The old rule is deactivated rather than overwritten — it explains how
+    existing records came to be assigned, and the audit trail points at it.
+    """
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = AssignmentRuleRepository(session).upsert_active(
+            scope, rule_scope=payload.scope, rules_json=payload.rules_json,
+            updated_by=payload.updated_by,
+        )
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="assignment_rule", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="upsert",
+            field_changes=diff_fields({}, {"scope": row.scope}),
+        )
+        session.commit()
+        session.refresh(row)
+        return row
+    except Exception as exc:
+        session.rollback()
+        raise _phase2_http_error(exc)
+
+
+@router.post(
+    "/licenses/{license_id}/assignment-rules/execute",
+    response_model=AssignmentResultOut,
+)
+def execute_assignment(
+    license_id: uuid.UUID,
+    payload: AssignmentRequestIn,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    """Assign one record, under a lock, and record why.
+
+    The lock covers reading current loads AND writing the assignment. Ten
+    tickets arriving at once must produce five assignments and five
+    overflows against a five-a-day cap — not ten members each reading
+    "load is 4" and all concluding they have room.
+
+    The engine itself lives in the Application tier and is pure; this
+    endpoint supplies it with candidates and loads read inside the lock,
+    then persists what it decided.
+    """
+    scope = TenantScope(license_id=license_id)
+    repo = AssignmentRuleRepository(session)
+    try:
+        rule_row = repo.get_active(scope, rule_scope=payload.scope)
+        rule = rule_row.rules_json if rule_row else {}
+
+        # Everything from here to commit is serialised per tenant.
+        repo.lock_license(scope)
+
+        matched_team = assignment_engine.match_team(rule, payload.context)
+        if matched_team:
+            candidates = repo.team_members(scope, team_name=matched_team)
+        else:
+            # No criterion matched: fall back to everyone who could do this
+            # kind of work, rather than refusing. A rule that does not
+            # mention a case is a gap in the policy, not a reason to leave
+            # the job unowned.
+            candidates = repo.active_members(scope)
+
+        loads = repo.current_loads(
+            scope, [c["id"] for c in candidates], on_day=date.today(),
+        )
+        outcome = assignment_engine.choose(
+            rule, candidates, loads,
+            matched_team=matched_team,
+            owner_candidates=repo.owner_members(scope),
+        )
+
+        if outcome.member_id and payload.entity_type == "deal":
+            repo.assign_deal(scope, payload.entity_id, uuid.UUID(outcome.member_id))
+
+        AuditRepository(session).write(
+            license_id=license_id,
+            entity_type=payload.entity_type,
+            entity_id=payload.entity_id,
+            # actor_type=ai per 11.5: the rule was authored by the model,
+            # and the reasoning is stored so an assignment can be explained
+            # later without re-running the engine against changed data.
+            actor_type="ai",
+            actor_id=x_actor_id or None,
+            action="assign",
+            ai_reasoning=outcome.reason,
+            field_changes=diff_fields(
+                {"owner_member_id": None}, {"owner_member_id": outcome.member_id},
+            ),
+        )
+        session.commit()
+        return AssignmentResultOut(
+            member_id=uuid.UUID(outcome.member_id) if outcome.member_id else None,
+            reason=outcome.reason,
+            matched_team=outcome.matched_team,
+            strategy=outcome.strategy,
+            warnings=outcome.warnings,
+            used_fallback=outcome.used_fallback,
+        )
+    except Exception as exc:
+        session.rollback()
+        raise _phase2_http_error(exc)
+
+
+# --------------------------------------------------------- Phase 12 tickets
+
+
+def _ticket_error(exc: Exception):
+    """Turn a repository refusal into the right status code.
+
+    DispatchBlocked is a 409 carrying WHICH fields are missing: the caller
+    shows that list to a person who then fills them in, and a bare "cannot
+    dispatch" would make them guess between five possibilities.
+    """
+    if isinstance(exc, DispatchBlocked):
+        return HTTPException(
+            status_code=409,
+            detail={"error": "dispatch_blocked", "missing": exc.missing},
+        )
+    if isinstance(exc, TicketNotFound):
+        return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, TicketConflict):
+        return HTTPException(status_code=409, detail=str(exc))
+    return _phase2_http_error(exc)
+
+
+@router.post("/licenses/{license_id}/tickets", response_model=TicketOut, status_code=201)
+def create_ticket(
+    license_id: uuid.UUID,
+    payload: TicketIn,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = ServiceTicketRepository(session).create(scope, **payload.model_dump())
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="service_ticket", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="create",
+            field_changes=diff_fields({}, {"ticket_number": row.ticket_number}),
+        )
+        session.commit()
+        session.refresh(row)
+        return row
+    except Exception as exc:
+        session.rollback()
+        raise _ticket_error(exc)
+
+
+@router.get("/licenses/{license_id}/tickets", response_model=list[TicketOut])
+def list_tickets(
+    license_id: uuid.UUID,
+    status: str | None = None,
+    visible_to: uuid.UUID | None = None,
+    session: Session = Depends(get_session),
+):
+    """Tickets, optionally filtered to what one technician may see.
+
+    visible_to is not a convenience: a technician browsing without it would
+    read the address and phone number of every private job in the tenant.
+    """
+    scope = TenantScope(license_id=license_id)
+    repo = ServiceTicketRepository(session)
+    if visible_to:
+        return repo.list_visible_to(scope, member_id=visible_to)
+    return repo.list_for_license(scope, status=status)
+
+
+@router.get("/licenses/{license_id}/tickets/{ticket_id}", response_model=TicketOut)
+def get_ticket(
+    license_id: uuid.UUID, ticket_id: uuid.UUID, session: Session = Depends(get_session),
+):
+    row = ServiceTicketRepository(session).get(TenantScope(license_id=license_id), ticket_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="ticket not found")
+    return row
+
+
+@router.patch("/licenses/{license_id}/tickets/{ticket_id}", response_model=TicketOut)
+def update_ticket(
+    license_id: uuid.UUID,
+    ticket_id: uuid.UUID,
+    payload: TicketPatchIn,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = ServiceTicketRepository(session).update(
+            scope, ticket_id, payload.model_dump(exclude_unset=True),
+        )
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="service_ticket", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="update",
+        )
+        session.commit()
+        session.refresh(row)
+        return row
+    except Exception as exc:
+        session.rollback()
+        raise _ticket_error(exc)
+
+
+@router.get("/licenses/{license_id}/tickets/{ticket_id}/dispatch-check")
+def dispatch_check(
+    license_id: uuid.UUID, ticket_id: uuid.UUID, session: Session = Depends(get_session),
+):
+    """What is still missing before this ticket can be dispatched.
+
+    Readable without attempting an assignment, so a dashboard can show the
+    gaps while someone is still filling the form rather than only after
+    they press assign.
+    """
+    scope = TenantScope(license_id=license_id)
+    repo = ServiceTicketRepository(session)
+    row = repo.get(scope, ticket_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="ticket not found")
+    missing = repo.dispatch_blockers(row)
+    return {"ready": not missing, "missing": missing}
+
+
+@router.post("/licenses/{license_id}/tickets/{ticket_id}/assign", response_model=TicketOut)
+def assign_ticket(
+    license_id: uuid.UUID,
+    ticket_id: uuid.UUID,
+    payload: TicketAssignIn,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = ServiceTicketRepository(session).assign(
+            scope, ticket_id,
+            target_type=payload.target_type, target_ref=payload.target_ref,
+        )
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="service_ticket", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="assign",
+            field_changes=diff_fields(
+                {}, {"target_type": payload.target_type, "target_ref": str(payload.target_ref)},
+            ),
+        )
+        session.commit()
+        session.refresh(row)
+        return row
+    except Exception as exc:
+        session.rollback()
+        raise _ticket_error(exc)
+
+
+@router.post("/licenses/{license_id}/tickets/{ticket_id}/claim", response_model=TicketOut)
+def claim_ticket(
+    license_id: uuid.UUID,
+    ticket_id: uuid.UUID,
+    payload: TicketMemberActionIn,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = ServiceTicketRepository(session).claim(
+            scope, ticket_id, member_id=payload.member_id,
+        )
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="service_ticket", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="claim",
+        )
+        session.commit()
+        session.refresh(row)
+        return row
+    except Exception as exc:
+        session.rollback()
+        raise _ticket_error(exc)
+
+
+@router.post("/licenses/{license_id}/tickets/{ticket_id}/reject", response_model=TicketOut)
+def reject_ticket(
+    license_id: uuid.UUID,
+    ticket_id: uuid.UUID,
+    payload: TicketMemberActionIn,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = ServiceTicketRepository(session).reject(
+            scope, ticket_id, member_id=payload.member_id,
+        )
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="service_ticket", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="reject",
+        )
+        session.commit()
+        session.refresh(row)
+        return row
+    except Exception as exc:
+        session.rollback()
+        raise _ticket_error(exc)
+
+
+@router.patch(
+    "/licenses/{license_id}/tickets/{ticket_id}/status", response_model=TicketOut,
+)
+def set_ticket_status(
+    license_id: uuid.UUID,
+    ticket_id: uuid.UUID,
+    payload: TicketStatusIn,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        before = ServiceTicketRepository(session).get(scope, ticket_id)
+        previous = before.status if before else None
+        row = ServiceTicketRepository(session).set_status(
+            scope, ticket_id, status=payload.status,
+        )
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="service_ticket", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="status",
+            field_changes=diff_fields({"status": previous}, {"status": row.status}),
+        )
+        session.commit()
+        session.refresh(row)
+        return row
+    except Exception as exc:
+        session.rollback()
+        raise _ticket_error(exc)
+
+
+# --------------------------------------------------- Phase 13 field service
+
+
+def _field_service_error(exc: Exception):
+    """The check-out gate's refusal names WHICH fields are missing.
+
+    Same reasoning as the dispatch gate: a technician told only "cannot
+    check out" has to guess, and they are standing in a customer's house
+    while they do it.
+    """
+    if isinstance(exc, CheckoutBlocked):
+        return HTTPException(
+            status_code=409,
+            detail={"error": "checkout_blocked", "missing": exc.missing},
+        )
+    if isinstance(exc, ReportNotFound):
+        return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, ReportConflict):
+        return HTTPException(status_code=409, detail=str(exc))
+    return _phase2_http_error(exc)
+
+
+@router.post(
+    "/licenses/{license_id}/tickets/{ticket_id}/check-in", response_model=TicketOut,
+)
+def check_in(
+    license_id: uuid.UUID,
+    ticket_id: uuid.UUID,
+    payload: CheckInIn,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = FieldServiceRepository(session).check_in(
+            scope, ticket_id,
+            member_id=payload.member_id,
+            gps_lat=payload.gps_lat, gps_lng=payload.gps_lng,
+            photo_url=payload.photo_url,
+        )
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="service_ticket", entity_id=ticket_id,
+            actor_type="user", actor_id=x_actor_id or None, action="check_in",
+            field_changes=diff_fields(
+                {}, {"gps": f"{payload.gps_lat},{payload.gps_lng}"},
+            ),
+        )
+        session.commit()
+        session.refresh(row)
+        return row
+    except Exception as exc:
+        session.rollback()
+        raise _field_service_error(exc)
+
+
+@router.post(
+    "/licenses/{license_id}/tickets/{ticket_id}/check-out",
+    response_model=ServiceReportOut,
+)
+def check_out(
+    license_id: uuid.UUID,
+    ticket_id: uuid.UUID,
+    payload: CheckOutIn,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    """Close a visit, creating its report in the same call.
+
+    One endpoint rather than two, because a check-out without a report is
+    exactly what the gate exists to prevent and two endpoints would mean
+    two orders they could happen in.
+    """
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = FieldServiceRepository(session).check_out(
+            scope, ticket_id,
+            member_id=payload.member_id, report_data=payload.report_data,
+            gps_lat=payload.gps_lat, gps_lng=payload.gps_lng,
+            photo_url=payload.photo_url,
+        )
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="service_report", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="check_out",
+            field_changes=diff_fields({}, {"report_id": row.report_id}),
+        )
+        session.commit()
+        session.refresh(row)
+        return row
+    except Exception as exc:
+        session.rollback()
+        raise _field_service_error(exc)
+
+
+@router.get("/licenses/{license_id}/tickets/{ticket_id}/checkout-check")
+def checkout_check(
+    license_id: uuid.UUID,
+    ticket_id: uuid.UUID,
+    found_issue: str = "",
+    work_done: str = "",
+    session: Session = Depends(get_session),
+):
+    """What the report still has to say, without attempting a check-out.
+
+    So a form can show the gaps while the technician is still typing,
+    rather than only when they try to leave.
+    """
+    missing = FieldServiceRepository(session).report_blockers(
+        {"found_issue": found_issue, "work_done": work_done}
+    )
+    return {"ready": not missing, "missing": missing}
+
+
+@router.post(
+    "/licenses/{license_id}/tickets/{ticket_id}/photos",
+    response_model=TicketPhotoOut, status_code=201,
+)
+def add_ticket_photo(
+    license_id: uuid.UUID,
+    ticket_id: uuid.UUID,
+    payload: TicketPhotoIn,
+    session: Session = Depends(get_session),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = FieldServiceRepository(session).add_photo(
+            scope, ticket_id=ticket_id, **payload.model_dump(),
+        )
+        session.commit()
+        session.refresh(row)
+        return row
+    except Exception as exc:
+        session.rollback()
+        raise _field_service_error(exc)
+
+
+@router.get(
+    "/licenses/{license_id}/tickets/{ticket_id}/photos",
+    response_model=list[TicketPhotoOut],
+)
+def list_ticket_photos(
+    license_id: uuid.UUID,
+    ticket_id: uuid.UUID,
+    photo_type: str | None = None,
+    session: Session = Depends(get_session),
+):
+    return FieldServiceRepository(session).list_photos(
+        TenantScope(license_id=license_id), ticket_id, photo_type=photo_type,
+    )
+
+
+@router.get("/licenses/{license_id}/service-reports", response_model=list[ServiceReportOut])
+def list_service_reports(
+    license_id: uuid.UUID,
+    status: str | None = None,
+    session: Session = Depends(get_session),
+):
+    return FieldServiceRepository(session).list_reports(
+        TenantScope(license_id=license_id), status=status,
+    )
+
+
+@router.get(
+    "/licenses/{license_id}/service-reports/{report_id}", response_model=ServiceReportOut,
+)
+def get_service_report(
+    license_id: uuid.UUID, report_id: uuid.UUID, session: Session = Depends(get_session),
+):
+    row = FieldServiceRepository(session).get_report(
+        TenantScope(license_id=license_id), report_id,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="service report not found")
+    return row
+
+
+@router.patch(
+    "/licenses/{license_id}/service-reports/{report_id}/status",
+    response_model=ServiceReportOut,
+)
+def set_service_report_status(
+    license_id: uuid.UUID,
+    report_id: uuid.UUID,
+    payload: ReportStatusIn,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = FieldServiceRepository(session).set_report_status(
+            scope, report_id, status=payload.status,
+        )
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="service_report", entity_id=report_id,
+            actor_type="user", actor_id=x_actor_id or None, action="status",
+            field_changes=diff_fields({}, {"status": row.status}),
+        )
+        session.commit()
+        session.refresh(row)
+        return row
+    except Exception as exc:
+        session.rollback()
+        raise _field_service_error(exc)

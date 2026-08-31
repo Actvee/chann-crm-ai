@@ -6,7 +6,8 @@ import { useCallback, useEffect, useState } from "react";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { AppShell, Badge } from "../../_components";
-import { Membership, initLiffSession, proxyHeaders } from "../../_lib";
+import { fetchPermissions, initLiffSession, proxyHeaders } from "../../_lib";
+import { FieldSection, RecordHead, RelatedHeading } from "../../_record";
 
 type Product = {
   id: string;
@@ -59,8 +60,8 @@ export default function DealDetail({
     (t.deal.stage as Record<string, string>)[stage] ?? stage;
 
   const [token, setToken] = useState("");
-  const [memberships, setMemberships] = useState<Membership[]>([]);
   const [licenseId, setLicenseId] = useState("");
+  const [permissions, setPermissions] = useState<Set<string>>(new Set());
   const [deal, setDeal] = useState<Deal | null>(null);
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [status, setStatus] = useState(t.dashboard.opening);
@@ -116,14 +117,42 @@ export default function DealDetail({
     try {
       const session = await initLiffSession(liffId);
       if (!session.token) return;
+      const license = session.memberships[0]?.license_id ?? "";
       setToken(session.token);
-      setMemberships(session.memberships);
-      setLicenseId(session.memberships[0]?.license_id ?? "");
-      if (!session.memberships.length) say(t.liff.noCompany, "error");
+      setLicenseId(license);
+      if (!session.memberships.length) {
+        say(t.liff.noCompany, "error");
+        return;
+      }
+      setPermissions(await fetchPermissions(session.token, license));
     } catch (error) {
       say(error instanceof Error ? error.message : t.dashboard.openFailed, "error");
     }
   }, [liffId, say, t]);
+
+  const canEdit = permissions.has("deal.update");
+
+  async function saveFields(changes: Record<string, string | null>) {
+    const response = await fetch(
+      `/api/phase2/licenses/${licenseId}/deals/${dealId}`,
+      {
+        method: "PATCH",
+        headers: proxyHeaders(token, licenseId),
+        body: JSON.stringify(changes),
+      },
+    );
+    if (!response.ok) {
+      say(
+        response.status === 403
+          ? t.dashboard.noPermission
+          : `${t.common.error} (${response.status})`,
+        "error",
+      );
+      throw new Error("save failed");
+    }
+    say(t.dashboard.saved, "ok");
+    await load();
+  }
 
   async function setStage(stage: string) {
     if (!deal) return;
@@ -195,45 +224,53 @@ export default function DealDetail({
       status={status}
       statusTone={tone}
     >
-      {memberships.length > 1 && null}
-
       {deal && (
         <>
-          <div className="card" data-stage={deal.stage}>
-            <div className="card-title">
-              <span className="code">{deal.deal_id}</span>
-              <Badge stage={deal.stage} label={stageLabel(deal.stage)} />
-            </div>
-            {customer && (
-              <div className="card-meta">
+          <RecordHead
+            stage={deal.stage}
+            title={deal.deal_id}
+            badge={<Badge stage={deal.stage} label={stageLabel(deal.stage)} />}
+            subtitle={
+              customer ? (
                 <Link href={`/liff/sales/customers/${customer.id}`}>
                   {[customer.first_name, customer.last_name].filter(Boolean).join(" ")}{" "}
                   ({customer.customer_id})
                 </Link>
-              </div>
-            )}
-            {deal.notes && <div className="card-meta">{deal.notes}</div>}
-            {NEXT_STAGES[deal.stage]?.length ? (
-              <div className="card-actions">
-                {NEXT_STAGES[deal.stage].map((stage) => (
-                  <button
-                    key={stage}
-                    type="button"
-                    className="btn"
-                    data-variant={stage === "won" ? "primary" : undefined}
-                    onClick={() => void setStage(stage)}
-                    disabled={busy}
-                  >
-                    {t.dashboard.deals.changeTo.replace("{stage}", stageLabel(stage))}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-          </div>
+              ) : null
+            }
+            actions={
+              canEdit && NEXT_STAGES[deal.stage]?.length
+                ? NEXT_STAGES[deal.stage].map((stage) => (
+                    <button
+                      key={stage}
+                      type="button"
+                      className="btn"
+                      data-variant={stage === "won" ? "primary" : undefined}
+                      onClick={() => void setStage(stage)}
+                      disabled={busy}
+                    >
+                      {t.dashboard.deals.changeTo.replace("{stage}", stageLabel(stage))}
+                    </button>
+                  ))
+                : null
+            }
+          />
 
-          <h2 style={{ fontSize: 15, margin: "22px 0 10px" }}>
-            {t.dashboard.deals.lineItems.replace("{count}", String(items.length))}
-          </h2>
+          <FieldSection
+            title={t.deal.title}
+            canEdit={canEdit}
+            record={deal as unknown as Record<string, unknown>}
+            onSave={saveFields}
+            fields={[
+              { name: "deal_id", label: t.dashboard.fields.code },
+              { name: "notes", label: t.dashboard.fields.notes, editable: true, type: "textarea" },
+            ]}
+          />
+
+          <RelatedHeading
+            title={t.dashboard.deals.lineItems.replace("{count}", "")}
+            count={items.length}
+          />
           {items.length === 0 ? (
             <div className="empty">
               <p>{t.dashboard.deals.noLineItems}</p>
@@ -253,23 +290,26 @@ export default function DealDetail({
                         )}
                       </strong>
                     </div>
-                    <div className="card-actions">
-                      <button
-                        type="button"
-                        className="btn"
-                        data-variant="quiet"
-                        onClick={() => void removeProduct(product)}
-                        disabled={busy}
-                      >
-                        {t.common.delete}
-                      </button>
-                    </div>
+                    {canEdit && (
+                      <div className="card-actions">
+                        <button
+                          type="button"
+                          className="btn"
+                          data-variant="quiet"
+                          onClick={() => void removeProduct(product)}
+                          disabled={busy}
+                        >
+                          {t.common.delete}
+                        </button>
+                      </div>
+                    )}
                   </li>
                 ))}
               </ul>
-              <p style={{ textAlign: "right", marginTop: 12, fontSize: 15 }}>
-                {t.dashboard.deals.subtotal}: <strong>{money(subtotal)}</strong>
-              </p>
+              <div className="totals">
+                <span>{t.dashboard.deals.subtotal}</span>
+                <strong>{money(subtotal)}</strong>
+              </div>
             </>
           )}
         </>

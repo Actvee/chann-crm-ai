@@ -14,10 +14,16 @@ from .config import settings
 
 
 class DataTierError(RuntimeError):
-    def __init__(self, status_code: int, detail: str):
-        super().__init__(f"data tier returned {status_code}: {detail[:200]}")
+    def __init__(self, status_code: int, detail, structured: dict | None = None):
+        text = str(detail)
+        super().__init__(f"data tier returned {status_code}: {text[:200]}")
         self.status_code = status_code
-        self.detail = detail[:200]
+        self.detail = text[:200]
+        # The original object when the Data tier sent one. Some refusals
+        # carry data the caller must act on — the dispatch gate replies
+        # with WHICH fields are missing, and str()-ing that into
+        # "{'missing': [...]}" would leave the caller parsing a repr.
+        self.structured = structured
 
 
 class DataClient:
@@ -271,11 +277,15 @@ class DataClient:
     @staticmethod
     def _unwrap(resp: httpx.Response):
         if resp.status_code >= 400:
+            structured = None
             try:
-                detail = str(resp.json().get("detail", resp.text))
+                raw = resp.json().get("detail", resp.text)
+                if isinstance(raw, dict):
+                    structured = raw
+                detail = str(raw)
             except Exception:
                 detail = resp.text
-            raise DataTierError(resp.status_code, detail)
+            raise DataTierError(resp.status_code, detail, structured)
         # 204 No Content is a valid, deliberate success response (every
         # endpoint that only stores/deletes state uses it) — by HTTP
         # definition its body is empty, so calling .json() on it always
@@ -381,6 +391,151 @@ class DataClient:
             f"{self._base}/internal/v1/licenses/{license_id}"
             f"/members/{chann_uid}/notifications/{notification_id}/read",
             headers=self._headers,
+        )
+        return self._unwrap(resp)
+
+    async def create_ticket(
+        self, license_id: str, payload: dict, actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/tickets",
+            headers=self._headers_for(actor_id), json=payload,
+        )
+        return self._unwrap(resp)
+
+    async def list_tickets(
+        self, license_id: str, status: str | None = None,
+        visible_to: str | None = None,
+    ) -> list[dict]:
+        params: dict = {}
+        if status:
+            params["status"] = status
+        if visible_to:
+            params["visible_to"] = visible_to
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/tickets",
+            headers=self._headers, params=params or None,
+        )
+        return self._unwrap(resp)
+
+    async def update_ticket(
+        self, license_id: str, ticket_id: str, fields: dict,
+        actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.patch(
+            f"{self._base}/internal/v1/licenses/{license_id}/tickets/{ticket_id}",
+            headers=self._headers_for(actor_id), json=fields,
+        )
+        return self._unwrap(resp)
+
+    async def ticket_dispatch_check(self, license_id: str, ticket_id: str) -> dict:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}"
+            f"/tickets/{ticket_id}/dispatch-check",
+            headers=self._headers,
+        )
+        return self._unwrap(resp)
+
+    async def assign_ticket(
+        self, license_id: str, ticket_id: str, *, target_type: str, target_ref: str,
+        actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/tickets/{ticket_id}/assign",
+            headers=self._headers_for(actor_id),
+            json={"target_type": target_type, "target_ref": target_ref},
+        )
+        return self._unwrap(resp)
+
+    async def claim_ticket(
+        self, license_id: str, ticket_id: str, member_id: str,
+        actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/tickets/{ticket_id}/claim",
+            headers=self._headers_for(actor_id), json={"member_id": member_id},
+        )
+        return self._unwrap(resp)
+
+    async def check_in_ticket(
+        self, license_id: str, ticket_id: str, *, member_id: str,
+        gps_lat: float | None = None, gps_lng: float | None = None,
+        photo_url: str | None = None, actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}"
+            f"/tickets/{ticket_id}/check-in",
+            headers=self._headers_for(actor_id),
+            json={
+                "member_id": member_id, "gps_lat": gps_lat,
+                "gps_lng": gps_lng, "photo_url": photo_url,
+            },
+        )
+        return self._unwrap(resp)
+
+    async def check_out_ticket(
+        self, license_id: str, ticket_id: str, *, member_id: str, report_data: dict,
+        gps_lat: float | None = None, gps_lng: float | None = None,
+        photo_url: str | None = None, actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}"
+            f"/tickets/{ticket_id}/check-out",
+            headers=self._headers_for(actor_id),
+            json={
+                "member_id": member_id, "report_data": report_data,
+                "gps_lat": gps_lat, "gps_lng": gps_lng, "photo_url": photo_url,
+            },
+        )
+        return self._unwrap(resp)
+
+    async def list_service_reports(
+        self, license_id: str, status: str | None = None,
+    ) -> list[dict]:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/service-reports",
+            headers=self._headers, params={"status": status} if status else None,
+        )
+        return self._unwrap(resp)
+
+    async def add_ticket_photo(
+        self, license_id: str, ticket_id: str, payload: dict,
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/tickets/{ticket_id}/photos",
+            headers=self._headers, json=payload,
+        )
+        return self._unwrap(resp)
+
+    async def get_assignment_rules(self, license_id: str) -> list[dict]:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/assignment-rules",
+            headers=self._headers,
+        )
+        return self._unwrap(resp)
+
+    async def upsert_assignment_rule(
+        self, license_id: str, scope: str, rules_json: dict,
+        actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.put(
+            f"{self._base}/internal/v1/licenses/{license_id}/assignment-rules",
+            headers=self._headers_for(actor_id),
+            json={"scope": scope, "rules_json": rules_json},
+        )
+        return self._unwrap(resp)
+
+    async def execute_assignment(
+        self, license_id: str, *, scope: str, entity_type: str, entity_id: str,
+        context: dict | None = None, actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/assignment-rules/execute",
+            headers=self._headers_for(actor_id),
+            json={
+                "scope": scope, "entity_type": entity_type,
+                "entity_id": entity_id, "context": context or {},
+            },
         )
         return self._unwrap(resp)
 

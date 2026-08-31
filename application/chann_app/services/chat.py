@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, time, timezone, timedelta
 from decimal import Decimal, InvalidOperation
 
-from ..data_client import DataClient
+from ..data_client import DataClient, DataTierError
 from .ai.client import AIUnavailable, AINotConfigured
 # Reused rather than reimplemented on purpose: what a salesperson reads
 # in chat must never disagree with what the customer receives on the PDF.
@@ -1032,6 +1032,554 @@ async def _handle_work_list(
         note = item.get("notes")
         lines.append(f"· {shown}{clock} · {who}" + (f" · {note}" if note else ""))
     return ChatReply(text="\n".join(lines))
+
+
+# ------------------------------------------------ Phase 13 field service
+
+CHECKIN_TRIGGERS = ("เช็คอิน", "เช็กอิน", "ถึงหน้างาน", "check in", "checkin")
+CHECKOUT_TRIGGERS = ("เช็คเอาท์", "เช็กเอาต์", "ปิดงาน", "check out", "checkout")
+
+CHECKIN_DONE = {
+    "th": "เช็คอิน {code} แล้ว\n{customer}\n{address}",
+    "en": "Checked in to {code}.\n{customer}\n{address}",
+}
+CHECKOUT_NEEDS_REPORT = {
+    "th": "ปิดงานยังไม่ได้ ต้องบันทึกก่อนว่า: {missing}\n\nพิมพ์แบบนี้:\nปิดงาน {code}\nพบ: <ปัญหาที่พบ>\nแก้: <สิ่งที่แก้ไข>",
+    "en": "Cannot close yet — still need: {missing}",
+}
+CHECKOUT_DONE = {
+    "th": "ปิดงาน {code} แล้ว\nใบรายงาน {report}\nรอ CS ตรวจสอบ",
+    "en": "Closed {code}. Report {report} is waiting for review.",
+}
+CHECKIN_FAILED = {
+    "th": "เช็คอินไม่สำเร็จ: {detail}",
+    "en": "Check-in failed: {detail}",
+}
+
+# "พบ:" and "แก้:" as the field markers. Chosen because a technician types
+# this one-handed, standing up, often outdoors — anything longer gets
+# abbreviated into something the parser will not recognise.
+_REPORT_FIELD_PATTERNS = (
+    ("found_issue", re.compile(r"(?:พบ|ปัญหา|found)\s*[:：]\s*(.+?)(?=\n\s*(?:แก้|วิธี|work|done)\s*[:：]|$)", re.S | re.I)),
+    ("work_done", re.compile(r"(?:แก้|วิธีแก้|work|done)\s*[:：]\s*(.+?)(?=\n\s*(?:พบ|ปัญหา|found)\s*[:：]|$)", re.S | re.I)),
+)
+
+
+def parse_service_report(message: str) -> dict:
+    """The report fields out of a typed message.
+
+    Deliberately forgiving about surrounding text and strict about the
+    markers: a technician writing "พบ: คอมรั่ว" in the middle of a longer
+    message means that, and demanding a rigid format would get the report
+    abandoned rather than corrected.
+    """
+    report: dict[str, str] = {}
+    for field, pattern in _REPORT_FIELD_PATTERNS:
+        match = pattern.search(message or "")
+        if match:
+            value = match.group(1).strip()
+            if value:
+                report[field] = value
+    return report
+
+
+async def _resolve_ticket_for_member(
+    client: DataClient, license_id: str, ctx: ResolvedContext, code: str,
+) -> tuple[dict | None, dict | None]:
+    """(member, ticket) for a code this person may act on, or (member, None)."""
+    member = await client.get_member(license_id, ctx.chann_uid)
+    if member is None:
+        return None, None
+    tickets = await client.list_tickets(license_id, visible_to=str(member["id"]))
+    ticket = next(
+        (t for t in tickets if str(t.get("ticket_number", "")).upper() == code), None,
+    )
+    return member, ticket
+
+
+async def _handle_check_in(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
+    permission_keys: list[str], language: str,
+) -> ChatReply:
+    if "ticket.update" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+
+    match = TICKET_CODE_RE.search(message or "")
+    if not match:
+        return ChatReply(text=_t(TICKET_NEEDS_CODE, language))
+    code = match.group(1).upper()
+
+    license_id = str(license_id)
+    try:
+        member, ticket = await _resolve_ticket_for_member(client, license_id, ctx, code)
+        if member is None or ticket is None:
+            return ChatReply(
+                text=_t(NOT_FOUND_BY_CODE, language).format(what="งาน", code=code)
+            )
+        # No GPS from a text message. The LIFF page sends coordinates; chat
+        # records the arrival without pretending to a location it does not
+        # have, which is better than storing one that is wrong.
+        result = await client.check_in_ticket(
+            license_id, str(ticket["id"]), member_id=str(member["id"]),
+            actor_id=ctx.chann_uid,
+        )
+    except DataTierError as exc:
+        return ChatReply(text=_t(CHECKIN_FAILED, language).format(detail=exc.detail))
+    except Exception:
+        log.exception("check-in failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    return ChatReply(
+        text=_t(CHECKIN_DONE, language).format(
+            code=code,
+            customer=" ".join(
+                p for p in (result.get("customer_name"), result.get("customer_phone")) if p
+            ) or "—",
+            address=result.get("service_address") or "—",
+        ),
+        entity_type="service_ticket", entity_id=str(result.get("id") or ""),
+        quick_replies=[("ปิดงาน", f"ปิดงาน {code}\nพบ: \nแก้: ")],
+    )
+
+
+async def _handle_check_out(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
+    permission_keys: list[str], language: str,
+) -> ChatReply:
+    if "ticket.update" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+
+    match = TICKET_CODE_RE.search(message or "")
+    if not match:
+        return ChatReply(text=_t(TICKET_NEEDS_CODE, language))
+    code = match.group(1).upper()
+
+    report_data = parse_service_report(message)
+    license_id = str(license_id)
+    try:
+        member, ticket = await _resolve_ticket_for_member(client, license_id, ctx, code)
+        if member is None or ticket is None:
+            return ChatReply(
+                text=_t(NOT_FOUND_BY_CODE, language).format(what="งาน", code=code)
+            )
+        result = await client.check_out_ticket(
+            license_id, str(ticket["id"]),
+            member_id=str(member["id"]), report_data=report_data,
+            actor_id=ctx.chann_uid,
+        )
+    except DataTierError as exc:
+        blocked = exc.structured or {}
+        if blocked.get("error") == "checkout_blocked":
+            # The gate's own list, passed through. The technician is
+            # standing in a customer's house reading this.
+            return ChatReply(
+                text=_t(CHECKOUT_NEEDS_REPORT, language).format(
+                    missing=", ".join(blocked.get("missing") or []), code=code,
+                )
+            )
+        return ChatReply(text=_t(CHECKIN_FAILED, language).format(detail=exc.detail))
+    except Exception:
+        log.exception("check-out failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    return ChatReply(
+        text=_t(CHECKOUT_DONE, language).format(
+            code=code, report=result.get("report_id") or "",
+        ),
+        entity_type="service_report", entity_id=str(result.get("id") or ""),
+    )
+
+
+# ------------------------------------------------------- Phase 12 tickets
+
+TICKET_LIST_PHRASES = ("รายการงาน", "งานซ่อม", "รายการซ่อม", "tickets")
+TICKET_MINE_PHRASES = ("งานของฉัน", "งานที่รับ", "my tickets")
+TICKET_DETAIL_TRIGGERS = ("ข้อมูลงาน", "รายละเอียดงาน", "ticket")
+TICKET_ASSIGN_TRIGGERS = ("มอบหมาย", "จ่ายงาน", "assign ticket")
+TICKET_CLAIM_TRIGGERS = ("รับงาน", "claim")
+
+TICKET_CODE_RE = re.compile(r"\b(T-\d{4}-\d{4})\b", re.IGNORECASE)
+
+TICKET_STATUS_LABELS = {
+    "open": {"th": "รอมอบหมาย", "en": "open"},
+    "assigned": {"th": "มอบหมายแล้ว", "en": "assigned"},
+    "in_progress": {"th": "กำลังทำ", "en": "in progress"},
+    "completed": {"th": "เสร็จแล้ว", "en": "completed"},
+    "cancelled": {"th": "ยกเลิก", "en": "cancelled"},
+}
+
+TICKET_EMPTY = {"th": "ยังไม่มีงานซ่อม", "en": "No service tickets yet."}
+TICKET_NEEDS_CODE = {
+    "th": "ระบุเลขงานด้วย เช่น \"มอบหมาย T-2026-0001 ให้ทีม AC\"",
+    "en": "Include the ticket number, e.g. \"assign T-2026-0001 to AC Team\".",
+}
+TICKET_NEEDS_TARGET = {
+    "th": "ระบุด้วยว่ามอบหมายให้ใครหรือทีมไหน เช่น \"มอบหมาย T-2026-0001 ให้ทีม AC\"",
+    "en": "Say who or which team, e.g. \"assign T-2026-0001 to AC Team\".",
+}
+TICKET_DISPATCH_BLOCKED = {
+    "th": "ยังมอบหมายไม่ได้ ข้อมูลไม่ครบ: {missing}\n\nเติมข้อมูลก่อนแล้วค่อยมอบหมายอีกครั้ง",
+    "en": "Cannot dispatch — still missing: {missing}",
+}
+TICKET_ASSIGNED = {
+    "th": "มอบหมาย {code} ให้ {target} แล้ว",
+    "en": "Assigned {code} to {target}.",
+}
+TICKET_CLAIMED = {
+    "th": "รับงาน {code} แล้ว\n{customer}\n{address}\nนัด {when}",
+    "en": "You took {code}.\n{customer}\n{address}\nScheduled {when}",
+}
+TICKET_CLAIM_FAILED = {
+    "th": "รับงานไม่สำเร็จ: {detail}",
+    "en": "Could not take that ticket: {detail}",
+}
+
+
+def _ticket_when(ticket: dict) -> str:
+    from .thai_datetime import format_thai_date, format_thai_time
+
+    raw_date = ticket.get("scheduled_date")
+    raw_time = ticket.get("scheduled_time")
+    parts = []
+    if raw_date:
+        try:
+            parts.append(format_thai_date(date.fromisoformat(str(raw_date))))
+        except ValueError:
+            parts.append(str(raw_date))
+    if raw_time:
+        try:
+            parts.append(format_thai_time(time.fromisoformat(str(raw_time))))
+        except ValueError:
+            parts.append(str(raw_time))
+    return " ".join(parts) or "—"
+
+
+async def _handle_ticket_list(
+    client: DataClient, *, ctx: ResolvedContext, license_id,
+    permission_keys: list[str], language: str, mine: bool = False,
+) -> ChatReply:
+    if "ticket.read" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+
+    license_id = str(license_id)
+    try:
+        if mine:
+            member = await client.get_member(license_id, ctx.chann_uid)
+            if member is None:
+                return ChatReply(text=_t(TICKET_EMPTY, language))
+            # visible_to, not a plain list: a technician browsing without
+            # it would read the address and phone number of every private
+            # job in the tenant.
+            tickets = await client.list_tickets(
+                license_id, visible_to=str(member["id"]),
+            )
+        else:
+            tickets = await client.list_tickets(license_id)
+    except Exception:
+        log.exception("ticket list failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    if not tickets:
+        return ChatReply(text=_t(TICKET_EMPTY, language))
+
+    shown = tickets[:LIST_LIMIT]
+    lines = [
+        f"{t.get('ticket_number')} · {_label(TICKET_STATUS_LABELS, t.get('status'), language)}"
+        + (f" · {t.get('customer_name')}" if t.get("customer_name") else "")
+        for t in shown
+    ]
+    return ChatReply(
+        text="\n".join(lines) + _truncation_note(len(shown), len(tickets), language, "index"),
+        list_card=_list_card(
+            title="งานซ่อม", section="index", language=language,
+            shown=len(shown), total=len(tickets),
+            rows=[
+                {
+                    "title": str(t.get("ticket_number") or "-"),
+                    "subtitle": " · ".join(
+                        p for p in (
+                            _label(TICKET_STATUS_LABELS, t.get("status"), language),
+                            str(t.get("customer_name") or ""),
+                        ) if p
+                    ),
+                    "stage": {"open": "new", "assigned": "proposed",
+                              "in_progress": "proposed", "completed": "won",
+                              "cancelled": "lost"}.get(str(t.get("status")), ""),
+                    "action_label": "ดู",
+                    "action_text": f"ข้อมูลงาน {t.get('ticket_number')}",
+                }
+                for t in shown
+            ],
+        ),
+    )
+
+
+async def _handle_ticket_assign(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
+    trigger: str, permission_keys: list[str], language: str,
+) -> ChatReply:
+    if "ticket.update" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+
+    match = TICKET_CODE_RE.search(message or "")
+    if not match:
+        return ChatReply(text=_t(TICKET_NEEDS_CODE, language))
+    code = match.group(1).upper()
+
+    # Whatever follows the code, minus the code and the trigger, names the
+    # target. Team names are tenant-chosen free text, so this cannot be a
+    # closed vocabulary.
+    lowered = message.lower()
+    index = lowered.find(trigger.lower())
+    target_text = message[index + len(trigger):] if index >= 0 else message
+    target_text = TICKET_CODE_RE.sub("", target_text)
+    for word in ("ให้ทีม", "ให้ช่าง", "ให้", "แก่", "to team", "to"):
+        target_text = target_text.replace(word, " ")
+    target_text = " ".join(target_text.split()).strip(" :·-")
+    if not target_text:
+        return ChatReply(text=_t(TICKET_NEEDS_TARGET, language))
+
+    license_id = str(license_id)
+    try:
+        tickets = await client.list_tickets(license_id)
+        ticket = next(
+            (t for t in tickets if str(t.get("ticket_number", "")).upper() == code), None,
+        )
+        if ticket is None:
+            return ChatReply(
+                text=_t(NOT_FOUND_BY_CODE, language).format(what="งาน", code=code)
+            )
+
+        teams = await client.list_technician_teams(license_id)
+        team = next(
+            (t for t in teams
+             if str(t.get("team_name", "")).lower() == target_text.lower()), None,
+        )
+        if team is not None:
+            target_type, target_ref, label = "technician_team", str(team["id"]), target_text
+        else:
+            return ChatReply(text=_t(TICKET_NEEDS_TARGET, language))
+
+        result = await client.assign_ticket(
+            license_id, str(ticket["id"]),
+            target_type=target_type, target_ref=target_ref, actor_id=ctx.chann_uid,
+        )
+    except DataTierError as exc:
+        # The gate's own answer, passed through: it names WHICH fields are
+        # missing, and a generic failure would make the person guess.
+        detail = exc.structured or {}
+        if detail.get("error") == "dispatch_blocked":
+            return ChatReply(
+                text=_t(TICKET_DISPATCH_BLOCKED, language).format(
+                    missing=", ".join(detail.get("missing") or [])
+                ),
+                quick_replies=[("ดูข้อมูลงาน", f"ข้อมูลงาน {code}")],
+            )
+        log.exception("ticket assign failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    except Exception:
+        log.exception("ticket assign failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    return ChatReply(
+        text=_t(TICKET_ASSIGNED, language).format(code=code, target=label),
+        entity_type="service_ticket", entity_id=str(result.get("id") or ""),
+    )
+
+
+async def _handle_ticket_claim(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
+    permission_keys: list[str], language: str,
+) -> ChatReply:
+    if "ticket.update" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+
+    match = TICKET_CODE_RE.search(message or "")
+    if not match:
+        return ChatReply(text=_t(TICKET_NEEDS_CODE, language))
+    code = match.group(1).upper()
+
+    license_id = str(license_id)
+    try:
+        member = await client.get_member(license_id, ctx.chann_uid)
+        if member is None:
+            return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        tickets = await client.list_tickets(license_id, visible_to=str(member["id"]))
+        ticket = next(
+            (t for t in tickets if str(t.get("ticket_number", "")).upper() == code), None,
+        )
+        if ticket is None:
+            # Not found OR not visible — deliberately the same message. A
+            # distinct "you may not see this" would confirm the ticket
+            # exists to someone who should not know that.
+            return ChatReply(
+                text=_t(NOT_FOUND_BY_CODE, language).format(what="งาน", code=code)
+            )
+        claimed = await client.claim_ticket(
+            license_id, str(ticket["id"]), str(member["id"]), actor_id=ctx.chann_uid,
+        )
+    except DataTierError as exc:
+        return ChatReply(
+            text=_t(TICKET_CLAIM_FAILED, language).format(detail=str(exc.detail))
+        )
+    except Exception:
+        log.exception("ticket claim failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    return ChatReply(
+        text=_t(TICKET_CLAIMED, language).format(
+            code=code,
+            customer=" ".join(
+                p for p in (claimed.get("customer_name"), claimed.get("customer_phone")) if p
+            ) or "—",
+            address=claimed.get("service_address") or "—",
+            when=_ticket_when(claimed),
+        ),
+        entity_type="service_ticket", entity_id=str(claimed.get("id") or ""),
+    )
+
+
+# ---------------------------------------------- Phase 11 assignment policy
+#
+# 11.6: an owner types a policy, the AI turns it into rule JSON, the rule
+# is shown back in words, and only a confirmed rule is saved. The runtime
+# engine never sees the prose — see chann_data/assignment_engine.py.
+
+ASSIGN_POLICY_TRIGGERS = ("ตั้งกฎมอบหมาย", "กฎมอบหมาย", "ตั้งกฎงาน", "assignment rule")
+ASSIGN_POLICY_SHOW = ("ดูกฎมอบหมาย", "กฎมอบหมายปัจจุบัน", "show assignment rule")
+ASSIGN_CONFIRM = ("ยืนยันกฎ", "confirm rule")
+
+POLICY_NEEDS_TEXT = {
+    "th": "พิมพ์นโยบายต่อท้ายด้วย เช่น \"ตั้งกฎมอบหมาย ช่างที่รับผิดชอบแอร์ ให้ทีม AC ไม่เกินวันละ 5 งาน\"",
+    "en": "Add the policy, e.g. \"assignment rule: AC work goes to the AC team, max 5 a day\".",
+}
+POLICY_NOT_UNDERSTOOD = {
+    "th": "ยังแปลงนโยบายเป็นกฎไม่ได้:\n{problems}\n\nลองระบุให้ชัดขึ้นว่า งานประเภทไหน ให้ทีมไหน และจำกัดวันละกี่งาน",
+    "en": "Could not turn that into a rule:\n{problems}",
+}
+POLICY_REVIEW = {
+    "th": "นี่คือกฎที่ได้ ตรวจดูก่อนบันทึก:\n\n{summary}\n\nถ้าถูกต้องพิมพ์ \"ยืนยันกฎ\"",
+    "en": "Here is the rule — check it before saving:\n\n{summary}\n\nType \"confirm rule\" to save.",
+}
+POLICY_SAVED = {
+    "th": "บันทึกกฎมอบหมายแล้ว\n\n{summary}",
+    "en": "Assignment rule saved.\n\n{summary}",
+}
+POLICY_NOTHING_PENDING = {
+    "th": "ยังไม่มีกฎที่รอยืนยัน พิมพ์ \"ตั้งกฎมอบหมาย ...\" ก่อน",
+    "en": "No rule is waiting for confirmation.",
+}
+POLICY_NONE_SET = {
+    "th": "ยังไม่ได้ตั้งกฎมอบหมาย",
+    "en": "No assignment rule set yet.",
+}
+
+# The draft waits here between "here is the rule" and "confirm". Same Redis
+# pattern and TTL reasoning as pending_intent: a rule someone walked away
+# from must not still be waiting an hour later.
+ASSIGNMENT_DRAFT_TTL_S = 900
+
+
+async def _handle_assignment_policy(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
+    trigger: str, permission_keys: list[str], language: str, ai_client=None,
+) -> ChatReply:
+    from .ai.assignment_policy import describe_rule, policy_to_rule
+
+    # setting.manage, not a dedicated key: this is company configuration,
+    # and the spec gives assignment rules no permission of their own.
+    if "setting.manage" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+
+    lowered = message.lower()
+    index = lowered.find(trigger.lower())
+    policy = message[index + len(trigger):].strip(" :·-") if index >= 0 else ""
+    if not policy:
+        return ChatReply(text=_t(POLICY_NEEDS_TEXT, language))
+
+    license_id = str(license_id)
+    try:
+        teams = await client.list_technician_teams(license_id)
+    except Exception:
+        log.exception("could not read teams for a policy translation")
+        teams = []
+
+    rule, problems = await policy_to_rule(
+        policy,
+        teams=[str(t.get("team_name")) for t in teams if t.get("team_name")],
+        client=ai_client,
+    )
+    if rule is None:
+        return ChatReply(
+            text=_t(POLICY_NOT_UNDERSTOOD, language).format(
+                problems="\n".join(f"· {p}" for p in problems)
+            )
+        )
+
+    # Held, not saved. 11.6 requires the person to see it first — a rule
+    # decides who gets work, and a model's reading of a sentence is not a
+    # good enough reason to change that unseen.
+    await client.set_pending_intent(
+        ctx.chann_uid, ctx.oa,
+        action="confirm", entity="assignment_rule",
+        fields={"rule": rule}, missing=[],
+        ttl_seconds=ASSIGNMENT_DRAFT_TTL_S,
+    )
+    return ChatReply(
+        text=_t(POLICY_REVIEW, language).format(summary=describe_rule(rule, language)),
+        quick_replies=[("ยืนยันกฎ", "ยืนยันกฎ")],
+    )
+
+
+async def _handle_assignment_confirm(
+    client: DataClient, *, ctx: ResolvedContext, license_id,
+    pending: dict | None, permission_keys: list[str], language: str,
+) -> ChatReply:
+    from .ai.assignment_policy import describe_rule
+
+    if "setting.manage" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    if not pending or pending.get("entity") != "assignment_rule":
+        return ChatReply(text=_t(POLICY_NOTHING_PENDING, language))
+
+    rule = (pending.get("fields") or {}).get("rule")
+    if not isinstance(rule, dict):
+        return ChatReply(text=_t(POLICY_NOTHING_PENDING, language))
+
+    try:
+        await client.upsert_assignment_rule(
+            str(license_id), scope=rule.get("scope", "technician"),
+            rules_json=rule, actor_id=ctx.chann_uid,
+        )
+        await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
+    except Exception:
+        log.exception("saving an assignment rule failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    return ChatReply(
+        text=_t(POLICY_SAVED, language).format(summary=describe_rule(rule, language)),
+    )
+
+
+async def _handle_assignment_show(
+    client: DataClient, *, license_id, permission_keys: list[str], language: str,
+) -> ChatReply:
+    from .ai.assignment_policy import describe_rule
+
+    if "setting.manage" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    try:
+        rules = await client.get_assignment_rules(str(license_id))
+    except Exception:
+        log.exception("could not read assignment rules")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    active = [r for r in rules if r.get("is_active")]
+    if not active:
+        return ChatReply(text=_t(POLICY_NONE_SET, language))
+    return ChatReply(
+        text="\n\n".join(describe_rule(r.get("rules_json") or {}, language) for r in active)
+    )
 
 
 # ------------------------------------------------ Phase 10 issue a quote
@@ -3067,6 +3615,80 @@ async def handle_chat_message(
         return await _handle_technician_invite_request(
             client, ctx=ctx, permission_keys=permission_keys, language=language,
         )
+
+    # Assignment policy (Phase 11.6). Sales OA only, and before the AI
+    # path: the policy TEXT goes to a model deliberately, but the command
+    # that carries it must not, or "ตั้งกฎมอบหมาย" could be parsed as
+    # something else entirely.
+    if ctx.oa == "sales":
+        if _matches_phrase(message, ASSIGN_CONFIRM):
+            return await _handle_assignment_confirm(
+                client, ctx=ctx, license_id=license_id,
+                pending=await client.get_pending_intent(ctx.chann_uid, ctx.oa),
+                permission_keys=permission_keys, language=language,
+            )
+        if _matches_phrase(message, ASSIGN_POLICY_SHOW):
+            return await _handle_assignment_show(
+                client, license_id=license_id,
+                permission_keys=permission_keys, language=language,
+            )
+        policy_trigger = next(
+            (t for t in ASSIGN_POLICY_TRIGGERS if t in message.lower()), None,
+        )
+        if policy_trigger:
+            return await _handle_assignment_policy(
+                client, ctx=ctx, license_id=license_id, message=message,
+                trigger=policy_trigger, permission_keys=permission_keys,
+                language=language, ai_client=ai_client,
+            )
+
+    # Tickets are checked AFTER assignment policy on purpose: "ตั้งกฎมอบหมาย"
+    # contains "มอบหมาย", so matching the ticket trigger first swallowed
+    # every attempt to configure a rule and refused it for lacking
+    # ticket.update. Same substring trap as ไม่สำเร็จ/สำเร็จ in Phase 9 and
+    # ออกเอกสารใหม่/ออกเอกสาร in Phase 10 — the longer, more specific
+    # phrase has to be tested first.
+    # Tickets (Phase 12). Available on the technician OA too — a technician
+    # taking a job is the whole point, and routing that through the sales
+    # OA only would make the feature unreachable for the people who use it.
+    if ctx.oa in ("sales", "technician"):
+        if _matches_phrase(message, TICKET_MINE_PHRASES):
+            return await _handle_ticket_list(
+                client, ctx=ctx, license_id=license_id,
+                permission_keys=permission_keys, language=language, mine=True,
+            )
+        if _matches_phrase(message, TICKET_LIST_PHRASES):
+            return await _handle_ticket_list(
+                client, ctx=ctx, license_id=license_id,
+                permission_keys=permission_keys, language=language,
+            )
+        # Check-in/out before claim: "ปิดงาน" and "รับงาน" are different
+        # actions on the same ticket, and the shorter claim trigger must
+        # not swallow a close.
+        if any(t in message.lower() for t in CHECKOUT_TRIGGERS):
+            return await _handle_check_out(
+                client, ctx=ctx, license_id=license_id, message=message,
+                permission_keys=permission_keys, language=language,
+            )
+        if any(t in message.lower() for t in CHECKIN_TRIGGERS):
+            return await _handle_check_in(
+                client, ctx=ctx, license_id=license_id, message=message,
+                permission_keys=permission_keys, language=language,
+            )
+        if any(t in message.lower() for t in TICKET_CLAIM_TRIGGERS):
+            return await _handle_ticket_claim(
+                client, ctx=ctx, license_id=license_id, message=message,
+                permission_keys=permission_keys, language=language,
+            )
+        assign_trigger = next(
+            (t for t in TICKET_ASSIGN_TRIGGERS if t in message.lower()), None,
+        )
+        if assign_trigger:
+            return await _handle_ticket_assign(
+                client, ctx=ctx, license_id=license_id, message=message,
+                trigger=assign_trigger, permission_keys=permission_keys,
+                language=language,
+            )
 
     # Help, before anything else and on every OA. Someone who types "ใช้ยังไง"
     # is telling you they are stuck; routing that through intent parsing to

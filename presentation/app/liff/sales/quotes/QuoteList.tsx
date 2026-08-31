@@ -25,6 +25,8 @@ export default function QuoteList({ liffId }: { liffId: string }) {
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
   const [busyId, setBusyId] = useState("");
+  // Object URLs for documents already fetched, keyed by quote.
+  const [docUrls, setDocUrls] = useState<Record<string, string>>({});
 
   const say = useCallback((message: string, kind?: "ok" | "error") => {
     setStatus(message);
@@ -53,6 +55,15 @@ export default function QuoteList({ liffId }: { liffId: string }) {
       say(error instanceof Error ? error.message : t.dashboard.loadFailed, "error"),
     );
   }, [licenseId, load, say, token]);
+
+  // Object URLs hold the blob in memory until revoked; without this a
+  // person opening several quotes leaks every one of them.
+  useEffect(() => {
+    return () => {
+      for (const url of Object.values(docUrls)) URL.revokeObjectURL(url);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const initialize = useCallback(async () => {
     try {
@@ -97,12 +108,21 @@ export default function QuoteList({ liffId }: { liffId: string }) {
         );
         return;
       }
-      // Opened as a blob rather than as a link: the request needs LIFF auth
-      // headers, which a plain anchor cannot send.
+      // Held in state and rendered as a link the person taps, NOT opened
+      // with window.open. A popup call after an await is not treated as
+      // user-initiated, so browsers block it silently — which is exactly
+      // what "I pressed the button and nothing happened" was. The LINE
+      // in-app browser is stricter about this than most.
+      //
+      // Still fetched as a blob rather than linked directly, because the
+      // request needs LIFF auth headers that a plain anchor cannot send.
       const url = URL.createObjectURL(await response.blob());
-      window.open(url, "_blank");
-      setTimeout(() => URL.revokeObjectURL(url), 60_000);
-      say(`${quote.quote_id} — ${t.dashboard.quotes.issued}`, "ok");
+      setDocUrls((current) => {
+        const previous = current[quote.id];
+        if (previous) URL.revokeObjectURL(previous);
+        return { ...current, [quote.id]: url };
+      });
+      say(t.dashboard.quotes.ready, "ok");
     } catch (error) {
       say(error instanceof Error ? error.message : t.common.error, "error");
     } finally {
@@ -144,6 +164,10 @@ export default function QuoteList({ liffId }: { liffId: string }) {
         "ok",
       );
       await load();
+      // Open it. Issuing a document and then saying only "status: sent" —
+      // which is what happened before — leaves the person with no way to
+      // see the thing they just made, and no reason to believe it exists.
+      await openDocument({ ...quote, generated_document_id: "just-issued" });
     } catch (error) {
       say(error instanceof Error ? error.message : t.common.error, "error");
     } finally {
@@ -179,6 +203,19 @@ export default function QuoteList({ liffId }: { liffId: string }) {
                   ? t.dashboard.quotes.issued
                   : t.dashboard.quotes.notIssued}
               </div>
+              {docUrls[quote.id] && (
+                <p style={{ margin: "10px 0 0" }}>
+                  <a
+                    className="btn"
+                    data-variant="primary"
+                    href={docUrls[quote.id]}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {t.dashboard.quotes.open}
+                  </a>
+                </p>
+              )}
               <div className="card-actions">
                 {quote.generated_document_id && (
                   <button

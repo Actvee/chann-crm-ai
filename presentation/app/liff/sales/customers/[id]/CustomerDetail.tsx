@@ -6,7 +6,8 @@ import { useCallback, useEffect, useState } from "react";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { AppShell, Badge } from "../../_components";
-import { Membership, initLiffSession, proxyHeaders } from "../../_lib";
+import { Membership, fetchPermissions, initLiffSession, proxyHeaders } from "../../_lib";
+import { FieldSection, RecordHead, RelatedHeading } from "../../_record";
 
 type Customer = {
   id: string;
@@ -41,14 +42,15 @@ export default function CustomerDetail({
   customerId: string;
 }) {
   const { t } = useLanguage();
+  const c = t.dashboard.companyProfile;
   const stageLabel = (stage: string) =>
     stage === "contact" ? t.customer.title : t.customer.lead;
   const dealStageLabel = (stage: string) =>
     (t.deal.stage as Record<string, string>)[stage] ?? stage;
 
   const [token, setToken] = useState("");
-  const [memberships, setMemberships] = useState<Membership[]>([]);
   const [licenseId, setLicenseId] = useState("");
+  const [permissions, setPermissions] = useState<Set<string>>(new Set());
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [deals, setDeals] = useState<Deal[]>([]);
   const [status, setStatus] = useState(t.dashboard.opening);
@@ -63,9 +65,6 @@ export default function CustomerDetail({
   const load = useCallback(async () => {
     if (!token || !licenseId) return;
     const headers = proxyHeaders(token, licenseId);
-    // Both lists in parallel: the detail view is only useful once it can
-    // show the customer AND their deals, so waiting for them in sequence
-    // just makes the page slower for no benefit.
     const [customersResponse, dealsResponse] = await Promise.all([
       fetch(`/api/phase2/licenses/${licenseId}/customers`, { headers }),
       fetch(`/api/phase2/licenses/${licenseId}/deals`, { headers }),
@@ -78,9 +77,7 @@ export default function CustomerDetail({
       );
     }
     const customers = (await customersResponse.json()) as Customer[];
-    const found = customers.find((c) => c.id === customerId) ?? null;
-    setCustomer(found);
-
+    setCustomer(customers.find((row) => row.id === customerId) ?? null);
     if (dealsResponse.ok) {
       const all = (await dealsResponse.json()) as Deal[];
       setDeals(all.filter((d) => d.contact_id === customerId));
@@ -99,14 +96,40 @@ export default function CustomerDetail({
     try {
       const session = await initLiffSession(liffId);
       if (!session.token) return;
+      const license = session.memberships[0]?.license_id ?? "";
       setToken(session.token);
-      setMemberships(session.memberships);
-      setLicenseId(session.memberships[0]?.license_id ?? "");
-      if (!session.memberships.length) say(t.liff.noCompany, "error");
+      setLicenseId(license);
+      if (!session.memberships.length) {
+        say(t.liff.noCompany, "error");
+        return;
+      }
+      setPermissions(await fetchPermissions(session.token, license));
     } catch (error) {
       say(error instanceof Error ? error.message : t.dashboard.openFailed, "error");
     }
   }, [liffId, say, t]);
+
+  async function saveFields(changes: Record<string, string | null>) {
+    const response = await fetch(
+      `/api/phase2/licenses/${licenseId}/customers/${customerId}`,
+      {
+        method: "PATCH",
+        headers: proxyHeaders(token, licenseId),
+        body: JSON.stringify(changes),
+      },
+    );
+    if (!response.ok) {
+      say(
+        response.status === 403
+          ? t.dashboard.noPermission
+          : `${t.common.error} (${response.status})`,
+        "error",
+      );
+      throw new Error("save failed");
+    }
+    say(t.dashboard.saved, "ok");
+    await load();
+  }
 
   async function promote() {
     if (!customer) return;
@@ -128,16 +151,16 @@ export default function CustomerDetail({
       }
       say(`${fullName(customer)} — ${t.dashboard.customers.promoted}`, "ok");
       await load();
-    } catch (error) {
-      say(error instanceof Error ? error.message : t.common.error, "error");
     } finally {
       setBusy(false);
     }
   }
 
+  const canEdit = permissions.has("customer.update");
+
   return (
     <AppShell
-      title={fullName(customer) || t.customer.title}
+      title={t.customer.title}
       back="/liff/sales/customers"
       liffId={liffId}
       onReady={() => void initialize()}
@@ -145,34 +168,15 @@ export default function CustomerDetail({
       status={status}
       statusTone={tone}
     >
-      {memberships.length > 1 && null}
-
       {customer && (
         <>
-          <div className="card" data-stage={customer.stage}>
-            <div className="card-title">
-              {fullName(customer)}
-              <Badge stage={customer.stage} label={stageLabel(customer.stage)} />
-            </div>
-            <div className="card-meta">
-              <span className="code">{customer.customer_id}</span>
-            </div>
-            <dl style={{ margin: "12px 0 0", display: "grid", gap: 6 }}>
-              {([
-                [t.dashboard.companyProfile.phone, customer.phone],
-                [t.dashboard.companyProfile.email, customer.email],
-                [t.dashboard.companyProfile.address, customer.address],
-              ] as const)
-                .filter(([, value]) => Boolean(value))
-                .map(([label, value]) => (
-                  <div key={label} style={{ display: "flex", gap: 8, fontSize: 14 }}>
-                    <dt style={{ color: "var(--ink-soft)", minWidth: 90 }}>{label}</dt>
-                    <dd style={{ margin: 0 }}>{value}</dd>
-                  </div>
-                ))}
-            </dl>
-            {customer.stage === "lead" && (
-              <div className="card-actions">
+          <RecordHead
+            stage={customer.stage}
+            title={fullName(customer)}
+            subtitle={<span className="code">{customer.customer_id}</span>}
+            badge={<Badge stage={customer.stage} label={stageLabel(customer.stage)} />}
+            actions={
+              customer.stage === "lead" && canEdit ? (
                 <button
                   type="button"
                   className="btn"
@@ -182,13 +186,26 @@ export default function CustomerDetail({
                 >
                   {busy ? t.dashboard.saving : t.dashboard.customers.promote}
                 </button>
-              </div>
-            )}
-          </div>
+              ) : null
+            }
+          />
 
-          {/* The link the flat list never had: a customer is only meaningful
-              alongside the work being done for them. */}
-          <h2 style={{ fontSize: 15, margin: "22px 0 10px" }}>{t.deal.title}</h2>
+          <FieldSection
+            title={t.customer.title}
+            canEdit={canEdit}
+            record={customer as unknown as Record<string, unknown>}
+            onSave={saveFields}
+            fields={[
+              { name: "first_name", label: t.dashboard.fields.firstName, editable: true },
+              { name: "last_name", label: t.dashboard.fields.lastName, editable: true },
+              { name: "phone", label: c.phone, editable: true, type: "tel" },
+              { name: "email", label: c.email, editable: true, type: "email" },
+              { name: "address", label: c.address, editable: true, type: "textarea" },
+              { name: "notes", label: t.dashboard.fields.notes, editable: true, type: "textarea" },
+            ]}
+          />
+
+          <RelatedHeading title={t.deal.title} count={deals.length} />
           {deals.length === 0 ? (
             <div className="empty">
               <p>{t.dashboard.deals.empty}</p>
@@ -197,20 +214,19 @@ export default function CustomerDetail({
             <ul className="list">
               {deals.map((deal) => (
                 <li key={deal.id} className="card" data-stage={deal.stage}>
-                  <Link
-                    href={`/liff/sales/deals/${deal.id}`}
-                    style={{ textDecoration: "none", color: "inherit" }}
-                  >
-                    <div className="card-title">
-                      <span className="code">{deal.deal_id}</span>
-                      <Badge stage={deal.stage} label={dealStageLabel(deal.stage)} />
-                    </div>
-                    <div className="card-meta">
-                      {t.dashboard.deals.lineItems.replace(
-                        "{count}",
-                        String(deal.products?.length ?? 0),
-                      )}
-                    </div>
+                  <Link className="row-link" href={`/liff/sales/deals/${deal.id}`}>
+                    <span className="row-body">
+                      <span className="card-title">
+                        <span className="code">{deal.deal_id}</span>
+                        <Badge stage={deal.stage} label={dealStageLabel(deal.stage)} />
+                      </span>
+                      <span className="card-meta">
+                        {t.dashboard.deals.lineItems.replace(
+                          "{count}",
+                          String(deal.products?.length ?? 0),
+                        )}
+                      </span>
+                    </span>
                   </Link>
                 </li>
               ))}

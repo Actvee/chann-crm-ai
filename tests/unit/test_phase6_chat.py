@@ -180,6 +180,49 @@ class FakeDataClient:
         self._last_entity_ref = {"entity_type": entity_type, "entity_id": entity_id, "code": code}
         self.recorded.append(("set_last_entity_ref", chann_uid, oa, entity_type, entity_id, code))
 
+    async def get_member(self, license_id, chann_uid):
+        return {"id": "member-1", "chann_uid": chann_uid, "role": "technician"}
+
+    async def list_tickets(self, license_id, status=None, visible_to=None):
+        self.recorded.append(("list_tickets", license_id, visible_to))
+        return list(getattr(self, "_tickets", []))
+
+    async def assign_ticket(self, license_id, ticket_id, *, target_type, target_ref, actor_id=None):
+        self.recorded.append(("assign_ticket", license_id, ticket_id, target_type, target_ref))
+        blocked = getattr(self, "_dispatch_error", None)
+        if blocked:
+            from chann_app.data_client import DataTierError
+            raise DataTierError(409, str(blocked), blocked)
+        return {"id": ticket_id, "ticket_number": "T-2026-0001"}
+
+    async def check_in_ticket(self, license_id, ticket_id, *, member_id, gps_lat=None, gps_lng=None, photo_url=None, actor_id=None):
+        self.recorded.append(("check_in_ticket", license_id, ticket_id, member_id))
+        return {"id": ticket_id, "customer_name": "ก", "service_address": "99/1"}
+
+    async def check_out_ticket(self, license_id, ticket_id, *, member_id, report_data, gps_lat=None, gps_lng=None, photo_url=None, actor_id=None):
+        self.recorded.append(("check_out_ticket", license_id, ticket_id, report_data))
+        blocked = getattr(self, "_checkout_error", None)
+        if blocked:
+            from chann_app.data_client import DataTierError
+            raise DataTierError(409, str(blocked), blocked)
+        return {"id": "sr-1", "report_id": "SR-2026-0001"}
+
+    async def claim_ticket(self, license_id, ticket_id, member_id, actor_id=None):
+        self.recorded.append(("claim_ticket", license_id, ticket_id, member_id))
+        return {"id": ticket_id, "ticket_number": "T-2026-0001",
+                "customer_name": "ก", "service_address": "99/1",
+                "scheduled_date": "2026-09-04", "scheduled_time": "14:00:00"}
+
+    async def list_technician_teams(self, license_id):
+        return list(getattr(self, "_teams", [{"id": "team-1", "team_name": "AC Team"}]))
+
+    async def upsert_assignment_rule(self, license_id, scope, rules_json, actor_id=None):
+        self.recorded.append(("upsert_assignment_rule", license_id, scope, rules_json))
+        return {"id": "rule-1", "scope": scope, "rules_json": rules_json, "is_active": True}
+
+    async def get_assignment_rules(self, license_id):
+        return list(getattr(self, "_assignment_rules", []))
+
     async def get_last_entity_ref(self, chann_uid, oa):
         self.recorded.append(("get_last_entity_ref", chann_uid, oa))
         return getattr(self, "_last_entity_ref", None)
@@ -3038,3 +3081,272 @@ class TestReplyDrivesTheAction:
             client, message_id="never-seen", reply_text="ออกเอกสาร", ctx=_ctx(),
         )
         assert reply.entity_id is None
+
+
+class TestAssignmentPolicyFlow:
+    """Master Spec 11.6 — type a policy, see it as a rule, confirm, save.
+
+    The confirmation step is not ceremony. A rule decides who gets work,
+    and a model's reading of one Thai sentence is not a good enough reason
+    to change that unseen.
+    """
+
+    def _ai_rule(self, **overrides):
+        rule = {
+            "version": 1,
+            "scope": "technician",
+            "match_criteria": [{
+                "field": "product.category", "operator": "equals",
+                "value": "AIR_CONDITIONER", "assign_to_team": "AC Team",
+            }],
+            "selection_strategy": "least_load",
+            "capacity_constraint": {"max_per_day": 5, "mode": "hard_block"},
+        }
+        rule.update(overrides)
+        return httpx.AsyncClient(transport=_ai(json.dumps(rule)))
+
+    async def test_a_policy_is_shown_back_before_it_is_saved(self):
+        client = FakeDataClient(permission_keys=["setting.manage"])
+        reply = await handle_chat_message(
+            client,
+            message="ตั้งกฎมอบหมาย ช่างที่รับผิดชอบแอร์ ให้ทีม AC ไม่เกินวันละ 5 งาน",
+            ctx=_ctx(), ai_client=self._ai_rule(),
+        )
+        assert "AC Team" in reply.text
+        assert "5" in reply.text
+        # Nothing saved yet — the person has not agreed to it.
+        assert not [r for r in client.recorded if r[0] == "upsert_assignment_rule"]
+
+    async def test_confirming_saves_the_rule(self):
+        client = FakeDataClient(permission_keys=["setting.manage"])
+        await handle_chat_message(
+            client, message="ตั้งกฎมอบหมาย แอร์ให้ทีม AC วันละ 5",
+            ctx=_ctx(), ai_client=self._ai_rule(),
+        )
+        reply = await handle_chat_message(client, message="ยืนยันกฎ", ctx=_ctx())
+        saved = [r for r in client.recorded if r[0] == "upsert_assignment_rule"]
+        assert len(saved) == 1
+        assert saved[0][2] == "technician"
+        assert "AC Team" in reply.text
+
+    async def test_confirming_with_nothing_pending_says_so(self):
+        client = FakeDataClient(permission_keys=["setting.manage"])
+        reply = await handle_chat_message(client, message="ยืนยันกฎ", ctx=_ctx())
+        assert "ยังไม่มีกฎ" in reply.text
+        assert not [r for r in client.recorded if r[0] == "upsert_assignment_rule"]
+
+    async def test_a_rule_the_model_gets_wrong_is_refused_not_saved(self):
+        """A model that invents an operator would otherwise produce a rule
+        that silently matches nothing, months later, with no error."""
+        client = FakeDataClient(permission_keys=["setting.manage"])
+        bad = httpx.AsyncClient(transport=_ai(json.dumps({
+            "scope": "technician",
+            "match_criteria": [{
+                "field": "product.category", "operator": "sounds_like",
+                "value": "AC", "assign_to_team": "AC Team",
+            }],
+        })))
+        reply = await handle_chat_message(
+            client, message="ตั้งกฎมอบหมาย อะไรก็ได้", ctx=_ctx(), ai_client=bad,
+        )
+        assert "operator" in reply.text or "ยังแปลง" in reply.text
+        assert not [r for r in client.recorded if r[0] == "upsert_assignment_rule"]
+
+    async def test_setting_a_policy_needs_setting_manage(self):
+        client = FakeDataClient(permission_keys=["deal.read"])
+        reply = await handle_chat_message(
+            client, message="ตั้งกฎมอบหมาย แอร์ให้ทีม AC", ctx=_ctx(),
+            ai_client=self._ai_rule(),
+        )
+        assert "สิทธิ์" in reply.text
+        assert not [r for r in client.recorded if r[0] == "upsert_assignment_rule"]
+
+    async def test_a_policy_with_no_text_asks_for_it(self):
+        client = FakeDataClient(permission_keys=["setting.manage"])
+        reply = await handle_chat_message(
+            client, message="ตั้งกฎมอบหมาย", ctx=_ctx(), ai_client=self._ai_rule(),
+        )
+        assert "พิมพ์นโยบาย" in reply.text
+
+
+class TestTicketChatFlow:
+    """Phase 12 through chat, which is how this product is actually used.
+
+    The dispatch gate's refusal is the case worth testing hardest: it has
+    to name the missing fields, because a technician sent without an
+    address is a wasted trip and a person told only "cannot assign" has to
+    guess which of five things is wrong.
+    """
+
+    async def test_the_dispatch_gate_names_what_is_missing(self):
+        client = FakeDataClient(permission_keys=["ticket.update"])
+        client._tickets = [{
+            "id": "tk-1", "ticket_number": "T-2026-0001", "status": "open",
+            "customer_name": None,
+        }]
+        client._dispatch_error = {
+            "error": "dispatch_blocked", "missing": ["ที่อยู่", "เวลานัด"],
+        }
+        reply = await handle_chat_message(
+            client, message="มอบหมาย T-2026-0001 ให้ทีม AC Team", ctx=_ctx(),
+        )
+        assert "ที่อยู่" in reply.text
+        assert "เวลานัด" in reply.text
+
+    async def test_a_complete_ticket_assigns(self):
+        client = FakeDataClient(permission_keys=["ticket.update"])
+        client._tickets = [{
+            "id": "tk-1", "ticket_number": "T-2026-0001", "status": "open",
+        }]
+        reply = await handle_chat_message(
+            client, message="มอบหมาย T-2026-0001 ให้ทีม AC Team", ctx=_ctx(),
+        )
+        assigned = [r for r in client.recorded if r[0] == "assign_ticket"]
+        assert len(assigned) == 1
+        assert "T-2026-0001" in reply.text
+
+    async def test_assigning_without_a_ticket_number_asks_for_one(self):
+        client = FakeDataClient(permission_keys=["ticket.update"])
+        reply = await handle_chat_message(client, message="มอบหมายให้ทีม AC", ctx=_ctx())
+        assert "เลขงาน" in reply.text
+        assert not [r for r in client.recorded if r[0] == "assign_ticket"]
+
+    async def test_listing_tickets_needs_ticket_read(self):
+        client = FakeDataClient(permission_keys=["deal.read"])
+        reply = await handle_chat_message(client, message="รายการงาน", ctx=_ctx())
+        assert "สิทธิ์" in reply.text
+
+    async def test_my_tickets_asks_only_for_what_that_person_may_see(self):
+        """Without visible_to, a technician browsing would read the address
+        and phone number of every private job in the tenant."""
+        client = FakeDataClient(permission_keys=["ticket.read"])
+        client._tickets = []
+        await handle_chat_message(client, message="งานของฉัน", ctx=_ctx())
+        calls = [r for r in client.recorded if r[0] == "list_tickets"]
+        assert calls and calls[-1][2] is not None, "visible_to was not passed"
+
+    async def test_claiming_an_invisible_ticket_does_not_confirm_it_exists(self):
+        """"Not found" and "not yours" are deliberately the same message —
+        the distinction would confirm the ticket exists to someone who
+        should not know that."""
+        client = FakeDataClient(permission_keys=["ticket.update"])
+        client._tickets = []
+        reply = await handle_chat_message(client, message="รับงาน T-2026-0009", ctx=_ctx())
+        assert "ไม่พบ" in reply.text
+
+
+class TestTriggerOrdering:
+    """Substring collisions between commands, which this project keeps
+    rediscovering.
+
+    ไม่สำเร็จ contains สำเร็จ (Phase 9). ออกเอกสารใหม่ contains ออกเอกสาร
+    (Phase 10). ตั้งกฎมอบหมาย contains มอบหมาย (Phase 11 vs 12) — that one
+    made every attempt to configure an assignment rule get swallowed by the
+    ticket dispatcher and refused for lacking ticket.update.
+    """
+
+    async def test_configuring_a_rule_is_not_mistaken_for_dispatching(self):
+        client = FakeDataClient(permission_keys=["setting.manage"])
+        ai = httpx.AsyncClient(transport=_ai(json.dumps({
+            "scope": "technician",
+            "match_criteria": [{
+                "field": "product.category", "operator": "equals",
+                "value": "AC", "assign_to_team": "AC Team",
+            }],
+            "selection_strategy": "least_load",
+        })))
+        reply = await handle_chat_message(
+            client, message="ตั้งกฎมอบหมาย แอร์ให้ทีม AC Team", ctx=_ctx(), ai_client=ai,
+        )
+        # Reached the policy handler, not the ticket dispatcher.
+        assert "AC Team" in reply.text
+        assert not [r for r in client.recorded if r[0] == "assign_ticket"]
+
+    async def test_dispatching_a_ticket_still_reaches_the_ticket_handler(self):
+        """The fix must not have traded one collision for the other."""
+        client = FakeDataClient(permission_keys=["ticket.update"])
+        client._tickets = [{
+            "id": "tk-1", "ticket_number": "T-2026-0001", "status": "open",
+        }]
+        await handle_chat_message(
+            client, message="มอบหมาย T-2026-0001 ให้ทีม AC Team", ctx=_ctx(),
+        )
+        assert [r for r in client.recorded if r[0] == "assign_ticket"]
+
+
+class TestFieldServiceChat:
+    """Phase 13 through chat — a technician types this one-handed, standing
+    up, often outdoors."""
+
+    def test_the_report_parser_reads_both_fields(self):
+        from chann_app.services.chat import parse_service_report
+
+        parsed = parse_service_report(
+            "ปิดงาน T-2026-0001\nพบ: คอมเพรสเซอร์รั่ว\nแก้: เปลี่ยนคอมใหม่"
+        )
+        assert parsed == {
+            "found_issue": "คอมเพรสเซอร์รั่ว", "work_done": "เปลี่ยนคอมใหม่",
+        }
+
+    def test_the_parser_accepts_one_field_on_one_line(self):
+        """Demanding a rigid format gets the report abandoned rather than
+        corrected."""
+        from chann_app.services.chat import parse_service_report
+
+        assert parse_service_report("ปิดงาน T-2026-0001 พบ: น้ำยาหมด") == {
+            "found_issue": "น้ำยาหมด",
+        }
+
+    def test_the_parser_returns_nothing_rather_than_guessing(self):
+        from chann_app.services.chat import parse_service_report
+
+        assert parse_service_report("ปิดงาน T-2026-0001") == {}
+        assert parse_service_report("") == {}
+
+    async def test_closing_without_a_report_is_refused_by_name(self):
+        client = FakeDataClient(permission_keys=["ticket.update"])
+        client._tickets = [{
+            "id": "tk-1", "ticket_number": "T-2026-0001", "status": "in_progress",
+        }]
+        client._checkout_error = {
+            "error": "checkout_blocked", "missing": ["ปัญหาที่พบ", "สิ่งที่แก้ไข"],
+        }
+        reply = await handle_chat_message(
+            client, message="ปิดงาน T-2026-0001", ctx=_ctx(),
+        )
+        assert "ปัญหาที่พบ" in reply.text
+        assert "สิ่งที่แก้ไข" in reply.text
+
+    async def test_closing_with_a_report_succeeds(self):
+        client = FakeDataClient(permission_keys=["ticket.update"])
+        client._tickets = [{
+            "id": "tk-1", "ticket_number": "T-2026-0001", "status": "in_progress",
+        }]
+        reply = await handle_chat_message(
+            client,
+            message="ปิดงาน T-2026-0001\nพบ: คอมรั่ว\nแก้: เปลี่ยนคอม",
+            ctx=_ctx(),
+        )
+        calls = [r for r in client.recorded if r[0] == "check_out_ticket"]
+        assert len(calls) == 1
+        assert calls[0][3]["found_issue"] == "คอมรั่ว"
+        assert "SR-" in reply.text
+
+    async def test_closing_is_not_mistaken_for_claiming(self):
+        """"ปิดงาน" and "รับงาน" are different actions on the same ticket;
+        the shorter claim trigger must not swallow a close."""
+        client = FakeDataClient(permission_keys=["ticket.update"])
+        client._tickets = [{
+            "id": "tk-1", "ticket_number": "T-2026-0001", "status": "in_progress",
+        }]
+        await handle_chat_message(
+            client, message="ปิดงาน T-2026-0001\nพบ: ก\nแก้: ข", ctx=_ctx(),
+        )
+        assert not [r for r in client.recorded if r[0] == "claim_ticket"]
+
+    async def test_checking_in_needs_ticket_update(self):
+        client = FakeDataClient(permission_keys=["ticket.read"])
+        reply = await handle_chat_message(
+            client, message="เช็คอิน T-2026-0001", ctx=_ctx(),
+        )
+        assert "สิทธิ์" in reply.text

@@ -327,3 +327,55 @@ class TestConfigurationContract:
             if forbidden_literal in p.read_text(encoding="utf-8")
         ]
         assert not offenders, f"hardcoded {forbidden_literal!r} in: {offenders}"
+
+
+class TestAssignmentVocabularyStaysInSync:
+    """The Application and Data tiers each own a copy of the assignment rule
+    vocabulary, because they do not import from each other.
+
+    Duplication is the deliberate choice — a shared package for forty lines
+    of closed lists is worse — but it must not be able to drift silently.
+    Adding an operator to one side and not the other would let someone save
+    a rule the engine refuses to execute, months before anyone finds out.
+    """
+
+    def _both(self):
+        """Imported normally, not by file path.
+
+        A path-loaded module gets a synthetic __module__, which breaks
+        dataclass construction inside the engine — the failure has nothing
+        to do with what this test is checking.
+        """
+        import sys
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[2]
+        for tier in ("application", "data"):
+            path = str(root / tier)
+            if path not in sys.path:
+                sys.path.insert(0, path)
+
+        from chann_app.services import assignment_validation as app
+        from chann_data import assignment_engine as data
+
+        return app, data
+
+    def test_the_two_copies_agree(self):
+        app, data = self._both()
+
+        assert app.OPERATORS == data.OPERATORS, "operator lists have drifted"
+        assert app.SELECTION_STRATEGIES == data.SELECTION_STRATEGIES
+        assert app.CAPACITY_MODES == data.CAPACITY_MODES
+        assert app.RULE_VERSION == data.RULE_VERSION
+
+    def test_both_reject_the_same_bad_rule(self):
+        """Agreeing on the vocabulary is not enough — they must also agree
+        on what to do with it."""
+        app, data = self._both()
+
+        bad = {
+            "scope": "nope",
+            "match_criteria": [{"field": "x", "operator": "sounds_like", "value": "a"}],
+            "selection_strategy": "vibes",
+        }
+        assert app.validate_rule(bad) == data.validate_rule(bad)
