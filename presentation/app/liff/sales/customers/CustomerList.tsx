@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { AppShell, Badge, CompanyPicker, Count, Empty } from "../_components";
@@ -150,6 +151,12 @@ export default function CustomerList({ liffId }: { liffId: string }) {
         <ul className="list">
           {visible.map((customer) => (
             <li key={customer.id} className="card" data-stage={customer.stage}>
+              {/* The whole row opens the detail view — a list you cannot
+                  drill into is a report, not a tool. */}
+              <Link
+                href={`/liff/sales/customers/${customer.id}`}
+                style={{ textDecoration: "none", color: "inherit" }}
+              >
               <div className="card-title">
                 {fullName(customer)}
                 <Badge stage={customer.stage} label={stageLabel(customer.stage)} />
@@ -159,6 +166,7 @@ export default function CustomerList({ liffId }: { liffId: string }) {
                 {customer.phone ? ` · ${customer.phone}` : ""}
                 {customer.email ? ` · ${customer.email}` : ""}
               </div>
+              </Link>
               {customer.stage === "lead" && (
                 <div className="card-actions">
                   <button

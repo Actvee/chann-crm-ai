@@ -125,3 +125,35 @@ class GcsDocumentStore:
             )
         except Exception as exc:  # noqa: BLE001
             raise DocumentStoreError(f"failed to sign a URL for {path}: {exc}") from exc
+
+    def _blocking_get(self, *, object_name: str) -> bytes:
+        bucket = _get_client().bucket(settings.gcs_bucket_name)
+        return bucket.blob(object_name).download_as_bytes()
+
+    async def get(self, *, path: str) -> bytes:
+        """The stored bytes for a gs:// path.
+
+        Exists because signed URLs need the signing service account to hold
+        iam.serviceAccounts.signBlob on itself, which roles/editor does not
+        grant and which this project has decided not to add. Serving the
+        bytes through an already-authenticated endpoint needs no new IAM at
+        all, and keeps the bucket's public_access_prevention intact.
+        """
+        if not settings.gcs_bucket_name:
+            raise DocumentStoreNotConfigured(
+                "document storage is not configured — GCS_BUCKET_NAME is unset"
+            )
+        prefix = f"gs://{settings.gcs_bucket_name}/"
+        if not path.startswith(prefix):
+            raise DocumentStoreError(
+                f"stored path {path!r} does not belong to bucket "
+                f"{settings.gcs_bucket_name}"
+            )
+        try:
+            return await asyncio.to_thread(
+                self._blocking_get, object_name=path[len(prefix):]
+            )
+        except gcs_exceptions.NotFound as exc:
+            raise DocumentStoreError(f"no stored document at {path}") from exc
+        except Exception as exc:  # noqa: BLE001
+            raise DocumentStoreError(f"failed to read {path}: {exc}") from exc

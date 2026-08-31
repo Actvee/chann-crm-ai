@@ -530,3 +530,37 @@ fieldset.group legend {
     transform: none;
   }
 }
+
+/* A loading indicator, shown while a page is still starting.
+ *
+ * Replaces a line of LIFF diagnostics that used to render here. That was
+ * developer output and read as a fault to anyone else — a person waiting
+ * for their customer list should see that something is happening, not a
+ * string of internal state.
+ */
+.spinner {
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  margin-right: 8px;
+  vertical-align: -1px;
+  border: 2px solid var(--line-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+    /* Still visibly a "waiting" marker without the motion. */
+    border-top-color: var(--line-strong);
+    opacity: 0.6;
+  }
+}

@@ -75,19 +75,23 @@ export default function QuoteList({ liffId }: { liffId: string }) {
     }
   }
 
-  async function preview(quote: Quote) {
+  async function openDocument(quote: Quote) {
     setBusyId(quote.id);
     say(t.dashboard.working);
     try {
+      // The stored file, not a fresh render. /pdf goes through SmartBrowz
+      // every time and returns 503 whenever that provider is unavailable —
+      // a strange failure to hit for a document that already exists and is
+      // sitting in the bucket.
       const response = await fetch(
-        `/api/phase2/licenses/${licenseId}/quotes/${quote.id}/pdf`,
+        `/api/phase2/licenses/${licenseId}/quotes/${quote.id}/document`,
         { headers: proxyHeaders(token, licenseId) },
       );
       if (!response.ok) {
         const reason = await detail(response);
         say(
-          response.status === 409
-            ? `${t.dashboard.quotes.incomplete} ${reason}`
+          response.status === 404
+            ? t.dashboard.quotes.notIssued
             : `${t.common.error} (${response.status}) ${reason}`,
           "error",
         );
@@ -98,7 +102,7 @@ export default function QuoteList({ liffId }: { liffId: string }) {
       const url = URL.createObjectURL(await response.blob());
       window.open(url, "_blank");
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
-      say(`${quote.quote_id} — ${t.dashboard.quotes.preview}`, "ok");
+      say(`${quote.quote_id} — ${t.dashboard.quotes.issued}`, "ok");
     } catch (error) {
       say(error instanceof Error ? error.message : t.common.error, "error");
     } finally {
@@ -176,14 +180,16 @@ export default function QuoteList({ liffId }: { liffId: string }) {
                   : t.dashboard.quotes.notIssued}
               </div>
               <div className="card-actions">
-                <button
-                  type="button"
-                  className="btn"
-                  onClick={() => void preview(quote)}
-                  disabled={busyId === quote.id}
-                >
-                  {busyId === quote.id ? t.dashboard.working : t.dashboard.quotes.preview}
-                </button>
+                {quote.generated_document_id && (
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={() => void openDocument(quote)}
+                    disabled={busyId === quote.id}
+                  >
+                    {busyId === quote.id ? t.dashboard.working : t.dashboard.quotes.view}
+                  </button>
+                )}
                 <button
                   type="button"
                   className="btn"

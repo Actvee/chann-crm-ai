@@ -7,7 +7,7 @@ import { ReactNode, useEffect, useState } from "react";
 import { LanguageSwitcher } from "@/lib/i18n/LanguageSwitcher";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
-import { LIFF_SDK_SRC, Membership, liffDiagnostics } from "./_lib";
+import { LIFF_SDK_SRC, Membership } from "./_lib";
 
 /**
  * The shell every Sales dashboard page sits in.
@@ -37,17 +37,6 @@ export function AppShell({
   children: ReactNode;
 }) {
   const { t } = useLanguage();
-  // Recomputed on a tick rather than once: liff's own state changes as the
-  // SDK loads and initialises, and a value captured at first render would
-  // always read "sdk=missing".
-  const [diagnostics, setDiagnostics] = useState("");
-  useEffect(() => {
-    const update = () => setDiagnostics(liffDiagnostics());
-    update();
-    const timer = setInterval(update, 1000);
-    return () => clearInterval(timer);
-  }, []);
-
   // Start on window.liff appearing, not only on next/script's onReady.
   //
   // onReady is a single callback with no retry: if it does not fire — the
@@ -121,18 +110,13 @@ export function AppShell({
         <div className="page">
           {status ? (
             <p className="status" data-tone={statusTone} aria-live="polite">
+              {/* A spinner while starting; plain text once there is something
+                  to say. The LIFF diagnostics that used to live here were
+                  debugging output and read as a fault to anyone who was not
+                  the developer — they belong in the console, which is where
+                  they now are. */}
+              {statusTone === undefined && <span className="spinner" aria-hidden="true" />}
               {status}
-              {/* Shown whenever the page has not finished starting, not only
-                  after an error. An earlier version only showed this on
-                  failure, which is exactly no help when the symptom is a
-                  spinner that never resolves and therefore never produces
-                  one. */}
-              <span
-                className="code"
-                style={{ display: "block", marginTop: 6, fontSize: 11.5 }}
-              >
-                {diagnostics}
-              </span>
             </p>
           ) : (
             // Kept in the tree even when empty so screen readers keep

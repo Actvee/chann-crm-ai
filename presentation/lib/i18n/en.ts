@@ -91,6 +91,7 @@ export const en: Dictionary = {
       empty: "No deals yet. Create one in chat with “create deal”.",
       noOpen: "No open deals",
       lineItems: "{count} line items",
+      subtotal: "Subtotal (before tax)",
       noLineItems: "No line items yet",
       changeTo: "Move to {stage}",
       stageDenied: "You do not have permission to change deal stages",
@@ -105,6 +106,7 @@ export const en: Dictionary = {
     quotes: {
       empty: "No quotes yet. Create one in chat from a deal.",
       preview: "Preview",
+      view: "View document",
       issue: "Issue",
       reissue: "Issue again",
       issued: "Issued",

@@ -702,3 +702,111 @@ async def get_deal(
     if deal is None:
         raise HTTPException(status_code=404, detail="deal not found")
     return deal
+
+
+@router.get("/documents/{token}")
+async def download_document(
+    token: str,
+    client: DataClient = Depends(get_data_client),
+):
+    """Serve an issued document to whoever holds a valid link token.
+
+    Deliberately NOT behind the LIFF guard: this URL is sent into a LINE
+    chat and opened by tapping it, where no ID token can be attached. The
+    token in the path is the authorisation, and it names one document for a
+    limited time — see auth/document_link.py for why GCS signed URLs are not
+    used instead.
+    """
+    from fastapi.responses import Response
+
+    from .auth.document_link import DocumentLinkInvalid, decode_document_token
+    from .services.storage.base import (
+        DocumentStoreError, DocumentStoreNotConfigured, get_document_store,
+    )
+
+    try:
+        license_id, document_id = decode_document_token(token)
+    except DocumentLinkInvalid as exc:
+        # 404 rather than 401: an expired or forged token should not confirm
+        # that a document with that id exists.
+        raise HTTPException(status_code=404, detail=f"link is not valid: {exc}")
+
+    try:
+        document = await client.get_generated_document(license_id, document_id)
+    except DataTierError as exc:
+        raise _propagate(exc)
+    if document is None:
+        raise HTTPException(status_code=404, detail="document not found")
+
+    try:
+        content = await get_document_store().get(path=str(document.get("output_path") or ""))
+    except DocumentStoreNotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except DocumentStoreError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    return Response(
+        content=content,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": 'inline; filename="quote.pdf"',
+            # The digest the audit row recorded, so a recipient can verify
+            # the bytes match what the system says it issued.
+            "X-Document-Sha256": str(document.get("sha256") or ""),
+        },
+    )
+
+
+@router.get("/licenses/{license_id}/quotes/{quote_id}/document")
+async def get_quote_document(
+    license_id: str,
+    quote_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """The stored document for a quote, as bytes.
+
+    Distinct from /pdf, which RENDERS a fresh preview through SmartBrowz and
+    therefore fails with 503 whenever that provider is unavailable. This
+    returns the file that was actually issued — the one the audit trail
+    names — which needs no renderer at all.
+    """
+    from fastapi.responses import Response
+
+    from .services.storage.base import (
+        DocumentStoreError, DocumentStoreNotConfigured, get_document_store,
+    )
+
+    _require_same_tenant(principal, license_id)
+    principal.require("quote.read")
+
+    try:
+        quote = await client.get_quote(license_id, quote_id)
+        if quote is None:
+            raise HTTPException(status_code=404, detail="quote not found")
+        document_id = quote.get("generated_document_id")
+        if not document_id:
+            raise HTTPException(
+                status_code=404, detail="this quote has no issued document yet"
+            )
+        document = await client.get_generated_document(license_id, str(document_id))
+    except DataTierError as exc:
+        raise _propagate(exc)
+    if document is None:
+        raise HTTPException(status_code=404, detail="document not found")
+
+    try:
+        content = await get_document_store().get(path=str(document.get("output_path") or ""))
+    except DocumentStoreNotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except DocumentStoreError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    return Response(
+        content=content,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": 'inline; filename="quote.pdf"',
+            "X-Document-Sha256": str(document.get("sha256") or ""),
+        },
+    )

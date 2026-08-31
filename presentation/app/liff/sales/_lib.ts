@@ -166,6 +166,10 @@ export async function initLiffSession(
   // person actually asked for.
   try {
     await withTimeout("liff.init", 15_000, liff.init({ liffId }));
+    // Console, not the page: this is developer output. Rendering it made a
+    // normal loading screen look like an error to the person using it.
+    // eslint-disable-next-line no-console
+    console.info("[liff]", liffDiagnostics());
   } catch (error) {
     lastInitError = error instanceof Error ? error.message : String(error);
     throw error;

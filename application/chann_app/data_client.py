@@ -1030,6 +1030,18 @@ class DataClient:
         )
         return self._unwrap(resp)
 
+    async def get_generated_document(
+        self, license_id: str, document_id: str,
+    ) -> dict | None:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}"
+            f"/generated-documents/{document_id}",
+            headers=self._headers,
+        )
+        if resp.status_code == 404:
+            return None
+        return self._unwrap(resp)
+
     async def record_generated_document(
         self, license_id: str, payload: dict, actor_id: str | None = None,
     ) -> dict:

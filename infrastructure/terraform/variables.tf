@@ -122,6 +122,12 @@ variable "admin_secret" {
   default     = ""
 }
 
+variable "application_public_base_url" {
+  type        = string
+  description = "The Application tier's own externally reachable base URL, used to build document links sent into LINE. Empty means such links are omitted rather than emitted broken."
+  default     = ""
+}
+
 variable "reminder_sweep_secret" {
   type        = string
   description = "Static machine-to-machine secret for Cloud Scheduler to call POST /api/v1/platform/reminders/sweep. Deliberately not the platform-admin JWT/session flow — see application/chann_app/routers_admin.py:require_scheduler for why."

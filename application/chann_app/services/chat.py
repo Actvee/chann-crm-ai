@@ -658,6 +658,35 @@ class _TargetNotFound(Exception):
         self.code = code
 
 
+async def _code_for_entity(
+    client: DataClient, license_id: str, entity_type: str, entity_id: str,
+) -> str | None:
+    """The human-facing code for a record, given its type and id.
+
+    The inverse of _resolve_entity, which looks a record up BY code. Needed
+    by the reply path: a line_message_entity_map row carries a UUID, while
+    everything downstream addresses records by C-/D-/Q- codes.
+    """
+    try:
+        if entity_type == "customer":
+            rows = await client.list_customers(license_id)
+            key = "customer_id"
+        elif entity_type == "deal":
+            rows = await client.list_deals(license_id)
+            key = "deal_id"
+        elif entity_type == "quote":
+            rows = await client.list_quotes(license_id)
+            key = "quote_id"
+        else:
+            return None
+    except Exception:
+        log.exception("could not look up a code for %s/%s", entity_type, entity_id)
+        return None
+
+    row = next((r for r in rows if str(r.get("id")) == str(entity_id)), None)
+    return str(row.get(key)) if row and row.get(key) else None
+
+
 async def _resolve_target_or_context(
     client: DataClient, ctx: ResolvedContext, license_id: str, message: str,
 ) -> tuple[str, str, str] | None:
@@ -1038,6 +1067,27 @@ QUOTE_ISSUE_FAILED = {
 }
 
 
+def document_download_url(license_id: str, document_id: str) -> str | None:
+    """A tappable link to an issued document, or None when it cannot be built.
+
+    Returns None rather than a broken URL for the same reason dashboard_link
+    does: a link that fails when tapped is worse than a message that admits
+    it has none.
+    """
+    from ..auth.document_link import issue_document_token
+    from ..config import settings
+
+    base = (settings.public_base_url or "").rstrip("/")
+    if not base or not document_id:
+        return None
+    try:
+        token = issue_document_token(license_id, document_id)
+    except Exception:
+        log.exception("could not issue a document link token")
+        return None
+    return f"{base}/api/v1/documents/{token}"
+
+
 async def _handle_quote_issue(
     client: DataClient, *, license_id, code: str, permission_keys: list[str],
     language: str, actor_id: str, allow_reissue: bool,
@@ -1094,17 +1144,14 @@ async def _handle_quote_issue(
         return ChatReply(text=_t(QUOTE_ISSUE_FAILED, language).format(detail=str(exc)[:160]))
 
     sha = str(document.get("sha256") or "")[:16]
-    # The document exists either way at this point. A signing failure must
-    # therefore never read as "issuing failed" — it is a delivery problem
-    # with a working fallback, and saying otherwise would invite a re-issue
-    # that duplicates a real customer-facing file.
-    try:
-        url = await get_document_store().signed_url(
-            path=str(document.get("output_path") or ""),
-            expires_seconds=QUOTE_LINK_TTL_SECONDS,
-        )
-    except (DocumentStoreError, DocumentStoreNotConfigured):
-        log.exception("issued document could not be signed for delivery")
+    # A link served by this application, not a GCS signed URL. Signing one
+    # needs iam.serviceAccounts.signBlob on the signing service account,
+    # which roles/editor does not grant and this project does not add — in
+    # production every issue ended with "could not create a download link"
+    # and no file, for a document that existed and was simply unreachable.
+    url = document_download_url(str(license_id), str(document.get("id") or ""))
+    if not url:
+        log.error("issued document has no id or no public base URL configured")
         return ChatReply(
             text=_t(QUOTE_ISSUED_NO_LINK, language).format(
                 quote_id=quote.get("quote_id"), sha=sha
@@ -1178,6 +1225,25 @@ def dashboard_link(section: str) -> str | None:
 
 CUSTOMER_LIST_PHRASES = ("รายชื่อลูกค้า", "รายการลูกค้า", "ดูลูกค้า", "ลูกค้าทั้งหมด", "customer list")
 DEAL_LIST_PHRASES = ("รายการดีล", "รายชื่อดีล", "ดูดีล", "ดีลทั้งหมด", "deal list")
+# Trailing-name forms: "ดูดีลของจุใจ", "ดีลของ C-2026-0005". Matched
+# separately from the bare phrases because _matches_phrase compares the
+# whole message, so anything after the trigger stops it matching at all.
+DEAL_FOR_CUSTOMER_TRIGGERS = (
+    "ดูดีลของ", "รายการดีลของ", "ดีลของ", "deals of", "deals for",
+)
+
+DEAL_CUSTOMER_NOT_FOUND = {
+    "th": "ไม่พบลูกค้าชื่อ \"{name}\"",
+    "en": "No customer matching \"{name}\".",
+}
+DEAL_CUSTOMER_AMBIGUOUS = {
+    "th": "มีลูกค้าหลายคนที่ตรงกัน ระบุให้ชัดขึ้นหรือใช้รหัส: {names}",
+    "en": "Several customers match — be more specific or use a code: {names}",
+}
+DEAL_NONE_FOR_CUSTOMER = {
+    "th": "{name} ยังไม่มีดีล",
+    "en": "{name} has no deals yet.",
+}
 DEAL_OPEN_PHRASES = ("ดีลที่ยังไม่ปิด", "ดีลค้าง", "ดีลเปิดอยู่", "open deals")
 PRODUCT_LIST_PHRASES = ("รายการสินค้า", "รายชื่อสินค้า", "ดูสินค้า", "สินค้าทั้งหมด", "product list")
 QUOTE_LIST_PHRASES = ("รายการใบเสนอราคา", "ใบเสนอราคาทั้งหมด", "ดูใบเสนอราคา", "quote list")
@@ -1440,15 +1506,55 @@ async def _handle_customer_detail(
 
 async def _handle_deal_list(
     client: DataClient, *, license_id, permission_keys: list[str], language: str,
-    open_only: bool = False,
+    open_only: bool = False, for_customer: str | None = None,
 ) -> ChatReply:
     if "deal.read" not in set(permission_keys):
         return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    license_id = str(license_id)
     try:
-        deals = await client.list_deals(str(license_id))
+        deals = await client.list_deals(license_id)
     except Exception:
         log.exception("deal list failed")
         return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    matched_customer = None
+    if for_customer:
+        # "ดูดีลของจุใจ" — the deals belonging to one person, which is how
+        # someone actually thinks about a customer they are working. Resolved
+        # by name or code against the customer list, then filtered on
+        # contact_id, because a deal stores who it belongs to and nothing
+        # else in the deal row names them.
+        try:
+            customers = await client.list_customers(license_id)
+        except Exception:
+            log.exception("customer lookup for a deal filter failed")
+            return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+        needle = for_customer.strip().lower()
+        matches = [
+            c for c in customers
+            if needle in _customer_name(c).lower()
+            or needle == str(c.get("customer_id") or "").lower()
+            or needle in str(c.get("phone") or "")
+        ]
+        if not matches:
+            return ChatReply(
+                text=_t(DEAL_CUSTOMER_NOT_FOUND, language).format(name=for_customer)
+            )
+        if len(matches) > 1:
+            # Guessing which "สมชาย" was meant would attach the answer to the
+            # wrong person's pipeline, so ask instead.
+            names = ", ".join(
+                f"{_customer_name(c)} ({c.get('customer_id')})" for c in matches[:5]
+            )
+            return ChatReply(
+                text=_t(DEAL_CUSTOMER_AMBIGUOUS, language).format(names=names)
+            )
+        matched_customer = matches[0]
+        deals = [
+            d for d in deals
+            if str(d.get("contact_id") or "") == str(matched_customer.get("id"))
+        ]
 
     if open_only:
         # "Open" means not yet resolved either way. Filtering on the two
@@ -1458,6 +1564,12 @@ async def _handle_deal_list(
         deals = [d for d in deals if str(d.get("stage") or "").lower() not in ("won", "lost")]
 
     if not deals:
+        if matched_customer is not None:
+            name = _customer_name(matched_customer)
+            return ChatReply(
+                text=_t(DEAL_NONE_FOR_CUSTOMER, language).format(name=name),
+                quick_replies=[("สร้างดีล", f"สร้างดีลให้ {name}")],
+            )
         return ChatReply(
             text=_t(EMPTY_LIST, language).format(what="ดีล" if language == "th" else "deals"),
             quick_replies=[("สร้างดีล", "สร้างดีล")],
@@ -3008,6 +3120,16 @@ async def handle_chat_message(
                 client, license_id=license_id, permission_keys=permission_keys,
                 language=language,
             )
+        # Checked before the bare list phrases: "ดูดีลของจุใจ" contains
+        # "ดูดีล", and matching the shorter form first would list every deal
+        # in the tenant instead of that customer's.
+        for_customer = _parse_after_trigger(message, DEAL_FOR_CUSTOMER_TRIGGERS)
+        if for_customer:
+            return await _handle_deal_list(
+                client, license_id=license_id, permission_keys=permission_keys,
+                language=language, for_customer=for_customer,
+            )
+
         if _matches_phrase(message, DEAL_OPEN_PHRASES):
             return await _handle_deal_list(
                 client, license_id=license_id, permission_keys=permission_keys,
@@ -3275,11 +3397,31 @@ async def handle_reply(
     if mapping is None:
         return ChatReply(text=_t(REPLY_NO_SOURCE_MESSAGE, language))
 
+    # Seed the conversation context BEFORE dispatching, not after.
+    #
+    # This used to call handle_chat_message first and overwrite the reply's
+    # entity fields afterwards — by which point the handler had already run
+    # and had no idea which record it was meant to act on. So replying
+    # "ออกเอกสาร" to a quote-created message still demanded the quote code,
+    # even though the message being replied to names it.
+    #
+    # Writing it into the same last_entity_ref that _resolve_target_or_context
+    # already reads means every command that resolves a target gets this for
+    # free, rather than each one needing its own reply-aware branch.
+    code = await _code_for_entity(
+        client, str(ctx.license_id), mapping["entity_type"], str(mapping["entity_id"]),
+    )
+    if code:
+        await _remember_entity(
+            client, ctx, entity_type=mapping["entity_type"],
+            entity_id=mapping["entity_id"], code=code,
+        )
+
     reply = await handle_chat_message(
         client, message=reply_text, ctx=ctx, language=language, ai_client=ai_client
     )
-    # The entity is decided by what was replied to, not by whatever the model
-    # inferred from the reply text — "แก้ชื่อเป็นสมหญิง" names no entity at all.
+    # Still asserted on the way out: the entity is decided by what was
+    # replied to, not by whatever the model inferred from the reply text.
     reply.entity_type = mapping["entity_type"]
     reply.entity_id = str(mapping["entity_id"])
     return reply

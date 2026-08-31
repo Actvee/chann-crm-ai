@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { AppShell, Badge, CompanyPicker, Count, Empty } from "../_components";
@@ -160,6 +161,10 @@ export default function DealList({ liffId }: { liffId: string }) {
         <ul className="list">
           {visible.map((deal) => (
             <li key={deal.id} className="card" data-stage={deal.stage}>
+              <Link
+                href={`/liff/sales/deals/${deal.id}`}
+                style={{ textDecoration: "none", color: "inherit" }}
+              >
               <div className="card-title">
                 <span className="code">{deal.deal_id}</span>
                 <Badge stage={deal.stage} label={stageLabel(deal.stage)} />
@@ -172,6 +177,7 @@ export default function DealList({ liffId }: { liffId: string }) {
                   : t.dashboard.deals.noLineItems}
                 {deal.notes ? ` · ${deal.notes}` : ""}
               </div>
+              </Link>
               {NEXT_STAGES[deal.stage]?.length ? (
                 <div className="card-actions">
                   {NEXT_STAGES[deal.stage].map((stage) => (

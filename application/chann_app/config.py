@@ -113,6 +113,11 @@ class Settings(BaseSettings):
     # than emitting a broken one.
     liff_sales_id: str = ""
 
+    # This service's own externally reachable base URL, used to build links
+    # sent into LINE chats (issued documents, and anything similar later).
+    # Empty means such links are omitted rather than emitted broken.
+    public_base_url: str = ""
+
     class Config:
         env_file = ".env"
         extra = "ignore"

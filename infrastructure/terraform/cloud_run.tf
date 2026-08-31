@@ -84,6 +84,9 @@ locals {
     # allowing them through when this is unset (see require_scheduler),
     # so leaving it blank is safe, not silently insecure.
     REMINDER_SWEEP_SECRET = var.reminder_sweep_secret
+    # This service's own URL, so links it sends into LINE point back at it.
+    # Cloud Run does not expose this to the container, so it is passed in.
+    PUBLIC_BASE_URL = var.application_public_base_url
   })
 
   presentation_runtime_env = merge(local.common_runtime_env, {

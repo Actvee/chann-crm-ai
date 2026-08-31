@@ -2936,3 +2936,105 @@ class TestUsageHelp:
 
         text = greet(_ctx())
         assert "วิธีใช้" in text
+
+
+class TestDealsForOneCustomer:
+    """"ดูดีลของจุใจ" — the deals belonging to one person.
+
+    _matches_phrase compares the WHOLE message, so a trailing name stopped
+    the deal-list command matching at all: the request was silently not
+    understood rather than answered.
+    """
+
+    async def _setup(self, client):
+        a = await client.create_customer("L1", {
+            "first_name": "จุใจ", "last_name": "มาติกา", "phone": "0659635642",
+        })
+        b = await client.create_customer("L1", {
+            "first_name": "สมชาย", "last_name": "ใจดี", "phone": "0889768056",
+        })
+        deal_a = await client.create_deal("L1", {"contact_id": a["id"]})
+        deal_b = await client.create_deal("L1", {"contact_id": b["id"]})
+        return a, b, deal_a, deal_b
+
+    async def test_only_that_customer_s_deals_are_listed(self):
+        client = FakeDataClient(permission_keys=["deal.read", "customer.read"])
+        _, _, deal_a, deal_b = await self._setup(client)
+        reply = await handle_chat_message(client, message="ดูดีลของจุใจ", ctx=_ctx())
+        assert deal_a["deal_id"] in reply.text
+        assert deal_b["deal_id"] not in reply.text
+
+    async def test_a_customer_code_works_as_well_as_a_name(self):
+        client = FakeDataClient(permission_keys=["deal.read", "customer.read"])
+        a, _, deal_a, deal_b = await self._setup(client)
+        reply = await handle_chat_message(
+            client, message=f"ดีลของ {a['customer_id']}", ctx=_ctx(),
+        )
+        assert deal_a["deal_id"] in reply.text
+        assert deal_b["deal_id"] not in reply.text
+
+    async def test_the_bare_list_command_still_lists_everything(self):
+        """"ดูดีลของจุใจ" contains "ดูดีล" — matching the shorter form first
+        would list the whole tenant instead of one customer's pipeline."""
+        client = FakeDataClient(permission_keys=["deal.read", "customer.read"])
+        _, _, deal_a, deal_b = await self._setup(client)
+        reply = await handle_chat_message(client, message="รายการดีล", ctx=_ctx())
+        assert deal_a["deal_id"] in reply.text
+        assert deal_b["deal_id"] in reply.text
+
+    async def test_an_unknown_name_says_so_rather_than_listing_everything(self):
+        client = FakeDataClient(permission_keys=["deal.read", "customer.read"])
+        await self._setup(client)
+        reply = await handle_chat_message(client, message="ดูดีลของสมหญิง", ctx=_ctx())
+        assert "ไม่พบลูกค้า" in reply.text
+
+    async def test_a_customer_with_no_deals_is_told_so_by_name(self):
+        client = FakeDataClient(permission_keys=["deal.read", "customer.read"])
+        lonely = await client.create_customer("L1", {
+            "first_name": "วินัย", "last_name": "ยอมความ", "phone": "0785649756",
+        })
+        reply = await handle_chat_message(client, message="ดูดีลของวินัย", ctx=_ctx())
+        assert "วินัย" in reply.text
+        assert any("สร้างดีล" in label for label, _ in reply.quick_replies)
+
+
+class TestReplyDrivesTheAction:
+    """Replying to a message should act on what that message was about.
+
+    handle_reply used to run the command FIRST and overwrite the reply's
+    entity fields afterwards — by which point the handler had already
+    finished and had never known which record it was for. So replying
+    "ออกเอกสาร" to a quote-created message still demanded the quote code
+    that the message being replied to was displaying.
+    """
+
+    async def test_replying_to_a_quote_message_issues_that_quote(self):
+        from chann_app.services.chat import handle_reply
+
+        client = FakeDataClient(permission_keys=["quote.read", "quote.update"])
+        customer = await client.create_customer("L1", {
+            "first_name": "ก", "last_name": "ข", "phone": "0800000000",
+        })
+        deal = await client.create_deal("L1", {"contact_id": customer["id"]})
+        quote = await client.create_quote("L1", {"deal_id": deal["id"]})
+        # The fake serves whatever _mapping holds; record_message_entity only
+        # logs the call, matching the real client's write-then-read split.
+        client._mapping = {"entity_type": "quote", "entity_id": quote["id"]}
+
+        reply = await handle_reply(
+            client, message_id="msg-1", reply_text="ออกเอกสาร", ctx=_ctx(),
+        )
+        # The quote code is now known from the replied-to message, so the
+        # reply is about that quote rather than a request to name one.
+        assert "ระบุรหัส" not in reply.text
+        assert reply.entity_type == "quote"
+        assert reply.entity_id == str(quote["id"])
+
+    async def test_replying_to_an_unknown_message_says_so(self):
+        from chann_app.services.chat import handle_reply
+
+        client = FakeDataClient(permission_keys=["quote.update"])
+        reply = await handle_reply(
+            client, message_id="never-seen", reply_text="ออกเอกสาร", ctx=_ctx(),
+        )
+        assert reply.entity_id is None
