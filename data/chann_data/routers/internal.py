@@ -9,6 +9,7 @@ import logging
 import uuid
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 

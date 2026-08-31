@@ -33,24 +33,9 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-@pytest.fixture(scope="module")
-def migrated_db():
-    from sqlalchemy import create_engine, text
-
-    engine = create_engine(TEST_DATABASE_URL, future=True)
-
-    # Start genuinely empty; a migration that only works on a warm database
-    # is not a migration you can deploy to a new environment.
-    with engine.begin() as conn:
-        conn.execute(text("DROP SCHEMA public CASCADE; CREATE SCHEMA public;"))
-
-    env = {**os.environ, "DATABASE_URL": TEST_DATABASE_URL}
-    result = subprocess.run(
-        [sys.executable, "-m", "alembic", "upgrade", "head"],
-        cwd=str(ROOT / "database"), env=env, capture_output=True, text=True,
-    )
-    assert result.returncode == 0, f"alembic upgrade failed:\n{result.stdout}\n{result.stderr}"
-    return engine
+# migrated_db now lives in conftest.py — a second integration file needed it,
+# and duplicating a fixture that drops and rebuilds the schema would be two
+# chances to disagree about what "a migrated database" means.
 
 
 def _run_seed(env_overrides: dict) -> subprocess.CompletedProcess:
