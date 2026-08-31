@@ -384,6 +384,16 @@ class DataClient:
         )
         return self._unwrap(resp)
 
+    async def line_target_of(self, chann_uid: str) -> str | None:
+        """The LINE user id to push to, or None if this person has none."""
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/identities/{chann_uid}/line-target",
+            headers=self._headers,
+        )
+        if resp.status_code == 404:
+            return None
+        return (self._unwrap(resp) or {}).get("line_user_id")
+
     async def list_licenses(
         self, status: str | None = None, exclude_status: str | None = None,
     ) -> list[dict]:

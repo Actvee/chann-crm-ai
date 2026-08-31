@@ -149,12 +149,22 @@ async def sweep_due_follow_ups(client: DataClient, *, days: int = 0) -> dict:
                 what=what, when=_format_when(item.get("due_time")),
             )
 
+            # Resolved, not left as None: send_notification treats a missing
+            # LINE target as "record it for the dashboard and stop", which is
+            # exactly how reminders came to be counted as sent while reaching
+            # nobody.
+            try:
+                line_target = await client.line_target_of(str(owner))
+            except Exception:
+                log.exception("could not resolve a LINE target for %s", owner)
+                line_target = None
+
             try:
                 await send_notification(
                     client,
                     license_id=license_id,
                     target_chann_uid=str(owner),
-                    target_line_user_id=None,
+                    target_line_user_id=line_target,
                     type=REMINDER_TYPE,
                     message=text,
                     message_en=REMINDER_TEXT["en"].format(

@@ -58,6 +58,11 @@ class _FakeClient:
         self._due = due_by_license
         self.list_calls: list[dict] = []
         self.pushed: list[dict] = []
+        self.line_lookups: list[str] = []
+        # Every owner has a LINE account unless a test says otherwise.
+        self.line_targets: dict[str, str | None] = {
+            "CHN-1": "Uline1", "CHN-2": "Uline2",
+        }
 
     async def list_licenses(self, status=None, exclude_status=None):
         self.list_calls.append({"status": status, "exclude_status": exclude_status})
@@ -74,6 +79,10 @@ class _FakeClient:
     async def create_notification(self, license_id, **kwargs):
         self.pushed.append({"license_id": license_id, **kwargs})
         return {"id": "notif-1", **kwargs}
+
+    async def line_target_of(self, chann_uid):
+        self.line_lookups.append(chann_uid)
+        return self.line_targets.get(chann_uid)
 
 
 @pytest.fixture
@@ -196,3 +205,61 @@ class TestSweepResilience:
         summary = await sweep_due_follow_ups(client)
         assert summary["skipped"] == 1
         assert summary["sent"] == 0
+
+
+class TestActualDelivery:
+    """A reminder that is recorded but never pushed is worse than one that
+    fails loudly: the sweep reported {"sent": 1} while nothing arrived in
+    LINE, because target_line_user_id was hardcoded to None and
+    send_notification treats that as "dashboard only".
+    """
+
+    async def test_the_line_target_is_resolved_before_sending(self, no_line_push):
+        today = datetime.now(BANGKOK).date()
+        client = _FakeClient(
+            licenses=[{"id": "lic-1", "status": "trial", "created_by_chann_uid": "CHN-1"}],
+            due_by_license={"lic-1": [{
+                "id": "fu-1", "entity_type": "deal", "entity_id": "d-1",
+                "due_date": today.isoformat(), "due_time": None, "notes": None,
+            }]},
+        )
+        await sweep_due_follow_ups(client)
+        assert client.line_lookups == ["CHN-1"], "the owner's LINE id must be looked up"
+        assert client.pushed[0]["target_line_user_id"] == "Uline1", (
+            "a resolved LINE target must reach send_notification, or the push "
+            "is silently downgraded to a dashboard-only record"
+        )
+
+    async def test_the_follow_up_s_own_owner_wins_over_the_license_creator(self, no_line_push):
+        """owner_chann_uid comes off the follow-up now that the Data tier
+        resolves it; the license creator is only the fallback."""
+        today = datetime.now(BANGKOK).date()
+        client = _FakeClient(
+            licenses=[{"id": "lic-1", "status": "trial", "created_by_chann_uid": "CHN-1"}],
+            due_by_license={"lic-1": [{
+                "id": "fu-1", "entity_type": "deal", "entity_id": "d-1",
+                "owner_chann_uid": "CHN-2",
+                "due_date": today.isoformat(), "due_time": None, "notes": None,
+            }]},
+        )
+        await sweep_due_follow_ups(client)
+        assert client.pushed[0]["target_chann_uid"] == "CHN-2"
+        assert client.pushed[0]["target_line_user_id"] == "Uline2"
+
+    async def test_an_owner_with_no_line_account_still_records_the_notification(
+        self, no_line_push,
+    ):
+        """Undeliverable over LINE is not the same as not worth recording —
+        it should still show up on the dashboard."""
+        today = datetime.now(BANGKOK).date()
+        client = _FakeClient(
+            licenses=[{"id": "lic-1", "status": "trial", "created_by_chann_uid": "CHN-NOLINE"}],
+            due_by_license={"lic-1": [{
+                "id": "fu-1", "entity_type": "deal", "entity_id": "d-1",
+                "due_date": today.isoformat(), "due_time": None, "notes": None,
+            }]},
+        )
+        client.line_targets["CHN-NOLINE"] = None
+        summary = await sweep_due_follow_ups(client)
+        assert summary["sent"] == 1
+        assert client.pushed[0]["target_line_user_id"] is None

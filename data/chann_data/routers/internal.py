@@ -28,7 +28,7 @@ from ..cache import (
 )
 from ..config import settings
 from ..db import get_session
-from ..models import License, LicenseMember
+from ..models import ChannIdentity, License, LicenseMember
 from ..repositories.tenant_scope import (
     CrossTenantAccessDenied,
     IdentityRepository,
@@ -146,6 +146,7 @@ from ..schemas import (
     InviteRedeemIn,
     LicenseCreateIn,
     LicenseOut,
+    LineTargetOut,
     LicenseStatusIn,
     MessageEntityMapIn,
     ShopOut,
@@ -2799,3 +2800,20 @@ def list_licenses(
         # an include-list without anyone noticing.
         query = query.where(License.status != exclude_status)
     return list(session.execute(query.order_by(License.created_at)).scalars())
+
+
+@router.get("/identities/{chann_uid}/line-target", response_model=LineTargetOut)
+def get_line_target(chann_uid: str, session: Session = Depends(get_session)):
+    """The LINE user id to push to, for a person known only by chann_uid.
+
+    Anything that notifies needs this. Without it the reminder sweep passed
+    target_line_user_id=None, and send_notification treats a missing LINE
+    target as "record it for the dashboard and stop" — so reminders were
+    stored, counted as sent, and never reached anyone.
+    """
+    row = session.execute(
+        select(ChannIdentity).where(ChannIdentity.chann_uid == chann_uid)
+    ).scalars().first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="identity not found")
+    return LineTargetOut(chann_uid=row.chann_uid, line_user_id=row.line_user_id)

@@ -469,6 +469,18 @@ class ProfileOut(BaseModel):
     registered_at: datetime | None
 
 
+class LineTargetOut(BaseModel):
+    """The LINE user id to push to, for a person known only by chann_uid.
+
+    Separate from ProfileOut on purpose: a LINE user id is a delivery
+    detail, not part of someone's profile, and putting it there would hand
+    it to every caller that only wanted a name.
+    """
+
+    chann_uid: str
+    line_user_id: str | None
+
+
 class ProfileEditCheckOut(BaseModel):
     allowed: bool
 
