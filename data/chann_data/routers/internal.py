@@ -80,6 +80,7 @@ from ..repositories.phase65 import (
 )
 from ..repositories.phase6 import (
     FollowUpRepository,
+    NoteRepository,
     MessageEntityMapRepository,
     NotificationRepository,
     Phase6Conflict,
@@ -111,6 +112,9 @@ from ..schemas import (
     StorefrontProductOut,
     AuditLogWriteIn,
     FollowUpIn,
+    NoteBodyIn,
+    NoteIn,
+    NoteOut,
     FollowUpOut,
     FollowUpStatusIn,
     PendingIntentIn,
@@ -957,6 +961,7 @@ def create_follow_up(
             entity_type=payload.entity_type,
             entity_id=payload.entity_id,
             due_date=payload.due_date,
+            due_time=payload.due_time,
             owner_member_id=payload.owner_member_id,
             notes=payload.notes,
         )
@@ -968,7 +973,11 @@ def create_follow_up(
             actor_id=x_actor_id or None,
             action="create",
             field_changes=diff_fields(
-                {}, {"entity_type": row.entity_type, "due_date": str(row.due_date)}
+                {}, {
+                    "entity_type": row.entity_type,
+                    "due_date": str(row.due_date),
+                    "due_time": str(row.due_time) if row.due_time else None,
+                }
             ),
         )
         session.commit()
@@ -2609,3 +2618,122 @@ def remove_deal_product(
     except Exception as exc:
         session.rollback()
         raise _phase2_http_error(exc)
+
+
+# ------------------------------------------------------------------ notes
+
+
+@router.post("/licenses/{license_id}/notes", response_model=NoteOut, status_code=201)
+def create_note(
+    license_id: uuid.UUID,
+    payload: NoteIn,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    """Master Spec 6.3 — an append-only note against any entity."""
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = NoteRepository(session).create(
+            scope,
+            entity_type=payload.entity_type,
+            entity_id=payload.entity_id,
+            body=payload.body,
+            author_chann_uid=x_actor_id or None,
+        )
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="note", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="create",
+            field_changes=diff_fields(
+                {}, {"entity_type": row.entity_type, "entity_id": str(row.entity_id)}
+            ),
+        )
+        session.commit()
+        session.refresh(row)
+        return row
+    except Exception as exc:
+        session.rollback()
+        raise _phase2_http_error(exc)
+
+
+@router.get("/licenses/{license_id}/notes", response_model=list[NoteOut])
+def list_notes(
+    license_id: uuid.UUID,
+    entity_type: str,
+    entity_id: uuid.UUID,
+    limit: int = 50,
+    session: Session = Depends(get_session),
+):
+    return NoteRepository(session).list_for_entity(
+        TenantScope(license_id=license_id),
+        entity_type=entity_type, entity_id=entity_id, limit=limit,
+    )
+
+
+@router.patch("/licenses/{license_id}/notes/{note_id}", response_model=NoteOut)
+def update_note(
+    license_id: uuid.UUID,
+    note_id: uuid.UUID,
+    payload: NoteBodyIn,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        before = NoteRepository(session).get(scope, note_id)
+        previous = before.body if before else None
+        row = NoteRepository(session).update(scope, note_id, body=payload.body)
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="note", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="update",
+            # The old text is kept in the audit entry: editing a note
+            # rewrites a record other people may already have acted on.
+            field_changes=diff_fields({"body": previous}, {"body": row.body}),
+        )
+        session.commit()
+        session.refresh(row)
+        return row
+    except Exception as exc:
+        session.rollback()
+        raise _phase2_http_error(exc)
+
+
+@router.delete("/licenses/{license_id}/notes/{note_id}", status_code=204)
+def delete_note(
+    license_id: uuid.UUID,
+    note_id: uuid.UUID,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        removed = NoteRepository(session).delete(scope, note_id)
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="note", entity_id=note_id,
+            actor_type="user", actor_id=x_actor_id or None, action="delete",
+            # The body goes into the audit entry because the row is gone:
+            # this is the only remaining record of what was deleted.
+            field_changes=diff_fields({"body": removed.body}, {"body": None}),
+        )
+        session.commit()
+        return None
+    except Exception as exc:
+        session.rollback()
+        raise _phase2_http_error(exc)
+
+
+@router.get("/licenses", response_model=list[LicenseOut])
+def list_licenses(
+    status: str | None = None,
+    session: Session = Depends(get_session),
+):
+    """Every tenant, for platform-wide scheduled work.
+
+    Deliberately not tenant-scoped, because the caller is a scheduler asking
+    "which tenants have work due", not a tenant asking about itself. It sits
+    on the internal API, which is only reachable from the Application tier —
+    the same trust boundary every other endpoint here relies on.
+    """
+    query = select(License)
+    if status:
+        query = query.where(License.status == status)
+    return list(session.execute(query.order_by(License.created_at)).scalars())

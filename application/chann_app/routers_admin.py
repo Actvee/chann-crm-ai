@@ -145,3 +145,23 @@ async def smartbrowz_verify_connection(claims: dict = Depends(require_admin)):
     except SmartBrowzRenderError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
     return result
+
+
+@router.post("/platform/reminders/sweep")
+async def run_reminder_sweep(
+    days: int = 0,
+    claims: dict = Depends(require_admin),
+    client: DataClient = Depends(get_data_client),
+):
+    """Push today's due follow-ups to their owners (Master Spec 6.7).
+
+    Called by Cloud Scheduler each morning. Behind require_admin like every
+    other platform route: an unauthenticated version would let anyone make
+    the platform send LINE messages to every tenant.
+
+    Returns the sweep's own summary so a failing schedule is visible in the
+    Scheduler job's history rather than only in logs.
+    """
+    from .services.reminders import sweep_due_follow_ups
+
+    return await sweep_due_follow_ups(client, days=max(0, min(days, 7)))

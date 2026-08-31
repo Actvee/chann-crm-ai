@@ -37,25 +37,70 @@ export const SALES_BASE_PATH = "/liff/sales";
 let lastInitError = "";
 
 /**
- * Let liff.init() complete a deep-link redirect.
+ * Every await in the startup path is wrapped in this.
  *
- * LINE loads the LIFF app's endpoint URL with the real destination in a
- * `liff.state` parameter and an authorisation `code` alongside it.
- * liff.init() exchanges that code, stores the session, and navigates to
- * the destination on its own.
- *
- * Reading liff.state and navigating manually — which this file used to do —
- * discards the code before it can be exchanged, and LIFF then loops
- * requesting a new one indefinitely.
+ * A hang is the worst possible failure here: the page shows a spinner
+ * forever, no error is raised, and the diagnostics below never appear — so
+ * there is nothing to report except "it did not load". A timeout converts
+ * that into a specific, visible failure naming the step that stalled.
  */
-export async function consumeLiffRedirect(liffId: string): Promise<void> {
-  const liff = getLiff();
-  if (!liff || !liffId) return;
+async function withTimeout<T>(label: string, ms: number, work: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    await liff.init({ liffId });
-  } catch (error) {
-    lastInitError = error instanceof Error ? error.message : String(error);
+    return await Promise.race([
+      work,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms / 1000}s`)), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
+}
+
+/**
+ * Complete a deep-link arrival, and return where to go next.
+ *
+ * Order is the whole point. LINE lands on the endpoint URL carrying both
+ * the destination (`liff.state`) and an authorisation `code` that
+ * liff.init() must exchange for a session. init() runs FIRST so the code is
+ * consumed; only then is it safe to leave the page.
+ *
+ * An earlier version navigated on liff.state immediately, which discarded
+ * the code, caused LIFF to reauthorise, and looped — a fresh `code=` in the
+ * access log every ~700ms. A later version left the navigation to init()
+ * itself on the assumption that it redirects; it does not always, and the
+ * page simply sat blank.
+ *
+ * Returns the in-app path to navigate to, or null when there is nothing to
+ * follow.
+ */
+export async function completeLiffRedirect(liffId: string): Promise<string | null> {
+  if (typeof window === "undefined") return null;
+  const state = new URLSearchParams(window.location.search).get("liff.state");
+  if (!state) return null;
+
+  const liff = getLiff();
+  if (liff && liffId) {
+    try {
+      await withTimeout("liff.init", 15_000, liff.init({ liffId }));
+    } catch (error) {
+      lastInitError = error instanceof Error ? error.message : String(error);
+      // Fall through and navigate anyway: the destination page runs the
+      // same init and will report the failure with its own diagnostics,
+      // which is far more useful than a blank menu.
+    }
+  }
+
+  // init() may have already navigated. If it did, the path no longer
+  // matches the endpoint and there is nothing left to do.
+  if (!window.location.pathname.endsWith(SALES_BASE_PATH)) return null;
+
+  // Only ever within this app. liff.state comes off a URL anyone can craft,
+  // so following an absolute target would be an open redirect.
+  const target = state.startsWith("/") ? state : `/${state}`;
+  if (target.startsWith("//") || target.includes("://")) return null;
+  return `${SALES_BASE_PATH}${target}`;
 }
 
 export function proxyHeaders(token: string, licenseId: string): HeadersInit {
@@ -97,28 +142,6 @@ export function liffDiagnostics(): string {
   const state = new URLSearchParams(window.location.search).get("liff.state");
   if (state) parts.push(`liff.state=${state}`);
   return parts.join(" · ");
-}
-
-/**
- * Every await in the startup path is wrapped in this.
- *
- * A hang is the worst possible failure here: the page shows a spinner
- * forever, no error is raised, and the diagnostics below never appear — so
- * there is nothing to report except "it did not load". A timeout converts
- * that into a specific, visible failure naming the step that stalled.
- */
-async function withTimeout<T>(label: string, ms: number, work: Promise<T>): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      work,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms / 1000}s`)), ms);
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
 }
 
 /** Returns the ID token and memberships, or throws with a message worth showing. */

@@ -3218,3 +3218,121 @@ class TestPhase9DealCodeIsPerTenant:
             session.commit()
         assert len(set(codes)) == 5
         assert codes == sorted(codes)
+
+
+class TestNotesAndAppointments:
+    """Master Spec 6.3/6.7 — notes as rows, and follow-ups with a time.
+
+    ACTION_PERMISSIONS promised note.* since Phase 6 while no notes table
+    existed; what there was is a single overwritable TEXT column per record,
+    with no author, no timestamp and no history.
+    """
+
+    def _tenant(self, migrated_db, suffix):
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import ChannIdentity
+        from chann_data.repositories.phase65 import RegistrationRepository
+        from chann_data.repositories.phase9 import CustomerRepository
+        from chann_data.repositories.tenant_scope import TenantScope
+
+        with Session(migrated_db) as session:
+            session.add(ChannIdentity(
+                chann_uid=f"CHN-NT-{suffix}", line_user_id=f"line-nt-{suffix}",
+                primary_role="sales",
+            ))
+            session.commit()
+        with Session(migrated_db) as session:
+            lic = RegistrationRepository(session).create_license(
+                company_name=f"Notes {suffix}", created_by_chann_uid=f"CHN-NT-{suffix}",
+            )
+            session.commit()
+            scope = TenantScope(license_id=lic.id)
+        with Session(migrated_db) as session:
+            customer = CustomerRepository(session).create(
+                scope, first_name="ก", last_name="ข", phone=f"07{ord(suffix):08d}",
+            )
+            session.commit()
+            return scope, customer.id
+
+    def test_many_notes_accumulate_newest_first(self, migrated_db):
+        """The whole point of a table over a column: a record keeps every
+        note, so "what did we agree in March" is answerable."""
+        from sqlalchemy.orm import Session
+
+        from chann_data.repositories.phase6 import NoteRepository
+
+        scope, customer_id = self._tenant(migrated_db, "A")
+        for text in ("ลูกค้าขอส่วนลด", "ตกลงราคาแล้ว", "รอเซ็นสัญญา"):
+            with Session(migrated_db) as session:
+                NoteRepository(session).create(
+                    scope, entity_type="customer", entity_id=customer_id,
+                    body=text, author_chann_uid="CHN-NT-A",
+                )
+                session.commit()
+
+        with Session(migrated_db) as session:
+            notes = NoteRepository(session).list_for_entity(
+                scope, entity_type="customer", entity_id=customer_id,
+            )
+            assert len(notes) == 3
+            assert notes[0].body == "รอเซ็นสัญญา", "newest first"
+            assert all(n.author_chann_uid == "CHN-NT-A" for n in notes)
+
+    def test_an_empty_note_is_refused(self, migrated_db):
+        """A blank row in a history is worse than a refusal someone can act
+        on."""
+        import pytest as _pytest
+        from sqlalchemy.orm import Session
+
+        from chann_data.repositories.phase6 import NoteRepository, Phase6Conflict
+
+        scope, customer_id = self._tenant(migrated_db, "B")
+        with Session(migrated_db) as session:
+            with _pytest.raises(Phase6Conflict):
+                NoteRepository(session).create(
+                    scope, entity_type="customer", entity_id=customer_id, body="   ",
+                )
+
+    def test_notes_do_not_leak_across_tenants(self, migrated_db):
+        from sqlalchemy.orm import Session
+
+        from chann_data.repositories.phase6 import NoteRepository
+
+        a, customer_a = self._tenant(migrated_db, "C")
+        b, _ = self._tenant(migrated_db, "D")
+        with Session(migrated_db) as session:
+            NoteRepository(session).create(
+                scope=a, entity_type="customer", entity_id=customer_a, body="ความลับ",
+            )
+            session.commit()
+
+        with Session(migrated_db) as session:
+            # Same entity id, other tenant's scope: must see nothing.
+            assert NoteRepository(session).list_for_entity(
+                b, entity_type="customer", entity_id=customer_a,
+            ) == []
+
+    def test_a_follow_up_can_carry_a_time_or_not(self, migrated_db):
+        """NULL keeps the original whole-day meaning exactly; a value turns
+        the same row into an appointment."""
+        from datetime import date, time
+
+        from sqlalchemy.orm import Session
+
+        from chann_data.repositories.phase6 import FollowUpRepository
+
+        scope, customer_id = self._tenant(migrated_db, "E")
+        with Session(migrated_db) as session:
+            repo = FollowUpRepository(session)
+            whole_day = repo.create(
+                scope, entity_type="customer", entity_id=customer_id,
+                due_date=date(2026, 9, 4),
+            )
+            appointment = repo.create(
+                scope, entity_type="customer", entity_id=customer_id,
+                due_date=date(2026, 9, 4), due_time=time(14, 0),
+            )
+            session.commit()
+            assert whole_day.due_time is None
+            assert appointment.due_time == time(14, 0)

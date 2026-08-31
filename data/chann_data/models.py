@@ -8,7 +8,7 @@ Columns marked "placed early" are required by a later phase but are created
 now because the Master Spec explicitly says so.
 """
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, time
 
 from sqlalchemy import (
     Boolean,
@@ -18,6 +18,7 @@ from sqlalchemy import (
     Integer,
     Numeric,
     String,
+    Time,
     Text,
     UniqueConstraint,
     func,
@@ -332,11 +333,47 @@ class FollowUp(TimestampMixin, Base):
     # this column — comparing it against an aware datetime raises, so the
     # repository works in dates throughout rather than mixing the two.
     due_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    # Optional clock time, which turns a whole-day reminder into an
+    # appointment. NULL keeps the original meaning exactly.
+    #
+    # TIME without a zone on purpose: a Thai SMB's appointments are in its
+    # own local time, and storing UTC would make "14:00" render differently
+    # depending on where it is read — the opposite of what someone writing
+    # "บ่ายสอง" means.
+    due_time: Mapped[time | None] = mapped_column(Time)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     owner_member_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("license_members.id", ondelete="RESTRICT")
     )
     notes: Mapped[str | None] = mapped_column(Text)
+
+
+class Note(TimestampMixin, Base):
+    """A dated, attributed note against any entity (Master Spec 6.3).
+
+    ACTION_PERMISSIONS has promised note.create/read/update since Phase 6,
+    but no table existed: what there was is a single `notes` TEXT column on
+    customers, deals and follow-ups — one blob per record, overwritten on
+    every edit, with no author and no history. Those columns still exist and
+    still hold their data; new notes are rows here.
+
+    Polymorphic by (entity_type, entity_id) like FollowUp, so a note can
+    hang off a customer, a deal or a quote without a table per entity.
+    """
+
+    __tablename__ = "notes"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    license_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("licenses.id", ondelete="RESTRICT"),
+        nullable=False, index=True,
+    )
+    entity_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    entity_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    # The person, not their membership: a note keeps its author even after
+    # that person's access is revoked.
+    author_chann_uid: Mapped[str | None] = mapped_column(String(32))
 
 
 class LicenseInvite(TimestampMixin, Base):

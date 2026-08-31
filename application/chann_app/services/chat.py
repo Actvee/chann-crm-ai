@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
+from datetime import date, datetime, time, timezone, timedelta
 from decimal import Decimal, InvalidOperation
 
 from ..data_client import DataClient
@@ -565,6 +566,256 @@ async def _handle_company_profile_command(
     else:
         text += "\n" + _t(COMPANY_READY, language)
     return ChatReply(text=text)
+
+
+# ------------------------------------------- Notes, reminders, appointments
+#
+# Master Spec 6.3/6.7. The follow_ups table and its endpoints have existed
+# since Phase 6, and ACTION_PERMISSIONS has promised note.* and followup.*
+# just as long — but no chat handler ever implemented either, so both passed
+# the permission gate and fell through to nothing. Notes had no table at all
+# until migration 0013.
+#
+# Matched deterministically. A reminder that lands on the wrong day is worse
+# than one the system says it did not understand: the person believes they
+# are covered, and finds out when the customer has already gone quiet.
+
+NOTE_TRIGGERS = ("บันทึกว่า", "จดว่า", "โน้ตว่า", "note")
+NOTE_LIST_TRIGGERS = ("ดูบันทึก", "บันทึกของ", "ประวัติ")
+REMINDER_TRIGGERS = ("เตือน", "นัด", "remind")
+TODAY_WORK_PHRASES = ("งานวันนี้", "ที่ต้องทำวันนี้", "today")
+UPCOMING_WORK_PHRASES = ("งานสัปดาห์นี้", "งานที่ค้าง", "ที่ต้องติดตาม", "upcoming")
+
+NOTE_SAVED = {
+    "th": "บันทึกไว้กับ {code} แล้ว",
+    "en": "Noted against {code}.",
+}
+NOTE_NEEDS_TARGET = {
+    "th": "ระบุด้วยว่าบันทึกกับใครหรือดีลไหน เช่น \"บันทึกว่า C-2026-0001 ลูกค้าขอส่วนลด\"",
+    "en": "Say which record the note is about, e.g. \"note C-2026-0001 asked for a discount\".",
+}
+NOTE_EMPTY = {
+    "th": "ยังไม่มีบันทึกของ {code}",
+    "en": "No notes for {code} yet.",
+}
+REMINDER_SAVED = {
+    "th": "ตั้งเตือน {code} วันที่ {date}{time} แล้ว",
+    "en": "Reminder set for {code} on {date}{time}.",
+}
+REMINDER_NEEDS_DATE = {
+    "th": "ไม่เข้าใจวันที่ ลองพิมพ์แบบนี้ดู: \"เตือน D-2026-0001 พรุ่งนี้\" · \"เตือน D-2026-0001 วันศุกร์ บ่าย 2\" · \"เตือน D-2026-0001 15 มี.ค.\"",
+    "en": "Could not read the date. Try: \"remind D-2026-0001 tomorrow\" or \"remind D-2026-0001 15 มี.ค. 14:00\".",
+}
+REMINDER_NEEDS_TARGET = {
+    "th": "ระบุด้วยว่าเตือนเรื่องอะไร เช่น \"เตือน D-2026-0001 พรุ่งนี้\"",
+    "en": "Say what the reminder is about, e.g. \"remind D-2026-0001 tomorrow\".",
+}
+WORK_EMPTY = {
+    "th": "ไม่มีงานที่ต้องติดตามในช่วงนี้",
+    "en": "Nothing to follow up on right now.",
+}
+WORK_HEADING = {
+    "th": "งานที่ต้องติดตาม:",
+    "en": "Follow-ups due:",
+}
+
+# Codes are how a person names a record in chat. The prefix tells us which
+# kind it is, so one regex covers all three without the caller having to say.
+ENTITY_CODE_RE = re.compile(r"\b([CDQ]-\d{4}-\d{4})\b", re.IGNORECASE)
+
+CODE_PREFIX_TO_ENTITY = {"C": "customer", "D": "deal", "Q": "quote"}
+
+
+def _find_entity_code(message: str) -> tuple[str, str] | None:
+    """(entity_type, code) for the first record code in the message."""
+    match = ENTITY_CODE_RE.search(message or "")
+    if not match:
+        return None
+    code = match.group(1).upper()
+    return CODE_PREFIX_TO_ENTITY[code[0]], code
+
+
+async def _resolve_entity(client: DataClient, license_id: str, entity_type: str, code: str):
+    """The row a code refers to, or None. Tenant-scoped by every underlying
+    list call, so a code from another tenant simply does not resolve."""
+    if entity_type == "customer":
+        rows = await client.list_customers(license_id)
+        return next((r for r in rows if str(r.get("customer_id", "")).upper() == code), None)
+    if entity_type == "deal":
+        rows = await client.list_deals(license_id)
+        return next((r for r in rows if str(r.get("deal_id", "")).upper() == code), None)
+    rows = await client.list_quotes(license_id)
+    return next((r for r in rows if str(r.get("quote_id", "")).upper() == code), None)
+
+
+async def _handle_note_create(
+    client: DataClient, *, license_id, message: str, trigger: str,
+    permission_keys: list[str], language: str, actor_id: str,
+) -> ChatReply:
+    if "note.create" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+
+    found = _find_entity_code(message)
+    if found is None:
+        return ChatReply(text=_t(NOTE_NEEDS_TARGET, language))
+    entity_type, code = found
+
+    # The note body is everything after the trigger, minus the code itself.
+    lowered = message.lower()
+    index = lowered.find(trigger.lower())
+    body = message[index + len(trigger):] if index >= 0 else message
+    body = ENTITY_CODE_RE.sub("", body).strip(" :·-").strip()
+    if not body:
+        return ChatReply(text=_t(NOTE_NEEDS_TARGET, language))
+
+    license_id = str(license_id)
+    try:
+        row = await _resolve_entity(client, license_id, entity_type, code)
+        if row is None:
+            return ChatReply(
+                text=_t(NOT_FOUND_BY_CODE, language).format(what=entity_type, code=code)
+            )
+        await client.create_note(
+            license_id,
+            {"entity_type": entity_type, "entity_id": str(row["id"]), "body": body},
+            actor_id=actor_id,
+        )
+    except Exception:
+        log.exception("note create failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    return ChatReply(
+        text=_t(NOTE_SAVED, language).format(code=code),
+        entity_type=entity_type, entity_id=str(row["id"]),
+        quick_replies=[
+            ("ดูบันทึกทั้งหมด", f"ดูบันทึก {code}"),
+            ("ตั้งเตือน", f"เตือน {code} พรุ่งนี้"),
+        ],
+    )
+
+
+async def _handle_note_list(
+    client: DataClient, *, license_id, message: str,
+    permission_keys: list[str], language: str,
+) -> ChatReply:
+    if "note.read" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+
+    found = _find_entity_code(message)
+    if found is None:
+        return ChatReply(text=_t(NOTE_NEEDS_TARGET, language))
+    entity_type, code = found
+
+    license_id = str(license_id)
+    try:
+        row = await _resolve_entity(client, license_id, entity_type, code)
+        if row is None:
+            return ChatReply(
+                text=_t(NOT_FOUND_BY_CODE, language).format(what=entity_type, code=code)
+            )
+        notes = await client.list_notes(license_id, entity_type, str(row["id"]))
+    except Exception:
+        log.exception("note list failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    if not notes:
+        return ChatReply(text=_t(NOTE_EMPTY, language).format(code=code))
+
+    lines = [f"บันทึกของ {code}:"]
+    for note in notes[:LIST_LIMIT]:
+        stamp = str(note.get("created_at") or "")[:10]
+        lines.append(f"· {stamp} {note.get('body') or ''}")
+    return ChatReply(text="\n".join(lines))
+
+
+async def _handle_reminder_create(
+    client: DataClient, *, license_id, message: str,
+    permission_keys: list[str], language: str, actor_id: str,
+) -> ChatReply:
+    from .thai_datetime import format_thai_date, format_thai_time, parse_thai_date, parse_thai_time
+
+    if "followup.create" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+
+    found = _find_entity_code(message)
+    if found is None:
+        return ChatReply(text=_t(REMINDER_NEEDS_TARGET, language))
+    entity_type, code = found
+
+    # Parse against the tenant's own day, not UTC: at 23:00 in Bangkok, UTC
+    # is still yesterday, and "พรุ่งนี้" would land on today.
+    today = datetime.now(BANGKOK_TZ).date()
+    due_date = parse_thai_date(message, today)
+    if due_date is None:
+        return ChatReply(text=_t(REMINDER_NEEDS_DATE, language))
+    due_time = parse_thai_time(message)
+
+    license_id = str(license_id)
+    try:
+        row = await _resolve_entity(client, license_id, entity_type, code)
+        if row is None:
+            return ChatReply(
+                text=_t(NOT_FOUND_BY_CODE, language).format(what=entity_type, code=code)
+            )
+        payload = {
+            "entity_type": entity_type,
+            "entity_id": str(row["id"]),
+            "due_date": due_date.isoformat(),
+        }
+        if due_time is not None:
+            payload["due_time"] = due_time.isoformat()
+        await client.create_follow_up(license_id, payload, actor_id=actor_id)
+    except Exception:
+        log.exception("reminder create failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    # The resolved date and time are echoed back deliberately: the parse is
+    # a best reading of free text, and showing what it decided is how the
+    # person catches a misread before it matters.
+    time_text = f" {format_thai_time(due_time)}" if due_time else ""
+    return ChatReply(
+        text=_t(REMINDER_SAVED, language).format(
+            code=code, date=format_thai_date(due_date), time=time_text,
+        ),
+        entity_type=entity_type, entity_id=str(row["id"]),
+        quick_replies=[("งานวันนี้", "งานวันนี้")],
+    )
+
+
+async def _handle_work_list(
+    client: DataClient, *, license_id, permission_keys: list[str], language: str,
+    days: int,
+) -> ChatReply:
+    from .thai_datetime import format_thai_date, format_thai_time
+
+    if "followup.read" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    try:
+        due = await client.due_follow_ups(str(license_id), days=days)
+    except Exception:
+        log.exception("due follow-ups failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    if not due:
+        return ChatReply(text=_t(WORK_EMPTY, language), quick_replies=[("รายการดีล", "รายการดีล")])
+
+    lines = [_t(WORK_HEADING, language)]
+    for item in due[:LIST_LIMIT]:
+        raw_date = str(item.get("due_date") or "")
+        try:
+            shown = format_thai_date(date.fromisoformat(raw_date))
+        except ValueError:
+            shown = raw_date
+        raw_time = item.get("due_time")
+        clock = ""
+        if raw_time:
+            try:
+                clock = " " + format_thai_time(time.fromisoformat(str(raw_time)))
+            except ValueError:
+                clock = f" {raw_time}"
+        note = item.get("notes")
+        lines.append(f"· {shown}{clock} · {item.get('entity_type')}" + (f" · {note}" if note else ""))
+    return ChatReply(text="\n".join(lines))
 
 
 # ------------------------------------------------ Phase 10 issue a quote
@@ -1273,6 +1524,12 @@ def required_permission(action: str, entity: str | None) -> str | None:
     return ACTION_PERMISSIONS.get((act, str(entity).strip().lower()))
 
 log = logging.getLogger(__name__)
+
+# Thailand does not observe daylight saving, so a fixed offset is exact
+# rather than an approximation. Reminders are parsed against the tenant's
+# own day: at 23:00 in Bangkok, UTC is still yesterday, and "พรุ่งนี้"
+# would otherwise land on today.
+BANGKOK_TZ = timezone(timedelta(hours=7))
 
 # Cap on how many capabilities a "what can I do" reply lists. A member with a
 # broad role can hold 40+ permissions, and a LINE bubble that long is unusable.
@@ -2380,6 +2637,39 @@ async def handle_chat_message(
         return await _handle_technician_invite_request(
             client, ctx=ctx, permission_keys=permission_keys, language=language,
         )
+
+    # Notes and reminders (6.3/6.7). Before the AI path for the same reason
+    # as the other closed-vocabulary commands, and additionally because a
+    # misparsed reminder date is silently wrong rather than visibly wrong.
+    if ctx.oa == "sales":
+        if _matches_phrase(message, TODAY_WORK_PHRASES):
+            return await _handle_work_list(
+                client, license_id=license_id, permission_keys=permission_keys,
+                language=language, days=1,
+            )
+        if _matches_phrase(message, UPCOMING_WORK_PHRASES):
+            return await _handle_work_list(
+                client, license_id=license_id, permission_keys=permission_keys,
+                language=language, days=7,
+            )
+        if any(t in message.lower() for t in NOTE_LIST_TRIGGERS):
+            return await _handle_note_list(
+                client, license_id=license_id, message=message,
+                permission_keys=permission_keys, language=language,
+            )
+        note_trigger = next((t for t in NOTE_TRIGGERS if t in message.lower()), None)
+        if note_trigger:
+            return await _handle_note_create(
+                client, license_id=license_id, message=message, trigger=note_trigger,
+                permission_keys=permission_keys, language=language,
+                actor_id=ctx.chann_uid,
+            )
+        if any(t in message.lower() for t in REMINDER_TRIGGERS):
+            return await _handle_reminder_create(
+                client, license_id=license_id, message=message,
+                permission_keys=permission_keys, language=language,
+                actor_id=ctx.chann_uid,
+            )
 
     # Phase 10 list/detail reads (Master Spec 9.2). Checked before the AI
     # path and before pending-intent: these are complete requests in

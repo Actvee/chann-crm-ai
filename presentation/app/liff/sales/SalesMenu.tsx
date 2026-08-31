@@ -1,13 +1,14 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import Script from "next/script";
 import { useEffect, useState } from "react";
 
 import { LanguageSwitcher } from "@/lib/i18n/LanguageSwitcher";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
-import { LIFF_SDK_SRC, consumeLiffRedirect } from "./_lib";
+import { LIFF_SDK_SRC, completeLiffRedirect } from "./_lib";
 
 /**
  * The Sales dashboard index — the page every other one links back to.
@@ -43,13 +44,38 @@ export default function SalesMenu({ liffId }: { liffId: string }) {
   // session, and then redirects to the target. All this page has to do is
   // call it and stay out of the way.
   const [redirecting, setRedirecting] = useState(false);
+  const router = useRouter();
 
   useEffect(() => {
     if (typeof window === "undefined") return;
     if (!new URLSearchParams(window.location.search).has("liff.state")) return;
     setRedirecting(true);
-    void consumeLiffRedirect(liffId);
-  }, [liffId]);
+
+    // Waits for the SDK: init() cannot run before the script exists, and
+    // running the redirect without it is what caused the loop.
+    let cancelled = false;
+    const attempt = async () => {
+      for (let i = 0; i < 100 && !cancelled; i += 1) {
+        if ((window as { liff?: unknown }).liff) break;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      if (cancelled) return;
+      const target = await completeLiffRedirect(liffId);
+      if (cancelled) return;
+      if (target) {
+        router.replace(target);
+      } else {
+        // Nothing to follow, or init already moved us. Show the menu rather
+        // than leaving a blank page, which is what a previous version did
+        // when it assumed init would always redirect.
+        setRedirecting(false);
+      }
+    };
+    void attempt();
+    return () => {
+      cancelled = true;
+    };
+  }, [liffId, router]);
   const titles: Record<string, string> = {
     customers: t.customer.title,
     deals: t.deal.title,

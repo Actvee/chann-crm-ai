@@ -384,6 +384,42 @@ class DataClient:
         )
         return self._unwrap(resp)
 
+    async def list_licenses(self, status: str | None = None) -> list[dict]:
+        params = {"status": status} if status else None
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses", headers=self._headers, params=params,
+        )
+        return self._unwrap(resp)
+
+    async def list_follow_ups(
+        self, license_id: str, status: str | None = None,
+    ) -> list[dict]:
+        params = {"status": status} if status else None
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/follow-ups",
+            headers=self._headers, params=params,
+        )
+        return self._unwrap(resp)
+
+    async def create_note(
+        self, license_id: str, payload: dict, actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/notes",
+            headers=self._headers_for(actor_id), json=payload,
+        )
+        return self._unwrap(resp)
+
+    async def list_notes(
+        self, license_id: str, entity_type: str, entity_id: str, limit: int = 50,
+    ) -> list[dict]:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/notes",
+            headers=self._headers,
+            params={"entity_type": entity_type, "entity_id": entity_id, "limit": limit},
+        )
+        return self._unwrap(resp)
+
     async def create_follow_up(
         self, license_id: str, payload: dict, actor_id: str | None = None
     ) -> dict:

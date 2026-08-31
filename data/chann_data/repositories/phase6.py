@@ -9,12 +9,12 @@ record out of someone else's tenant.
 from __future__ import annotations
 
 import uuid
-from datetime import date, timedelta
+from datetime import date, time, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..models import FollowUp, LineMessageEntityMap, Notification
+from ..models import FollowUp, LineMessageEntityMap, Note, Notification
 from .tenant_scope import TenantScope
 
 FOLLOW_UP_STATUSES = frozenset({"pending", "completed", "cancelled"})
@@ -201,6 +201,7 @@ class FollowUpRepository:
         entity_type: str,
         entity_id: uuid.UUID,
         due_date: date,
+        due_time: time | None = None,
         owner_member_id: uuid.UUID | None = None,
         notes: str | None = None,
     ) -> FollowUp:
@@ -210,6 +211,7 @@ class FollowUpRepository:
             entity_type=entity_type,
             entity_id=entity_id,
             due_date=due_date,
+            due_time=due_time,
             status="pending",
             owner_member_id=owner_member_id,
             notes=notes,
@@ -295,5 +297,88 @@ class FollowUpRepository:
             )
 
         row.status = status
+        self._s.flush()
+        return row
+
+
+class NoteRepository:
+    """Master Spec 6.3 — dated, attributed notes against any entity.
+
+    Separate from the `notes` TEXT columns that live on customers, deals and
+    follow-ups. Those hold one overwritable blob each and stay as they are;
+    this is the append-only record that can answer "what did we agree with
+    this customer in March", which the columns never could.
+    """
+
+    def __init__(self, session: Session):
+        self._s = session
+
+    def create(
+        self,
+        scope: TenantScope,
+        *,
+        entity_type: str,
+        entity_id: uuid.UUID,
+        body: str,
+        author_chann_uid: str | None = None,
+    ) -> Note:
+        body = (body or "").strip()
+        if not body:
+            # An empty note is never what someone meant, and a blank row in a
+            # history is worse than a refusal they can act on.
+            raise Phase6Conflict("a note needs some text")
+        row = Note(
+            id=uuid.uuid4(),
+            license_id=scope.license_id,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            body=body,
+            author_chann_uid=author_chann_uid,
+        )
+        self._s.add(row)
+        self._s.flush()
+        return row
+
+    def list_for_entity(
+        self, scope: TenantScope, *, entity_type: str, entity_id: uuid.UUID,
+        limit: int = 50,
+    ) -> list[Note]:
+        limit = max(1, min(limit, 200))
+        return list(
+            self._s.execute(
+                select(Note)
+                .where(
+                    Note.license_id == scope.license_id,
+                    Note.entity_type == entity_type,
+                    Note.entity_id == entity_id,
+                )
+                # Newest first: the last thing said is the thing being looked
+                # for far more often than the first.
+                .order_by(Note.created_at.desc())
+                .limit(limit)
+            ).scalars()
+        )
+
+    def get(self, scope: TenantScope, note_id: uuid.UUID) -> Note | None:
+        return self._s.execute(
+            select(Note).where(Note.id == note_id, Note.license_id == scope.license_id)
+        ).scalar_one_or_none()
+
+    def update(self, scope: TenantScope, note_id: uuid.UUID, *, body: str) -> Note:
+        row = self.get(scope, note_id)
+        if row is None:
+            raise Phase6NotFound("note not found")
+        body = (body or "").strip()
+        if not body:
+            raise Phase6Conflict("a note needs some text")
+        row.body = body
+        self._s.flush()
+        return row
+
+    def delete(self, scope: TenantScope, note_id: uuid.UUID) -> Note:
+        row = self.get(scope, note_id)
+        if row is None:
+            raise Phase6NotFound("note not found")
+        self._s.delete(row)
         self._s.flush()
         return row

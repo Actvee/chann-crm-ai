@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, time
 from decimal import Decimal
 from typing import Literal
 
@@ -207,8 +207,32 @@ class FollowUpIn(BaseModel):
     entity_type: str
     entity_id: uuid.UUID
     due_date: date
+    # Optional clock time. None means a whole-day reminder, which is what
+    # every existing follow-up is; a value makes it an appointment.
+    due_time: time | None = None
     owner_member_id: uuid.UUID | None = None
     notes: str | None = None
+
+
+class NoteIn(BaseModel):
+    entity_type: str
+    entity_id: uuid.UUID
+    body: str
+
+
+class NoteBodyIn(BaseModel):
+    body: str
+
+
+class NoteOut(BaseModel):
+    id: uuid.UUID
+    license_id: uuid.UUID
+    entity_type: str
+    entity_id: uuid.UUID
+    body: str
+    author_chann_uid: str | None
+    created_at: datetime
+    updated_at: datetime
 
 
 class FollowUpStatusIn(BaseModel):
@@ -221,6 +245,7 @@ class FollowUpOut(BaseModel):
     entity_type: str
     entity_id: uuid.UUID
     due_date: date
+    due_time: time | None
     status: str
     owner_member_id: uuid.UUID | None
     notes: str | None
