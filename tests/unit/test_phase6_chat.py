@@ -2883,3 +2883,56 @@ class TestAIRoutedNotes:
         reply = await handle_chat_message(client, message="สนใจเรื่องนี้", ctx=_ctx(), ai_client=ai)
         assert not [r for r in client.recorded if r[0] == "create_note"]
         assert "ระบุรหัส" in reply.text or "เปิดดู" in reply.text
+
+
+class TestUsageHelp:
+    """"How do I use this?" has to be answerable in the product itself.
+
+    This is a chat-first tool: the interface IS what you type, so a person
+    who does not know the phrasings cannot use it at all. The existing
+    suggest_what_you_can_do lists PERMISSIONS, which is a different thing —
+    knowing you hold "followup.create" does not tell you to type
+    "เตือน D-2026-0001 พรุ่งนี้".
+    """
+
+    async def test_asking_for_help_returns_example_commands(self):
+        client = FakeDataClient(permission_keys=["customer.read", "followup.create"])
+        reply = await handle_chat_message(client, message="วิธีใช้", ctx=_ctx())
+        assert "รายชื่อลูกค้า" in reply.text
+        assert "เตือน" in reply.text
+
+    async def test_several_phrasings_all_reach_help(self):
+        for phrasing in ("ช่วยเหลือ", "ใช้ยังไง", "ทำอะไรได้บ้าง", "help", "?"):
+            client = FakeDataClient(permission_keys=["customer.read"])
+            reply = await handle_chat_message(client, message=phrasing, ctx=_ctx())
+            assert "รายชื่อลูกค้า" in reply.text, f"{phrasing!r} did not reach help"
+
+    async def test_help_only_shows_commands_the_person_can_actually_run(self):
+        """Offering someone a command that will refuse them is worse than not
+        mentioning it."""
+        client = FakeDataClient(permission_keys=["customer.read"])
+        reply = await handle_chat_message(client, message="วิธีใช้", ctx=_ctx())
+        assert "รายชื่อลูกค้า" in reply.text
+        assert "สร้างใบเสนอราคา" not in reply.text
+        assert "ตั้งเลขผู้เสียภาษี" not in reply.text
+
+    async def test_someone_with_no_permissions_is_told_who_to_ask(self):
+        client = FakeDataClient(permission_keys=[])
+        reply = await handle_chat_message(client, message="วิธีใช้", ctx=_ctx())
+        assert "เจ้าของบริษัท" in reply.text
+
+    async def test_help_reaches_the_ai_parser_for_nobody(self):
+        """A person typing "ใช้ยังไง" is stuck; spending a model call to
+        maybe get a permission list back is not an answer."""
+        client = FakeDataClient(permission_keys=["customer.read"])
+        await handle_chat_message(client, message="วิธีใช้", ctx=_ctx())
+        assert not [r for r in client.recorded if r[0] == "permission_catalog"]
+
+    def test_the_greeting_tells_a_new_member_where_to_start(self):
+        """A follow event is the one moment someone is guaranteed to be
+        looking, and "connected to X" alone does not tell them what to do
+        next."""
+        from chann_app.services.chat import greet
+
+        text = greet(_ctx())
+        assert "วิธีใช้" in text

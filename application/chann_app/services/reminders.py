@@ -33,10 +33,13 @@ BANGKOK_TZ = timezone(timedelta(hours=7))
 # Checked before sending so a scheduler retry does not re-announce.
 REMINDER_TYPE = "followup_due"
 
-REMINDER_TEXT = {
-    "th": "เตือนงานวันนี้{when}\n{who}{what}",
-    "en": "Due today{when}\n{who}{what}",
+DIGEST_HEADING = {
+    "th": "งานวันนี้ {count} รายการ",
+    "en": "{count} due today",
 }
+
+# Whole-day items line up under a dash so the timed ones read as a column.
+NO_TIME_MARK = "—"
 
 ENTITY_LABEL = {
     "customer": {"th": "ลูกค้า", "en": "Customer"},
@@ -83,6 +86,36 @@ def _coerce_date(value) -> date | None:
         return None
 
 
+def _render_line(item: dict, language: str) -> str:
+    """One row of the digest: when, who, and what to do."""
+    raw_time = item.get("due_time")
+    clock = NO_TIME_MARK
+    if raw_time:
+        try:
+            parsed = time.fromisoformat(str(raw_time))
+            clock = f"{parsed.hour:02d}:{parsed.minute:02d}"
+        except ValueError:
+            clock = str(raw_time)
+
+    line = f"{clock} · {item['who']}"
+    if item.get("subject"):
+        # Indented under its own row rather than appended: a subject is a
+        # sentence, and running it onto the end makes both harder to scan.
+        line += f"\n        {item['subject']}"
+    return line
+
+
+def _render_digest(items: list[dict], language: str) -> str:
+    """The whole message one person receives.
+
+    One message instead of one per follow-up: five due items used to arrive
+    as five separate LINE pushes, which is harder to read than a list and
+    spends five of the 500 free pushes a LINE account gets each month.
+    """
+    heading = DIGEST_HEADING[language].format(count=len(items))
+    return heading + "\n\n" + "\n".join(_render_line(i, language) for i in items)
+
+
 async def _describe_entity(
     client: DataClient, license_id: str, entity_type: str, entity_id: str,
 ) -> str:
@@ -126,10 +159,20 @@ async def _describe_entity(
 
 
 async def sweep_due_follow_ups(client: DataClient, *, days: int = 0) -> dict:
-    """Push a LINE reminder for every follow-up due within `days`.
+    """Send each person ONE message listing everything they owe today.
+
+    Collects across every tenant first, then sends per person. Two reasons
+    it works this way rather than pushing as it goes:
+
+    * Five due follow-ups used to mean five separate LINE messages arriving
+      together, which is harder to read than one list and burns five of the
+      500 free pushes a LINE account gets per month.
+    * A person who belongs to more than one tenant does not think in
+      tenants. Their work is their work; the fact that the platform stores
+      it under two licenses is not their problem.
 
     Returns a summary rather than raising on individual failures: one
-    tenant's missing LINE credentials must not stop every other tenant's
+    tenant's missing credentials must not stop every other tenant's
     reminders, and Cloud Scheduler retrying the whole sweep because of one
     bad row would re-push everything that already succeeded.
     """
@@ -149,6 +192,9 @@ async def sweep_due_follow_ups(client: DataClient, *, days: int = 0) -> dict:
         log.exception("reminder sweep could not list tenants")
         raise
 
+    # chann_uid -> the lines that person needs to see today.
+    per_person: dict[str, list[dict]] = {}
+
     for license_row in licenses:
         license_id = str(license_row["id"])
         summary["tenants"] += 1
@@ -159,6 +205,22 @@ async def sweep_due_follow_ups(client: DataClient, *, days: int = 0) -> dict:
             summary["failed"] += 1
             continue
 
+        # What this tenant already announced today. Cloud Scheduler retries a
+        # failed run, and a run can fail after sending some of its messages;
+        # without this every retry re-sends what already went out, and a
+        # person who gets the same reminder twice stops trusting reminders.
+        try:
+            already = await client.announced_today(license_id, REMINDER_TYPE)
+        except Exception:
+            # A failure here must not stop the sweep, but it does mean the
+            # duplicate guard is off for this tenant — say so rather than
+            # silently risking a repeat.
+            log.exception(
+                "could not read today's notifications for %s; duplicate guard is off",
+                license_id,
+            )
+            already = set()
+
         for item in due:
             # due_follow_ups takes a day count, so filter to the exact day
             # here: a sweep for "today" should not announce Friday's work on
@@ -167,11 +229,7 @@ async def sweep_due_follow_ups(client: DataClient, *, days: int = 0) -> dict:
             # Parsed defensively rather than assuming one wire format. A
             # production TypeError comparing str to date happened here with
             # code that looked correct in isolation and could not be
-            # reproduced locally from any obvious input — so this no longer
-            # assumes the Data tier always sends a bare "YYYY-MM-DD". It
-            # accepts a date, a datetime, and an ISO string with or without
-            # a time part, and logs anything it still cannot read instead of
-            # crashing the whole sweep for every other tenant.
+            # reproduced locally from any obvious input.
             item_date = _coerce_date(item.get("due_date"))
             if item_date is None:
                 log.warning(
@@ -185,6 +243,12 @@ async def sweep_due_follow_ups(client: DataClient, *, days: int = 0) -> dict:
                 continue
             summary["due"] += 1
 
+            entity_id = str(item.get("entity_id") or "")
+            if entity_id and entity_id in already:
+                # Announced earlier today — this is a retry, not new work.
+                summary["skipped"] += 1
+                continue
+
             owner = item.get("owner_chann_uid") or license_row.get("created_by_chann_uid")
             if not owner:
                 # Nobody to tell. Counted rather than silently dropped so the
@@ -192,53 +256,82 @@ async def sweep_due_follow_ups(client: DataClient, *, days: int = 0) -> dict:
                 summary["skipped"] += 1
                 continue
 
-            # Name the record, not its type. "customer" on its own is true
-            # and useless — it was what every reminder said before this,
-            # because notes were never stored and entity_type was the
-            # fallback.
             entity_type = str(item.get("entity_type") or "")
-            who = await _describe_entity(
-                client, license_id, entity_type, str(item.get("entity_id") or ""),
+            per_person.setdefault(str(owner), []).append({
+                "license_id": license_id,
+                "entity_type": entity_type,
+                "entity_id": entity_id,
+                "due_time": item.get("due_time"),
+                # Name the record, not its type. "customer" on its own is
+                # true and useless — it was what every reminder said before
+                # this, because notes were never stored and entity_type was
+                # the fallback.
+                "who": await _describe_entity(client, license_id, entity_type, entity_id),
+                "subject": (item.get("notes") or "").strip(),
+            })
+
+    for owner, items in per_person.items():
+        # Timed work first and in clock order, then whole-day items: someone
+        # reading this at 08:00 wants to know what is coming and when.
+        items.sort(key=lambda i: (i["due_time"] is None, str(i["due_time"] or "")))
+
+        try:
+            line_target = await client.line_target_of(owner)
+        except Exception:
+            log.exception("could not resolve a LINE target for %s", owner)
+            line_target = None
+
+        # Recorded against the tenant the first item belongs to. A single
+        # message can span tenants for a person who belongs to several; the
+        # notification row has to name one, and the alternative — splitting
+        # the message back apart per tenant — is the thing this batching
+        # exists to avoid.
+        license_id = items[0]["license_id"]
+
+        try:
+            await send_notification(
+                client,
+                license_id=license_id,
+                target_chann_uid=owner,
+                target_line_user_id=line_target,
+                type=REMINDER_TYPE,
+                message=_render_digest(items, "th"),
+                message_en=_render_digest(items, "en"),
+                entity_type=items[0]["entity_type"],
+                # The first item's id, so the duplicate guard has something
+                # to match on. Every other item in the digest is recorded by
+                # its own marker row below.
+                entity_id=items[0]["entity_id"],
+                oa="sales",
             )
-            # The subject the person typed, when there was one. A reminder
-            # with no subject still names the record, which is the minimum
-            # useful thing to say.
-            subject = (item.get("notes") or "").strip()
-            what = f"\n{subject}" if subject else ""
-            when = _format_when(item.get("due_time"))
+            summary["sent"] += 1
+        except Exception:
+            # Logged and counted, never raised: one person's delivery
+            # failure must not stop everyone else's.
+            log.exception("reminder digest failed for %s", owner)
+            summary["failed"] += 1
+            continue
 
-            # Resolved, not left as None: send_notification treats a missing
-            # LINE target as "record it for the dashboard and stop", which is
-            # exactly how reminders came to be counted as sent while reaching
-            # nobody.
+        # Mark the remaining items as announced, so a retry does not rebuild
+        # a digest containing work that already went out. Dashboard-only, so
+        # these produce no second LINE message.
+        for extra in items[1:]:
             try:
-                line_target = await client.line_target_of(str(owner))
-            except Exception:
-                log.exception("could not resolve a LINE target for %s", owner)
-                line_target = None
-
-            try:
-                await send_notification(
-                    client,
-                    license_id=license_id,
-                    target_chann_uid=str(owner),
-                    target_line_user_id=line_target,
+                await client.create_notification(
+                    extra["license_id"],
+                    target_chann_uid=owner,
                     type=REMINDER_TYPE,
-                    message=REMINDER_TEXT["th"].format(who=who, what=what, when=when),
-                    message_en=REMINDER_TEXT["en"].format(who=who, what=what, when=when),
-                    entity_type=str(item.get("entity_type") or ""),
-                    entity_id=str(item.get("entity_id") or ""),
-                    oa="sales",
+                    message=_render_line(extra, "th"),
+                    message_en=_render_line(extra, "en"),
+                    entity_type=extra["entity_type"],
+                    entity_id=extra["entity_id"],
+                    delivery_line=False,
+                    delivery_dashboard=True,
                 )
-                summary["sent"] += 1
             except Exception:
-                # Logged and counted, never raised: one tenant's missing LINE
-                # credentials must not stop everyone else's reminders.
                 log.exception(
-                    "reminder push failed for follow-up %s in %s",
-                    item.get("id"), license_id,
+                    "could not record digest item %s for %s", extra["entity_id"], owner
                 )
-                summary["failed"] += 1
 
     log.info("reminder sweep finished: %s", summary)
     return summary

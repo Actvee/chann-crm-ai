@@ -1872,9 +1872,20 @@ def greet(ctx: ResolvedContext, language: str = "th") -> str:
         member = ctx.memberships[0]
         name = ctx.display_name or ctx.chann_uid
         company = member.get("company_name", "")
+        # Points at the help rather than embedding it: a greeting is not the
+        # place for a twenty-line command list, and greet() has no permission
+        # set to filter one by anyway — showing commands someone cannot run
+        # is worse than not showing them. One sentence gets them to the
+        # filtered version.
         if language == "en":
-            return f"Hello {name} — connected to {company}"
-        return f"สวัสดีคุณ{name} — เชื่อมต่อกับ {company} แล้ว"
+            return (
+                f"Hello {name} — connected to {company}\n"
+                'Type "help" to see what you can do.'
+            )
+        return (
+            f"สวัสดีคุณ{name} — เชื่อมต่อกับ {company} แล้ว\n"
+            'พิมพ์ "วิธีใช้" เพื่อดูคำสั่งที่ใช้ได้'
+        )
 
     if ctx.resolution is TenantResolution.MULTIPLE:
         names = ", ".join(m.get("company_name", "") for m in ctx.memberships)
@@ -1920,6 +1931,92 @@ def ask_for_missing(missing: list[str], language: str = "th") -> str:
         MISSING_FIELD_LABELS.get(m, {}).get(language) or str(m) for m in missing
     )
     return _t(ASK_MISSING, language).format(fields=labels)
+
+
+HELP_TRIGGERS = (
+    "ช่วยเหลือ", "วิธีใช้", "ใช้ยังไง", "ทำอะไรได้บ้าง", "คำสั่ง",
+    "help", "how to use", "commands", "?",
+)
+
+# What to show, grouped the way a salesperson's day is shaped rather than the
+# way the permission catalogue is organised. Each entry is
+# (permission key, example command, what it does) — the example is the point:
+# a list of capabilities tells someone what exists, an example tells them what
+# to type, and only one of those gets used.
+HELP_SECTIONS = (
+    ("ลูกค้า", (
+        ("customer.read", "รายชื่อลูกค้า", "ดูลูกค้าทั้งหมด"),
+        ("customer.read", "ค้นหาลูกค้า สมชาย", "ค้นหาด้วยชื่อหรือเบอร์"),
+        ("customer.read", "ข้อมูลลูกค้า C-2026-0001", "ดูรายละเอียด"),
+        ("customer.create", "สร้างลูกค้า สมชาย ใจดี 0812345678", "เพิ่มลูกค้าใหม่"),
+    )),
+    ("ดีลและใบเสนอราคา", (
+        ("deal.read", "รายการดีล", "ดูดีลทั้งหมด"),
+        ("deal.read", "ดีลที่ยังไม่ปิด", "เฉพาะที่ยังไม่จบ"),
+        ("deal.read", "ข้อมูลดีล D-2026-0001", "ดูรายละเอียดพร้อมยอดรวม"),
+        ("deal.create", "สร้างดีลให้ สมชาย", "เปิดดีลใหม่"),
+        ("quote.create", "สร้างใบเสนอราคาจากดีล D-2026-0001", "ออกใบเสนอราคา"),
+        ("quote.update", "ออกเอกสาร Q-2026-0001", "สร้าง PDF ส่งลูกค้า"),
+    )),
+    ("บันทึกและการติดตาม", (
+        ("note.create", "บันทึกว่า C-2026-0001 ลูกค้าขอส่วนลด", "จดบันทึก"),
+        ("note.read", "ดูบันทึก C-2026-0001", "ดูบันทึกย้อนหลัง"),
+        ("followup.create", "เตือน D-2026-0001 พรุ่งนี้", "ตั้งเตือน"),
+        ("followup.create", "นัดดูสินค้าวันศุกร์ บ่าย 2", "นัดหมายพร้อมเวลา"),
+        ("followup.read", "งานวันนี้", "ดูงานที่ต้องทำ"),
+    )),
+    ("ตั้งค่า", (
+        ("setting.manage", "ข้อมูลบริษัท", "ดูข้อมูลที่พิมพ์บนเอกสาร"),
+        ("setting.manage", "ตั้งเลขผู้เสียภาษี 0105558123456", "แก้ทีละช่อง"),
+    )),
+)
+
+HELP_INTRO = {
+    "th": "พิมพ์คุยได้เลยเหมือนคุยกับผู้ช่วย ตัวอย่างคำสั่งที่ใช้บ่อย:",
+    "en": "Just type naturally. Some things you can say:",
+}
+HELP_OUTRO = {
+    "th": "\nเคล็ดลับ: เปิดดูลูกค้าหรือดีลก่อน แล้วพิมพ์บันทึกหรือนัดต่อได้เลยโดยไม่ต้องใส่รหัสซ้ำ",
+    "en": "\nTip: open a customer or deal first, then add a note or reminder without repeating the code.",
+}
+HELP_NOTHING = {
+    "th": "ยังไม่มีสิทธิ์ใช้งานคำสั่งใด ๆ — ติดต่อเจ้าของบริษัทเพื่อขอสิทธิ์",
+    "en": "You do not have permission to use any commands yet — ask the company owner.",
+}
+
+
+def usage_help(permission_keys, language: str = "th") -> str:
+    """Example commands this person can actually run.
+
+    Deliberately separate from suggest_what_you_can_do, which lists the
+    PERMISSIONS someone holds. Knowing you hold "followup.create" does not
+    tell you to type "เตือน D-2026-0001 พรุ่งนี้" — and this product's whole
+    interface is what you type, so the examples are the help.
+
+    Filtered by permission for the same reason suggest_what_you_can_do is:
+    showing someone a command that will refuse them is worse than not
+    mentioning it.
+    """
+    held = set(permission_keys)
+    lines: list[str] = []
+
+    for title, entries in HELP_SECTIONS:
+        usable = [(cmd, what) for key, cmd, what in entries if key in held]
+        if not usable:
+            continue
+        lines.append(f"\n【{title}】")
+        # De-duplicated on the command text: two permissions can legitimately
+        # surface the same example, and printing it twice looks like a bug.
+        seen = set()
+        for cmd, what in usable:
+            if cmd in seen:
+                continue
+            seen.add(cmd)
+            lines.append(f"· {cmd}\n   → {what}")
+
+    if not lines:
+        return _t(HELP_NOTHING, language)
+    return _t(HELP_INTRO, language) + "\n" + "\n".join(lines) + "\n" + _t(HELP_OUTRO, language)
 
 
 def suggest_what_you_can_do(
@@ -2857,6 +2954,15 @@ async def handle_chat_message(
     if ctx.oa == "sales" and _is_technician_invite_request(message):
         return await _handle_technician_invite_request(
             client, ctx=ctx, permission_keys=permission_keys, language=language,
+        )
+
+    # Help, before anything else and on every OA. Someone who types "ใช้ยังไง"
+    # is telling you they are stuck; routing that through intent parsing to
+    # maybe get a permission list back is not an answer.
+    if _matches_phrase(message, HELP_TRIGGERS) or (message or "").strip() == "?":
+        return ChatReply(
+            text=usage_help(permission_keys, language),
+            quick_replies=[("รายชื่อลูกค้า", "รายชื่อลูกค้า"), ("งานวันนี้", "งานวันนี้")],
         )
 
     # Notes and reminders (6.3/6.7). Before the AI path for the same reason

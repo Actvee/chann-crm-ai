@@ -9,7 +9,7 @@ record out of someone else's tenant.
 from __future__ import annotations
 
 import uuid
-from datetime import date, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -96,6 +96,33 @@ class MessageEntityMapRepository:
 class NotificationRepository:
     def __init__(self, session: Session):
         self._s = session
+
+    def announced_entity_ids_today(
+        self, scope: TenantScope, *, type: str, on_day: date,
+    ) -> set[uuid.UUID]:
+        """entity_ids already notified about today, for one notification type.
+
+        Cloud Scheduler retries a failed run, and a run can fail after
+        sending some of its messages — without this, every retry re-sends
+        everything that already went out, and a person who receives the same
+        reminder twice stops trusting the reminders.
+
+        Keyed on the day rather than a sent-flag on the follow-up itself:
+        "we mentioned this today" is a fact about the notification, not a
+        state change on the work, which belongs to whoever completes it.
+        """
+        start = datetime.combine(on_day, time.min, tzinfo=timezone.utc)
+        end = start + timedelta(days=1)
+        rows = self._s.execute(
+            select(Notification.entity_id).where(
+                Notification.license_id == scope.license_id,
+                Notification.type == type,
+                Notification.entity_id.is_not(None),
+                Notification.created_at >= start,
+                Notification.created_at < end,
+            )
+        ).scalars()
+        return {r for r in rows if r}
 
     def create(
         self,

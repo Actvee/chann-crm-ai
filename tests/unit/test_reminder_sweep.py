@@ -65,6 +65,7 @@ class _FakeClient:
         }
         self.customers: list[dict] = []
         self.deals: list[dict] = []
+        self.already_announced: dict[str, list[str]] = {}
 
     async def list_licenses(self, status=None, exclude_status=None):
         self.list_calls.append({"status": status, "exclude_status": exclude_status})
@@ -81,6 +82,9 @@ class _FakeClient:
     async def create_notification(self, license_id, **kwargs):
         self.pushed.append({"license_id": license_id, **kwargs})
         return {"id": "notif-1", **kwargs}
+
+    async def announced_today(self, license_id, notification_type):
+        return set(self.already_announced.get(license_id, []))
 
     async def line_target_of(self, chann_uid):
         self.line_lookups.append(chann_uid)
@@ -357,3 +361,143 @@ class TestReminderMessageContent:
         message = client.pushed[0]["message"]
         assert message.strip()
         assert "ลูกค้า" in message
+
+
+class TestDigestBatching:
+    """One message per person, not one per follow-up.
+
+    Five due items used to arrive as five separate LINE pushes — harder to
+    read than a list, and five of the 500 free pushes a LINE account gets
+    each month.
+    """
+
+    def _client_with(self, items, license_id="lic-1", owner="CHN-1"):
+        today = datetime.now(BANGKOK).date()
+        due = []
+        for index, (entity_type, entity_id, due_time, notes) in enumerate(items):
+            due.append({
+                "id": f"fu-{index}", "entity_type": entity_type, "entity_id": entity_id,
+                "due_date": today.isoformat(), "due_time": due_time, "notes": notes,
+                "owner_chann_uid": owner,
+            })
+        client = _FakeClient(
+            licenses=[{"id": license_id, "status": "trial", "created_by_chann_uid": owner}],
+            due_by_license={license_id: due},
+        )
+        client.customers = [
+            {"id": "c1", "customer_id": "C-2026-0005", "first_name": "จุใจ", "last_name": "มาติกา"},
+            {"id": "c2", "customer_id": "C-2026-0001", "first_name": "สมชาย", "last_name": ""},
+        ]
+        client.deals = [{"id": "d1", "deal_id": "D-2026-0003"}]
+        return client
+
+    async def test_three_follow_ups_produce_one_line_message(self, no_line_push):
+        client = self._client_with([
+            ("customer", "c1", "15:00:00", "ดูสินค้า"),
+            ("deal", "d1", "09:00:00", "ประชุมสรุปราคา"),
+            ("customer", "c2", None, ""),
+        ])
+        summary = await sweep_due_follow_ups(client)
+        line_pushes = [p for p in client.pushed if p.get("delivery_line") is not False]
+        assert len(line_pushes) == 1, f"expected one push, got {len(line_pushes)}"
+        assert summary["sent"] == 1
+        assert summary["due"] == 3
+
+    async def test_the_digest_contains_every_item(self, no_line_push):
+        client = self._client_with([
+            ("customer", "c1", "15:00:00", "ดูสินค้า"),
+            ("deal", "d1", "09:00:00", "ประชุมสรุปราคา"),
+            ("customer", "c2", None, ""),
+        ])
+        await sweep_due_follow_ups(client)
+        message = client.pushed[0]["message"]
+        for expected in ("จุใจ", "D-2026-0003", "สมชาย", "ดูสินค้า", "ประชุมสรุปราคา"):
+            assert expected in message, f"{expected!r} missing from digest:\n{message}"
+
+    async def test_timed_items_come_first_and_in_clock_order(self, no_line_push):
+        """Someone reading this at 08:00 wants to know what is coming next."""
+        client = self._client_with([
+            ("customer", "c2", None, "ไม่มีเวลา"),
+            ("customer", "c1", "15:00:00", "บ่าย"),
+            ("deal", "d1", "09:00:00", "เช้า"),
+        ])
+        await sweep_due_follow_ups(client)
+        message = client.pushed[0]["message"]
+        assert message.index("09:00") < message.index("15:00") < message.index("ไม่มีเวลา")
+
+    async def test_two_people_get_their_own_digest(self, no_line_push):
+        today = datetime.now(BANGKOK).date()
+        client = _FakeClient(
+            licenses=[{"id": "lic-1", "status": "trial", "created_by_chann_uid": "CHN-1"}],
+            due_by_license={"lic-1": [
+                {"id": "a", "entity_type": "deal", "entity_id": "d1",
+                 "due_date": today.isoformat(), "due_time": None, "notes": None,
+                 "owner_chann_uid": "CHN-1"},
+                {"id": "b", "entity_type": "deal", "entity_id": "d1",
+                 "due_date": today.isoformat(), "due_time": None, "notes": None,
+                 "owner_chann_uid": "CHN-2"},
+            ]},
+        )
+        client.deals = [{"id": "d1", "deal_id": "D-2026-0003"}]
+        await sweep_due_follow_ups(client)
+        line_pushes = [p for p in client.pushed if p.get("delivery_line") is not False]
+        assert {p["target_chann_uid"] for p in line_pushes} == {"CHN-1", "CHN-2"}
+
+
+class TestIdempotency:
+    """Cloud Scheduler retries a failed run, and a run can fail after sending
+    some of its messages. Re-sending what already went out teaches people to
+    ignore the reminders."""
+
+    async def test_an_already_announced_item_is_not_resent(self, no_line_push):
+        today = datetime.now(BANGKOK).date()
+        client = _FakeClient(
+            licenses=[{"id": "lic-1", "status": "trial", "created_by_chann_uid": "CHN-1"}],
+            due_by_license={"lic-1": [{
+                "id": "fu-1", "entity_type": "deal", "entity_id": "d1",
+                "due_date": today.isoformat(), "due_time": None, "notes": None,
+            }]},
+        )
+        client.deals = [{"id": "d1", "deal_id": "D-2026-0003"}]
+        client.already_announced = {"lic-1": ["d1"]}
+        summary = await sweep_due_follow_ups(client)
+        assert summary["sent"] == 0
+        assert summary["skipped"] == 1
+        assert not [p for p in client.pushed if p.get("delivery_line") is not False]
+
+    async def test_every_digest_item_is_recorded_so_a_retry_sees_it(self, no_line_push):
+        """The pushed message names only the first item; the rest need their
+        own rows or a retry would rebuild a digest containing them."""
+        today = datetime.now(BANGKOK).date()
+        client = _FakeClient(
+            licenses=[{"id": "lic-1", "status": "trial", "created_by_chann_uid": "CHN-1"}],
+            due_by_license={"lic-1": [
+                {"id": "a", "entity_type": "deal", "entity_id": "d1",
+                 "due_date": today.isoformat(), "due_time": "09:00:00", "notes": None},
+                {"id": "b", "entity_type": "customer", "entity_id": "c1",
+                 "due_date": today.isoformat(), "due_time": "10:00:00", "notes": None},
+            ]},
+        )
+        client.deals = [{"id": "d1", "deal_id": "D-2026-0003"}]
+        client.customers = [{"id": "c1", "customer_id": "C-2026-0001", "first_name": "ก", "last_name": ""}]
+        await sweep_due_follow_ups(client)
+        recorded = {p["entity_id"] for p in client.pushed}
+        assert recorded == {"d1", "c1"}, f"not every item was recorded: {recorded}"
+
+    async def test_the_marker_rows_do_not_send_a_second_line_message(self, no_line_push):
+        today = datetime.now(BANGKOK).date()
+        client = _FakeClient(
+            licenses=[{"id": "lic-1", "status": "trial", "created_by_chann_uid": "CHN-1"}],
+            due_by_license={"lic-1": [
+                {"id": "a", "entity_type": "deal", "entity_id": "d1",
+                 "due_date": today.isoformat(), "due_time": "09:00:00", "notes": None},
+                {"id": "b", "entity_type": "deal", "entity_id": "d2",
+                 "due_date": today.isoformat(), "due_time": "10:00:00", "notes": None},
+            ]},
+        )
+        client.deals = [
+            {"id": "d1", "deal_id": "D-2026-0003"}, {"id": "d2", "deal_id": "D-2026-0004"},
+        ]
+        await sweep_due_follow_ups(client)
+        line_pushes = [p for p in client.pushed if p.get("delivery_line") is not False]
+        assert len(line_pushes) == 1

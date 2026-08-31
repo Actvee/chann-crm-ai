@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from datetime import date
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy import select
@@ -2817,3 +2818,23 @@ def get_line_target(chann_uid: str, session: Session = Depends(get_session)):
     if row is None:
         raise HTTPException(status_code=404, detail="identity not found")
     return LineTargetOut(chann_uid=row.chann_uid, line_user_id=row.line_user_id)
+
+
+@router.get("/licenses/{license_id}/notifications/announced-today")
+def announced_today(
+    license_id: uuid.UUID,
+    type: str,
+    on_day: date | None = None,
+    session: Session = Depends(get_session),
+):
+    """Which entity_ids already got a notification of this type today.
+
+    Lets a scheduled job be safely retried: Cloud Scheduler retries a failed
+    run, a run can fail partway through sending, and re-sending everything
+    that already went out teaches people to ignore the notifications.
+    """
+    scope = TenantScope(license_id=license_id)
+    ids = NotificationRepository(session).announced_entity_ids_today(
+        scope, type=type, on_day=on_day or date.today(),
+    )
+    return {"entity_ids": [str(i) for i in ids]}

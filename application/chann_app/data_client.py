@@ -384,6 +384,16 @@ class DataClient:
         )
         return self._unwrap(resp)
 
+    async def announced_today(
+        self, license_id: str, notification_type: str,
+    ) -> set[str]:
+        """entity_ids already notified about today, for one type."""
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/notifications/announced-today",
+            headers=self._headers, params={"type": notification_type},
+        )
+        return set((self._unwrap(resp) or {}).get("entity_ids") or [])
+
     async def line_target_of(self, chann_uid: str) -> str | None:
         """The LINE user id to push to, or None if this person has none."""
         resp = await self._client.get(
