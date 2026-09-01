@@ -79,6 +79,33 @@ export default function DealList({ liffId }: { liffId: string }) {
       setToken(session.token);
       setMemberships(session.memberships);
       setLicenseId(session.memberships[0]?.license_id ?? "");
+      const license = session.memberships[0]?.license_id ?? "";
+      if (license) {
+        setPermissions(await fetchPermissions(session.token, license));
+        // A deal needs a customer, so the picker is filled up front
+        // rather than asking anyone to remember a code.
+        const response = await fetch(
+          `/api/phase2/licenses/${license}/customers`,
+          { headers: proxyHeaders(session.token, license) },
+        );
+        if (response.ok) {
+          const rows = (await response.json()) as {
+            id: string; first_name?: string; last_name?: string;
+            customer_id?: string; stage?: string;
+          }[];
+          setContacts(
+            rows
+              // Contacts only: a lead has not agreed to anything, and
+              // opening a deal on one skips the step that says they did.
+              .filter((row) => row.stage !== "lead")
+              .map((row) => ({
+                id: row.id,
+                name: `${row.first_name ?? ""} ${row.last_name ?? ""}`.trim()
+                  || (row.customer_id ?? row.id),
+              })),
+          );
+        }
+      }
       if (!session.memberships.length) say(t.liff.noCompany, "error");
     } catch (error) {
       say(error instanceof Error ? error.message : t.dashboard.openFailed, "error");

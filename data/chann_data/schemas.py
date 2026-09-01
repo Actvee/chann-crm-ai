@@ -38,6 +38,14 @@ class MembershipOut(BaseModel):
 
 
 class MemberOut(BaseModel):
+    # The row id, which the Application Tier needs to ask "which tickets
+    # are visible to this member". It has been reading member["id"] since
+    # Phase 12 and this endpoint has never sent it — every technician's
+    # "งานของฉัน" raised KeyError and answered with a generic apology.
+    #
+    # The fake in the chat tests returned an "id", so nothing caught it:
+    # a fake that is more generous than the real client hides exactly this.
+    id: uuid.UUID
     chann_uid: str
     role: str
     status: str

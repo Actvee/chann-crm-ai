@@ -701,3 +701,144 @@ class TestEveryTenantRouteIsGuarded:
 
         stale = sorted(set(self.EXEMPT) - declared)
         assert not stale, f"exemptions for routes that no longer exist: {stale}"
+
+
+class TestCreateFormsAreActuallyWired:
+    """A form gated on a permission that is never loaded renders nothing.
+
+    That shipped: all three list pages imported fetchPermissions, declared
+    the state, and never called it — so `permissions.has(...)` was always
+    false and the create buttons were invisible in production while the
+    code looked complete in review.
+
+    The cause was a string replacement that silently did not match. These
+    assertions check the wiring rather than the intent.
+    """
+
+    LISTS = {
+        "customers/CustomerList.tsx": "customer.create",
+        "deals/DealList.tsx": "deal.create",
+        "quotes/QuoteList.tsx": "quote.create",
+    }
+
+    def _source(self, name: str) -> str:
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[2]
+        return (
+            root / "presentation/app/liff/sales" / name
+        ).read_text(encoding="utf-8")
+
+    def test_every_list_page_loads_the_permissions_it_gates_on(self):
+        problems = []
+        for name, key in self.LISTS.items():
+            source = self._source(name)
+            if f'permissions.has("{key}")' not in source:
+                problems.append(f"{name}: no create form gated on {key}")
+                continue
+            if "await fetchPermissions(" not in source:
+                problems.append(
+                    f"{name}: gates on {key} but never calls fetchPermissions — "
+                    "the button can never appear"
+                )
+        assert not problems, "\n".join(problems)
+
+    def test_the_pickers_are_populated(self):
+        """A deal form needs customers and a quote form needs deals. Both
+        are additionally gated on the list being non-empty, so an unfilled
+        picker hides the form as completely as a missing permission."""
+        problems = []
+        deals = self._source("deals/DealList.tsx")
+        if "contacts.length > 0" in deals and "setContacts(" not in deals:
+            problems.append("DealList gates on contacts but never loads them")
+        quotes = self._source("quotes/QuoteList.tsx")
+        if "openDeals.length > 0" in quotes and "setOpenDeals(" not in quotes:
+            problems.append("QuoteList gates on openDeals but never loads them")
+        assert not problems, "\n".join(problems)
+
+    def test_each_create_form_posts_to_a_real_route(self):
+        import re
+        import sys
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[2]
+        sys.path.insert(0, str(root / "application"))
+        from chann_app.main import app
+
+        routes = [
+            re.compile("^" + re.sub(r"\{[^}]+\}", "[^/]+", route.path) + "$")
+            for route in app.routes
+            if getattr(route, "path", "").startswith("/api/v1/")
+            and "POST" in (getattr(route, "methods", set()) or set())
+        ]
+
+        expected = {
+            "customers/CustomerList.tsx": "/api/v1/licenses/X/customers",
+            "deals/DealList.tsx": "/api/v1/licenses/X/deals",
+            "quotes/QuoteList.tsx": "/api/v1/licenses/X/quotes",
+        }
+        for name, probe in expected.items():
+            assert any(rx.match(probe.replace("X", "placeholder")) for rx in routes), (
+                f"{name} posts to {probe}, which no Application route serves"
+            )
+
+
+class TestSchemasCarryWhatCallersRead:
+    """The Application Tier reading a field the Data Tier never sends.
+
+    member["id"] had been read since Phase 12 and MemberOut has never
+    declared it, so every technician's "งานของฉัน" raised KeyError and
+    answered with a generic apology. Nothing caught it because the chat
+    fake returned an "id" the real endpoint did not.
+
+    This compares the fields the Application Tier subscripts out of a
+    member against what the schema promises.
+    """
+
+    def test_member_out_declares_every_field_the_app_reads(self):
+        import re
+        import sys
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[2]
+        sys.path.insert(0, str(root / "data"))
+        from chann_data.schemas import MemberOut
+
+        declared = set(MemberOut.model_fields)
+
+        read = set()
+        for name in ("services/chat.py", "routers_phase2.py"):
+            source = (
+                root / "application/chann_app" / name
+            ).read_text(encoding="utf-8")
+            read |= set(re.findall(r'\bmember\[\s*"(\w+)"\s*\]', source))
+
+        missing = sorted(read - declared)
+        assert not missing, (
+            "the Application Tier reads these off a member, and MemberOut "
+            f"does not send them: {missing}"
+        )
+
+    def test_the_chat_fake_matches_the_schema(self):
+        """A fake more generous than the real client hides exactly this."""
+        import re
+        import sys
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[2]
+        sys.path.insert(0, str(root / "data"))
+        from chann_data.schemas import MemberOut
+
+        source = (
+            root / "tests/unit/test_phase6_chat.py"
+        ).read_text(encoding="utf-8")
+        block = re.search(
+            r"async def get_member\(.*?\n        \}", source, re.S,
+        )
+        assert block, "get_member not found in the fake"
+        faked = set(re.findall(r'"(\w+)":', block.group(0)))
+
+        invented = sorted(faked - set(MemberOut.model_fields))
+        assert not invented, (
+            f"the fake returns fields MemberOut does not: {invented}"
+        )

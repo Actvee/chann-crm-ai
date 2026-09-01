@@ -68,6 +68,31 @@ export default function QuoteList({ liffId }: { liffId: string }) {
       setToken(session.token);
       setMemberships(session.memberships);
       setLicenseId(session.memberships[0]?.license_id ?? "");
+      const license = session.memberships[0]?.license_id ?? "";
+      if (license) {
+        setPermissions(await fetchPermissions(session.token, license));
+        // A quote is created FROM a deal, and only an open one:
+        // quoting a closed deal is not a thing.
+        const response = await fetch(
+          `/api/phase2/licenses/${license}/deals`,
+          { headers: proxyHeaders(session.token, license) },
+        );
+        if (response.ok) {
+          const rows = (await response.json()) as {
+            id: string; deal_id?: string; stage?: string; customer_name?: string;
+          }[];
+          setOpenDeals(
+            rows
+              .filter((row) => row.stage === "new" || row.stage === "proposed")
+              .map((row) => ({
+                id: row.id,
+                label: `${row.deal_id ?? row.id}${
+                  row.customer_name ? ` · ${row.customer_name}` : ""
+                }`,
+              })),
+          );
+        }
+      }
       if (!session.memberships.length) say(t.liff.noCompany, "error");
     } catch (error) {
       say(error instanceof Error ? error.message : t.dashboard.openFailed, "error");

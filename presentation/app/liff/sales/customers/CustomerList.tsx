@@ -76,6 +76,10 @@ export default function CustomerList({ liffId }: { liffId: string }) {
       setToken(session.token);
       setMemberships(session.memberships);
       setLicenseId(session.memberships[0]?.license_id ?? "");
+      const license = session.memberships[0]?.license_id ?? "";
+      if (license) {
+        setPermissions(await fetchPermissions(session.token, license));
+      }
       if (!session.memberships.length) say(t.liff.noCompany, "error");
     } catch (error) {
       say(error instanceof Error ? error.message : t.dashboard.openFailed, "error");

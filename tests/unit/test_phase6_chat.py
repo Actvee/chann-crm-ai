@@ -181,7 +181,17 @@ class FakeDataClient:
         self.recorded.append(("set_last_entity_ref", chann_uid, oa, entity_type, entity_id, code))
 
     async def get_member(self, license_id, chann_uid):
-        return {"id": "member-1", "chann_uid": chann_uid, "role": "technician"}
+        # Mirrors MemberOut exactly. This fake used to return an "id" the
+        # real endpoint never sent, which hid a KeyError that made every
+        # technician's "งานของฉัน" fail in production while the tests
+        # passed. A fake more generous than the real client hides bugs of
+        # exactly this shape.
+        return {
+            "id": "member-1",
+            "chann_uid": chann_uid,
+            "role": "technician",
+            "status": "active",
+        }
 
     async def update_quote_product(self, license_id, quote_id, line_id, fields, actor_id=None):
         self.recorded.append(("update_quote_product", license_id, quote_id, line_id, fields))

@@ -381,7 +381,10 @@ def list_members(license_id: uuid.UUID, session: Session = Depends(get_session))
     if LicenseRepository(session).get_scoped(scope) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="license not found")
     members = MemberRepository(session).list_for_license(scope)
-    return [MemberOut(chann_uid=m.chann_uid, role=m.role, status=m.status) for m in members]
+    return [
+        MemberOut(id=m.id, chann_uid=m.chann_uid, role=m.role, status=m.status)
+        for m in members
+    ]
 
 
 @router.get("/licenses/{license_id}/members/{chann_uid}", response_model=MemberOut)
@@ -392,7 +395,12 @@ def get_member(license_id: uuid.UUID, chann_uid: str, session: Session = Depends
         member = MemberRepository(session).get(scope, chann_uid)
         if member is None:
             return None
-        return {"chann_uid": member.chann_uid, "role": member.role, "status": member.status}
+        return {
+            "id": member.id,
+            "chann_uid": member.chann_uid,
+            "role": member.role,
+            "status": member.status,
+        }
 
     cached = cache.get_or_load(
         k_member(str(license_id), chann_uid),
@@ -668,7 +676,7 @@ def set_member_role(
             k_member(str(license_id), chann_uid),
             k_permissions(str(license_id), chann_uid),
         )
-        return MemberOut(chann_uid=member.chann_uid, role=member.role, status=member.status)
+        return MemberOut(id=member.id, chann_uid=member.chann_uid, role=member.role, status=member.status)
     except Exception as exc:
         session.rollback()
         raise _phase2_http_error(exc)
@@ -826,7 +834,7 @@ def force_transfer_owner(
         )
         session.commit()
         _invalidate_authorization_for_license(session, scope)
-        return MemberOut(chann_uid=member.chann_uid, role=member.role, status=member.status)
+        return MemberOut(id=member.id, chann_uid=member.chann_uid, role=member.role, status=member.status)
     except Exception as exc:
         session.rollback()
         raise _phase2_http_error(exc)
