@@ -842,3 +842,51 @@ class TestSchemasCarryWhatCallersRead:
         assert not invented, (
             f"the fake returns fields MemberOut does not: {invented}"
         )
+
+
+
+class TestCreatingFromWhereYouAlreadyAre:
+    """A record you are looking at answers its own question.
+
+    Opening a deal from the deal list has to ask which customer; opening
+    one from a customer's page does not, because the page already knows.
+    Making someone answer it anyway is the friction that sends them back
+    to chat.
+    """
+
+    def _source(self, name: str) -> str:
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[2]
+        return (
+            root / "presentation/app/liff/sales" / name
+        ).read_text(encoding="utf-8")
+
+    def test_a_customer_page_can_open_a_deal(self):
+        source = self._source("customers/[id]/CustomerDetail.tsx")
+        assert "createDeal" in source
+        assert '"/api/phase2/licenses/${licenseId}/deals"' in source or (
+            "/deals`" in source and 'method: "POST"' in source
+        )
+
+    def test_a_deal_page_can_create_a_quote(self):
+        source = self._source("deals/[id]/DealDetail.tsx")
+        assert "createQuote" in source
+        assert 'method: "POST"' in source
+
+    def test_long_lists_are_searchable(self):
+        """A native select is fine for four options and useless for four
+        hundred: a shop with a real customer list cannot scroll to find
+        someone, and on a phone the list closes if you look away."""
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[2]
+        form = (
+            root / "presentation/app/liff/_inline-create.tsx"
+        ).read_text(encoding="utf-8")
+        assert "SearchablePicker" in form, (
+            "the shared create form still uses a plain select for pickers"
+        )
+        assert "<select" not in form, (
+            "a native select survived in the create form"
+        )

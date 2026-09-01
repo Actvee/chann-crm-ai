@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
@@ -55,6 +56,7 @@ export default function CustomerDetail({
   const [deals, setDeals] = useState<Deal[]>([]);
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
+  const router = useRouter();
   const [busy, setBusy] = useState(false);
 
   const say = useCallback((message: string, kind?: "ok" | "error") => {
@@ -108,6 +110,36 @@ export default function CustomerDetail({
       say(error instanceof Error ? error.message : t.dashboard.openFailed, "error");
     }
   }, [liffId, say, t]);
+
+  async function createDeal() {
+    setBusy(true);
+    try {
+      const response = await fetch(`/api/phase2/licenses/${licenseId}/deals`, {
+        method: "POST",
+        headers: proxyHeaders(token, licenseId),
+        body: JSON.stringify({ contact_id: customerId }),
+      });
+      if (!response.ok) {
+        const detail = await response.json().catch(() => ({}));
+        const body = detail.detail;
+        say(
+          body && typeof body === "object" && body.error === "duplicate"
+            ? t.dashboard.deals.alreadyOpen.replace(
+                "{code}", String(body.existing_code ?? ""),
+              )
+            : `${t.common.error} (${response.status})`,
+          "error",
+        );
+        return;
+      }
+      const created = (await response.json()) as { id: string };
+      // Straight into it: someone who opened a deal wants to add what is
+      // being sold, and that is the next screen.
+      router.push(`/liff/sales/deals/${created.id}`);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function saveFields(changes: Record<string, string | null>) {
     const response = await fetch(
@@ -206,9 +238,28 @@ export default function CustomerDetail({
           />
 
           <RelatedHeading title={t.deal.title} count={deals.length} />
+
+          {/* Opening a deal from the customer you are looking at. The
+              customer is already known here, so asking for one — as the
+              deal list has to — would be asking a question the page can
+              already answer. */}
+          {canEdit && !deals.some((d) => d.stage === "new" || d.stage === "proposed") && (
+            <div className="actions" style={{ margin: "0 0 12px" }}>
+              <button
+                type="button"
+                className="btn"
+                data-variant="primary"
+                onClick={() => void createDeal()}
+                disabled={busy}
+              >
+                {busy ? t.dashboard.saving : t.dashboard.deals.addForThisCustomer}
+              </button>
+            </div>
+          )}
+
           {deals.length === 0 ? (
             <div className="empty">
-              <p>{t.dashboard.deals.empty}</p>
+              <p>{t.dashboard.deals.emptyHere}</p>
             </div>
           ) : (
             <ul className="list">

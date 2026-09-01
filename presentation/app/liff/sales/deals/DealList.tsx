@@ -40,7 +40,9 @@ export default function DealList({ liffId }: { liffId: string }) {
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
   const [busy, setBusy] = useState(false);
   const [permissions, setPermissions] = useState<Set<string>>(new Set());
-  const [contacts, setContacts] = useState<{ id: string; name: string }[]>([]);
+  const [contacts, setContacts] = useState<
+    { id: string; name: string; keywords?: string }[]
+  >([]);
   const [busyId, setBusyId] = useState("");
   const [openOnly, setOpenOnly] = useState(false);
 
@@ -220,7 +222,10 @@ export default function DealList({ liffId }: { liffId: string }) {
               label: t.dashboard.fields.customer,
               required: true,
               type: "select",
-              options: contacts.map((c) => ({ value: c.id, label: c.name })),
+              searchHint: t.dashboard.customers.searchHint,
+              options: contacts.map((c) => ({
+                value: c.id, label: c.name, keywords: c.keywords,
+              })),
             },
             { name: "notes", label: t.dashboard.fields.notes },
           ]}

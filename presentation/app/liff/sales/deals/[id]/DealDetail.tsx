@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
@@ -74,6 +75,7 @@ export default function DealDetail({
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
+  const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [addingProduct, setAddingProduct] = useState(false);
   const [editingLine, setEditingLine] = useState<string>("");
@@ -231,6 +233,27 @@ export default function DealDetail({
     }
   }
 
+  async function createQuote() {
+    setBusy(true);
+    try {
+      const response = await fetch(`/api/phase2/licenses/${licenseId}/quotes`, {
+        method: "POST",
+        headers: proxyHeaders(token, licenseId),
+        body: JSON.stringify({ deal_id: dealId }),
+      });
+      if (!response.ok) {
+        say(`${t.common.error} (${response.status})`, "error");
+        return;
+      }
+      const created = (await response.json()) as { id: string };
+      // Onto the quote: the next thing is checking the lines and issuing
+      // it, and both live there.
+      router.push(`/liff/sales/quotes/${created.id}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function setStage(stage: string) {
     if (!deal) return;
     setBusy(true);
@@ -369,6 +392,24 @@ export default function DealDetail({
                 />
               )}
             </section>
+          )}
+
+          {/* Quoting the deal being looked at. Shown only once there is
+              something to quote — the rule that a quote needs a line is
+              enforced in the Data Tier, and offering the button before
+              then is offering a button that fails. */}
+          {canEdit && items.length > 0 && (
+            <div className="actions" style={{ margin: "0 0 12px" }}>
+              <button
+                type="button"
+                className="btn"
+                data-variant="primary"
+                onClick={() => void createQuote()}
+                disabled={busy}
+              >
+                {busy ? t.dashboard.saving : t.dashboard.quotes.addForThisDeal}
+              </button>
+            </div>
           )}
 
           <RelatedHeading

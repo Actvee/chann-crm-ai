@@ -236,7 +236,10 @@ export default function QuoteList({ liffId }: { liffId: string }) {
               label: t.deal.title,
               required: true,
               type: "select",
-              options: openDeals.map((d) => ({ value: d.id, label: d.label })),
+              searchHint: t.dashboard.deals.searchHint,
+              options: openDeals.map((d) => ({
+                value: d.id, label: d.label, keywords: d.label,
+              })),
             },
           ]}
           onSubmit={createQuote}

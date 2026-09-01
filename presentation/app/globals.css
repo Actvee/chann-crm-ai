@@ -893,3 +893,61 @@ fieldset.group legend {
   font-family: var(--font-data);
   font-size: 12.5px;
 }
+
+/* ------------------------------------------------------------- picker
+ *
+ * A search box with results under it. The list is capped and scrolls,
+ * because a picker taller than the screen is the problem it was meant to
+ * solve.
+ */
+
+.picker { position: relative; }
+
+.picker input { width: 100%; }
+
+.picker-options {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.picker-options li { margin: 0; }
+
+.picker-options button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.picker-options button:hover,
+.picker-options button:focus-visible {
+  background: var(--surface-sunken, rgba(0, 0, 0, 0.04));
+}
+
+.picker-empty {
+  padding: 9px 10px;
+  font-size: 13px;
+  color: var(--ink-faint);
+}
+
+/* The chosen value, with a way back to searching. Showing a filled
+   search box instead reads as nothing having been selected. */
+.picker-chosen {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}

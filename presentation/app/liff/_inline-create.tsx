@@ -4,13 +4,17 @@ import { useState } from "react";
 
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
+import { PickerOption, SearchablePicker } from "./_searchable-picker";
+
 export type CreateField = {
   name: string;
   label: string;
   placeholder?: string;
   required?: boolean;
   type?: "text" | "tel" | "email" | "select";
-  options?: { value: string; label: string }[];
+  options?: PickerOption[];
+  /** Shown in the picker's search box when nothing is chosen yet. */
+  searchHint?: string;
 };
 
 /**
@@ -82,19 +86,17 @@ export function InlineCreateForm({
             <dt>{field.label}</dt>
             <dd>
               {field.type === "select" ? (
-                <select
+                // Searchable, not a native select: a shop with a real
+                // customer list cannot scroll to find someone, and on a
+                // phone the list closes the moment you look away.
+                <SearchablePicker
+                  options={field.options ?? []}
                   value={values[field.name] ?? ""}
-                  onChange={(event) =>
-                    setValues({ ...values, [field.name]: event.target.value })
+                  placeholder={field.searchHint}
+                  onChange={(next) =>
+                    setValues({ ...values, [field.name]: next })
                   }
-                >
-                  <option value="">—</option>
-                  {(field.options ?? []).map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
+                />
               ) : (
                 <input
                   type={field.type === "tel" ? "tel" : "text"}
