@@ -1,4 +1,4 @@
-# Session Handoff — 1 Sep 2026
+# Session Handoff — 1 Sep 2026 (evening)
 
 Written because the conversations doing Phases 3-13 repeatedly hit their
 context limits. This is what the next AI session needs to pick up
@@ -76,14 +76,80 @@ clone.
 
 ## Where things stand
 
-`origin/main` HEAD is **`ee1a3ab` — warranties, serial routing, and quotes
-that own their line items**, plus one patch applied on top and deployed
-with it (see the commit log for the exact SHA once pushed).
+`origin/main` HEAD is **`1b60907`**, deployed. Migration head is
+**`0020_crm_essentials`**.
 
-Migration head is **`0019_quote_products`**.
+One patch is prepared on top of it and NOT yet deployed: the three-OA
+fixes plus the AI vocabulary work described below.
 
 Everything below was exercised in LINE and in the LIFF dashboard on DEV.
 Where something is known NOT to work, it says so.
+
+### The concept the triggers were quietly breaking
+
+The product is a shop talking to an assistant. Typed triggers were only
+ever meant to be a fast path — for the phrasings people use most, and for
+the text the system writes on its own quick-reply buttons.
+
+They had become the vocabulary instead. Counting them: **28 trigger
+groups, and the AI knew 7 entities**. Service jobs, check-in, check-out,
+dispatch, warranties, teams, reminders, company settings and reports were
+all reachable ONLY by typing an exact phrase. The intent prompt even said
+"NOT a deal's line item" — so "ทำให้ราคาถูกลงหน่อยเป็น 1200" was answered
+with "that is not a feature yet" for a feature that plainly was.
+
+Seven entities were added to the prompt with examples of how people
+actually speak. Every one routes to the handler the typed path already
+uses: the model's job is to recognise the request and pull out the
+values, never to reimplement what happens next. One set of rules about
+finding a ticket, one about the dispatch gate, one about permissions.
+
+Four entities are deliberately left out — `role`, `member`, `audit_log`,
+`sales_group`. System configuration belongs on a screen, where the
+consequences of a misunderstanding are worst.
+
+**A test now compares the two lists directly.** Adding a capability to
+`ACTION_PERMISSIONS` and forgetting to teach the AI fails the build.
+
+Three related traps found the same way:
+
+* `claim`, `check_in` and `check_out` were missing from
+  `ACTION_PERMISSIONS`, so the gate answered "no permission covers that"
+  for things the Technician OA does all day.
+* Claiming a ticket demanded a code, unlike check-in and check-out which
+  have inferred it since Phase 13 — "ถึงแล้ว" worked and "รับงาน" did
+  not, for no reason a technician could see.
+* Two quick-reply buttons the system writes ("สร้างลูกค้า", "สร้างสินค้า")
+  still spent an AI call to be told what the system already knew.
+
+### Owner decisions made this session
+
+* **Technician OA is capability-gated**, not role-gated. It required
+  `role == "technician"` exactly, which was right about the risk and
+  wrong about who works: a small shop's owner goes out on jobs and was
+  told they were "not linked to any company as a technician" at their own
+  company. The gate is `ticket.read` now, and a tenant that revokes it
+  from a role is honoured.
+* **Technicians can read warranties.** "เครื่องนี้ยังอยู่ในประกันไหม" is
+  what a customer asks the person standing in front of them. Read only;
+  registering one is still the shop's job.
+* **B2C only.** No company/organisation entity — a customer is a person.
+* **One phone, one customer** and **one OPEN deal per customer**. Open,
+  not ever: a customer who bought last year and comes back is the point
+  of keeping the record.
+* **new → lost** is a legal deal transition (departure from Spec 9.6).
+* **draft → rejected** is a legal quote transition (departure from Spec
+  10.1) — otherwise a draft written by mistake could only be abandoned by
+  sending it to the customer first.
+
+### The list pages could not create anything
+
+Customers, deals and quotes could each be promoted, advanced and issued —
+everything except brought into existence. Someone who opened the
+dashboard to add a customer had to go back to LINE and type a sentence,
+which is a strange thing for a screen full of customers to require. All
+three now have an inline create form; the deal and quote forms pick from
+real records rather than asking for a code from memory.
 
 ### The bug that ate most of a day, and what it teaches
 

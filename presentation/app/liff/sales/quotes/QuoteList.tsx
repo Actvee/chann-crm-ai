@@ -6,7 +6,9 @@ import { useCallback, useEffect, useState } from "react";
 import { AppShell, Badge, CompanyPicker, Count, Empty } from "../_components";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
-import { Membership, initLiffSession, openExternal, proxyHeaders } from "../_lib";
+import { InlineCreateForm } from "../../_inline-create";
+
+import { Membership, fetchPermissions, initLiffSession, openExternal, proxyHeaders } from "../_lib";
 
 type Quote = {
   id: string;
@@ -26,6 +28,9 @@ export default function QuoteList({ liffId }: { liffId: string }) {
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
   const [busyId, setBusyId] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [permissions, setPermissions] = useState<Set<string>>(new Set());
+  const [openDeals, setOpenDeals] = useState<{ id: string; label: string }[]>([]);
 
   const say = useCallback((message: string, kind?: "ok" | "error") => {
     setStatus(message);
@@ -103,6 +108,33 @@ export default function QuoteList({ liffId }: { liffId: string }) {
     }
   }
 
+  async function createQuote(values: Record<string, string>) {
+    setBusy(true);
+    try {
+      const response = await fetch(`/api/phase2/licenses/${licenseId}/quotes`, {
+        method: "POST",
+        headers: proxyHeaders(token, licenseId),
+        body: JSON.stringify(values),
+      });
+      if (!response.ok) {
+        const detail = await response.json().catch(() => ({}));
+        // "No products" is the common refusal and is actionable, so it
+        // is passed through rather than flattened into a status code.
+        const message =
+          typeof detail.detail === "string" &&
+          detail.detail.toLowerCase().includes("no products")
+            ? t.dashboard.quotes.dealHasNoProducts
+            : `${t.common.error} (${response.status})`;
+        say(message, "error");
+        return;
+      }
+      await load();
+      say(t.dashboard.saved, "ok");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function issue(quote: Quote) {
     const already = Boolean(quote.generated_document_id);
     if (
@@ -168,6 +200,23 @@ export default function QuoteList({ liffId }: { liffId: string }) {
       <CompanyPicker memberships={memberships} licenseId={licenseId} onChange={setLicenseId} />
 
       <Count shown={quotes.length} total={quotes.length} />
+
+      {permissions.has("quote.create") && openDeals.length > 0 && (
+        <InlineCreateForm
+          title={t.dashboard.quotes.add}
+          busy={busy}
+          fields={[
+            {
+              name: "deal_id",
+              label: t.deal.title,
+              required: true,
+              type: "select",
+              options: openDeals.map((d) => ({ value: d.id, label: d.label })),
+            },
+          ]}
+          onSubmit={createQuote}
+        />
+      )}
 
       {quotes.length === 0 ? (
         <Empty message={t.dashboard.quotes.empty} />

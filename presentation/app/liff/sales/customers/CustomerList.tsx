@@ -6,7 +6,9 @@ import { useCallback, useEffect, useState } from "react";
 import { AppShell, Badge, CompanyPicker, Count, Empty } from "../_components";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
-import { Membership, initLiffSession, proxyHeaders } from "../_lib";
+import { InlineCreateForm } from "../../_inline-create";
+
+import { Membership, fetchPermissions, initLiffSession, proxyHeaders } from "../_lib";
 
 type Customer = {
   id: string;
@@ -34,6 +36,8 @@ export default function CustomerList({ liffId }: { liffId: string }) {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
+  const [busy, setBusy] = useState(false);
+  const [permissions, setPermissions] = useState<Set<string>>(new Set());
   const [busyId, setBusyId] = useState("");
   const [query, setQuery] = useState("");
 
@@ -77,6 +81,39 @@ export default function CustomerList({ liffId }: { liffId: string }) {
       say(error instanceof Error ? error.message : t.dashboard.openFailed, "error");
     }
   }, [liffId, say]);
+
+  async function createCustomer(values: Record<string, string>) {
+    setBusy(true);
+    try {
+      const response = await fetch(
+        `/api/phase2/licenses/${licenseId}/customers`,
+        {
+          method: "POST",
+          headers: proxyHeaders(token, licenseId),
+          body: JSON.stringify(values),
+        },
+      );
+      if (!response.ok) {
+        const detail = await response.json().catch(() => ({}));
+        const body = detail.detail;
+        // A duplicate phone names the record that already holds it, so
+        // the answer is "here it is" rather than "that failed".
+        say(
+          body && typeof body === "object" && body.error === "duplicate"
+            ? t.dashboard.customers.duplicate.replace(
+                "{code}", String(body.existing_code ?? ""),
+              )
+            : `${t.common.error} (${response.status})`,
+          "error",
+        );
+        return;
+      }
+      await load();
+      say(t.dashboard.saved, "ok");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function promote(customer: Customer) {
     setBusyId(customer.id);
@@ -138,6 +175,20 @@ export default function CustomerList({ liffId }: { liffId: string }) {
       </label>
 
       <Count shown={visible.length} total={customers.length} />
+
+      {permissions.has("customer.create") && (
+        <InlineCreateForm
+          title={t.dashboard.customers.add}
+          busy={busy}
+          fields={[
+            { name: "first_name", label: t.dashboard.fields.firstName, required: true },
+            { name: "last_name", label: t.dashboard.fields.lastName },
+            { name: "phone", label: t.dashboard.fields.phone, type: "tel", required: true },
+            { name: "email", label: t.dashboard.fields.email },
+          ]}
+          onSubmit={createCustomer}
+        />
+      )}
 
       {visible.length === 0 ? (
         <Empty

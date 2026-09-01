@@ -6,7 +6,9 @@ import { useCallback, useEffect, useState } from "react";
 import { AppShell, Badge, CompanyPicker, Count, Empty } from "../_components";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
-import { Membership, initLiffSession, proxyHeaders } from "../_lib";
+import { InlineCreateForm } from "../../_inline-create";
+
+import { Membership, fetchPermissions, initLiffSession, proxyHeaders } from "../_lib";
 
 type Deal = {
   id: string;
@@ -36,6 +38,9 @@ export default function DealList({ liffId }: { liffId: string }) {
   const [deals, setDeals] = useState<Deal[]>([]);
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
+  const [busy, setBusy] = useState(false);
+  const [permissions, setPermissions] = useState<Set<string>>(new Set());
+  const [contacts, setContacts] = useState<{ id: string; name: string }[]>([]);
   const [busyId, setBusyId] = useState("");
   const [openOnly, setOpenOnly] = useState(false);
 
@@ -79,6 +84,35 @@ export default function DealList({ liffId }: { liffId: string }) {
       say(error instanceof Error ? error.message : t.dashboard.openFailed, "error");
     }
   }, [liffId, say]);
+
+  async function createDeal(values: Record<string, string>) {
+    setBusy(true);
+    try {
+      const response = await fetch(`/api/phase2/licenses/${licenseId}/deals`, {
+        method: "POST",
+        headers: proxyHeaders(token, licenseId),
+        body: JSON.stringify(values),
+      });
+      if (!response.ok) {
+        const detail = await response.json().catch(() => ({}));
+        const body = detail.detail;
+        // One open deal per customer: saying which one beats "conflict".
+        say(
+          body && typeof body === "object" && body.error === "duplicate"
+            ? t.dashboard.deals.alreadyOpen.replace(
+                "{code}", String(body.existing_code ?? ""),
+              )
+            : `${t.common.error} (${response.status})`,
+          "error",
+        );
+        return;
+      }
+      await load();
+      say(t.dashboard.saved, "ok");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function setStage(deal: Deal, stage: string) {
     setBusyId(deal.id);
@@ -148,6 +182,24 @@ export default function DealList({ liffId }: { liffId: string }) {
       </div>
 
       <Count shown={visible.length} total={deals.length} />
+
+      {permissions.has("deal.create") && contacts.length > 0 && (
+        <InlineCreateForm
+          title={t.dashboard.deals.add}
+          busy={busy}
+          fields={[
+            {
+              name: "contact_id",
+              label: t.dashboard.fields.customer,
+              required: true,
+              type: "select",
+              options: contacts.map((c) => ({ value: c.id, label: c.name })),
+            },
+            { name: "notes", label: t.dashboard.fields.notes },
+          ]}
+          onSubmit={createDeal}
+        />
+      )}
 
       {visible.length === 0 ? (
         <Empty

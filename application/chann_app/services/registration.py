@@ -236,6 +236,25 @@ async def handle_registration(
     return _t(WELCOME, language)
 
 
+# The bot's own vocabulary. Held and repeated back, these read as the
+# customer having described a problem when they asked a question.
+_CUSTOMER_COMMAND_WORDS = frozenset({
+    "วิธีใช้", "ช่วยเหลือ", "help", "เมนู", "menu", "เริ่ม", "start",
+    "แจ้งซ่อม", "แจ้งปัญหา", "เช็คประกัน", "ลงทะเบียนสินค้า",
+    "ดูงาน", "งานของฉัน", "สวัสดี", "สอบถาม",
+})
+
+
+def _is_a_command_not_a_message(text: str) -> bool:
+    """Is this a command word on its own?
+
+    On its own, deliberately: "แจ้งซ่อม" is a menu tap, but "แจ้งซ่อม
+    แอร์ไม่เย็น" is a real report with the trigger in front of it and
+    must still be held.
+    """
+    return (text or "").strip().lower() in _CUSTOMER_COMMAND_WORDS
+
+
 async def _handle_customer(
     client: DataClient, text: str, ctx: ResolvedContext, language: str
 ) -> str:
@@ -365,6 +384,13 @@ async def _handle_customer(
             )
         except Exception:
             log.exception("could not hold a customer's message while unlinked")
+        # A command, not something to pass on. "วิธีใช้" and "แจ้งซ่อม"
+        # are the words for asking how this works and for starting a
+        # repair — repeating them back as "got your message" is the bot
+        # mistaking its own vocabulary for a customer's problem.
+        if _is_a_command_not_a_message(text):
+            return _t(WELCOME_CUSTOMER, language)
+
         if language == "en":
             return (
                 f'Got it: "{text[:80]}"\n\n'

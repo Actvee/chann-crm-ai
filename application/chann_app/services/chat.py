@@ -61,6 +61,19 @@ ACTION_PERMISSIONS: dict[tuple[str, str], str] = {
     ("create", "deal"): "deal.create",
     ("update", "deal"): "deal.update",
     ("archive", "deal"): "deal.archive",
+    # A line ON a deal or quote, not the catalogue product. Editing one
+    # changes a single record, so it needs the permission for that record
+    # rather than product.manage — and without these entries the request
+    # was reported as "not a feature yet" when it plainly is one.
+    # The verbs the AI uses for field work. Without these the gate above
+    # reads "no permission covers that" and answers "not a feature" — for
+    # things the technician OA does all day.
+    ("claim", "ticket"): "ticket.update",
+    ("check_in", "service_report"): "service_report.create",
+    ("check_out", "service_report"): "service_report.create",
+    ("update", "line_item"): "deal.update",
+    ("delete", "line_item"): "deal.update",
+    ("create", "line_item"): "deal.update",
     ("read", "note"): "note.read",
     ("create", "note"): "note.create",
     ("update", "note"): "note.update",
@@ -128,6 +141,12 @@ OA_ALLOWED_PERMISSION_KEYS: dict[str, frozenset[str] | None] = {
     "technician": frozenset({
         "ticket.read", "ticket.update", "ticket.assign", "ticket.close",
         "service_report.create", "service_report.read", "service_report.update",
+        # Reading a warranty, at the owner's direction. "เครื่องนี้ยังอยู่
+        # ในประกันไหม" is the question a customer asks the technician
+        # standing in front of them, and sending them away to phone the
+        # shop for an answer the system already holds is worse for
+        # everyone. Read only — registering one is still the shop's job.
+        "warranty.read",
     }),
     "sales": None,
 }
@@ -2385,17 +2404,32 @@ async def _handle_ticket_claim(
     if "ticket.update" not in set(permission_keys):
         return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
 
-    match = TICKET_CODE_RE.search(message or "")
-    if not match:
-        return ChatReply(text=_t(TICKET_NEEDS_CODE, language))
-    code = match.group(1).upper()
-
     license_id = str(license_id)
+    match = TICKET_CODE_RE.search(message or "")
+    code = match.group(1).upper() if match else ""
+
     try:
         member = await client.get_member(license_id, ctx.chann_uid)
         if member is None:
             return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
         tickets = await client.list_tickets(license_id, visible_to=str(member["id"]))
+
+        if not code:
+            # No code given. Claiming used to demand one, unlike check-in
+            # and check-out which have inferred it since Phase 13 — so
+            # "เดี๋ยวผมไปเอง" was refused while "ถึงแล้ว" worked, for no
+            # reason a technician could see.
+            #
+            # Only when exactly one job is claimable: taking the wrong
+            # one sends someone to the wrong address.
+            claimable = [
+                t for t in tickets
+                if str(t.get("status") or "") in ("assigned", "dispatched", "open")
+            ]
+            if len(claimable) != 1:
+                return ChatReply(text=_t(TICKET_NEEDS_CODE, language))
+            code = str(claimable[0].get("ticket_number", "")).upper()
+
         ticket = next(
             (t for t in tickets if str(t.get("ticket_number", "")).upper() == code), None,
         )
@@ -3134,9 +3168,20 @@ def _distinguishing_part(name: str, others: list[str]) -> str:
 # line's position and on a deal with several similar products is easy to
 # do to the wrong one.
 
-LINE_EDIT_TRIGGERS = ("แก้ราคา", "เปลี่ยนราคา", "ลดราคา", "แก้จำนวน", "เปลี่ยนจำนวน")
+LINE_EDIT_TRIGGERS = (
+    "แก้ราคา", "เปลี่ยนราคา", "ลดราคา", "ปรับราคา", "ขึ้นราคา",
+    "แก้จำนวน", "เปลี่ยนจำนวน", "เพิ่มจำนวน", "ลดจำนวน", "ปรับจำนวน",
+)
 LINE_REMOVE_TRIGGERS = ("ลบสินค้า", "เอาสินค้าออก", "ตัดสินค้า", "remove product")
 
+LINE_NONE_YET = {
+    "th": "{where} {code} ยังไม่มีสินค้าให้แก้",
+    "en": "{code} has no lines to change.",
+}
+LINE_WHICH_ONE = {
+    "th": "{where} {code} มีหลายรายการ จะแก้อันไหนครับ\n{options}",
+    "en": "{code} has several lines — which one?\n{options}",
+}
 LINE_NOT_FOUND = {
     "th": "ไม่พบสินค้า \"{name}\" ใน{where} {code}",
     "en": 'No line called "{name}" on {code}',
@@ -3207,6 +3252,18 @@ async def _resolve_line_target(
     return None, None, None, []
 
 
+def _is_generic_product_word(name: str) -> bool:
+    """Is this the WORD for a product rather than the name of one?
+
+    Someone editing a deal with one line says "แก้ราคาสินค้าเป็น 1800",
+    meaning "change the product's price" — and the parser reads "สินค้า"
+    as a name and finds nothing.
+    """
+    return (name or "").strip().lower() in {
+        "สินค้า", "ของ", "รายการ", "อัน", "ตัว", "product", "item", "it",
+    }
+
+
 def _match_line(lines: list[dict], name: str) -> dict | None:
     needle = (name or "").strip().lower()
     if not needle:
@@ -3219,6 +3276,155 @@ def _match_line(lines: list[dict], name: str) -> dict | None:
     # edit could land on either, and changing the wrong price on a quote
     # is worse than being asked again.
     return partial[0] if len(partial) == 1 else None
+
+
+async def _handle_ai_understood_intent(
+    client: DataClient, *, intent: dict, ctx: ResolvedContext, license_id,
+    permission_keys: list[str], language: str,
+) -> ChatReply:
+    """Route a request the AI recognised to the handler that already does it.
+
+    The triggers were never meant to be the vocabulary. They are the fast
+    path for the phrasings people use most and for the text the system
+    writes on its own buttons — but a shop that says "เดี๋ยวผมไปเอง"
+    instead of "รับงาน" is asking for the same thing, and until now got
+    told the feature did not exist.
+
+    Each branch rebuilds a sentence the existing handler parses, rather
+    than reimplementing it. One set of rules about finding the ticket, one
+    about the dispatch gate, one about permissions — and no way for the
+    typed path and the spoken one to disagree about any of them.
+    """
+    entity = str(intent.get("entity") or "")
+    action = str(intent.get("action") or "")
+    fields = intent.get("fields") or {}
+
+    def _joined(*parts) -> str:
+        return " ".join(str(p) for p in parts if str(p or "").strip())
+
+    code = str(fields.get("code") or "").strip()
+    target = str(fields.get("target_name") or "").strip()
+
+    if entity == "ticket":
+        if action == "claim":
+            return await _handle_ticket_claim(
+                client, ctx=ctx, license_id=license_id,
+                message=_joined("รับงาน", code),
+                permission_keys=permission_keys, language=language,
+            )
+        if action == "assign":
+            return await _handle_ticket_assign(
+                client, ctx=ctx, license_id=license_id,
+                message=_joined("มอบหมาย", code, "ให้", target),
+                trigger="มอบหมาย", permission_keys=permission_keys,
+                language=language,
+            )
+
+    if entity == "service_report":
+        if action == "check_in":
+            return await _handle_check_in(
+                client, ctx=ctx, license_id=license_id,
+                message=_joined("เช็คอิน", code),
+                permission_keys=permission_keys, language=language,
+            )
+        if action == "check_out":
+            return await _handle_check_out(
+                client, ctx=ctx, license_id=license_id,
+                message=_joined("ปิดงาน", code),
+                permission_keys=permission_keys, language=language,
+            )
+
+    if entity == "followup" and action == "create":
+        due = _joined(fields.get("due_date"), fields.get("due_time"))
+        return await _handle_reminder_create(
+            client, ctx=ctx, license_id=license_id,
+            message=_joined("เตือน", due, target, fields.get("notes")),
+            permission_keys=permission_keys, language=language,
+            actor_id=ctx.chann_uid,
+        )
+
+    if entity == "warranty" and action == "read":
+        serial = str(fields.get("serial_number") or "").strip()
+        if serial:
+            return await _handle_serial_enquiry(
+                client, ctx=ctx, license_id=license_id,
+                message=_joined("เช็คประกัน", serial), language=language,
+            )
+
+    # Understood as a category but not as something with a handler behind
+    # it. Saying what IS possible beats "not a feature", which is wrong —
+    # the feature exists, this particular shape of it does not.
+    try:
+        catalog = await client.permission_catalog()
+    except Exception:
+        log.exception("could not read the permission catalogue")
+        catalog = []
+    return ChatReply(
+        text=suggest_what_you_can_do(
+            permission_keys, catalog, language,
+            requested_action=action, requested_entity=entity,
+        )
+    )
+
+
+async def _handle_line_item_intent(
+    client: DataClient, *, intent: dict, ctx: ResolvedContext, license_id,
+    permission_keys: list[str], language: str,
+) -> ChatReply:
+    """A line edit the AI understood, rather than one a trigger matched.
+
+    The triggers are a shortcut for the phrasings people use most and for
+    the text the system writes on its own buttons. They are not the
+    vocabulary — "ทำให้ถูกลงหน่อยเป็น 1200" means the same as "ลดราคา
+    เหลือ 1200" and a shop should not have to learn which words we
+    happened to list.
+
+    Both paths converge on the same handler: the AI's job here is to
+    recognise the request and pull out the numbers, not to reimplement
+    what happens next.
+    """
+    fields = intent.get("fields") or {}
+    action = str(intent.get("action") or "update")
+
+    # Rebuild a sentence the shared parser understands. Passing the
+    # extracted values through the same code path as the typed version
+    # means one set of rules about matching a line, one set about
+    # ambiguity, and no way for the two to disagree.
+    parts: list[str] = []
+    name = str(fields.get("target_name") or "").strip()
+    if name:
+        parts.append(name)
+    code = str(fields.get("code") or "").strip()
+    if code:
+        parts.append(code)
+
+    if action == "delete":
+        return await _handle_line_edit(
+            client, ctx=ctx, license_id=license_id,
+            message="ลบสินค้า " + " ".join(parts),
+            trigger="ลบสินค้า", permission_keys=permission_keys,
+            language=language, remove=True,
+        )
+
+    price = fields.get("quoted_unit_price")
+    qty = fields.get("qty")
+    if price is None and qty is None:
+        # Recognised as a line edit but with nothing to change. Asking
+        # beats guessing which of price or quantity was meant.
+        return ChatReply(text=_t(LINE_NEEDS_TARGET, language))
+
+    if price is not None:
+        trigger = "แก้ราคา"
+        parts.append(f"เป็น {price}")
+    else:
+        trigger = "แก้จำนวน"
+        parts.append(f"เป็น {qty}")
+
+    return await _handle_line_edit(
+        client, ctx=ctx, license_id=license_id,
+        message=trigger + " " + " ".join(parts),
+        trigger=trigger, permission_keys=permission_keys, language=language,
+    )
 
 
 async def _handle_line_edit(
@@ -3262,7 +3468,45 @@ async def _handle_line_edit(
         text = text.replace(word, " ")
     name = " ".join(text.split()).strip(" :·-,")
 
+    if not lines:
+        return ChatReply(
+            text=_t(LINE_NONE_YET, language).format(
+                where="ใบเสนอราคา" if kind == "quote" else "ดีล", code=code or "",
+            )
+        )
+
     line = _match_line(lines, name)
+    if line is None and len(lines) == 1 and (
+        not name or _is_generic_product_word(name)
+    ):
+        # One line on the deal, and nothing that identifies a different
+        # one. "แก้ราคาสินค้าเป็น 1800" uses the WORD for product rather
+        # than a name; "เพิ่มจำนวนเป็น 5" names nothing at all. Both are
+        # unambiguous when there is only one line to mean.
+        #
+        # Only when there is exactly one: with several, guessing would
+        # put a price on the wrong product.
+        line = lines[0]
+    if line is None and not name:
+        # Several lines and nothing said which. Listing them is the
+        # answer — asking "which one?" without showing the options makes
+        # someone go and look the deal up.
+        return ChatReply(
+            text=_t(LINE_WHICH_ONE, language).format(
+                where="ใบเสนอราคา" if kind == "quote" else "ดีล",
+                code=code or "",
+                options="\n".join(
+                    f"· {l.get('product_name')}" for l in lines[:LIST_LIMIT]
+                ),
+            ),
+            quick_replies=[
+                (
+                    str(l.get("product_name"))[:20],
+                    f"{trigger}{l.get('product_name')} เป็น ",
+                )
+                for l in lines[:4]
+            ],
+        )
     if line is None:
         return ChatReply(
             text=_t(LINE_NOT_FOUND, language).format(
@@ -3791,6 +4035,41 @@ def _after_deal_conjunction(message: str) -> str | None:
     """
     match = _DEAL_CONJUNCTION_RE.search(message or "")
     return message[match.start(1):].strip() if match else None
+
+
+# Buttons the system writes that ask for something rather than doing it.
+# Tapping one must not spend an AI call to be told what the system already
+# knows: there is nothing to interpret in "สร้างลูกค้า" on its own.
+BARE_CREATE_PROMPTS: dict[str, tuple[tuple[str, ...], str, dict]] = {
+    "customer": (("สร้างลูกค้า", "เพิ่มลูกค้า", "add customer"), "customer.create", {
+        "th": "สร้างลูกค้าใหม่ พิมพ์ชื่อกับเบอร์มาได้เลยครับ\n"
+              'เช่น "จุใจ มาติกา 0812345678"',
+        "en": 'New customer — send a name and phone, e.g. "Jujai 0812345678".',
+    }),
+    "product": (("สร้างสินค้า", "เพิ่มสินค้าใหม่", "add product"), "product.manage", {
+        "th": "เพิ่มสินค้าใหม่ พิมพ์รหัส ชื่อ และราคามาได้เลยครับ\n"
+              'เช่น "FAN001 พัดลมตั้งพื้น 16 นิ้ว ราคา 1500"',
+        "en": 'New product — code, name and price, e.g. "FAN001 Fan 1500".',
+    }),
+}
+
+
+async def _handle_bare_create_prompt(
+    message: str, permission_keys: list[str], language: str,
+) -> ChatReply | None:
+    """The reply to a button that only asks for details.
+
+    Returns None when the message carries more than the bare phrase — at
+    that point there IS something to interpret, and the AI should have it.
+    """
+    lowered = (message or "").strip().lower()
+    for _, (phrases, needed, prompt) in BARE_CREATE_PROMPTS.items():
+        if lowered not in {p.lower() for p in phrases}:
+            continue
+        if needed not in set(permission_keys):
+            return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return ChatReply(text=_t(prompt, language))
+    return None
 
 
 async def _handle_deal_create_direct(
@@ -5679,6 +5958,10 @@ async def handle_chat_message(
                 language=language,
             )
 
+        bare = await _handle_bare_create_prompt(message, permission_keys, language)
+        if bare is not None:
+            return bare
+
         product_trigger = next(
             (t for t in DEAL_PRODUCT_ADD_TRIGGERS if t in message.lower()), None,
         )
@@ -5964,6 +6247,16 @@ async def handle_chat_message(
     if intent.get("entity") == "quote":
         return await _handle_quote_intent(
             client, intent=intent, ctx=ctx, license_id=license_id, language=language,
+        )
+    if intent.get("entity") in ("ticket", "service_report", "followup", "warranty"):
+        return await _handle_ai_understood_intent(
+            client, intent=intent, ctx=ctx, license_id=license_id,
+            permission_keys=permission_keys, language=language,
+        )
+    if intent.get("entity") == "line_item":
+        return await _handle_line_item_intent(
+            client, intent=intent, ctx=ctx, license_id=license_id,
+            permission_keys=permission_keys, language=language,
         )
     if intent.get("entity") == "note":
         return await _handle_note_intent(

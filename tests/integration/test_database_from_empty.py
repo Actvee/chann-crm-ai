@@ -1472,9 +1472,19 @@ class TestPhase65TenantRegistration:
 
         with Session(migrated_db) as session:
             member_repo = MemberRepository(session)
+            # OWNER-APPROVED CHANGE. This used to require role ==
+            # "technician" exactly, which was right about the risk — a
+            # salesperson must not silently become a technician — and
+            # wrong about who actually works: in a small shop the owner
+            # goes out on jobs, and the rule told them they were "not
+            # linked to any company as a technician" at their own company.
+            #
+            # The gate is ticket.read now, which is the same capability
+            # the channel already uses to decide what may be done once
+            # someone is inside it.
             owner_as_tech = member_repo.memberships_of("CHN-OASCOPE-0001", oa="technician")
-            assert owner_as_tech == [], (
-                "an Owner/Sales membership must not satisfy Technician OA"
+            assert len(owner_as_tech) == 1, (
+                "an owner holds ticket.read and does field work in a small shop"
             )
             owner_as_sales = member_repo.memberships_of("CHN-OASCOPE-0001", oa="sales")
             assert len(owner_as_sales) == 1 and owner_as_sales[0].role == "owner"
@@ -3454,3 +3464,131 @@ class TestDealCanBeLostBeforeItIsQuoted:
                 deals.transition_stage(
                     scope, deal.id, to_stage="won", allow_reopen=False,
                 )
+
+
+class TestTechnicianChannelIsCapabilityGated:
+    """Who may use the Technician OA, at the owner's direction: anyone
+    whose role grants ticket.read.
+
+    The old rule was role == "technician" exactly. It protected the right
+    thing — a salesperson should not silently become a technician — but a
+    small shop's owner goes out on jobs, and it left them told they were
+    "not linked to any company as a technician" at their own company.
+    """
+
+    def _license_with_member(self, migrated_db, role: str, suffix: str):
+        import uuid
+
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import ChannIdentity, LicenseMember
+        from chann_data.repositories.phase65 import RegistrationRepository
+
+        tag = f"{suffix}-{uuid.uuid4().hex[:4]}"
+        with Session(migrated_db) as session:
+            session.add(ChannIdentity(
+                chann_uid=f"CHN-{tag}", line_user_id=f"line-{tag}",
+                primary_role="sales",
+            ))
+            session.commit()
+        with Session(migrated_db) as session:
+            lic = RegistrationRepository(session).create_license(
+                company_name=f"Cap {tag}", created_by_chann_uid=f"CHN-{tag}",
+            )
+            session.commit()
+            license_id = lic.id
+
+        if role != "owner":
+            with Session(migrated_db) as session:
+                member = session.query(LicenseMember).filter_by(
+                    license_id=license_id, chann_uid=f"CHN-{tag}",
+                ).one()
+                member.role = role
+                session.commit()
+
+        return f"CHN-{tag}", license_id
+
+    @pytest.mark.parametrize("role", ["owner", "admin", "cs", "technician"])
+    def test_roles_that_do_field_work_get_in(self, migrated_db, role):
+        from sqlalchemy.orm import Session
+
+        from chann_data.repositories.tenant_scope import MemberRepository
+
+        chann_uid, _ = self._license_with_member(migrated_db, role, "IN")
+        with Session(migrated_db) as session:
+            found = MemberRepository(session).memberships_of(
+                chann_uid, oa="technician",
+            )
+        assert len(found) == 1, f"{role} holds ticket.read and should get in"
+
+    def test_a_role_without_ticket_read_is_refused(self, migrated_db):
+        """The protection that mattered, kept."""
+        from sqlalchemy.orm import Session
+
+        from chann_data.repositories.tenant_scope import MemberRepository
+
+        chann_uid, _ = self._license_with_member(migrated_db, "member", "OUT")
+        with Session(migrated_db) as session:
+            found = MemberRepository(session).memberships_of(
+                chann_uid, oa="technician",
+            )
+        assert found == []
+
+    def test_an_unknown_role_name_is_refused(self, migrated_db):
+        """A typo, or a role deleted after members were assigned to it,
+        must not open a channel."""
+        from sqlalchemy.orm import Session
+
+        from chann_data.repositories.tenant_scope import MemberRepository
+
+        chann_uid, _ = self._license_with_member(migrated_db, "ผู้ช่วย", "UNK")
+        with Session(migrated_db) as session:
+            found = MemberRepository(session).memberships_of(
+                chann_uid, oa="technician",
+            )
+        assert found == []
+
+    def test_a_tenant_can_revoke_it_from_a_role(self, migrated_db):
+        """A shop that removed ticket.read from cs has said cs does not do
+        field work, and that must be honoured over the template."""
+        from sqlalchemy.orm import Session
+
+        import uuid
+
+        from chann_data.models import RolePermission
+        from chann_data.repositories.tenant_scope import MemberRepository
+
+        chann_uid, license_id = self._license_with_member(migrated_db, "cs", "REV")
+        with Session(migrated_db) as session:
+            # The grant already exists — creating a licence seeds the
+            # default roles into role_permissions — so revoking means
+            # flipping the row, not inserting a second one.
+            existing = session.query(RolePermission).filter_by(
+                license_id=license_id, role="cs", permission_key="ticket.read",
+            ).one_or_none()
+            if existing is None:
+                session.add(RolePermission(
+                    id=uuid.uuid4(), license_id=license_id, role="cs",
+                    permission_key="ticket.read", allowed=False,
+                ))
+            else:
+                existing.allowed = False
+            session.commit()
+
+        with Session(migrated_db) as session:
+            found = MemberRepository(session).memberships_of(
+                chann_uid, oa="technician",
+            )
+        assert found == []
+
+    def test_sales_oa_still_excludes_technicians(self, migrated_db):
+        """The other direction is unchanged: a technician has no business
+        in the Sales channel."""
+        from sqlalchemy.orm import Session
+
+        from chann_data.repositories.tenant_scope import MemberRepository
+
+        chann_uid, _ = self._license_with_member(migrated_db, "technician", "SAL")
+        with Session(migrated_db) as session:
+            found = MemberRepository(session).memberships_of(chann_uid, oa="sales")
+        assert found == []

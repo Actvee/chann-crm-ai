@@ -96,19 +96,67 @@ class MemberRepository:
         "sales" (or omitted): every role except "technician" — Master Spec
         section 6 lists Sales OA as Sales/CS/Admin/Owner, technician is a
         separate persona with its own onboarding.
-        "technician": only role == "technician" — must have been invited
-        into that specific role, not merely employed at the company in some
-        other capacity.
+
+        "technician": any role whose permissions include ticket.read, at
+        the owner's direction. Requiring role == "technician" exactly was
+        right about the risk — a salesperson should not silently become a
+        technician — but wrong about who works: in a small shop the owner
+        goes out on jobs, and the rule left them told they were "not
+        linked to any company as a technician" at their own company.
+
+        Capability, not job title, is also what the rest of the system
+        already uses; OA_ALLOWED_PERMISSION_KEYS gates the channel's
+        actions the same way. A role with no ticket.read still cannot get
+        in, which is the protection that mattered.
         """
         query = select(LicenseMember).where(
             LicenseMember.chann_uid == chann_uid,
             LicenseMember.status == "active",
         )
+        rows = list(self._s.execute(query).scalars())
+
         if oa == "technician":
-            query = query.where(LicenseMember.role == "technician")
-        elif oa is not None:
-            query = query.where(LicenseMember.role != "technician")
-        return list(self._s.execute(query).scalars())
+            return [row for row in rows if self._can_do_field_work(row)]
+        if oa is not None:
+            return [row for row in rows if row.role != "technician"]
+        return rows
+
+    def _can_do_field_work(self, member: LicenseMember) -> bool:
+        """Does this member's role let them see service tickets?
+
+        Custom roles are read from the tenant's own definitions; the
+        built-in ones fall back to the template. A tenant that removed
+        ticket.read from a role has said that role does not do field work,
+        and this must honour that rather than assuming from the name.
+        """
+        from ..models import RolePermission
+        from ..permissions import DEFAULT_ROLE_TEMPLATES
+
+        # A tenant's explicit grant wins. Overrides live per key, so the
+        # question is whether THIS key is granted, not whether the role
+        # has any overrides at all.
+        override = self._s.execute(
+            select(RolePermission).where(
+                RolePermission.license_id == member.license_id,
+                RolePermission.role == member.role,
+                RolePermission.permission_key == "ticket.read",
+            )
+        ).scalars().first()
+        if override is not None:
+            return bool(override.allowed)
+
+        if member.role not in DEFAULT_ROLE_TEMPLATES:
+            # An unknown role name. Refuse rather than assume: a typo or a
+            # role deleted after members were assigned to it must not open
+            # a channel, and `.get()` returning None for a missing key
+            # looks identical to the owner template's deliberate None.
+            return False
+
+        template = DEFAULT_ROLE_TEMPLATES[member.role]
+        # Only the owner template is None, and it means everything.
+        if template is None:
+            return True
+        return "ticket.read" in template
 
 
 class IdentityRepository:

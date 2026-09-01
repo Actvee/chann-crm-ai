@@ -557,8 +557,10 @@ class TestSlotFilling:
             FakeDataClient(permission_keys=["customer.create"]),
             message="เพิ่มลูกค้า", ctx=_ctx(), ai_client=ai,
         )
-        assert "กรุณาระบุ" in reply.text
-        assert "ชื่อลูกค้า" in reply.text
+        # The bare button is answered before the AI is reached, and the
+        # reply says what to send. The slot-filling wording it used to
+        # assert belongs to the interpreted path, tested separately.
+        assert "ชื่อ" in reply.text and "เบอร์" in reply.text
 
     async def test_complete_message_proceeds_past_slot_filling(self):
         ai = httpx.AsyncClient(transport=_ai(json.dumps(
@@ -787,7 +789,11 @@ class TestAIFailureDegradesGracefully:
     async def test_missing_api_key_does_not_leak_config_detail(self, monkeypatch):
         monkeypatch.setattr(settings, "openrouter_api_key", "")
         reply = await handle_chat_message(
-            FakeDataClient(), message="เพิ่มลูกค้า", ctx=_ctx()
+            # A message that genuinely needs interpreting. "เพิ่มลูกค้า"
+            # on its own is answered before the AI is reached now, so it
+            # would no longer exercise this.
+            FakeDataClient(permission_keys=["customer.create"]),
+            message="ลูกค้าใหม่ชื่อจุใจ เบอร์ 0812345678", ctx=_ctx(),
         )
         assert "ขออภัย" in reply.text
         assert "OPENROUTER" not in reply.text
@@ -1276,8 +1282,13 @@ class TestPhase9CustomerChat:
             {"action": "create", "entity": "customer", "fields": {}, "missing": []})))
         client = FakeDataClient(permission_keys=["customer.create"])
         reply = await handle_chat_message(
-            client, message="เพิ่มลูกค้า", ctx=_ctx(primary_role="sales"), ai_client=ai,
+            # Phrased so it must go through the AI: the bare button is
+            # answered before that now.
+            client, message="ลูกค้าใหม่ เบอร์ 0812345678",
+            ctx=_ctx(primary_role="sales"), ai_client=ai,
         )
+        # It reached the AI and asked for what was missing, which is the
+        # behaviour under test — not the particular field it named.
         assert "กรุณาระบุ" in reply.text
         assert not any(r[0] == "create_customer" for r in client.recorded)
 
@@ -4485,3 +4496,304 @@ class TestMessageTemplatesGetWhatTheyNeed:
 
         _, problems = self._scan(module)
         assert not problems, "\n".join(["format calls missing a value:", *problems])
+
+
+class TestLineEditsAreNotLimitedToTheTriggers:
+    """The triggers are a shortcut, not the vocabulary.
+
+    They exist for the phrasings people use most and for the text the
+    system writes on its own buttons. A shop should not have to learn
+    which words we happened to list — "ทำให้ถูกลงหน่อยเป็น 1200" means
+    the same as "ลดราคาเหลือ 1200", and before this the first one fell
+    through to an AI that had no idea line items could be edited at all.
+    """
+
+    async def _deal_with_a_line(self):
+        client = FakeDataClient(permission_keys=[
+            "customer.read", "deal.create", "deal.read", "deal.update",
+            "product.manage",
+        ])
+        customer = await client.create_customer("L1", {
+            "first_name": "ก", "last_name": "ข", "phone": "0800000000",
+        })
+        client._products = [{
+            "id": "p1", "product_id": "FAN", "product_name": "พัดลม",
+            "unit_price": "1500.00",
+        }]
+        await handle_chat_message(
+            client, message=f"ข้อมูลลูกค้า {customer['customer_id']}", ctx=_ctx(),
+        )
+        await handle_chat_message(client, message="สร้างดีล พัดลม 1 ตัว", ctx=_ctx())
+        return client
+
+    async def test_an_unfamiliar_phrasing_still_changes_the_price(self):
+        client = await self._deal_with_a_line()
+        ai = httpx.AsyncClient(transport=_ai(json.dumps({
+            "action": "update", "entity": "line_item",
+            "fields": {"quoted_unit_price": "1200"}, "missing": [],
+        })))
+        reply = await handle_chat_message(
+            client, message="ทำให้ราคาถูกลงหน่อยเป็น 1200", ctx=_ctx(), ai_client=ai,
+        )
+        updated = [r for r in client.recorded if r[0] == "update_deal_product"]
+        assert updated, reply.text
+        assert str(updated[-1][4]["quoted_unit_price"]) == "1200"
+
+    async def test_an_unfamiliar_phrasing_can_remove_a_line(self):
+        client = await self._deal_with_a_line()
+        ai = httpx.AsyncClient(transport=_ai(json.dumps({
+            "action": "delete", "entity": "line_item",
+            "fields": {"target_name": "พัดลม"}, "missing": [],
+        }, ensure_ascii=False)))
+        await handle_chat_message(
+            client, message="ไม่เอาตัวนี้แล้ว", ctx=_ctx(), ai_client=ai,
+        )
+        assert [r for r in client.recorded if r[0] == "remove_deal_product"]
+
+    async def test_the_ai_path_obeys_the_same_permission(self):
+        """Both routes end in one handler, so the gate cannot differ
+        between the words someone happened to use."""
+        client = await self._deal_with_a_line()
+        client._permission_keys = ["deal.read"]
+        ai = httpx.AsyncClient(transport=_ai(json.dumps({
+            "action": "update", "entity": "line_item",
+            "fields": {"quoted_unit_price": "1200"}, "missing": [],
+        })))
+        reply = await handle_chat_message(
+            client, message="ลองลดราคาให้หน่อย", ctx=_ctx(), ai_client=ai,
+        )
+        assert not [r for r in client.recorded if r[0] == "update_deal_product"]
+        assert "สิทธิ์" in reply.text
+
+    async def test_a_recognised_edit_with_no_number_asks(self):
+        """Understood as a line edit but with nothing to change: asking
+        beats guessing whether price or quantity was meant."""
+        client = await self._deal_with_a_line()
+        ai = httpx.AsyncClient(transport=_ai(json.dumps({
+            "action": "update", "entity": "line_item", "fields": {}, "missing": [],
+        })))
+        reply = await handle_chat_message(
+            client, message="แก้รายการนี้หน่อย", ctx=_ctx(), ai_client=ai,
+        )
+        assert not [r for r in client.recorded if r[0] == "update_deal_product"]
+        assert reply.text
+
+    async def test_the_typed_shortcuts_still_work_without_the_ai(self):
+        """The fast path must not have become dependent on the model."""
+        client = await self._deal_with_a_line()
+        await handle_chat_message(client, message="ลดราคาพัดลมเหลือ 1400", ctx=_ctx())
+        assert [r for r in client.recorded if r[0] == "update_deal_product"]
+
+
+class TestTheTriggersAreAShortcutNotTheVocabulary:
+    """The point of the product is that a shop talks to an assistant.
+
+    Triggers exist for the phrasings people use most and for the text the
+    system writes on its own buttons — but a technician who says "เดี๋ยว
+    ผมไปเอง" instead of "รับงาน" is asking for the same thing, and until
+    the AI knew these entities existed at all the answer was "this is not
+    a feature yet" for a feature that plainly was.
+
+    Every case below goes through the SAME handler the typed shortcut
+    uses. The AI's job is to recognise the request; it does not get its
+    own copy of the rules.
+    """
+
+    async def _technician_with_a_job(self):
+        client = FakeDataClient(
+            permission_keys=[
+                "ticket.read", "ticket.update", "ticket.close",
+                "service_report.create", "service_report.update",
+            ],
+            role="technician",
+        )
+        client._tickets = [{
+            "id": "t1", "ticket_number": "T-2026-0001", "status": "assigned",
+            # assigned_to_ref is what the inference matches on; the older
+            # assigned_member_id is not read by that path.
+            "assigned_to_ref": "member-1", "customer_name": "จุใจ",
+            "service_address": "99/1", "issue_description": "แอร์ไม่เย็น",
+        }]
+        return client
+
+    async def test_a_technician_can_claim_a_job_in_their_own_words(self):
+        client = await self._technician_with_a_job()
+        ai = httpx.AsyncClient(transport=_ai(json.dumps({
+            "action": "claim", "entity": "ticket", "fields": {}, "missing": [],
+        })))
+        await handle_chat_message(
+            client, message="เดี๋ยวผมไปเอง", ctx=_ctx(oa="technician"), ai_client=ai,
+        )
+        assert [r for r in client.recorded if r[0] == "claim_ticket"], (
+            "a claim phrased naturally never reached the claim handler"
+        )
+
+    async def test_arriving_on_site_does_not_need_the_word_check_in(self):
+        client = await self._technician_with_a_job()
+        # Claiming sets accept_status, not status — the ticket stays
+        # "assigned" until work starts, which is what check-in looks for.
+        client._tickets[0]["accept_status"] = "accepted"
+        ai = httpx.AsyncClient(transport=_ai(json.dumps({
+            "action": "check_in", "entity": "service_report",
+            "fields": {}, "missing": [],
+        })))
+        await handle_chat_message(
+            client, message="มาถึงหน้างานแล้วครับ", ctx=_ctx(oa="technician"),
+            ai_client=ai,
+        )
+        assert [r for r in client.recorded if r[0] == "check_in_ticket"]
+
+    async def test_a_warranty_question_phrased_as_a_question(self):
+        client = FakeDataClient(permission_keys=["warranty.read"])
+        ai = httpx.AsyncClient(transport=_ai(json.dumps({
+            "action": "read", "entity": "warranty",
+            "fields": {"serial_number": "SN12345"}, "missing": [],
+        })))
+        reply = await handle_chat_message(
+            client, message="เครื่องนี้ยังอยู่ในประกันไหม SN12345",
+            ctx=_ctx(), ai_client=ai,
+        )
+        assert reply.text
+        assert "ไม่มีฟังก์ชันนี้" not in reply.text
+
+    async def test_an_understood_category_with_no_handler_says_what_is_possible(self):
+        """"Not a feature" is the wrong answer when the feature exists and
+        only this shape of it does not."""
+        client = FakeDataClient(permission_keys=["ticket.read", "ticket.update"])
+        ai = httpx.AsyncClient(transport=_ai(json.dumps({
+            "action": "archive", "entity": "ticket", "fields": {}, "missing": [],
+        })))
+        reply = await handle_chat_message(
+            client, message="เก็บงานนี้เข้ากรุ", ctx=_ctx(), ai_client=ai,
+        )
+        assert reply.text
+
+    async def test_the_typed_shortcut_still_works_with_no_ai(self):
+        """The fast path must not have become dependent on the model —
+        that is why it exists."""
+        client = await self._technician_with_a_job()
+        await handle_chat_message(
+            client, message="รับงาน T-2026-0001", ctx=_ctx(oa="technician"),
+        )
+        assert [r for r in client.recorded if r[0] == "claim_ticket"]
+
+
+class TestTheAIKnowsWhatTheSystemCanDo:
+    """A capability the AI has never heard of is unreachable by anything
+    except its exact trigger words — which is the opposite of an
+    assistant.
+
+    This compares the two lists directly so a new entity cannot be added
+    to the permission table and quietly stay invisible.
+    """
+
+    # Entities deliberately left out of the AI's vocabulary: system
+    # configuration that belongs on a screen, where the consequences of a
+    # misunderstanding are worst.
+    NOT_CONVERSATIONAL = {"audit_log", "member", "role", "sales_group"}
+
+    def test_every_conversational_capability_is_in_the_prompt(self):
+        import re
+        from pathlib import Path
+
+        from chann_app.services.chat import ACTION_PERMISSIONS
+
+        root = Path(__file__).resolve().parents[2]
+        prompt = (
+            root / "application/chann_app/services/ai/intent.py"
+        ).read_text(encoding="utf-8")
+        known = set(re.findall(r'entity="(\w+)"', prompt))
+        mapped = {entity for _, entity in ACTION_PERMISSIONS}
+
+        invisible = sorted(mapped - known - self.NOT_CONVERSATIONAL)
+        assert not invisible, (
+            "these capabilities exist but the AI has never heard of them, so "
+            f"they can only be reached by typing an exact trigger: {invisible}"
+        )
+
+
+class TestButtonsTheSystemWritesDoNotNeedTheAI:
+    """A quick reply is text the system chose, in a shape it chose.
+
+    Sending that to a model to be interpreted is strange in principle and
+    fails in practice — "สร้างลูกค้า" on its own has nothing to
+    interpret, and it spent an API call to be told what the system
+    already knew. Two of these survived the earlier sweep.
+    """
+
+    async def test_the_new_customer_button_answers_without_a_model(self):
+        client = FakeDataClient(permission_keys=["customer.create", "customer.read"])
+        reply = await handle_chat_message(client, message="สร้างลูกค้า", ctx=_ctx())
+        assert "ไม่พร้อมใช้งาน" not in reply.text
+        # And it says what to send next, rather than just acknowledging.
+        assert "เบอร์" in reply.text
+
+    async def test_the_new_product_button_answers_without_a_model(self):
+        client = FakeDataClient(permission_keys=["product.manage"])
+        reply = await handle_chat_message(client, message="สร้างสินค้า", ctx=_ctx())
+        assert "ไม่พร้อมใช้งาน" not in reply.text
+        assert "ราคา" in reply.text
+
+    async def test_it_still_checks_the_permission(self):
+        client = FakeDataClient(permission_keys=["customer.read"])
+        reply = await handle_chat_message(client, message="สร้างลูกค้า", ctx=_ctx())
+        assert "สิทธิ์" in reply.text
+
+    async def test_a_message_carrying_details_still_goes_to_the_ai(self):
+        """Only the BARE phrase is answered here. "สร้างลูกค้า จุใจ
+        0812345678" has something to interpret and must not be swallowed
+        by a prompt telling them to send what they just sent."""
+        client = FakeDataClient(permission_keys=["customer.create", "customer.read"])
+        ai = httpx.AsyncClient(transport=_ai(json.dumps({
+            "action": "create", "entity": "customer",
+            "fields": {"first_name": "จุใจ", "phone": "0812345678"}, "missing": [],
+        }, ensure_ascii=False)))
+        reply = await handle_chat_message(
+            client, message="สร้างลูกค้า จุใจ 0812345678", ctx=_ctx(), ai_client=ai,
+        )
+        # It reached the AI path — proven by the pending intent, which only
+        # the interpreted route writes. Whether it then asks for a surname
+        # is the slot-filling tests' business, not this one's.
+        assert [r for r in client.recorded if r[0] == "set_pending_intent"]
+        assert "พิมพ์ชื่อกับเบอร์" not in reply.text
+
+    def test_every_button_the_system_writes_leads_somewhere(self):
+        """A button whose text matches no trigger and no AI entity is a
+        dead end the system built for itself."""
+        import re
+        from pathlib import Path
+
+        from chann_app.services import chat as module
+
+        source = Path(module.__file__).read_text(encoding="utf-8")
+        sent = set()
+        for block in re.finditer(r"quick_replies=\[(.*?)\],\s*\n", source, re.S):
+            for entry in re.finditer(r'\(\s*[^,]+,\s*f?"([^"]+)"', block.group(1)):
+                sent.add(entry.group(1))
+
+        triggers: list[str] = []
+        for name in dir(module):
+            if name.endswith("_TRIGGERS"):
+                value = getattr(module, name)
+                if isinstance(value, tuple):
+                    triggers += [t for t in value if isinstance(t, str)]
+        for phrases, _, _ in module.BARE_CREATE_PROMPTS.values():
+            triggers += list(phrases)
+
+        dead = []
+        for text in sorted(sent):
+            probe = re.sub(r"\{[^}]*\}", "X", text).lower()
+            if len(probe) < 3 or "_" in probe:
+                continue  # a format placeholder, not a button label
+            if not any(t.lower() in probe for t in triggers):
+                dead.append(text)
+
+        # Known-good: these are handled by literal comparison in the
+        # dispatcher rather than by a trigger tuple.
+        handled_by_literal = {
+            "งานของฉัน", "งานวันนี้", "รายการดีล", "รายชื่อลูกค้า",
+            "ดีลที่ยังไม่ปิด", "ยืนยันกฎ", "ข้อมูลบริษัท",
+            "รายการใบเสนอราคา", "แจ้งซ่อม", "en",
+        }
+        remaining = [t for t in dead if t not in handled_by_literal]
+        assert not remaining, f"buttons that lead nowhere: {remaining}"
