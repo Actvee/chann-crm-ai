@@ -64,6 +64,25 @@ def to_gregorian_year(year: int) -> int:
 
 def parse_thai_date(text: str, today: date) -> date | None:
     """A date from Thai text, or None when nothing is recognised."""
+    # "วันที่ 6" — a bare day of the month, which is how someone says a
+    # date within the next few weeks without naming the month. Taken as
+    # the NEXT such day: "มาดูสินค้าวันที่ 6" said on the 20th means next
+    # month's 6th, not one that has already passed.
+    bare_day = re.search(r"วันที่\s*(\d{1,2})(?!\s*[/\-.\d])", text or "")
+    if bare_day:
+        day = int(bare_day.group(1))
+        if 1 <= day <= 31:
+            for month_offset in (0, 1, 2):
+                month = today.month + month_offset
+                year = today.year + (month - 1) // 12
+                month = (month - 1) % 12 + 1
+                try:
+                    candidate = date(year, month, day)
+                except ValueError:
+                    continue
+                if candidate >= today:
+                    return candidate
+
     if not text:
         return None
     cleaned = text.strip().lower()

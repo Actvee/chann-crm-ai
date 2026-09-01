@@ -230,9 +230,13 @@ export default function CustomerDetail({
             fields={[
               { name: "first_name", label: t.dashboard.fields.firstName, editable: true },
               { name: "last_name", label: t.dashboard.fields.lastName, editable: true },
-              { name: "phone", label: c.phone, editable: true, type: "tel" },
-              { name: "email", label: c.email, editable: true, type: "email" },
-              { name: "address", label: c.address, editable: true, type: "textarea" },
+              // The customer's own labels, not the company profile's. These
+              // read "เบอร์โทรบริษัท" on a person's record because `c` is
+              // t.dashboard.companyProfile — borrowed for its field names
+              // and wrong for every one of them here.
+              { name: "phone", label: t.dashboard.fields.phone, editable: true, type: "tel" },
+              { name: "email", label: t.dashboard.fields.email, editable: true, type: "email" },
+              { name: "address", label: t.dashboard.fields.address, editable: true, type: "textarea" },
               { name: "notes", label: t.dashboard.fields.notes, editable: true, type: "textarea" },
             ]}
           />

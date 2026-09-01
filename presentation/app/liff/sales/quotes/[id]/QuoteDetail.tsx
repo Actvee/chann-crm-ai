@@ -24,6 +24,11 @@ type Detail = {
     status: string;
     deal_id: string;
     generated_document_id?: string | null;
+    // Since migration 0020. A quote with no expiry is a price the shop
+    // is bound to indefinitely.
+    valid_until?: string | null;
+    discount_percent?: string | null;
+    discount_amount?: string | null;
   };
   deal: { id: string; deal_id: string; stage: string; products?: Product[] } | null;
   customer: {
@@ -60,6 +65,8 @@ export default function QuoteDetail({
   const [lines, setLines] = useState<Product[]>([]);
   const [adding, setAdding] = useState(false);
   const [editingLine, setEditingLine] = useState<string>("");
+  const [editingTerms, setEditingTerms] = useState(false);
+  const [terms, setTerms] = useState({ valid_until: "", discount: "" });
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
@@ -195,6 +202,47 @@ export default function QuoteDetail({
       }
       setEditingLine("");
       await loadLines();
+      say(t.dashboard.saved, "ok");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveTerms() {
+    setBusy(true);
+    try {
+      const body: Record<string, string> = {};
+      if (terms.valid_until) body.valid_until = terms.valid_until;
+      // Percent when it ends in %, an absolute amount otherwise — the
+      // two are stored separately because "10% and also 500 off" is
+      // ambiguous about which applies first.
+      const discount = terms.discount.trim();
+      if (discount) {
+        if (discount.endsWith("%")) {
+          body.discount_percent = discount.slice(0, -1).trim();
+        } else {
+          body.discount_amount = discount;
+        }
+      }
+      const response = await fetch(
+        `/api/phase2/licenses/${licenseId}/quotes/${quoteId}/terms`,
+        {
+          method: "PATCH",
+          headers: proxyHeaders(token, licenseId),
+          body: JSON.stringify(body),
+        },
+      );
+      if (!response.ok) {
+        say(
+          response.status === 409
+            ? t.dashboard.quotes.issuedLocked
+            : `${t.common.error} (${response.status})`,
+          "error",
+        );
+        return;
+      }
+      setEditingTerms(false);
+      await initialize();
       say(t.dashboard.saved, "ok");
     } finally {
       setBusy(false);
@@ -353,6 +401,94 @@ export default function QuoteDetail({
               </>
             }
           />
+
+          {/* When the offer stops standing, and what came off the price.
+              Both were storable from migration 0020 and reachable from
+              nowhere — a quote's validity could be defaulted but never
+              changed. */}
+          <section className="section" style={{ marginBottom: 14 }}>
+            <div className="section-head">
+              <h2>{t.dashboard.quotes.terms}</h2>
+              {editable && !editingTerms && (
+                <button
+                  type="button"
+                  className="btn"
+                  data-variant="quiet"
+                  onClick={() => {
+                    setTerms({
+                      valid_until: String(detail.quote.valid_until ?? ""),
+                      discount: detail.quote.discount_percent
+                        ? `${detail.quote.discount_percent}%`
+                        : String(detail.quote.discount_amount ?? ""),
+                    });
+                    setEditingTerms(true);
+                  }}
+                >
+                  {t.common.edit}
+                </button>
+              )}
+            </div>
+            <dl className="fields">
+              <div className="field-row">
+                <dt>{t.dashboard.quotes.validUntil}</dt>
+                <dd>
+                  {editingTerms ? (
+                    <input
+                      type="date"
+                      value={terms.valid_until}
+                      onChange={(event) =>
+                        setTerms({ ...terms, valid_until: event.target.value })
+                      }
+                    />
+                  ) : (
+                    String(detail.quote.valid_until ?? "—")
+                  )}
+                </dd>
+              </div>
+              <div className="field-row">
+                <dt>{t.dashboard.quotes.discount}</dt>
+                <dd>
+                  {editingTerms ? (
+                    <input
+                      value={terms.discount}
+                      placeholder={t.dashboard.quotes.discountHint}
+                      onChange={(event) =>
+                        setTerms({ ...terms, discount: event.target.value })
+                      }
+                    />
+                  ) : detail.quote.discount_percent ? (
+                    `${detail.quote.discount_percent}%`
+                  ) : detail.quote.discount_amount ? (
+                    money(detail.quote.discount_amount)
+                  ) : (
+                    "—"
+                  )}
+                </dd>
+              </div>
+              {editingTerms && (
+                <div className="actions">
+                  <button
+                    type="button"
+                    className="btn"
+                    data-variant="quiet"
+                    onClick={() => setEditingTerms(false)}
+                    disabled={busy}
+                  >
+                    {t.common.cancel}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn"
+                    data-variant="primary"
+                    onClick={() => void saveTerms()}
+                    disabled={busy}
+                  >
+                    {busy ? t.dashboard.saving : t.common.save}
+                  </button>
+                </div>
+              )}
+            </dl>
+          </section>
 
           <RelatedHeading title={t.product.title} count={items.length} />
           {editable && (

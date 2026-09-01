@@ -844,6 +844,12 @@ class QuoteOut(BaseModel):
     products: list[QuoteProductOut] = []
 
 
+class QuoteTermsIn(BaseModel):
+    valid_until: date | None = None
+    discount_percent: Decimal | str | float | None = None
+    discount_amount: Decimal | str | float | None = None
+
+
 class QuoteStatusIn(BaseModel):
     status: str
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import date
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy import select
@@ -178,6 +179,7 @@ from ..schemas import (
     ReportStatusIn,
     ServiceReportOut,
     QuoteProductIn,
+    QuoteTermsIn,
     QuoteProductOut,
     QuoteProductPatchIn,
     TicketAssignIn,
@@ -3778,3 +3780,38 @@ def expire_overdue_quotes(
 def pipeline_summary(license_id: uuid.UUID, session: Session = Depends(get_session)):
     """Counts and value by stage, plus what is closing this month."""
     return DealRepository(session).pipeline_summary(TenantScope(license_id=license_id))
+
+
+@router.patch(
+    "/licenses/{license_id}/quotes/{quote_id}/terms", response_model=QuoteOut,
+)
+def set_quote_terms(
+    license_id: uuid.UUID,
+    quote_id: uuid.UUID,
+    payload: QuoteTermsIn,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    """The expiry date and the discount.
+
+    Written since migration 0020 and unreachable until now: the
+    repository method existed with no endpoint above it, so a quote's
+    validity could be defaulted but never changed, and a discount could
+    be stored but never set.
+    """
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = QuoteRepository(session).set_terms(
+            scope, quote_id, **payload.model_dump(exclude_unset=True),
+        )
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="quote", entity_id=quote_id,
+            actor_type="user", actor_id=x_actor_id or None, action="update",
+            field_changes=diff_fields({}, payload.model_dump(exclude_unset=True)),
+        )
+        session.commit()
+        session.refresh(row)
+        return row
+    except Exception as exc:
+        session.rollback()
+        raise _phase10_http_error(exc)

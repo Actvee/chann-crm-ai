@@ -439,7 +439,13 @@ fieldset.group legend {
 }
 
 .tile {
-  display: block;
+  /* Fill the row. A grid row is as tall as its tallest cell, but a tile
+     that only takes the height of its own text leaves the shorter one
+     floating with a gap under it — which reads as a broken layout
+     rather than as two cards of different lengths. */
+  display: flex;
+  flex-direction: column;
+  height: 100%;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius);

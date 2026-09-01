@@ -1686,3 +1686,29 @@ async def list_document_template_versions(
         return await client.list_document_template_versions(license_id, template_id)
     except DataTierError as exc:
         raise _propagate(exc)
+
+
+class QuoteTermsPatchIn(BaseModel):
+    valid_until: str | None = None
+    discount_percent: str | float | None = None
+    discount_amount: str | float | None = None
+
+
+@router.patch("/licenses/{license_id}/quotes/{quote_id}/terms")
+async def set_quote_terms(
+    license_id: str,
+    quote_id: str,
+    payload: QuoteTermsPatchIn,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """When the offer expires, and what came off the price."""
+    _require_same_tenant(principal, license_id)
+    principal.require("quote.update")
+    try:
+        return await client.set_quote_terms(
+            license_id, quote_id, payload.model_dump(exclude_unset=True),
+            actor_id=principal.chann_uid,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)

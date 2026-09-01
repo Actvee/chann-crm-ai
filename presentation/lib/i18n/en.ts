@@ -151,6 +151,7 @@ export const en: Dictionary = {
       customer: "Customer",
       phone: "Phone",
       email: "Email",
+      address: "Address",
       code: "Code",
     },
     sections: {
@@ -222,6 +223,10 @@ export const en: Dictionary = {
       add: "New quote",
       addForThisDeal: "Quote this deal",
       dealHasNoProducts: "That deal has no products yet",
+      terms: "Terms",
+      validUntil: "Valid until",
+      discount: "Discount",
+      discountHint: "e.g. 10% or 500",
       issuedLocked: "This quote has been issued — create a new one to change it",
       markAccepted: "Mark accepted",
       markRejected: "Void this quote",

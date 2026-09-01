@@ -153,6 +153,7 @@ export const th = {
       customer: "ลูกค้า",
       phone: "เบอร์โทร",
       email: "อีเมล",
+      address: "ที่อยู่",
       code: "รหัส",
     },
     sections: {
@@ -224,6 +225,10 @@ export const th = {
       add: "สร้างใบเสนอราคาใหม่",
       addForThisDeal: "สร้างใบเสนอราคาจากดีลนี้",
       dealHasNoProducts: "ดีลนี้ยังไม่มีสินค้า เพิ่มสินค้าในดีลก่อน",
+      terms: "เงื่อนไข",
+      validUntil: "มีผลถึงวันที่",
+      discount: "ส่วนลด",
+      discountHint: "เช่น 10% หรือ 500",
       issuedLocked: "ออกเอกสารแล้ว แก้ไขรายการไม่ได้ ถ้าต้องแก้ให้สร้างใบใหม่",
       markAccepted: "ลูกค้าตอบรับ",
       markRejected: "ยกเลิก/ไม่ใช้",

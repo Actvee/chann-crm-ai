@@ -923,6 +923,66 @@ def _reminder_subject(message: str, code: str) -> str:
     return subject if len(subject) >= 3 else ""
 
 
+# Seeing what is coming up. Reminders could be created and never read —
+# a reminder nobody can look at is a reminder that only exists when it
+# fires, which is not what "ดูนัดหมาย" means.
+#
+# Listed BEFORE the create triggers, because "ดูนัดหมาย" contains "นัด"
+# and the shorter phrase was swallowing it: asking to see the diary
+# opened a form for adding to it.
+REMINDER_LIST_TRIGGERS = (
+    "ดูนัดหมาย", "นัดหมาย", "รายการนัด", "ดูการเตือน", "รายการเตือน",
+    "นัดวันนี้", "งานที่ต้องทำ", "my reminders",
+)
+
+REMINDER_LIST_EMPTY = {
+    "th": "ยังไม่มีนัดหมายที่ค้างอยู่",
+    "en": "Nothing scheduled.",
+}
+REMINDER_LIST_HEAD = {
+    "th": "นัดหมายที่ค้างอยู่ {count} รายการ",
+    "en": "{count} upcoming",
+}
+
+
+async def _handle_reminder_list(
+    client: DataClient, *, ctx: ResolvedContext, license_id,
+    permission_keys: list[str], language: str,
+) -> ChatReply:
+    """What is coming up, soonest first."""
+    if "followup.read" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+
+    try:
+        rows = await client.list_follow_ups(str(license_id), status="pending")
+    except Exception:
+        log.exception("could not list follow-ups")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    # Mine first, then everyone's — a salesperson opening this wants their
+    # own day, not the shop's whole diary.
+    mine = [r for r in rows if str(r.get("owner_chann_uid") or "") == ctx.chann_uid]
+    shown = (mine or rows)
+    shown = sorted(shown, key=lambda r: str(r.get("due_date") or "9999-12-31"))
+
+    if not shown:
+        return ChatReply(text=_t(REMINDER_LIST_EMPTY, language))
+
+    lines = []
+    for row in shown[:LIST_LIMIT]:
+        when = str(row.get("due_date") or "")
+        if row.get("due_time"):
+            when = f"{when} {str(row['due_time'])[:5]}"
+        what = str(row.get("notes") or row.get("title") or "").strip()
+        code = str(row.get("entity_code") or "")
+        lines.append(f"· {when} {what}{f' ({code})' if code else ''}".rstrip())
+
+    return ChatReply(
+        text=_t(REMINDER_LIST_HEAD, language).format(count=len(shown))
+        + "\n" + "\n".join(lines)
+    )
+
+
 async def _handle_reminder_create(
     client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
     permission_keys: list[str], language: str, actor_id: str,
@@ -4997,6 +5057,11 @@ async def _handle_profile_intent(
 
 # ---------------------------------------------------------------- Phase 9 CRM
 
+APPOINTMENT_OFFER = {
+    "th": "เห็นว่ามีนัดวันที่ {date} — ตั้งเตือนไว้ไหมครับ",
+    "en": "Looks like {date} — shall I set a reminder?",
+}
+
 CUSTOMER_CREATED = {
     "th": "เพิ่มลูกค้า{name}เรียบร้อยแล้ว",
     "en": "Added customer {name}.",
@@ -5205,9 +5270,35 @@ async def _handle_customer_intent(
                 return ChatReply(text=_t(CUSTOMER_NEEDS_SOMETHING, language), intent=intent)
             raise
         await _remember_customer(client, ctx, row)
+
+        # A date in what they said is almost always an appointment.
+        # Offered rather than made: guessing wrong puts a reminder in
+        # someone's diary they did not ask for, and the cost of asking is
+        # one tap.
+        reply_text = _t(CUSTOMER_CREATED, language).format(
+            name=f" {_display_name(row)} "
+        )
+        # From the note, which after recover_free_text holds the person's
+        # own words rather than the model's retyping of them.
+        from .thai_datetime import parse_thai_date
+
+        suggested = parse_thai_date(
+            str(fields.get("notes") or ""), datetime.now(timezone.utc).date(),
+        )
+        quick: list[tuple[str, str]] = []
+        if suggested:
+            reply_text += "\n" + _t(APPOINTMENT_OFFER, language).format(
+                date=suggested.isoformat(),
+            )
+            quick = [
+                ("ตั้งนัด", f"เตือน {row['customer_id']} {suggested.isoformat()}"),
+                ("ไม่ต้อง", "ดูนัดหมาย"),
+            ]
+
         return ChatReply(
-            text=_t(CUSTOMER_CREATED, language).format(name=f" {_display_name(row)} "),
+            text=reply_text,
             entity_type="customer", entity_id=row["id"], intent=intent,
+            quick_replies=quick,
         )
 
     if action in ("update", "promote"):
@@ -5912,6 +6003,13 @@ async def handle_chat_message(
                 client, ctx=ctx, license_id=license_id, message=message, trigger=note_trigger,
                 permission_keys=permission_keys, language=language,
                 actor_id=ctx.chann_uid,
+            )
+        if _matches_phrase(message, REMINDER_LIST_TRIGGERS) or any(
+            t in message.lower() for t in REMINDER_LIST_TRIGGERS
+        ):
+            return await _handle_reminder_list(
+                client, ctx=ctx, license_id=license_id,
+                permission_keys=permission_keys, language=language,
             )
         if any(t in message.lower() for t in REMINDER_TRIGGERS):
             return await _handle_reminder_create(

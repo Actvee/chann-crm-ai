@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 
+from .recover_text import recover_free_text
 from .client import AIUnavailable, complete
 
 log = logging.getLogger(__name__)
@@ -318,4 +319,16 @@ async def parse_intent(
         thinking=False,          # 4.3: chat tier runs with thinking OFF
         client=client,
     )
-    return parse_intent_json(raw)
+    intent = parse_intent_json(raw)
+
+    # Free text goes back to the person's own characters. A model copying
+    # a long Thai phrase into JSON drops vowel and tone marks — "ซื้อ"
+    # comes back as "ซี้" — and the result looks right in a review while
+    # being wrong in the record a shop keeps about its customer.
+    #
+    # The model is still the one that decided which span of the message
+    # is a note; it is only its transcription that is discarded.
+    fields = intent.get("fields")
+    if isinstance(fields, dict):
+        intent["fields"] = recover_free_text(fields, message)
+    return intent

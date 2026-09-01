@@ -359,6 +359,12 @@ class FakeDataClient:
         self._follow_ups.append(row)
         return row
 
+    async def list_follow_ups(self, license_id, status=None):
+        rows = list(getattr(self, "_follow_ups", []))
+        if status:
+            rows = [r for r in rows if r.get("status") == status]
+        return rows
+
     async def due_follow_ups(self, license_id, days=1):
         self.recorded.append(("due_follow_ups", license_id, days))
         return list(getattr(self, "_follow_ups", []))
@@ -4807,3 +4813,193 @@ class TestButtonsTheSystemWritesDoNotNeedTheAI:
         }
         remaining = [t for t in dead if t not in handled_by_literal]
         assert not remaining, f"buttons that lead nowhere: {remaining}"
+
+
+class TestSeeingWhatIsComingUp:
+    """Reminders could be created and never read.
+
+    A reminder nobody can look at only exists at the moment it fires,
+    which is not what someone means by "ดูนัดหมาย" — and worse, "นัด" is
+    a create trigger, so asking to SEE the diary opened a form for adding
+    to it. The same substring trap as ไม่สำเร็จ/สำเร็จ, five times over.
+    """
+
+    async def _with_reminders(self):
+        client = FakeDataClient(
+            permission_keys=["followup.read", "followup.create", "customer.read"],
+        )
+        client._follow_ups = [
+            {
+                "due_date": "2026-09-06", "due_time": "14:00:00",
+                "notes": "ลูกค้ามาดูสินค้า", "status": "pending",
+                "entity_code": "C-2026-0009",
+            },
+            {"due_date": "2026-09-03", "notes": "โทรตาม", "status": "pending"},
+            {"due_date": "2026-08-01", "notes": "เก่า", "status": "done"},
+        ]
+        return client
+
+    async def test_asking_to_see_the_diary_does_not_open_a_form(self):
+        client = await self._with_reminders()
+        reply = await handle_chat_message(client, message="ดูนัดหมาย", ctx=_ctx())
+        assert "ไม่เข้าใจวันที่" not in reply.text
+        assert "โทรตาม" in reply.text
+
+    async def test_the_soonest_comes_first(self):
+        """A list in insertion order is a list nobody can act on."""
+        client = await self._with_reminders()
+        reply = await handle_chat_message(client, message="ดูนัดหมาย", ctx=_ctx())
+        assert reply.text.index("2026-09-03") < reply.text.index("2026-09-06")
+
+    async def test_completed_reminders_are_not_shown(self):
+        client = await self._with_reminders()
+        reply = await handle_chat_message(client, message="นัดหมาย", ctx=_ctx())
+        assert "เก่า" not in reply.text
+
+    async def test_an_empty_diary_says_so(self):
+        client = FakeDataClient(permission_keys=["followup.read"])
+        reply = await handle_chat_message(client, message="ดูนัดหมาย", ctx=_ctx())
+        assert "ยังไม่มี" in reply.text
+
+    async def test_creating_a_reminder_still_works(self):
+        """The list trigger must not have swallowed the create one — the
+        collision runs both ways."""
+        client = await self._with_reminders()
+        customer = await client.create_customer("L1", {
+            "first_name": "ก", "last_name": "ข", "phone": "0800000000",
+        })
+        deal = await client.create_deal("L1", {"contact_id": customer["id"]})
+
+        await handle_chat_message(
+            client, message=f"เตือน {deal['deal_id']} พรุ่งนี้", ctx=_ctx(),
+        )
+        # It reached the create path: the deal was looked up, which only
+        # that path does. Whether the date parses is another test's job.
+        assert [r for r in client.recorded if r[0] == "list_deals"]
+
+    async def test_it_requires_followup_read(self):
+        client = FakeDataClient(permission_keys=["customer.read"])
+        reply = await handle_chat_message(client, message="ดูนัดหมาย", ctx=_ctx())
+        assert "สิทธิ์" in reply.text
+
+
+class TestFreeTextSurvivesTheModel:
+    """A model copying a long Thai phrase into JSON drops marks.
+
+    "สนใจอยากซื้อพัดลมขอเข้ามาดูสินค้าวันที่ 6" came back as "สนใจอยากซี้
+    พัดลมขอเข้ามาดูสินค้วันที่ 6" — close enough to pass a review and
+    wrong in the record a shop keeps about its customer.
+
+    The model still decides which span of the message is a note. Only
+    its transcription is thrown away.
+    """
+
+    def test_a_mangled_note_is_restored_from_the_message(self):
+        from chann_app.services.ai.recover_text import recover_free_text
+
+        message = (
+            "มีลูกค้าใหม่ นาคี มีนาคม เบอร์ 0879876746 "
+            "สนใจอยากซื้อพัดลมขอเข้ามาดูสินค้าวันที่ 6"
+        )
+        out = recover_free_text(
+            {"notes": "สนใจอยากซี้พัดลมขอเข้ามาดูสินค้วันที่ 6"}, message,
+        )
+        assert out["notes"] == "สนใจอยากซื้อพัดลมขอเข้ามาดูสินค้าวันที่ 6"
+
+    def test_a_genuine_summary_is_kept(self):
+        """If the model summarised rather than copied, that is what was
+        asked for."""
+        from chann_app.services.ai.recover_text import recover_free_text
+
+        message = "ลูกค้าโทรมาบ่นว่าแอร์เสียงดังมากตั้งแต่เมื่อวาน"
+        out = recover_free_text({"notes": "แอร์เสียงดัง"}, message)
+        assert out["notes"] == "แอร์เสียงดัง"
+
+    def test_structured_fields_are_never_touched(self):
+        """A corrected name may well be the model doing its job."""
+        from chann_app.services.ai.recover_text import recover_free_text
+
+        out = recover_free_text(
+            {"first_name": "นาคี", "phone": "0812345678"},
+            "ลูกค้าใหม่ นาคี เบอร์ 0812345678",
+        )
+        assert out["first_name"] == "นาคี"
+        assert out["phone"] == "0812345678"
+
+    def test_short_text_is_left_alone(self):
+        """Too short to anchor: replacing the wrong span is worse than
+        keeping what the model returned."""
+        from chann_app.services.ai.recover_text import recover_free_text
+
+        out = recover_free_text({"notes": "ด่วน"}, "ลูกค้ารายนี้เร่งด่วนมาก")
+        assert out["notes"] == "ด่วน"
+
+
+class TestADateBecomesAnOffer:
+    """"ขอเข้ามาดูสินค้าวันที่ 6" is an appointment.
+
+    Offered rather than made: guessing wrong puts a reminder in someone's
+    diary they never asked for, and the cost of asking is one tap.
+    """
+
+    async def test_a_date_in_the_note_offers_a_reminder(self):
+        client = FakeDataClient(permission_keys=[
+            "customer.create", "customer.read", "followup.create",
+        ])
+        ai = httpx.AsyncClient(transport=_ai(json.dumps({
+            "action": "create", "entity": "customer",
+            "fields": {
+                "first_name": "นาคี", "last_name": "มีนาคม",
+                "phone": "0879876746",
+                "notes": "ขอเข้ามาดูสินค้าวันที่ 6",
+            },
+            "missing": [],
+        }, ensure_ascii=False)))
+        reply = await handle_chat_message(
+            client,
+            message="ลูกค้าใหม่ นาคี มีนาคม 0879876746 ขอเข้ามาดูสินค้าวันที่ 6",
+            ctx=_ctx(), ai_client=ai,
+        )
+        assert "ตั้งเตือน" in reply.text
+        assert reply.quick_replies
+        # Offered, not created.
+        assert not [r for r in client.recorded if r[0] == "create_follow_up"]
+
+    async def test_a_note_with_no_date_offers_nothing(self):
+        client = FakeDataClient(permission_keys=["customer.create", "customer.read"])
+        ai = httpx.AsyncClient(transport=_ai(json.dumps({
+            "action": "create", "entity": "customer",
+            "fields": {
+                "first_name": "สมชาย", "last_name": "ใจดี",
+                "phone": "0810000000", "notes": "สนใจพัดลม",
+            },
+            "missing": [],
+        }, ensure_ascii=False)))
+        reply = await handle_chat_message(
+            client, message="ลูกค้าใหม่ สมชาย ใจดี 0810000000 สนใจพัดลม",
+            ctx=_ctx(), ai_client=ai,
+        )
+        assert "ตั้งเตือน" not in reply.text
+
+    def test_a_bare_day_of_month_parses(self):
+        """"วันที่ 6" is how someone names a date within the next few
+        weeks without naming the month."""
+        from datetime import date
+
+        from chann_app.services.thai_datetime import parse_thai_date
+
+        assert parse_thai_date("ดูสินค้าวันที่ 6", date(2026, 9, 1)) == date(2026, 9, 6)
+
+    def test_a_day_that_has_passed_means_next_month(self):
+        from datetime import date
+
+        from chann_app.services.thai_datetime import parse_thai_date
+
+        assert parse_thai_date("วันที่ 6", date(2026, 9, 20)) == date(2026, 10, 6)
+
+    def test_a_phone_number_is_not_a_date(self):
+        from datetime import date
+
+        from chann_app.services.thai_datetime import parse_thai_date
+
+        assert parse_thai_date("เบอร์ 0812345678", date(2026, 9, 1)) is None

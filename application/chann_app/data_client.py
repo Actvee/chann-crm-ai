@@ -1270,6 +1270,16 @@ class DataClient:
         )
         return self._unwrap(resp)
 
+    async def set_quote_terms(
+        self, license_id: str, quote_id: str, fields: dict,
+        actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.patch(
+            f"{self._base}/internal/v1/licenses/{license_id}/quotes/{quote_id}/terms",
+            headers=self._headers_for(actor_id), json=fields,
+        )
+        return self._unwrap(resp)
+
     async def set_quote_status(
         self, license_id: str, quote_id: str, status: str,
         actor_id: str | None = None,
