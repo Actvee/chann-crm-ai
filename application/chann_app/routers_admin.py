@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hmac
+import logging
 import uuid
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
@@ -10,6 +11,8 @@ from pydantic import BaseModel
 from .auth.liff import LiffTokenInvalid, verify_id_token
 from .auth.platform_admin import decode_token, issue_token
 from .config import settings
+
+log = logging.getLogger(__name__)
 from .data_client import DataClient, DataTierError
 from .services.identity import OA_TO_ROLE
 
@@ -184,3 +187,46 @@ async def run_reminder_sweep(
     from .services.reminders import sweep_due_follow_ups
 
     return await sweep_due_follow_ups(client, days=max(0, min(days, 7)))
+
+
+@router.post("/platform/quotes/expire-overdue")
+async def run_quote_expiry_sweep(
+    _: None = Depends(require_scheduler),
+    client: DataClient = Depends(get_data_client),
+):
+    """Expire quotes past their validity date, across every tenant.
+
+    Same authentication and same shape as the reminder sweep: a static
+    shared secret, because an unauthenticated version would let anyone
+    change the status of every quote on the platform.
+
+    A quote still reading "sent" a month after it expired tells a
+    salesperson the offer stands when it does not — and the "expired"
+    status has existed since Phase 10 with nothing able to set it.
+    """
+    summary = {"tenants": 0, "expired": 0, "failed": []}
+    try:
+        # exclude_status rather than status="active": a trial tenant is a
+        # real tenant, and filtering on "active" silently skipped every
+        # one of them when the reminder sweep first shipped.
+        licenses = await client.list_licenses(exclude_status="suspended")
+    except Exception:
+        log.exception("quote expiry sweep could not list tenants")
+        return {**summary, "error": "could not list tenants"}
+
+    for lic in licenses:
+        license_id = str(lic.get("id") or "")
+        if not license_id:
+            continue
+        summary["tenants"] += 1
+        try:
+            result = await client.expire_overdue_quotes(license_id)
+            summary["expired"] += int(result.get("expired") or 0)
+        except Exception:
+            # One tenant's failure must not stop the rest: a sweep that
+            # aborts halfway leaves the remaining tenants silently unswept
+            # until someone notices, which is how the first sweep bug hid.
+            log.exception("quote expiry failed for %s", license_id)
+            summary["failed"].append(license_id)
+
+    return summary

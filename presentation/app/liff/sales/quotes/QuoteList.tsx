@@ -6,7 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 import { AppShell, Badge, CompanyPicker, Count, Empty } from "../_components";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
-import { Membership, initLiffSession, proxyHeaders } from "../_lib";
+import { Membership, initLiffSession, openExternal, proxyHeaders } from "../_lib";
 
 type Quote = {
   id: string;
@@ -26,8 +26,6 @@ export default function QuoteList({ liffId }: { liffId: string }) {
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
   const [busyId, setBusyId] = useState("");
-  // Object URLs for documents already fetched, keyed by quote.
-  const [docUrls, setDocUrls] = useState<Record<string, string>>({});
 
   const say = useCallback((message: string, kind?: "ok" | "error") => {
     setStatus(message);
@@ -57,14 +55,6 @@ export default function QuoteList({ liffId }: { liffId: string }) {
     );
   }, [licenseId, load, say, token]);
 
-  // Object URLs hold the blob in memory until revoked; without this a
-  // person opening several quotes leaks every one of them.
-  useEffect(() => {
-    return () => {
-      for (const url of Object.values(docUrls)) URL.revokeObjectURL(url);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   const initialize = useCallback(async () => {
     try {
@@ -87,67 +77,29 @@ export default function QuoteList({ liffId }: { liffId: string }) {
     }
   }
 
-  async function openDocumentById(quoteId: string, documentId: string) {
-    try {
-      const response = await fetch(
-        `/api/phase2/licenses/${licenseId}/documents/${documentId}`,
-        { headers: proxyHeaders(token, licenseId) },
-      );
-      if (!response.ok) return;
-      const url = URL.createObjectURL(await response.blob());
-      setDocUrls((current) => {
-        const previous = current[quoteId];
-        if (previous) URL.revokeObjectURL(previous);
-        return { ...current, [quoteId]: url };
-      });
-    } catch {
-      // The document exists; only the immediate preview failed. The
-      // "view document" button on the row is the fallback, so this must
-      // not surface as a failure to issue.
-    }
-  }
 
-  async function openDocument(quote: Quote) {
-    setBusyId(quote.id);
+
+  async function openDocument(quote: Quote, documentId?: string) {
+    const id = documentId ?? quote.generated_document_id;
+    if (!id) return;
     say(t.dashboard.working);
     try {
-      // The stored file, not a fresh render. /pdf goes through SmartBrowz
-      // every time and returns 503 whenever that provider is unavailable —
-      // a strange failure to hit for a document that already exists and is
-      // sitting in the bucket.
+      // A signed https link, opened by the browser. Fetching the PDF as a
+      // blob and linking to blob: cannot work here: LINE refuses those
+      // URLs, and it made the person press twice to reach a dead end.
       const response = await fetch(
-        `/api/phase2/licenses/${licenseId}/quotes/${quote.id}/document`,
+        `/api/phase2/licenses/${licenseId}/documents/${id}/link`,
         { headers: proxyHeaders(token, licenseId) },
       );
       if (!response.ok) {
-        const reason = await detail(response);
-        say(
-          response.status === 404
-            ? t.dashboard.quotes.notIssued
-            : `${t.common.error} (${response.status}) ${reason}`,
-          "error",
-        );
+        say(`${t.common.error} (${response.status})`, "error");
         return;
       }
-      // Held in state and rendered as a link the person taps, NOT opened
-      // with window.open. A popup call after an await is not treated as
-      // user-initiated, so browsers block it silently — which is exactly
-      // what "I pressed the button and nothing happened" was. The LINE
-      // in-app browser is stricter about this than most.
-      //
-      // Still fetched as a blob rather than linked directly, because the
-      // request needs LIFF auth headers that a plain anchor cannot send.
-      const url = URL.createObjectURL(await response.blob());
-      setDocUrls((current) => {
-        const previous = current[quote.id];
-        if (previous) URL.revokeObjectURL(previous);
-        return { ...current, [quote.id]: url };
-      });
-      say(t.dashboard.quotes.ready, "ok");
+      const { url } = (await response.json()) as { url: string };
+      openExternal(url);
+      say("");
     } catch (error) {
       say(error instanceof Error ? error.message : t.common.error, "error");
-    } finally {
-      setBusyId("");
     }
   }
 
@@ -195,7 +147,7 @@ export default function QuoteList({ liffId }: { liffId: string }) {
       // when that lagged or failed, the person who had just issued a
       // document was told there wasn't one.
       if (issued.generated_document_id) {
-        await openDocumentById(quote.id, String(issued.generated_document_id));
+        await openDocument(quote, String(issued.generated_document_id));
       }
     } catch (error) {
       say(error instanceof Error ? error.message : t.common.error, "error");
@@ -237,19 +189,6 @@ export default function QuoteList({ liffId }: { liffId: string }) {
                   : t.dashboard.quotes.notIssued}
               </div>
               </Link>
-              {docUrls[quote.id] && (
-                <p style={{ margin: "10px 0 0" }}>
-                  <a
-                    className="btn"
-                    data-variant="primary"
-                    href={docUrls[quote.id]}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    {t.dashboard.quotes.open}
-                  </a>
-                </p>
-              )}
               <div className="card-actions">
                 {quote.generated_document_id && (
                   <button

@@ -8,6 +8,7 @@ import { useEffect, useState } from "react";
 import { LanguageSwitcher } from "@/lib/i18n/LanguageSwitcher";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
+import PipelineSummary from "./PipelineSummary";
 import { LIFF_SDK_SRC, completeLiffRedirect } from "./_lib";
 
 /**
@@ -24,7 +25,9 @@ const SECTIONS = [
   { href: "/liff/sales/deals", key: "deals" },
   { href: "/liff/sales/quotes", key: "quotes" },
     { href: "/liff/sales/tickets", key: "tickets" },
+    { href: "/liff/sales/reports", key: "reports" },
   { href: "/liff/sales/products", key: "products" },
+  { href: "/liff/sales/templates", key: "templates" },
   { href: "/liff/sales/company", key: "company" },
   { href: "/liff/sales/roles", key: "roles" },
 ] as const;
@@ -85,6 +88,8 @@ export default function SalesMenu({ liffId }: { liffId: string }) {
     company: t.dashboard.companyTitle,
     roles: t.role.title,
     tickets: t.dashboard.tickets.title,
+    reports: t.dashboard.reports.title,
+    templates: t.dashboard.templates.title,
   };
 
   if (redirecting) {
@@ -109,6 +114,8 @@ export default function SalesMenu({ liffId }: { liffId: string }) {
         <p style={{ color: "var(--ink-soft)", fontSize: 14.5, margin: "0 0 16px" }}>
           {t.dashboard.menuIntro}
         </p>
+
+        <PipelineSummary liffId={liffId} />
 
         <ul className="tiles">
           {SECTIONS.map((section) => (

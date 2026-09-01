@@ -6,8 +6,9 @@ import { useCallback, useState } from "react";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { AppShell, Badge } from "../../_components";
+import { ProductLineForm } from "../../../_product-line-form";
 import { RecordHead, RelatedHeading } from "../../_record";
-import { initLiffSession, proxyHeaders } from "../../_lib";
+import { initLiffSession, openExternal, proxyHeaders } from "../../_lib";
 
 type Product = {
   id: string;
@@ -56,7 +57,10 @@ export default function QuoteDetail({
 }) {
   const { t } = useLanguage();
   const [detail, setDetail] = useState<Detail | null>(null);
-  const [docUrl, setDocUrl] = useState("");
+  const [lines, setLines] = useState<Product[]>([]);
+  const [adding, setAdding] = useState(false);
+  const [editingLine, setEditingLine] = useState<string>("");
+  const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
   const [licenseId, setLicenseId] = useState("");
@@ -92,6 +96,7 @@ export default function QuoteDetail({
         return;
       }
       setDetail((await response.json()) as Detail);
+      await loadLines(session.token, license);
       say("");
     } catch (error) {
       say(error instanceof Error ? error.message : t.dashboard.openFailed, "error");
@@ -102,24 +107,162 @@ export default function QuoteDetail({
     if (!detail?.quote.generated_document_id) return;
     say(t.dashboard.working);
     try {
+      // Ask for a signed link and hand it straight to the browser. The
+      // previous version fetched the PDF as a blob and rendered a second
+      // button pointing at a blob: URL — which LINE refuses to open, and
+      // which made the person press twice to reach a dead end.
       const response = await fetch(
-        `/api/phase2/licenses/${licenseId}/documents/${detail.quote.generated_document_id}`,
+        `/api/phase2/licenses/${licenseId}/documents/${detail.quote.generated_document_id}/link`,
         { headers: proxyHeaders(token, licenseId) },
       );
       if (!response.ok) {
         say(`${t.common.error} (${response.status})`, "error");
         return;
       }
-      // A link the person taps, not window.open — a popup call after an
-      // await is not user-initiated and browsers block it silently.
-      setDocUrl(URL.createObjectURL(await response.blob()));
-      say(t.dashboard.quotes.ready, "ok");
+      const { url } = (await response.json()) as { url: string };
+      openExternal(url);
+      say("");
     } catch (error) {
       say(error instanceof Error ? error.message : t.common.error, "error");
     }
   }
 
-  const items = detail?.deal?.products ?? [];
+  // The QUOTE's lines, not the deal's. They were copied at creation and
+  // are independent since, so showing the deal's would display something
+  // other than what this document actually says.
+  const loadLines = useCallback(
+    async (currentToken = token, license = licenseId) => {
+      const response = await fetch(
+        `/api/phase2/licenses/${license}/quotes/${quoteId}/products`,
+        { headers: proxyHeaders(currentToken, license) },
+      );
+      if (response.ok) setLines((await response.json()) as Product[]);
+    },
+    [licenseId, quoteId, token],
+  );
+
+  async function setQuoteStatus(status: string) {
+    const label =
+      (t.quote.status as Record<string, string>)[status] ?? status;
+    if (!window.confirm(t.dashboard.quotes.confirmStatus.replace("{status}", label)))
+      return;
+    setBusy(true);
+    try {
+      const response = await fetch(
+        `/api/phase2/licenses/${licenseId}/quotes/${quoteId}/status`,
+        {
+          method: "PATCH",
+          headers: proxyHeaders(token, licenseId),
+          body: JSON.stringify({ status }),
+        },
+      );
+      if (!response.ok) {
+        say(`${t.common.error} (${response.status})`, "error");
+        return;
+      }
+      say(t.dashboard.saved, "ok");
+      await initialize();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function updateLine(
+    lineId: string, line: { name: string; qty: number; price: string },
+  ) {
+    setBusy(true);
+    try {
+      const response = await fetch(
+        `/api/phase2/licenses/${licenseId}/quotes/${quoteId}/products/${lineId}`,
+        {
+          method: "PATCH",
+          headers: proxyHeaders(token, licenseId),
+          body: JSON.stringify({
+            product_name: line.name,
+            quoted_unit_price: line.price,
+            qty: line.qty,
+          }),
+        },
+      );
+      if (!response.ok) {
+        say(
+          response.status === 409
+            ? t.dashboard.quotes.issuedLocked
+            : `${t.common.error} (${response.status})`,
+          "error",
+        );
+        return;
+      }
+      setEditingLine("");
+      await loadLines();
+      say(t.dashboard.saved, "ok");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function addLine(line: { name: string; qty: number; price: string }) {
+    setBusy(true);
+    try {
+      const response = await fetch(
+        `/api/phase2/licenses/${licenseId}/quotes/${quoteId}/products`,
+        {
+          method: "POST",
+          headers: proxyHeaders(token, licenseId),
+          body: JSON.stringify({
+            product_name: line.name,
+            quoted_unit_price: line.price,
+            qty: line.qty,
+          }),
+        },
+      );
+      if (!response.ok) {
+        // 409 is the rule doing its job on an issued quote, not a fault.
+        say(
+          response.status === 409
+            ? t.dashboard.quotes.issuedLocked
+            : `${t.common.error} (${response.status})`,
+          "error",
+        );
+        return;
+      }
+      setAdding(false);
+      await loadLines();
+      say(t.dashboard.saved, "ok");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeLine(line: Product) {
+    if (!window.confirm(`${t.common.delete}: ${line.product_name ?? ""}?`)) return;
+    setBusy(true);
+    try {
+      const response = await fetch(
+        `/api/phase2/licenses/${licenseId}/quotes/${quoteId}/products/${line.id}`,
+        { method: "DELETE", headers: proxyHeaders(token, licenseId) },
+      );
+      if (!response.ok) {
+        say(
+          response.status === 409
+            ? t.dashboard.quotes.issuedLocked
+            : `${t.common.error} (${response.status})`,
+          "error",
+        );
+        return;
+      }
+      await loadLines();
+      say(t.dashboard.saved, "ok");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const items = lines;
+  // Only a draft. An issued quote is a document the customer is holding,
+  // and the Data Tier refuses to change one — offering the buttons anyway
+  // would mean every tap ends in a 409.
+  const editable = detail?.quote.status === "draft";
   const subtotal = items.reduce(
     (sum, p) => sum + Number(p.qty ?? 0) * Number(p.quoted_unit_price ?? 0),
     0,
@@ -169,18 +312,35 @@ export default function QuoteDetail({
               </>
             }
             actions={
-              detail.quote.generated_document_id ? (
-                docUrl ? (
-                  <a
-                    className="btn"
-                    data-variant="primary"
-                    href={docUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    {t.dashboard.quotes.open}
-                  </a>
-                ) : (
+              <>
+                {/* A quote issued with the wrong contents cannot be
+                    edited — the customer is holding it — so the only
+                    honest path is to void this one and issue another.
+                    Without these there was no way to do the first half
+                    and the wrong quote stayed "sent" forever. */}
+                {detail.quote.status !== "accepted" &&
+                  detail.quote.status !== "rejected" && (
+                    <>
+                      <button
+                        type="button"
+                        className="btn"
+                        onClick={() => void setQuoteStatus("accepted")}
+                        disabled={busy}
+                      >
+                        {t.dashboard.quotes.markAccepted}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn"
+                        data-variant="quiet"
+                        onClick={() => void setQuoteStatus("rejected")}
+                        disabled={busy}
+                      >
+                        {t.dashboard.quotes.markRejected}
+                      </button>
+                    </>
+                  )}
+                {detail.quote.generated_document_id ? (
                   <button
                     type="button"
                     className="btn"
@@ -189,12 +349,38 @@ export default function QuoteDetail({
                   >
                     {t.dashboard.quotes.view}
                   </button>
-                )
-              ) : null
+                ) : null}
+              </>
             }
           />
 
           <RelatedHeading title={t.product.title} count={items.length} />
+          {editable && (
+            <section className="section" style={{ margin: "0 0 14px" }}>
+              <div className="section-head">
+                <h2>{t.dashboard.deals.addProduct}</h2>
+                {!adding && (
+                  <button
+                    type="button"
+                    className="btn"
+                    data-variant="primary"
+                    onClick={() => setAdding(true)}
+                  >
+                    {t.dashboard.deals.addProduct}
+                  </button>
+                )}
+              </div>
+              {adding && (
+                <ProductLineForm
+                  licenseId={licenseId}
+                  token={token}
+                  busy={busy}
+                  onCancel={() => setAdding(false)}
+                  onSubmit={addLine}
+                />
+              )}
+            </section>
+          )}
           {items.length === 0 ? (
             <div className="empty">
               {/* A quote can no longer be created without line items, but
@@ -215,6 +401,42 @@ export default function QuoteDetail({
                         )}
                       </strong>
                     </div>
+                    {editable && editingLine !== product.id && (
+                      <div className="card-actions">
+                        <button
+                          type="button"
+                          className="btn"
+                          data-variant="quiet"
+                          onClick={() => setEditingLine(product.id)}
+                          disabled={busy}
+                        >
+                          {t.common.edit}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn"
+                          data-variant="quiet"
+                          onClick={() => void removeLine(product)}
+                          disabled={busy}
+                        >
+                          {t.common.delete}
+                        </button>
+                      </div>
+                    )}
+                    {editable && editingLine === product.id && (
+                      <ProductLineForm
+                        licenseId={licenseId}
+                        token={token}
+                        busy={busy}
+                        initial={{
+                          name: String(product.product_name ?? ""),
+                          qty: Number(product.qty ?? 1),
+                          price: String(product.quoted_unit_price ?? ""),
+                        }}
+                        onCancel={() => setEditingLine("")}
+                        onSubmit={(line) => updateLine(product.id, line)}
+                      />
+                    )}
                   </li>
                 ))}
               </ul>

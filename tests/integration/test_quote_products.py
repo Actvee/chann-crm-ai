@@ -251,3 +251,500 @@ class TestTenantIsolation:
 
         with Session(migrated_db) as session:
             assert QuoteRepository(session).list_products(other_scope, quote_id) == []
+
+
+class TestQuoteTerms:
+    """Expiry and discount — the two things a real quote has that this one
+    did not, found by walking the flow against how commercial CRMs model
+    the same object."""
+
+    def test_a_new_quote_expires_by_default(self, deal_with_products):
+        """A quote with no expiry is a price the shop is bound to
+        indefinitely, and asking every salesperson to set one means most
+        quotes will not have one."""
+        scope, deal_id = deal_with_products["scope"], deal_with_products["deal_id"]
+        with deal_with_products["session"]() as session:
+            quote = QuoteRepository(session).create(scope, deal_id=deal_id)
+            session.commit()
+            assert quote.valid_until is not None
+
+    def test_a_percentage_discount_reduces_the_total(self, deal_with_products):
+        scope, deal_id = deal_with_products["scope"], deal_with_products["deal_id"]
+        with deal_with_products["session"]() as session:
+            repo = QuoteRepository(session)
+            quote = repo.create(scope, deal_id=deal_id)
+            session.flush()
+            repo.set_terms(scope, quote.id, discount_percent="10")
+            totals = repo.totals(scope, quote.id)
+            session.commit()
+
+        # Two fans at 1500 plus a 500 fitting fee.
+        assert totals["subtotal"] == Decimal("3500.00")
+        assert totals["discount"] == Decimal("350.00")
+        assert totals["total"] == Decimal("3150.00")
+
+    def test_percent_and_amount_cannot_both_be_set(self, deal_with_products):
+        """"10% and also 500 off" is ambiguous about which applies first,
+        and the order changes the total."""
+        scope, deal_id = deal_with_products["scope"], deal_with_products["deal_id"]
+        with deal_with_products["session"]() as session:
+            repo = QuoteRepository(session)
+            quote = repo.create(scope, deal_id=deal_id)
+            session.flush()
+            with pytest.raises(Phase10Conflict):
+                repo.set_terms(
+                    scope, quote.id, discount_percent="10", discount_amount="500",
+                )
+
+    def test_setting_one_kind_of_discount_clears_the_other(self, deal_with_products):
+        scope, deal_id = deal_with_products["scope"], deal_with_products["deal_id"]
+        with deal_with_products["session"]() as session:
+            repo = QuoteRepository(session)
+            quote = repo.create(scope, deal_id=deal_id)
+            session.flush()
+            repo.set_terms(scope, quote.id, discount_percent="10")
+            row = repo.set_terms(scope, quote.id, discount_amount="200")
+            session.commit()
+            assert row.discount_percent is None
+            assert row.discount_amount == Decimal("200.00")
+
+    def test_a_discount_larger_than_the_subtotal_is_clamped(self, deal_with_products):
+        """Otherwise the shop owes the customer money."""
+        scope, deal_id = deal_with_products["scope"], deal_with_products["deal_id"]
+        with deal_with_products["session"]() as session:
+            repo = QuoteRepository(session)
+            quote = repo.create(scope, deal_id=deal_id)
+            session.flush()
+            repo.set_terms(scope, quote.id, discount_amount="99999")
+            totals = repo.totals(scope, quote.id)
+            assert totals["total"] == Decimal("0.00")
+
+    def test_an_issued_quote_cannot_have_its_terms_changed(self, deal_with_products):
+        scope, deal_id = deal_with_products["scope"], deal_with_products["deal_id"]
+        with deal_with_products["session"]() as session:
+            repo = QuoteRepository(session)
+            quote = repo.create(scope, deal_id=deal_id)
+            session.flush()
+            repo.transition_status(scope, quote.id, to_status="sent")
+            session.commit()
+            quote_id = quote.id
+        with deal_with_products["session"]() as session:
+            with pytest.raises(Phase10Conflict):
+                QuoteRepository(session).set_terms(
+                    scope, quote_id, discount_percent="5",
+                )
+
+    def test_only_sent_quotes_expire(self, deal_with_products):
+        """A draft was never an offer, and an accepted quote is a
+        commitment that a date does not undo."""
+        from datetime import date, timedelta
+
+        scope, deal_id = deal_with_products["scope"], deal_with_products["deal_id"]
+        yesterday = date.today() - timedelta(days=1)
+
+        with deal_with_products["session"]() as session:
+            repo = QuoteRepository(session)
+            draft = repo.create(scope, deal_id=deal_id)
+            sent = repo.create(scope, deal_id=deal_id)
+            session.flush()
+            draft.valid_until = yesterday
+            sent.valid_until = yesterday
+            repo.transition_status(scope, sent.id, to_status="sent")
+            session.commit()
+            draft_id, sent_id = draft.id, sent.id
+
+        with deal_with_products["session"]() as session:
+            repo = QuoteRepository(session)
+            assert repo.expire_overdue(scope) == 1
+            session.commit()
+
+        with deal_with_products["session"]() as session:
+            repo = QuoteRepository(session)
+            assert repo.get(scope, draft_id).status == "draft"
+            assert repo.get(scope, sent_id).status == "expired"
+
+
+class TestDealForecastAndLossReason:
+    """Two fields every commercial CRM has: without a close date there is
+    no forecast, and without a reason a shop loses the same way twice."""
+
+    def _deal(self, migrated_db):
+        import uuid
+
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import ChannIdentity
+        from chann_data.repositories.phase65 import RegistrationRepository
+
+        suffix = uuid.uuid4().hex[:6]
+        with Session(migrated_db) as session:
+            session.add(ChannIdentity(
+                chann_uid=f"CHN-FC-{suffix}", line_user_id=f"line-fc-{suffix}",
+                primary_role="sales",
+            ))
+            session.commit()
+        with Session(migrated_db) as session:
+            lic = RegistrationRepository(session).create_license(
+                company_name=f"Forecast {suffix}",
+                created_by_chann_uid=f"CHN-FC-{suffix}",
+            )
+            session.commit()
+            scope = TenantScope(license_id=lic.id)
+
+        with Session(migrated_db) as session:
+            customer = CustomerRepository(session).create(
+                scope, first_name="ก", last_name="ข", phone="0800000000",
+            )
+            deal = DealRepository(session).create(scope, contact_id=customer.id)
+            session.commit()
+            return scope, deal.id, lambda: Session(migrated_db)
+
+    def test_a_loss_reason_is_recorded_when_given(self, migrated_db):
+        scope, deal_id, session_factory = self._deal(migrated_db)
+        with session_factory() as session:
+            deal = DealRepository(session).transition_stage(
+                scope, deal_id, to_stage="lost", allow_reopen=False,
+                lost_reason="ลูกค้าเลือกเจ้าอื่นเพราะราคาถูกกว่า",
+            )
+            session.commit()
+            assert "ราคาถูกกว่า" in deal.lost_reason
+
+    def test_closing_without_a_reason_still_works(self, migrated_db):
+        """Demanding one gets a column full of "-", which looks answered
+        and teaches nothing."""
+        scope, deal_id, session_factory = self._deal(migrated_db)
+        with session_factory() as session:
+            deal = DealRepository(session).transition_stage(
+                scope, deal_id, to_stage="lost", allow_reopen=False,
+            )
+            session.commit()
+            assert deal.stage == "lost"
+            assert deal.lost_reason is None
+
+    def test_reopening_clears_the_reason(self, migrated_db):
+        """Otherwise the deal explains why it was lost while sitting in
+        "new"."""
+        scope, deal_id, session_factory = self._deal(migrated_db)
+        with session_factory() as session:
+            repo = DealRepository(session)
+            repo.transition_stage(
+                scope, deal_id, to_stage="lost", allow_reopen=False,
+                lost_reason="ราคาสูงไป",
+            )
+            session.commit()
+        with session_factory() as session:
+            deal = DealRepository(session).transition_stage(
+                scope, deal_id, to_stage="new", allow_reopen=True,
+            )
+            session.commit()
+            assert deal.lost_reason is None
+
+    def test_an_expected_close_date_can_be_set(self, migrated_db):
+        from datetime import date
+
+        scope, deal_id, session_factory = self._deal(migrated_db)
+        with session_factory() as session:
+            deal = DealRepository(session).update(
+                scope, deal_id, {"expected_close_date": date(2026, 10, 15)},
+            )
+            session.commit()
+            assert deal.expected_close_date == date(2026, 10, 15)
+
+
+class TestOnePhoneOneCustomer:
+    """A repair shop's customer calls in months apart. Two records for the
+    same person split their service history, so the technician arriving
+    sees no previous visit and the shop cannot tell a repeat customer from
+    a new one."""
+
+    def _scope(self, migrated_db):
+        import uuid
+
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import ChannIdentity
+        from chann_data.repositories.phase65 import RegistrationRepository
+
+        suffix = uuid.uuid4().hex[:6]
+        with Session(migrated_db) as session:
+            session.add(ChannIdentity(
+                chann_uid=f"CHN-DUP-{suffix}", line_user_id=f"line-dup-{suffix}",
+                primary_role="sales",
+            ))
+            session.commit()
+        with Session(migrated_db) as session:
+            lic = RegistrationRepository(session).create_license(
+                company_name=f"Dup {suffix}", created_by_chann_uid=f"CHN-DUP-{suffix}",
+            )
+            session.commit()
+            return TenantScope(license_id=lic.id), lambda: Session(migrated_db)
+
+    def test_the_same_number_twice_is_refused(self, migrated_db):
+        from chann_data.repositories.phase9 import Phase9Duplicate
+
+        scope, session_factory = self._scope(migrated_db)
+        with session_factory() as session:
+            CustomerRepository(session).create(
+                scope, first_name="ก", last_name="ข", phone="0812345678",
+            )
+            session.commit()
+        with session_factory() as session:
+            with pytest.raises(Phase9Duplicate) as caught:
+                CustomerRepository(session).create(
+                    scope, first_name="ค", last_name="ง", phone="0812345678",
+                )
+            # It says WHICH record, so the caller can point at it rather
+            # than leaving the person to go and search.
+            assert caught.value.existing_code.startswith("C-")
+
+    @pytest.mark.parametrize(
+        "written", ["081-234-5678", "081 234 5678", "+66812345678", "66812345678"],
+    )
+    def test_formatting_differences_are_the_same_number(self, migrated_db, written):
+        """A Thai shop saves the same number both ways depending on where
+        it was copied from."""
+        from chann_data.repositories.phase9 import Phase9Duplicate
+
+        scope, session_factory = self._scope(migrated_db)
+        with session_factory() as session:
+            CustomerRepository(session).create(
+                scope, first_name="ก", last_name="ข", phone="0812345678",
+            )
+            session.commit()
+        with session_factory() as session:
+            with pytest.raises(Phase9Duplicate):
+                CustomerRepository(session).create(
+                    scope, first_name="ค", last_name="ง", phone=written,
+                )
+
+    def test_another_tenant_may_hold_the_same_number(self, migrated_db):
+        """Two shops can both have the same customer; the rule is about one
+        shop's records, not the platform's."""
+        scope_a, factory = self._scope(migrated_db)
+        scope_b, _ = self._scope(migrated_db)
+        with factory() as session:
+            repo = CustomerRepository(session)
+            repo.create(scope_a, first_name="ก", last_name="ข", phone="0899999999")
+            repo.create(scope_b, first_name="ก", last_name="ข", phone="0899999999")
+            session.commit()
+
+    def test_a_customer_with_no_phone_is_still_allowed(self, migrated_db):
+        """Someone who walks in and gives only a name is a real customer."""
+        scope, factory = self._scope(migrated_db)
+        with factory() as session:
+            repo = CustomerRepository(session)
+            repo.create(scope, first_name="ไม่มี", last_name="เบอร์")
+            repo.create(scope, first_name="ก็ไม่มี", last_name="เหมือนกัน")
+            session.commit()
+
+
+class TestOneOpenDealPerCustomer:
+    """Two live deals for one person means two salespeople quoting them
+    different numbers and neither knowing about the other."""
+
+    def _customer(self, migrated_db):
+        import uuid
+
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import ChannIdentity
+        from chann_data.repositories.phase65 import RegistrationRepository
+
+        suffix = uuid.uuid4().hex[:6]
+        with Session(migrated_db) as session:
+            session.add(ChannIdentity(
+                chann_uid=f"CHN-1D-{suffix}", line_user_id=f"line-1d-{suffix}",
+                primary_role="sales",
+            ))
+            session.commit()
+        with Session(migrated_db) as session:
+            lic = RegistrationRepository(session).create_license(
+                company_name=f"One deal {suffix}",
+                created_by_chann_uid=f"CHN-1D-{suffix}",
+            )
+            session.commit()
+            scope = TenantScope(license_id=lic.id)
+        with Session(migrated_db) as session:
+            customer = CustomerRepository(session).create(
+                scope, first_name="ก", last_name="ข", phone="0855555555",
+            )
+            session.commit()
+            return scope, customer.id, lambda: Session(migrated_db)
+
+    def test_a_second_open_deal_is_refused(self, migrated_db):
+        from chann_data.repositories.phase9 import Phase9Duplicate
+
+        scope, customer_id, factory = self._customer(migrated_db)
+        with factory() as session:
+            DealRepository(session).create(scope, contact_id=customer_id)
+            session.commit()
+        with factory() as session:
+            with pytest.raises(Phase9Duplicate) as caught:
+                DealRepository(session).create(scope, contact_id=customer_id)
+            assert caught.value.existing_code.startswith("D-")
+
+    def test_closing_the_first_frees_the_customer(self, migrated_db):
+        """A customer who bought last year and comes back is the reason for
+        keeping the record at all."""
+        scope, customer_id, factory = self._customer(migrated_db)
+        with factory() as session:
+            repo = DealRepository(session)
+            first = repo.create(scope, contact_id=customer_id)
+            session.flush()
+            repo.transition_stage(
+                scope, first.id, to_stage="proposed", allow_reopen=False,
+            )
+            repo.transition_stage(scope, first.id, to_stage="won", allow_reopen=False)
+            session.commit()
+
+        with factory() as session:
+            second = DealRepository(session).create(scope, contact_id=customer_id)
+            session.commit()
+            assert second.deal_id.endswith("0002")
+
+    def test_a_lost_deal_also_frees_the_customer(self, migrated_db):
+        scope, customer_id, factory = self._customer(migrated_db)
+        with factory() as session:
+            repo = DealRepository(session)
+            first = repo.create(scope, contact_id=customer_id)
+            session.flush()
+            repo.transition_stage(
+                scope, first.id, to_stage="lost", allow_reopen=False,
+                lost_reason="เปลี่ยนใจ",
+            )
+            session.commit()
+        with factory() as session:
+            DealRepository(session).create(scope, contact_id=customer_id)
+            session.commit()
+
+
+class TestPipelineSummary:
+    """Counting deals by stage is not a forecast: a stage says where a deal
+    is, not when or whether it lands."""
+
+    def _tenant(self, migrated_db):
+        import uuid
+
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import ChannIdentity
+        from chann_data.repositories.phase65 import RegistrationRepository
+
+        suffix = uuid.uuid4().hex[:6]
+        with Session(migrated_db) as session:
+            session.add(ChannIdentity(
+                chann_uid=f"CHN-PL-{suffix}", line_user_id=f"line-pl-{suffix}",
+                primary_role="sales",
+            ))
+            session.commit()
+        with Session(migrated_db) as session:
+            lic = RegistrationRepository(session).create_license(
+                company_name=f"Pipeline {suffix}",
+                created_by_chann_uid=f"CHN-PL-{suffix}",
+            )
+            session.commit()
+            return TenantScope(license_id=lic.id), lambda: Session(migrated_db)
+
+    def _deal_worth(self, session, scope, *, phone, amount, close_date=None):
+        customer = CustomerRepository(session).create(
+            scope, first_name="ก", last_name="ข", phone=phone,
+        )
+        deals = DealRepository(session)
+        deal = deals.create(scope, contact_id=customer.id)
+        deals.add_product(
+            scope, deal.id, product_id=None, product_name="สินค้า",
+            quoted_unit_price=str(amount), qty=1,
+        )
+        if close_date:
+            deals.update(scope, deal.id, {"expected_close_date": close_date})
+        return deal
+
+    def test_value_comes_from_the_line_items(self, migrated_db):
+        scope, factory = self._tenant(migrated_db)
+        with factory() as session:
+            self._deal_worth(session, scope, phone="0810000001", amount=1500)
+            self._deal_worth(session, scope, phone="0810000002", amount=2500)
+            session.commit()
+
+        with factory() as session:
+            summary = DealRepository(session).pipeline_summary(scope)
+        assert summary["by_stage"]["new"]["count"] == 2
+        assert Decimal(summary["open_value"]) == Decimal("4000")
+
+    def test_only_deals_closing_this_month_are_forecast(self, migrated_db):
+        from datetime import date, timedelta
+
+        scope, factory = self._tenant(migrated_db)
+        today = date.today()
+        next_month = (today.replace(day=28) + timedelta(days=10)).replace(day=1)
+
+        with factory() as session:
+            self._deal_worth(
+                session, scope, phone="0820000001", amount=1000, close_date=today,
+            )
+            self._deal_worth(
+                session, scope, phone="0820000002", amount=9000,
+                close_date=next_month,
+            )
+            session.commit()
+
+        with factory() as session:
+            summary = DealRepository(session).pipeline_summary(scope)
+        assert Decimal(summary["closing_this_month"]) == Decimal("1000")
+
+    def test_overdue_deals_are_counted_separately_from_the_forecast(self, migrated_db):
+        """A deal whose close date has passed and is still open is not a
+        forecast, it is a deal nobody has touched."""
+        from datetime import date, timedelta
+
+        scope, factory = self._tenant(migrated_db)
+        with factory() as session:
+            self._deal_worth(
+                session, scope, phone="0830000001", amount=5000,
+                close_date=date.today() - timedelta(days=30),
+            )
+            session.commit()
+
+        with factory() as session:
+            summary = DealRepository(session).pipeline_summary(scope)
+        assert summary["overdue_count"] == 1
+        assert Decimal(summary["closing_this_month"]) == Decimal("0")
+
+    def test_deals_with_no_date_are_counted_not_hidden(self, migrated_db):
+        """A pipeline where half the deals have no date has a forecast that
+        means very little, and the reader should be able to see that."""
+        scope, factory = self._tenant(migrated_db)
+        with factory() as session:
+            self._deal_worth(session, scope, phone="0840000001", amount=100)
+            session.commit()
+
+        with factory() as session:
+            summary = DealRepository(session).pipeline_summary(scope)
+        assert summary["undated_open_count"] == 1
+
+    def test_closed_deals_leave_the_open_value(self, migrated_db):
+        scope, factory = self._tenant(migrated_db)
+        with factory() as session:
+            deal = self._deal_worth(session, scope, phone="0850000001", amount=7000)
+            repo = DealRepository(session)
+            repo.transition_stage(
+                scope, deal.id, to_stage="proposed", allow_reopen=False,
+            )
+            repo.transition_stage(scope, deal.id, to_stage="won", allow_reopen=False)
+            session.commit()
+
+        with factory() as session:
+            summary = DealRepository(session).pipeline_summary(scope)
+        assert Decimal(summary["open_value"]) == Decimal("0")
+        assert summary["by_stage"]["won"]["count"] == 1
+
+    def test_another_tenant_is_not_counted(self, migrated_db):
+        scope_a, factory = self._tenant(migrated_db)
+        scope_b, _ = self._tenant(migrated_db)
+        with factory() as session:
+            self._deal_worth(session, scope_a, phone="0860000001", amount=1234)
+            session.commit()
+
+        with factory() as session:
+            summary = DealRepository(session).pipeline_summary(scope_b)
+        assert Decimal(summary["open_value"]) == Decimal("0")

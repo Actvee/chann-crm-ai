@@ -379,3 +379,325 @@ class TestAssignmentVocabularyStaysInSync:
             "selection_strategy": "vibes",
         }
         assert app.validate_rule(bad) == data.validate_rule(bad)
+
+
+class TestDocumentEndpointsReturnFiles:
+    """The Presentation proxy parses every response as JSON.
+
+    Endpoints that return a PDF must therefore be listed in that proxy's
+    pass-through predicate, or res.json() throws, the catch turns it into
+    a 503, and the person is told the server is unavailable while holding
+    a request the Application Tier answered with 200 and a valid file.
+
+    That failure leaves NO trace: no error in the Application Tier because
+    it succeeded, and no 503 in its access log because it never returned
+    one. It survived several rounds of looking at the wrong tier, so the
+    two sides are pinned together here.
+    """
+
+    def _document_routes(self) -> set[str]:
+        """Application Tier routes whose response is a file, not JSON."""
+        import re
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[2]
+        source = (
+            root / "application/chann_app/routers_phase2.py"
+        ).read_text(encoding="utf-8")
+
+        found = set()
+        # A handler returning fastapi Response with a media_type is
+        # returning bytes; find the route path decorating it.
+        for match in re.finditer(
+            r'@router\.get\("([^"]+)"\)(.{0,3000}?)(?=@router\.|\Z)', source, re.S,
+        ):
+            path, body = match.group(1), match.group(2)
+            if "media_type=" in body and "application/pdf" in body:
+                found.add(path.rstrip("/").rsplit("/", 1)[-1])
+        return found
+
+    def _proxy_predicate(self) -> str:
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[2]
+        return (
+            root / "presentation/app/api/phase2/[...path]/route.ts"
+        ).read_text(encoding="utf-8")
+
+    def test_every_pdf_route_is_passed_through_by_the_proxy(self):
+        segments = self._document_routes()
+        assert segments, "no PDF-returning routes found — has the detection broken?"
+
+        proxy = self._proxy_predicate()
+        for segment in segments:
+            token = segment.strip("{}")
+            # Either the literal last segment, or the parent collection for
+            # routes ending in an id like /documents/{document_id}.
+            assert token in proxy or "documents" in proxy, (
+                f"route ending in {segment!r} returns a PDF but the proxy will "
+                "parse it as JSON and answer 503"
+            )
+
+    def test_the_proxy_does_not_json_parse_documents(self):
+        proxy = self._proxy_predicate()
+        assert "isDocumentPath" in proxy
+        assert "callApplicationRaw" in proxy, (
+            "documents must be streamed, not parsed"
+        )
+
+
+class TestDocumentsOpenInsideLine:
+    """LINE's in-app browser refuses blob: URLs.
+
+    The dashboard runs inside LIFF and nowhere else, so fetching a PDF as
+    a blob and linking to the resulting blob: URL produces exactly one
+    outcome: "ไม่สามารถเปิดลิงก์ได้ เนื่องจากเกิดข้อผิดพลาดที่ไม่คาดคิด".
+
+    It also made the person press twice — once to fetch, once on the
+    button that appeared — to reach that dead end.
+
+    A signed https link avoids all of it: it carries its own
+    authorisation, opens like any other URL, and can be forwarded to a
+    customer as-is.
+    """
+
+    def _quote_pages(self) -> dict[str, str]:
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[2] / "presentation/app/liff/sales/quotes"
+        return {
+            str(path.relative_to(root)): path.read_text(encoding="utf-8")
+            for path in root.rglob("*.tsx")
+        }
+
+    def test_no_page_builds_a_blob_url_for_a_document(self):
+        for name, source in self._quote_pages().items():
+            assert "createObjectURL" not in source, (
+                f"{name} builds a blob: URL — LINE will refuse to open it"
+            )
+
+    def test_documents_are_opened_through_liff(self):
+        """liff.openWindow, not an anchor and not window.open: a popup
+        opened after an await is not user-initiated and gets blocked."""
+        pages = self._quote_pages()
+        assert any("openExternal(" in source for source in pages.values()), (
+            "no quote page opens a document through the LIFF helper"
+        )
+
+    def test_the_link_endpoint_exists_to_open(self):
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[2]
+        source = (
+            root / "application/chann_app/routers_phase2.py"
+        ).read_text(encoding="utf-8")
+        assert "/documents/{document_id}/link" in source, (
+            "the pages ask for a signed link; the endpoint must exist"
+        )
+
+
+class TestEveryClientCallHasARoute:
+    """The failure that keeps recurring: a method or path that exists on
+    one tier and not the other.
+
+    It has happened three ways — an endpoint built only in the Data tier
+    so every dashboard call 404'd, a client sending PATCH to a route that
+    only accepts POST, and a URL assembled from an f-string that no route
+    matched. None of them fail at import; they fail on the first press of
+    a button, in production.
+    """
+
+    def _data_routes(self):
+        import re
+        import sys
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[2]
+        sys.path.insert(0, str(root / "data"))
+        from chann_data.main import app
+
+        routes = []
+        for route in app.routes:
+            path = getattr(route, "path", "")
+            if path.startswith("/internal/v1/"):
+                routes.append((
+                    path,
+                    getattr(route, "methods", set()) or set(),
+                    re.compile("^" + re.sub(r"\{[^}]+\}", "[^/]+", path) + "$"),
+                ))
+        return routes
+
+    def test_every_data_client_call_matches_a_route_and_method(self):
+        import re
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[2]
+        source = (
+            root / "application/chann_app/data_client.py"
+        ).read_text(encoding="utf-8")
+        routes = self._data_routes()
+
+        problems = []
+        for match in re.finditer(
+            r'self\._client\.(get|post|patch|put|delete)\(\s*\n?\s*f?"([^"]*)"'
+            r'(?:\s*\n?\s*f?"([^"]*)")?',
+            source,
+        ):
+            verb = match.group(1).upper()
+            url = (match.group(2) or "") + (match.group(3) or "")
+            url = url.replace("{self._base}", "")
+            if not url.startswith("/internal/v1/"):
+                continue  # /health and similar live outside the surface
+            probe = re.sub(r"\{[^}]*\}", "placeholder", url)
+
+            matching = [p for p, methods, rx in routes if rx.match(probe)]
+            if not matching:
+                problems.append(f"{verb} {url} — no such route")
+            elif not any(
+                verb in methods for p, methods, rx in routes if rx.match(probe)
+            ):
+                allowed = sorted(
+                    m for p, methods, rx in routes if rx.match(probe)
+                    for m in methods if m != "HEAD"
+                )
+                problems.append(f"{verb} {url} — route accepts {allowed}")
+
+        assert not problems, "\n".join(["client/route mismatches:", *problems])
+
+
+class TestEveryDashboardCallHasARoute:
+    """The other direction of the same failure: a page calling a path the
+    Application Tier does not serve.
+
+    It has happened once already — Phase 12's ticket endpoints were built
+    in the Data tier only, so every dashboard call 404'd — and it fails on
+    the first press of a button rather than at import.
+    """
+
+    def test_no_page_calls_a_path_that_does_not_exist(self):
+        import re
+        import sys
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[2]
+        sys.path.insert(0, str(root / "application"))
+        from chann_app.main import app
+
+        routes = [
+            re.compile("^" + re.sub(r"\{[^}]+\}", "[^/]+", route.path) + "$")
+            for route in app.routes
+            if getattr(route, "path", "").startswith("/api/v1/")
+        ]
+
+        problems = []
+        for source_file in (root / "presentation/app").rglob("*.tsx"):
+            text = source_file.read_text(encoding="utf-8")
+            for match in re.finditer(
+                r"/api/phase2/([A-Za-z0-9_\-/${}.\[\]]*)", text,
+            ):
+                url = re.sub(r"\$\{[^}]*\}", "X", match.group(1))
+                url = url.split("?")[0].rstrip("/")
+                if not url or "$" in url:
+                    # A URL split across source lines; the scanner sees
+                    # half of it and cannot judge. Joining such URLs is
+                    # the fix, not loosening this check.
+                    continue
+                probe = "/api/v1/" + url.replace("X", "placeholder")
+                if not any(rx.match(probe) for rx in routes):
+                    problems.append(f"{url}   ({source_file.name})")
+
+        assert not problems, "\n".join(
+            ["dashboard calls with no Application Tier route:", *problems]
+        )
+
+
+class TestEveryTenantRouteIsGuarded:
+    """A tenant-scoped route that resolves a principal but never checks a
+    permission is readable by any member of any role.
+
+    Every exemption below is a route where a permission check would be
+    wrong, not one that was forgotten — and naming them here is what makes
+    a forgotten one visible.
+    """
+
+    # route path -> why a permission check does not apply
+    EXEMPT = {
+        # Returning your own permissions cannot require a permission
+        # without circularity, and it discloses nothing the caller does
+        # not already have.
+        "/licenses/{license_id}/me/permissions": "returns the caller's own keys",
+        # Guarded by is_owner instead: ownership is not a permission a role
+        # can be granted, it is a property of one member.
+        "/licenses/{license_id}/ownership-transfers": "checks principal.is_owner",
+        # The recipient accepts; the Data tier verifies the caller IS the
+        # named recipient, which a permission key cannot express.
+        "/licenses/{license_id}/ownership-transfers/{transfer_id}/accept":
+            "the data tier verifies the caller is the recipient",
+        # A platform route, not a tenant one: require_admin plus an
+        # explicit platform.admin.break_glass check.
+        "/platform/licenses/{license_id}/break-glass/transfer-owner":
+            "platform admin route with its own check",
+    }
+
+    def test_no_tenant_route_is_missing_its_guards(self):
+        import ast
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[2]
+        source = (
+            root / "application/chann_app/routers_phase2.py"
+        ).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+
+        problems = []
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            paths = [
+                d.args[0].value
+                for d in node.decorator_list
+                if isinstance(d, ast.Call)
+                and isinstance(d.func, ast.Attribute)
+                and getattr(d.func.value, "id", "") == "router"
+                and d.args
+                and isinstance(d.args[0], ast.Constant)
+            ]
+            if not paths or "{license_id}" not in paths[0]:
+                continue
+            if paths[0] in self.EXEMPT:
+                continue
+
+            body = ast.dump(node)
+            if "_require_same_tenant" not in body:
+                problems.append(f"{paths[0]} ({node.name}) — no tenant check")
+            if "'require'" not in body:
+                problems.append(f"{paths[0]} ({node.name}) — no permission check")
+
+        assert not problems, "\n".join(["unguarded tenant routes:", *problems])
+
+    def test_the_exemption_list_has_not_gone_stale(self):
+        """An exemption for a route that no longer exists hides the next
+        one that needs looking at."""
+        import ast
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[2]
+        source = (
+            root / "application/chann_app/routers_phase2.py"
+        ).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+
+        declared = set()
+        for node in ast.walk(tree):
+            for d in getattr(node, "decorator_list", []):
+                if (
+                    isinstance(d, ast.Call)
+                    and isinstance(d.func, ast.Attribute)
+                    and getattr(d.func.value, "id", "") == "router"
+                    and d.args
+                    and isinstance(d.args[0], ast.Constant)
+                ):
+                    declared.add(d.args[0].value)
+
+        stale = sorted(set(self.EXEMPT) - declared)
+        assert not stale, f"exemptions for routes that no longer exist: {stale}"

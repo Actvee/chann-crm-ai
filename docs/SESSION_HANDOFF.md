@@ -1,28 +1,39 @@
-# Session Handoff — 31 Aug 2026
+# Session Handoff — 1 Sep 2026
 
-Written because the conversations doing Phases 3-10 repeatedly hit their
+Written because the conversations doing Phases 3-13 repeatedly hit their
 context limits. This is what the next AI session needs to pick up
 cleanly — read this before `docs/CHANN_CRM_AI_MASTER_SPEC.md`, not
 instead of it.
 
-Supersedes all earlier versions of this file. The previous version froze
-at `abd8f93`; seventeen commits landed since, `abd8f93..c585b78`, in a
-single very long day covering the rest of Phase 10 (quotes, PDFs,
-storage, the whole Sales dashboard) and part of Phase 6 (notes,
-reminders). Read the whole "Where things stand" section before touching
-anything — several fixes in that run directly undo assumptions an
-earlier fix in the SAME run made, and the reasoning for why the LAST one
-is correct is not obvious without the failed attempts in front of you.
+Supersedes all earlier versions. The previous version froze at `c585b78`;
+everything from there to `ee1a3ab` and beyond landed in one very long
+run covering Phases 11, 12, 13 and 16, the customer-facing half of the
+product, and a long chain of production bug reports from real use in
+LINE.
 
-**⚠️ A standing risk with this file, proven twice now.** A previous
+Read "Where things stand" before touching anything. Several fixes in that
+run directly undo assumptions an earlier fix in the SAME run made, and the
+reasoning for why the LAST one is correct is not obvious without the
+failed attempts in front of you.
+
+**⚠️ A standing risk with this file, proven three times now.** A previous
 session wrote a corrected version of this handoff and never committed
 it — the repo kept the stale text while a newer copy circulated outside
-git. Separately, mid-way through this session's LIFF debugging, `git
-apply` was pointed at the WRONG saved patch file three separate times
-(an old one instead of the latest), each time appearing to succeed
-before the mismatch was caught by checking `MIGRATION_HEAD` in the
-verify output. If a copy of this file, or of a patch, disagrees with
-`git log` or with `MIGRATION_HEAD`, trust the git state, not the copy.
+git. Separately, `git apply` was pointed at the WRONG saved patch file
+three times (an old one instead of the latest), each time appearing to
+succeed before the mismatch was caught by checking `MIGRATION_HEAD` in
+the verify output. And once, a stale HEAD was mistaken for a divergent
+branch and nearly force-reset over. If a copy of this file, or of a
+patch, disagrees with `git log` or `MIGRATION_HEAD`, trust git.
+
+**⚠️ Deploys are manual and the order matters.** Migrations run as a
+Cloud Run Job and MUST complete before the service images are deployed,
+or `EXPECTED_MIGRATION_HEAD` will not match and `/health` reports a stale
+schema. Cloud Shell resets `sysctl`, installed fonts and the active
+project on every restart; IPv6 breaks `terraform apply` at random and
+`GODEBUG=netdns=go` plus disabling IPv6 is the reliable fix, with
+`gcloud run services update --image` as the fallback that has worked
+every time.
 
 ---
 
@@ -65,235 +76,157 @@ clone.
 
 ## Where things stand
 
-`origin/main` HEAD is **`c585b78` — `fix(phase6): work-list names and
-AI-routed freetext notes`**. Everything below is deployed to DEV and
-confirmed working from the real environment — this is not a "should
-work" list, it was tested end to end in LINE after every deploy in this
-session.
+`origin/main` HEAD is **`ee1a3ab` — warranties, serial routing, and quotes
+that own their line items**, plus one patch applied on top and deployed
+with it (see the commit log for the exact SHA once pushed).
 
-Migration head is **`0013_notes_and_due_time`**.
+Migration head is **`0019_quote_products`**.
 
-### Phase 10 is functionally complete on DEV
+Everything below was exercised in LINE and in the LIFF dashboard on DEV.
+Where something is known NOT to work, it says so.
 
-The quote-to-PDF pipeline the previous handoff listed as the next task is
-done: data snapshot → deterministic HTML → real SmartBrowz PDF → GCS
-storage → `generated_documents` row → signed URL pushed back to the
-salesperson in LINE. Company identity fields, a full CRM read/write
-surface (customers, deals, products, quotes), and a real Sales dashboard
-with its own visual design all shipped in the same run. See "Already
-deployed" below for the section-by-section detail preserved from when
-each patch went in — it is long, and most of an AI picking this up cold
-does not need to re-read all of it, but the ADR-style callouts inside it
-(especially the `deal_id` one) matter regardless of what you work on
-next.
+### The bug that ate most of a day, and what it teaches
 
-### An owner-approved departure from the Master Spec: `deal_id` is now per-tenant
+Issuing a quote appeared to fail for hours. The eventual cause was
+`ck_audit_log_action`: the constraint has allowed six verbs since Phase 3,
+and every phase since has written verbs outside that list —
+`link_document`, `upsert`, `status`, `remove_product`, `claim`, `reject`,
+`check_in`, `check_out`.
 
-The spec marks `deal_id` plainly `UNIQUE NOT NULL` with no per-company
-qualifier, unlike `quote_id` which explicitly gets one. This session
-changed `deal_id` to per-tenant numbering anyway, **with the owner's
-explicit sign-off**, because global numbering meant a newly registered
-tenant's first deal was called something like `D-2026-0847` — visibly
-broken to that tenant, and a quiet disclosure of platform-wide volume.
-Migration `0012_deal_code_per_license` renumbers every existing deal to
-match; the owner accepted that a code already told to a customer before
-this migration stops resolving, since DEV only had a handful of deals at
-the time. `quote_id` was already per-tenant and needed no change.
-`customer_id` did not exist at all until this session (migration
-`0011_customer_code`) — customers were the one entity that could be
-listed but never referred to afterward, because a list row's "view"
-button had nothing to put in the message and sent the literal string
-`"None"`.
+An audit entry shares a transaction with the change it records. So the
+constraint did not merely reject the audit row: it rolled back the PDF
+render, the GCS upload and the `generated_documents` insert alongside it.
+The file existed in the bucket, unreachable, while the salesperson was
+told the quote had not been issued.
 
-**If you add a fourth business-code entity, make it per-tenant.**
-Global numbering across a multi-tenant platform is now the exception,
-not the pattern, and the reasoning above is why.
+**The lesson is the ordering, not the list.** A constraint guarding a
+write that shares a transaction with it destroys good work alongside bad,
+silently, and surfaces something three layers from the cause. Migration
+`0017` widened it; `chann_data/audit_actions.py` is now the single source
+and a test scans the routers for any `action=` literal missing from it.
 
-### Notes and reminders (Phase 6) are real now, not just promised
+Two more failures had the same shape — correct upstream, broken at a
+boundary, invisible in logs:
 
-`ACTION_PERMISSIONS` has mapped `note.create`/`note.read`/`note.update`
-and `followup.create`/`followup.read`/`followup.update` since Phase 6.
-Nothing implemented any of them in chat until this session — a message
-routed to either entity passed the permission gate and fell through to
-the generic "not available yet" stub. Notes additionally had **no table
-at all**: what existed was a single overwritable `notes` TEXT column on
-customers/deals/follow-ups, with no author, no timestamp and no history.
+* **503 on viewing a document.** The Presentation proxy parses every
+  response as JSON; a PDF is not JSON, `res.json()` threw, the catch
+  turned it into 503. No error in the Application Tier (it succeeded), no
+  503 in its access log (it never returned one). A boundary test now pins
+  the proxy's pass-through list to the routes that return files.
+* **"ไม่สามารถเปิดลิงก์ได้" when opening a PDF.** LINE's in-app browser
+  refuses `blob:` URLs, and LIFF is the only place this dashboard runs.
+  Documents now go through a signed link and `liff.openWindow`. A boundary
+  test fails the build if any quote page builds a blob URL again.
 
-What is there now:
+When something works in isolation and fails in the product, suspect the
+boundary before the logic, and read the layer that does not appear in the
+logs.
 
-- `notes` table (migration `0013`), polymorphic by `(entity_type,
-  entity_id)` like `follow_ups`. The old TEXT columns are untouched and
-  still hold whatever they held — no backfill, because guessing which of
-  a tenant's existing free-text fields "should have been" a note row
-  risked mangling real data for no real gain.
-- `follow_ups.due_time` (also `0013`), an optional `TIME` alongside the
-  existing `due_date`. `NULL` keeps a follow-up a whole-day reminder,
-  exactly as before; a value turns the same row into an appointment. No
-  timezone stored on purpose — a Thai SMB's "บ่ายสอง" is local time, and
-  storing UTC would make it display differently depending on who reads
-  it.
-- `services/thai_datetime.py` — deterministic Thai date/time parsing
-  (พรุ่งนี้, วันศุกร์/ศุกร์หน้า, 15 มี.ค. 2569, บ่าย 2 = 14:00, 2 ทุ่ม =
-  20:00, Buddhist-era year conversion). Refuses rather than guesses
-  (`31/02` is rejected, not clamped to `28/02`), and every reminder
-  echoes the parsed date/time back in the reply so a misread is caught
-  immediately — a reminder on the wrong day is silently wrong, not
-  loudly wrong: the person believes they are covered and finds out when
-  the customer has already gone quiet.
-- `services/reminders.py` + `POST /api/v1/platform/reminders/sweep` — a
-  Cloud-Scheduler-driven daily push of due follow-ups to their owners'
-  LINE accounts. **Not yet wired to an actual Scheduler job** — the
-  endpoint exists and works if called, but nothing calls it on a
-  schedule yet. See next actions.
-- **Context fallback**, added after the owner reported it live: typing
-  "นัดประชุมพรุ่งนี้ตอน 9 โมงเช้า" right after "ข้อมูลลูกค้า C-2026-0001"
-  used to be refused with "ระบุด้วยว่าเตือนเรื่องอะไร" — technically
-  correct (no code was typed) but unusable, since the conversation had
-  just been about exactly one record. `_remember_entity` /
-  `_resolve_target_or_context` (in `chat.py`) generalise the existing
-  `last_customer_ref` pattern (used for deal-creation-after-promoting-a-
-  lead) to customers/deals/quotes together, cached in Redis under
-  `k_last_entity_ref` with the same `(chann_uid, oa)` scoping and a
-  10-minute TTL. An explicit code always wins over context, and the
-  reply always names which record it used, so a wrong guess is caught
-  immediately rather than discovered later. **A real bug caught while
-  wiring this in**: the first version conflated "no code given" with "a
-  code was given but doesn't exist", so a typo produced "please specify"
-  instead of "not found" — split into two paths (`_TargetNotFound` vs
-  plain `None`) once the test for it failed.
-- **AI-routed notes.** A free-text remark with no trigger word at all —
-  "ลูกค้าสนใจเรื่องการซื้อบ้าน" — matches none of `NOTE_TRIGGERS`
-  (`บันทึกว่า`/`จดว่า`/`โน้ตว่า`/`note`) and fell through to the AI intent
-  parser, which had never been taught `entity="note"` existed, so even a
-  correct guess landed on the same generic stub. `ai/intent.py`'s prompt
-  now describes it, told explicitly to omit `entity_code` (never invent
-  one) when the message names no record, so the AI-routed path falls
-  back to context exactly like the trigger-based path does — both entry
-  points end at the same `_resolve_target_or_context` /
-  `create_note` call.
-- **`due_follow_ups` returns only `entity_type` and a UUID, no name.**
-  "งานวันนี้" originally printed the literal word `"customer"` or
-  `"deal"` on every row — every row looked identical. `chat.py`'s
-  `_describe_entity_by_id` resolves the id back to a real name for
-  customers and a code for deals/quotes, falling back to the bare type
-  only when a row can't be resolved, so one bad row doesn't blank the
-  whole list.
+### Phases 11, 12, 13 and 16 are on DEV
 
-### The LIFF dashboard: five bugs, one root cause, found by guessing four times and reading logs once
+* **11 — assignment engine.** The AI writes a rule once, at configuration
+  time; the runtime engine only reads it, and lives in the Data tier
+  because the decision must happen inside the same transaction and lock
+  that reads current loads and writes the assignment. The mandatory race
+  test drives ten real concurrent transactions against a five-a-day cap.
+  `มอบหมาย T-… ให้อัตโนมัติ` invokes it.
+* **12 — tickets and the dispatch gate.** Refuses to dispatch until name,
+  phone, address, date and time exist, and names which are missing.
+  Visibility is enforced server-side (`visible_to`), never in the client.
+* **13 — field service.** Check-out requires a report; the technician is
+  asked one question at a time rather than handed a format. GPS is stored
+  on the photo, not the ticket, because check-in and check-out happen in
+  the same place hours apart.
+* **16 — warranties and serial routing.** A serial identifies the
+  product, the shop and the warranty at once. The cross-tenant lookup is
+  the only query here that deliberately leaves a tenant: it returns
+  nothing but what identifies a shop, matches exactly (never by prefix),
+  and is audited with `cross_tenant=true` whether or not it finds
+  anything.
 
-Skip this subsection unless you are touching `presentation/app/liff/sales/`
-or LIFF navigation generally — but if you are, read all of it before
-changing anything, because the working code looks like it does specifically
-*because* of the four wrong attempts before it.
+### The customer flow finally exists
 
-**Symptom progression, in the order they were hit:**
+Phase 12.4 starts with a customer reporting a fault, and that entry point
+was never built — `create_ticket` had no caller, so every capability in
+Phases 12 and 13 operated on rows nothing could create. A customer now
+reports in one message with only a description; the address and the
+appointment are asked for afterwards, which is also where the dispatch
+gate gets what it needs. They can move or cancel the appointment, and the
+assigned technician is told when they do.
 
-1. Every dashboard sub-page bounced back to the menu the instant it loaded.
-2. (attempted fix) → pages hung on a spinner forever instead.
-3. (attempted fix) → pages went blank white instead.
-4. (attempted fix) → the LINE-in-app browser looped opening
-   `access.line.me` (LINE's own OAuth consent page) forever, burning a
-   fresh authorization `code` roughly every 700ms.
-5. (actual fix, confirmed against the Cloud Run access log) → works.
+### Chat no longer depends on the AI for its own buttons
 
-**The one root cause behind all five:** a LIFF session exists only in the
-document LINE opened via a `https://liff.line.me/<id>/<path>` URL, and
-that URL arrives at the app's *endpoint URL* (not the path in it) carrying
-the real destination in a `liff.state` query parameter plus an
-authorization `code` that `liff.init()` must exchange for a token.
+Quick replies are text the system writes itself, in a shape it chose.
+Routing that through a model failed in production and spent a call per
+tap. Deterministic now: creating deals and quotes, adding, editing and
+removing line items, check-in, check-out, claiming a ticket.
 
-- **Symptom 1** happened because `_lib.ts` read `liff.state` and
-  navigated to the target immediately, before `liff.init()` had a chance
-  to run at all.
-- The fix for that swapped `next/link` for plain `<a href>` tags
-  everywhere "to guarantee a clean `liff.init()`" — which caused
-  **symptom 1's real cousin**: a full page load starts a brand new
-  document with **no LIFF context whatsoever**, so `inClient=true` but
-  `loggedIn=false` on every sub-page. (Diagnostics — see below — measured
-  this directly.) Fixed by reverting to `next/link` client-side
-  navigation everywhere, since a LIFF session only exists in the
-  document LINE actually opened.
-- **Symptom 2** (blank spinner) came from a version that stopped
-  navigating on `liff.state` at all, on the assumption `liff.init()`
-  redirects to the target itself once it succeeds. It does not always.
-- **Symptom 3** (blank white page) came from the fix for #2: it awaited
-  `init()` and rendered nothing while waiting, with no path that ever
-  stopped waiting if `init()` neither redirected nor threw.
-- **Symptom 4 (the real bug, found via `gcloud logging read` on the
-  Cloud Run access log — not by guessing)**: a version navigated to the
-  `liff.state` target itself, immediately, **discarding the
-  authorization code before `liff.init()` could exchange it**. LIFF then
-  requested authorization again, got a fresh code, and the same
-  navigation discarded that one too — forever. The log showed a
-  different `code=` value roughly every 700ms; that is what a
-  discarded-auth-code loop looks like in an access log, and it is
-  unambiguous once you know to look for it.
+**But deterministic paths must yield, not refuse.** Twice a
+short-circuit was added that answered "please name a customer" when
+context was absent — removing the AI's ability to read a name out of a
+longer sentence. Both times existing tests caught it. If a deterministic
+path cannot answer, fall through.
 
-**The actual fix** (`presentation/app/liff/sales/_lib.ts`,
-`completeLiffRedirect`): `await liff.init()` **first**, so the code is
-exchanged and a session exists; **only then** read `liff.state` and
-navigate to it client-side via `router.replace`; if `init()` throws,
-navigate anyway rather than leaving the menu blank, because the
-destination page has its own diagnostics and reports the failure more
-usefully than a blank menu does. No branch in the final version ends on
-a blank screen or an infinite loop.
+### Substring collisions keep happening
 
-**Lesson, stated plainly because it cost real time twice over:**
-`gcloud logging read` against the Cloud Run access log
-(`httpRequest.requestUrl`) shows the exact URL, including query string,
-for every request a webview makes — this is available immediately, needs
-no code change, and answered in one command what four rounds of reading
-LIFF documentation and guessing could not. When a LIFF/OAuth flow
-misbehaves, read the access log before writing a fix.
+Five so far, every one caught by tests: `ไม่สำเร็จ`/`สำเร็จ`,
+`ออกเอกสารใหม่`/`ออกเอกสาร`, `ตั้งกฎมอบหมาย`/`มอบหมาย`,
+`เปิดดีล`/`เปิดดีลใหม่ (reopen)`, and `เพิ่มสินค้า` meaning both "line
+item" and "catalogue entry". Check every new trigger against the existing
+list before adding it.
 
-**A diagnostics line was added and deliberately left in** —
-`liffDiagnostics()` in `_lib.ts`, rendered by `AppShell` whenever a page
-has not finished starting (not only on error, since a hang produces no
-error). It reports `path`, `sdk` (loaded/missing), `inClient`,
-`loggedIn`, `idToken` (yes/no), any `liff.state`, and the last
-`init()` error. It is cheap, it is the thing that actually solved
-symptom 4, and there is no reason to remove it pre-emptively — do so
-once the LIFF flow has been stable for a while, not before.
+### Owner-approved departures from the Master Spec
+
+* `deal_id` is per-tenant, not globally unique (recorded earlier).
+* **`new → lost` is allowed.** Spec 9.6 lists no such transition, which
+  made a deal that dies before anyone quotes it impossible to close — the
+  most ordinary way for one to end. The alternatives were leaving it open
+  forever or inventing a quote that was never made; both corrupt the
+  pipeline numbers the stage exists to produce. `new → won` is still
+  refused.
+* **Quotes own their line items** (`quote_products`, migration `0019`).
+  A quote used to be a pointer at a deal, so two quotes on one deal were
+  necessarily identical and editing a deal rewrote drafts already under
+  discussion. Copied at creation, independent after. Issued quotes cannot
+  be edited at all.
+
+### Context, and why the TTL matters
+
+`last_customer_ref` and `last_entity_ref` are what let someone say
+"สร้างดีล" without naming anyone. Both were 600 seconds, which was long
+enough for a demo and too short for work: a salesperson confirmed a
+customer at 10:21, took a call, asked for a deal at 10:38, and was shown a
+list of permissions. Both are an hour now. Viewing a customer writes BOTH
+refs — it used to write only the generic one, which is why the fallback
+never fired.
 
 ---
 
 ## Immediate next actions (in order)
 
-1. **Wire the reminder sweep to an actual Cloud Scheduler job.**
-   `POST /api/v1/platform/reminders/sweep` exists, is behind
-   `require_admin`, and works when called — nothing calls it yet. Needs:
-   ```
-   gcloud services enable cloudscheduler.googleapis.com --project=chann1-1
-   gcloud scheduler jobs create http chann-crm-ai-dev-reminder-sweep \
-     --project=chann1-1 --location=asia-southeast1 \
-     --schedule="0 8 * * *" --time-zone="Asia/Bangkok" \
-     --uri="https://chann-crm-ai-dev-application-6ktjuv4zaq-as.a.run.app/api/v1/platform/reminders/sweep" \
-     --http-method=POST \
-     --headers="Authorization=Bearer <platform admin JWT>"
-   ```
-   The auth header needs a real platform-admin token — check whether
-   `require_admin` accepts a long-lived service credential or only the
-   same JWT issued at `/api/v1/platform/login`, and if the latter, decide
-   whether that login needs a non-expiring option for this one caller
-   before wiring the job for real.
-2. **Notes/reminders have no dashboard UI.** Chat-side is complete; the
-   project's own current policy (set by the owner mid-session, see
-   "Patterns" below) is that a phase isn't done until the dashboard does
-   the same thing chat does. This phase shipped without that for notes
-   and reminders specifically — close the gap before calling Phase 6
-   fully done.
-3. **Deal detail has no UI for removing a line item or editing notes.**
-   The Data-tier and Application-tier endpoints exist
-   (`DELETE .../deals/{id}/products/{pid}`, `PATCH .../deals/{id}`); no
-   page calls them.
-4. Secret rotation — still deferred by explicit owner decision, still
-   not an oversight. See the section below. The exposure surface has
-   only grown this session: `smartbrowz_client_secret`,
-   `smartbrowz_refresh_token`, `admin_secret`, and multiple platform-admin
-   passwords have all appeared in AI chat transcripts by now, on top of
-   the original `.bak-*` files still live in git history.
-5. Phases 11+ (beyond 10.6's pipeline and Phase 6's notes/reminders)
-   have not been started.
+1. **Rotate the LINE channel secret exposed in a chat transcript.** One
+   Sales channel secret was printed in full while debugging environment
+   variables. Rotate it in the LINE Developers console and update
+   `terraform.tfvars`. This is separate from, and more urgent than, the
+   deferred rotation below.
+
+2. **Nothing displays a Service Report's PDF.** The report is written,
+   stored and now readable in the dashboard, and `attach_document` exists
+   to link a rendered file — but nothing renders one. Wire it to
+   SmartBrowz the same way quotes are, using
+   `document_type='service_report'` on the generic template tables
+   (Master Spec 13.3 requires that, not a second template model).
+
+3. **Phase 14 — approval workflow and satisfaction survey.** Service
+   reports already carry `submitted`/`approved`/`rejected` and the
+   dashboard can move between them; Phase 14 is the rest of it.
+
+4. **Phase 15, 17, 17.5, 18** remain. Phase 16 was pulled forward and is
+   done. Phase 16.5 (PDPA) is untouched.
+
+5. **CI auth method is still undecided** — WIF vs SA key vs Cloud Build
+   trigger. Every deploy so far has been manual from Cloud Shell.
+
 
 ## Already deployed, section by section (oldest first)
 
@@ -1185,30 +1118,67 @@ tests/unit/test_phase6_chat.py               ← +13 tests
 
 ## Known issues / open threads
 
-- **CI/CD via Workload Identity Federation is blocked** — the deploying GCP
-  account has no Owner/IAM-admin role. Manual build+push+deploy is the only
-  path until someone with Owner sets it up.
-- ~~Phase 9 must pass each entity's real field schema into the AI intent
-  prompt~~ — **done** in the Phase 9 patch above (`ai/intent.py`'s prompt
-  now describes customer/deal's real fields).
-- ~~Phase 9 also inherits the ambiguity that fix #1 side-steps~~ — **done**:
-  customer create/update/promote and deal-create all resolve a name to a
-  record via `_find_one_customer_by_name`, asking to clarify on an
-  ambiguous match rather than guessing. `may_edit_on_behalf` /
-  `check_profile_edit` (the on-behalf profile path, distinct from this) are
-  still not wired into chat — nothing in Phase 9 needed them.
-- ~~Quote generation (Phase 10) is next in spec order~~ — **done**, see
-  "Where things stand" above.
-- `view_reports` is intentionally one broad permission key — deferred to
-  Phase 17 where reports actually get designed.
-- **Rich Menu test (Phase 19) must avoid hardcoded role names** —
-  Principle #10 requires permission-key checks only.
-- Stage/prod are **parked** for cost (Cloud SQL stopped, Redis/VPC-connector
-  deleted). Recreate steps in `docs/ENVIRONMENT_RESOURCE_MAP.yaml`.
-
----
+* **A LINE channel secret was printed in full in a chat transcript** while
+  inspecting Cloud Run environment variables. Rotate it. The `sed` filter
+  used at the time only masked `sk-`-style keys and did not cover it.
+* **Service Reports have no PDF.** Everything up to `attach_document`
+  exists; nothing renders the file.
+* **`Q-2026-0001` and any other quote issued before migration `0017`**
+  has no `generated_document_id`: the audit constraint rolled the link
+  back. Those quotes will always read "not issued". Re-issue them or
+  leave them; nothing is corrupt, the document simply is not linked.
+* **No test runner on the Presentation tier.** Its logic is pinned by
+  boundary tests in `tests/boundary/` that read the TypeScript as text —
+  crude, but they have caught two real regressions.
+* **Rich menus are configured per OA by a script**, not by Terraform, so
+  they must be re-run after any change to the tile sets. They need
+  `fonts-thai-tlwg`, which Cloud Shell drops on restart; the script
+  refuses rather than rendering boxes.
+* **Phase 16 was pulled forward** ahead of 14 and 15 at the owner's
+  request. 16.5 (PDPA) is untouched.
+* **CI/CD is still manual.** WIF vs SA key vs Cloud Build undecided.
 
 ## Patterns worth reusing (all proven in this codebase)
+
+### Suspect the boundary before the logic
+
+Three of this run's worst bugs were correct code failing at a seam, and
+all three were invisible in the obvious place:
+
+* an audit constraint rolling back the work it recorded,
+* a proxy parsing a PDF as JSON,
+* LINE refusing a `blob:` URL.
+
+In each case the tier everyone was reading had succeeded. When something
+works in isolation and fails in the product, read the layer that does NOT
+appear in the logs.
+
+### A silent success is worse than a crash
+
+"Status: sent" with no document, "sent: 1" with no LINE message,
+`tenants: 0` from a sweep that should have found several. Each looked
+fine and was not. Where a step can half-succeed, assert the visible
+consequence, not the return value.
+
+### Deterministic paths must yield, not refuse
+
+A hand-written trigger that cannot answer should fall through to the AI,
+not reject. Refusing removed the model's ability to read a name out of a
+longer sentence — twice, both caught by tests that already existed.
+
+### Keep the fake honest
+
+Every time `FakeDataClient` diverged from the real client, a bug hid
+behind it: a missing `get_profile`, a `create_quote` that skipped copying
+lines, a team with no `id`. When a fake needs a new method to make a test
+pass, check what the real one returns rather than inventing a shape.
+
+### Ordering columns need a tiebreak that is not a timestamp
+
+Postgres `now()` is fixed for a whole transaction, so rows inserted in one
+message share `created_at` exactly and sort arbitrarily. Both
+`deal_products` and `quote_products` carry an explicit `position`.
+
 
 - **When a browser/LIFF flow misbehaves, read the access log before
   guessing.** `gcloud logging read` against

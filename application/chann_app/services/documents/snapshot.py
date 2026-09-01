@@ -97,7 +97,7 @@ def build_line_items(products: list[dict]) -> list[dict]:
     return items
 
 
-def compute_totals(line_items: list[dict], vat_rate) -> dict:
+def compute_totals(line_items: list[dict], vat_rate, discount=None) -> dict:
     """Subtotal, VAT and grand total.
 
     `vat_rate` is a fraction (0.07), or None for a tenant that is not
@@ -109,20 +109,36 @@ def compute_totals(line_items: list[dict], vat_rate) -> dict:
     """
     subtotal = _money(sum((Decimal(item["line_total"]) for item in line_items), Decimal("0")))
 
+    # A discount comes off BEFORE VAT. Thai VAT is charged on what the
+    # customer actually pays, so discounting after tax would overstate the
+    # tax due and put a number on the document that does not reconcile.
+    #
+    # Clamped at the subtotal: a larger discount would make the shop owe
+    # the customer money.
+    discount_amount = _money(min(Decimal(str(discount or 0)), subtotal))
+    net = _money(subtotal - discount_amount)
+    has_discount = discount_amount > 0
+
     if vat_rate is None or str(vat_rate).strip() == "":
         return {
             "subtotal": str(subtotal),
+            "discount_applicable": has_discount,
+            "discount_amount": str(discount_amount) if has_discount else None,
+            "net_total": str(net),
             "vat_applicable": False,
             "vat_rate": None,
             "vat_rate_percent": None,
             "vat_amount": None,
-            "grand_total": str(subtotal),
+            "grand_total": str(net),
         }
 
     rate = Decimal(str(vat_rate))
-    vat_amount = _money(subtotal * rate)
+    vat_amount = _money(net * rate)
     return {
         "subtotal": str(subtotal),
+        "discount_applicable": has_discount,
+        "discount_amount": str(discount_amount) if has_discount else None,
+        "net_total": str(net),
         "vat_applicable": True,
         # Both forms are frozen: the fraction is what the arithmetic used,
         # the percent is what the document prints. Deriving one from the
@@ -131,7 +147,7 @@ def compute_totals(line_items: list[dict], vat_rate) -> dict:
         "vat_rate": str(rate),
         "vat_rate_percent": _percent_str(rate),
         "vat_amount": str(vat_amount),
-        "grand_total": str(_money(subtotal + vat_amount)),
+        "grand_total": str(_money(net + vat_amount)),
     }
 
 
@@ -164,7 +180,21 @@ def build_quote_snapshot(
     line_items = build_line_items(
         quote.get("products") or deal.get("products") or []
     )
-    totals = compute_totals(line_items, company.get("vat_rate"))
+    # The discount as an ABSOLUTE amount, resolved here rather than
+    # stored: a percentage is meaningless once the lines change, and the
+    # snapshot must freeze what the customer was actually charged.
+    discount = Decimal("0")
+    subtotal_for_discount = sum(
+        (Decimal(item["line_total"]) for item in line_items), Decimal("0")
+    )
+    if quote.get("discount_percent") is not None:
+        discount = _money(
+            subtotal_for_discount * Decimal(str(quote["discount_percent"])) / 100
+        )
+    elif quote.get("discount_amount") is not None:
+        discount = Decimal(str(quote["discount_amount"]))
+
+    totals = compute_totals(line_items, company.get("vat_rate"), discount)
     stamped_at = issued_at or datetime.now(timezone.utc)
 
     return {
@@ -191,6 +221,10 @@ def build_quote_snapshot(
         "quote": {
             "quote_id": quote.get("quote_id") or "",
             "status": quote.get("status") or "",
+            # Frozen with the rest: the document says the offer stands
+            # until a date, and that sentence must not change afterwards
+            # because someone edited the quote's validity later.
+            "valid_until": quote.get("valid_until") or "",
         },
         "deal": {"deal_id": deal.get("deal_id") or ""},
         "line_items": line_items,

@@ -7,6 +7,7 @@ import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { AppShell, Badge } from "../../_components";
 import { fetchPermissions, initLiffSession, proxyHeaders } from "../../_lib";
+import { ProductLineForm } from "../../../_product-line-form";
 import { FieldSection, RecordHead, RelatedHeading } from "../../_record";
 
 type Product = {
@@ -34,6 +35,13 @@ type Customer = {
 
 // Only the moves the Phase 9 state machine allows. Offering "won" on an
 // already-won deal would show a button whose only outcome is an error.
+// Mirrors _ALLOWED_TRANSITIONS in chann_data/repositories/phase9.py.
+// Offering a move the Data Tier refuses means a button that always
+// errors, so these two lists have to agree.
+//
+// new → lost is allowed because a deal that dies before anyone quotes it
+// is the most ordinary way for one to end. new → won is not: a deal
+// nobody ever quoted was not won, it was never worked.
 const NEXT_STAGES: Record<string, string[]> = {
   new: ["proposed", "lost"],
   proposed: ["won", "lost"],
@@ -68,7 +76,7 @@ export default function DealDetail({
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
   const [busy, setBusy] = useState(false);
   const [addingProduct, setAddingProduct] = useState(false);
-  const [newProduct, setNewProduct] = useState({ name: "", qty: "1", price: "" });
+  const [editingLine, setEditingLine] = useState<string>("");
 
   const say = useCallback((message: string, kind?: "ok" | "error") => {
     setStatus(message);
@@ -156,14 +164,42 @@ export default function DealDetail({
     await load();
   }
 
-  async function addProduct() {
-    // A quote now requires at least one line item, so a deal page that
-    // could only DELETE them left a deal that lost its last product
-    // permanently unquotable from the dashboard.
-    if (!newProduct.name.trim() || !newProduct.price.trim()) {
-      say(t.dashboard.deals.needsNameAndPrice, "error");
-      return;
+  async function updateProduct(
+    lineId: string, line: { name: string; qty: number; price: string },
+  ) {
+    // Correcting in place rather than delete-and-retype, which loses the
+    // line's position and on a deal with several similar products is easy
+    // to do to the wrong one.
+    setBusy(true);
+    try {
+      const response = await fetch(
+        `/api/phase2/licenses/${licenseId}/deals/${dealId}/products/${lineId}`,
+        {
+          method: "PATCH",
+          headers: proxyHeaders(token, licenseId),
+          body: JSON.stringify({
+            product_name: line.name,
+            quoted_unit_price: line.price,
+            qty: line.qty,
+          }),
+        },
+      );
+      if (!response.ok) {
+        say(`${t.common.error} (${response.status})`, "error");
+        return;
+      }
+      setEditingLine("");
+      await load();
+      say(t.dashboard.saved, "ok");
+    } finally {
+      setBusy(false);
     }
+  }
+
+  async function addProduct(line: { name: string; qty: number; price: string }) {
+    // A quote requires at least one line, so a deal page that could only
+    // DELETE them left a deal that lost its last product permanently
+    // unquotable from the dashboard.
     setBusy(true);
     try {
       const response = await fetch(
@@ -172,9 +208,9 @@ export default function DealDetail({
           method: "POST",
           headers: proxyHeaders(token, licenseId),
           body: JSON.stringify({
-            product_name: newProduct.name.trim(),
-            quoted_unit_price: newProduct.price.trim(),
-            qty: Number(newProduct.qty) || 1,
+            product_name: line.name,
+            quoted_unit_price: line.price,
+            qty: line.qty,
           }),
         },
       );
@@ -188,7 +224,6 @@ export default function DealDetail({
         return;
       }
       say(t.dashboard.saved, "ok");
-      setNewProduct({ name: "", qty: "1", price: "" });
       setAddingProduct(false);
       await load();
     } finally {
@@ -325,64 +360,13 @@ export default function DealDetail({
                 )}
               </div>
               {addingProduct && (
-                <dl className="fields">
-                  <div className="field-row">
-                    <dt>{t.product.title}</dt>
-                    <dd>
-                      <input
-                        value={newProduct.name}
-                        onChange={(event) =>
-                          setNewProduct({ ...newProduct, name: event.target.value })
-                        }
-                      />
-                    </dd>
-                  </div>
-                  <div className="field-row">
-                    <dt>{t.dashboard.deals.qty}</dt>
-                    <dd>
-                      <input
-                        inputMode="numeric"
-                        value={newProduct.qty}
-                        onChange={(event) =>
-                          setNewProduct({ ...newProduct, qty: event.target.value })
-                        }
-                      />
-                    </dd>
-                  </div>
-                  <div className="field-row">
-                    <dt>{t.dashboard.products.price}</dt>
-                    <dd>
-                      <input
-                        inputMode="decimal"
-                        value={newProduct.price}
-                        placeholder="0.00"
-                        onChange={(event) =>
-                          setNewProduct({ ...newProduct, price: event.target.value })
-                        }
-                      />
-                    </dd>
-                  </div>
-                  <div className="actions">
-                    <button
-                      type="button"
-                      className="btn"
-                      data-variant="quiet"
-                      onClick={() => setAddingProduct(false)}
-                      disabled={busy}
-                    >
-                      {t.common.cancel}
-                    </button>
-                    <button
-                      type="button"
-                      className="btn"
-                      data-variant="primary"
-                      onClick={() => void addProduct()}
-                      disabled={busy}
-                    >
-                      {busy ? t.dashboard.saving : t.common.save}
-                    </button>
-                  </div>
-                </dl>
+                <ProductLineForm
+                  licenseId={licenseId}
+                  token={token}
+                  busy={busy}
+                  onCancel={() => setAddingProduct(false)}
+                  onSubmit={addProduct}
+                />
               )}
             </section>
           )}
@@ -410,8 +394,17 @@ export default function DealDetail({
                         )}
                       </strong>
                     </div>
-                    {canEdit && (
+                    {canEdit && editingLine !== product.id && (
                       <div className="card-actions">
+                        <button
+                          type="button"
+                          className="btn"
+                          data-variant="quiet"
+                          onClick={() => setEditingLine(product.id)}
+                          disabled={busy}
+                        >
+                          {t.common.edit}
+                        </button>
                         <button
                           type="button"
                           className="btn"
@@ -422,6 +415,20 @@ export default function DealDetail({
                           {t.common.delete}
                         </button>
                       </div>
+                    )}
+                    {canEdit && editingLine === product.id && (
+                      <ProductLineForm
+                        licenseId={licenseId}
+                        token={token}
+                        busy={busy}
+                        initial={{
+                          name: String(product.product_name ?? ""),
+                          qty: Number(product.qty ?? 1),
+                          price: String(product.quoted_unit_price ?? ""),
+                        }}
+                        onCancel={() => setEditingLine("")}
+                        onSubmit={(line) => updateProduct(product.id, line)}
+                      />
                     )}
                   </li>
                 ))}

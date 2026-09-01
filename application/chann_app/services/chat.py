@@ -3083,6 +3083,11 @@ DEAL_PRODUCT_NEEDS_NAME = {
     "th": "ระบุชื่อสินค้าและราคาด้วยครับ เช่น \"เพิ่มสินค้า พัดลม 2 ตัว ราคา 1500\"",
     "en": 'Name and price please, e.g. "add product fan 2 at 1500".',
 }
+PRODUCT_UNKNOWN_NEEDS_PRICE = {
+    "th": "ไม่มี \"{name}\" ในรายการสินค้า ระบุราคาด้วยครับ เช่น \"{name} 2 ตัว ราคา 1500\"\n(หรือเพิ่มเข้ารายการสินค้าก่อนด้วย \"สร้างสินค้า\")",
+    "en": '"{name}" is not in the catalogue — give a price, e.g. "{name} 2 at 1500".',
+}
+
 DEAL_PRODUCT_AMBIGUOUS = {
     "th": "มีสินค้าหลายรายการที่ตรงกับ \"{name}\" เลือกอันไหนครับ\n{options}",
     "en": 'Several products match "{name}" — which one?\n{options}',
@@ -3122,6 +3127,202 @@ def _distinguishing_part(name: str, others: list[str]) -> str:
     if not trimmed or len(trimmed) < 2:
         return name
     return trimmed
+
+
+# Editing a line already on a deal or a quote. Before this the only way
+# to correct a quantity was to delete and retype it, which loses the
+# line's position and on a deal with several similar products is easy to
+# do to the wrong one.
+
+LINE_EDIT_TRIGGERS = ("แก้ราคา", "เปลี่ยนราคา", "ลดราคา", "แก้จำนวน", "เปลี่ยนจำนวน")
+LINE_REMOVE_TRIGGERS = ("ลบสินค้า", "เอาสินค้าออก", "ตัดสินค้า", "remove product")
+
+LINE_NOT_FOUND = {
+    "th": "ไม่พบสินค้า \"{name}\" ใน{where} {code}",
+    "en": 'No line called "{name}" on {code}',
+}
+LINE_UPDATED = {
+    "th": "แก้ {name} เป็น {qty} × {price} = {total} ใน{where} {code} แล้ว",
+    "en": "Updated {name} to {qty} × {price} = {total} on {code}.",
+}
+LINE_REMOVED = {
+    "th": "ลบ {name} ออกจาก{where} {code} แล้ว",
+    "en": "Removed {name} from {code}.",
+}
+LINE_NEEDS_TARGET = {
+    "th": "แก้ของดีลหรือใบเสนอราคาไหนครับ พิมพ์รหัสด้วย เช่น \"ลดราคาพัดลมเหลือ 1400 ใน Q-2026-0001\"",
+    "en": "Which deal or quote? Include the code.",
+}
+LINE_QUOTE_LOCKED = {
+    "th": "ใบเสนอราคา {code} ออกเอกสารแล้ว แก้ไม่ได้ ถ้าต้องแก้ให้ยกเลิกแล้วสร้างใบใหม่",
+    "en": "Quote {code} has been issued and cannot be changed.",
+}
+
+_NEW_PRICE_RE = re.compile(r"(?:เหลือ|เป็น|as|to)\s*([\d,]+(?:\.\d{1,2})?)", re.I)
+
+
+async def _resolve_line_target(
+    client: DataClient, license_id: str, ctx: ResolvedContext, message: str,
+):
+    """(kind, code, id, lines) for the quote or deal a line edit targets.
+
+    An explicit code wins; otherwise the record just discussed. Quotes are
+    checked before deals because someone editing prices is usually working
+    on the offer, not the pipeline entry behind it.
+    """
+    quote_match = re.search(r"\b(Q-\d{4}-\d{4})\b", message or "", re.I)
+    deal_match = re.search(r"\b(D-\d{4}-\d{4})\b", message or "", re.I)
+
+    if quote_match:
+        code = quote_match.group(1).upper()
+        quotes = await client.list_quotes(license_id)
+        row = next((q for q in quotes if str(q.get("quote_id", "")).upper() == code), None)
+        if row is None:
+            return None, code, None, []
+        lines = await client.list_quote_products(license_id, str(row["id"]))
+        return "quote", code, str(row["id"]), lines
+
+    if deal_match:
+        code = deal_match.group(1).upper()
+        deals = await client.list_deals(license_id)
+        row = next((d for d in deals if str(d.get("deal_id", "")).upper() == code), None)
+        if row is None:
+            return None, code, None, []
+        return "deal", code, str(row["id"]), list(row.get("products") or [])
+
+    last_ref = await client.get_last_entity_ref(ctx.chann_uid, ctx.oa)
+    if not last_ref:
+        return None, None, None, []
+    kind = str(last_ref.get("entity_type") or "")
+    code = str(last_ref.get("code") or "")
+    entity_id = str(last_ref.get("entity_id") or "")
+    if kind == "quote":
+        return "quote", code, entity_id, await client.list_quote_products(
+            license_id, entity_id,
+        )
+    if kind == "deal":
+        deals = await client.list_deals(license_id)
+        row = next((d for d in deals if str(d.get("id")) == entity_id), None)
+        return "deal", code, entity_id, list((row or {}).get("products") or [])
+    return None, None, None, []
+
+
+def _match_line(lines: list[dict], name: str) -> dict | None:
+    needle = (name or "").strip().lower()
+    if not needle:
+        return None
+    exact = [l for l in lines if str(l.get("product_name") or "").lower() == needle]
+    if exact:
+        return exact[0]
+    partial = [l for l in lines if needle in str(l.get("product_name") or "").lower()]
+    # One match or nothing: two lines matching the same words means the
+    # edit could land on either, and changing the wrong price on a quote
+    # is worse than being asked again.
+    return partial[0] if len(partial) == 1 else None
+
+
+async def _handle_line_edit(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
+    trigger: str, permission_keys: list[str], language: str, remove: bool = False,
+) -> ChatReply:
+    license_id = str(license_id)
+    kind, code, entity_id, lines = await _resolve_line_target(
+        client, license_id, ctx, message,
+    )
+    if kind is None or entity_id is None:
+        return ChatReply(text=_t(LINE_NEEDS_TARGET, language))
+
+    needed = "quote.update" if kind == "quote" else "deal.update"
+    if needed not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+
+    # Everything after the trigger, minus the codes and the new value, is
+    # the product being pointed at.
+    lowered = message.lower()
+    index = lowered.find(trigger.lower())
+    text = message[index + len(trigger):] if index >= 0 else message
+    text = re.sub(r"\b[QD]-\d{4}-\d{4}\b", " ", text, flags=re.I)
+
+    new_price = None
+    new_qty = None
+    price_match = _NEW_PRICE_RE.search(text)
+    if price_match and "ราคา" in trigger:
+        new_price = price_match.group(1).replace(",", "")
+        text = text.replace(price_match.group(0), " ")
+    elif price_match and "จำนวน" in trigger:
+        new_qty = int(float(price_match.group(1).replace(",", "")))
+        text = text.replace(price_match.group(0), " ")
+    else:
+        qty_match = _QTY_RE.search(text)
+        if qty_match and "จำนวน" in trigger:
+            new_qty = max(1, int(qty_match.group(1) or qty_match.group(2)))
+            text = text.replace(qty_match.group(0), " ")
+
+    for word in ("ใน", "ของ", "ออกจาก", "จาก", "on", "from"):
+        text = text.replace(word, " ")
+    name = " ".join(text.split()).strip(" :·-,")
+
+    line = _match_line(lines, name)
+    if line is None:
+        return ChatReply(
+            text=_t(LINE_NOT_FOUND, language).format(
+                name=name or "—",
+                where="ใบเสนอราคา" if kind == "quote" else "ดีล",
+                code=code or "",
+            )
+        )
+
+    where = "ใบเสนอราคา" if kind == "quote" else "ดีล"
+    try:
+        if remove:
+            if kind == "quote":
+                await client.remove_quote_product(
+                    license_id, entity_id, str(line["id"]), actor_id=ctx.chann_uid,
+                )
+            else:
+                await client.remove_deal_product(
+                    license_id, entity_id, str(line["id"]), actor_id=ctx.chann_uid,
+                )
+            return ChatReply(
+                text=_t(LINE_REMOVED, language).format(
+                    name=line.get("product_name"), where=where, code=code,
+                )
+            )
+
+        fields: dict = {}
+        if new_price is not None:
+            fields["quoted_unit_price"] = new_price
+        if new_qty is not None:
+            fields["qty"] = new_qty
+        if not fields:
+            return ChatReply(text=_t(LINE_NEEDS_TARGET, language))
+
+        if kind == "quote":
+            updated = await client.update_quote_product(
+                license_id, entity_id, str(line["id"]), fields, actor_id=ctx.chann_uid,
+            )
+        else:
+            updated = await client.update_deal_product(
+                license_id, entity_id, str(line["id"]), fields, actor_id=ctx.chann_uid,
+            )
+    except DataTierError as exc:
+        if kind == "quote" and "can no longer be edited" in str(exc.detail):
+            return ChatReply(text=_t(LINE_QUOTE_LOCKED, language).format(code=code))
+        log.exception("line edit failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    except Exception:
+        log.exception("line edit failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    unit = Decimal(str(updated.get("quoted_unit_price") or 0))
+    qty = int(updated.get("qty") or 1)
+    return ChatReply(
+        text=_t(LINE_UPDATED, language).format(
+            name=updated.get("product_name"), qty=qty,
+            price=f"{unit:,.2f}", total=f"{unit * qty:,.2f}",
+            where=where, code=code,
+        )
+    )
 
 
 async def _handle_deal_product_add(
@@ -3258,7 +3459,12 @@ async def _handle_deal_product_add(
                 name = str(product.get("product_name") or name)
 
         if price is None:
-            return ChatReply(text=_t(DEAL_PRODUCT_NEEDS_PRICE, language).format(name=name))
+            # Not in the catalogue and no price given. Naming the gap and
+            # showing the shape of an answer beats a bare "what price?",
+            # which leaves someone guessing at the format too.
+            return ChatReply(
+                text=_t(PRODUCT_UNKNOWN_NEEDS_PRICE, language).format(name=name)
+            )
 
         row = await client.add_deal_product(
             license_id, str(deal["id"]),
@@ -3291,6 +3497,16 @@ async def _handle_deal_product_add(
 QUOTE_CREATE_TRIGGERS = (
     "สร้างใบเสนอราคา", "ออกใบเสนอราคา", "ทำใบเสนอราคา", "create quote",
 )
+
+DEAL_ALREADY_OPEN = {
+    "th": "ลูกค้ารายนี้มีดีล {code} เปิดอยู่แล้ว\nปิดดีลเดิมก่อน (ปิดสำเร็จหรือปิดไม่สำเร็จ) แล้วค่อยเปิดใหม่",
+    "en": "This customer already has {code} open. Close it before starting another.",
+}
+
+CUSTOMER_ALREADY_EXISTS = {
+    "th": "เบอร์นี้มีลูกค้า {code} อยู่แล้ว ใช้รายเดิมได้เลย",
+    "en": "That number already belongs to {code}.",
+}
 
 QUOTE_NEEDS_DEAL = {
     "th": "สร้างใบเสนอราคาจากดีลไหนครับ พิมพ์ \"สร้างใบเสนอราคาจากดีล D-2026-0001\"",
@@ -3343,6 +3559,16 @@ async def _handle_quote_create_direct(
             license_id, {"deal_id": deal["id"]}, actor_id=ctx.chann_uid,
         )
     except DataTierError as exc:
+        duplicate = exc.structured or {}
+        if duplicate.get("error") == "duplicate":
+            return ChatReply(
+                text=_t(DEAL_ALREADY_OPEN, language).format(
+                    code=duplicate.get("existing_code", ""),
+                ),
+                quick_replies=[
+                    ("ดูดีล", f"ข้อมูลดีล {duplicate.get('existing_code','')}"),
+                ],
+            )
         # The "no products" rule, said in terms the person can act on
         # rather than as a raw conflict from the data tier.
         if "no products" in str(exc.detail).lower():
@@ -3370,6 +3596,40 @@ async def _handle_quote_create_direct(
     await _remember_entity(
         client, ctx, entity_type="quote", entity_id=row["id"], code=row["quote_id"],
     )
+
+    # A product named in the same breath REPLACES what was copied from the
+    # deal. "ออกใบเสนอราคา พัดลม 2 ตัว" means quote two fans; copying one
+    # from the deal and ignoring the rest of the sentence produced a
+    # document that quietly said something the person did not ask for.
+    #
+    # Said nothing about products? Keep the deal's, which is the whole
+    # point of copying them.
+    override = _trailing_product_for_quote(message)
+    if override:
+        try:
+            existing = await client.list_quote_products(license_id, str(row["id"]))
+            for line in existing:
+                await client.remove_quote_product(
+                    license_id, str(row["id"]), str(line["id"]),
+                    actor_id=ctx.chann_uid,
+                )
+        except Exception:
+            log.exception("could not clear copied lines before an override")
+            existing = []
+
+        added = await _add_line_from_text(
+            client, ctx=ctx, license_id=license_id, quote_id=str(row["id"]),
+            text=override, language=language,
+        )
+        if added is not None:
+            # The add failed or needs a choice; its reply explains why, and
+            # the quote exists either way so it is named here too.
+            return ChatReply(
+                text=f"{_t(QUOTE_CREATED, language).format(quote_id=row['quote_id'], deal_id=deal_code)}\n{added.text}",
+                entity_type="quote", entity_id=str(row["id"]),
+                quick_replies=added.quick_replies,
+            )
+
     return ChatReply(
         text=_t(QUOTE_CREATED, language).format(
             quote_id=row["quote_id"], deal_id=deal_code,
@@ -3377,6 +3637,112 @@ async def _handle_quote_create_direct(
         entity_type="quote", entity_id=str(row["id"]),
         quick_replies=[("ออกเอกสาร", f"ออกเอกสาร {row['quote_id']}")],
     )
+
+
+def _trailing_product_for_quote(message: str) -> str | None:
+    """A product line named alongside a create-quote command."""
+    for trigger in QUOTE_CREATE_TRIGGERS:
+        index = (message or "").lower().find(trigger.lower())
+        if index < 0:
+            continue
+        rest = message[index + len(trigger):]
+        rest = re.sub(r"\bจากดีล\b|\bD-\d{4}-\d{4}\b", " ", rest, flags=re.I)
+        rest = " ".join(rest.split()).strip(" :·-,")
+        if rest and (_QTY_RE.search(rest) or _PRICE_RE.search(rest)):
+            return rest
+    return None
+
+
+async def _add_line_from_text(
+    client: DataClient, *, ctx: ResolvedContext, license_id: str, quote_id: str,
+    text: str, language: str,
+) -> ChatReply | None:
+    """Put one line on a quote, parsed from free text.
+
+    Returns None when it worked, or a ChatReply explaining what is needed
+    — an ambiguous name, an unknown product with no price. The caller
+    prefixes it, so the person always learns the quote exists even when
+    the line did not land.
+    """
+    qty = 1
+    price = None
+    name = text
+
+    price_match = _PRICE_RE.search(name)
+    if price_match:
+        price = price_match.group(1).replace(",", "")
+        name = name.replace(price_match.group(0), " ")
+    qty_match = _QTY_RE.search(name)
+    if qty_match:
+        qty = max(1, int(qty_match.group(1) or qty_match.group(2)))
+        name = name.replace(qty_match.group(0), " ")
+    name = " ".join(name.split()).strip(" :·-,")
+    if not name:
+        return ChatReply(text=_t(DEAL_PRODUCT_NEEDS_NAME, language))
+
+    product = None
+    if price is None:
+        try:
+            products = await client.list_products(license_id)
+        except Exception:
+            products = []
+        needle = name.lower()
+        exact = [
+            p for p in products
+            if str(p.get("product_id") or "").lower() == needle
+            or str(p.get("product_name") or "").lower() == needle
+        ]
+        candidates = exact or [
+            p for p in products
+            if needle in str(p.get("product_name") or "").lower()
+            or needle in str(p.get("product_id") or "").lower()
+        ]
+        if len(candidates) > 1:
+            shown = candidates[:LIST_LIMIT]
+            lines = "\n".join(
+                f"· {c.get('product_name')}"
+                + (f" — {Decimal(str(c['unit_price'])):,.2f}"
+                   if c.get("unit_price") is not None else "")
+                for c in shown
+            )
+            return ChatReply(
+                text=_t(DEAL_PRODUCT_AMBIGUOUS, language).format(name=name, options=lines),
+                quick_replies=[
+                    (
+                        _distinguishing_part(
+                            str(c.get("product_name") or ""),
+                            [str(o.get("product_name") or "") for o in shown],
+                        ),
+                        f"เพิ่มสินค้าในใบเสนอราคา {c.get('product_name')} {qty} ตัว",
+                    )
+                    for c in shown[:4]
+                ],
+            )
+        product = candidates[0] if candidates else None
+        if product and product.get("unit_price") is not None:
+            price = str(product["unit_price"])
+            name = str(product.get("product_name") or name)
+
+    if price is None:
+        # Not in the catalogue and no price given. Saying so plainly beats
+        # inventing a zero, which would render a document offering to do
+        # the work for nothing.
+        return ChatReply(text=_t(PRODUCT_UNKNOWN_NEEDS_PRICE, language).format(name=name))
+
+    try:
+        await client.add_quote_product(
+            license_id, quote_id,
+            {
+                "product_name": name,
+                "quoted_unit_price": price,
+                "qty": qty,
+            },
+            actor_id=ctx.chann_uid,
+        )
+    except Exception:
+        log.exception("could not add a line to a quote")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    return None
 
 
 # "เปิดดีล" is deliberately NOT here: "เปิดดีล D-2026-0001 ใหม่" means
@@ -3392,6 +3758,29 @@ _DEAL_CONJUNCTION_RE = re.compile(
     r"(?:\s*(?:และ|แล้ว|พร้อม|,|\+|and)\s*)(เพิ่มสินค้า|ใส่สินค้า|add product)",
     re.IGNORECASE,
 )
+
+def _trailing_product(message: str) -> str | None:
+    """A product named after a bare create-deal command, with no "และ".
+
+    "สร้างดีล พัดลม 2 ตัว" is one instruction with two parts and no
+    conjunction — people leave it out constantly — so the remainder after
+    the trigger is treated as a product line when it looks like one.
+
+    Returns it phrased as an add-product command so the existing handler
+    parses it, keeping one parser for product lines rather than two that
+    can disagree about what "2 ตัว" means.
+    """
+    for trigger in DEAL_CREATE_BARE_TRIGGERS:
+        index = message.lower().find(trigger.lower())
+        if index < 0:
+            continue
+        rest = message[index + len(trigger):].strip(" :·-,")
+        # A name alone is not enough; a product line has a quantity or a
+        # price, and without one this is more likely a customer's name.
+        if rest and (_QTY_RE.search(rest) or _PRICE_RE.search(rest)):
+            return f"เพิ่มสินค้า {rest}"
+    return None
+
 
 def _after_deal_conjunction(message: str) -> str | None:
     """The second half of a compound instruction, if there is one.
@@ -4619,7 +5008,11 @@ async def _remember_customer(client: DataClient, ctx: ResolvedContext, row: dict
     )
 
 
-LAST_ENTITY_REF_TTL_S = 600
+# An hour, not ten minutes. Ten was long enough for a demo and too short
+# for work: someone confirms a customer, takes a phone call, and comes
+# back to open a deal — and was told they had no permission, because the
+# context had expired and the message fell through to the AI.
+LAST_ENTITY_REF_TTL_S = 3600
 
 
 async def _remember_entity(
@@ -4640,7 +5033,7 @@ async def _remember_entity(
         log.exception("failed to remember last entity ref")
 
 
-LAST_CUSTOMER_REF_TTL_S = 600
+LAST_CUSTOMER_REF_TTL_S = 3600
 
 DEAL_CREATED_FROM_CONTEXT = {
     "th": "สร้างดีล {deal_id} สำหรับ {name} (ลูกค้าที่เพิ่งคุยถึง) เรียบร้อยแล้ว",
@@ -4700,6 +5093,22 @@ async def _apply_deal_create(
             {"contact_id": contact["id"], "notes": fields.get("notes")},
             actor_id=ctx.chann_uid,
         )
+    except DataTierError as exc:
+        # A customer holds one open deal at a time. Saying which one, with
+        # a button to open it, is the useful answer — a bare "conflict"
+        # leaves them to go and find it.
+        duplicate = exc.structured or {}
+        if duplicate.get("error") == "duplicate":
+            code = duplicate.get("existing_code", "")
+            return ChatReply(
+                text=_t(DEAL_ALREADY_OPEN, language).format(code=code),
+                quick_replies=[("ดูดีล", f"ข้อมูลดีล {code}")] if code else [],
+            )
+        if _is_not_found(exc):
+            return ChatReply(text=_t(CUSTOMER_NOT_FOUND, language).format(
+                name=_display_name(contact)
+            ))
+        raise
     except Exception as exc:  # noqa: BLE001
         if _is_not_found(exc):
             return ChatReply(text=_t(CUSTOMER_NOT_FOUND, language).format(
@@ -5251,6 +5660,25 @@ async def handle_chat_message(
         # the one just being discussed. Someone who has just opened a deal
         # and says "เพิ่มสินค้า พัดลม ราคา 500" means that deal; someone
         # with no deal in context is building their catalogue.
+        remove_trigger = next(
+            (t for t in LINE_REMOVE_TRIGGERS if t in message.lower()), None,
+        )
+        if remove_trigger:
+            return await _handle_line_edit(
+                client, ctx=ctx, license_id=license_id, message=message,
+                trigger=remove_trigger, permission_keys=permission_keys,
+                language=language, remove=True,
+            )
+        edit_trigger = next(
+            (t for t in LINE_EDIT_TRIGGERS if t in message.lower()), None,
+        )
+        if edit_trigger:
+            return await _handle_line_edit(
+                client, ctx=ctx, license_id=license_id, message=message,
+                trigger=edit_trigger, permission_keys=permission_keys,
+                language=language,
+            )
+
         product_trigger = next(
             (t for t in DEAL_PRODUCT_ADD_TRIGGERS if t in message.lower()), None,
         )
@@ -5295,8 +5723,16 @@ async def handle_chat_message(
                 return await _handle_deal_create_direct(
                     client, ctx=ctx, license_id=license_id, name=None,
                     permission_keys=permission_keys, language=language,
-                    rest=_after_deal_conjunction(message),
+                    rest=_after_deal_conjunction(message) or _trailing_product(message),
                 )
+            # Deliberately NO refusal here. Falling through lets the AI
+            # pull a customer name out of a longer sentence, which it can
+            # and this path cannot — short-circuiting removed that once
+            # already and two tests caught it both times.
+            #
+            # The permission list someone saw in production came from the
+            # context having EXPIRED after ten minutes, not from this
+            # branch; the TTL above is the actual fix.
 
         # Checked before the bare list phrases: "ดูดีลของจุใจ" contains
         # "ดูดีล", and matching the shorter form first would list every deal

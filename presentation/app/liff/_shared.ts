@@ -21,6 +21,7 @@ export type Membership = {
 
 type LiffApi = {
   init(config: { liffId: string; withLoginOnExternalBrowser?: boolean }): Promise<void>;
+  openWindow(config: { url: string; external?: boolean }): void;
   isLoggedIn(): boolean;
   isInClient(): boolean;
   login(config?: { redirectUri?: string }): void;
@@ -254,4 +255,26 @@ export async function fetchPermissions(
     // direction to fail in: nothing is offered that would then be refused.
     return new Set();
   }
+}
+
+/**
+ * Open a URL from inside LIFF.
+ *
+ * liff.openWindow, not an anchor or window.open. LINE's in-app browser
+ * refuses blob: URLs outright — "ไม่สามารถเปิดลิงก์ได้" — and a popup
+ * opened after an await is not treated as user-initiated, so both of the
+ * obvious approaches fail in exactly the place this dashboard runs.
+ *
+ * `external: true` hands it to the phone's real browser, which is what
+ * you want for a PDF: the in-app viewer cannot save or share one.
+ */
+export function openExternal(url: string): void {
+  const liff = getLiff();
+  if (liff && typeof liff.openWindow === "function") {
+    liff.openWindow({ url, external: true });
+    return;
+  }
+  // Outside LIFF — during local development, or if the SDK failed to
+  // load — a plain navigation is correct and available.
+  window.open(url, "_blank", "noopener");
 }

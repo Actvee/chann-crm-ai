@@ -902,6 +902,15 @@ class Deal(TimestampMixin, Base):
         UUID(as_uuid=True), ForeignKey("license_members.id", ondelete="RESTRICT")
     )
     notes: Mapped[str | None] = mapped_column(Text)
+    # Without a date there is no forecast: "how much closes this month" is
+    # what a pipeline exists to answer, and a stage alone cannot — a deal
+    # sitting in "proposed" for a day and one sitting there for five
+    # months look identical.
+    expected_close_date: Mapped[date | None] = mapped_column(Date)
+    # Free text on purpose. Every shop loses deals for its own reasons,
+    # and a fixed list is either wrong for most of them or so generic
+    # nobody learns anything from it.
+    lost_reason: Mapped[str | None] = mapped_column(Text)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
@@ -972,6 +981,19 @@ class Quote(TimestampMixin, Base):
         UUID(as_uuid=True), ForeignKey("license_members.id", ondelete="RESTRICT")
     )
 
+    # A quote with no expiry is a price the shop is bound to forever. The
+    # "expired" status has existed since Phase 10 with nothing able to set
+    # it, because nothing recorded when the offer stopped standing.
+    valid_until: Mapped[date | None] = mapped_column(Date)
+    # Percent OR amount, never both: "10% and also 500 off" is ambiguous
+    # about which applies first, and the order changes the total. A CHECK
+    # constraint enforces it too.
+    #
+    # On the quote rather than across its lines: editing unit prices to
+    # represent a negotiation destroys the list price, so afterwards
+    # nobody can see what was given away.
+    discount_percent: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    discount_amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 2))
 
 class DocumentTemplate(TimestampMixin, Base):
     """Phase 10 (Master Spec 10.3) — a named template slot a tenant fills

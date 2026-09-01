@@ -61,6 +61,7 @@ from ..repositories.phase9 import (
     CustomerRepository,
     DealRepository,
     Phase9Conflict,
+    Phase9Duplicate,
     Phase9NotFound,
     StorefrontRepository,
 )
@@ -1878,6 +1879,19 @@ def clear_smartbrowz_token():
 def _phase9_http_error(exc: Exception) -> HTTPException:
     if isinstance(exc, Phase9NotFound):
         return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    if isinstance(exc, Phase9Duplicate):
+        # Structured, so the caller can offer to open the existing record.
+        # "Already exists" without saying WHICH leaves the person to go
+        # and search for it themselves, which is most of the work.
+        return HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "duplicate",
+                "message": str(exc),
+                "existing_id": exc.existing_id,
+                "existing_code": exc.existing_code,
+            },
+        )
     if isinstance(exc, Phase9Conflict):
         return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
     if isinstance(exc, HTTPException):
@@ -3695,3 +3709,64 @@ def remove_quote_product(
     except Exception as exc:
         session.rollback()
         raise _phase10_http_error(exc)
+
+
+@router.patch(
+    "/licenses/{license_id}/deals/{deal_id}/products/{deal_product_id}",
+    response_model=DealProductOut,
+)
+def update_deal_product(
+    license_id: uuid.UUID,
+    deal_id: uuid.UUID,
+    deal_product_id: uuid.UUID,
+    payload: dict,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    """Correct a line without deleting and retyping it.
+
+    Delete-and-retype loses the line's position and, on a deal with
+    several similar products, is easy to do to the wrong one.
+    """
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = DealRepository(session).update_product(
+            scope, deal_id, deal_product_id, payload,
+        )
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="deal", entity_id=deal_id,
+            actor_type="user", actor_id=x_actor_id or None, action="update",
+            field_changes=diff_fields({}, payload),
+        )
+        session.commit()
+        session.refresh(row)
+        return row
+    except Exception as exc:
+        session.rollback()
+        raise _phase9_http_error(exc)
+
+
+@router.post("/licenses/{license_id}/quotes/expire-overdue")
+def expire_overdue_quotes(
+    license_id: uuid.UUID, session: Session = Depends(get_session),
+):
+    """Mark sent quotes whose validity has passed.
+
+    The "expired" status has existed since Phase 10 with nothing able to
+    set it. A quote that says it is valid until last month, still sitting
+    in "sent", tells a salesperson the offer stands when it does not.
+    """
+    scope = TenantScope(license_id=license_id)
+    try:
+        count = QuoteRepository(session).expire_overdue(scope)
+        session.commit()
+        return {"expired": count}
+    except Exception as exc:
+        session.rollback()
+        raise _phase10_http_error(exc)
+
+
+@router.get("/licenses/{license_id}/pipeline")
+def pipeline_summary(license_id: uuid.UUID, session: Session = Depends(get_session)):
+    """Counts and value by stage, plus what is closing this month."""
+    return DealRepository(session).pipeline_summary(TenantScope(license_id=license_id))

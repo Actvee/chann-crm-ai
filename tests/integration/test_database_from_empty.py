@@ -3181,9 +3181,19 @@ class TestPhase9DealCodeIsPerTenant:
         b, customer_b = self._tenant_with_customer(migrated_db, "B")
 
         with Session(migrated_db) as session:
+            # A customer holds only one OPEN deal, so numbering has to be
+            # exercised across several — which is what a real tenant looks
+            # like anyway.
+            from chann_data.repositories.phase9 import CustomerRepository
+
             repo = DealRepository(session)
-            for _ in range(3):
-                repo.create(a, contact_id=customer_a)
+            customers = CustomerRepository(session)
+            for index in range(3):
+                extra = customers.create(
+                    a, first_name=f"นับ{index}", last_name="ก",
+                    phone=f"08220000{index:02d}",
+                )
+                repo.create(a, contact_id=extra.id)
             session.commit()
 
         with Session(migrated_db) as session:
@@ -3218,8 +3228,17 @@ class TestPhase9DealCodeIsPerTenant:
 
         scope, customer = self._tenant_with_customer(migrated_db, "E")
         with Session(migrated_db) as session:
+            from chann_data.repositories.phase9 import CustomerRepository
+
             repo = DealRepository(session)
-            codes = [repo.create(scope, contact_id=customer).deal_id for _ in range(5)]
+            customers = CustomerRepository(session)
+            codes = []
+            for index in range(5):
+                extra = customers.create(
+                    scope, first_name=f"รหัส{index}", last_name="ก",
+                    phone=f"08330000{index:02d}",
+                )
+                codes.append(repo.create(scope, contact_id=extra.id).deal_id)
             session.commit()
         assert len(set(codes)) == 5
         assert codes == sorted(codes)
@@ -3341,3 +3360,97 @@ class TestNotesAndAppointments:
             session.commit()
             assert whole_day.due_time is None
             assert appointment.due_time == time(14, 0)
+
+
+class TestDealCanBeLostBeforeItIsQuoted:
+    """OWNER-APPROVED DEPARTURE FROM MASTER SPEC 9.6.
+
+    The spec has no new → lost, which makes a deal that dies before anyone
+    quotes it impossible to close — and that is the most ordinary way for
+    a deal to end: the customer changes their mind, buys elsewhere, or
+    stops replying, all before a quote exists.
+
+    The alternatives were leaving it open forever, or moving it to
+    proposed — inventing a quote that was never made — and then losing it.
+    Both corrupt the pipeline numbers the stage exists to produce.
+    """
+
+    def test_a_new_deal_can_be_marked_lost(self, migrated_db):
+        import uuid
+
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import ChannIdentity
+        from chann_data.repositories.phase65 import RegistrationRepository
+        from chann_data.repositories.phase9 import CustomerRepository, DealRepository
+        from chann_data.repositories.tenant_scope import TenantScope
+
+        suffix = uuid.uuid4().hex[:6]
+        with Session(migrated_db) as session:
+            session.add(ChannIdentity(
+                chann_uid=f"CHN-LOST-{suffix}", line_user_id=f"line-lost-{suffix}",
+                primary_role="sales",
+            ))
+            session.commit()
+        with Session(migrated_db) as session:
+            lic = RegistrationRepository(session).create_license(
+                company_name=f"Lost {suffix}",
+                created_by_chann_uid=f"CHN-LOST-{suffix}",
+            )
+            session.commit()
+            scope = TenantScope(license_id=lic.id)
+
+        with Session(migrated_db) as session:
+            customer = CustomerRepository(session).create(
+                scope, first_name="ก", last_name="ข", phone="0800000000",
+            )
+            deals = DealRepository(session)
+            deal = deals.create(scope, contact_id=customer.id)
+            session.flush()
+            assert deal.stage == "new"
+
+            updated = deals.transition_stage(
+                scope, deal.id, to_stage="lost", allow_reopen=False,
+            )
+            session.commit()
+            assert updated.stage == "lost"
+
+    def test_a_new_deal_still_cannot_jump_to_won(self, migrated_db):
+        """A deal nobody ever quoted was not won — it was never worked."""
+        import uuid
+
+        import pytest
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import ChannIdentity
+        from chann_data.repositories.phase65 import RegistrationRepository
+        from chann_data.repositories.phase9 import (
+            CustomerRepository, DealRepository, Phase9Conflict,
+        )
+        from chann_data.repositories.tenant_scope import TenantScope
+
+        suffix = uuid.uuid4().hex[:6]
+        with Session(migrated_db) as session:
+            session.add(ChannIdentity(
+                chann_uid=f"CHN-WON-{suffix}", line_user_id=f"line-won-{suffix}",
+                primary_role="sales",
+            ))
+            session.commit()
+        with Session(migrated_db) as session:
+            lic = RegistrationRepository(session).create_license(
+                company_name=f"Won {suffix}", created_by_chann_uid=f"CHN-WON-{suffix}",
+            )
+            session.commit()
+            scope = TenantScope(license_id=lic.id)
+
+        with Session(migrated_db) as session:
+            customer = CustomerRepository(session).create(
+                scope, first_name="ก", last_name="ข", phone="0800000001",
+            )
+            deals = DealRepository(session)
+            deal = deals.create(scope, contact_id=customer.id)
+            session.flush()
+            with pytest.raises(Phase9Conflict):
+                deals.transition_stage(
+                    scope, deal.id, to_stage="won", allow_reopen=False,
+                )

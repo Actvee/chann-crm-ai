@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 
 from ..data_client import DataClient
 from .documents.html import render_quote_html
+from .documents.fill import fill_template
 from .documents.snapshot import build_quote_snapshot
 from .pdf.base import PdfOptions, get_renderer
 from .storage.base import get_document_store, sha256_hex
@@ -60,6 +61,77 @@ def document_key(*, license_id: str, quote_code: str, issued_at: datetime, sha25
         f"documents/{license_id}/quotes/"
         f"{issued_at:%Y/%m}/{safe_code}-{sha256[:12]}.pdf"
     )
+
+
+async def _resolve_template(
+    client: DataClient, license_id: str, snapshot: dict, *, actor_id: str | None = None,
+) -> tuple[str, str]:
+    """(template_version_id, html) — the shop's own template, or the
+    built-in one.
+
+    A tenant that has published a template for this document type gets
+    theirs; everyone else gets the layout in the codebase. Falling back
+    rather than failing matters because a shop should not lose the ability
+    to issue a quote by uploading a template that turns out to be broken.
+
+    The published version's HTML is filled by simple placeholder
+    substitution rather than a template language. Anything richer would be
+    a code path a tenant controls, running on our server, on data from
+    other tenants' snapshots — the safe version of "upload your own
+    design" is one that can only put values into holes.
+    """
+    try:
+        templates = await client.list_document_templates(
+            license_id, document_type="quote",
+        )
+    except Exception:
+        log.exception("could not read templates; falling back to the built-in")
+        templates = []
+
+    for template in templates:
+        if template.get("template_code") == BUILTIN_QUOTE_TEMPLATE_CODE:
+            continue
+        if not template.get("is_active", True):
+            continue
+        try:
+            versions = await client.list_document_template_versions(
+                license_id, str(template["id"]),
+            )
+        except Exception:
+            log.exception("could not read versions for template %s", template.get("id"))
+            continue
+
+        published = [v for v in versions if v.get("status") == "published"]
+        if not published:
+            continue
+        # Highest version number, so republishing supersedes rather than
+        # having to unpublish the old one first.
+        newest = max(published, key=lambda v: int(v.get("version") or 0))
+        compiled = str(newest.get("compiled_template_path") or "")
+        if not compiled or compiled.startswith("builtin://"):
+            continue
+
+        try:
+            from .storage.base import get_document_store
+
+            raw = await get_document_store().get(path=compiled)
+            html = fill_template(raw.decode("utf-8"), snapshot)
+        except Exception:
+            # A tenant's template that cannot be loaded or filled must not
+            # stop them issuing quotes. Their layout is lost for this
+            # document; their ability to do business is not.
+            log.exception(
+                "tenant template %s could not be used; using the built-in",
+                newest.get("id"),
+            )
+            break
+
+        return str(newest["id"]), html
+
+    version_id = await _ensure_builtin_template_version(
+        client, license_id, actor_id=actor_id,
+    )
+    return version_id, render_quote_html(snapshot)
 
 
 async def _ensure_builtin_template_version(
@@ -165,9 +237,18 @@ async def issue_quote_document(
         quote=quote, deal=deal, customer=customer, company=company, issued_at=issued_at,
     )
 
+    # A shop's own template if it has published one, the built-in
+    # otherwise. Chosen BEFORE rendering, not recorded afterwards: the
+    # template version was previously resolved only to store its id
+    # alongside the finished PDF, which meant every tenant got the
+    # built-in layout no matter what they had uploaded.
+    template_version_id, html = await _resolve_template(
+        client, license_id, snapshot, actor_id=actor_id,
+    )
+
     renderer = get_renderer("smartbrowz")
     result = await renderer.render(
-        render_quote_html(snapshot), PdfOptions(),
+        html, PdfOptions(),
         idempotency_key=f"quote:{license_id}:{quote.get('id')}",
     )
     if not result.content:
@@ -185,10 +266,6 @@ async def issue_quote_document(
 
     store = get_document_store()
     stored = await store.put(key=key, content=result.content, content_type="application/pdf")
-
-    template_version_id = await _ensure_builtin_template_version(
-        client, license_id, actor_id=actor_id
-    )
 
     document = await client.record_generated_document(
         license_id,

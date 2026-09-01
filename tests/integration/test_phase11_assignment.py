@@ -299,13 +299,19 @@ class TestRaceCondition:
 
         # Ten deals, all matching the same team.
         with Session(migrated_db) as session:
-            customer = CustomerRepository(session).create(
-                scope, first_name="ก", last_name="ข", phone="0800000099",
-            )
-            deals = [
-                DealRepository(session).create(scope, contact_id=customer.id).id
-                for _ in range(10)
-            ]
+            # Ten customers, not ten deals for one: a customer may hold
+            # only one OPEN deal. Ten simultaneous assignments come from
+            # ten enquiries anyway, so this is closer to real load.
+            customers = CustomerRepository(session)
+            deals = []
+            for index in range(10):
+                customer = customers.create(
+                    scope, first_name=f"ลูกค้า{index}", last_name="ข",
+                    phone=f"08000000{index:02d}",
+                )
+                deals.append(
+                    DealRepository(session).create(scope, contact_id=customer.id).id
+                )
             session.commit()
 
         rule = {**AC_RULE, "capacity_constraint": {"max_per_day": cap, "mode": "hard_block"}}
@@ -364,11 +370,16 @@ class TestRaceCondition:
         b_scope = TenantScope(license_id=b_license)
 
         with Session(migrated_db) as session:
-            customer = CustomerRepository(session).create(
-                a_scope, first_name="ก", last_name="ข", phone="0800000098",
-            )
+            # Three customers, because a customer may hold only one open
+            # deal — and three deals on one person was never realistic
+            # load anyway.
+            customers = CustomerRepository(session)
             repo = DealRepository(session)
-            for _ in range(3):
+            for index in range(3):
+                customer = customers.create(
+                    a_scope, first_name=f"โหลด{index}", last_name="ข",
+                    phone=f"08000000{index:02d}",
+                )
                 deal = repo.create(a_scope, contact_id=customer.id)
                 deal.owner_member_id = a_members[0]
             session.commit()

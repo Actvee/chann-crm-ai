@@ -562,6 +562,17 @@ class DataClient:
         )
         return self._unwrap(resp)
 
+    async def set_service_report_status(
+        self, license_id: str, report_id: str, status: str,
+        actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.patch(
+            f"{self._base}/internal/v1/licenses/{license_id}"
+            f"/service-reports/{report_id}/status",
+            headers=self._headers_for(actor_id), json={"status": status},
+        )
+        return self._unwrap(resp)
+
     async def list_service_reports(
         self, license_id: str, status: str | None = None,
     ) -> list[dict]:
@@ -1245,6 +1256,45 @@ class DataClient:
             f"{self._base}/internal/v1/licenses/{license_id}"
             f"/document-template-versions/{version_id}/archive",
             headers=self._headers_for(actor_id),
+        )
+        return self._unwrap(resp)
+
+    async def update_deal_product(
+        self, license_id: str, deal_id: str, line_id: str, fields: dict,
+        actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.patch(
+            f"{self._base}/internal/v1/licenses/{license_id}"
+            f"/deals/{deal_id}/products/{line_id}",
+            headers=self._headers_for(actor_id), json=fields,
+        )
+        return self._unwrap(resp)
+
+    async def set_quote_status(
+        self, license_id: str, quote_id: str, status: str,
+        actor_id: str | None = None,
+    ) -> dict:
+        # POST, not PATCH: the Data Tier models this as a state transition
+        # rather than a field edit, and it rejects PATCH outright. Caught by
+        # cross-checking every client call against the real routes — the
+        # button would have returned 405 on its first press in production.
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/quotes/{quote_id}/status",
+            headers=self._headers_for(actor_id), json={"status": status},
+        )
+        return self._unwrap(resp)
+
+    async def pipeline_summary(self, license_id: str) -> dict:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/pipeline",
+            headers=self._headers,
+        )
+        return self._unwrap(resp)
+
+    async def expire_overdue_quotes(self, license_id: str) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/quotes/expire-overdue",
+            headers=self._headers,
         )
         return self._unwrap(resp)
 

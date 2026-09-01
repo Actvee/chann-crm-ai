@@ -84,6 +84,17 @@ def _totals_rows(totals: dict) -> str:
         '<tr><th>รวมเป็นเงิน</th>'
         f'<td class="num">{_fmt_money(totals["subtotal"])}</td></tr>'
     ]
+    # The discount, and only when there is one. A "ส่วนลด 0.00" row on a
+    # quote with no discount reads as an offer that was declined.
+    if totals.get("discount_applicable"):
+        rows.append(
+            '<tr><th>ส่วนลด</th>'
+            f'<td class="num">-{_fmt_money(totals["discount_amount"])}</td></tr>'
+        )
+        rows.append(
+            '<tr><th>ยอดหลังหักส่วนลด</th>'
+            f'<td class="num">{_fmt_money(totals["net_total"])}</td></tr>'
+        )
     # No VAT line at all when the tenant is not registered — see
     # compute_totals for why this is not the same as printing 0.00.
     if totals.get("vat_applicable"):
@@ -96,6 +107,22 @@ def _totals_rows(totals: dict) -> str:
         f'<td class="num">{_fmt_money(totals["grand_total"])}</td></tr>'
     )
     return "".join(rows)
+
+
+def _validity_note(quote: dict) -> str:
+    """When the offer stops standing.
+
+    Printed on the document rather than kept internal: a price with no
+    stated expiry is one the customer can reasonably hold the shop to
+    months later, and "valid until" is the sentence that prevents that.
+    """
+    valid_until = quote.get("valid_until")
+    if not valid_until:
+        return ""
+    return (
+        '<p class="validity">ใบเสนอราคานี้มีผลถึงวันที่ '
+        f'{escape(str(valid_until))}</p>'
+    )
 
 
 def render_quote_html(snapshot: dict) -> str:
@@ -191,6 +218,7 @@ def render_quote_html(snapshot: dict) -> str:
 </table>
 
 <table class="totals">{_totals_rows(snapshot["totals"])}</table>
+{_validity_note(quote)}
 
 <footer>
   <div class="sign"><div class="line">ผู้เสนอราคา</div></div>

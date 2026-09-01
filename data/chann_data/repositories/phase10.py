@@ -22,7 +22,7 @@ elsewhere; it does not perform one.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from decimal import Decimal, InvalidOperation
 
@@ -43,7 +43,12 @@ from .tenant_scope import TenantScope
 
 QUOTE_STATUSES = frozenset({"draft", "sent", "accepted", "rejected", "expired"})
 _QUOTE_ALLOWED_TRANSITIONS: dict[str, frozenset[str]] = {
-    "draft": frozenset({"sent"}),
+    # draft → rejected is an OWNER-APPROVED DEPARTURE FROM MASTER SPEC
+    # 10.1, which lists only draft → sent. Without it a draft written by
+    # mistake can only be abandoned by sending it to the customer first
+    # and then voiding it, which is absurd — and it left a "void this
+    # quote" button that failed on every draft.
+    "draft": frozenset({"sent", "rejected"}),
     "sent": frozenset({"accepted", "rejected", "expired"}),
     # Terminal once accepted/rejected/expired — 10.1's spec gives quotes no
     # reopen concept the way 9.6 gives deals one; a rejected/expired quote
@@ -91,6 +96,13 @@ class QuoteRepository:
             id=uuid.uuid4(), license_id=scope.license_id,
             quote_id=self._unique_quote_id(scope.license_id), deal_id=deal_id,
             status="draft", owner_member_id=owner_member_id,
+            # A default rather than nothing: a quote with no expiry is a
+            # price the shop is bound to indefinitely, and asking every
+            # salesperson to set one means most quotes will not have one.
+            valid_until=(
+                datetime.now(timezone.utc).date()
+                + timedelta(days=self.DEFAULT_VALIDITY_DAYS)
+            ),
         )
         self._s.add(row)
         self._s.flush()
@@ -118,6 +130,103 @@ class QuoteRepository:
             ))
         self._s.flush()
         return row
+
+    # Two weeks. Long enough that a customer can think, short enough that
+    # a price quoted in one month is not still binding in the next — which
+    # is what "no expiry" actually meant.
+    DEFAULT_VALIDITY_DAYS = 14
+
+    def set_terms(
+        self, scope: TenantScope, quote_id: uuid.UUID, *,
+        valid_until=None, discount_percent=None, discount_amount=None,
+    ) -> Quote:
+        """The expiry and the discount — the two things a real quote has
+        that this one did not.
+
+        A discount belongs on the quote, not spread across its lines:
+        editing unit prices to represent a negotiation destroys the list
+        price, so afterwards nobody can see what was given away.
+        """
+        row = self._editable(scope, quote_id)
+
+        if discount_percent is not None and discount_amount is not None:
+            # "10% and also 500 off" is ambiguous about which applies
+            # first, and the order changes the total.
+            raise Phase10Conflict("set a percentage or an amount, not both")
+
+        if valid_until is not None:
+            row.valid_until = valid_until
+        if discount_percent is not None:
+            pct = Decimal(str(discount_percent))
+            if pct < 0 or pct > 100:
+                raise Phase10Conflict("a discount percentage must be between 0 and 100")
+            row.discount_percent = pct
+            row.discount_amount = None
+        if discount_amount is not None:
+            amount = Decimal(str(discount_amount))
+            if amount < 0:
+                raise Phase10Conflict("a discount cannot be negative")
+            row.discount_amount = amount
+            row.discount_percent = None
+
+        self._s.flush()
+        return row
+
+    def totals(self, scope: TenantScope, quote_id: uuid.UUID) -> dict:
+        """Subtotal, discount and total, computed from the stored lines.
+
+        Computed rather than stored: a cached total is a number that can
+        disagree with the lines under it, and on a document a customer
+        receives that disagreement is the worst possible one.
+        """
+        row = self.get(scope, quote_id)
+        if row is None:
+            raise Phase10NotFound("quote not found in this tenant")
+        lines = self.list_products(scope, quote_id)
+        subtotal = sum(
+            (Decimal(str(l.quoted_unit_price)) * int(l.qty) for l in lines),
+            Decimal("0"),
+        )
+
+        discount = Decimal("0")
+        if row.discount_percent is not None:
+            discount = (subtotal * Decimal(str(row.discount_percent)) / 100).quantize(
+                Decimal("0.01")
+            )
+        elif row.discount_amount is not None:
+            # Clamped: a discount larger than the subtotal would make the
+            # shop owe the customer money.
+            discount = min(Decimal(str(row.discount_amount)), subtotal)
+
+        return {
+            "subtotal": subtotal,
+            "discount": discount,
+            "total": subtotal - discount,
+        }
+
+    def expire_overdue(self, scope: TenantScope, *, on_day=None) -> int:
+        """Mark quotes whose validity has passed.
+
+        The "expired" status has existed since Phase 10 and nothing could
+        ever set it, because nothing recorded when an offer stopped
+        standing. Only `sent` quotes expire: a draft was never an offer,
+        and an accepted one is a commitment that a date does not undo.
+        """
+        from datetime import date as _date, datetime as _dt, timezone as _tz
+
+        today = on_day or _dt.now(_tz.utc).date()
+        rows = self._s.execute(
+            select(Quote).where(
+                Quote.license_id == scope.license_id,
+                Quote.status == "sent",
+                Quote.valid_until.is_not(None),
+                Quote.valid_until < today,
+            )
+        ).scalars().all()
+        for row in rows:
+            row.status = "expired"
+        self._s.flush()
+        return len(rows)
 
     # ------------------------------------------------------- quote lines
 

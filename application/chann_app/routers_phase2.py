@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import uuid
 
 import hashlib
 from decimal import Decimal
@@ -9,6 +10,7 @@ from decimal import Decimal
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel, Field
 
+from .config import settings
 from .data_client import DataClient, DataTierError
 from .routers_admin import get_data_client, require_admin
 from .services.authorization import TenantPrincipal, resolve_tenant_principal
@@ -70,7 +72,12 @@ def _require_same_tenant(principal: TenantPrincipal, license_id: str) -> None:
 def _propagate(exc: DataTierError) -> HTTPException:
     allowed = {400, 404, 409, 422, 503}
     code = exc.status_code if exc.status_code in allowed else 502
-    return HTTPException(status_code=code, detail=exc.detail)
+    # The structured body when the Data Tier sent one. Some refusals carry
+    # data the caller must act on — a duplicate names the existing record
+    # so a UI can offer to open it, and the dispatch gate names the fields
+    # still missing. exc.detail is the str() of those, which arrives as
+    # "{'error': 'duplicate', ...}" and forces the caller to parse a repr.
+    return HTTPException(status_code=code, detail=exc.structured or exc.detail)
 
 
 @router.post("/licenses/{license_id}/roles/compile-policy")
@@ -1349,5 +1356,333 @@ async def remove_quote_product(
         await client.remove_quote_product(
             license_id, quote_id, line_id, actor_id=principal.chann_uid,
         )
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+class QuoteStatusPatchIn(BaseModel):
+    status: str
+
+
+@router.patch("/licenses/{license_id}/quotes/{quote_id}/status")
+async def set_quote_status(
+    license_id: str,
+    quote_id: str,
+    payload: QuoteStatusPatchIn,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Mark a quote accepted, rejected or expired.
+
+    Needed most for the case nobody plans for: a quote issued with the
+    wrong contents. It cannot be edited once issued — that is deliberate,
+    the customer is holding it — so the only honest options are to void
+    this one and issue a replacement. Without this endpoint there was no
+    way to do the first half, and the wrong quote stayed "sent" forever.
+    """
+    _require_same_tenant(principal, license_id)
+    principal.require("quote.update")
+    try:
+        return await client.set_quote_status(
+            license_id, quote_id, payload.status, actor_id=principal.chann_uid,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.get("/licenses/{license_id}/documents/{document_id}/link")
+async def get_document_link(
+    license_id: str,
+    document_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """A plain https link to a document, for opening in a browser.
+
+    The dashboard used to fetch the PDF as a blob and render an anchor at
+    the resulting blob: URL. That cannot work inside LINE: its in-app
+    browser refuses blob: URLs and answers "ไม่สามารถเปิดลิงก์ได้" — and
+    LIFF is the only place this dashboard runs.
+
+    A signed link avoids the problem entirely. It carries its own
+    authorisation, so it needs no LIFF headers, opens like any other URL,
+    and can be forwarded to a customer as-is.
+    """
+    from .auth.document_link import issue_document_token
+
+    _require_same_tenant(principal, license_id)
+    principal.require("quote.read")
+
+    try:
+        document = await client.get_generated_document(license_id, document_id)
+    except DataTierError as exc:
+        raise _propagate(exc)
+    if document is None:
+        raise HTTPException(status_code=404, detail="document not found")
+
+    base = (settings.public_base_url or "").rstrip("/")
+    if not base:
+        # Without a base URL the link would be relative and open nothing.
+        # Saying so beats handing back something that silently fails.
+        raise HTTPException(
+            status_code=503, detail="PUBLIC_BASE_URL is REQUIRED_NOT_CONFIGURED",
+        )
+
+    token = issue_document_token(license_id, document_id)
+    return {
+        "url": f"{base}/api/v1/documents/{token}",
+        "sha256": document.get("sha256"),
+    }
+
+
+@router.patch("/licenses/{license_id}/deals/{deal_id}/products/{line_id}")
+async def update_deal_product(
+    license_id: str,
+    deal_id: str,
+    line_id: str,
+    payload: QuoteLinePatchIn,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Same shape as a quote line, because it is the same edit."""
+    _require_same_tenant(principal, license_id)
+    principal.require("deal.update")
+    try:
+        return await client.update_deal_product(
+            license_id, deal_id, line_id, payload.model_dump(exclude_unset=True),
+            actor_id=principal.chann_uid,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.patch("/licenses/{license_id}/service-reports/{report_id}/status")
+async def set_service_report_status(
+    license_id: str,
+    report_id: str,
+    payload: QuoteStatusPatchIn,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Approve or reject what a technician filed.
+
+    ticket.update rather than a new permission: whoever dispatches work is
+    who reviews it, and inventing a separate key would mean every existing
+    tenant's CS role silently losing the ability on the day this shipped.
+    """
+    _require_same_tenant(principal, license_id)
+    principal.require("ticket.update")
+    try:
+        return await client.set_service_report_status(
+            license_id, report_id, payload.status, actor_id=principal.chann_uid,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.get("/licenses/{license_id}/pipeline")
+async def pipeline_summary(
+    license_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """The numbers a shop owner opens the dashboard to see.
+
+    deal.read, not a reporting permission: anyone who can see the deals
+    can already add them up, and inventing a separate key would hide the
+    total from the people whose pipeline it is.
+    """
+    _require_same_tenant(principal, license_id)
+    principal.require("deal.read")
+    try:
+        return await client.pipeline_summary(license_id)
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+# ---------------------------------------------------- tenant PDF templates
+#
+# A shop uploads the HTML it wants its quotes to look like. Placeholders
+# only — see services/documents/fill.py for why a template language is not
+# on offer.
+
+
+class TemplateUploadIn(BaseModel):
+    template_name: str
+    html: str
+    document_type: str = "quote"
+
+
+@router.post("/licenses/{license_id}/document-templates/upload", status_code=201)
+async def upload_document_template(
+    license_id: str,
+    payload: TemplateUploadIn,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Store a shop's own layout as an unpublished draft.
+
+    Draft, never live on upload: a template goes onto documents customers
+    receive, and the person who wrote it should see it rendered before
+    anyone else does.
+
+    The response lists any placeholder that will come out blank, so that
+    is discovered here rather than on a quote already sent.
+    """
+    from .services.documents.fill import unknown_placeholders
+    from .services.storage.base import DocumentStoreNotConfigured, get_document_store
+
+    _require_same_tenant(principal, license_id)
+    principal.require("setting.manage")
+
+    html = payload.html or ""
+    if not html.strip():
+        raise HTTPException(status_code=400, detail="the template is empty")
+    if len(html) > 512_000:
+        # Half a megabyte of HTML is not a quote layout; it is an embedded
+        # image someone should be hosting instead.
+        raise HTTPException(status_code=400, detail="template is too large")
+
+    try:
+        templates = await client.list_document_templates(
+            license_id, document_type=payload.document_type,
+        )
+        existing = next(
+            (t for t in templates if t.get("template_name") == payload.template_name),
+            None,
+        )
+        if existing is None:
+            existing = await client.create_document_template(
+                license_id,
+                {
+                    "document_type": payload.document_type,
+                    "template_code": f"tenant-{uuid.uuid4().hex[:8]}",
+                    "template_name": payload.template_name,
+                },
+                actor_id=principal.chann_uid,
+            )
+
+        store = get_document_store()
+        key = (
+            f"{license_id}/templates/{existing['id']}/"
+            f"{uuid.uuid4().hex}.html"
+        )
+        stored = await store.put(
+            key=key, content=html.encode("utf-8"), content_type="text/html",
+        )
+
+        version = await client.create_document_template_version(
+            license_id,
+            str(existing["id"]),
+            {
+                "source_docx_path": "upload://html",
+                "intermediate_model": {"kind": "html_upload"},
+                "mapping_schema": {"kind": "placeholders"},
+                "compiled_template_path": stored.path,
+            },
+            actor_id=principal.chann_uid,
+        )
+    except DocumentStoreNotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+    return {
+        "template_id": str(existing["id"]),
+        "version_id": str(version["id"]),
+        "version": version.get("version"),
+        "status": version.get("status"),
+        # Reported, not rejected: a placeholder that resolves to nothing
+        # may be deliberate, and refusing the upload over one would make
+        # the feature unusable for a layout with an optional field.
+        "unknown_placeholders": unknown_placeholders(html, _template_sample()),
+    }
+
+
+def _template_sample() -> dict:
+    """A representative snapshot, for checking placeholders.
+
+    Shaped like build_quote_snapshot's output rather than invented, so
+    "this placeholder resolves" here means it resolves on a real document.
+    """
+    return {
+        "company": {
+            "legal_name": "", "address": "", "phone": "", "email": "",
+            "tax_id": "", "logo_url": "",
+        },
+        "customer": {"name": "", "phone": "", "email": "", "address": ""},
+        "quote": {"quote_id": "", "status": "", "valid_until": ""},
+        "deal": {"deal_id": ""},
+        "line_items": [{
+            "name": "", "qty": "", "unit_price": "", "line_total": "", "notes": "",
+        }],
+        "totals": {
+            "subtotal": "", "discount_applicable": "", "discount_amount": "",
+            "net_total": "", "vat_applicable": "", "vat_rate": "",
+            "vat_rate_percent": "", "vat_amount": "", "grand_total": "",
+        },
+        "issued_at": "",
+    }
+
+
+@router.post(
+    "/licenses/{license_id}/document-templates/{template_id}/versions/{version_id}/publish"
+)
+async def publish_document_template(
+    license_id: str,
+    template_id: str,
+    version_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Make a draft the layout new documents use.
+
+    Documents already issued keep the version they were rendered with —
+    that is what template_version_id on generated_documents is for, and
+    why publishing cannot change what a customer already holds.
+    """
+    _require_same_tenant(principal, license_id)
+    principal.require("setting.manage")
+    try:
+        return await client.publish_document_template_version(
+            license_id, template_id, version_id, actor_id=principal.chann_uid,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.get("/licenses/{license_id}/document-templates")
+async def list_document_templates(
+    license_id: str,
+    document_type: str = "quote",
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    _require_same_tenant(principal, license_id)
+    principal.require("setting.manage")
+    try:
+        return await client.list_document_templates(
+            license_id, document_type=document_type,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.get("/licenses/{license_id}/document-templates/{template_id}/versions")
+async def list_document_template_versions(
+    license_id: str,
+    template_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Every version of a template, so a draft can be found and published.
+
+    Includes superseded ones: a shop that published something wrong needs
+    to see the version it had before in order to go back to it.
+    """
+    _require_same_tenant(principal, license_id)
+    principal.require("setting.manage")
+    try:
+        return await client.list_document_template_versions(license_id, template_id)
     except DataTierError as exc:
         raise _propagate(exc)

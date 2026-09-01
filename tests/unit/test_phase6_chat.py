@@ -183,6 +183,45 @@ class FakeDataClient:
     async def get_member(self, license_id, chann_uid):
         return {"id": "member-1", "chann_uid": chann_uid, "role": "technician"}
 
+    async def update_quote_product(self, license_id, quote_id, line_id, fields, actor_id=None):
+        self.recorded.append(("update_quote_product", license_id, quote_id, line_id, fields))
+        for row in getattr(self, "_quote_lines", []):
+            if row["id"] == line_id:
+                row.update(fields)
+                return row
+        return {"id": line_id, **fields}
+
+    async def update_deal_product(self, license_id, deal_id, line_id, fields, actor_id=None):
+        self.recorded.append(("update_deal_product", license_id, deal_id, line_id, fields))
+        for deal in getattr(self, "_deals", []):
+            for row in deal.get("products", []):
+                if row["id"] == line_id:
+                    row.update(fields)
+                    return row
+        return {"id": line_id, **fields}
+
+    async def remove_deal_product(self, license_id, deal_id, line_id, actor_id=None):
+        self.recorded.append(("remove_deal_product", license_id, deal_id, line_id))
+        for deal in getattr(self, "_deals", []):
+            deal["products"] = [
+                p for p in deal.get("products", []) if p["id"] != line_id
+            ]
+
+    async def list_quote_products(self, license_id, quote_id):
+        return [q for q in getattr(self, "_quote_lines", []) if q["quote_id"] == quote_id]
+
+    async def add_quote_product(self, license_id, quote_id, payload, actor_id=None):
+        self.recorded.append(("add_quote_product", license_id, quote_id, payload))
+        row = {"id": f"ql-{len(self.recorded)}", "quote_id": quote_id, **payload}
+        self._quote_lines = [*getattr(self, "_quote_lines", []), row]
+        return row
+
+    async def remove_quote_product(self, license_id, quote_id, line_id, actor_id=None):
+        self.recorded.append(("remove_quote_product", license_id, quote_id, line_id))
+        self._quote_lines = [
+            q for q in getattr(self, "_quote_lines", []) if q["id"] != line_id
+        ]
+
     async def add_deal_product(self, license_id, deal_id, payload, actor_id=None):
         self.recorded.append(("add_deal_product", license_id, deal_id, payload))
         row = {"id": f"dp-{len(self.recorded)}", "deal_id": deal_id, **payload}
@@ -425,6 +464,24 @@ class FakeDataClient:
             "quote_id": quote_id, "deal_id": payload["deal_id"], "status": "draft",
             "generated_document_id": None, "owner_member_id": None,
         }
+        # Copy the deal's lines, as the real repository does since
+        # migration 0019. A fake that skips this hides the clear-then-add
+        # behaviour an override depends on.
+        source = next(
+            (d for d in getattr(self, "_deals", []) if d["id"] == payload["deal_id"]),
+            None,
+        )
+        for item in (source or {}).get("products", []):
+            self._quote_lines = [
+                *getattr(self, "_quote_lines", []),
+                {
+                    "id": f"ql-copy-{len(getattr(self, '_quote_lines', []))}",
+                    "quote_id": row["id"],
+                    "product_name": item.get("product_name"),
+                    "quoted_unit_price": item.get("quoted_unit_price"),
+                    "qty": item.get("qty", 1),
+                },
+            ]
         self._quotes.append(row)
         return row
 
@@ -3891,7 +3948,11 @@ class TestAddingProductsToADeal:
             client, message="เพิ่มสินค้า อะไรสักอย่าง", ctx=_ctx(),
         )
         assert not [r for r in client.recorded if r[0] == "add_deal_product"]
-        assert "ราคาเท่าไหร่" in reply.text
+        # The message now names the missing product and shows the shape of
+        # an answer, rather than asking a bare "what price?" that leaves
+        # someone guessing at the format too.
+        assert "อะไรสักอย่าง" in reply.text
+        assert "ราคา" in reply.text
 
     async def test_the_whole_journey_needs_no_codes_typed(self):
         """Create a deal, add a product, quote it — the sequence the
@@ -4179,3 +4240,248 @@ class TestChoosingBetweenSimilarProducts:
         assert added[0][3]["product_name"] == "พัดลมตั้งพื้น 18 นิ้ว"
         # The quantity from the original message survives the round trip.
         assert added[0][3]["qty"] == 2
+
+
+class TestNamingProductsAlongsideACommand:
+    """Reported from live use:
+
+        ยืนยันลูกค้าเป็น contact      (10:21)
+        ออกใบเสนอราคา พัดลม 2 ตัว    (10:34) → asked which deal
+        สร้างดีล พัดลม 2 ตัว          (10:38) → listed permissions
+
+    Two separate faults: context expired after ten minutes, and a product
+    named without "และ" was ignored.
+    """
+
+    async def _viewing_a_customer(self):
+        client = FakeDataClient(permission_keys=[
+            "customer.read", "deal.create", "deal.read", "deal.update",
+            "quote.create", "quote.read", "quote.update", "product.manage",
+        ])
+        customer = await client.create_customer("L1", {
+            "first_name": "จารุพงศ์", "last_name": "เรืองสุวรรณ", "phone": "0779998888",
+        })
+        client._products = [{
+            "id": "p1", "product_id": "FAN", "product_name": "พัดลม",
+            "unit_price": "1500.00",
+        }]
+        await handle_chat_message(
+            client, message=f"ข้อมูลลูกค้า {customer['customer_id']}", ctx=_ctx(),
+        )
+        return client
+
+    async def test_a_product_named_without_a_conjunction_is_still_added(self):
+        """"สร้างดีล พัดลม 2 ตัว" — people leave out "และ" constantly."""
+        client = await self._viewing_a_customer()
+        await handle_chat_message(client, message="สร้างดีล พัดลม 2 ตัว", ctx=_ctx())
+        added = [r for r in client.recorded if r[0] == "add_deal_product"]
+        assert added and added[0][3]["qty"] == 2
+
+    async def test_a_name_after_create_deal_is_not_mistaken_for_a_product(self):
+        """"สร้างดีล สมชาย" names a customer, not a product. A trailing
+        product is only read as one when it carries a quantity or price."""
+        client = await self._viewing_a_customer()
+        await client.create_customer("L1", {
+            "first_name": "สมชาย", "last_name": "ใจดี", "phone": "0810000000",
+        })
+        await handle_chat_message(client, message="สร้างดีลให้ สมชาย ใจดี", ctx=_ctx())
+        assert not [r for r in client.recorded if r[0] == "add_deal_product"]
+
+    async def test_a_product_named_when_quoting_replaces_the_copied_lines(self):
+        """"ออกใบเสนอราคา พัดลม 2 ตัว" means quote TWO. Copying one from
+        the deal and ignoring the rest of the sentence produced a document
+        saying something the person did not ask for."""
+        client = await self._viewing_a_customer()
+        await handle_chat_message(client, message="สร้างดีล พัดลม 1 ตัว", ctx=_ctx())
+        await handle_chat_message(client, message="ออกใบเสนอราคา พัดลม 2 ตัว", ctx=_ctx())
+
+        added = [r for r in client.recorded if r[0] == "add_quote_product"]
+        assert added and added[-1][3]["qty"] == 2
+        # The copied line was cleared first, so the quote is not both.
+        assert [r for r in client.recorded if r[0] == "remove_quote_product"]
+
+    async def test_quoting_with_no_product_named_keeps_the_deal_lines(self):
+        """Saying nothing about products is what copying them is FOR."""
+        client = await self._viewing_a_customer()
+        await handle_chat_message(client, message="สร้างดีล พัดลม 1 ตัว", ctx=_ctx())
+        await handle_chat_message(client, message="สร้างใบเสนอราคา", ctx=_ctx())
+        assert not [r for r in client.recorded if r[0] == "remove_quote_product"]
+        assert not [r for r in client.recorded if r[0] == "add_quote_product"]
+
+    async def test_an_unknown_product_says_what_is_missing(self):
+        """Inventing a zero would render a document offering to do the
+        work for nothing."""
+        client = await self._viewing_a_customer()
+        await handle_chat_message(client, message="สร้างดีล พัดลม 1 ตัว", ctx=_ctx())
+        reply = await handle_chat_message(
+            client, message="เพิ่มสินค้า เครื่องดูดฝุ่น 1 ตัว", ctx=_ctx(),
+        )
+        assert "เครื่องดูดฝุ่น" in reply.text
+        assert "ราคา" in reply.text
+        assert not [
+            r for r in client.recorded
+            if r[0] == "add_deal_product" and "ดูดฝุ่น" in str(r[3])
+        ]
+
+    def test_the_context_lasts_longer_than_a_phone_call(self):
+        """Ten minutes was long enough for a demo and too short for work:
+        confirm a customer, take a call, come back — and be told you have
+        no permission."""
+        from chann_app.services.chat import (
+            LAST_CUSTOMER_REF_TTL_S, LAST_ENTITY_REF_TTL_S,
+        )
+
+        assert LAST_CUSTOMER_REF_TTL_S >= 3600
+        assert LAST_ENTITY_REF_TTL_S >= 3600
+
+
+class TestEditingLinesAlreadyAdded:
+    """Deals could add and delete lines but never edit one, so correcting
+    a quantity meant deleting and retyping.
+
+    That loses the line's position and, on a deal with several similar
+    products, is easy to do to the wrong one.
+    """
+
+    async def _with_a_line(self):
+        client = FakeDataClient(permission_keys=[
+            "customer.read", "deal.create", "deal.read", "deal.update",
+            "quote.create", "quote.read", "quote.update", "product.manage",
+        ])
+        customer = await client.create_customer("L1", {
+            "first_name": "ก", "last_name": "ข", "phone": "0800000000",
+        })
+        client._products = [{
+            "id": "p1", "product_id": "FAN", "product_name": "พัดลม",
+            "unit_price": "1500.00",
+        }]
+        await handle_chat_message(
+            client, message=f"ข้อมูลลูกค้า {customer['customer_id']}", ctx=_ctx(),
+        )
+        await handle_chat_message(client, message="สร้างดีล พัดลม 2 ตัว", ctx=_ctx())
+        return client
+
+    async def test_a_price_can_be_lowered_on_the_deal_just_discussed(self):
+        client = await self._with_a_line()
+        reply = await handle_chat_message(
+            client, message="แก้ราคาพัดลมเหลือ 1400", ctx=_ctx(),
+        )
+        updated = [r for r in client.recorded if r[0] == "update_deal_product"]
+        assert updated and str(updated[-1][4]["quoted_unit_price"]) == "1400"
+        assert "2,800.00" in reply.text
+
+    async def test_a_quantity_can_be_corrected(self):
+        client = await self._with_a_line()
+        await handle_chat_message(client, message="แก้จำนวนพัดลมเป็น 5", ctx=_ctx())
+        updated = [r for r in client.recorded if r[0] == "update_deal_product"]
+        assert updated[-1][4]["qty"] == 5
+
+    async def test_a_line_can_be_removed_by_name(self):
+        client = await self._with_a_line()
+        reply = await handle_chat_message(client, message="ลบสินค้าพัดลม", ctx=_ctx())
+        assert [r for r in client.recorded if r[0] == "remove_deal_product"]
+        assert "ลบ" in reply.text
+
+    async def test_removing_is_not_read_as_adding(self):
+        """"ลบสินค้า" contains "สินค้า"; matching the add trigger first
+        would turn a deletion into an addition."""
+        client = await self._with_a_line()
+        await handle_chat_message(client, message="ลบสินค้าพัดลม", ctx=_ctx())
+        assert not [
+            r for r in client.recorded
+            if r[0] == "add_deal_product" and r[3].get("product_name") == "พัดลม"
+            and len([x for x in client.recorded if x[0] == "add_deal_product"]) > 1
+        ]
+
+    async def test_an_unknown_line_name_says_so(self):
+        client = await self._with_a_line()
+        reply = await handle_chat_message(
+            client, message="แก้ราคาเครื่องซักผ้าเหลือ 900", ctx=_ctx(),
+        )
+        assert not [r for r in client.recorded if r[0] == "update_deal_product"]
+        assert "ไม่พบ" in reply.text
+
+    async def test_editing_needs_the_right_permission(self):
+        """Built with deal.update so the line exists, then attempted by a
+        principal that only holds deal.read — otherwise the target lookup
+        refuses first and the permission check is never reached."""
+        client = await self._with_a_line()
+        client._permission_keys = ["deal.read"]
+        reply = await handle_chat_message(
+            client, message="แก้ราคาพัดลมเหลือ 1400", ctx=_ctx(),
+        )
+        assert not [r for r in client.recorded if r[0] == "update_deal_product"]
+        assert "สิทธิ์" in reply.text
+
+
+class TestMessageTemplatesGetWhatTheyNeed:
+    """A `.format()` missing one placeholder raises KeyError at runtime.
+
+    It happened with DEAL_PRODUCT_ADDED and {deal_id}: the template asked
+    for a deal code, the call did not pass one, and nothing caught it
+    until the message was actually sent. Nothing about it fails at import,
+    and no type checker sees inside a format string.
+    """
+
+    def _scan(self, module):
+        import ast
+        import re
+        from pathlib import Path
+
+        source = Path(module.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+
+        templates: dict[str, set[str]] = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Dict):
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and target.id.isupper():
+                        holes: set[str] = set()
+                        for value in node.value.values:
+                            if isinstance(value, ast.Constant) and isinstance(
+                                value.value, str
+                            ):
+                                holes |= set(re.findall(r"\{(\w+)\}", value.value))
+                        if holes:
+                            templates[target.id] = holes
+
+        problems = []
+        for node in ast.walk(tree):
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "format"
+            ):
+                continue
+            inner = node.func.value
+            if not (
+                isinstance(inner, ast.Call)
+                and isinstance(inner.func, ast.Name)
+                and inner.func.id == "_t"
+            ):
+                continue
+            if not inner.args or not isinstance(inner.args[0], ast.Name):
+                continue
+            name = inner.args[0].id
+            if name not in templates:
+                continue
+            supplied = {kw.arg for kw in node.keywords if kw.arg}
+            missing = templates[name] - supplied
+            if missing:
+                problems.append(
+                    f"{module.__name__}:{node.lineno} {name} needs {sorted(missing)}"
+                )
+        return templates, problems
+
+    def test_chat_templates(self):
+        from chann_app.services import chat as module
+
+        templates, problems = self._scan(module)
+        assert templates, "no templates found — has the scan broken?"
+        assert not problems, "\n".join(["format calls missing a value:", *problems])
+
+    def test_registration_templates(self):
+        from chann_app.services import registration as module
+
+        _, problems = self._scan(module)
+        assert not problems, "\n".join(["format calls missing a value:", *problems])

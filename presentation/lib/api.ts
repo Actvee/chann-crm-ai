@@ -40,6 +40,30 @@ export async function callApplicationResponse<T>(
   return { data: (await res.json()) as T, status: res.status };
 }
 
+/**
+ * The Application Tier's response, untouched.
+ *
+ * `callApplicationResponse` parses JSON, which is right for almost every
+ * endpoint and wrong for the ones that return a PDF: res.json() throws on
+ * binary, the proxy catches it, and the person sees a 503 for a request
+ * the Application Tier answered with 200 and a perfectly good document.
+ *
+ * That failure left no trace anywhere — no error in the Application Tier
+ * (it succeeded) and no 503 in its access log (it never returned one) —
+ * which is why it survived several rounds of looking.
+ */
+export async function callApplicationRaw(
+  path: string,
+  init: RequestInit = {},
+): Promise<Response> {
+  if (!path.startsWith("/api/v1/")) {
+    throw new Error(
+      `Presentation may only call the Application Tier /api/v1 surface, got: ${path}`,
+    );
+  }
+  return fetch(`${BASE}${path}`, { ...init, cache: "no-store" });
+}
+
 export async function callApplication<T>(
   path: string,
   init: RequestInit = {},

@@ -18,8 +18,19 @@ from .tenant_scope import TenantScope
 # gated by deal.reopen at the caller (permission is not this repository's
 # concern; only whether the state machine allows the move at all).
 DEAL_STAGES = frozenset({"new", "proposed", "won", "lost"})
+# OWNER-APPROVED DEPARTURE FROM MASTER SPEC 9.6.
+#
+# The spec lists new → proposed, proposed → won, proposed → lost and
+# won → new. It has no new → lost, which makes a deal that dies before
+# anyone quotes it impossible to close — and that is the most ordinary
+# way for a deal to end: the customer changes their mind, buys elsewhere,
+# or stops replying, all before a quote exists.
+#
+# Without it the only options were to leave the deal open forever, or to
+# move it to proposed — inventing a quote that was never made — and then
+# lose it. Both corrupt the pipeline numbers the stage exists to produce.
 _ALLOWED_TRANSITIONS: dict[str, frozenset[str]] = {
-    "new": frozenset({"proposed"}),
+    "new": frozenset({"proposed", "lost"}),
     "proposed": frozenset({"won", "lost"}),
     "won": frozenset({"new"}),
     "lost": frozenset({"new"}),
@@ -42,6 +53,35 @@ def _decimal(value) -> Decimal:
         return Decimal(str(value))
     except (InvalidOperation, TypeError) as exc:
         raise Phase9Conflict(f"not a valid price: {value!r}") from exc
+
+
+class Phase9Duplicate(Phase9Conflict):
+    """A record already exists that the caller should be using instead.
+
+    Carries the existing id and code so the caller can point at it rather
+    than just refusing — "already exists" without saying WHICH leaves the
+    person to go and search for it themselves.
+    """
+
+    def __init__(self, message: str, *, existing_id: str, existing_code: str):
+        super().__init__(message)
+        self.existing_id = existing_id
+        self.existing_code = existing_code
+
+
+def _normalise_phone(phone: str | None) -> str:
+    """Digits only, so formatting differences do not create duplicates.
+
+    "081-234-5678", "0812345678" and "+66812345678" are one person. The
+    leading country code is stripped to a local zero because a Thai shop
+    saves the same number both ways depending on where it was copied from.
+    """
+    if not phone:
+        return ""
+    digits = "".join(ch for ch in str(phone) if ch.isdigit())
+    if digits.startswith("66") and len(digits) > 9:
+        digits = "0" + digits[2:]
+    return digits
 
 
 class CustomerRepository:
@@ -97,6 +137,32 @@ class CustomerRepository:
     ) -> Customer:
         if not any([first_name, last_name, phone, email, customer_chann_uid]):
             raise Phase9Conflict("a customer needs at least a name, phone, email, or chann_uid")
+
+        # One phone number, one customer. A repair shop's customer calls in
+        # months apart; two records for the same person split their service
+        # history in half, so the technician arriving sees no previous
+        # visit and the shop cannot tell a repeat customer from a new one.
+        #
+        # Raises rather than silently returning the existing row: the
+        # caller asked to CREATE, and quietly handing back a different
+        # record with a different name is how a customer's details get
+        # overwritten by someone else's.
+        normalised = _normalise_phone(phone)
+        if normalised:
+            existing = self._s.execute(
+                select(Customer).where(
+                    Customer.license_id == scope.license_id,
+                    Customer.phone.is_not(None),
+                    Customer.archived_at.is_(None),
+                )
+            ).scalars().all()
+            for row in existing:
+                if _normalise_phone(row.phone) == normalised:
+                    raise Phase9Duplicate(
+                        f"{row.customer_id} already has this phone number",
+                        existing_id=str(row.id),
+                        existing_code=row.customer_id,
+                    )
         if customer_chann_uid:
             existing = self._s.execute(
                 select(Customer).where(
@@ -190,6 +256,28 @@ class DealRepository:
         if contact is None:
             raise Phase9NotFound("contact not found in this tenant")
 
+        # One OPEN deal per customer. Two live deals for the same person
+        # means two salespeople quoting them different numbers and neither
+        # knowing about the other.
+        #
+        # Open, not ever: a customer who bought last year and comes back is
+        # the point of keeping the record. Closing the old deal — won or
+        # lost — frees them to start another.
+        open_deal = self._s.execute(
+            select(Deal).where(
+                Deal.license_id == scope.license_id,
+                Deal.contact_id == contact_id,
+                Deal.stage.in_(("new", "proposed")),
+                Deal.archived_at.is_(None),
+            )
+        ).scalars().first()
+        if open_deal is not None:
+            raise Phase9Duplicate(
+                f"{open_deal.deal_id} is still open for this customer",
+                existing_id=str(open_deal.id),
+                existing_code=open_deal.deal_id,
+            )
+
         row = Deal(
             id=uuid.uuid4(), license_id=scope.license_id,
             deal_id=self._unique_deal_id(scope), contact_id=contact_id,
@@ -276,6 +364,46 @@ class DealRepository:
         self._s.flush()
         return row
 
+    def update_product(
+        self, scope: TenantScope, deal_id: uuid.UUID, deal_product_id: uuid.UUID,
+        fields: dict,
+    ) -> DealProduct:
+        """Change a line already on a deal.
+
+        Deals could add and delete lines but never edit one, so correcting
+        a quantity meant deleting and retyping — which loses the line's
+        position and, on a deal with several similar products, is easy to
+        do to the wrong one.
+        """
+        deal = self.get(scope, deal_id)
+        if deal is None:
+            raise Phase9NotFound("deal not found in this tenant")
+        row = self._s.execute(
+            select(DealProduct).where(
+                DealProduct.id == deal_product_id,
+                DealProduct.deal_id == deal_id,
+            )
+        ).scalars().first()
+        if row is None:
+            raise Phase9NotFound("line not found on this deal")
+
+        if "quoted_unit_price" in fields and fields["quoted_unit_price"] is not None:
+            price = _decimal(fields["quoted_unit_price"])
+            if price < 0:
+                raise Phase9Conflict("a price cannot be negative")
+            row.quoted_unit_price = price
+        if "qty" in fields and fields["qty"] is not None:
+            qty = int(fields["qty"])
+            if qty < 1:
+                raise Phase9Conflict("qty must be at least 1")
+            row.qty = qty
+        if "product_name" in fields and str(fields["product_name"] or "").strip():
+            row.product_name = str(fields["product_name"]).strip()
+        if "notes" in fields:
+            row.notes = fields["notes"]
+        self._s.flush()
+        return row
+
     def remove_product(
         self, scope: TenantScope, deal_id: uuid.UUID, deal_product_id: uuid.UUID,
     ) -> DealProduct:
@@ -314,7 +442,7 @@ class DealRepository:
         row = self.get(scope, deal_id)
         if row is None:
             raise Phase9NotFound("deal not found in this tenant")
-        allowed = {"notes", "owner_member_id"}
+        allowed = {"notes", "owner_member_id", "expected_close_date"}
         for key, value in fields.items():
             if key not in allowed:
                 continue
@@ -323,6 +451,80 @@ class DealRepository:
             setattr(row, key, value)
         self._s.flush()
         return row
+
+    def pipeline_summary(self, scope: TenantScope) -> dict:
+        """What is in the pipeline, and what is closing.
+
+        The reason expected_close_date exists. Counting deals by stage is
+        not a forecast — a stage says where a deal is, not when or whether
+        it lands — so the value comes from the line items and the timing
+        from the date.
+
+        Overdue is separated from this month deliberately: a deal whose
+        close date has passed and is still open is not a forecast, it is a
+        deal nobody has touched, and averaging the two hides that.
+        """
+        from datetime import date as _date, datetime as _dt, timezone as _tz
+
+        today = _dt.now(_tz.utc).date()
+        month_end = (
+            _date(today.year + 1, 1, 1) if today.month == 12
+            else _date(today.year, today.month + 1, 1)
+        )
+
+        rows = self._s.execute(
+            select(
+                Deal.id, Deal.stage, Deal.expected_close_date,
+                func.coalesce(
+                    func.sum(DealProduct.quoted_unit_price * DealProduct.qty), 0,
+                ).label("value"),
+            )
+            .outerjoin(DealProduct, DealProduct.deal_id == Deal.id)
+            .where(
+                Deal.license_id == scope.license_id,
+                Deal.archived_at.is_(None),
+            )
+            .group_by(Deal.id, Deal.stage, Deal.expected_close_date)
+        ).all()
+
+        by_stage: dict[str, dict] = {
+            stage: {"count": 0, "value": Decimal("0")} for stage in DEAL_STAGES
+        }
+        open_value = Decimal("0")
+        closing_this_month = Decimal("0")
+        overdue_count = 0
+        undated_open = 0
+
+        for row in rows:
+            value = Decimal(str(row.value or 0))
+            bucket = by_stage.setdefault(
+                row.stage, {"count": 0, "value": Decimal("0")}
+            )
+            bucket["count"] += 1
+            bucket["value"] += value
+
+            if row.stage in ("new", "proposed"):
+                open_value += value
+                if row.expected_close_date is None:
+                    # Counted, not hidden: a pipeline where half the deals
+                    # have no date has a forecast that means very little,
+                    # and the reader should be able to see that.
+                    undated_open += 1
+                elif row.expected_close_date < today:
+                    overdue_count += 1
+                elif row.expected_close_date < month_end:
+                    closing_this_month += value
+
+        return {
+            "by_stage": {
+                stage: {"count": b["count"], "value": str(b["value"])}
+                for stage, b in by_stage.items()
+            },
+            "open_value": str(open_value),
+            "closing_this_month": str(closing_this_month),
+            "overdue_count": overdue_count,
+            "undated_open_count": undated_open,
+        }
 
     def products_of(self, deal_id: uuid.UUID) -> list[DealProduct]:
         return list(
@@ -339,6 +541,7 @@ class DealRepository:
 
     def transition_stage(
         self, scope: TenantScope, deal_id: uuid.UUID, *, to_stage: str, allow_reopen: bool,
+        lost_reason: str | None = None,
     ) -> Deal:
         """9.6's state machine. `allow_reopen` is decided by the caller
         against the actor's permission_keys — this method only enforces
@@ -353,6 +556,20 @@ class DealRepository:
             raise Phase9Conflict(f"cannot move a deal from {deal.stage!r} to {to_stage!r}")
         if (deal.stage, to_stage) in REOPEN_TRANSITIONS and not allow_reopen:
             raise Phase9Conflict("reopening a closed deal requires deal.reopen")
+
+        if to_stage == "lost":
+            # Recorded when offered, never demanded. Requiring a reason
+            # before a deal can be closed gets you a column full of "-":
+            # it looks answered and teaches nothing, which is worse than
+            # an empty one that at least reads as unknown.
+            if lost_reason and lost_reason.strip():
+                deal.lost_reason = lost_reason.strip()
+        elif deal.lost_reason:
+            # Reopened. The old reason describes a loss that no longer
+            # happened, and keeping it would leave the deal explaining why
+            # it was lost while sitting in "new".
+            deal.lost_reason = None
+
         deal.stage = to_stage
         self._s.flush()
         return deal
