@@ -46,6 +46,17 @@ application/schema/API ของระบบเดิมใด ๆ
 
 ---
 
+### ตั้ง environment ก่อน (sandbox ไม่ติดมาจากแชทเก่า)
+
+`docs/DEV_ENVIRONMENT.md` มีคำสั่งครบ — clone, venv, Postgres, npm ci
+ใช้เวลาประมาณ 2 นาที ทำก่อนแตะโค้ดใดๆ
+
+**`scripts/dev/` คือเครื่องมือที่เจอบั๊กจริงส่วนใหญ่** โดยเฉพาะ
+`simulate-day.py` และ `simulate-edge-cases.py` ที่เดินผ่าน chat handler
+จริงทั้ง 3 OA แล้วจับคำตอบที่ผิดปกติ — รอบแรกเจอ 23 จุด
+ทั้งสองตัวต้องได้ **0 findings** บน tree ที่สะอาด และควรรันก่อนบอกว่า
+ฟีเจอร์แชทเสร็จแล้วทุกครั้ง
+
 ### สิ่งที่ต้องรู้ก่อนส่ง patch แรก (จาก incident จริง 2 ก.ย. 2569)
 
 **Sync ก่อนสร้าง patch เสมอ** — `git fetch origin && git reset --hard origin/main`
