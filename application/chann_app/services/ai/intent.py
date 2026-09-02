@@ -127,7 +127,9 @@ does not exist anywhere else the model can check against):
     the system afterward, never asked from the user or invented by you.
 
 - entity="ticket" — a service job: a repair, an installation, a site
-  visit. NOT a deal, which is a sale.
+  visit to FIX something. NOT a deal, which is a sale — and NOT a
+  customer coming to see or buy products, which is a followup: a ticket
+  needs something broken, to be installed, or to be serviced.
   action="create": fields may include target_name (the customer),
     issue_description, service_address, scheduled_date, scheduled_time.
     Examples: "ลูกค้าจุใจแจ้งแอร์ไม่เย็น", "มีงานซ่อมที่บ้านคุณสมชาย".
@@ -152,11 +154,15 @@ does not exist anywhere else the model can check against):
   action="check_out": finishing. Examples: "เสร็จแล้ว", "งานเรียบร้อย",
     "จบงานครับ".
 
-- entity="followup" — a reminder to do something later, tied to a
-  customer or deal.
+- entity="followup" — a reminder or appointment (นัด): anything the
+  person wants brought back to them on a day — a call, a visit, a
+  customer coming in to LOOK at products, a sales meeting. When a
+  sentence is about a date and a customer and no machine is broken,
+  this is the entity.
   action="create": fields may include target_name, due_date, due_time,
     notes. Examples: "เตือนผมโทรหาคุณจุใจพรุ่งนี้เช้า", "อีกสามวันติดตาม
-    ดีลนี้หน่อย".
+    ดีลนี้หน่อย", "ตั้งนัดวันที่ 6 ที่จะถึง", "ลูกค้าอยากดูสินค้าวันที่ 6
+    ตอน 9 โมงเช้า", "นัดลูกค้ามาดูของวันศุกร์บ่าย".
   action="cancel": the reminder is no longer needed. fields may include
     code or target_name. Examples: "ไม่ต้องเตือนดีลนี้แล้ว", "เอาการเตือน
     ของ C-2026-0001 ออกให้หน่อย".

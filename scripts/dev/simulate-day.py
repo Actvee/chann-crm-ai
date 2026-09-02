@@ -31,6 +31,22 @@ def ai(payload):
 
 findings = []
 
+# A polite reply can hide an explosion: on 2 Sep the quote-issue scene
+# raised AttributeError inside a catch, logged it, answered something
+# classifier-clean, and this script said 0 FINDINGS. Every logged
+# exception during a scene is now a finding in its own right.
+import logging
+
+class _ExceptionTrap(logging.Handler):
+    def emit(self, record):
+        if record.exc_info:
+            findings.append((
+                "log", record.getMessage(), "EXCEPTION",
+                str(record.exc_info[1])[:70],
+            ))
+
+logging.getLogger().addHandler(_ExceptionTrap())
+
 async def say(client, oa, msg, expect_ok=True, ai_client=None, role=None):
     ctx = T._ctx(oa=oa, primary_role=role or ("technician" if oa == "technician" else "sales"))
     r = await T.handle_chat_message(client, message=msg, ctx=ctx, ai_client=ai_client)
@@ -170,6 +186,24 @@ async def reminder_lifecycle_day():
     check("cancel names the code and the count", code in r.text and "1 รายการ" in r.text, r.text)
     r = await say(c, "sales", "รายการเตือน")
     check("the diary is empty afterwards", "ยังไม่มี" in r.text, r.text)
+
+    # The 2 Sep screenshot, replayed word for word. The cancel above left
+    # the conversation on this customer — the next two sentences never
+    # name it, and an assistant is expected to know who "the customer" is.
+    r = await say(c, "sales", "ตั้งนัดวันที่ 6 ที่จะถึง")
+    check("ตั้งนัด after a cancel books the appointment",
+          code in r.text and "คุณสามารถทำสิ่งเหล่านี้ได้" not in r.text, r.text)
+    check("and an unstated time defaulted to 09:00",
+          any(w[2].get("due_time") == "09:00:00"
+              for w in c.recorded if w[0] == "create_follow_up"), r.text)
+    unknown = ai({"action": "suggest", "entity": None, "fields": {}})
+    r = await say(c, "sales", "ลูกค้าอยากดูสินค้าวันที่ 6 ที่จะถึงนี้ตอน 9 โมงเช้า",
+                  ai_client=unknown)
+    check("a dated sentence the model gave up on still lands",
+          "service_address" not in r.text
+          and "คุณสามารถทำสิ่งเหล่านี้ได้" not in r.text
+          and sum(1 for w in c.recorded if w[0] == "create_follow_up") >= 2,
+          r.text)
 
 async def main():
     await sales_day(); await tech_day(); await customer_day()

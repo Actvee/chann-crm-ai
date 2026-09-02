@@ -620,7 +620,10 @@ async def _handle_company_profile_command(
 
 NOTE_TRIGGERS = ("บันทึกว่า", "จดว่า", "โน้ตว่า", "note")
 NOTE_LIST_TRIGGERS = ("ดูบันทึก", "บันทึกของ", "ประวัติ")
-REMINDER_TRIGGERS = ("เตือน", "นัด", "remind")
+# "ตั้งนัด"/"ตั้งเตือน" added from live use (2 Sep): "ตั้งนัดวันที่ 6
+# ที่จะถึง" starts with neither "นัด" nor "เตือน", missed every matcher,
+# and the person got a capability list for a perfectly ordinary sentence.
+REMINDER_TRIGGERS = ("เตือน", "นัด", "ตั้งนัด", "ตั้งเตือน", "remind")
 # Dispatched BEFORE reminder creation: every one of these contains "เตือน",
 # so the create matcher would otherwise claim "ยกเลิกเตือน C-2026-0011" and
 # answer "ไม่เข้าใจวันที่" — the same longer-first rule every Thai trigger
@@ -1035,6 +1038,19 @@ async def _handle_reminder_list(
     )
 
 
+def _mentions_a_datetime(message: str) -> bool:
+    """Whether the sentence carries a readable date or time at all.
+
+    Used to tell "นัดหมาย" (show me the diary) from "นัดหมายพรุ่งนี้"
+    (make one), and as the entry condition for the appointment net: a
+    sentence with a concrete day in it is somebody arranging something.
+    """
+    from .thai_datetime import parse_thai_date, parse_thai_time
+
+    today = datetime.now(BANGKOK_TZ).date()
+    return parse_thai_date(message, today) is not None or parse_thai_time(message) is not None
+
+
 def _is_reminder_command(message: str) -> bool:
     """Is this message a reminder instruction, rather than a sentence
     that happens to contain the word?"""
@@ -1096,6 +1112,15 @@ async def _handle_reminder_cancel(
         return ChatReply(text=_t(REMINDER_CANCEL_NEEDS_TARGET, language))
     entity_type, entity_id, code = target
 
+    # Remembered the moment the target resolves, not only on success: the
+    # live 2 Sep flow was "ยกเลิกเตือน C-2026-0011" then "ตั้งนัดวันที่ 6
+    # ที่จะถึง", and the second sentence only means anything if the first
+    # left the conversation on that record — which is just as true when
+    # the cancel finds nothing to cancel.
+    await _remember_entity(
+        client, ctx, entity_type=entity_type, entity_id=str(entity_id), code=code,
+    )
+
     try:
         rows = await client.list_follow_ups(license_id, status="pending")
     except Exception:
@@ -1125,6 +1150,41 @@ async def _handle_reminder_cancel(
             ("ตั้งเตือนใหม่", f"เตือน {code} พรุ่งนี้"),
             ("รายการเตือน", "รายการเตือน"),
         ],
+    )
+
+
+async def _appointment_net(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
+    permission_keys: list[str], language: str,
+):
+    """Last understanding before giving up: a dated sentence about a known
+    record is somebody arranging something.
+
+    Reported live (2 Sep): "ตั้งนัดวันที่ 6 ที่จะถึง", typed right after
+    working on a customer, got the capability list — the assistant had the
+    date, the context, and the permission, and answered with a menu. This
+    net runs only where the reply would otherwise BE that menu, so a wrong
+    guess here replaces "I did not understand" with a dated, echoed,
+    one-message-to-cancel reminder — strictly more useful, never louder.
+
+    Returns None (fall through to the suggestions) unless the message
+    carries a date/time, the OA is a staff one, the person may create
+    follow-ups, and a target record resolves from the text or context.
+    """
+    if ctx.oa == "customer" or "followup.create" not in set(permission_keys):
+        return None
+    if not _mentions_a_datetime(message):
+        return None
+    try:
+        target = await _resolve_target_or_context(client, ctx, str(license_id), message)
+    except _TargetNotFound:
+        return None
+    if target is None:
+        return None
+    return await _handle_reminder_create(
+        client, ctx=ctx, license_id=license_id, message=message,
+        permission_keys=permission_keys, language=language,
+        actor_id=ctx.chann_uid,
     )
 
 
@@ -1166,6 +1226,12 @@ async def _handle_reminder_create(
             quick_replies=[("พรุ่งนี้", f"เตือน {code} พรุ่งนี้")],
         )
     due_time = parse_thai_time(message)
+    if due_time is None:
+        # Owner request (2 Sep): an appointment nobody gave a time for
+        # still gets one — 09:00, start of the working day — instead of a
+        # bare "–" in the digest. The confirmation echoes it, so a wrong
+        # guess is visible and one message away from being corrected.
+        due_time = time(9, 0)
 
     try:
         payload = {
@@ -1192,6 +1258,9 @@ async def _handle_reminder_create(
     # person catches a misread before it matters. The code is echoed too,
     # for exactly the same reason when the target came from context rather
     # than being typed.
+    await _remember_entity(
+        client, ctx, entity_type=entity_type, entity_id=str(entity_id), code=code,
+    )
     time_text = f" {format_thai_time(due_time)}" if due_time else ""
     return ChatReply(
         text=_t(REMINDER_SAVED, language).format(
@@ -5735,6 +5804,12 @@ MISSING_FIELD_LABELS = {
     "product_id": {"th": "รหัสสินค้า", "en": "product code"},
     "product_name": {"th": "ชื่อสินค้า", "en": "product name"},
     "unit_price": {"th": "ราคา", "en": "price"},
+    # Ticket fields — reported live as "กรุณาระบุservice_address", the raw
+    # key straight from the AI's JSON shown to a person mid-conversation.
+    "service_address": {"th": "ที่อยู่หน้างาน", "en": "the service address"},
+    "scheduled_date": {"th": "วันนัดหมาย", "en": "the appointment date"},
+    "scheduled_time": {"th": "เวลานัดหมาย", "en": "the appointment time"},
+    "issue_description": {"th": "อาการหรือรายละเอียดงาน", "en": "what the job is"},
 }
 
 
@@ -7061,9 +7136,14 @@ async def handle_chat_message(
                 permission_keys=permission_keys, language=language,
                 actor_id=ctx.chann_uid,
             )
-        if _matches_phrase(message, REMINDER_LIST_TRIGGERS) or any(
-            t in message.lower() for t in REMINDER_LIST_TRIGGERS
-        ):
+        if (
+            _matches_phrase(message, REMINDER_LIST_TRIGGERS)
+            or any(t in message.lower() for t in REMINDER_LIST_TRIGGERS)
+        ) and not _mentions_a_datetime(message):
+            # The datetime guard tells "นัดหมาย" (show me the diary) from
+            # "นัดหมายพรุ่งนี้บ่าย 2" (make one): same word, opposite
+            # requests, and the contains-match here used to swallow the
+            # second into the first.
             return await _handle_reminder_list(
                 client, ctx=ctx, license_id=license_id,
                 permission_keys=permission_keys, language=language,
@@ -7437,6 +7517,12 @@ async def handle_chat_message(
         await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
 
     if intent.get("action") == "suggest":
+        net = await _appointment_net(
+            client, ctx=ctx, license_id=license_id, message=message,
+            permission_keys=permission_keys, language=language,
+        )
+        if net is not None:
+            return net
         catalog = await client.permission_catalog()
         return ChatReply(
             text=suggest_what_you_can_do(
@@ -7467,6 +7553,19 @@ async def handle_chat_message(
         or needed not in set(permission_keys)
         or not _oa_allows(ctx.oa, needed)
     ):
+        # Same net as the suggest branch, but ONLY for the model inventing
+        # an entity nobody has (needed is None): a dated sentence the model
+        # mislabelled must not outrank the date, the context, and the
+        # permission we can all see. A real permission denial, though,
+        # stays a denial — quietly turning "เลื่อนปิดดีล..." from someone
+        # without deal.update into a reminder would hide the refusal.
+        if needed is None:
+            net = await _appointment_net(
+                client, ctx=ctx, license_id=license_id, message=message,
+                permission_keys=permission_keys, language=language,
+            )
+            if net is not None:
+                return net
         catalog = await client.permission_catalog()
         return ChatReply(
             text=suggest_what_you_can_do(

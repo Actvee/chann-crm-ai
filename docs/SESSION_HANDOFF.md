@@ -76,7 +76,11 @@ clone.
 
 ## Where things stand
 
-`origin/main` HEAD is **`c0c24b1`**. Migration head is
+`origin/main` HEAD is **`bfe7aee`**, **deployed** (2 Sep ~11:00): data
+and application verified via `/health` returning the full SHA and
+`schema_state: up-to-date`; presentation's image applied in the same
+terraform run (it exposes `/api/ready`, not `/health` — the one
+"mismatch" finding check-client has always carried). Migration head is
 **`0020_crm_essentials`**.
 
 **The previous version of this section was stale in exactly the way the
@@ -89,12 +93,52 @@ git: at 22:54 on 1 Sep the Sales OA still parsed `2026-09-06` as
 26 ก.ย. 2506, a bug `67f5a04` fixes.
 
 **One patch is prepared and NOT deployed**:
-`reminder-digest-truth-v2-*.patch` (application tier + tests +
-simulate-day scene + this file; supersedes the unused v1). 871 tests
-pass (617 unit/boundary + 254 integration). Apply, verify, commit,
-build all three images — three because `e286648..c0c24b1` already
-touches all three tiers, so this deploy carries them together. No
-migration.
+`assistant-understanding-v1-*.patch` (application tier + tests +
+simulate-day + this file). 878 tests pass (624 unit/boundary + 254
+integration). Application image only — nothing outside that tier
+changed and the deployed base `bfe7aee` already carries all three
+current images. No migration.
+
+### The 11:07 screenshot (2 Sep) — "ผู้ช่วย ไม่ใช่ตัวระบบพิมตามคำสั่ง"
+
+Minutes after the reminder deploy, the owner cancelled the misfiled
+reminder and then typed, as anyone would: "ตั้งนัดวันที่ 6 ที่จะถึง" —
+and got the capability list. Then "ลูกค้าอยากดูสินค้าวันที่ 6 ที่จะถึง
+นี้ตอน 9 โมงเช้า" — and got "กรุณาระบุservice_address", a raw JSON key,
+because the model filed a product-viewing visit as a repair ticket. The
+owner's standing verdict, now policy: **the chat must behave like an
+assistant that gets the meaning, not a command parser; a time not given
+gets a default.** What shipped, layer by layer:
+
+1. **Wider deterministic ear** — "ตั้งนัด"/"ตั้งเตือน" join
+   REMINDER_TRIGGERS; and the reminder-LIST contains-match now yields
+   when the sentence carries a date/time (`_mentions_a_datetime`), so
+   "นัดหมายพรุ่งนี้บ่าย 2" books instead of listing while bare "นัดหมาย"
+   still lists.
+2. **Default time 09:00** when none is stated (owner request), always
+   echoed in the confirmation so a wrong default is one message from
+   corrected. Stated times ("บ่าย 2", "9 โมงเช้า") are kept.
+3. **The appointment net** (`_appointment_net`) — runs only where the
+   reply would otherwise BE the capability list (the model's "suggest",
+   or an entity nobody has): staff OA + followup.create + a readable
+   date/time + a target from text or context ⇒ book it. It deliberately
+   stays OUT of real permission denials — "เลื่อนปิดดีล..." from someone
+   without deal.update stays a denial, never a reminder that hides it.
+4. **Cancel and create remember the record** (`_remember_entity` at
+   target-resolution time), because cancelling is almost always step one
+   of rescheduling — the screenshot's second sentence only means
+   anything if the first left the conversation on C-2026-0011.
+5. **Intent boundary redrawn** — followup is "a date and a customer and
+   nothing broken" (with the screenshot sentences as examples); ticket
+   requires a fault/installation/service. Ticket field names got Thai
+   labels (ที่อยู่หน้างาน, วันนัดหมาย, เวลานัดหมาย, อาการหรือรายละเอียด
+   งาน) so ask_for_missing can never show a raw key again.
+6. **The simulator now catches its own blindness** — a logging trap
+   turns any logged exception during a scene into a finding. It
+   immediately paid for itself: the 2 Sep quote-issue explosion
+   (`get_deal` missing on the chat fake, then `get_customer` one step
+   deeper) was invisible behind a polite reply and "0 FINDINGS"; both
+   methods now exist on the fake and the scene runs to completion.
 
 ### The 2 Sep incident this patch closes (read as one chain)
 
@@ -257,15 +301,14 @@ All three are now pinned by boundary tests that read the source as text.
 
 ## Immediate next actions (in order)
 
-0. **Deploy `reminder-digest-truth-v2-*.patch`** (which carries the
-   still-undeployed `67f5a04`+`c0c24b1` along with it — three images, no
-   migration). `reminder-digest-deploy.sh` in this delivery is the
-   one-shot: apply → verify → commit → push → build three into
-   `chann1-dev` (never `--source` — see the digest-drift section below) →
-   digests into tfvars → dev-infra-plan gate → terraform apply, with
-   `gcloud run services update --image` as the fallback that has worked
-   every time terraform's IPv6 lookups failed. Then the in-chat data
-   cleanup listed under "Where things stand".
+0. **Deploy `assistant-understanding-v1-*.patch`** via
+   `assistant-understanding-deploy.sh` — application image only, no
+   migration. Same one-shot shape as before (apply → verify → test →
+   commit → push → build into `chann1-dev`, never `--source` → digest
+   into tfvars → dev-infra-plan gate → terraform apply, gcloud
+   services update as the IPv6 fallback), now re-runnable after a push:
+   STAGE 4 recognises its own commit at HEAD and continues instead of
+   halting. Then replay the screenshot in chat to confirm live.
 
 1. **Rotate the LINE Sales channel secret.** It was printed in full in a
    chat transcript while debugging environment variables. This is

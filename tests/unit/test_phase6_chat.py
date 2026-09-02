@@ -516,6 +516,27 @@ class FakeDataClient:
         self._deals.append(row)
         return row
 
+    async def get_customer(self, license_id, customer_id):
+        # Same story as get_deal below: real since Phase 7, absent here,
+        # and the quote-issue scene died one step later on it (2 Sep).
+        self.recorded.append(("get_customer", license_id, customer_id))
+        return next(
+            (c for c in getattr(self, "_customers", [])
+             if str(c.get("id")) == str(customer_id)),
+            None,
+        )
+
+    async def get_deal(self, license_id, deal_id):
+        # The real client has carried this since Phase 9; its absence here
+        # made simulate-day's quote-issue scene explode inside a catch and
+        # still report 0 findings (2 Sep) — a fake that is missing a method
+        # does not skip a path, it silently un-tests it.
+        self.recorded.append(("get_deal", license_id, deal_id))
+        return next(
+            (d for d in getattr(self, "_deals", []) if str(d.get("id")) == str(deal_id)),
+            None,
+        )
+
     async def list_deals(self, license_id, stage=None):
         self.recorded.append(("list_deals", license_id, stage))
         if stage:
@@ -3145,6 +3166,116 @@ class TestReminderDatesCannotPoisonTheDigest:
         client._last_entity_ref = None  # simulates TTL expiry
         reply = await handle_chat_message(client, message="บันทึกว่าตามต่อ", ctx=_ctx())
         assert not [r for r in client.recorded if r[0] == "create_note"]
+
+
+class TestTheAssistantUnderstandsAppointments:
+    """The 2 Sep screenshot, turn by turn.
+
+    Right after cancelling a reminder on C-2026-0011, the owner typed
+    "ตั้งนัดวันที่ 6 ที่จะถึง" — and got the capability list. Then
+    "ลูกค้าอยากดูสินค้าวันที่ 6 ที่จะถึงนี้ตอน 9 โมงเช้า" — and got
+    "กรุณาระบุservice_address", a raw JSON key, because the model filed a
+    product-viewing visit as a repair ticket. The owner's verdict: this
+    must behave like an assistant that gets the meaning, not a command
+    parser — and an appointment with no stated time gets a default.
+    """
+
+    async def _after_working_on(self):
+        client = FakeDataClient(permission_keys=[
+            "customer.read", "followup.create", "followup.read", "followup.update",
+        ])
+        customer = await client.create_customer("L1", {
+            "first_name": "จิตวิทยา", "last_name": "ลายดอก", "phone": "0879876646",
+        })
+        await handle_chat_message(
+            client, message=f"ยกเลิกเตือน {customer['customer_id']}", ctx=_ctx(),
+        )
+        return client, customer
+
+    async def test_tang_nat_right_after_a_cancel_creates_the_appointment(self):
+        client, customer = await self._after_working_on()
+        reply = await handle_chat_message(
+            client, message="ตั้งนัดวันที่ 6 ที่จะถึง", ctx=_ctx(),
+        )
+        writes = [r for r in client.recorded if r[0] == "create_follow_up"]
+        assert len(writes) == 1, reply.text
+        assert writes[0][2]["entity_id"] == customer["id"]
+        assert writes[0][2]["due_date"].endswith("-06")
+        assert customer["customer_id"] in reply.text
+
+    async def test_no_stated_time_defaults_to_nine_and_says_so(self):
+        client, customer = await self._after_working_on()
+        reply = await handle_chat_message(
+            client, message=f"เตือน {customer['customer_id']} พรุ่งนี้", ctx=_ctx(),
+        )
+        writes = [r for r in client.recorded if r[0] == "create_follow_up"]
+        assert writes[0][2]["due_time"] == "09:00:00"
+        # Echoed, so a wrong default is visible and correctable.
+        assert "09:00" in reply.text
+
+    async def test_a_stated_time_is_kept_not_overridden(self):
+        client, customer = await self._after_working_on()
+        reply = await handle_chat_message(
+            client, message=f"เตือน {customer['customer_id']} พรุ่งนี้ บ่าย 2", ctx=_ctx(),
+        )
+        writes = [r for r in client.recorded if r[0] == "create_follow_up"]
+        assert writes[0][2]["due_time"] == "14:00:00"
+        assert "14:00" in reply.text
+
+    async def test_a_dated_sentence_the_model_gave_up_on_still_lands(self):
+        """The net: the model answers "suggest", but the sentence has a
+        date, a time, and a record in context — that is an appointment,
+        not a menu request."""
+        client, customer = await self._after_working_on()
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "suggest", "entity": None, "fields": {}},
+            ensure_ascii=False,
+        )))
+        reply = await handle_chat_message(
+            client,
+            message="ลูกค้าอยากดูสินค้าวันที่ 6 ที่จะถึงนี้ตอน 9 โมงเช้า",
+            ctx=_ctx(), ai_client=ai,
+        )
+        writes = [r for r in client.recorded if r[0] == "create_follow_up"]
+        assert len(writes) == 1, reply.text
+        assert writes[0][2]["due_time"] == "09:00:00"
+        assert "คุณสามารถทำสิ่งเหล่านี้ได้" not in reply.text
+
+    async def test_the_net_stays_out_of_a_real_permission_denial(self):
+        """"เลื่อนปิดดีลไปวันศุกร์" from someone without deal.update must
+        stay a denial — not quietly become a reminder that hides it."""
+        client, customer = await self._after_working_on()
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "update", "entity": "deal",
+             "fields": {"expected_close_date": "วันศุกร์"}},
+            ensure_ascii=False,
+        )))
+        reply = await handle_chat_message(
+            client, message="เลื่อนปิดดีลไปวันศุกร์", ctx=_ctx(), ai_client=ai,
+        )
+        assert not [r for r in client.recorded if r[0] == "create_follow_up"]
+        assert "สิทธิ์" in reply.text
+
+    async def test_the_ticket_field_prompt_speaks_thai(self):
+        from chann_app.services.chat import ask_for_missing
+
+        out = ask_for_missing(["service_address", "scheduled_time"], "th")
+        assert "service_address" not in out and "scheduled_time" not in out
+        assert "ที่อยู่หน้างาน" in out and "เวลานัดหมาย" in out
+
+    async def test_nat_mai_with_a_date_creates_instead_of_listing(self):
+        """"นัดหมาย" alone is still the diary; "นัดหมายพรุ่งนี้บ่าย 2" is
+        making one — the contains-match on the list trigger used to
+        swallow the second into the first."""
+        client, customer = await self._after_working_on()
+        reply = await handle_chat_message(
+            client, message="นัดหมายพรุ่งนี้บ่าย 2", ctx=_ctx(),
+        )
+        writes = [r for r in client.recorded if r[0] == "create_follow_up"]
+        assert len(writes) == 1, reply.text
+        listing = await handle_chat_message(client, message="นัดหมาย", ctx=_ctx())
+        assert "นัดหมายที่ค้างอยู่" in listing.text
+
 
 
 class TestWorkListShowsNames:
