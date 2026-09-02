@@ -132,8 +132,48 @@ async def customer_day():
     await say(c, "customer", "ยกเลิกงาน")
     await say(c, "customer", "ขอบคุณครับ")
 
+async def reminder_lifecycle_day():
+    """Create → list → refuse-the-past → cancel → empty, as one person
+    would actually type it, with content asserts beyond the classifier —
+    the 2 Sep incident showed the classifier alone cannot see a reply that
+    is polite, well-formed, and wrong.
+    """
+    print("\n=== SALES OA: managing reminders (2 Sep incident flows) ===")
+    from datetime import date, timedelta
+    c = T.FakeDataClient(permission_keys=[
+        "customer.read", "followup.create", "followup.read", "followup.update",
+    ])
+    cust = await c.create_customer("L1", {
+        "first_name": "จิตวิทยา", "last_name": "ลายดอก", "phone": "0879876646",
+    })
+    code = cust["customer_id"]
+    future = (date.today() + timedelta(days=4)).isoformat()
+
+    def check(label, ok, detail=""):
+        print(f"{'  ' if ok else '!!'} [assert    ] {label:40} -> {'ok' if ok else 'FAIL'} {detail[:60]}")
+        if not ok:
+            findings.append(("sales", label, "ASSERT", detail[:70]))
+
+    r = await say(c, "sales", f"เตือน {code} {future}")
+    check("ISO date stored as typed",
+          any(w[2].get("due_date") == future for w in c.recorded if w[0] == "create_follow_up"),
+          r.text)
+    r = await say(c, "sales", "รายการเตือน")
+    check("list prints the code (cancel needs it)", code in r.text, r.text)
+    check("list prints Thai BE dates, not raw ISO",
+          future not in r.text and str(date.today().year + 543) in r.text, r.text)
+    r = await say(c, "sales", f"เตือน {code} 15/03/2569")
+    check("a past date is refused with an echo", "ผ่านมาแล้ว" in r.text and "มี.ค." in r.text, r.text)
+    check("and nothing was stored for it",
+          sum(1 for w in c.recorded if w[0] == "create_follow_up") == 1)
+    r = await say(c, "sales", f"ยกเลิกเตือน {code}")
+    check("cancel names the code and the count", code in r.text and "1 รายการ" in r.text, r.text)
+    r = await say(c, "sales", "รายการเตือน")
+    check("the diary is empty afterwards", "ยังไม่มี" in r.text, r.text)
+
 async def main():
     await sales_day(); await tech_day(); await customer_day()
+    await reminder_lifecycle_day()
     print(f"\n=== {len(findings)} FINDINGS ===")
     for oa, msg, kind, first in findings:
         print(f"  [{oa}] {msg!r} -> {kind}: {first}")

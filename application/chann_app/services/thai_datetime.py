@@ -72,7 +72,16 @@ def parse_thai_date(text: str, today: date) -> date | None:
     iso = re.search(r"\b(\d{4})-(\d{2})-(\d{2})\b", text or "")
     if iso:
         try:
-            return date(int(iso.group(1)), int(iso.group(2)), int(iso.group(3)))
+            # A Buddhist year typed in ISO shape ("2569-09-06") converts the
+            # same way every other year here does. Without this it became a
+            # literal year-2569 date — five centuries ahead, never announced,
+            # and silently wrong in exactly the way this module exists to
+            # prevent.
+            return date(
+                to_gregorian_year(int(iso.group(1))),
+                int(iso.group(2)),
+                int(iso.group(3)),
+            )
         except ValueError:
             pass
 

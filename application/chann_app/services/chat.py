@@ -80,6 +80,9 @@ ACTION_PERMISSIONS: dict[tuple[str, str], str] = {
     ("read", "followup"): "followup.read",
     ("create", "followup"): "followup.create",
     ("update", "followup"): "followup.update",
+    # Cancelling is an update to the row's status, not its own permission —
+    # same reasoning as ("promote", "customer") above.
+    ("cancel", "followup"): "followup.update",
     ("read", "ticket"): "ticket.read",
     ("create", "ticket"): "ticket.create",
     ("update", "ticket"): "ticket.update",
@@ -618,6 +621,11 @@ async def _handle_company_profile_command(
 NOTE_TRIGGERS = ("บันทึกว่า", "จดว่า", "โน้ตว่า", "note")
 NOTE_LIST_TRIGGERS = ("ดูบันทึก", "บันทึกของ", "ประวัติ")
 REMINDER_TRIGGERS = ("เตือน", "นัด", "remind")
+# Dispatched BEFORE reminder creation: every one of these contains "เตือน",
+# so the create matcher would otherwise claim "ยกเลิกเตือน C-2026-0011" and
+# answer "ไม่เข้าใจวันที่" — the same longer-first rule every Thai trigger
+# collision in this project has ended up needing.
+REMINDER_CANCEL_TRIGGERS = ("ยกเลิกเตือน", "ยกเลิกการเตือน", "ลบเตือน", "cancel reminder")
 TODAY_WORK_PHRASES = ("งานวันนี้", "ที่ต้องทำวันนี้", "today")
 UPCOMING_WORK_PHRASES = ("งานสัปดาห์นี้", "งานที่ค้าง", "ที่ต้องติดตาม", "upcoming")
 
@@ -644,6 +652,22 @@ REMINDER_NEEDS_DATE = {
 REMINDER_NEEDS_TARGET = {
     "th": "ระบุรหัสด้วยว่าเตือนเรื่องอะไร เช่น \"เตือน D-2026-0001 พรุ่งนี้\" หรือเปิดดูข้อมูลลูกค้า/ดีลนั้นก่อนแล้วค่อยพิมพ์เตือนตาม",
     "en": "Say what the reminder is about, e.g. \"remind D-2026-0001 tomorrow\", or open that record first.",
+}
+REMINDER_DATE_PAST = {
+    "th": "วันที่ {date} ผ่านมาแล้ว ตั้งเตือนได้ตั้งแต่วันนี้เป็นต้นไปครับ ลองพิมพ์ใหม่ เช่น \"เตือน {code} พรุ่งนี้\"",
+    "en": "{date} has already passed — a reminder can only be set for today onward. Try \"remind {code} tomorrow\".",
+}
+REMINDER_CANCELLED = {
+    "th": "ยกเลิกการเตือนของ {code} แล้ว {count} รายการ",
+    "en": "Cancelled {count} reminder(s) for {code}.",
+}
+REMINDER_CANCEL_NONE = {
+    "th": "ไม่มีการเตือนที่ค้างอยู่ของ {code}",
+    "en": "No pending reminders for {code}.",
+}
+REMINDER_CANCEL_NEEDS_TARGET = {
+    "th": "ระบุรหัสด้วยว่ายกเลิกการเตือนของอะไร เช่น \"ยกเลิกเตือน C-2026-0001\" หรือเปิดดูข้อมูลนั้นก่อนแล้วค่อยพิมพ์ยกเลิก",
+    "en": "Say which record to cancel reminders for, e.g. \"cancel reminder C-2026-0001\", or open that record first.",
 }
 WORK_EMPTY = {
     "th": "ไม่มีงานที่ต้องติดตามในช่วงนี้",
@@ -977,14 +1001,33 @@ async def _handle_reminder_list(
     if not shown:
         return ChatReply(text=_t(REMINDER_LIST_EMPTY, language))
 
+    # With the digest silent about overdue work (owner decision — see
+    # reminders.py), this list is the ONE place a slipped or misfiled row
+    # can be seen, and ยกเลิกเตือน needs the code printed here to act on.
+    # The rows carry only entity_id, so name each the way the digest does;
+    # raw ISO dates and code-less lines made the list unusable for exactly
+    # the cleanup it exists to serve.
+    from .thai_datetime import format_thai_date as _fmt_date
+
+    today = datetime.now(BANGKOK_TZ).date()
     lines = []
     for row in shown[:LIST_LIMIT]:
-        when = str(row.get("due_date") or "")
+        raw = str(row.get("due_date") or "")
+        try:
+            due_on = date.fromisoformat(raw)
+            when = _fmt_date(due_on) if language == "th" else raw
+            if language == "th" and due_on < today:
+                when += " (เลยกำหนด)"
+        except ValueError:
+            when = raw
         if row.get("due_time"):
             when = f"{when} {str(row['due_time'])[:5]}"
-        what = str(row.get("notes") or row.get("title") or "").strip()
-        code = str(row.get("entity_code") or "")
-        lines.append(f"· {when} {what}{f' ({code})' if code else ''}".rstrip())
+        who = await _describe_entity_by_id(
+            client, str(license_id), str(row.get("entity_type") or ""),
+            str(row.get("entity_id") or ""),
+        )
+        what = str(row.get("notes") or "").strip()
+        lines.append(f"· {when} · {who}{f' — {what}' if what else ''}")
 
     return ChatReply(
         text=_t(REMINDER_LIST_HEAD, language).format(count=len(shown))
@@ -1004,6 +1047,85 @@ def _is_reminder_command(message: str) -> bool:
     # Or names a record and mentions the verb anywhere: "D-2026-0001 เตือนพรุ่งนี้".
     has_code = re.search(r"\b[CDQT]-\d{4}-\d{4}\b", message or "", re.I) is not None
     return has_code and any(t in lowered for t in REMINDER_TRIGGERS)
+
+
+def _is_reminder_cancel_command(message: str) -> bool:
+    """A cancel instruction, told apart from setting a reminder.
+
+    Checked before _is_reminder_command on purpose: "ยกเลิกเตือน
+    C-2026-0011" starts with a cancel verb but also contains "เตือน" and a
+    record code, which is exactly what the create matcher claims.
+    """
+    lowered = (message or "").strip().lower()
+    if not lowered:
+        return False
+    if any(lowered.startswith(t) for t in REMINDER_CANCEL_TRIGGERS):
+        return True
+    has_code = re.search(r"\b[CDQT]-\d{4}-\d{4}\b", message or "", re.I) is not None
+    return has_code and any(t in lowered for t in REMINDER_CANCEL_TRIGGERS)
+
+
+async def _handle_reminder_cancel(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
+    permission_keys: list[str], language: str, actor_id: str,
+) -> ChatReply:
+    """Cancel every pending follow-up on one record.
+
+    This is also the only self-service way to clear a reminder that was
+    stored on the wrong day: the row the ISO-parse bug filed under
+    26 ก.ย. 2506 would otherwise sit in every morning digest forever,
+    because nothing in chat or the dashboard could touch a follow-up's
+    status even though the data tier has carried the endpoint since
+    Phase 6.
+
+    All pending rows for the record, not "the nearest one": which of two
+    reminders a person means is a guess, and the reply states the count so
+    an over-broad cancel is visible immediately.
+    """
+    if "followup.update" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+
+    license_id = str(license_id)
+    try:
+        target = await _resolve_target_or_context(client, ctx, license_id, message)
+    except _TargetNotFound as exc:
+        return ChatReply(
+            text=_t(NOT_FOUND_BY_CODE, language).format(what=exc.entity_type, code=exc.code)
+        )
+    if target is None:
+        return ChatReply(text=_t(REMINDER_CANCEL_NEEDS_TARGET, language))
+    entity_type, entity_id, code = target
+
+    try:
+        rows = await client.list_follow_ups(license_id, status="pending")
+    except Exception:
+        log.exception("reminder cancel could not list follow-ups")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    mine = [r for r in rows if str(r.get("entity_id")) == str(entity_id)]
+    if not mine:
+        return ChatReply(text=_t(REMINDER_CANCEL_NONE, language).format(code=code))
+
+    cancelled = 0
+    for row in mine:
+        try:
+            await client.set_follow_up_status(
+                license_id, str(row.get("id")), "cancelled", actor_id=actor_id,
+            )
+            cancelled += 1
+        except Exception:
+            log.exception("could not cancel follow-up %s", row.get("id"))
+    if cancelled == 0:
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    return ChatReply(
+        text=_t(REMINDER_CANCELLED, language).format(code=code, count=cancelled),
+        entity_type=entity_type, entity_id=entity_id,
+        quick_replies=[
+            ("ตั้งเตือนใหม่", f"เตือน {code} พรุ่งนี้"),
+            ("รายการเตือน", "รายการเตือน"),
+        ],
+    )
 
 
 async def _handle_reminder_create(
@@ -1032,6 +1154,17 @@ async def _handle_reminder_create(
     due_date = parse_thai_date(message, today)
     if due_date is None:
         return ChatReply(text=_t(REMINDER_NEEDS_DATE, language))
+    if due_date < today:
+        # A reminder about the past cannot ring. Storing it anyway is how a
+        # misread date ended up in every morning digest with nothing able to
+        # remove it — refuse, echo what was read (the echo is what catches a
+        # misparse), and offer a way forward.
+        return ChatReply(
+            text=_t(REMINDER_DATE_PAST, language).format(
+                date=format_thai_date(due_date), code=code,
+            ),
+            quick_replies=[("พรุ่งนี้", f"เตือน {code} พรุ่งนี้")],
+        )
     due_time = parse_thai_time(message)
 
     try:
@@ -1115,6 +1248,24 @@ async def _handle_work_list(
         log.exception("due follow-ups failed")
         return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
 
+    if not due:
+        return ChatReply(text=_t(WORK_EMPTY, language), quick_replies=[("รายการดีล", "รายการดีล")])
+
+    # Same owner policy as the morning digest (see reminders.py): "งานวันนี้"
+    # names only work that has not passed. due_follow_ups includes overdue
+    # rows on purpose so they are never lost — they stay visible in
+    # รายการเตือน, flagged เลยกำหนด, which is where cancelling lives too.
+    today_local = datetime.now(BANGKOK_TZ).date()
+
+    def _not_past(item) -> bool:
+        try:
+            return date.fromisoformat(str(item.get("due_date") or "")) >= today_local
+        except ValueError:
+            # An unreadable date is a data problem, not a reason to hide
+            # the row from the one list that could surface it.
+            return True
+
+    due = [item for item in due if _not_past(item)]
     if not due:
         return ChatReply(text=_t(WORK_EMPTY, language), quick_replies=[("รายการดีล", "รายการดีล")])
 
@@ -3907,6 +4058,16 @@ async def _handle_ai_understood_intent(
         return await _handle_reminder_create(
             client, ctx=ctx, license_id=license_id,
             message=_joined("เตือน", due, target, fields.get("notes")),
+            permission_keys=permission_keys, language=language,
+            actor_id=ctx.chann_uid,
+        )
+
+    if entity == "followup" and action == "cancel":
+        # The handler falls back to "the record we were just looking at"
+        # when neither a code nor a name was given, same as creating one.
+        return await _handle_reminder_cancel(
+            client, ctx=ctx, license_id=license_id,
+            message=_joined("ยกเลิกเตือน", code, target),
             permission_keys=permission_keys, language=language,
             actor_id=ctx.chann_uid,
         )
@@ -6906,6 +7067,15 @@ async def handle_chat_message(
             return await _handle_reminder_list(
                 client, ctx=ctx, license_id=license_id,
                 permission_keys=permission_keys, language=language,
+            )
+        # Cancelling comes before creating: "ยกเลิกเตือน C-2026-0011" names
+        # a record and contains the create verb, so the create matcher would
+        # otherwise claim it and answer "ไม่เข้าใจวันที่".
+        if _is_reminder_cancel_command(message):
+            return await _handle_reminder_cancel(
+                client, ctx=ctx, license_id=license_id, message=message,
+                permission_keys=permission_keys, language=language,
+                actor_id=ctx.chann_uid,
             )
         # "นัด" inside a sentence is not a reminder command. "มีลูกค้าใหม่
         # สมชาย ... นัดดูวันศุกร์" is a customer with an appointment in the

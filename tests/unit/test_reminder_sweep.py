@@ -444,6 +444,92 @@ class TestDigestBatching:
         assert {p["target_chann_uid"] for p in line_pushes} == {"CHN-1", "CHN-2"}
 
 
+class TestOverdueWorkIsNotAnnounced:
+    """Owner decision, 2 Sep 2026: the 08:00 digest announces only work
+    that has not passed. First design put overdue rows under a
+    "ค้างเกินกำหนด" heading; the owner reviewed it and chose silence — the
+    digest is "what is coming", and slipped work is looked up on demand
+    with รายการเตือน. So an overdue row (including the one the old parser
+    misfiled onto 26 ก.ย. 2506) must not appear at all, under any heading.
+    """
+
+    def _client(self, due_rows):
+        client = _FakeClient(
+            licenses=[{"id": "lic-1", "status": "trial", "created_by_chann_uid": "CHN-1"}],
+            due_by_license={"lic-1": due_rows},
+        )
+        client.customers = [
+            {"id": "c1", "customer_id": "C-2026-0011",
+             "first_name": "จิตวิทยา", "last_name": "ลายดอก"},
+        ]
+        client.deals = [{"id": "d1", "deal_id": "D-2026-0003"}]
+        return client
+
+    async def test_an_overdue_row_is_dropped_from_the_digest(self, no_line_push):
+        today = datetime.now(BANGKOK).date()
+        client = self._client([
+            {"id": "a", "entity_type": "deal", "entity_id": "d1",
+             "due_date": today.isoformat(), "due_time": "09:00:00", "notes": None,
+             "owner_chann_uid": "CHN-1"},
+            {"id": "b", "entity_type": "customer", "entity_id": "c1",
+             "due_date": (today - timedelta(days=3)).isoformat(), "due_time": None,
+             "notes": None, "owner_chann_uid": "CHN-1"},
+        ])
+        summary = await sweep_due_follow_ups(client)
+        message = client.pushed[0]["message"]
+        assert "งานวันนี้ 1 รายการ" in message, message
+        assert "C-2026-0011" not in message and "จิตวิทยา" not in message, message
+        assert "ค้างเกินกำหนด" not in message, message
+        assert summary["overdue_dropped"] == 1
+        # Dropped from the DIGEST only. The fake implements no
+        # set_follow_up_status at all, so had the sweep tried to mutate the
+        # row this test would have failed with an AttributeError.
+
+    async def test_only_overdue_work_means_no_message_at_all(self, no_line_push):
+        """The exact shape of the 1 Sep incident: had this policy been live,
+        the misfiled 2506 row would have produced silence, not a wrong
+        "งานวันนี้ 3 รายการ"."""
+        client = self._client([
+            {"id": "b", "entity_type": "customer", "entity_id": "c1",
+             "due_date": "1963-09-26", "due_time": None, "notes": None,
+             "owner_chann_uid": "CHN-1"},
+        ])
+        summary = await sweep_due_follow_ups(client)
+        assert client.pushed == [], client.pushed
+        assert summary["sent"] == 0
+        assert summary["overdue_dropped"] == 1
+
+    async def test_a_lookahead_row_shows_its_date_so_it_cannot_pass_as_today_s(self, no_line_push):
+        """days=1 pulls tomorrow in; the row must carry its date (BE, like
+        everything the reader sees) instead of a bare clock column."""
+        today = datetime.now(BANGKOK).date()
+        tomorrow = today + timedelta(days=1)
+        client = self._client([
+            {"id": "a", "entity_type": "deal", "entity_id": "d1",
+             "due_date": tomorrow.isoformat(), "due_time": "09:00:00", "notes": None,
+             "owner_chann_uid": "CHN-1"},
+        ])
+        await sweep_due_follow_ups(client, days=1)
+        message = client.pushed[0]["message"]
+        assert str(tomorrow.year + 543) in message, message
+        assert str(tomorrow.day) in message, message
+
+    async def test_a_digest_of_only_today_s_work_reads_exactly_as_before(self, no_line_push):
+        """The common case must not change shape: same heading, bare clock
+        column, no per-row dates."""
+        today = datetime.now(BANGKOK).date()
+        client = self._client([
+            {"id": "a", "entity_type": "deal", "entity_id": "d1",
+             "due_date": today.isoformat(), "due_time": "09:00:00", "notes": None,
+             "owner_chann_uid": "CHN-1"},
+        ])
+        await sweep_due_follow_ups(client)
+        message = client.pushed[0]["message"]
+        assert message.startswith("งานวันนี้ 1 รายการ")
+        assert "09:00" in message
+        assert str(today.year + 543) not in message
+
+
 class TestIdempotency:
     """Cloud Scheduler retries a failed run, and a run can fail after sending
     some of its messages. Re-sending what already went out teaches people to

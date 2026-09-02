@@ -7,6 +7,7 @@ that OpenRouter actually answers Thai in under 3s is runtime acceptance
 """
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import sys
 from decimal import Decimal
@@ -427,6 +428,16 @@ class FakeDataClient:
         if status:
             rows = [r for r in rows if r.get("status") == status]
         return rows
+
+    async def set_follow_up_status(self, license_id, follow_up_id, status, actor_id=None):
+        self.recorded.append(("set_follow_up_status", license_id, follow_up_id, status, actor_id))
+        if self._raises:
+            raise self._raises
+        for row in getattr(self, "_follow_ups", []):
+            if row["id"] == follow_up_id:
+                row["status"] = status
+                return dict(row)
+        raise AssertionError(f"no such follow-up {follow_up_id}")
 
     async def due_follow_ups(self, license_id, days=1):
         self.recorded.append(("due_follow_ups", license_id, days))
@@ -3022,6 +3033,99 @@ class TestNoteAndReminderContextFallback:
         assert "ระบุรหัส" in reply.text or "เปิดดู" in reply.text
         assert not [r for r in client.recorded if r[0] == "create_note"]
 
+
+class TestReminderDatesCannotPoisonTheDigest:
+    """The two ends of one production incident (1 Sep 2026).
+
+    "เตือน C-2026-0011 2026-09-06" was stored as 26 September 1963 — the
+    d-m-y pattern matched "26-09-06" inside the ISO date the system itself
+    had written onto a quick-reply button — and the row then surfaced in
+    every morning digest as today's work, with nothing in chat able to
+    remove it. The parser fix is pinned in test_thai_datetime; these pin
+    the guard rails around it: a past date is refused at the door, and a
+    stored reminder can be cancelled again.
+    """
+
+    async def _client_with_customer(self, *extra_permissions):
+        client = FakeDataClient(
+            permission_keys=["customer.read", "followup.create", *extra_permissions],
+        )
+        customer = await client.create_customer("L1", {
+            "first_name": "จิตวิทยา", "last_name": "ลายดอก", "phone": "0879876646",
+        })
+        return client, customer
+
+    async def test_an_iso_date_on_a_system_button_lands_on_the_right_day(self):
+        from datetime import date, timedelta
+
+        client, customer = await self._client_with_customer()
+        # Computed, not literal: a literal "2026-09-06" would itself become
+        # a past date and trip the new guard once the calendar passes it.
+        future = date.today() + timedelta(days=200)
+        reply = await handle_chat_message(
+            client,
+            message=f"เตือน {customer['customer_id']} {future.isoformat()}",
+            ctx=_ctx(),
+        )
+        writes = [r for r in client.recorded if r[0] == "create_follow_up"]
+        assert len(writes) == 1
+        assert writes[0][2]["due_date"] == future.isoformat()
+        # The echo is what catches a misparse — it must show the stored day
+        # (Buddhist era, as everything shown to the reader is).
+        assert str(future.year + 543) in reply.text
+
+    async def test_a_date_already_past_is_refused_not_stored(self):
+        client, customer = await self._client_with_customer()
+        reply = await handle_chat_message(
+            client,
+            message=f"เตือน {customer['customer_id']} 15/03/2569",
+            ctx=_ctx(),
+        )
+        assert "ผ่านมาแล้ว" in reply.text
+        # The refusal echoes the date it read, so a misparse is still visible.
+        assert "มี.ค." in reply.text
+        assert not [r for r in client.recorded if r[0] == "create_follow_up"]
+
+    async def test_cancelling_clears_every_pending_reminder_on_the_record(self):
+        client, customer = await self._client_with_customer("followup.update")
+        code = customer["customer_id"]
+        await handle_chat_message(client, message=f"เตือน {code} พรุ่งนี้", ctx=_ctx())
+        await handle_chat_message(client, message=f"เตือน {code} อีก 3 วัน", ctx=_ctx())
+
+        reply = await handle_chat_message(client, message=f"ยกเลิกเตือน {code}", ctx=_ctx())
+
+        assert code in reply.text and "2 รายการ" in reply.text
+        assert all(r["status"] == "cancelled" for r in client._follow_ups)
+        # And the create matcher did NOT claim the message first: a cancel
+        # that answers "ไม่เข้าใจวันที่" is the collision this guards.
+        assert "ไม่เข้าใจวันที่" not in reply.text
+
+    async def test_cancelling_when_nothing_is_pending_says_so(self):
+        client, customer = await self._client_with_customer("followup.update")
+        reply = await handle_chat_message(
+            client, message=f"ยกเลิกเตือน {customer['customer_id']}", ctx=_ctx(),
+        )
+        assert "ไม่มีการเตือน" in reply.text
+        assert not [r for r in client.recorded if r[0] == "set_follow_up_status"]
+
+    async def test_cancelling_needs_followup_update_not_just_create(self):
+        client, customer = await self._client_with_customer()
+        code = customer["customer_id"]
+        await handle_chat_message(client, message=f"เตือน {code} พรุ่งนี้", ctx=_ctx())
+        reply = await handle_chat_message(client, message=f"ยกเลิกเตือน {code}", ctx=_ctx())
+        assert not [r for r in client.recorded if r[0] == "set_follow_up_status"]
+        assert client._follow_ups[0]["status"] == "pending"
+        assert reply.text  # a suggestion, never silence
+
+    async def test_cancel_falls_back_to_the_record_just_viewed(self):
+        client, customer = await self._client_with_customer("followup.update")
+        code = customer["customer_id"]
+        await handle_chat_message(client, message=f"เตือน {code} พรุ่งนี้", ctx=_ctx())
+        await handle_chat_message(client, message=f"ข้อมูลลูกค้า {code}", ctx=_ctx())
+        reply = await handle_chat_message(client, message="ยกเลิกเตือน", ctx=_ctx())
+        assert code in reply.text
+        assert client._follow_ups[0]["status"] == "cancelled"
+
     async def test_an_explicit_but_unknown_code_says_not_found_not_please_specify(self):
         """A wrong code and no code at all are different mistakes and need
         different replies — conflating them was a real bug caught while
@@ -3055,7 +3159,7 @@ class TestWorkListShowsNames:
         })
         client._follow_ups = [{
             "id": "FU-1", "entity_type": "customer", "entity_id": customer["id"],
-            "due_date": "2026-08-29", "due_time": None, "notes": None,
+            "due_date": _dt.date.today().isoformat(), "due_time": None, "notes": None,
         }]
         reply = await handle_chat_message(client, message="งานวันนี้", ctx=_ctx())
         assert "สมชาย ใจดี" in reply.text
@@ -3069,7 +3173,7 @@ class TestWorkListShowsNames:
         deal = await client.create_deal("L1", {"contact_id": customer["id"]})
         client._follow_ups = [{
             "id": "FU-2", "entity_type": "deal", "entity_id": deal["id"],
-            "due_date": "2026-08-29", "due_time": "14:00:00", "notes": "ปิดการขาย",
+            "due_date": _dt.date.today().isoformat(), "due_time": "14:00:00", "notes": "ปิดการขาย",
         }]
         reply = await handle_chat_message(client, message="งานวันนี้", ctx=_ctx())
         assert deal["deal_id"] in reply.text
@@ -3081,10 +3185,31 @@ class TestWorkListShowsNames:
         client = FakeDataClient(permission_keys=["followup.read", "customer.read"])
         client._follow_ups = [{
             "id": "FU-3", "entity_type": "customer", "entity_id": "does-not-exist",
-            "due_date": "2026-08-29", "due_time": None, "notes": None,
+            "due_date": _dt.date.today().isoformat(), "due_time": None, "notes": None,
         }]
         reply = await handle_chat_message(client, message="งานวันนี้", ctx=_ctx())
         assert "customer" in reply.text  # falls back to the bare type
+
+    async def test_an_overdue_row_is_not_listed_as_today_s_work(self):
+        """Owner decision, 2 Sep 2026, same as the morning digest: "งานวันนี้"
+        names only work that has not passed. The misfiled 26 ก.ย. 2506 row
+        surfaced here too — the command and the digest share the query that
+        includes overdue on purpose, so they must share the filter."""
+        client = FakeDataClient(permission_keys=["followup.read", "customer.read"])
+        customer = await client.create_customer("L1", {
+            "first_name": "จิตวิทยา", "last_name": "ลายดอก", "phone": "0879876646",
+        })
+        past = (_dt.date.today() - _dt.timedelta(days=3)).isoformat()
+        client._follow_ups = [
+            {"id": "FU-4", "entity_type": "customer", "entity_id": customer["id"],
+             "due_date": past, "due_time": None, "notes": None, "status": "pending"},
+        ]
+        reply = await handle_chat_message(client, message="งานวันนี้", ctx=_ctx())
+        assert "จิตวิทยา" not in reply.text, reply.text
+        assert "ยังไม่มี" in reply.text or "ไม่มีงาน" in reply.text, reply.text
+        # The row is dropped from THIS list only — รายการเตือน still shows it.
+        listing = await handle_chat_message(client, message="รายการเตือน", ctx=_ctx())
+        assert "จิตวิทยา" in listing.text and "เลยกำหนด" in listing.text
 
 
 class TestAIRoutedNotes:
@@ -4935,7 +5060,37 @@ class TestSeeingWhatIsComingUp:
         """A list in insertion order is a list nobody can act on."""
         client = await self._with_reminders()
         reply = await handle_chat_message(client, message="ดูนัดหมาย", ctx=_ctx())
-        assert reply.text.index("2026-09-03") < reply.text.index("2026-09-06")
+        assert reply.text.index("3 ก.ย.") < reply.text.index("6 ก.ย.")
+
+    async def test_rows_name_their_record_and_flag_overdue(self):
+        """The list must print each row's code and mark slipped dates.
+
+        With the digest silent about overdue work (owner decision), this
+        list is the one place a misfiled row — like the one the old parser
+        put on 26 ก.ย. 2506 — can be found, and ยกเลิกเตือน needs the code
+        printed here to act on it. The old rendering read entity_code off
+        the row, a field the data tier never sends, so no code ever showed.
+        """
+        from datetime import date, timedelta
+
+        client = FakeDataClient(
+            permission_keys=["followup.read", "customer.read"],
+        )
+        customer = await client.create_customer("L1", {
+            "first_name": "จิตวิทยา", "last_name": "ลายดอก", "phone": "0879876646",
+        })
+        slipped = date.today() - timedelta(days=3)
+        client._follow_ups = [{
+            "due_date": slipped.isoformat(), "notes": "ตามใบเสนอราคา",
+            "status": "pending", "entity_type": "customer",
+            "entity_id": customer["id"],
+        }]
+        reply = await handle_chat_message(client, message="รายการเตือน", ctx=_ctx())
+        assert customer["customer_id"] in reply.text, reply.text
+        assert "เลยกำหนด" in reply.text, reply.text
+        # Thai (BE) date, like everything else the reader sees — not raw ISO.
+        assert str(slipped.year + 543) in reply.text, reply.text
+        assert slipped.isoformat() not in reply.text, reply.text
 
     async def test_completed_reminders_are_not_shown(self):
         client = await self._with_reminders()

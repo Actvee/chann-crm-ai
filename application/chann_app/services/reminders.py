@@ -24,6 +24,7 @@ from datetime import date, datetime, time, timedelta, timezone
 
 from ..data_client import DataClient
 from .notify import send_notification
+from .thai_datetime import format_thai_date
 
 log = logging.getLogger(__name__)
 
@@ -37,6 +38,16 @@ DIGEST_HEADING = {
     "th": "งานวันนี้ {count} รายการ",
     "en": "{count} due today",
 }
+
+# Owner decision (2 Sep 2026): the morning digest announces only work that
+# has not passed — today and, when the sweep is called with a lookahead,
+# ahead. Overdue rows are NOT announced. First design put them under their
+# own "ค้างเกินกำหนด" heading; the owner reviewed the rendering and chose
+# silence instead: the digest is "what is coming", and slipped work is
+# looked up on demand with รายการเตือน (which names each row's real date)
+# and cleared with ยกเลิกเตือน. due_within() still returns overdue rows on
+# purpose — the filter lives in the sweep, not the query, so the list
+# command keeps seeing them.
 
 # Whole-day items line up under a dash so the timed ones read as a column.
 NO_TIME_MARK = "—"
@@ -86,8 +97,13 @@ def _coerce_date(value) -> date | None:
         return None
 
 
-def _render_line(item: dict, language: str) -> str:
-    """One row of the digest: when, who, and what to do."""
+def _render_line(item: dict, language: str, today: date) -> str:
+    """One row of the digest: when, who, and what to do.
+
+    A row due on a day other than today shows that date, so the reader
+    never has to guess which entries the heading's "วันนี้" actually
+    covers. Today's rows keep the bare clock column they always had.
+    """
     raw_time = item.get("due_time")
     clock = NO_TIME_MARK
     if raw_time:
@@ -97,7 +113,14 @@ def _render_line(item: dict, language: str) -> str:
         except ValueError:
             clock = str(raw_time)
 
-    line = f"{clock} · {item['who']}"
+    due_on = item.get("due_on")
+    if isinstance(due_on, date) and due_on != today:
+        when = format_thai_date(due_on) if language == "th" else due_on.isoformat()
+        head = when if clock == NO_TIME_MARK else f"{when} {clock}"
+    else:
+        head = clock
+
+    line = f"{head} · {item['who']}"
     if item.get("subject"):
         # Indented under its own row rather than appended: a subject is a
         # sentence, and running it onto the end makes both harder to scan.
@@ -105,15 +128,19 @@ def _render_line(item: dict, language: str) -> str:
     return line
 
 
-def _render_digest(items: list[dict], language: str) -> str:
+def _render_digest(items: list[dict], language: str, today: date) -> str:
     """The whole message one person receives.
 
     One message instead of one per follow-up: five due items used to arrive
     as five separate LINE pushes, which is harder to read than a list and
     spends five of the 500 free pushes a LINE account gets each month.
+
+    Overdue rows never reach here — the sweep drops them (owner decision,
+    see the note by DIGEST_HEADING). A row dated later than today (a
+    lookahead sweep) shows its date via _render_line.
     """
     heading = DIGEST_HEADING[language].format(count=len(items))
-    return heading + "\n\n" + "\n".join(_render_line(i, language) for i in items)
+    return heading + "\n\n" + "\n".join(_render_line(i, language, today) for i in items)
 
 
 async def _describe_entity(
@@ -177,7 +204,7 @@ async def sweep_due_follow_ups(client: DataClient, *, days: int = 0) -> dict:
     bad row would re-push everything that already succeeded.
     """
     today = datetime.now(BANGKOK_TZ).date()
-    summary = {"tenants": 0, "due": 0, "sent": 0, "skipped": 0, "failed": 0}
+    summary = {"tenants": 0, "due": 0, "sent": 0, "skipped": 0, "failed": 0, "overdue_dropped": 0}
 
     try:
         # NOT status="active": a new tenant's license defaults to "trial"
@@ -241,6 +268,14 @@ async def sweep_due_follow_ups(client: DataClient, *, days: int = 0) -> dict:
                 continue
             if item_date > today + timedelta(days=days):
                 continue
+            if item_date < today:
+                # Owner decision: the digest announces what is coming, not
+                # what slipped — overdue rows are dropped here, visible
+                # only through รายการเตือน. Counted under their own key so
+                # the sweep response still shows how much sits past due
+                # (the rows stay pending; nothing here mutates them).
+                summary["overdue_dropped"] += 1
+                continue
             summary["due"] += 1
 
             entity_id = str(item.get("entity_id") or "")
@@ -262,6 +297,11 @@ async def sweep_due_follow_ups(client: DataClient, *, days: int = 0) -> dict:
                 "entity_type": entity_type,
                 "entity_id": entity_id,
                 "due_time": item.get("due_time"),
+                # Already parsed above; rendering needs it to tell today's
+                # work from work that slipped, and re-parsing the wire value
+                # at render time is how the str-vs-date comparison bug got
+                # in the first time.
+                "due_on": item_date,
                 # Name the record, not its type. "customer" on its own is
                 # true and useless — it was what every reminder said before
                 # this, because notes were never stored and entity_type was
@@ -295,8 +335,8 @@ async def sweep_due_follow_ups(client: DataClient, *, days: int = 0) -> dict:
                 target_chann_uid=owner,
                 target_line_user_id=line_target,
                 type=REMINDER_TYPE,
-                message=_render_digest(items, "th"),
-                message_en=_render_digest(items, "en"),
+                message=_render_digest(items, "th", today),
+                message_en=_render_digest(items, "en", today),
                 entity_type=items[0]["entity_type"],
                 # The first item's id, so the duplicate guard has something
                 # to match on. Every other item in the digest is recorded by
@@ -321,8 +361,8 @@ async def sweep_due_follow_ups(client: DataClient, *, days: int = 0) -> dict:
                     extra["license_id"],
                     target_chann_uid=owner,
                     type=REMINDER_TYPE,
-                    message=_render_line(extra, "th"),
-                    message_en=_render_line(extra, "en"),
+                    message=_render_line(extra, "th", today),
+                    message_en=_render_line(extra, "en", today),
                     entity_type=extra["entity_type"],
                     entity_id=extra["entity_id"],
                     delivery_line=False,

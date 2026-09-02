@@ -157,6 +157,9 @@ does not exist anywhere else the model can check against):
   action="create": fields may include target_name, due_date, due_time,
     notes. Examples: "เตือนผมโทรหาคุณจุใจพรุ่งนี้เช้า", "อีกสามวันติดตาม
     ดีลนี้หน่อย".
+  action="cancel": the reminder is no longer needed. fields may include
+    code or target_name. Examples: "ไม่ต้องเตือนดีลนี้แล้ว", "เอาการเตือน
+    ของ C-2026-0001 ออกให้หน่อย".
 
 - entity="warranty" — a product's warranty registration, found by serial
   number.

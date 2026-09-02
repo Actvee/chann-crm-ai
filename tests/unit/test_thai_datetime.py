@@ -77,6 +77,24 @@ class TestAbsoluteDates:
     def test_numeric_date(self):
         assert parse_thai_date("15/03/2569", FRIDAY) == date(2026, 3, 15)
 
+    def test_an_iso_date_is_read_as_written_not_as_d_m_y(self):
+        """The production misread of 1 Sep 2026, pinned exactly.
+
+        "เตือน C-2026-0011 2026-09-06" was parsed as 26 September 1963: the
+        d-m-y pattern found "26-09-06" inside the ISO date, took "06" as a
+        two-digit Buddhist year, and the confirmation dutifully echoed
+        "26 ก.ย. 2506". ISO is the format the system writes onto its own
+        quick-reply buttons, so it must win — and the record code sitting
+        next to it must not confuse the read.
+        """
+        got = parse_thai_date("เตือน C-2026-0011 2026-09-06", date(2026, 9, 2))
+        assert got == date(2026, 9, 6)
+
+    def test_a_buddhist_year_in_iso_shape_converts_like_every_other(self):
+        """"2569-09-06" is 2026, not a literal year five centuries out that
+        would be stored, never announced, and silently wrong."""
+        assert parse_thai_date("2569-09-06", date(2026, 9, 2)) == date(2026, 9, 6)
+
     def test_an_impossible_date_is_refused_not_clamped(self):
         """31 February must not quietly become 28 February on a document
         someone is relying on."""

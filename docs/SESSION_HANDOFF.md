@@ -76,15 +76,85 @@ clone.
 
 ## Where things stand
 
-`origin/main` HEAD is **`e286648`**, deployed. Migration head is
+`origin/main` HEAD is **`c0c24b1`**. Migration head is
 **`0020_crm_essentials`**.
 
-**One patch is prepared and NOT deployed**:
-`simulation-round2-v1-3155.patch` (21 files, +2,250/−38). Everything in
-the two sections below is in it. 857 tests pass. Apply, verify, commit,
-build all three images. No migration.
+**The previous version of this section was stale in exactly the way the
+warning at the top of this file describes.** It said `e286648` was HEAD
+with `simulation-round2-v1-3155.patch` pending — that patch was in fact
+applied and pushed as `67f5a04`, and the dev-script toolbox followed as
+`c0c24b1`. What did NOT happen is the image build: **nothing after
+`e286648` has been deployed to Cloud Run.** Proof from live use, not from
+git: at 22:54 on 1 Sep the Sales OA still parsed `2026-09-06` as
+26 ก.ย. 2506, a bug `67f5a04` fixes.
 
-### What the last session changed, and why
+**One patch is prepared and NOT deployed**:
+`reminder-digest-truth-v2-*.patch` (application tier + tests +
+simulate-day scene + this file; supersedes the unused v1). 871 tests
+pass (617 unit/boundary + 254 integration). Apply, verify, commit,
+build all three images — three because `e286648..c0c24b1` already
+touches all three tiers, so this deploy carries them together. No
+migration.
+
+### The 2 Sep incident this patch closes (read as one chain)
+
+The owner set a reminder from the system's own quick-reply text —
+`เตือน C-2026-0011 2026-09-06` — on the **deployed** (old) parser, which
+read it as 26 ก.ย. 2506 and stored `due_date=1963-09-26`. The next
+morning's digest announced it under "งานวันนี้ 3 รายการ": the sweep
+includes overdue rows and the rendering never said which rows those
+were. And nothing in chat or the dashboard could touch a follow-up's
+status, so the row would have returned every morning. Fixes, one per
+link, plus the owner's policy call made on review:
+
+1. **ISO-first parsing** — already in `67f5a04`, undeployed; now pinned
+   by `test_an_iso_date_is_read_as_written_not_as_d_m_y`, plus BE-in-ISO
+   (`2569-09-06` → 2026) added this patch.
+2. **The digest announces only work that has not passed** (owner
+   decision, 2 Sep, reversing this patch's first design which put
+   overdue rows under a "ค้างเกินกำหนด" heading — the owner reviewed the
+   rendering and chose silence). The sweep drops `due_date < today`,
+   counted under `overdue_dropped` in the summary and never mutated; a
+   morning with only overdue work sends **nothing**. Chat's `งานวันนี้`
+   shares the query, so it now shares the filter.
+3. **A past date is refused at create** (`_handle_reminder_create`):
+   `due_date < today` no longer stores — the reply echoes the date it
+   read (the echo is what catches a misparse) and offers "พรุ่งนี้".
+4. **`ยกเลิกเตือน <code>`** (`_handle_reminder_cancel`, new): cancels
+   every pending follow-up on a record and states the count. Dispatched
+   BEFORE the create matcher ("ยกเลิกเตือน" contains "เตือน" plus a code
+   — the same longer-first rule as every Thai collision so far). Also
+   reachable through the AI as `followup`/`cancel` → `followup.update`.
+   First and only caller of `set_follow_up_status`, an endpoint the data
+   tier has carried since Phase 6 with nothing driving it.
+5. **`รายการเตือน` became load-bearing and was broken.** Under the new
+   policy it is the ONE place a slipped or misfiled row is visible — and
+   it read `entity_code` off rows that never carry it (so no code ever
+   showed, and `ยกเลิกเตือน` needs the code from exactly there) and
+   printed raw ISO dates. It now names each record the way the digest
+   does, prints Thai BE dates, and flags overdue rows `(เลยกำหนด)`.
+
+Also in this patch, from the same review pass: the work-list test
+fixtures' hard-coded `2026-08-29` had rotted into the past (replaced
+with computed dates); `simulate-day.py` gained a reminder-lifecycle
+scene with content asserts — create by ISO → list shows code and Thai
+date → past date refused → cancel → empty — because the 2 Sep incident
+showed the classifier alone cannot see a reply that is polite,
+well-formed, and wrong. The presentation tier was verified end to end
+(`npm ci`, `tsc --noEmit`, full `next build`; every LIFF route builds),
+and the standing `check-fields` DealDetail finding was investigated and
+is a **false positive of the checker's heuristic**: the page carries
+both `expected_close_date` and `lost_reason` (row 25-26 types, form
+descriptors at 401/408, and the stage-change payload at 282).
+
+**After this deploys, in chat (Sales OA):** the misfiled rows are now
+silent in the digest but still pending, and a reminder sitting on
+1963 will never ring — `ยกเลิกเตือน C-2026-0011` then
+`เตือน C-2026-0011 2026-09-06` so it actually fires on 6 ก.ย. (ISO
+parses correctly once deployed). `รายการเตือน` lists remaining stale
+rows flagged (เลยกำหนด); cancel the unwanted ones.
+
+## What the last session changed, and why
 
 Three rounds of work, each one starting from something the owner saw on
 their phone rather than something a test caught.
@@ -187,13 +257,15 @@ All three are now pinned by boundary tests that read the source as text.
 
 ## Immediate next actions (in order)
 
-0. **Deploy `simulation-round2-v1-3155.patch`.** Prepared, validated, not
-   applied. Three images, no migration. The deploy commands are in the
-   last chat and reproduced in `docs/DEPLOY.md` if that exists; otherwise
-   the shape is: apply → verify → commit → push → build three → digests
-   into tfvars → terraform apply, with
+0. **Deploy `reminder-digest-truth-v2-*.patch`** (which carries the
+   still-undeployed `67f5a04`+`c0c24b1` along with it — three images, no
+   migration). `reminder-digest-deploy.sh` in this delivery is the
+   one-shot: apply → verify → commit → push → build three into
+   `chann1-dev` (never `--source` — see the digest-drift section below) →
+   digests into tfvars → dev-infra-plan gate → terraform apply, with
    `gcloud run services update --image` as the fallback that has worked
-   every time terraform's IPv6 lookups failed.
+   every time terraform's IPv6 lookups failed. Then the in-chat data
+   cleanup listed under "Where things stand".
 
 1. **Rotate the LINE Sales channel secret.** It was printed in full in a
    chat transcript while debugging environment variables. This is
