@@ -16,6 +16,17 @@ type FollowUp = {
   status?: string | null;
 };
 
+/** Pending first and soonest first: the point of the panel is what is
+ * still to happen. Shared by the first load and every reload after an
+ * edit, so a row cannot jump position depending on how it arrived. */
+function sortFollowUps(rows: FollowUp[]): FollowUp[] {
+  const pending = (r: FollowUp) => (r.status === "pending" ? 0 : 1);
+  return [...rows].sort(
+    (a, b) =>
+      pending(a) - pending(b) || (a.due_date ?? "").localeCompare(b.due_date ?? ""),
+  );
+}
+
 type Note = {
   id: string;
   body?: string | null;
@@ -51,6 +62,84 @@ export function RelatedActivity({
   const { t } = useLanguage();
   const [followUps, setFollowUps] = useState<FollowUp[] | null>(null);
   const [notes, setNotes] = useState<Note[] | null>(null);
+  // Editing state. Appointments could be made and read from this panel
+  // but never changed: no way to mark one done, cancel it, move it, or
+  // add one — reported live (2 Sep) alongside the chat having the same
+  // gap. Kept in this component rather than lifted, because nothing
+  // above it needs to know.
+  const [busy, setBusy] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [form, setForm] = useState<{ date: string; time: string; note: string } | null>(null);
+  const [movingId, setMovingId] = useState<string | null>(null);
+
+  async function reload() {
+    const headers = proxyHeaders(token, licenseId);
+    const response = await fetch(
+      `/api/phase2/licenses/${licenseId}/follow-ups` +
+        `?entity_type=${entityType}&entity_id=${entityId}`,
+      { headers },
+    );
+    if (!response.ok) return;
+    const rows = (await response.json()) as FollowUp[];
+    setFollowUps(sortFollowUps(rows));
+  }
+
+  /** Set a follow-up's status — the endpoint the Data Tier has always had. */
+  async function setStatus(id: string, status: "completed" | "cancelled") {
+    setBusy(id);
+    setFailed(false);
+    try {
+      const response = await fetch(
+        `/api/phase2/follow-ups/${id}/status?status_value=${status}`,
+        { method: "PATCH", headers: proxyHeaders(token, licenseId) },
+      );
+      if (!response.ok) throw new Error(String(response.status));
+      await reload();
+    } catch {
+      setFailed(true);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /** Create one, optionally cancelling the row it replaces.
+   *
+   * Moving an appointment is create-then-cancel over the two endpoints
+   * that exist, matching what chat's "เลื่อนนัด" does — and in that
+   * order, so a failure leaves the old appointment standing rather than
+   * leaving the person with none.
+   */
+  async function saveAppointment(replaces: string | null) {
+    if (!form?.date) return;
+    setBusy(replaces ?? "new");
+    setFailed(false);
+    try {
+      const response = await fetch(`/api/phase2/follow-ups`, {
+        method: "POST",
+        headers: { ...proxyHeaders(token, licenseId), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          entity_type: entityType,
+          entity_id: entityId,
+          due_date: form.date,
+          due_time: form.time ? `${form.time}:00` : null,
+          notes: form.note || null,
+        }),
+      });
+      if (!response.ok) throw new Error(String(response.status));
+      if (replaces) {
+        await fetch(`/api/phase2/follow-ups/${replaces}/status?status_value=cancelled`, {
+          method: "PATCH", headers: proxyHeaders(token, licenseId),
+        });
+      }
+      setForm(null);
+      setMovingId(null);
+      await reload();
+    } catch {
+      setFailed(true);
+    } finally {
+      setBusy(null);
+    }
+  }
 
   useEffect(() => {
     if (!licenseId || !token || !entityId) return;
@@ -66,14 +155,7 @@ export function RelatedActivity({
         );
         if (response.ok && !cancelled) {
           const rows = (await response.json()) as FollowUp[];
-          // Pending first and soonest first: the point of the panel is
-          // what is still to happen.
-          rows.sort((a, b) => {
-            const pending = (r: FollowUp) => (r.status === "pending" ? 0 : 1);
-            return pending(a) - pending(b)
-              || (a.due_date ?? "").localeCompare(b.due_date ?? "");
-          });
-          setFollowUps(rows);
+          setFollowUps(sortFollowUps(rows));
         } else if (!cancelled) {
           setFollowUps([]);
         }
@@ -130,10 +212,99 @@ export function RelatedActivity({
                 )}
               </div>
               {row.notes && <div className="card-meta">{row.notes}</div>}
+              {row.status === "pending" && (
+                <div className="card-actions">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMovingId(row.id);
+                      setForm({
+                        date: row.due_date ?? "",
+                        time: String(row.due_time ?? "").slice(0, 5),
+                        note: row.notes ?? "",
+                      });
+                    }}
+                    disabled={busy !== null}
+                  >
+                    {t.dashboard.related.reschedule}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void setStatus(row.id, "completed")}
+                    disabled={busy !== null}
+                  >
+                    {busy === row.id ? t.dashboard.related.saving : t.dashboard.related.markDone}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void setStatus(row.id, "cancelled")}
+                    disabled={busy !== null}
+                  >
+                    {t.dashboard.related.cancelAppointment}
+                  </button>
+                </div>
+              )}
             </li>
           ))}
         </ul>
       )}
+
+      {form !== null ? (
+        <div className="card">
+          <label>
+            {t.dashboard.related.appointmentDate}
+            <input
+              type="date"
+              value={form.date}
+              onChange={(e) => setForm({ ...form, date: e.target.value })}
+            />
+          </label>
+          <label>
+            {t.dashboard.related.appointmentTime}
+            <input
+              type="time"
+              value={form.time}
+              onChange={(e) => setForm({ ...form, time: e.target.value })}
+            />
+          </label>
+          <label>
+            {t.dashboard.related.appointmentNote}
+            <input
+              type="text"
+              value={form.note}
+              onChange={(e) => setForm({ ...form, note: e.target.value })}
+            />
+          </label>
+          <div className="card-actions">
+            <button
+              type="button"
+              onClick={() => void saveAppointment(movingId)}
+              disabled={busy !== null || !form.date}
+            >
+              {busy !== null ? t.dashboard.related.saving : t.dashboard.related.save}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setForm(null);
+                setMovingId(null);
+              }}
+              disabled={busy !== null}
+            >
+              {t.dashboard.related.cancelForm}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setForm({ date: "", time: "", note: "" })}
+          disabled={busy !== null}
+        >
+          {t.dashboard.related.addAppointment}
+        </button>
+      )}
+      {failed && <p className="card-meta">{t.dashboard.related.actionFailed}</p>}
 
       <RelatedHeading title={t.dashboard.related.notes} count={notes?.length ?? 0} />
       {notes === null ? null : notes.length === 0 ? (

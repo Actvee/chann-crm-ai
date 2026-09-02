@@ -45,6 +45,10 @@ class FollowUpCreateIn(BaseModel):
     entity_type: str
     entity_id: uuid.UUID
     due_date: str
+    # Chat has stored a time on every appointment since the 09:00 default
+    # landed; this endpoint could not, so an appointment made from the
+    # dashboard was the only kind with no time on it.
+    due_time: str | None = None
     notes: str | None = None
 
 
@@ -109,6 +113,7 @@ async def create_follow_up(
             "entity_type": payload.entity_type,
             "entity_id": str(payload.entity_id),
             "due_date": payload.due_date,
+            "due_time": payload.due_time,
             "notes": payload.notes,
         },
         actor_id=principal.chann_uid,

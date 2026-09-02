@@ -196,6 +196,21 @@ async def reminder_lifecycle_day():
     check("and an unstated time defaulted to 09:00",
           any(w[2].get("due_time") == "09:00:00"
               for w in c.recorded if w[0] == "create_follow_up"), r.text)
+    # The 12:03 loop, replayed: a brand-new-sounding sentence naming a
+    # customer, a date in words, and a model that reports due_time missing.
+    await c.create_customer("L1", {
+        "first_name": "สมบัติ", "last_name": "ราชเทวี", "phone": "0879707586",
+    })
+    loop_ai = ai({"action": "create", "entity": "followup",
+                  "fields": {"target_name": "สมบัติ ราชเทวี", "notes": "ดู demo สินค้า"},
+                  "missing": ["due_time"]})
+    r = await say(c, "sales", "สมบัติ ราชเทวี 0879707586 อยากนัดดู demo สินค้าวันที่ 7",
+                  ai_client=loop_ai)
+    check("no raw JSON key is ever shown to a person",
+          "due_time" not in r.text and "service_address" not in r.text, r.text)
+    check("a named customer with a date books the appointment",
+          "สมบัติ" in r.text or "C-2026" in r.text, r.text)
+
     unknown = ai({"action": "suggest", "entity": None, "fields": {}})
     r = await say(c, "sales", "ลูกค้าอยากดูสินค้าวันที่ 6 ที่จะถึงนี้ตอน 9 โมงเช้า",
                   ai_client=unknown)

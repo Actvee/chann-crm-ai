@@ -3278,6 +3278,177 @@ class TestTheAssistantUnderstandsAppointments:
 
 
 
+class TestTheDueTimeLoop:
+    """The 12:03-12:04 screenshot (2 Sep) — a loop with no exit.
+
+    "สมบัติ ราชเทวี 0879707586 อยากนัดดู demo สินค้าวันที่ 7" came back as
+    "กรุณาระบุdue_time": a raw JSON key, for a field that has a default,
+    on a message that already carried a date. Answering "9.00" produced
+    "ไม่เข้าใจวันที่" — the model had dropped the date it was given.
+    Rephrasing produced the same demand again. Three separate failures
+    stacked into one trap, pinned here one by one.
+    """
+
+    def _ai_missing_due_time(self):
+        return httpx.AsyncClient(transport=_ai(json.dumps({
+            "action": "create", "entity": "followup",
+            "fields": {"target_name": "สมบัติ ราชเทวี", "notes": "ดู demo สินค้า"},
+            "missing": ["due_time"],
+        }, ensure_ascii=False)))
+
+    async def _client_with_sombat(self):
+        client = FakeDataClient(permission_keys=[
+            "customer.read", "customer.create", "followup.create", "followup.read",
+        ])
+        customer = await client.create_customer("L1", {
+            "first_name": "สมบัติ", "last_name": "ราชเทวี", "phone": "0879707586",
+        })
+        return client, customer
+
+    async def test_the_time_is_never_asked_for_it_has_a_default(self):
+        client, customer = await self._client_with_sombat()
+        reply = await handle_chat_message(
+            client,
+            message="สมบัติ ราชเทวี 0879707586 อยากนัดดู demo สินค้าวันที่ 7",
+            ctx=_ctx(), ai_client=self._ai_missing_due_time(),
+        )
+        assert "due_time" not in reply.text, reply.text
+        writes = [r for r in client.recorded if r[0] == "create_follow_up"]
+        assert len(writes) == 1, reply.text
+        assert writes[0][2]["due_date"].endswith("-07")
+        assert writes[0][2]["due_time"] == "09:00:00"
+        assert writes[0][2]["entity_id"] == customer["id"]
+
+    async def test_a_named_customer_is_a_target_without_a_code(self):
+        """The person typed a name and a phone, never a C- code — and had
+        no record in context. Demanding a code they have never seen is the
+        form-shaped failure this whole round is about."""
+        client, customer = await self._client_with_sombat()
+        reply = await handle_chat_message(
+            client, message="คุณ สมบัติ อยากนัดdemo พัดลม วันที่ 7 นี้",
+            ctx=_ctx(), ai_client=self._ai_missing_due_time(),
+        )
+        assert customer["customer_id"] in reply.text, reply.text
+        assert "ระบุรหัส" not in reply.text
+
+    async def test_a_date_in_the_sentence_survives_the_model_forgetting_it(self):
+        """The model returned no due_date at all; the sentence has "วันที่ 7"
+        in it and the parser can read it."""
+        client, _ = await self._client_with_sombat()
+        ai = httpx.AsyncClient(transport=_ai(json.dumps({
+            "action": "create", "entity": "followup",
+            "fields": {"target_name": "สมบัติ ราชเทวี"},
+        }, ensure_ascii=False)))
+        reply = await handle_chat_message(
+            client, message="นัดคุณสมบัติดูสินค้าวันที่ 7", ctx=_ctx(), ai_client=ai,
+        )
+        assert "ไม่เข้าใจวันที่" not in reply.text, reply.text
+        assert [r for r in client.recorded if r[0] == "create_follow_up"]
+
+    async def test_a_field_with_no_default_is_still_asked_for_in_thai(self):
+        """Pruning must not silence a genuine question — and when one is
+        asked, it is asked in Thai, never as a JSON key."""
+        from chann_app.services.chat import _prune_missing, ask_for_missing
+
+        still = _prune_missing(
+            ["due_date", "due_time"], {"entity": "followup"}, "นัดคุณสมบัติหน่อย",
+        )
+        assert still == ["due_date"]
+        out = ask_for_missing(still, "th")
+        assert "due_date" not in out and "วันที่ต้องการให้เตือน" in out
+
+    async def test_pruning_leaves_other_entities_alone(self):
+        from chann_app.services.chat import _prune_missing
+
+        missing = ["due_time", "phone"]
+        assert _prune_missing(missing, {"entity": "customer"}, "อะไรก็ได้") == missing
+
+
+class TestMovingAnAppointment:
+    """12:08, 2 Sep: "เปลี่ยนเวลาเป็น 13.00" → "คุณยังไม่มีสิทธิ์ทำสิ่งนี้"
+    plus a 20-line capability list, to a person holding every permission
+    involved. Nothing in the system could change an appointment's time:
+    no chat handler, no dashboard control, and ("update","followup") was
+    registered in ACTION_PERMISSIONS with nowhere to route.
+    """
+
+    async def _with_appointment(self):
+        client = FakeDataClient(permission_keys=[
+            "customer.read", "followup.create", "followup.read", "followup.update",
+        ])
+        customer = await client.create_customer("L1", {
+            "first_name": "สมบัติ", "last_name": "ราชเทวี", "phone": "0879707586",
+        })
+        code = customer["customer_id"]
+        await handle_chat_message(
+            client, message=f"ตั้งนัด ประชุมกับคุณสมบัติ {code} วันที่ 4", ctx=_ctx(),
+        )
+        return client, customer, code
+
+    async def test_a_bare_time_change_moves_the_appointment(self):
+        client, _, code = await self._with_appointment()
+        reply = await handle_chat_message(client, message="เปลี่ยนเวลาเป็น 13.00", ctx=_ctx())
+        assert "ไม่มีสิทธิ์" not in reply.text, reply.text
+        assert "13:00" in reply.text and code in reply.text
+        pending = [r for r in client._follow_ups if r["status"] == "pending"]
+        assert len(pending) == 1
+        assert pending[0]["due_time"] == "13:00:00"
+        # Only the time changed — the day it was on is kept.
+        assert pending[0]["due_date"].endswith("-04")
+
+    async def test_the_old_row_is_cancelled_not_left_behind(self):
+        client, _, _ = await self._with_appointment()
+        await handle_chat_message(client, message="เปลี่ยนเวลาเป็น 13.00", ctx=_ctx())
+        assert sum(1 for r in client._follow_ups if r["status"] == "cancelled") == 1
+        assert len(client._follow_ups) == 2  # old cancelled, new pending
+
+    async def test_moving_the_day_keeps_the_time(self):
+        client, _, _ = await self._with_appointment()
+        await handle_chat_message(client, message="เลื่อนนัดเป็นวันที่ 5", ctx=_ctx())
+        pending = [r for r in client._follow_ups if r["status"] == "pending"]
+        assert pending[0]["due_date"].endswith("-05")
+        assert pending[0]["due_time"] == "09:00:00"
+
+    async def test_moving_into_the_past_is_refused(self):
+        client, _, _ = await self._with_appointment()
+        reply = await handle_chat_message(client, message="เลื่อนนัดเป็น 15/03/2569", ctx=_ctx())
+        assert "ผ่านมาแล้ว" in reply.text
+        assert all(r["due_date"].endswith("-04") for r in client._follow_ups if r["status"] == "pending")
+
+    async def test_nothing_to_move_says_so_and_offers_the_way_forward(self):
+        client = FakeDataClient(permission_keys=[
+            "customer.read", "followup.create", "followup.read", "followup.update",
+        ])
+        customer = await client.create_customer("L1", {"first_name": "ก", "last_name": "ข"})
+        await handle_chat_message(
+            client, message=f"ข้อมูลลูกค้า {customer['customer_id']}", ctx=_ctx(),
+        )
+        reply = await handle_chat_message(client, message="เลื่อนนัดเป็นพรุ่งนี้", ctx=_ctx())
+        assert "ไม่มีนัด" in reply.text and customer["customer_id"] in reply.text
+
+    async def test_moving_needs_both_permissions(self):
+        client = FakeDataClient(permission_keys=["customer.read", "followup.read"])
+        reply = await handle_chat_message(client, message="เปลี่ยนเวลาเป็น 13.00", ctx=_ctx())
+        assert not [r for r in client.recorded if r[0] == "create_follow_up"]
+        assert reply.text
+
+    async def test_a_new_appointment_can_be_added_with_phoem_nat(self):
+        """"เพิ่มนัด เข้าประชุมวันที่ 4 นี้" right after viewing a customer
+        (12:06) answered "กรุณาระบุชื่อลูกค้า" — the record was on screen."""
+        client = FakeDataClient(permission_keys=[
+            "customer.read", "followup.create", "followup.read",
+        ])
+        customer = await client.create_customer("L1", {
+            "first_name": "สมบัติ", "last_name": "ราชเทวี", "phone": "0879707586",
+        })
+        await handle_chat_message(
+            client, message=f"ข้อมูลลูกค้า {customer['customer_id']}", ctx=_ctx(),
+        )
+        reply = await handle_chat_message(client, message="เพิ่มนัด เข้าประชุมวันที่ 4 นี้", ctx=_ctx())
+        assert "ระบุชื่อลูกค้า" not in reply.text, reply.text
+        assert customer["customer_id"] in reply.text
+
+
 class TestWorkListShowsNames:
     """"งานวันนี้" listed the literal word "customer"/"deal" on every row,
     since due_follow_ups returns only entity_type and a UUID. Reported live

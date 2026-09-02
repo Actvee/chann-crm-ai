@@ -93,11 +93,11 @@ git: at 22:54 on 1 Sep the Sales OA still parsed `2026-09-06` as
 26 ก.ย. 2506, a bug `67f5a04` fixes.
 
 **One patch is prepared and NOT deployed**:
-`assistant-understanding-v1-*.patch` (application tier + tests +
-simulate-day + this file). 878 tests pass (624 unit/boundary + 254
-integration). Application image only — nothing outside that tier
-changed and the deployed base `bfe7aee` already carries all three
-current images. No migration.
+`appointments-editable-v1-*.patch`, on top of the deployed `8251537`.
+890 tests pass (636 unit/boundary + 254 integration); the presentation
+tier typechecks and builds. Application + presentation images, no
+migration. `bfe7aee` and `8251537` are both deployed and live — the
+earlier "assistant-understanding v2" work is folded into this patch.
 
 ### The 11:07 screenshot (2 Sep) — "ผู้ช่วย ไม่ใช่ตัวระบบพิมตามคำสั่ง"
 
@@ -139,6 +139,73 @@ gets a default.** What shipped, layer by layer:
    (`get_deal` missing on the chat fake, then `get_customer` one step
    deeper) was invisible behind a polite reply and "0 FINDINGS"; both
    methods now exist on the fake and the scene runs to completion.
+
+### The 12:03 loop (2 Sep) — the same lesson, one layer deeper
+
+Fifty minutes later, still on the deployed build: "สมบัติ ราชเทวี
+0879707586 อยากนัดดู demo สินค้าวันที่ 7" → **"กรุณาระบุdue_time"**.
+Answering "9.00" → "ไม่เข้าใจวันที่". Rephrasing → the same demand. A
+loop with no exit, made of three independent faults:
+
+7. **`_prune_missing`** — the model may not ask for what the system can
+   answer. `due_time` is never asked (it defaults to 09:00); `due_date`
+   is dropped from "missing" whenever the sentence contains a readable
+   date, because the parser decides that, not the model. Other entities
+   are untouched.
+8. **The raw sentence reaches the handler.** `_handle_ai_understood_intent`
+   never received the person's own words, so when the model omitted
+   `due_date`, "วันที่ 7" — sitting right there in the message — was
+   unreachable and the reply was "ไม่เข้าใจวันที่". The message is now
+   threaded through and appended to the reconstructed command.
+9. **A name is a target.** `_customer_named_in` asks the reverse question
+   from `_find_one_customer_by_name`: not "is this name inside that
+   record" but "is one of my records named inside this sentence" — which
+   is the shape real messages have ("นัดคุณสมบัติดูสินค้าวันที่ 7").
+   Exactly one match or nothing; two Somchais is a question, not a coin
+   flip. Runs last, only when no code and no context resolved, and only
+   with customer.read.
+
+Deploy note: v1's terraform **plan** failed on IPv6
+(`dial tcp [2001:…]:443: cannot assign requested address`) because
+`GODEBUG=netdns=go` was only wrapped around apply. The lesson generalises:
+**every terraform invocation on Cloud Shell needs it, plan included** —
+now baked into the deploy script's plan stage.
+
+### The 12:06-12:08 screenshots — "the system knows but cannot act"
+
+10. **Nothing could move an appointment.** "เปลี่ยนเวลาเป็น 13.00"
+    produced "คุณยังไม่มีสิทธิ์ทำสิ่งนี้" and a 20-line menu, to a person
+    holding every permission involved: chat had no handler, the dashboard
+    had no control, and `("update","followup")` had been registered in
+    ACTION_PERMISSIONS since Phase 6 with nowhere to route.
+    `_handle_reminder_move` now takes เลื่อนนัด/เปลี่ยนเวลา/แก้วันนัด
+    (dispatched before cancel and create, which they all contain) and the
+    AI's update intent. **Create-then-cancel over the two endpoints that
+    already exist**, not a new PATCH route: the Data Tier has no
+    follow-up update endpoint, and inventing an audit verb is what
+    silently rolled back whole transactions in Phase 3. In that order, so
+    a failure leaves the old appointment standing rather than none. A
+    bare time keeps the day; a bare day keeps the time.
+11. **"เพิ่มนัด" was not a create trigger** — "เพิ่มนัด เข้าประชุมวันที่
+    4 นี้", typed seconds after opening C-2026-0014, answered
+    "กรุณาระบุชื่อลูกค้า" about the record on screen.
+12. **The dashboard could show appointments but not touch them.** The
+    related panel now has เลื่อนนัด / เสร็จแล้ว / ยกเลิกนัด per row and an
+    add form, over `PATCH /follow-ups/{id}/status` and `POST /follow-ups`
+    — the latter gained `due_time`, which it never accepted, so an
+    appointment made from the dashboard was the only kind with no time on
+    it. Rescheduling in the UI is the same create-then-cancel as chat,
+    deliberately: two paths doing one thing two ways is how they drift.
+
+**Still open, and the right next piece of work: replying to a message.**
+Quoting an old message to say which reminder or customer is meant does
+not work, and cannot be bolted on. LINE sends `quotedMessageId` on the
+webhook event, but nothing maps a message id back to the record it was
+about. It needs (a) recording the id LINE returns when the bot sends a
+message, against the entity ref that reply carried, and (b) reading
+`quotedMessageId` in the webhook and seeding `last_entity_ref` from it.
+A small schema addition plus webhook plumbing — phase-sized, and it
+should not be squeezed in beside behaviour fixes.
 
 ### The 2 Sep incident this patch closes (read as one chain)
 
@@ -301,7 +368,7 @@ All three are now pinned by boundary tests that read the source as text.
 
 ## Immediate next actions (in order)
 
-0. **Deploy `assistant-understanding-v1-*.patch`** via
+0. **Deploy `appointments-editable-v1-*.patch`** via
    `assistant-understanding-deploy.sh` — application image only, no
    migration. Same one-shot shape as before (apply → verify → test →
    commit → push → build into `chann1-dev`, never `--source` → digest

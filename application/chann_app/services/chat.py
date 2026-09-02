@@ -623,7 +623,14 @@ NOTE_LIST_TRIGGERS = ("ดูบันทึก", "บันทึกของ",
 # "ตั้งนัด"/"ตั้งเตือน" added from live use (2 Sep): "ตั้งนัดวันที่ 6
 # ที่จะถึง" starts with neither "นัด" nor "เตือน", missed every matcher,
 # and the person got a capability list for a perfectly ordinary sentence.
-REMINDER_TRIGGERS = ("เตือน", "นัด", "ตั้งนัด", "ตั้งเตือน", "remind")
+REMINDER_TRIGGERS = ("เตือน", "นัด", "ตั้งนัด", "ตั้งเตือน", "เพิ่มนัด", "remind")
+
+# Moving an existing appointment. Dispatched BEFORE creating, like
+# cancelling: every one of these contains a create trigger inside it.
+REMINDER_MOVE_TRIGGERS = (
+    "เลื่อนนัด", "เลื่อนเตือน", "เปลี่ยนเวลา", "เปลี่ยนวันนัด", "เปลี่ยนวัน",
+    "แก้เวลา", "แก้วันนัด", "reschedule",
+)
 # Dispatched BEFORE reminder creation: every one of these contains "เตือน",
 # so the create matcher would otherwise claim "ยกเลิกเตือน C-2026-0011" and
 # answer "ไม่เข้าใจวันที่" — the same longer-first rule every Thai trigger
@@ -667,6 +674,18 @@ REMINDER_CANCELLED = {
 REMINDER_CANCEL_NONE = {
     "th": "ไม่มีการเตือนที่ค้างอยู่ของ {code}",
     "en": "No pending reminders for {code}.",
+}
+REMINDER_MOVED = {
+    "th": "เลื่อนนัดของ {code} เป็นวันที่ {date} {time} แล้ว",
+    "en": "Moved the appointment for {code} to {date} {time}.",
+}
+REMINDER_MOVE_NONE = {
+    "th": "ไม่มีนัดที่ค้างอยู่ของ {code} ให้เลื่อน ถ้าต้องการตั้งใหม่พิมพ์ได้เลย เช่น \"เตือน {code} พรุ่งนี้ 13.00\"",
+    "en": "No pending appointment for {code} to move. To make one: \"remind {code} tomorrow 13:00\".",
+}
+REMINDER_MOVE_NEEDS_WHEN = {
+    "th": "จะเลื่อนเป็นวันไหนเวลาใด ลองพิมพ์ เช่น \"เลื่อนนัด {code} เป็นพรุ่งนี้ 13.00\"",
+    "en": "Move it to when? e.g. \"reschedule {code} to tomorrow 13:00\".",
 }
 REMINDER_CANCEL_NEEDS_TARGET = {
     "th": "ระบุรหัสด้วยว่ายกเลิกการเตือนของอะไร เช่น \"ยกเลิกเตือน C-2026-0001\" หรือเปิดดูข้อมูลนั้นก่อนแล้วค่อยพิมพ์ยกเลิก",
@@ -1081,6 +1100,122 @@ def _is_reminder_cancel_command(message: str) -> bool:
     return has_code and any(t in lowered for t in REMINDER_CANCEL_TRIGGERS)
 
 
+def _is_reminder_move_command(message: str) -> bool:
+    """Moving an existing appointment, told apart from making a new one.
+
+    Checked before both cancel and create: "เปลี่ยนเวลาเป็น 13.00" carries
+    no code, no verb they match, and a bare time — and on 2 Sep it fell all
+    the way through to "คุณยังไม่มีสิทธิ์ทำสิ่งนี้" for a person who had
+    every permission involved.
+    """
+    lowered = (message or "").strip().lower()
+    return bool(lowered) and any(t in lowered for t in REMINDER_MOVE_TRIGGERS)
+
+
+async def _handle_reminder_move(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
+    permission_keys: list[str], language: str, actor_id: str,
+) -> ChatReply:
+    """Move the pending appointment on a record to a new day and/or time.
+
+    Reported live (12:08, 2 Sep): the owner replied to a reminder message
+    with "เปลี่ยนเวลาเป็น 13.00" and got a capability list. Nothing in the
+    system could change an appointment's time at all — the chat had no
+    handler, the dashboard had no control, and the AI's ("update",
+    "followup") intent had a permission key registered but nowhere to go.
+
+    Implemented as cancel-then-create over the endpoints that already
+    exist, rather than a new PATCH route: the Data Tier can set a
+    follow-up's status and create one, and inventing a new verb here is
+    how the ck_audit_log_action constraint silently rolled back whole
+    transactions in Phase 3. The reply names the new day and time, and
+    only what was given changes — a bare time keeps the original date.
+    """
+    keys = set(permission_keys)
+    if not {"followup.update", "followup.create"} <= keys:
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+
+    license_id = str(license_id)
+    try:
+        target = await _resolve_target_or_context(client, ctx, license_id, message)
+    except _TargetNotFound as exc:
+        return ChatReply(
+            text=_t(NOT_FOUND_BY_CODE, language).format(what=exc.entity_type, code=exc.code)
+        )
+    if target is None:
+        target = await _customer_named_in(client, license_id, message, permission_keys)
+    if target is None:
+        return ChatReply(text=_t(REMINDER_CANCEL_NEEDS_TARGET, language))
+    entity_type, entity_id, code = target
+
+    try:
+        rows = await client.list_follow_ups(license_id, status="pending")
+    except Exception:
+        log.exception("reminder move could not list follow-ups")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    mine = [r for r in rows if str(r.get("entity_id")) == str(entity_id)]
+    if not mine:
+        return ChatReply(text=_t(REMINDER_MOVE_NONE, language).format(code=code))
+    # The soonest one: "เลื่อนนัด" with two pending means the next one.
+    mine.sort(key=lambda r: (str(r.get("due_date") or ""), str(r.get("due_time") or "")))
+    row = mine[0]
+
+    from .thai_datetime import format_thai_date, format_thai_time, parse_thai_date, parse_thai_time
+
+    today = datetime.now(BANGKOK_TZ).date()
+    new_date = parse_thai_date(message, today)
+    new_time = parse_thai_time(message)
+    if new_date is None and new_time is None:
+        return ChatReply(text=_t(REMINDER_MOVE_NEEDS_WHEN, language).format(code=code))
+    if new_date is None:
+        # Only a time was given — keep the day it was already on.
+        try:
+            new_date = date.fromisoformat(str(row.get("due_date") or ""))
+        except ValueError:
+            new_date = today
+    if new_date < today:
+        return ChatReply(
+            text=_t(REMINDER_DATE_PAST, language).format(
+                date=format_thai_date(new_date), code=code,
+            ),
+        )
+    if new_time is None:
+        try:
+            new_time = time.fromisoformat(str(row.get("due_time") or "09:00:00"))
+        except ValueError:
+            new_time = time(9, 0)
+
+    payload = {
+        "entity_type": entity_type,
+        "entity_id": str(entity_id),
+        "due_date": new_date.isoformat(),
+        "due_time": new_time.isoformat(),
+    }
+    if row.get("notes"):
+        payload["notes"] = row["notes"]
+    try:
+        # New one first: if creating fails, the person still has the old
+        # appointment rather than neither.
+        await client.create_follow_up(license_id, payload, actor_id=actor_id)
+        await client.set_follow_up_status(
+            license_id, str(row.get("id")), "cancelled", actor_id=actor_id,
+        )
+    except Exception:
+        log.exception("reminder move failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    await _remember_entity(
+        client, ctx, entity_type=entity_type, entity_id=str(entity_id), code=code,
+    )
+    return ChatReply(
+        text=_t(REMINDER_MOVED, language).format(
+            code=code, date=format_thai_date(new_date), time=format_thai_time(new_time),
+        ),
+        entity_type=entity_type, entity_id=entity_id,
+        quick_replies=[("รายการเตือน", "รายการเตือน")],
+    )
+
+
 async def _handle_reminder_cancel(
     client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
     permission_keys: list[str], language: str, actor_id: str,
@@ -1188,9 +1323,47 @@ async def _appointment_net(
     )
 
 
-async def _handle_reminder_create(
+async def _customer_named_in(
+    client: DataClient, license_id: str, message: str, permission_keys: list[str],
+) -> tuple[str, str, str] | None:
+    """The customer whose name appears in what the person wrote.
+
+    _find_one_customer_by_name asks "is this name inside that record"; this
+    asks the reverse — "is one of my records named inside this sentence" —
+    which is the shape a real message has: "นัดคุณสมบัติดูสินค้าวันที่ 7"
+    names a customer without a code, without a field, and without the word
+    order any lookup helper expects.
+
+    Exactly one match or nothing: two Somchais in one sentence is a
+    question to ask, not a coin to flip.
+    """
+    if "customer.read" not in set(permission_keys):
+        return None
+    text = (message or "").lower()
+    try:
+        rows = await client.list_customers(license_id)
+    except Exception:
+        log.exception("could not list customers to resolve a reminder target")
+        return None
+    matches = []
+    for row in rows:
+        first = str(row.get("first_name") or "").strip()
+        last = str(row.get("last_name") or "").strip()
+        full = f"{first} {last}".strip()
+        # Full name first, then the given name alone — "คุณสมบัติ" is how
+        # people write it, with the honorific glued on and no surname.
+        if (full and full.lower() in text) or (len(first) >= 2 and first.lower() in text):
+            matches.append(row)
+    if len(matches) != 1:
+        return None
+    row = matches[0]
+    return "customer", str(row["id"]), str(row.get("customer_id") or "")
+
+
+async def _handle_reminder_create(  # noqa: PLR0913
     client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
     permission_keys: list[str], language: str, actor_id: str,
+    target: tuple[str, str, str] | None = None,
 ) -> ChatReply:
     from .thai_datetime import format_thai_date, format_thai_time, parse_thai_date, parse_thai_time
 
@@ -1198,12 +1371,18 @@ async def _handle_reminder_create(
         return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
 
     license_id = str(license_id)
-    try:
-        target = await _resolve_target_or_context(client, ctx, license_id, message)
-    except _TargetNotFound as exc:
-        return ChatReply(
-            text=_t(NOT_FOUND_BY_CODE, language).format(what=exc.entity_type, code=exc.code)
-        )
+    if target is None:
+        # No caller-resolved target: fall back to a code in the text, then
+        # to the record we were just looking at.
+        try:
+            target = await _resolve_target_or_context(client, ctx, license_id, message)
+        except _TargetNotFound as exc:
+            return ChatReply(
+                text=_t(NOT_FOUND_BY_CODE, language).format(what=exc.entity_type, code=exc.code)
+            )
+    if target is None:
+        # Before giving up: a name in the sentence is a target too.
+        target = await _customer_named_in(client, license_id, message, permission_keys)
     if target is None:
         return ChatReply(text=_t(REMINDER_NEEDS_TARGET, language))
     entity_type, entity_id, code = target
@@ -4063,7 +4242,7 @@ async def _handle_sales_summary(
 
 async def _handle_ai_understood_intent(
     client: DataClient, *, intent: dict, ctx: ResolvedContext, license_id,
-    permission_keys: list[str], language: str,
+    permission_keys: list[str], language: str, message: str = "",
 ) -> ChatReply:
     """Route a request the AI recognised to the handler that already does it.
 
@@ -4124,9 +4303,42 @@ async def _handle_ai_understood_intent(
 
     if entity == "followup" and action == "create":
         due = _joined(fields.get("due_date"), fields.get("due_time"))
+        # The person's own sentence goes in too, not just the model's
+        # extracted fields: "วันที่ 7" lives in the message even when the
+        # model forgets to put it in due_date, and the parser reads it
+        # perfectly well (12:03, 2 Sep — the model returned no date and the
+        # assistant answered "ไม่เข้าใจวันที่" to a message containing one).
+        text = _joined("เตือน", due, target, fields.get("notes"), message)
+        resolved = None
+        if target and _find_entity_code(message) is None:
+            # A named customer is a target in its own right — waiting for a
+            # code the person has never seen is not how an assistant works.
+            row, err = await _find_one_customer_by_name(
+                client, str(license_id), target, language,
+                ctx=ctx, resume_entity="followup", resume_action="create",
+                resume_fields=fields,
+            )
+            if row is not None:
+                resolved = ("customer", str(row["id"]), str(row.get("customer_id") or ""))
+            elif not await client.get_last_entity_ref(ctx.chann_uid, ctx.oa):
+                # Unknown name and nothing in context: the not-found reply
+                # (which offers the candidates or a way to add them) is more
+                # use than booking against the wrong record.
+                return err
         return await _handle_reminder_create(
+            client, ctx=ctx, license_id=license_id, message=text,
+            permission_keys=permission_keys, language=language,
+            actor_id=ctx.chann_uid, target=resolved,
+        )
+
+    if entity == "followup" and action == "update":
+        # Registered in ACTION_PERMISSIONS since Phase 6 and unhandled ever
+        # since: the intent resolved, the permission passed, and the router
+        # fell through to the capability list.
+        return await _handle_reminder_move(
             client, ctx=ctx, license_id=license_id,
-            message=_joined("เตือน", due, target, fields.get("notes")),
+            message=_joined("เลื่อนนัด", code, target,
+                            fields.get("due_date"), fields.get("due_time"), message),
             permission_keys=permission_keys, language=language,
             actor_id=ctx.chann_uid,
         )
@@ -5810,7 +6022,38 @@ MISSING_FIELD_LABELS = {
     "scheduled_date": {"th": "วันนัดหมาย", "en": "the appointment date"},
     "scheduled_time": {"th": "เวลานัดหมาย", "en": "the appointment time"},
     "issue_description": {"th": "อาการหรือรายละเอียดงาน", "en": "what the job is"},
+    # Reminder fields — "กรุณาระบุdue_time" was shown to the owner twice in
+    # one minute (12:03/12:04, 2 Sep). Labels are the backstop; the real
+    # fix is _prune_missing below, which stops most of these being asked.
+    "due_date": {"th": "วันที่ต้องการให้เตือน", "en": "the reminder date"},
+    "due_time": {"th": "เวลา", "en": "the time"},
+    "notes": {"th": "รายละเอียด", "en": "the details"},
 }
+
+
+def _prune_missing(missing: list[str], intent: dict, message: str) -> list[str]:
+    """Drop anything we can answer ourselves before asking a person.
+
+    The 12:03 loop (2 Sep): "สมบัติ ราชเทวี 0879707586 อยากนัดดู demo
+    สินค้าวันที่ 7" came back with missing=["due_time"], so the assistant
+    demanded a raw key instead of booking a perfectly complete request —
+    and answering "9.00" produced the same demand again, because the model
+    kept reporting the field it had just been given. Two rules:
+
+    * A reminder's time is never worth asking for: it defaults to 09:00,
+      echoed in the confirmation.
+    * A date already present in the sentence ("วันที่ 7") is not missing,
+      whatever the model says — the parser, not the model, decides that.
+
+    Asking a person for something already on screen is the fastest way to
+    make an assistant feel like a form.
+    """
+    if intent.get("entity") != "followup":
+        return missing
+    pruned = [m for m in missing if m != "due_time"]
+    if "due_date" in pruned and _mentions_a_datetime(message):
+        pruned = [m for m in pruned if m != "due_date"]
+    return pruned
 
 
 def ask_for_missing(missing: list[str], language: str = "th") -> str:
@@ -7148,6 +7391,15 @@ async def handle_chat_message(
                 client, ctx=ctx, license_id=license_id,
                 permission_keys=permission_keys, language=language,
             )
+        # Moving comes before both: "เลื่อนนัด"/"เปลี่ยนเวลา" contain a
+        # create trigger, and a bare "เปลี่ยนเวลาเป็น 13.00" matches nothing
+        # else at all.
+        if _is_reminder_move_command(message):
+            return await _handle_reminder_move(
+                client, ctx=ctx, license_id=license_id, message=message,
+                permission_keys=permission_keys, language=language,
+                actor_id=ctx.chann_uid,
+            )
         # Cancelling comes before creating: "ยกเลิกเตือน C-2026-0011" names
         # a record and contains the create verb, so the create matcher would
         # otherwise claim it and answer "ไม่เข้าใจวันที่".
@@ -7497,7 +7749,7 @@ async def handle_chat_message(
         intent = _merge_pending(pending_intent, intent)
 
     # Missing fields come first: never refuse a request we did not understand.
-    missing = intent.get("missing") or []
+    missing = _prune_missing(intent.get("missing") or [], intent, message)
     if missing:
         # Remember what is still outstanding so the next message — which may
         # be nothing but the answer itself — can be understood as part of it.
@@ -7602,7 +7854,7 @@ async def handle_chat_message(
     if intent.get("entity") in ("ticket", "service_report", "followup", "warranty"):
         return await _handle_ai_understood_intent(
             client, intent=intent, ctx=ctx, license_id=license_id,
-            permission_keys=permission_keys, language=language,
+            permission_keys=permission_keys, language=language, message=message,
         )
     if intent.get("entity") == "line_item":
         return await _handle_line_item_intent(
