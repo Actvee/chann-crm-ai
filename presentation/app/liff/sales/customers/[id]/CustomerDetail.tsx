@@ -9,8 +9,11 @@ import { useLanguage } from "@/lib/i18n/LanguageProvider";
 import { AppShell, Badge } from "../../_components";
 import { Membership, fetchPermissions, initLiffSession, proxyHeaders } from "../../_lib";
 import { FieldSection, RecordHead, RelatedHeading } from "../../_record";
+import { RelatedActivity } from "../../_related";
 
 type Customer = {
+  created_at?: string | null;
+  updated_at?: string | null;
   id: string;
   customer_id: string;
   first_name?: string | null;
@@ -203,6 +206,8 @@ export default function CustomerDetail({
       {customer && (
         <>
           <RecordHead
+            createdAt={customer.created_at}
+            updatedAt={customer.updated_at}
             stage={customer.stage}
             title={fullName(customer)}
             subtitle={<span className="code">{customer.customer_id}</span>}
@@ -287,6 +292,13 @@ export default function CustomerDetail({
               ))}
             </ul>
           )}
+
+          <RelatedActivity
+            licenseId={licenseId}
+            token={token}
+            entityType="customer"
+            entityId={customerId}
+          />
         </>
       )}
     </AppShell>

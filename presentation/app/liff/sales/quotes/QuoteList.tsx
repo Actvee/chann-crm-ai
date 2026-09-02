@@ -7,10 +7,14 @@ import { AppShell, Badge, CompanyPicker, Count, Empty } from "../_components";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { InlineCreateForm } from "../../_inline-create";
+import {
+  ListControls, byNewest, byOldest, shortDate, useListControls,
+} from "../../_list-controls";
 
 import { Membership, fetchPermissions, initLiffSession, openExternal, proxyHeaders } from "../_lib";
 
 type Quote = {
+  created_at?: string | null;
   id: string;
   quote_id: string;
   status: string;
@@ -213,6 +217,18 @@ export default function QuoteList({ liffId }: { liffId: string }) {
     }
   }
 
+  const sorts = [
+    { key: "newest", label: t.dashboard.list.newest, compare: byNewest<Quote> },
+    { key: "oldest", label: t.dashboard.list.oldest, compare: byOldest<Quote> },
+    {
+      key: "code",
+      label: t.dashboard.list.byCode,
+      compare: (a: Quote, b: Quote) => b.quote_id.localeCompare(a.quote_id),
+    },
+  ];
+  const controls = useListControls(quotes, sorts, "newest");
+  const visibleQuotes = controls.visible;
+
   return (
     <AppShell
       title={t.quote.title}
@@ -224,7 +240,17 @@ export default function QuoteList({ liffId }: { liffId: string }) {
     >
       <CompanyPicker memberships={memberships} licenseId={licenseId} onChange={setLicenseId} />
 
-      <Count shown={quotes.length} total={quotes.length} />
+      <ListControls
+        sorts={sorts}
+        sortKey={controls.sortKey}
+        onSort={controls.setSortKey}
+        from={controls.from}
+        to={controls.to}
+        onFrom={controls.setFrom}
+        onTo={controls.setTo}
+      />
+
+      <Count shown={visibleQuotes.length} total={quotes.length} />
 
       {permissions.has("quote.create") && openDeals.length > 0 && (
         <InlineCreateForm
@@ -246,11 +272,11 @@ export default function QuoteList({ liffId }: { liffId: string }) {
         />
       )}
 
-      {quotes.length === 0 ? (
+      {visibleQuotes.length === 0 ? (
         <Empty message={t.dashboard.quotes.empty} />
       ) : (
         <ul className="list">
-          {quotes.map((quote) => (
+          {visibleQuotes.map((quote) => (
             <li key={quote.id} className="card" data-stage={quote.status}>
               <Link
                 className="row-link"

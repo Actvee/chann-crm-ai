@@ -1,4 +1,4 @@
-# Session Handoff — 1 Sep 2026 (evening)
+# Session Handoff — 2 Sep 2026
 
 Written because the conversations doing Phases 3-13 repeatedly hit their
 context limits. This is what the next AI session needs to pick up
@@ -76,223 +76,159 @@ clone.
 
 ## Where things stand
 
-`origin/main` HEAD is **`1b60907`**, deployed. Migration head is
+`origin/main` HEAD is **`e286648`**, deployed. Migration head is
 **`0020_crm_essentials`**.
 
-One patch is prepared on top of it and NOT yet deployed: the three-OA
-fixes plus the AI vocabulary work described below.
+**One patch is prepared and NOT deployed**:
+`simulation-round2-v1-3155.patch` (21 files, +2,250/−38). Everything in
+the two sections below is in it. 857 tests pass. Apply, verify, commit,
+build all three images. No migration.
 
-Everything below was exercised in LINE and in the LIFF dashboard on DEV.
-Where something is known NOT to work, it says so.
+### What the last session changed, and why
 
-### The concept the triggers were quietly breaking
+Three rounds of work, each one starting from something the owner saw on
+their phone rather than something a test caught.
 
-The product is a shop talking to an assistant. Typed triggers were only
-ever meant to be a fast path — for the phrasings people use most, and for
-the text the system writes on its own quick-reply buttons.
+**Every field migration 0020 added existed only in the database.** The
+close date, the lost reason, the quote's validity and its discount could
+all be stored and none could be seen, edited, or asked about. A deal page
+did not show what the deal was worth. The rule that came out of it, and
+that the next session should hold to: **a field added to the schema needs
+somewhere to show it, somewhere to edit it, and a way to ask about it in
+chat — in the same patch.** Otherwise it is a column nobody uses.
 
-They had become the vocabulary instead. Counting them: **28 trigger
-groups, and the AI knew 7 entities**. Service jobs, check-in, check-out,
-dispatch, warranties, teams, reminders, company settings and reports were
-all reachable ONLY by typing an exact phrase. The intent prompt even said
-"NOT a deal's line item" — so "ทำให้ราคาถูกลงหน่อยเป็น 1200" was answered
-with "that is not a feature yet" for a feature that plainly was.
+**The list pages could not create anything.** Customers, deals and quotes
+could each be promoted, advanced and issued, but not brought into
+existence; someone who opened the dashboard to add a customer had to go
+back to LINE and type a sentence. All three have inline create forms now,
+and the record pages create the things that belong to them — a deal from
+a customer, a quote from a deal — because the page already knows the
+answer to the question the list form has to ask.
 
-Seven entities were added to the prompt with examples of how people
-actually speak. Every one routes to the handler the typed path already
-uses: the model's job is to recognise the request and pull out the
-values, never to reimplement what happens next. One set of rules about
-finding a ticket, one about the dispatch gate, one about permissions.
+**Long lists were unusable.** A native select with four hundred customers
+in it cannot be scrolled on a phone, and the list closes when you look
+away. Pickers filter as you type and match on phone numbers and codes as
+well as names, because someone looking a customer up has the number from
+a missed call rather than the spelling of a surname.
 
-Four entities are deliberately left out — `role`, `member`, `audit_log`,
-`sales_group`. System configuration belongs on a screen, where the
-consequences of a misunderstanding are worst.
+### Two simulations, and what they found
 
-**A test now compares the two lists directly.** Adding a capability to
-`ACTION_PERMISSIONS` and forgetting to teach the AI fails the build.
+The most productive thing done all session was a script that plays a
+shop's day through the real chat handler on all three OAs and flags every
+reply that is an apology, a permission list, or "not a feature" for
+something the person can plainly do. `/tmp/simulate_day.py` and
+`/tmp/simulate_more.py` in the last session; worth rebuilding if they are
+gone, because unit tests assert what was thought of and these find what
+was not.
 
-Three related traps found the same way:
+**Twenty-three findings on the first run, most of them one fault.** "นัด"
+inside "มีลูกค้าใหม่ สมชาย … นัดดูวันศุกร์" matched the reminder trigger,
+so the customer was never created and every step after it failed as a
+consequence. That is the **seventh substring collision** in this project
+and the first to break the main flow of the product. A reminder command
+now has to START with its verb or name a record code.
 
-* `claim`, `check_in` and `check_out` were missing from
-  `ACTION_PERMISSIONS`, so the gate answered "no permission covers that"
-  for things the Technician OA does all day.
-* Claiming a ticket demanded a code, unlike check-in and check-out which
-  have inferred it since Phase 13 — "ถึงแล้ว" worked and "รับงาน" did
-  not, for no reason a technician could see.
-* Two quick-reply buttons the system writes ("สร้างลูกค้า", "สร้างสินค้า")
-  still spent an AI call to be told what the system already knew.
+The rest, briefly: a greeting on a staff OA spent an AI call and got an
+apology when the AI was down; "งานวันนี้" worked only on Sales;
+"ถึงแล้ว" was not a check-in phrase; TICKET_DETAIL_TRIGGERS was declared
+and never dispatched; "ข้อมูลลูกค้า สมชาย" demanded a code the person
+would have to look up first; dispatching checked ticket.update while the
+catalogue says ticket.assign; the AI was taught to emit ticket-create and
+report-read and nothing received either.
 
-### Owner decisions made this session
+**The second run** found the customer OA turning questions into work:
+"ช่างจะมากี่โมง" opened a second repair job, and typed while the address
+prompt was open it was saved as where the customer lives. A question is
+now answered with the job's status. A bare serial gets the same
+protection.
 
-* **Technician OA is capability-gated**, not role-gated. It required
-  `role == "technician"` exactly, which was right about the risk and
-  wrong about who works: a small shop's owner goes out on jobs and was
-  told they were "not linked to any company as a technician" at their own
-  company. The gate is `ticket.read` now, and a tenant that revokes it
-  from a role is honoured.
-* **Technicians can read warranties.** "เครื่องนี้ยังอยู่ในประกันไหม" is
-  what a customer asks the person standing in front of them. Read only;
-  registering one is still the shop's job.
-* **B2C only.** No company/organisation entity — a customer is a person.
-* **One phone, one customer** and **one OPEN deal per customer**. Open,
-  not ever: a customer who bought last year and comes back is the point
-  of keeping the record.
-* **new → lost** is a legal deal transition (departure from Spec 9.6).
-* **draft → rejected** is a legal quote transition (departure from Spec
-  10.1) — otherwise a draft written by mistake could only be abandoned by
-  sending it to the customer first.
+Also from that run: "ลดราคา 10%" was read as a line edit and looked for a
+product called "10%"; an ambiguous product name was answered "not found"
+when the lines were there, two of them; "ปิดสำเร็จ" with no code failed
+although the context had one; and voiding a quote was impossible in chat
+even though it is the only way to retire one issued with the wrong
+contents.
 
-### The list pages could not create anything
+### Thai text was being corrupted by the model
 
-Customers, deals and quotes could each be promoted, advanced and issued —
-everything except brought into existence. Someone who opened the
-dashboard to add a customer had to go back to LINE and type a sentence,
-which is a strange thing for a screen full of customers to require. All
-three now have an inline create form; the deal and quote forms pick from
-real records rather than asking for a code from memory.
+`ซื้อ` came back as `ซี้`, `สินค้า` as `สินค้`. A model copying a long
+Thai phrase into a JSON field drops vowel and tone marks — close enough
+to pass a review, wrong in the record a shop keeps about its customer.
 
-### The bug that ate most of a day, and what it teaches
+`services/ai/recover_text.py` keeps the model's judgment about WHICH span
+of the message is a note and throws away its transcription, locating the
+span in the original by its ends rather than matching it whole. The
+damage is in the middle, so any exact-match approach fails on exactly the
+input this exists for. Summaries are kept; structured fields are never
+touched.
 
-Issuing a quote appeared to fail for hours. The eventual cause was
-`ck_audit_log_action`: the constraint has allowed six verbs since Phase 3,
-and every phase since has written verbs outside that list —
-`link_document`, `upsert`, `status`, `remove_product`, `claim`, `reject`,
-`check_in`, `check_out`.
+**A different model may or may not help.** The owner asked; the honest
+answer is that better models drop marks less often but none guarantee it,
+the failure is silent when it happens, and the recovery costs nothing to
+keep. Try a model change if names start coming back wrong too, since
+recovery deliberately does not touch those.
 
-An audit entry shares a transaction with the change it records. So the
-constraint did not merely reject the audit row: it rolled back the PDF
-render, the GCS upload and the `generated_documents` insert alongside it.
-The file existed in the bucket, unreachable, while the salesperson was
-told the quote had not been issued.
+### Bugs that were mine, from earlier in the same session
 
-**The lesson is the ordering, not the list.** A constraint guarding a
-write that shares a transaction with it destroys good work alongside bad,
-silently, and surfaces something three layers from the cause. Migration
-`0017` widened it; `chann_data/audit_actions.py` is now the single source
-and a test scans the routers for any `action=` literal missing from it.
+Worth reading as a class rather than as a list:
 
-Two more failures had the same shape — correct upstream, broken at a
-boundary, invisible in logs:
+* `2026-09-06` parsed as 26 September 1963 — the d-m-y pattern matched
+  first, and ISO is the format the system writes onto its own buttons.
+* `MemberOut` never sent the `id` the Application Tier had read since
+  Phase 12, so every technician's "งานของฉัน" raised KeyError. **The chat
+  fake returned an id the real endpoint did not**, which is the failure
+  the handoff already warned about and which hid it anyway.
+* The create forms on all three list pages imported `fetchPermissions`,
+  declared the state and never called it, so the buttons could never
+  render. A string replacement had silently not matched.
 
-* **503 on viewing a document.** The Presentation proxy parses every
-  response as JSON; a PDF is not JSON, `res.json()` threw, the catch
-  turned it into 503. No error in the Application Tier (it succeeded), no
-  503 in its access log (it never returned one). A boundary test now pins
-  the proxy's pass-through list to the routes that return files.
-* **"ไม่สามารถเปิดลิงก์ได้" when opening a PDF.** LINE's in-app browser
-  refuses `blob:` URLs, and LIFF is the only place this dashboard runs.
-  Documents now go through a signed link and `liff.openWindow`. A boundary
-  test fails the build if any quote page builds a blob URL again.
+All three are now pinned by boundary tests that read the source as text.
 
-When something works in isolation and fails in the product, suspect the
-boundary before the logic, and read the layer that does not appear in the
-logs.
-
-### Phases 11, 12, 13 and 16 are on DEV
-
-* **11 — assignment engine.** The AI writes a rule once, at configuration
-  time; the runtime engine only reads it, and lives in the Data tier
-  because the decision must happen inside the same transaction and lock
-  that reads current loads and writes the assignment. The mandatory race
-  test drives ten real concurrent transactions against a five-a-day cap.
-  `มอบหมาย T-… ให้อัตโนมัติ` invokes it.
-* **12 — tickets and the dispatch gate.** Refuses to dispatch until name,
-  phone, address, date and time exist, and names which are missing.
-  Visibility is enforced server-side (`visible_to`), never in the client.
-* **13 — field service.** Check-out requires a report; the technician is
-  asked one question at a time rather than handed a format. GPS is stored
-  on the photo, not the ticket, because check-in and check-out happen in
-  the same place hours apart.
-* **16 — warranties and serial routing.** A serial identifies the
-  product, the shop and the warranty at once. The cross-tenant lookup is
-  the only query here that deliberately leaves a tenant: it returns
-  nothing but what identifies a shop, matches exactly (never by prefix),
-  and is audited with `cross_tenant=true` whether or not it finds
-  anything.
-
-### The customer flow finally exists
-
-Phase 12.4 starts with a customer reporting a fault, and that entry point
-was never built — `create_ticket` had no caller, so every capability in
-Phases 12 and 13 operated on rows nothing could create. A customer now
-reports in one message with only a description; the address and the
-appointment are asked for afterwards, which is also where the dispatch
-gate gets what it needs. They can move or cancel the appointment, and the
-assigned technician is told when they do.
-
-### Chat no longer depends on the AI for its own buttons
-
-Quick replies are text the system writes itself, in a shape it chose.
-Routing that through a model failed in production and spent a call per
-tap. Deterministic now: creating deals and quotes, adding, editing and
-removing line items, check-in, check-out, claiming a ticket.
-
-**But deterministic paths must yield, not refuse.** Twice a
-short-circuit was added that answered "please name a customer" when
-context was absent — removing the AI's ability to read a name out of a
-longer sentence. Both times existing tests caught it. If a deterministic
-path cannot answer, fall through.
-
-### Substring collisions keep happening
-
-Five so far, every one caught by tests: `ไม่สำเร็จ`/`สำเร็จ`,
-`ออกเอกสารใหม่`/`ออกเอกสาร`, `ตั้งกฎมอบหมาย`/`มอบหมาย`,
-`เปิดดีล`/`เปิดดีลใหม่ (reopen)`, and `เพิ่มสินค้า` meaning both "line
-item" and "catalogue entry". Check every new trigger against the existing
-list before adding it.
-
-### Owner-approved departures from the Master Spec
-
-* `deal_id` is per-tenant, not globally unique (recorded earlier).
-* **`new → lost` is allowed.** Spec 9.6 lists no such transition, which
-  made a deal that dies before anyone quotes it impossible to close — the
-  most ordinary way for one to end. The alternatives were leaving it open
-  forever or inventing a quote that was never made; both corrupt the
-  pipeline numbers the stage exists to produce. `new → won` is still
-  refused.
-* **Quotes own their line items** (`quote_products`, migration `0019`).
-  A quote used to be a pointer at a deal, so two quotes on one deal were
-  necessarily identical and editing a deal rewrote drafts already under
-  discussion. Copied at creation, independent after. Issued quotes cannot
-  be edited at all.
-
-### Context, and why the TTL matters
-
-`last_customer_ref` and `last_entity_ref` are what let someone say
-"สร้างดีล" without naming anyone. Both were 600 seconds, which was long
-enough for a demo and too short for work: a salesperson confirmed a
-customer at 10:21, took a call, asked for a deal at 10:38, and was shown a
-list of permissions. Both are an hour now. Viewing a customer writes BOTH
-refs — it used to write only the generic one, which is why the fallback
-never fired.
-
----
 
 ## Immediate next actions (in order)
 
-1. **Rotate the LINE channel secret exposed in a chat transcript.** One
-   Sales channel secret was printed in full while debugging environment
-   variables. Rotate it in the LINE Developers console and update
-   `terraform.tfvars`. This is separate from, and more urgent than, the
-   deferred rotation below.
+0. **Deploy `simulation-round2-v1-3155.patch`.** Prepared, validated, not
+   applied. Three images, no migration. The deploy commands are in the
+   last chat and reproduced in `docs/DEPLOY.md` if that exists; otherwise
+   the shape is: apply → verify → commit → push → build three → digests
+   into tfvars → terraform apply, with
+   `gcloud run services update --image` as the fallback that has worked
+   every time terraform's IPv6 lookups failed.
 
-2. **Nothing displays a Service Report's PDF.** The report is written,
-   stored and now readable in the dashboard, and `attach_document` exists
-   to link a rendered file — but nothing renders one. Wire it to
-   SmartBrowz the same way quotes are, using
-   `document_type='service_report'` on the generic template tables
-   (Master Spec 13.3 requires that, not a second template model).
+1. **Rotate the LINE Sales channel secret.** It was printed in full in a
+   chat transcript while debugging environment variables. This is
+   separate from, and more urgent than, the deferred rotation above.
 
-3. **Phase 14 — approval workflow and satisfaction survey.** Service
-   reports already carry `submitted`/`approved`/`rejected` and the
-   dashboard can move between them; Phase 14 is the rest of it.
+2. **Service reports still have no PDF.** Everything up to
+   `attach_document` exists; nothing renders one. Wire it to SmartBrowz
+   the way quotes are, with `document_type='service_report'` on the
+   generic template tables — Master Spec 13.3 requires that, not a second
+   template model.
 
-4. **Phase 15, 17, 17.5, 18** remain. Phase 16 was pulled forward and is
-   done. Phase 16.5 (PDPA) is untouched.
+3. **Nothing calls `/platform/quotes/expire-overdue`.** The endpoint and
+   its scheduler auth exist and a Cloud Scheduler job has never been
+   created, so `valid_until` passes and quotes stay "sent". The reminder
+   sweep's job is the template.
 
-5. **CI auth method is still undecided** — WIF vs SA key vs Cloud Build
-   trigger. Every deploy so far has been manual from Cloud Shell.
+4. **Phase 14** (approval + satisfaction survey) is next by the spec.
+   Service reports already carry submitted/approved/rejected and the
+   dashboard can move between them, so 14 is the survey and the rest of
+   the approval flow. **Phase 15, 17, 17.5, 18** remain; **16.5 (PDPA)**
+   is untouched. Phase 16 was pulled forward and is done.
 
+5. **CI is still manual.** WIF vs SA key vs Cloud Build undecided, and
+   the deploying account cannot configure WIF itself.
+
+### Things deliberately not done
+
+* **`ลบลูกค้า`** — no delete anywhere, by design. Archiving exists;
+  deleting a customer with deals and tickets behind them is a decision
+  nobody has made yet.
+* **`งานพรุ่งนี้`** for technicians — only "today" and "mine" exist.
+* Free-form status from a technician ("ลูกค้าไม่อยู่บ้าน") has no
+  handler and falls to the suggestion path.
+* **B2C only**, at the owner's direction: a customer is a person, there
+  is no company/organisation entity.
 
 ## Already deployed, section by section (oldest first)
 

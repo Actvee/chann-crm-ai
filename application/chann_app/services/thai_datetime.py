@@ -64,6 +64,18 @@ def to_gregorian_year(year: int) -> int:
 
 def parse_thai_date(text: str, today: date) -> date | None:
     """A date from Thai text, or None when nothing is recognised."""
+    # ISO first, before anything that could mistake it. "2026-09-06" was
+    # read by the d-m-y pattern as day 26, month 09, and the trailing 06
+    # as a two-digit year — landing on 26 September 1963. The system
+    # writes ISO dates onto its own quick-reply buttons, so this is the
+    # format that failed most reliably.
+    iso = re.search(r"\b(\d{4})-(\d{2})-(\d{2})\b", text or "")
+    if iso:
+        try:
+            return date(int(iso.group(1)), int(iso.group(2)), int(iso.group(3)))
+        except ValueError:
+            pass
+
     # "วันที่ 6" — a bare day of the month, which is how someone says a
     # date within the next few weeks without naming the month. Taken as
     # the NEXT such day: "มาดูสินค้าวันที่ 6" said on the 20th means next

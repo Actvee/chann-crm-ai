@@ -33,7 +33,7 @@ export default function ProductList({ liffId }: { liffId: string }) {
   const [permissions, setPermissions] = useState<Set<string>>(new Set());
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState({
-    product_id: "", product_name: "", unit_price: "", category: "",
+    product_id: "", product_name: "", unit_price: "", category: "", sku: "", description: "",
   });
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState(t.dashboard.opening);
@@ -113,6 +113,8 @@ export default function ProductList({ liffId }: { liffId: string }) {
             product_name: draft.product_name.trim(),
             unit_price: draft.unit_price.trim() || null,
             category: draft.category.trim() || null,
+            sku: draft.sku.trim() || null,
+            description: draft.description.trim() || null,
           }),
         },
       );
@@ -126,7 +128,7 @@ export default function ProductList({ liffId }: { liffId: string }) {
         return;
       }
       say(t.dashboard.saved, "ok");
-      setDraft({ product_id: "", product_name: "", unit_price: "", category: "" });
+      setDraft({ product_id: "", product_name: "", unit_price: "", category: "", sku: "", description: "" });
       setAdding(false);
       await load();
     } finally {
@@ -179,6 +181,8 @@ export default function ProductList({ liffId }: { liffId: string }) {
                 ["product_name", t.product.title, ""],
                 ["unit_price", t.dashboard.products.price, "0.00"],
                 ["category", t.dashboard.products.category, ""],
+                ["sku", t.dashboard.products.sku, ""],
+                ["description", t.dashboard.products.description, ""],
               ] as const).map(([field, label, placeholder]) => (
                 <div className="field-row" key={field}>
                   <dt>{label}</dt>
@@ -243,6 +247,37 @@ export default function ProductList({ liffId }: { liffId: string }) {
                     })}`
                   : ` · ${t.dashboard.products.noPrice}`}
               </div>
+              {product.description && (
+                <div className="card-meta">{product.description}</div>
+              )}
+              {/* Editing an existing product. The save is an upsert keyed
+                  on product_id, so the form already handled edits — it
+                  just had no way to be filled with a product's current
+                  values, which made it a create-only form in practice. */}
+              {permissions.has("product.manage") && (
+                <div className="card-actions">
+                  <button
+                    type="button"
+                    className="btn"
+                    data-variant="quiet"
+                    onClick={() => {
+                      setDraft({
+                        product_id: String(product.product_id ?? product.sku ?? ""),
+                        product_name: String(product.product_name ?? ""),
+                        unit_price:
+                          product.unit_price != null ? String(product.unit_price) : "",
+                        category: String(product.category ?? ""),
+                        sku: String(product.sku ?? ""),
+                        description: String(product.description ?? ""),
+                      });
+                      setAdding(true);
+                      window.scrollTo({ top: 0, behavior: "smooth" });
+                    }}
+                  >
+                    {t.common.edit}
+                  </button>
+                </div>
+              )}
             </li>
           ))}
         </ul>

@@ -4,6 +4,8 @@ import { ReactNode, useEffect, useState } from "react";
 
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
+import { fullDateTime } from "../_list-controls";
+
 /**
  * The record-detail building blocks, shared by customers, deals and quotes.
  *
@@ -21,7 +23,7 @@ export type FieldSpec = {
   display?: (value: unknown) => ReactNode;
   /** Omit to make the field read-only regardless of permission. */
   editable?: boolean;
-  type?: "text" | "tel" | "email" | "textarea" | "number";
+  type?: "text" | "tel" | "email" | "textarea" | "number" | "date";
   placeholder?: string;
 };
 
@@ -183,13 +185,19 @@ export function RecordHead({
   subtitle,
   badge,
   actions,
+  createdAt,
+  updatedAt,
 }: {
   stage?: string;
   title: string;
   subtitle?: ReactNode;
+  /** System timestamps, shown on every record the way any CRM does. */
+  createdAt?: string | null;
+  updatedAt?: string | null;
   badge?: ReactNode;
   actions?: ReactNode;
 }) {
+  const { t } = useLanguage();
   return (
     <div className="record-head" data-stage={stage}>
       <h1 className="record-title">
@@ -197,6 +205,14 @@ export function RecordHead({
         {badge}
       </h1>
       {subtitle && <p className="record-sub">{subtitle}</p>}
+      {(createdAt || updatedAt) && (
+        <p className="record-sub" style={{ fontSize: 12, color: "var(--ink-faint)" }}>
+          {createdAt && `${t.dashboard.list.createdAt} ${fullDateTime(createdAt)}`}
+          {createdAt && updatedAt && updatedAt !== createdAt && " · "}
+          {updatedAt && updatedAt !== createdAt &&
+            `${t.dashboard.list.updatedAt} ${fullDateTime(updatedAt)}`}
+        </p>
+      )}
       {actions && <div className="actions">{actions}</div>}
     </div>
   );

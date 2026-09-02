@@ -1118,11 +1118,15 @@ class DataClient:
     async def transition_deal_stage(
         self, license_id: str, deal_id: str, stage: str, *,
         allow_reopen: bool = False, actor_id: str | None = None,
+        lost_reason: str | None = None,
     ) -> dict:
+        body: dict = {"stage": stage}
+        if lost_reason:
+            body["lost_reason"] = lost_reason
         resp = await self._client.post(
             f"{self._base}/internal/v1/licenses/{license_id}/deals/{deal_id}/stage",
             headers=self._headers_for(actor_id),
-            params={"allow_reopen": allow_reopen}, json={"stage": stage},
+            params={"allow_reopen": allow_reopen}, json=body,
         )
         return self._unwrap(resp)
 

@@ -773,6 +773,9 @@ class DealOut(BaseModel):
 
 class DealStageIn(BaseModel):
     stage: str
+    # Only meaningful with stage="lost". Optional there too: demanding a
+    # reason gets a column full of "-", which looks answered.
+    lost_reason: str | None = None
 
 
 class StorefrontProductOut(BaseModel):

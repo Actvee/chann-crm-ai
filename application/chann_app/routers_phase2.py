@@ -574,6 +574,7 @@ async def list_products(
 class DealStageWriteIn(BaseModel):
     stage: str
     allow_reopen: bool = False
+    lost_reason: str | None = None
 
 
 @router.post("/licenses/{license_id}/deals/{deal_id}/stage")
@@ -597,7 +598,7 @@ async def set_deal_stage(
         principal.require("deal.reopen")
     try:
         return await client.transition_deal_stage(
-            license_id, deal_id, payload.stage,
+            license_id, deal_id, payload.stage, lost_reason=payload.lost_reason,
             allow_reopen=payload.allow_reopen, actor_id=principal.chann_uid,
         )
     except DataTierError as exc:
@@ -1710,5 +1711,58 @@ async def set_quote_terms(
             license_id, quote_id, payload.model_dump(exclude_unset=True),
             actor_id=principal.chann_uid,
         )
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+# --------------------------------------------------- related lists
+#
+# What a record is connected to, for the panel under it. Every CRM shows
+# a record's activities and notes on the record; until now both existed
+# only in chat, so opening a customer told you nothing about the
+# appointment made with them ten minutes earlier.
+
+
+@router.get("/licenses/{license_id}/follow-ups")
+async def list_follow_ups(
+    license_id: str,
+    entity_type: str | None = None,
+    entity_id: str | None = None,
+    status: str | None = None,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    _require_same_tenant(principal, license_id)
+    principal.require("followup.read")
+    try:
+        rows = await client.list_follow_ups(license_id, status=status)
+    except DataTierError as exc:
+        raise _propagate(exc)
+    # Narrowed here rather than in the Data Tier: its list endpoint has no
+    # entity filter, and adding one for a per-tenant list this size is a
+    # migration's worth of ceremony for a filter the browser can do.
+    if entity_type and entity_id:
+        rows = [
+            r for r in rows
+            if str(r.get("entity_type") or "") == entity_type
+            and str(r.get("entity_id") or "") == entity_id
+        ]
+    return rows
+
+
+@router.get("/licenses/{license_id}/notes")
+async def list_notes(
+    license_id: str,
+    entity_type: str,
+    entity_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    _require_same_tenant(principal, license_id)
+    # Notes hang off a customer, deal or quote, and reading them needs
+    # the same permission as reading the record they hang off.
+    principal.require(f"{entity_type}.read")
+    try:
+        return await client.list_notes(license_id, entity_type, entity_id)
     except DataTierError as exc:
         raise _propagate(exc)

@@ -10,6 +10,7 @@ import { AppShell, Badge } from "../../_components";
 import { fetchPermissions, initLiffSession, proxyHeaders } from "../../_lib";
 import { ProductLineForm } from "../../../_product-line-form";
 import { FieldSection, RecordHead, RelatedHeading } from "../../_record";
+import { RelatedActivity } from "../../_related";
 
 type Product = {
   id: string;
@@ -19,6 +20,11 @@ type Product = {
 };
 
 type Deal = {
+  created_at?: string | null;
+  updated_at?: string | null;
+  expected_close_date?: string | null;
+  lost_reason?: string | null;
+  owner_member_id?: string | null;
   id: string;
   deal_id: string;
   stage: string;
@@ -255,6 +261,15 @@ export default function DealDetail({
   }
 
   async function setStage(stage: string) {
+    // Why, when it is a loss. Asked for once and never demanded: an
+    // empty answer is recorded as no reason, not refused, because a
+    // column full of "-" looks answered and teaches nothing.
+    let lostReason: string | undefined;
+    if (stage === "lost") {
+      const answer = window.prompt(t.dashboard.deals.askLostReason, "");
+      if (answer === null) return;
+      lostReason = answer.trim() || undefined;
+    }
     if (!deal) return;
     setBusy(true);
     say(t.dashboard.working);
@@ -264,7 +279,7 @@ export default function DealDetail({
         {
           method: "POST",
           headers: proxyHeaders(token, licenseId),
-          body: JSON.stringify({ stage, allow_reopen: false }),
+          body: JSON.stringify({ stage, allow_reopen: false, lost_reason: lostReason }),
         },
       );
       if (!response.ok) {
@@ -327,6 +342,8 @@ export default function DealDetail({
       {deal && (
         <>
           <RecordHead
+            createdAt={deal.created_at}
+            updatedAt={deal.updated_at}
             stage={deal.stage}
             title={deal.deal_id}
             badge={<Badge stage={deal.stage} label={stageLabel(deal.stage)} />}
@@ -363,6 +380,37 @@ export default function DealDetail({
             onSave={saveFields}
             fields={[
               { name: "deal_id", label: t.dashboard.fields.code },
+              // The total, computed from the lines. A deal page with no
+              // value on it is a deal page nobody can read at a glance,
+              // and it is the number the pipeline forecast is built from.
+              {
+                name: "value",
+                label: t.dashboard.deals.value,
+                display: () =>
+                  items.length
+                    ? money(
+                        items.reduce(
+                          (sum, p) =>
+                            sum + Number(p.qty ?? 0) * Number(p.quoted_unit_price ?? 0),
+                          0,
+                        ),
+                      )
+                    : "—",
+              },
+              {
+                name: "expected_close_date",
+                label: t.dashboard.deals.expectedClose,
+                editable: true,
+                type: "date",
+              },
+              ...(deal.stage === "lost"
+                ? [{
+                    name: "lost_reason",
+                    label: t.dashboard.deals.lostReason,
+                    editable: true,
+                    type: "textarea" as const,
+                  }]
+                : []),
               { name: "notes", label: t.dashboard.fields.notes, editable: true, type: "textarea" },
             ]}
           />
@@ -480,6 +528,13 @@ export default function DealDetail({
               </div>
             </>
           )}
+
+          <RelatedActivity
+            licenseId={licenseId}
+            token={token}
+            entityType="deal"
+            entityId={dealId}
+          />
         </>
       )}
     </AppShell>

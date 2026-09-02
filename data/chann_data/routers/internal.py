@@ -2141,6 +2141,7 @@ def transition_deal_stage(
         before = before_stage.stage if before_stage else None
         row = repo.transition_stage(
             scope, deal_id, to_stage=payload.stage, allow_reopen=allow_reopen,
+            lost_reason=payload.lost_reason,
         )
         AuditRepository(session).write(
             license_id=license_id, entity_type="deal", entity_id=row.id,

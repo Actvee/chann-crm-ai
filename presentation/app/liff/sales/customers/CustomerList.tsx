@@ -7,6 +7,9 @@ import { AppShell, Badge, CompanyPicker, Count, Empty } from "../_components";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { InlineCreateForm } from "../../_inline-create";
+import {
+  ListControls, byNewest, byOldest, shortDate, useListControls,
+} from "../../_list-controls";
 
 import { Membership, fetchPermissions, initLiffSession, proxyHeaders } from "../_lib";
 
@@ -18,6 +21,7 @@ type Customer = {
   stage: string;
   phone?: string | null;
   email?: string | null;
+  created_at?: string | null;
 };
 
 function fullName(customer: Customer): string {
@@ -149,13 +153,25 @@ export default function CustomerList({ liffId }: { liffId: string }) {
   // list is already loaded and SMB-scale, so a round trip per keystroke
   // would add latency for no benefit.
   const needle = query.trim().toLowerCase();
-  const visible = needle
+  const searched = needle
     ? customers.filter((customer) =>
         [fullName(customer), customer.phone, customer.email, customer.customer_id]
           .map((value) => String(value ?? "").toLowerCase())
           .some((value) => value.includes(needle)),
       )
     : customers;
+
+  const sorts = [
+    { key: "newest", label: t.dashboard.list.newest, compare: byNewest<Customer> },
+    { key: "oldest", label: t.dashboard.list.oldest, compare: byOldest<Customer> },
+    {
+      key: "name",
+      label: t.dashboard.list.byName,
+      compare: (a: Customer, b: Customer) => fullName(a).localeCompare(fullName(b), "th"),
+    },
+  ];
+  const controls = useListControls(searched, sorts, "newest");
+  const visible = controls.visible;
 
   return (
     <AppShell
@@ -177,6 +193,16 @@ export default function CustomerList({ liffId }: { liffId: string }) {
           type="search"
         />
       </label>
+
+      <ListControls
+        sorts={sorts}
+        sortKey={controls.sortKey}
+        onSort={controls.setSortKey}
+        from={controls.from}
+        to={controls.to}
+        onFrom={controls.setFrom}
+        onTo={controls.setTo}
+      />
 
       <Count shown={visible.length} total={customers.length} />
 

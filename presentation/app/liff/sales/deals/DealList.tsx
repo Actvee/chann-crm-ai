@@ -7,6 +7,9 @@ import { AppShell, Badge, CompanyPicker, Count, Empty } from "../_components";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { InlineCreateForm } from "../../_inline-create";
+import {
+  ListControls, byNewest, byOldest, shortDate, useListControls,
+} from "../../_list-controls";
 
 import { Membership, fetchPermissions, initLiffSession, proxyHeaders } from "../_lib";
 
@@ -15,8 +18,16 @@ type Deal = {
   deal_id: string;
   stage: string;
   notes?: string | null;
-  products?: unknown[];
+  products?: { qty?: number; quoted_unit_price?: string | number }[];
+  created_at?: string | null;
+  expected_close_date?: string | null;
 };
+
+function dealValue(deal: Deal): number {
+  return (deal.products ?? []).reduce(
+    (sum, p) => sum + Number(p.qty ?? 0) * Number(p.quoted_unit_price ?? 0), 0,
+  );
+}
 
 // Only the moves the Phase 9 state machine actually permits. Offering "won"
 // on an already-won deal would put a button in front of someone whose only
@@ -144,6 +155,15 @@ export default function DealList({ liffId }: { liffId: string }) {
   }
 
   async function setStage(deal: Deal, stage: string) {
+    // Why, when it is a loss. Asked for once and never demanded: an
+    // empty answer is recorded as no reason, not refused, because a
+    // column full of "-" looks answered and teaches nothing.
+    let lostReason: string | undefined;
+    if (stage === "lost") {
+      const answer = window.prompt(t.dashboard.deals.askLostReason, "");
+      if (answer === null) return;
+      lostReason = answer.trim() || undefined;
+    }
     setBusyId(deal.id);
     say(t.dashboard.working);
     try {
@@ -152,7 +172,7 @@ export default function DealList({ liffId }: { liffId: string }) {
         {
           method: "POST",
           headers: proxyHeaders(token, licenseId),
-          body: JSON.stringify({ stage, allow_reopen: false }),
+          body: JSON.stringify({ stage, allow_reopen: false, lost_reason: lostReason }),
         },
       );
       if (!response.ok) {
@@ -173,12 +193,32 @@ export default function DealList({ liffId }: { liffId: string }) {
     }
   }
 
-  const visible = openOnly
+  const stageFiltered = openOnly
     ? // Filtering on the two terminal stages rather than listing the open
       // ones means a stage added later counts as open by default, which is
       // the safer direction to be wrong in for a work queue.
       deals.filter((deal) => !["won", "lost"].includes(deal.stage))
     : deals;
+
+  const sorts = [
+    { key: "newest", label: t.dashboard.list.newest, compare: byNewest<Deal> },
+    { key: "oldest", label: t.dashboard.list.oldest, compare: byOldest<Deal> },
+    {
+      key: "value",
+      label: t.dashboard.list.highestValue,
+      compare: (a: Deal, b: Deal) => dealValue(b) - dealValue(a),
+    },
+    {
+      key: "closing",
+      label: t.dashboard.list.closingSoonest,
+      // Undated deals sink to the bottom rather than sorting as the
+      // earliest — an empty string compares before any real date.
+      compare: (a: Deal, b: Deal) =>
+        (a.expected_close_date ?? "9999").localeCompare(b.expected_close_date ?? "9999"),
+    },
+  ];
+  const controls = useListControls(stageFiltered, sorts, "newest");
+  const visible = controls.visible;
 
   return (
     <AppShell
@@ -209,6 +249,16 @@ export default function DealList({ liffId }: { liffId: string }) {
           {t.dashboard.deals.openOnly}
         </button>
       </div>
+
+      <ListControls
+        sorts={sorts}
+        sortKey={controls.sortKey}
+        onSort={controls.setSortKey}
+        from={controls.from}
+        to={controls.to}
+        onFrom={controls.setFrom}
+        onTo={controls.setTo}
+      />
 
       <Count shown={visible.length} total={deals.length} />
 
@@ -259,7 +309,16 @@ export default function DealList({ liffId }: { liffId: string }) {
                       "{count}", String(deal.products?.length ?? 0),
                     )
                   : t.dashboard.deals.noLineItems}
+                {dealValue(deal) > 0
+                  ? ` · ${dealValue(deal).toLocaleString("th-TH", { maximumFractionDigits: 0 })}`
+                  : ""}
                 {deal.notes ? ` · ${deal.notes}` : ""}
+              </div>
+              {/* Created time is a system field on every CRM record, and
+                  the thing a date filter is filtering on — a list that
+                  can be filtered by a date it does not show is a puzzle. */}
+              <div className="card-meta" style={{ fontSize: 12, color: "var(--ink-faint)" }}>
+                {shortDate(deal.created_at)}
               </div>
               </Link>
               {NEXT_STAGES[deal.stage]?.length ? (

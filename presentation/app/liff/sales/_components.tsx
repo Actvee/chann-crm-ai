@@ -5,6 +5,8 @@ import Script from "next/script";
 import { ReactNode, useEffect, useState } from "react";
 
 import { LanguageSwitcher } from "@/lib/i18n/LanguageSwitcher";
+import { usePathname, useRouter } from "next/navigation";
+
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { LIFF_SDK_SRC, Membership } from "./_lib";
@@ -107,6 +109,12 @@ export function AppShell({
             <LanguageSwitcher />
           </div>
         </header>
+        {/* Section navigation, on every Sales page. Without it, moving
+            from a deal to the quote list meant back to the menu and out
+            again — two taps and a full page for what every CRM does with
+            a tab strip. Scrolls sideways on a phone rather than wrapping,
+            so it stays one row. */}
+        {back && <SectionNav />}
         <div className="page">
           {status ? (
             <p className="status" data-tone={statusTone} aria-live="polite">
@@ -189,5 +197,50 @@ export function Count({ shown, total }: { shown: number; total: number }) {
             .replace("{shown}", String(shown))
             .replace("{total}", String(total))}
     </p>
+  );
+}
+
+
+const NAV = [
+  { href: "/liff/sales/customers", key: "customers" },
+  { href: "/liff/sales/deals", key: "deals" },
+  { href: "/liff/sales/quotes", key: "quotes" },
+  { href: "/liff/sales/tickets", key: "tickets" },
+  { href: "/liff/sales/reports", key: "reports" },
+  { href: "/liff/sales/products", key: "products" },
+] as const;
+
+/** The strip of sections under the header — where you are, and where else you can go. */
+function SectionNav() {
+  const { t } = useLanguage();
+  const pathname = usePathname();
+  const router = useRouter();
+  const labels: Record<string, string> = {
+    customers: t.customer.title,
+    deals: t.deal.title,
+    quotes: t.quote.title,
+    tickets: t.dashboard.tickets.title,
+    reports: t.dashboard.reports.title,
+    products: t.product.title,
+  };
+  return (
+    <nav className="section-nav" aria-label="sections">
+      {NAV.map((item) => {
+        const active = pathname?.startsWith(item.href);
+        return (
+          <button
+            key={item.key}
+            type="button"
+            data-active={active ? "true" : undefined}
+            aria-current={active ? "page" : undefined}
+            // router.push, not an anchor: a full page load loses the
+            // LIFF session (see the note on tiles in SalesMenu).
+            onClick={() => router.push(item.href)}
+          >
+            {labels[item.key]}
+          </button>
+        );
+      })}
+    </nav>
   );
 }

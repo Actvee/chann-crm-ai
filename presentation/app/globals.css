@@ -957,3 +957,65 @@ fieldset.group legend {
   justify-content: space-between;
   gap: 10px;
 }
+
+/* ---------------------------------------------------------- section nav
+ *
+ * One row that scrolls sideways. Wrapping to two rows on a phone would
+ * push the page content down by a header's worth every time; a strip
+ * that scrolls keeps its cost constant.
+ */
+
+.section-nav {
+  display: flex;
+  gap: 4px;
+  padding: 6px 12px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.section-nav::-webkit-scrollbar { display: none; }
+
+.section-nav button {
+  flex: 0 0 auto;
+  padding: 7px 12px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  font: inherit;
+  font-size: 13.5px;
+  color: var(--ink-soft);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.section-nav button[data-active] {
+  background: var(--accent-soft, rgba(212, 162, 78, 0.15));
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* --------------------------------------------------------- list controls */
+
+.list-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: end;
+  margin: 0 0 14px;
+}
+
+.list-controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+
+.list-controls select,
+.list-controls input {
+  font-size: 13.5px;
+  padding: 6px 8px;
+}

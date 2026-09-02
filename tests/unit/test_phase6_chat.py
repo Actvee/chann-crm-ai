@@ -217,6 +217,69 @@ class FakeDataClient:
                 p for p in deal.get("products", []) if p["id"] != line_id
             ]
 
+    async def pipeline_summary(self, license_id):
+        from decimal import Decimal as _D
+        by_stage = {}
+        open_value = _D("0")
+        for d in self._deals:
+            value = sum(
+                (_D(str(p.get("quoted_unit_price") or 0)) * int(p.get("qty") or 0)
+                 for p in (d.get("products") or [])), _D("0"),
+            )
+            bucket = by_stage.setdefault(d["stage"], {"count": 0, "value": _D("0")})
+            bucket["count"] += 1
+            bucket["value"] += value
+            if d["stage"] in ("new", "proposed"):
+                open_value += value
+        return {
+            "by_stage": {k: {"count": v["count"], "value": str(v["value"])}
+                         for k, v in by_stage.items()},
+            "open_value": str(open_value),
+            "closing_this_month": "0",
+            "overdue_count": 0,
+            "undated_open_count": sum(
+                1 for d in self._deals
+                if d["stage"] in ("new", "proposed") and not d.get("expected_close_date")
+            ),
+        }
+
+    async def list_warranties(self, license_id, serial_number=None, customer_chann_uid=None):
+        rows = list(getattr(self, "_warranties", []))
+        if serial_number:
+            rows = [
+                w for w in rows
+                if str(w.get("serial_number", "")).upper() == serial_number.upper()
+            ]
+        if customer_chann_uid:
+            rows = [w for w in rows if w.get("customer_chann_uid") == customer_chann_uid]
+        return rows
+
+    async def lookup_serial(self, serial_number, actor_chann_uid=""):
+        self.recorded.append(("lookup_serial", serial_number, actor_chann_uid))
+        for w in getattr(self, "_warranties", []):
+            if str(w.get("serial_number", "")).upper() == serial_number.upper():
+                return {"found": True, **w}
+        return {"found": False}
+
+    async def set_quote_status(self, license_id, quote_id, status, actor_id=None):
+        self.recorded.append(("set_quote_status", license_id, quote_id, status))
+        for q in self._quotes:
+            if q["id"] == quote_id:
+                q["status"] = status
+                return q
+        return {"id": quote_id, "status": status}
+
+    async def set_quote_terms(self, license_id, quote_id, fields, actor_id=None):
+        self.recorded.append(("set_quote_terms", license_id, quote_id, fields))
+        for q in self._quotes:
+            if q["id"] == quote_id:
+                q.update(fields)
+                return q
+        return {"id": quote_id, **fields}
+
+    async def list_service_reports(self, license_id, status=None):
+        return list(getattr(self, "_reports", []))
+
     async def list_quote_products(self, license_id, quote_id):
         return [q for q in getattr(self, "_quote_lines", []) if q["quote_id"] == quote_id]
 
@@ -459,10 +522,20 @@ class FakeDataClient:
             return [q for q in quotes if q["status"] == status]
         return quotes
 
+    async def update_deal(self, license_id, deal_id, fields, actor_id=None):
+        self.recorded.append(("update_deal", license_id, deal_id, fields))
+        for row in self._deals:
+            if row["id"] == deal_id:
+                row.update(fields)
+                return row
+        return {"id": deal_id, **fields}
+
     async def transition_deal_stage(self, license_id, deal_id, stage, *,
-                                     allow_reopen=False, actor_id=None):
+                                     allow_reopen=False, actor_id=None,
+                                     lost_reason=None):
         self.recorded.append(
-            ("transition_deal_stage", license_id, deal_id, stage, allow_reopen, actor_id)
+            ("transition_deal_stage", license_id, deal_id, stage, allow_reopen, actor_id,
+             lost_reason)
         )
         row = next(d for d in self._deals if d["id"] == deal_id)
         row["stage"] = stage
@@ -3318,7 +3391,7 @@ class TestTicketChatFlow:
     """
 
     async def test_the_dispatch_gate_names_what_is_missing(self):
-        client = FakeDataClient(permission_keys=["ticket.update"])
+        client = FakeDataClient(permission_keys=["ticket.update", "ticket.assign"])
         client._tickets = [{
             "id": "tk-1", "ticket_number": "T-2026-0001", "status": "open",
             "customer_name": None,
@@ -3333,7 +3406,7 @@ class TestTicketChatFlow:
         assert "เวลานัด" in reply.text
 
     async def test_a_complete_ticket_assigns(self):
-        client = FakeDataClient(permission_keys=["ticket.update"])
+        client = FakeDataClient(permission_keys=["ticket.update", "ticket.assign"])
         client._tickets = [{
             "id": "tk-1", "ticket_number": "T-2026-0001", "status": "open",
         }]
@@ -3345,7 +3418,7 @@ class TestTicketChatFlow:
         assert "T-2026-0001" in reply.text
 
     async def test_assigning_without_a_ticket_number_asks_for_one(self):
-        client = FakeDataClient(permission_keys=["ticket.update"])
+        client = FakeDataClient(permission_keys=["ticket.update", "ticket.assign"])
         reply = await handle_chat_message(client, message="มอบหมายให้ทีม AC", ctx=_ctx())
         assert "เลขงาน" in reply.text
         assert not [r for r in client.recorded if r[0] == "assign_ticket"]
@@ -3368,7 +3441,7 @@ class TestTicketChatFlow:
         """"Not found" and "not yours" are deliberately the same message —
         the distinction would confirm the ticket exists to someone who
         should not know that."""
-        client = FakeDataClient(permission_keys=["ticket.update"])
+        client = FakeDataClient(permission_keys=["ticket.update", "ticket.assign"])
         client._tickets = []
         reply = await handle_chat_message(client, message="รับงาน T-2026-0009", ctx=_ctx())
         assert "ไม่พบ" in reply.text
@@ -3403,7 +3476,7 @@ class TestTriggerOrdering:
 
     async def test_dispatching_a_ticket_still_reaches_the_ticket_handler(self):
         """The fix must not have traded one collision for the other."""
-        client = FakeDataClient(permission_keys=["ticket.update"])
+        client = FakeDataClient(permission_keys=["ticket.update", "ticket.assign"])
         client._tickets = [{
             "id": "tk-1", "ticket_number": "T-2026-0001", "status": "open",
         }]
@@ -3468,7 +3541,11 @@ class TestFieldServiceChat:
         await handle_chat_message(client, message="ปิดงาน T-2026-0001", ctx=_ctx())
         second = await handle_chat_message(client, message="คอมเพรสเซอร์รั่ว", ctx=_ctx())
         assert "แก้ไขอะไร" in second.text
-        await handle_chat_message(client, message="เปลี่ยนคอมใหม่", ctx=_ctx())
+        third = await handle_chat_message(client, message="เปลี่ยนคอมใหม่", ctx=_ctx())
+        # A third question now: parts. Asked because the shop bills for
+        # them, skippable because most visits replace nothing.
+        assert "อะไหล่" in third.text
+        await handle_chat_message(client, message="ไม่มี", ctx=_ctx())
 
         calls = [r for r in client.recorded if r[0] == "check_out_ticket"]
         assert len(calls) == 1
@@ -3714,7 +3791,7 @@ class TestDispatchTargets:
     product invented."""
 
     async def test_a_ticket_can_go_to_a_named_person(self):
-        client = FakeDataClient(permission_keys=["ticket.update"])
+        client = FakeDataClient(permission_keys=["ticket.update", "ticket.assign"])
         client._tickets = [{
             "id": "tk-1", "ticket_number": "T-2026-0001", "status": "open",
         }]
@@ -3733,7 +3810,7 @@ class TestDispatchTargets:
     async def test_automatic_asks_the_assignment_engine(self):
         """Phase 11 existed and nothing ever called it — 12.5 says the gate
         checks completeness and then the RULE decides who."""
-        client = FakeDataClient(permission_keys=["ticket.update"])
+        client = FakeDataClient(permission_keys=["ticket.update", "ticket.assign"])
         client._tickets = [{
             "id": "tk-1", "ticket_number": "T-2026-0001", "status": "open",
         }]
@@ -3747,7 +3824,7 @@ class TestDispatchTargets:
         assert "least_load" in reply.text
 
     async def test_two_people_with_the_same_name_asks(self):
-        client = FakeDataClient(permission_keys=["ticket.update"])
+        client = FakeDataClient(permission_keys=["ticket.update", "ticket.assign"])
         client._tickets = [{
             "id": "tk-1", "ticket_number": "T-2026-0001", "status": "open",
         }]
@@ -4795,12 +4872,21 @@ class TestButtonsTheSystemWritesDoNotNeedTheAI:
                     triggers += [t for t in value if isinstance(t, str)]
         for phrases, _, _ in module.BARE_CREATE_PROMPTS.values():
             triggers += list(phrases)
+        # Phrase groups that are dicts or plain tuples rather than
+        # *_TRIGGERS: the pipeline queries and the typed summary.
+        for phrases in module.DEAL_QUERY_PHRASES.values():
+            triggers += list(phrases)
+        triggers += list(module.SALES_SUMMARY_PHRASES)
+        triggers += list(module.REPORT_LIST_PHRASES)
+        triggers += list(module.REMINDER_LIST_TRIGGERS)
 
         dead = []
         for text in sorted(sent):
             probe = re.sub(r"\{[^}]*\}", "X", text).lower()
             if len(probe) < 3 or "_" in probe:
                 continue  # a format placeholder, not a button label
+            if text.startswith("{"):
+                continue  # trigger lives in the variable; nothing literal to check
             if not any(t.lower() in probe for t in triggers):
                 dead.append(text)
 
@@ -5003,3 +5089,341 @@ class TestADateBecomesAnOffer:
         from chann_app.services.thai_datetime import parse_thai_date
 
         assert parse_thai_date("เบอร์ 0812345678", date(2026, 9, 1)) is None
+
+
+class TestIsoDatesOnButtons:
+    """The system writes ISO dates onto its own quick-reply buttons.
+
+    "2026-09-06" was read by the d-m-y pattern as day 26, month 09 and a
+    two-digit year 06 — landing on 26 September 1963 and confirming a
+    reminder for a date sixty years gone. The format the system itself
+    produces was the one that failed most reliably.
+    """
+
+    def test_an_iso_date_is_read_as_written(self):
+        from datetime import date
+
+        from chann_app.services.thai_datetime import parse_thai_date
+
+        assert parse_thai_date("เตือน C-2026-0011 2026-09-06", date(2026, 9, 1)) == date(2026, 9, 6)
+
+    def test_iso_does_not_shadow_thai_formats(self):
+        from datetime import date
+
+        from chann_app.services.thai_datetime import parse_thai_date
+
+        assert parse_thai_date("15/03/2027", date(2026, 9, 1)) == date(2027, 3, 15)
+        assert parse_thai_date("พรุ่งนี้", date(2026, 9, 1)) == date(2026, 9, 2)
+
+    def test_an_impossible_iso_date_is_not_a_date(self):
+        from datetime import date
+
+        from chann_app.services.thai_datetime import parse_thai_date
+
+        assert parse_thai_date("2026-13-40", date(2026, 9, 1)) is None
+
+
+class TestThePipelineCanBeAskedAbout:
+    """Every field migration 0020 added could be filtered on a screen and
+    asked about nowhere. A salesperson between calls does not open a
+    screen to learn which deals are due this week; they ask."""
+
+    async def _pipeline(self):
+        from datetime import date, timedelta
+
+        client = FakeDataClient(permission_keys=[
+            "customer.read", "deal.create", "deal.read", "deal.update",
+        ])
+        today = date.today()
+        for i, (close, value, stage) in enumerate([
+            (today + timedelta(days=3), "5000", "proposed"),
+            (today + timedelta(days=40), "20000", "new"),
+            (today - timedelta(days=5), "1500", "new"),
+            (None, "800", "new"),
+            (today - timedelta(days=30), "9000", "lost"),
+        ]):
+            customer = await client.create_customer("L1", {
+                "first_name": f"ล{i}", "last_name": "ข", "phone": f"08000000{i:02d}",
+            })
+            deal = await client.create_deal("L1", {"contact_id": customer["id"]})
+            deal["stage"] = stage
+            deal["expected_close_date"] = close.isoformat() if close else None
+            deal["products"] = [{"quoted_unit_price": value, "qty": 1}]
+            if stage == "lost":
+                deal["lost_reason"] = "ราคาสูงไป"
+        return client
+
+    async def test_closing_this_month(self):
+        client = await self._pipeline()
+        reply = await handle_chat_message(client, message="ดีลเดือนนี้", ctx=_ctx())
+        assert "D-2026-0001" in reply.text
+        assert "5,000" in reply.text
+
+    async def test_overdue(self):
+        client = await self._pipeline()
+        reply = await handle_chat_message(client, message="ดีลเลยกำหนด", ctx=_ctx())
+        assert "D-2026-0003" in reply.text
+        assert "D-2026-0001" not in reply.text
+
+    async def test_over_a_value(self):
+        client = await self._pipeline()
+        reply = await handle_chat_message(client, message="ดีลเกิน 4000", ctx=_ctx())
+        assert "D-2026-0002" in reply.text and "D-2026-0001" in reply.text
+        assert "D-2026-0004" not in reply.text
+
+    async def test_lost_deals_show_their_reason(self):
+        """The reason is why the field exists: a shop that loses on price
+        should be able to see that it loses on price."""
+        client = await self._pipeline()
+        reply = await handle_chat_message(client, message="ดีลที่แพ้", ctx=_ctx())
+        assert "ราคาสูงไป" in reply.text
+
+    async def test_setting_a_close_date_in_words(self):
+        client = await self._pipeline()
+        await handle_chat_message(
+            client, message="ดีล D-2026-0004 คาดว่าจะปิดพรุ่งนี้", ctx=_ctx(),
+        )
+        updated = [r for r in client.recorded if r[0] == "update_deal"]
+        assert updated and "expected_close_date" in updated[-1][3]
+
+    async def test_closing_a_deal_with_a_reason(self):
+        client = await self._pipeline()
+        await handle_chat_message(
+            client, message="ปิดไม่สำเร็จ D-2026-0001 เพราะลูกค้าเลือกเจ้าอื่น", ctx=_ctx(),
+        )
+        moved = [r for r in client.recorded if r[0] == "transition_deal_stage"]
+        assert moved and moved[-1][3] == "lost"
+        assert moved[-1][6] == "ลูกค้าเลือกเจ้าอื่น"
+
+
+class TestADayPlayedThrough:
+    """Found by playing a shop's day through the handler and flagging
+    every reply that was an apology, a permission list, or "not a
+    feature" for something the person could plainly do.
+
+    Twenty-three such replies on the first run. Most were one fault:
+    "นัด" inside a sentence about a new customer matched the reminder
+    trigger, the customer was never created, and every step after it
+    failed as a consequence. The rest are below.
+    """
+
+    async def test_a_customer_with_an_appointment_in_the_note_is_created(self):
+        """The seventh substring collision, and the worst: it broke the
+        main flow of the product."""
+        client = FakeDataClient(permission_keys=[
+            "customer.create", "customer.read", "followup.create",
+        ])
+        ai = httpx.AsyncClient(transport=_ai(json.dumps({
+            "action": "create", "entity": "customer",
+            "fields": {
+                "first_name": "สมชาย", "last_name": "ใจดี", "phone": "0812345678",
+                "notes": "สนใจแอร์ นัดดูวันศุกร์",
+            },
+            "missing": [],
+        }, ensure_ascii=False)))
+        await handle_chat_message(
+            client, message="มีลูกค้าใหม่ สมชาย ใจดี เบอร์ 0812345678 สนใจแอร์ นัดดูวันศุกร์",
+            ctx=_ctx(), ai_client=ai,
+        )
+        assert [r for r in client.recorded if r[0] == "create_customer"], (
+            "the reminder trigger swallowed a new-customer message"
+        )
+
+    async def test_a_reminder_command_still_works(self):
+        client = FakeDataClient(permission_keys=["followup.create", "customer.read", "deal.read"])
+        customer = await client.create_customer("L1", {
+            "first_name": "ก", "last_name": "ข", "phone": "0800000000",
+        })
+        deal = await client.create_deal("L1", {"contact_id": customer["id"]})
+        await handle_chat_message(
+            client, message=f"เตือน {deal['deal_id']} พรุ่งนี้", ctx=_ctx(),
+        )
+        assert [r for r in client.recorded if r[0] == "list_deals"]
+
+    async def test_a_greeting_on_a_staff_oa_does_not_call_the_model(self):
+        client = FakeDataClient(permission_keys=["customer.read"])
+        reply = await handle_chat_message(client, message="สวัสดี", ctx=_ctx())
+        assert "ไม่พร้อมใช้งาน" not in reply.text
+        assert "วิธีใช้" in reply.text
+
+    async def test_a_technician_can_ask_for_todays_work(self):
+        client = FakeDataClient(permission_keys=["ticket.read"], role="technician")
+        client._tickets = [{
+            "id": "t1", "ticket_number": "T-2026-0001", "status": "assigned",
+            "assigned_to_ref": "member-1", "customer_name": "สมชาย",
+        }]
+        reply = await handle_chat_message(
+            client, message="งานวันนี้", ctx=_ctx(oa="technician"),
+        )
+        assert "T-2026-0001" in reply.text
+
+    async def test_arriving_can_be_said_the_way_people_say_it(self):
+        client = FakeDataClient(permission_keys=["ticket.read", "ticket.update"], role="technician")
+        client._tickets = [{
+            "id": "t1", "ticket_number": "T-2026-0001", "status": "assigned",
+            "accept_status": "accepted", "assigned_to_ref": "member-1",
+        }]
+        await handle_chat_message(client, message="ถึงแล้ว", ctx=_ctx(oa="technician"))
+        assert [r for r in client.recorded if r[0] == "check_in_ticket"]
+
+    async def test_ticket_detail_is_reachable(self):
+        """The trigger was declared and never dispatched."""
+        client = FakeDataClient(permission_keys=["ticket.read"], role="technician")
+        client._tickets = [{
+            "id": "t1", "ticket_number": "T-2026-0001", "status": "assigned",
+            "assigned_to_ref": "member-1", "customer_name": "สมชาย",
+            "service_address": "99/1", "issue_description": "แอร์ไม่เย็น",
+        }]
+        reply = await handle_chat_message(
+            client, message="ข้อมูลงาน T-2026-0001", ctx=_ctx(oa="technician"),
+        )
+        assert "99/1" in reply.text and "แอร์ไม่เย็น" in reply.text
+
+    async def test_customer_detail_accepts_a_name(self):
+        """The code is something they would have to look up first, which
+        defeats the point of asking."""
+        client = FakeDataClient(permission_keys=["customer.read"])
+        await client.create_customer("L1", {
+            "first_name": "สมชาย", "last_name": "ใจดี", "phone": "0812345678",
+        })
+        reply = await handle_chat_message(client, message="ข้อมูลลูกค้า สมชาย", ctx=_ctx())
+        assert "ไม่พบ" not in reply.text
+        assert "0812345678" in reply.text
+
+    async def test_dispatch_needs_assign_not_update(self):
+        """The catalogue says dispatching is its own capability; the
+        handler checked a different one and refused a role that had it."""
+        client = FakeDataClient(permission_keys=["ticket.read", "ticket.assign"])
+        client._tickets = [{"id": "t1", "ticket_number": "T-2026-0001", "status": "open"}]
+        reply = await handle_chat_message(
+            client, message="มอบหมาย T-2026-0001 ให้อัตโนมัติ", ctx=_ctx(),
+        )
+        assert "ไม่มีสิทธิ์" not in reply.text
+
+    async def test_staff_can_log_a_fault_for_a_customer(self):
+        """The AI was taught to emit this and nothing received it."""
+        client = FakeDataClient(permission_keys=["ticket.create", "customer.read"])
+        await client.create_customer("L1", {
+            "first_name": "สมชาย", "last_name": "ใจดี", "phone": "0812345678",
+        })
+        ai = httpx.AsyncClient(transport=_ai(json.dumps({
+            "action": "create", "entity": "ticket",
+            "fields": {"target_name": "สมชาย", "issue_description": "แอร์ไม่เย็น"},
+            "missing": [],
+        }, ensure_ascii=False)))
+        reply = await handle_chat_message(
+            client, message="ลูกค้าสมชายแจ้งแอร์ไม่เย็น", ctx=_ctx(), ai_client=ai,
+        )
+        assert [r for r in client.recorded if r[0] == "create_ticket"], reply.text
+
+
+class TestTheSecondDayOfSimulation:
+    """Edge cases the first pass did not reach: context without codes,
+    ambiguity, and the customer OA turning questions into work.
+    """
+
+    async def _shop(self):
+        client = FakeDataClient(permission_keys=[
+            "customer.create", "customer.read", "deal.create", "deal.read",
+            "deal.update", "quote.create", "quote.read", "quote.update",
+            "product.manage", "followup.create", "followup.read",
+        ])
+        client._products = [{
+            "id": "p1", "product_id": "FAN16", "product_name": "พัดลม 16 นิ้ว",
+            "unit_price": "1500.00",
+        }]
+        await client.create_customer("L1", {
+            "first_name": "สมชาย", "last_name": "ใจดี", "phone": "0812345678",
+        })
+        return client
+
+    async def test_a_whole_quote_discount_is_not_a_line_edit(self):
+        """"ลดราคา 10%" was read as a line edit and looked for a product
+        called "10%"."""
+        client = await self._shop()
+        await handle_chat_message(client, message="สร้างดีลให้สมชาย", ctx=_ctx())
+        await handle_chat_message(client, message="เพิ่มสินค้าพัดลม 2 ตัว", ctx=_ctx())
+        await handle_chat_message(client, message="สร้างใบเสนอราคา", ctx=_ctx())
+        await handle_chat_message(client, message="ส่วนลด 10%", ctx=_ctx())
+        terms = [r for r in client.recorded if r[0] == "set_quote_terms"]
+        assert terms and terms[-1][3].get("discount_percent") == "10"
+
+    async def test_a_bare_amount_is_an_absolute_discount(self):
+        client = await self._shop()
+        await handle_chat_message(client, message="สร้างดีลให้สมชาย", ctx=_ctx())
+        await handle_chat_message(client, message="เพิ่มสินค้าพัดลม 2 ตัว", ctx=_ctx())
+        await handle_chat_message(client, message="สร้างใบเสนอราคา", ctx=_ctx())
+        await handle_chat_message(client, message="ส่วนลด 500", ctx=_ctx())
+        terms = [r for r in client.recorded if r[0] == "set_quote_terms"]
+        assert terms and terms[-1][3].get("discount_amount") == "500"
+
+    async def test_a_quote_can_be_voided_in_chat(self):
+        """It cannot be edited once issued, so voiding is the honest way
+        to retire one with the wrong contents."""
+        client = await self._shop()
+        await handle_chat_message(client, message="สร้างดีลให้สมชาย", ctx=_ctx())
+        await handle_chat_message(client, message="เพิ่มสินค้าพัดลม 1 ตัว", ctx=_ctx())
+        await handle_chat_message(client, message="สร้างใบเสนอราคา", ctx=_ctx())
+        await handle_chat_message(client, message="ยกเลิกใบเสนอราคา", ctx=_ctx())
+        moved = [r for r in client.recorded if r[0] == "set_quote_status"]
+        assert moved and moved[-1][3] == "rejected"
+
+    async def test_a_bare_stage_word_uses_the_deal_just_worked_on(self):
+        client = await self._shop()
+        await handle_chat_message(client, message="สร้างดีลให้สมชาย", ctx=_ctx())
+        await handle_chat_message(client, message="เพิ่มสินค้าพัดลม 1 ตัว", ctx=_ctx())
+        await handle_chat_message(client, message="ปิดสำเร็จ", ctx=_ctx())
+        moved = [r for r in client.recorded if r[0] == "transition_deal_stage"]
+        assert moved and moved[-1][3] == "won"
+
+    async def test_an_ambiguous_line_name_offers_the_options(self):
+        """"not found" was false: the lines were there, two of them."""
+        client = await self._shop()
+        client._products.append({
+            "id": "p2", "product_id": "FAN18", "product_name": "พัดลม 18 นิ้ว",
+            "unit_price": "1800.00",
+        })
+        await handle_chat_message(client, message="สร้างดีลให้สมชาย", ctx=_ctx())
+        await handle_chat_message(client, message="เพิ่มสินค้าพัดลม 16 นิ้ว 1 ตัว", ctx=_ctx())
+        await handle_chat_message(client, message="เพิ่มสินค้าพัดลม 18 นิ้ว 1 ตัว", ctx=_ctx())
+        reply = await handle_chat_message(client, message="ลดราคาพัดลมเหลือ 1200", ctx=_ctx())
+        assert "ไม่พบ" not in reply.text
+        assert reply.quick_replies
+
+    async def test_the_sales_summary_can_be_asked_for(self):
+        """The AI was taught to emit entity="report" and nothing received
+        it, so the question was answered as a permission problem."""
+        client = await self._shop()
+        await handle_chat_message(client, message="สร้างดีลให้สมชาย", ctx=_ctx())
+        await handle_chat_message(client, message="เพิ่มสินค้าพัดลม 2 ตัว", ctx=_ctx())
+        reply = await handle_chat_message(client, message="ยอดขายเดือนนี้", ctx=_ctx())
+        assert "สรุปการขาย" in reply.text
+        assert "3,000" in reply.text
+
+    async def test_a_customer_question_does_not_open_a_second_job(self):
+        """"ช่างจะมากี่โมง" opened a repair job, because every message
+        that was not a command became one."""
+        client = FakeDataClient(permission_keys=["ticket.create", "ticket.read"])
+        await handle_chat_message(
+            client, message="แอร์ไม่เย็นครับ", ctx=_ctx(oa="customer"),
+        )
+        before = len([r for r in client.recorded if r[0] == "create_ticket"])
+        reply = await handle_chat_message(
+            client, message="ช่างจะมากี่โมงครับ", ctx=_ctx(oa="customer"),
+        )
+        after = len([r for r in client.recorded if r[0] == "create_ticket"])
+        assert after == before, "a question opened a second job"
+        assert "T-" in reply.text
+
+    async def test_a_serial_is_not_an_address(self):
+        """Typed while the bot waited for an address, "ABC123456" was
+        saved as where the customer lives."""
+        client = FakeDataClient(permission_keys=["ticket.create", "ticket.read", "warranty.read"])
+        await handle_chat_message(
+            client, message="เครื่องซักผ้าไม่ปั่น", ctx=_ctx(oa="customer"),
+        )
+        await handle_chat_message(client, message="ABC123456", ctx=_ctx(oa="customer"))
+        updates = [r for r in client.recorded if r[0] == "update_ticket"]
+        assert not any(
+            "ABC123456" in str(u[3].get("service_address", "")) for u in updates
+        )

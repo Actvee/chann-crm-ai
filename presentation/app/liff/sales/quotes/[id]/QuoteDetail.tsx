@@ -8,6 +8,7 @@ import { useLanguage } from "@/lib/i18n/LanguageProvider";
 import { AppShell, Badge } from "../../_components";
 import { ProductLineForm } from "../../../_product-line-form";
 import { RecordHead, RelatedHeading } from "../../_record";
+import { RelatedActivity } from "../../_related";
 import { initLiffSession, openExternal, proxyHeaders } from "../../_lib";
 
 type Product = {
@@ -29,6 +30,8 @@ type Detail = {
     valid_until?: string | null;
     discount_percent?: string | null;
     discount_amount?: string | null;
+    created_at?: string | null;
+    updated_at?: string | null;
   };
   deal: { id: string; deal_id: string; stage: string; products?: Product[] } | null;
   customer: {
@@ -315,6 +318,15 @@ export default function QuoteDetail({
     (sum, p) => sum + Number(p.qty ?? 0) * Number(p.quoted_unit_price ?? 0),
     0,
   );
+  // The same arithmetic the document uses: discount off first, VAT on
+  // what is left. A screen total that disagrees with the printed one is
+  // the worst possible disagreement, so the two must share the rule.
+  const discount = detail?.quote.discount_percent
+    ? Math.min(subtotal, subtotal * Number(detail.quote.discount_percent) / 100)
+    : detail?.quote.discount_amount
+      ? Math.min(subtotal, Number(detail.quote.discount_amount))
+      : 0;
+  const net = subtotal - discount;
 
   return (
     <AppShell
@@ -329,6 +341,8 @@ export default function QuoteDetail({
       {detail && (
         <>
           <RecordHead
+            createdAt={detail.quote.created_at}
+            updatedAt={detail.quote.updated_at}
             stage={detail.quote.status}
             title={detail.quote.quote_id}
             badge={
@@ -580,8 +594,27 @@ export default function QuoteDetail({
                 <span>{t.dashboard.deals.subtotal}</span>
                 <strong>{money(subtotal)}</strong>
               </div>
+              {discount > 0 && (
+                <>
+                  <div className="totals">
+                    <span>{t.dashboard.quotes.discount}</span>
+                    <strong>-{money(discount)}</strong>
+                  </div>
+                  <div className="totals">
+                    <span>{t.dashboard.quotes.net}</span>
+                    <strong>{money(net)}</strong>
+                  </div>
+                </>
+              )}
             </>
           )}
+
+          <RelatedActivity
+            licenseId={licenseId}
+            token={token}
+            entityType="quote"
+            entityId={quoteId}
+          />
         </>
       )}
     </AppShell>
