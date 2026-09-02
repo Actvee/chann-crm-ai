@@ -93,83 +93,79 @@ git: at 22:54 on 1 Sep the Sales OA still parsed `2026-09-06` as
 26 ก.ย. 2506, a bug `67f5a04` fixes.
 
 **One patch is prepared and NOT deployed**:
-`appointments-editable-v1-*.patch`, on top of the deployed `8251537`.
-890 tests pass (636 unit/boundary + 254 integration); the presentation
-tier typechecks and builds. Application + presentation images, no
-migration. `bfe7aee` and `8251537` are both deployed and live — the
-earlier "assistant-understanding v2" work is folded into this patch.
+`records-editable-everywhere-v2-*.patch`, on top of the deployed
+`e737bcf`. 898 tests pass (644 unit/boundary + 254 integration);
+presentation typechecks and builds. Application + presentation images,
+no migration. `bfe7aee`, `8251537` and `e737bcf` are deployed and live.
 
-### The 11:07 screenshot (2 Sep) — "ผู้ช่วย ไม่ใช่ตัวระบบพิมตามคำสั่ง"
+### The 12:39 screenshot + the owner's parity rule
 
-Minutes after the reminder deploy, the owner cancelled the misfiled
-reminder and then typed, as anyone would: "ตั้งนัดวันที่ 6 ที่จะถึง" —
-and got the capability list. Then "ลูกค้าอยากดูสินค้าวันที่ 6 ที่จะถึง
-นี้ตอน 9 โมงเช้า" — and got "กรุณาระบุservice_address", a raw JSON key,
-because the model filed a product-viewing visit as a repair ticket. The
-owner's standing verdict, now policy: **the chat must behave like an
-assistant that gets the meaning, not a command parser; a time not given
-gets a default.** What shipped, layer by layer:
+The rule, stated plainly by the owner and now the standard this project
+holds itself to: **whatever can be done in chat must be doable in the
+dashboard, and whatever can be done in the dashboard must be doable in
+chat.** What this patch closes:
 
-1. **Wider deterministic ear** — "ตั้งนัด"/"ตั้งเตือน" join
-   REMINDER_TRIGGERS; and the reminder-LIST contains-match now yields
-   when the sentence carries a date/time (`_mentions_a_datetime`), so
-   "นัดหมายพรุ่งนี้บ่าย 2" books instead of listing while bare "นัดหมาย"
-   still lists.
-2. **Default time 09:00** when none is stated (owner request), always
-   echoed in the confirmation so a wrong default is one message from
-   corrected. Stated times ("บ่าย 2", "9 โมงเช้า") are kept.
-3. **The appointment net** (`_appointment_net`) — runs only where the
-   reply would otherwise BE the capability list (the model's "suggest",
-   or an entity nobody has): staff OA + followup.create + a readable
-   date/time + a target from text or context ⇒ book it. It deliberately
-   stays OUT of real permission denials — "เลื่อนปิดดีล..." from someone
-   without deal.update stays a denial, never a reminder that hides it.
-4. **Cancel and create remember the record** (`_remember_entity` at
-   target-resolution time), because cancelling is almost always step one
-   of rescheduling — the screenshot's second sentence only means
-   anything if the first left the conversation on C-2026-0011.
-5. **Intent boundary redrawn** — followup is "a date and a customer and
-   nothing broken" (with the screenshot sentences as examples); ticket
-   requires a fault/installation/service. Ticket field names got Thai
-   labels (ที่อยู่หน้างาน, วันนัดหมาย, เวลานัดหมาย, อาการหรือรายละเอียด
-   งาน) so ask_for_missing can never show a raw key again.
-6. **The simulator now catches its own blindness** — a logging trap
-   turns any logged exception during a scene into a finding. It
-   immediately paid for itself: the 2 Sep quote-issue explosion
-   (`get_deal` missing on the chat fake, then `get_customer` one step
-   deeper) was invisible behind a polite reply and "0 FINDINGS"; both
-   methods now exist on the fake and the scene runs to completion.
+13. **"ดูเอกสาร" did nothing.** `PUBLIC_BASE_URL` has no default and is
+    not in `terraform.tfvars.example`, so `/documents/{id}/link` answered
+    503 and the button appeared dead. It now falls back to the URL the
+    request itself arrived on — the request already knows the tier's own
+    externally reachable origin, and requiring an operator to configure
+    what the system can observe was the mistake. The setting still wins
+    when set, for a custom domain in front of Cloud Run.
+14. **Notes were read-only on the dashboard and uncorrectable anywhere.**
+    The Data Tier has had `PATCH`/`DELETE` on notes since Phase 6 — with
+    the old text preserved in the audit entry, because editing a note
+    rewrites something others may have acted on — and `note.update` has
+    sat in the permission catalogue that whole time with no caller.
+    Added: `DataClient.update_note`/`delete_note`, dashboard routes
+    (`POST`/`PATCH`/`DELETE /licenses/{id}/notes`), UI add/edit/delete on
+    every note, and — for parity — `แก้บันทึก` / `ลบบันทึก` in chat,
+    acting on the record's LATEST note. Latest, not a chosen one: chat
+    has no note ids, and inventing a numbering scheme to type back would
+    be worse than the mistake it fixes; older notes are the dashboard's
+    job, where they are on screen with their own buttons.
+15. **The appointment panel looked like a different product.** It now
+    uses the same section-with-action-in-the-heading shape as
+    "เพิ่มสินค้า" on the deal and quote pages, and its buttons use the
+    shared `btn` styling rather than bare browser defaults.
+16. **An issued quote said nothing about why it was frozen.** Everything
+    on that page is editable only in `draft`, which is right — an issued
+    quote is a document the customer already has — but hiding the
+    controls read as broken. It now says so, and names the way forward
+    (void it, re-create from the same deal).
 
-### The 12:03 loop (2 Sep) — the same lesson, one layer deeper
+**The parity rule now has a checker.** `scripts/dev/check-parity.py`
+maps chat's ACTION_PERMISSIONS and the dashboard's HTTP calls onto
+(entity, action) and prints what only one side can do. Reading it took
+two rounds — the first version called `POST .../tickets/X/claim` a
+"create" and misread `${encodeURIComponent(...)}` badly enough to file
+the product catalogue as line items — which is itself the point: the
+gaps were invisible from either side alone. It found two real ones:
 
-Fifty minutes later, still on the deployed build: "สมบัติ ราชเทวี
-0879707586 อยากนัดดู demo สินค้าวันที่ 7" → **"กรุณาระบุdue_time"**.
-Answering "9.00" → "ไม่เข้าใจวันที่". Rephrasing → the same demand. A
-loop with no exit, made of three independent faults:
+17. **`note.delete` was unregistered.** Chat could delete via the
+    trigger, but `("delete","note")` was absent from ACTION_PERMISSIONS,
+    so an AI-routed "เอาบันทึกเมื่อกี้ออกให้หน่อย" fell through to the
+    capability list. Registered (to `note.update` — deleting is an edit
+    down to nothing) and routed. Writing the test for it caught a
+    `NameError` that would have been a live 500: the branch used
+    `_joined`, a helper local to the *other* router.
+18. **check-out has no dashboard path.** The technician screen can check
+    in but not out; chat reaches the Data Tier directly, so there is no
+    Application route for the dashboard to call either.
 
-7. **`_prune_missing`** — the model may not ask for what the system can
-   answer. `due_time` is never asked (it defaults to 09:00); `due_date`
-   is dropped from "missing" whenever the sentence contains a readable
-   date, because the parser decides that, not the model. Other entities
-   are untouched.
-8. **The raw sentence reaches the handler.** `_handle_ai_understood_intent`
-   never received the person's own words, so when the model omitted
-   `due_date`, "วันที่ 7" — sitting right there in the message — was
-   unreachable and the reply was "ไม่เข้าใจวันที่". The message is now
-   threaded through and appended to the reconstructed command.
-9. **A name is a target.** `_customer_named_in` asks the reverse question
-   from `_find_one_customer_by_name`: not "is this name inside that
-   record" but "is one of my records named inside this sentence" — which
-   is the shape real messages have ("นัดคุณสมบัติดูสินค้าวันที่ 7").
-   Exactly one match or nothing; two Somchais is a question, not a coin
-   flip. Runs last, only when no code and no context resolved, and only
-   with customer.read.
+The script's three lists are deliberate: ACCEPTED (one-sided on purpose,
+each with a reason), KNOWN_GAPS (real, planned — currently ticket
+create/assign/close/update, product.delete, service_report.check_out),
+and unexplained differences, which must stay empty. It reads clean now.
+Tickets are the substantial one: the dashboard lists them read-only
+while chat can create, assign, claim and close, and that asymmetry is
+the next parity work worth doing.
 
-Deploy note: v1's terraform **plan** failed on IPv6
-(`dial tcp [2001:…]:443: cannot assign requested address`) because
-`GODEBUG=netdns=go` was only wrapped around apply. The lesson generalises:
-**every terraform invocation on Cloud Shell needs it, plan included** —
-now baked into the deploy script's plan stage.
+**Still open from the same report, and deliberately not rushed:** the
+quote page's line-item editing exists but only for drafts (see 16 — this
+is the rule working, not a gap); a full parity audit chat↔UI across every
+entity has not been done, and should be its own pass with a written
+matrix rather than another round of spot fixes.
 
 ### The 12:06-12:08 screenshots — "the system knows but cannot act"
 
@@ -197,15 +193,24 @@ now baked into the deploy script's plan stage.
     it. Rescheduling in the UI is the same create-then-cancel as chat,
     deliberately: two paths doing one thing two ways is how they drift.
 
-**Still open, and the right next piece of work: replying to a message.**
-Quoting an old message to say which reminder or customer is meant does
-not work, and cannot be bolted on. LINE sends `quotedMessageId` on the
-webhook event, but nothing maps a message id back to the record it was
-about. It needs (a) recording the id LINE returns when the bot sends a
-message, against the entity ref that reply carried, and (b) reading
-`quotedMessageId` in the webhook and seeding `last_entity_ref` from it.
-A small schema addition plus webhook plumbing — phase-sized, and it
-should not be squeezed in beside behaviour fixes.
+**On "replying to a message does not work" — I was wrong, and checked.**
+An earlier version of this section said reply-to needed building. It is
+already built end to end: `_is_reply` reads `quotedMessageId`,
+`record_message_entity` stores the ids LINE returns for the messages the
+bot sent (and the inbound one), and `handle_reply` seeds
+`last_entity_ref` before dispatching. Both screenshot flows now pass as
+tests driven through `handle_reply` — quoting the customer card and
+saying "เพิ่มนัด …", and quoting the reminder and saying "เปลี่ยนเวลา
+เป็น 13.00". **What failed was never the quoting; it was that the
+correctly-resolved record was handed to a router with nowhere to send
+it.** Both handlers exist now.
+
+The one real limit left: a mapping is recorded only when a reply carries
+`entity_type`/`entity_id`, so **replying to a LIST** (รายการเตือน,
+งานวันนี้, รายชื่อลูกค้า) resolves to nothing and answers "ไม่พบข้อความ
+ต้นฉบับ". That is defensible — a list is about many records — but the
+honest fix is a per-row reply affordance rather than guessing which row
+was meant. Worth doing only if it comes up in real use.
 
 ### The 2 Sep incident this patch closes (read as one chain)
 

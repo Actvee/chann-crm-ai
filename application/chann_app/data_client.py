@@ -686,6 +686,33 @@ class DataClient:
         )
         return self._unwrap(resp)
 
+    async def update_note(
+        self, license_id: str, note_id: str, body: str, actor_id: str | None = None,
+    ) -> dict:
+        """Rewrite a note's text.
+
+        The Data Tier has had PATCH/DELETE on notes since Phase 6 (and
+        keeps the old text in the audit entry, because editing a note
+        rewrites a record other people may have acted on). Nothing ever
+        called them: a note could be written and never corrected, in chat
+        or on the dashboard.
+        """
+        resp = await self._client.patch(
+            f"{self._base}/internal/v1/licenses/{license_id}/notes/{note_id}",
+            headers=self._headers_for(actor_id), json={"body": body},
+        )
+        return self._unwrap(resp)
+
+    async def delete_note(
+        self, license_id: str, note_id: str, actor_id: str | None = None,
+    ) -> None:
+        resp = await self._client.delete(
+            f"{self._base}/internal/v1/licenses/{license_id}/notes/{note_id}",
+            headers=self._headers_for(actor_id),
+        )
+        if resp.status_code not in (204, 200):
+            self._unwrap(resp)
+
     async def create_follow_up(
         self, license_id: str, payload: dict, actor_id: str | None = None
     ) -> dict:

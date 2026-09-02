@@ -7,7 +7,7 @@ import uuid
 import hashlib
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from .config import settings
@@ -1395,6 +1395,7 @@ async def set_quote_status(
 async def get_document_link(
     license_id: str,
     document_id: str,
+    request: Request,
     principal: TenantPrincipal = Depends(get_tenant_principal),
     client: DataClient = Depends(get_data_client),
 ):
@@ -1423,10 +1424,20 @@ async def get_document_link(
 
     base = (settings.public_base_url or "").rstrip("/")
     if not base:
-        # Without a base URL the link would be relative and open nothing.
-        # Saying so beats handing back something that silently fails.
+        # Fall back to the URL this very request arrived on.
+        #
+        # PUBLIC_BASE_URL is not set in dev — it has no default and is not
+        # in terraform.tfvars.example — so this endpoint answered 503 and
+        # "ดูเอกสาร" appeared to do nothing at all (2 Sep). The request
+        # already carries the tier's own externally reachable origin,
+        # which is exactly what the setting would have said; requiring an
+        # operator to configure what the request can tell us was the
+        # mistake. The setting still wins when set, for the case it exists
+        # for: a custom domain in front of Cloud Run.
+        base = str(request.base_url).rstrip("/")
+    if not base:
         raise HTTPException(
-            status_code=503, detail="PUBLIC_BASE_URL is REQUIRED_NOT_CONFIGURED",
+            status_code=503, detail="no base URL for document links",
         )
 
     token = issue_document_token(license_id, document_id)
@@ -1748,6 +1759,81 @@ async def list_follow_ups(
             and str(r.get("entity_id") or "") == entity_id
         ]
     return rows
+
+
+class NoteIn(BaseModel):
+    entity_type: str
+    entity_id: uuid.UUID
+    body: str
+
+
+class NoteBodyIn(BaseModel):
+    body: str
+
+
+@router.post("/licenses/{license_id}/notes", status_code=201)
+async def create_note(
+    license_id: str,
+    payload: NoteIn,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Write a note from the dashboard.
+
+    Chat could write notes from the first week of Phase 6; the dashboard
+    could only read them, so the panel that shows a record's history was
+    the one place you could not add to it.
+    """
+    _require_same_tenant(principal, license_id)
+    principal.require("note.create")
+    try:
+        return await client.create_note(
+            license_id,
+            {
+                "entity_type": payload.entity_type,
+                "entity_id": str(payload.entity_id),
+                "body": payload.body,
+            },
+            actor_id=principal.chann_uid,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.patch("/licenses/{license_id}/notes/{note_id}")
+async def update_note(
+    license_id: str,
+    note_id: uuid.UUID,
+    payload: NoteBodyIn,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    _require_same_tenant(principal, license_id)
+    principal.require("note.update")
+    try:
+        return await client.update_note(
+            license_id, str(note_id), payload.body, actor_id=principal.chann_uid,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.delete("/licenses/{license_id}/notes/{note_id}", status_code=204)
+async def delete_note(
+    license_id: str,
+    note_id: uuid.UUID,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    # Deleting is an edit down to nothing, so it takes the same key
+    # rather than a note.delete that the catalogue has never had.
+    _require_same_tenant(principal, license_id)
+    principal.require("note.update")
+    try:
+        await client.delete_note(license_id, str(note_id), actor_id=principal.chann_uid)
+    except DataTierError as exc:
+        raise _propagate(exc)
+    return None
 
 
 @router.get("/licenses/{license_id}/notes")

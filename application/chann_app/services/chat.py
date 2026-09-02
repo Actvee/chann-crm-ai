@@ -77,6 +77,11 @@ ACTION_PERMISSIONS: dict[tuple[str, str], str] = {
     ("read", "note"): "note.read",
     ("create", "note"): "note.create",
     ("update", "note"): "note.update",
+    # Deleting is an edit down to nothing, so it takes note.update rather
+    # than a note.delete the catalogue has never had. Registered so the
+    # AI can route "ลบบันทึกอันล่าสุดออกให้หน่อย" to the same handler the
+    # deterministic trigger reaches.
+    ("delete", "note"): "note.update",
     ("read", "followup"): "followup.read",
     ("create", "followup"): "followup.create",
     ("update", "followup"): "followup.update",
@@ -620,6 +625,10 @@ async def _handle_company_profile_command(
 
 NOTE_TRIGGERS = ("บันทึกว่า", "จดว่า", "โน้ตว่า", "note")
 NOTE_LIST_TRIGGERS = ("ดูบันทึก", "บันทึกของ", "ประวัติ")
+# Correcting and removing the last note on a record. Dispatched before
+# both the list and the create triggers, which they all contain.
+NOTE_EDIT_TRIGGERS = ("แก้บันทึก", "แก้ไขบันทึก", "เปลี่ยนบันทึก", "edit note")
+NOTE_DELETE_TRIGGERS = ("ลบบันทึก", "เอาบันทึกออก", "delete note")
 # "ตั้งนัด"/"ตั้งเตือน" added from live use (2 Sep): "ตั้งนัดวันที่ 6
 # ที่จะถึง" starts with neither "นัด" nor "เตือน", missed every matcher,
 # and the person got a capability list for a perfectly ordinary sentence.
@@ -674,6 +683,18 @@ REMINDER_CANCELLED = {
 REMINDER_CANCEL_NONE = {
     "th": "ไม่มีการเตือนที่ค้างอยู่ของ {code}",
     "en": "No pending reminders for {code}.",
+}
+NOTE_UPDATED = {
+    "th": "แก้บันทึกล่าสุดของ {code} แล้ว",
+    "en": "Updated the latest note on {code}.",
+}
+NOTE_DELETED = {
+    "th": "ลบบันทึกล่าสุดของ {code} แล้ว",
+    "en": "Deleted the latest note on {code}.",
+}
+NOTE_EDIT_NEEDS_BODY = {
+    "th": "จะแก้เป็นข้อความว่าอะไร เช่น \"แก้บันทึก {code} เป็น ลูกค้าขอส่วนลด 10%\"",
+    "en": "Change it to what? e.g. \"edit note {code} to customer asked for 10% off\".",
 }
 REMINDER_MOVED = {
     "th": "เลื่อนนัดของ {code} เป็นวันที่ {date} {time} แล้ว",
@@ -898,6 +919,95 @@ async def _handle_note_intent(
             ("ตั้งเตือน", f"เตือน {code} พรุ่งนี้"),
         ],
     )
+
+
+async def _handle_note_edit(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
+    permission_keys: list[str], language: str, actor_id: str, delete: bool = False,
+) -> ChatReply:
+    """Correct or remove the most recent note on a record.
+
+    Parity with the dashboard, which gains edit and delete on every note
+    in this same patch: whatever one surface can do to a record, the other
+    must be able to do too — the owner's rule, and the reason this exists
+    rather than only the button.
+
+    The LATEST note, not a chosen one: chat has no note ids and inventing
+    a numbering scheme to type back would be worse than the mistake it
+    fixes. Someone correcting a note is almost always correcting the one
+    they just wrote; anything older is a job for the dashboard, where the
+    notes are on screen with their own buttons.
+    """
+    needed = "note.update"
+    if needed not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+
+    license_id = str(license_id)
+    try:
+        target = await _resolve_target_or_context(client, ctx, license_id, message)
+    except _TargetNotFound as exc:
+        return ChatReply(
+            text=_t(NOT_FOUND_BY_CODE, language).format(what=exc.entity_type, code=exc.code)
+        )
+    if target is None:
+        target = await _customer_named_in(client, license_id, message, permission_keys)
+    if target is None:
+        return ChatReply(text=_t(NOTE_NEEDS_TARGET, language))
+    entity_type, entity_id, code = target
+
+    try:
+        notes = await client.list_notes(license_id, entity_type, str(entity_id))
+    except Exception:
+        log.exception("note edit could not list notes")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    if not notes:
+        return ChatReply(text=_t(NOTE_EMPTY, language).format(code=code))
+    latest = sorted(notes, key=lambda n: str(n.get("created_at") or ""))[-1]
+
+    if delete:
+        try:
+            await client.delete_note(license_id, str(latest.get("id")), actor_id=actor_id)
+        except Exception:
+            log.exception("note delete failed")
+            return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+        return ChatReply(
+            text=_t(NOTE_DELETED, language).format(code=code),
+            entity_type=entity_type, entity_id=entity_id,
+        )
+
+    body = _note_body_after_trigger(message)
+    if not body:
+        return ChatReply(text=_t(NOTE_EDIT_NEEDS_BODY, language).format(code=code))
+    try:
+        await client.update_note(license_id, str(latest.get("id")), body, actor_id=actor_id)
+    except Exception:
+        log.exception("note update failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    return ChatReply(
+        text=_t(NOTE_UPDATED, language).format(code=code) + f"\n· {body}",
+        entity_type=entity_type, entity_id=entity_id,
+    )
+
+
+def _note_body_after_trigger(message: str) -> str:
+    """The new text, after the verb, the code, and any "เป็น"/"to".
+
+    "แก้บันทึก C-2026-0001 เป็น ลูกค้าขอส่วนลด" — everything before the
+    new text is scaffolding the person had to type to be understood, and
+    none of it belongs in the note.
+    """
+    text = (message or "").strip()
+    for trigger in (*NOTE_EDIT_TRIGGERS, *NOTE_DELETE_TRIGGERS):
+        idx = text.lower().find(trigger)
+        if idx >= 0:
+            text = text[idx + len(trigger):]
+            break
+    text = re.sub(r"\b[CDQT]-\d{4}-\d{4}\b", "", text, flags=re.I).strip()
+    for lead in ("เป็น", "ว่า", "to", ":"):
+        if text.startswith(lead):
+            text = text[len(lead):].strip()
+            break
+    return text.strip(" -–—")
 
 
 async def _handle_note_list(
@@ -7367,6 +7477,20 @@ async def handle_chat_message(
                 client, license_id=license_id, permission_keys=permission_keys,
                 language=language, days=7,
             )
+        # Editing and deleting come before listing and creating: every one
+        # of their triggers contains "บันทึก", which both of those match.
+        if any(t in message.lower() for t in NOTE_DELETE_TRIGGERS):
+            return await _handle_note_edit(
+                client, ctx=ctx, license_id=license_id, message=message,
+                permission_keys=permission_keys, language=language,
+                actor_id=ctx.chann_uid, delete=True,
+            )
+        if any(t in message.lower() for t in NOTE_EDIT_TRIGGERS):
+            return await _handle_note_edit(
+                client, ctx=ctx, license_id=license_id, message=message,
+                permission_keys=permission_keys, language=language,
+                actor_id=ctx.chann_uid,
+            )
         if any(t in message.lower() for t in NOTE_LIST_TRIGGERS):
             return await _handle_note_list(
                 client, license_id=license_id, message=message,
@@ -7862,6 +7986,25 @@ async def handle_chat_message(
             permission_keys=permission_keys, language=language,
         )
     if intent.get("entity") == "note":
+        note_action = intent.get("action")
+        if note_action in ("update", "delete"):
+            fields = intent.get("fields") or {}
+            return await _handle_note_edit(
+                client, ctx=ctx, license_id=license_id,
+                # _joined is local to the other router; a note command is
+                # three short parts, so building the text here is clearer
+                # than reaching for it.
+                message=" ".join(
+                    str(part) for part in (
+                        "ลบบันทึก" if note_action == "delete" else "แก้บันทึก",
+                        fields.get("entity_code") or fields.get("code") or "",
+                        fields.get("body") or "",
+                        message,
+                    ) if part
+                ),
+                permission_keys=permission_keys, language=language,
+                actor_id=ctx.chann_uid, delete=(note_action == "delete"),
+            )
         return await _handle_note_intent(
             client, intent=intent, ctx=ctx, license_id=license_id, language=language,
         )

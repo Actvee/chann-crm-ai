@@ -197,6 +197,11 @@ does not exist anywhere else the model can check against):
     (starts with C-/D-/Q-) if the user gave one; OMIT the key entirely if
     they did not — do not guess one and do not put it in "missing", since
     the system may already know which record the conversation is about.
+  action="update": correcting what was already written. Examples:
+    "แก้บันทึกเป็น ลูกค้าขอส่วนลด 10%", "เปลี่ยนบันทึกล่าสุด".
+  action="delete": removing it. Examples: "ลบบันทึกล่าสุด", "เอาบันทึก
+    เมื่อกี้ออก". Both act on the record's most recent note.
+
   Never choose entity="note" for a sentence that is actually asking to
   change a named field (a phone number, a stage, a price) — those stay
   entity="customer"/"deal"/etc. with action="update". note is for

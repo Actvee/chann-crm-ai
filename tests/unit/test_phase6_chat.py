@@ -406,6 +406,18 @@ class FakeDataClient:
         self._notes.append(row)
         return row
 
+    async def update_note(self, license_id, note_id, body, actor_id=None):
+        self.recorded.append(("update_note", license_id, note_id, body, actor_id))
+        for row in getattr(self, "_notes", []):
+            if str(row.get("id")) == str(note_id):
+                row["body"] = body
+                return dict(row)
+        raise AssertionError(f"no such note {note_id}")
+
+    async def delete_note(self, license_id, note_id, actor_id=None):
+        self.recorded.append(("delete_note", license_id, note_id, actor_id))
+        self._notes = [r for r in getattr(self, "_notes", []) if str(r.get("id")) != str(note_id)]
+
     async def list_notes(self, license_id, entity_type, entity_id, limit=50):
         self.recorded.append(("list_notes", license_id, entity_type, entity_id))
         return [
@@ -3364,6 +3376,81 @@ class TestTheDueTimeLoop:
         assert _prune_missing(missing, {"entity": "customer"}, "อะไรก็ได้") == missing
 
 
+class TestNotesCanBeCorrected:
+    """Parity, and a gap five phases old.
+
+    The dashboard gains add/edit/delete on notes in this patch, so chat
+    must be able to do the same (the owner's rule: what one surface can
+    do, the other can). Underneath, the Data Tier has had PATCH and
+    DELETE on notes — with the old text kept in the audit entry — since
+    Phase 6, and `note.update` has sat in the permission catalogue that
+    whole time with nothing calling it.
+    """
+
+    async def _with_note(self, *keys):
+        client = FakeDataClient(permission_keys=["customer.read", "note.create", *keys])
+        customer = await client.create_customer("L1", {
+            "first_name": "สมบัติ", "last_name": "ราชเทวี", "phone": "0879707586",
+        })
+        code = customer["customer_id"]
+        await handle_chat_message(
+            client, message=f"บันทึกว่า {code} ลูกค้าขอส่วนลด", ctx=_ctx(),
+        )
+        return client, code
+
+    async def test_editing_replaces_the_latest_note(self):
+        client, code = await self._with_note("note.update", "note.read")
+        reply = await handle_chat_message(
+            client, message=f"แก้บันทึก {code} เป็น ลูกค้าขอส่วนลด 10%", ctx=_ctx(),
+        )
+        writes = [r for r in client.recorded if r[0] == "update_note"]
+        assert len(writes) == 1, reply.text
+        assert writes[0][3] == "ลูกค้าขอส่วนลด 10%"
+        # The scaffolding the person had to type is not part of the note.
+        assert code not in writes[0][3] and "แก้บันทึก" not in writes[0][3]
+
+    async def test_deleting_removes_the_latest_note(self):
+        client, code = await self._with_note("note.update", "note.read")
+        reply = await handle_chat_message(client, message=f"ลบบันทึก {code}", ctx=_ctx())
+        assert [r for r in client.recorded if r[0] == "delete_note"], reply.text
+        assert not [r for r in client.recorded if r[0] == "update_note"]
+
+    async def test_editing_does_not_create_a_second_note(self):
+        """"แก้บันทึก" contains "บันทึก", which the create trigger matches —
+        the same longer-first rule as every other collision here."""
+        client, code = await self._with_note("note.update", "note.read")
+        await handle_chat_message(client, message=f"แก้บันทึก {code} เป็น ใหม่", ctx=_ctx())
+        assert sum(1 for r in client.recorded if r[0] == "create_note") == 1
+
+    async def test_editing_needs_note_update_permission(self):
+        client, code = await self._with_note("note.read")
+        reply = await handle_chat_message(
+            client, message=f"แก้บันทึก {code} เป็น อะไรก็ได้", ctx=_ctx(),
+        )
+        assert not [r for r in client.recorded if r[0] == "update_note"]
+        assert reply.text
+
+    async def test_the_ai_can_route_a_deletion_too(self):
+        """Registered in ACTION_PERMISSIONS as ("delete","note") so a
+        sentence the triggers miss — "เอาบันทึกเมื่อกี้ออกให้หน่อย" — still
+        reaches the same handler."""
+        client, code = await self._with_note("note.update", "note.read")
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "delete", "entity": "note", "fields": {"code": code}},
+            ensure_ascii=False,
+        )))
+        reply = await handle_chat_message(
+            client, message="เอาบันทึกเมื่อกี้ออกให้หน่อย", ctx=_ctx(), ai_client=ai,
+        )
+        assert [r for r in client.recorded if r[0] == "delete_note"], reply.text
+
+    async def test_editing_with_no_new_text_asks_rather_than_blanking_it(self):
+        client, code = await self._with_note("note.update", "note.read")
+        reply = await handle_chat_message(client, message=f"แก้บันทึก {code}", ctx=_ctx())
+        assert not [r for r in client.recorded if r[0] == "update_note"]
+        assert "เป็น" in reply.text
+
+
 class TestMovingAnAppointment:
     """12:08, 2 Sep: "เปลี่ยนเวลาเป็น 13.00" → "คุณยังไม่มีสิทธิ์ทำสิ่งนี้"
     plus a 20-line capability list, to a person holding every permission
@@ -3711,6 +3798,56 @@ class TestReplyDrivesTheAction:
         assert "ระบุรหัส" not in reply.text
         assert reply.entity_type == "quote"
         assert reply.entity_id == str(quote["id"])
+
+    async def test_replying_to_a_reminder_message_moves_that_appointment(self):
+        """The 12:08 flow, end to end: quote the "ตั้งเตือน C-2026-0014 ..."
+        message and say "เปลี่ยนเวลาเป็น 13.00". Reply-to has always seeded
+        the context correctly — what failed was that nothing downstream
+        could move an appointment, so the correctly-resolved record was
+        handed to a router with nowhere to send it.
+        """
+        from chann_app.services.chat import handle_reply
+
+        client = FakeDataClient(permission_keys=[
+            "customer.read", "followup.create", "followup.read", "followup.update",
+        ])
+        customer = await client.create_customer("L1", {
+            "first_name": "สมบัติ", "last_name": "ราชเทวี", "phone": "0879707586",
+        })
+        await handle_chat_message(
+            client, message=f"ตั้งนัด {customer['customer_id']} วันที่ 4", ctx=_ctx(),
+        )
+        client._mapping = {"entity_type": "customer", "entity_id": customer["id"]}
+
+        reply = await handle_reply(
+            client, message_id="msg-reminder", reply_text="เปลี่ยนเวลาเป็น 13.00",
+            ctx=_ctx(),
+        )
+        assert "ไม่มีสิทธิ์" not in reply.text, reply.text
+        assert "13:00" in reply.text
+        pending = [r for r in client._follow_ups if r["status"] == "pending"]
+        assert len(pending) == 1 and pending[0]["due_time"] == "13:00:00"
+
+    async def test_replying_to_a_customer_message_adds_the_appointment(self):
+        """12:06: quoting the customer card and saying "เพิ่มนัด เข้าประชุม
+        วันที่ 4 นี้" answered "กรุณาระบุชื่อลูกค้า" — about the very record
+        being quoted."""
+        from chann_app.services.chat import handle_reply
+
+        client = FakeDataClient(permission_keys=[
+            "customer.read", "followup.create", "followup.read",
+        ])
+        customer = await client.create_customer("L1", {
+            "first_name": "สมบัติ", "last_name": "ราชเทวี", "phone": "0879707586",
+        })
+        client._mapping = {"entity_type": "customer", "entity_id": customer["id"]}
+
+        reply = await handle_reply(
+            client, message_id="msg-customer",
+            reply_text="เพิ่มนัด เข้าประชุมวันที่ 4 นี้", ctx=_ctx(),
+        )
+        assert "ระบุชื่อลูกค้า" not in reply.text, reply.text
+        assert [r for r in client.recorded if r[0] == "create_follow_up"]
 
     async def test_replying_to_an_unknown_message_says_so(self):
         from chann_app.services.chat import handle_reply

@@ -504,6 +504,18 @@ export default function QuoteDetail({
             </dl>
           </section>
 
+          {/* Why the controls are gone, said out loud.
+              Everything on this page — terms, line items, notes — is
+              editable only while the quote is a draft, which is correct:
+              an issued quote is a document someone has been sent. But the
+              page simply hid the buttons, so it read as broken rather
+              than as a rule (reported 2 Sep). */}
+          {!editable && (
+            <p className="card-meta" style={{ marginBottom: 14 }}>
+              {t.dashboard.quotes.issuedReadOnly}
+            </p>
+          )}
+
           <RelatedHeading title={t.product.title} count={items.length} />
           {editable && (
             <section className="section" style={{ margin: "0 0 14px" }}>

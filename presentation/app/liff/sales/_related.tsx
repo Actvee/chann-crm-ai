@@ -71,6 +71,69 @@ export function RelatedActivity({
   const [failed, setFailed] = useState(false);
   const [form, setForm] = useState<{ date: string; time: string; note: string } | null>(null);
   const [movingId, setMovingId] = useState<string | null>(null);
+  // Notes were read-only here: the panel showing a record's history was
+  // the one place you could not add to it, and nothing anywhere could
+  // correct a note — the Data Tier has had PATCH/DELETE since Phase 6
+  // with no caller.
+  const [noteForm, setNoteForm] = useState<string | null>(null);
+  const [editingNote, setEditingNote] = useState<string | null>(null);
+
+  async function reloadNotes() {
+    const response = await fetch(
+      `/api/phase2/licenses/${licenseId}/notes` +
+        `?entity_type=${entityType}&entity_id=${entityId}`,
+      { headers: proxyHeaders(token, licenseId) },
+    );
+    if (response.ok) setNotes((await response.json()) as Note[]);
+  }
+
+  async function saveNote() {
+    const body = (noteForm ?? "").trim();
+    if (!body) return;
+    setBusy(editingNote ?? "new-note");
+    setFailed(false);
+    try {
+      const response = await fetch(
+        editingNote
+          ? `/api/phase2/licenses/${licenseId}/notes/${editingNote}`
+          : `/api/phase2/licenses/${licenseId}/notes`,
+        {
+          method: editingNote ? "PATCH" : "POST",
+          headers: { ...proxyHeaders(token, licenseId), "Content-Type": "application/json" },
+          body: JSON.stringify(
+            editingNote
+              ? { body }
+              : { entity_type: entityType, entity_id: entityId, body },
+          ),
+        },
+      );
+      if (!response.ok) throw new Error(String(response.status));
+      setNoteForm(null);
+      setEditingNote(null);
+      await reloadNotes();
+    } catch {
+      setFailed(true);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function deleteNote(id: string) {
+    setBusy(id);
+    setFailed(false);
+    try {
+      const response = await fetch(`/api/phase2/licenses/${licenseId}/notes/${id}`, {
+        method: "DELETE",
+        headers: proxyHeaders(token, licenseId),
+      });
+      if (!response.ok) throw new Error(String(response.status));
+      await reloadNotes();
+    } catch {
+      setFailed(true);
+    } finally {
+      setBusy(null);
+    }
+  }
 
   async function reload() {
     const headers = proxyHeaders(token, licenseId);
@@ -189,6 +252,82 @@ export function RelatedActivity({
   return (
     <>
       <RelatedHeading title={t.dashboard.related.appointments} count={followUps?.length ?? 0} />
+      {/* The same shape as "เพิ่มสินค้า" on the deal and quote pages: a
+          section with the action in its heading, and the form appearing
+          inside it. The first version put a bare button under the empty
+          state, which looked like a different product. */}
+      <section className="section" style={{ margin: "0 0 14px" }}>
+        <div className="section-head">
+          <h2>{t.dashboard.related.addAppointment}</h2>
+          {form === null && (
+            <button
+              type="button"
+              className="btn"
+              data-variant="primary"
+              onClick={() => setForm({ date: "", time: "", note: "" })}
+              disabled={busy !== null}
+            >
+              {t.dashboard.related.addAppointment}
+            </button>
+          )}
+        </div>
+        {form !== null && (
+          <dl className="fields">
+            <div className="field-row">
+              <dt>{t.dashboard.related.appointmentDate}</dt>
+              <dd>
+                <input
+                  type="date"
+                  value={form.date}
+                  onChange={(e) => setForm({ ...form, date: e.target.value })}
+                />
+              </dd>
+            </div>
+            <div className="field-row">
+              <dt>{t.dashboard.related.appointmentTime}</dt>
+              <dd>
+                <input
+                  type="time"
+                  value={form.time}
+                  onChange={(e) => setForm({ ...form, time: e.target.value })}
+                />
+              </dd>
+            </div>
+            <div className="field-row">
+              <dt>{t.dashboard.related.appointmentNote}</dt>
+              <dd>
+                <input
+                  value={form.note}
+                  onChange={(e) => setForm({ ...form, note: e.target.value })}
+                />
+              </dd>
+            </div>
+            <div className="actions">
+              <button
+                type="button"
+                className="btn"
+                data-variant="quiet"
+                onClick={() => {
+                  setForm(null);
+                  setMovingId(null);
+                }}
+                disabled={busy !== null}
+              >
+                {t.dashboard.related.cancelForm}
+              </button>
+              <button
+                type="button"
+                className="btn"
+                data-variant="primary"
+                onClick={() => void saveAppointment(movingId)}
+                disabled={busy !== null || !form.date}
+              >
+                {busy !== null ? t.dashboard.related.saving : t.dashboard.related.save}
+              </button>
+            </div>
+          </dl>
+        )}
+      </section>
       {followUps === null ? null : followUps.length === 0 ? (
         <div className="empty">
           <p>{t.dashboard.related.noAppointments}</p>
@@ -216,6 +355,8 @@ export function RelatedActivity({
                 <div className="card-actions">
                   <button
                     type="button"
+                    className="btn"
+                    data-variant="quiet"
                     onClick={() => {
                       setMovingId(row.id);
                       setForm({
@@ -230,6 +371,8 @@ export function RelatedActivity({
                   </button>
                   <button
                     type="button"
+                    className="btn"
+                    data-variant="quiet"
                     onClick={() => void setStatus(row.id, "completed")}
                     disabled={busy !== null}
                   >
@@ -237,6 +380,8 @@ export function RelatedActivity({
                   </button>
                   <button
                     type="button"
+                    className="btn"
+                    data-variant="quiet"
                     onClick={() => void setStatus(row.id, "cancelled")}
                     disabled={busy !== null}
                   >
@@ -249,64 +394,65 @@ export function RelatedActivity({
         </ul>
       )}
 
-      {form !== null ? (
-        <div className="card">
-          <label>
-            {t.dashboard.related.appointmentDate}
-            <input
-              type="date"
-              value={form.date}
-              onChange={(e) => setForm({ ...form, date: e.target.value })}
-            />
-          </label>
-          <label>
-            {t.dashboard.related.appointmentTime}
-            <input
-              type="time"
-              value={form.time}
-              onChange={(e) => setForm({ ...form, time: e.target.value })}
-            />
-          </label>
-          <label>
-            {t.dashboard.related.appointmentNote}
-            <input
-              type="text"
-              value={form.note}
-              onChange={(e) => setForm({ ...form, note: e.target.value })}
-            />
-          </label>
-          <div className="card-actions">
-            <button
-              type="button"
-              onClick={() => void saveAppointment(movingId)}
-              disabled={busy !== null || !form.date}
-            >
-              {busy !== null ? t.dashboard.related.saving : t.dashboard.related.save}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setForm(null);
-                setMovingId(null);
-              }}
-              disabled={busy !== null}
-            >
-              {t.dashboard.related.cancelForm}
-            </button>
-          </div>
-        </div>
-      ) : (
-        <button
-          type="button"
-          onClick={() => setForm({ date: "", time: "", note: "" })}
-          disabled={busy !== null}
-        >
-          {t.dashboard.related.addAppointment}
-        </button>
-      )}
       {failed && <p className="card-meta">{t.dashboard.related.actionFailed}</p>}
 
       <RelatedHeading title={t.dashboard.related.notes} count={notes?.length ?? 0} />
+      <section className="section" style={{ margin: "0 0 14px" }}>
+        <div className="section-head">
+          <h2>{t.dashboard.related.addNote}</h2>
+          {noteForm === null && (
+            <button
+              type="button"
+              className="btn"
+              data-variant="primary"
+              onClick={() => {
+                setEditingNote(null);
+                setNoteForm("");
+              }}
+              disabled={busy !== null}
+            >
+              {t.dashboard.related.addNote}
+            </button>
+          )}
+        </div>
+        {noteForm !== null && (
+          <dl className="fields">
+            <div className="field-row">
+              <dt>{t.dashboard.related.noteBody}</dt>
+              <dd>
+                <textarea
+                  rows={3}
+                  value={noteForm}
+                  onChange={(e) => setNoteForm(e.target.value)}
+                />
+              </dd>
+            </div>
+            <div className="actions">
+              <button
+                type="button"
+                className="btn"
+                data-variant="quiet"
+                onClick={() => {
+                  setNoteForm(null);
+                  setEditingNote(null);
+                }}
+                disabled={busy !== null}
+              >
+                {t.dashboard.related.cancelForm}
+              </button>
+              <button
+                type="button"
+                className="btn"
+                data-variant="primary"
+                onClick={() => void saveNote()}
+                disabled={busy !== null || !noteForm.trim()}
+              >
+                {busy !== null ? t.dashboard.related.saving : t.dashboard.related.save}
+              </button>
+            </div>
+          </dl>
+        )}
+      </section>
       {notes === null ? null : notes.length === 0 ? (
         <div className="empty">
           <p>{t.dashboard.related.noNotes}</p>
@@ -321,6 +467,29 @@ export function RelatedActivity({
               <div className="card-meta" style={{ fontSize: 12, color: "var(--ink-faint)" }}>
                 {fullDateTime(note.created_at)}
                 {note.author_display_name ? ` · ${note.author_display_name}` : ""}
+              </div>
+              <div className="card-actions">
+                <button
+                  type="button"
+                  className="btn"
+                  data-variant="quiet"
+                  onClick={() => {
+                    setEditingNote(note.id);
+                    setNoteForm(note.body ?? note.text ?? "");
+                  }}
+                  disabled={busy !== null}
+                >
+                  {t.common.edit}
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  data-variant="quiet"
+                  onClick={() => void deleteNote(note.id)}
+                  disabled={busy !== null}
+                >
+                  {busy === note.id ? t.dashboard.related.saving : t.common.delete}
+                </button>
               </div>
             </li>
           ))}
