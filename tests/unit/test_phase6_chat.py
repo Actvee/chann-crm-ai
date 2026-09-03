@@ -617,6 +617,19 @@ class FakeDataClient:
             if not (r["team_id"] == team_id and r["member_id"] == member_id)
         ]
 
+    async def get_generated_document(self, license_id, document_id):
+        return {"id": document_id, "sha256": "abc123", "output_path": f"gs://b/{document_id}.pdf"}
+
+    async def attach_report_document(self, license_id, report_id, *, document_id, pdf_path, actor_id=None):
+        self.recorded.append(("attach_report_document", license_id, report_id, document_id))
+        for r in getattr(self, "_reports", []):
+            if r.get("id") == report_id:
+                r["generated_document_id"] = document_id
+        return {"id": report_id, "generated_document_id": document_id, "pdf_path": pdf_path}
+
+    async def identity_signature(self, chann_uid):
+        return getattr(self, "_signatures", {}).get(chann_uid)
+
     async def get_display_preferences(self, chann_uid):
         return dict(getattr(self, "_prefs", {}).get(chann_uid) or {"language": "th", "date_format": "dd/mm/yyyy", "timezone": "Asia/Bangkok"})
 

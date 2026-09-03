@@ -264,6 +264,13 @@ async def reminder_lifecycle_day():
           r.text)
 
 async def approval_day():
+    # The PDF pipeline (SmartBrowz + object store) is proven by
+    # test_report_issue.py; the sim watches the chat flow, so the seam is
+    # stubbed the way a working provider would answer.
+    from chann_app.services import report_issue as _ri
+    async def _issued(client, *, license_id, report_id, actor_id=None, allow_reissue=False):
+        return {"id": "doc-sim", "sha256": "sim"}
+    _ri.issue_for_report = _issued
     """Phase 14-B end to end: technician closes → CS is asked → approves
     → customer answers the survey; then a reject; then the flow is
     changed by typing. One FakeDataClient plays every OA so the steps and

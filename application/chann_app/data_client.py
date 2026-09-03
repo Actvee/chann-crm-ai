@@ -936,6 +936,26 @@ class DataClient:
         )
         return self._unwrap(resp)
 
+    async def attach_report_document(
+        self, license_id: str, report_id: str, *, document_id: str, pdf_path: str,
+        actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/service-reports/{report_id}/document",
+            headers=self._headers_for(actor_id),
+            params={"document_id": document_id, "pdf_path": pdf_path},
+        )
+        return self._unwrap(resp)
+
+    async def identity_signature(self, chann_uid: str) -> str | None:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/identities/{chann_uid}/signature",
+            headers=self._headers,
+        )
+        if resp.status_code == 404:
+            return None
+        return self._unwrap(resp).get("signature_url") or None
+
     # ------------------------------------------ Phase 16 display preferences
 
     async def get_display_preferences(self, chann_uid: str) -> dict:

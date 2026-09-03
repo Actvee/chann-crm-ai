@@ -76,10 +76,11 @@ clone.
 
 ## Where things stand
 
-**The commit carrying this text** is the technician-flow patch
-(`tech-flow-v1`, all three tiers, no migration), deployed by
-`~/tech-flow-deploy.sh`. Before it, on 3 Sep: `cdd2c1a` customer
-onboarding, `4b53f60` shops-chosen/units-claimed. Each is "deployed" only
+**The commit carrying this text** is the service-report-PDF patch
+(`report-pdf-v1`, all three tiers, no migration), deployed by
+`~/report-pdf-deploy.sh`. Before it, on 3 Sep: `cdd2c1a` customer
+onboarding, `4b53f60` shops-chosen/units-claimed, `e0ba461` the
+technician's day (tech-flow). Each is "deployed" only
 when `/health` on both services echoes its SHA — the scripts' STAGE 9
 checks that, and this file is not evidence. The plan for everything the
 three OAs still need is `docs/PLAN_3OA.md`; read it before starting work.
@@ -265,6 +266,27 @@ deploy data/application/presentation. The new data image's
 `EXPECTED_MIGRATION_HEAD` is `0021_approvals` and it will refuse to
 serve against an older schema, which is the guard working.
 668 tests pass (656 unit/boundary + 266 integration, 12 of them Phase 14).
+
+### Service Report PDF (3 Sep, late) — 13.4/13.5 through the Phase 10 engine
+
+Owner: "ใบ PDF service report ต้องมี ตัดแค่ใบรับประกัน". Built on the quote
+pipeline, not beside it: `services/report_issue.py` mirrors
+`quote_issue.py` (frozen snapshot → the shop's published `service_report`
+template or the built-in `documents/report_html.py` → SmartBrowz → object
+store first, `generated_documents` row second, report linked last via the
+new Data route `POST service-reports/{id}/document`). `issue_for_report`
+gathers ticket, company, technician (profile name) and every approved
+step's approver with a signed link to their signature
+(`GET identities/{uid}/signature`, 13.5) — a person with no signature on
+file gets a labelled line, never a broken image. Produced automatically
+at final approval (`approval.act` → `issue_report_document`, best effort:
+a render failure never undoes the approval), the technician is told with
+the link, the CS reply carries it, and it can be asked for again:
+chat "ออกรายงาน SR-2026-0001" / "ออกรายงานใหม่ …", the PDF button on the
+reports page (`POST /service-reports/{id}/document`, returns the existing
+document's link or issues one). A report that is not approved refuses:
+there is no approver to sign it yet. Not built: uploading a signature
+(the report renders without), photos on the report.
 
 ### The third walk (3 Sep evening) — the technician's day, as the spec has it
 

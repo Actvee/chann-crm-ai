@@ -3435,6 +3435,46 @@ def list_ticket_photos(
     )
 
 
+@router.post(
+    "/licenses/{license_id}/service-reports/{report_id}/document",
+    response_model=ServiceReportOut,
+)
+def attach_service_report_document(
+    license_id: uuid.UUID,
+    report_id: uuid.UUID,
+    document_id: uuid.UUID,
+    pdf_path: str,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    """Phase 13.4 — record which generated document is this report's PDF.
+    Same shape as the quote's link_document: the Application stores and
+    records first, then links, so a failure here leaves a findable
+    document rather than a report pointing at nothing."""
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = FieldServiceRepository(session).attach_document(
+            scope, report_id, document_id=document_id, pdf_path=pdf_path,
+        )
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="service_report", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="link_document",
+            field_changes=diff_fields(
+                {"generated_document_id": None},
+                {"generated_document_id": str(document_id)},
+            ),
+        )
+        session.commit()
+        session.refresh(row)
+        return row
+    except ReportNotFound as exc:
+        session.rollback()
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        session.rollback()
+        raise _phase2_http_error(exc)
+
+
 @router.get("/licenses/{license_id}/service-reports", response_model=list[ServiceReportOut])
 def list_service_reports(
     license_id: uuid.UUID,
@@ -3890,6 +3930,19 @@ def lookup_serial_across_tenants(
     )
     session.commit()
     return {"serial_number": serial_number, "matches": matches}
+
+
+@router.get("/identities/{chann_uid}/signature")
+def get_identity_signature(chann_uid: str, session: Session = Depends(get_session)):
+    """13.5 — where this person's signature image is stored (an object
+    path, or null). Read by the report renderer; uploading one is the
+    profile's job (not built yet — the report leaves a labelled line)."""
+    row = session.execute(
+        select(ChannIdentity).where(ChannIdentity.chann_uid == chann_uid)
+    ).scalars().first()
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="identity not found")
+    return {"chann_uid": chann_uid, "signature_url": row.signature_url}
 
 
 @router.get("/identities/{chann_uid}/display-preferences")

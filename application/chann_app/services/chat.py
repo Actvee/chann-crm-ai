@@ -100,6 +100,7 @@ ACTION_PERMISSIONS: dict[tuple[str, str], str] = {
     ("read", "service_report"): "service_report.read",
     ("create", "service_report"): "service_report.create",
     ("update", "service_report"): "service_report.update",
+    ("issue", "service_report"): "service_report.read",
     # Phase 14-B — approvals. Registered here first so check-parity holds
     # 14-C (the queue and config pages) to the same set.
     ("read", "approval"): "approval.view",
@@ -3939,6 +3940,95 @@ TICKET_DETAIL_EMPTY = {
 
 REPORT_LIST_PHRASES = ("รายงานของฉัน", "รายงานที่ส่ง", "ดูรายงาน", "my reports")
 
+# Phase 13.4/13.5 — the report as paper. Produced at approval; asked for
+# here when it was not, or when a corrected copy is wanted.
+REPORT_PDF_TRIGGERS = ("ออกรายงาน", "รายงาน pdf", "pdf รายงาน", "ขอ pdf", "ขอไฟล์รายงาน", "report pdf", "issue report")
+REPORT_PDF_REISSUE = ("ออกรายงานใหม่", "ออกรายงานซ้ำ", "reissue report")
+REPORT_PDF_READY = {
+    "th": "รายงาน {code} (PDF)\nลิงก์ดาวน์โหลด (ใช้ได้ 7 วัน):\n{url}",
+    "en": "Report {code} (PDF)\nDownload link (valid 7 days):\n{url}",
+}
+REPORT_PDF_NOT_APPROVED = {
+    "th": "รายงาน {code} ยังไม่ผ่านการอนุมัติ PDF จะออกให้เมื่อ CS อนุมัติแล้ว",
+    "en": "Report {code} is not approved yet — the PDF is produced on approval.",
+}
+REPORT_PDF_NEEDS_CODE = {
+    "th": "ออกรายงานไหนครับ พิมพ์ \"ออกรายงาน SR-2026-0001\" (ดูเลขได้จาก \"รายงานของฉัน\")",
+    "en": "Which report? Type \"issue report SR-2026-0001\" (see \"my reports\")",
+}
+REPORT_PDF_FAILED = {
+    "th": "ออก PDF ไม่สำเร็จ: {detail}",
+    "en": "Could not produce the PDF: {detail}",
+}
+
+
+async def _handle_report_pdf(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
+    permission_keys: list[str], language: str,
+) -> ChatReply:
+    from .report_issue import ReportAlreadyIssued, ReportNotApproved, issue_for_report
+
+    if "service_report.read" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    license_id = str(license_id)
+    match = SERVICE_REPORT_CODE_RE.search(message or "")
+    code = match.group(1).upper() if match else ""
+    reissue = any(t in (message or "").lower() for t in REPORT_PDF_REISSUE)
+    try:
+        rows = await client.list_service_reports(license_id)
+    except Exception:
+        log.exception("could not list reports")
+        return ChatReply(text=unavailable_reply(language))
+    if not code:
+        # One approved report of mine and no code: that one. Otherwise ask.
+        try:
+            member = await client.get_member(license_id, ctx.chann_uid)
+        except Exception:
+            member = None
+        mine = [
+            r for r in rows
+            if str(r.get("status") or "") == "approved"
+            and (not member or str(r.get("technician_member_id") or "") == str(member.get("id")))
+        ]
+        if len(mine) != 1:
+            return ChatReply(
+                text=_t(REPORT_PDF_NEEDS_CODE, language),
+                quick_replies=[
+                    (str(r.get("report_id"))[:20], f"ออกรายงาน {r.get('report_id')}") for r in mine[:4]
+                ] or [("รายงานของฉัน", "รายงานของฉัน")],
+            )
+        code = str(mine[0].get("report_id") or "")
+    report = next((r for r in rows if str(r.get("report_id") or "").upper() == code), None)
+    if report is None:
+        return ChatReply(text=_t(NOT_FOUND_BY_CODE, language).format(what="รายงาน", code=code))
+
+    document_id = str(report.get("generated_document_id") or "")
+    if document_id and not reissue:
+        url = document_download_url(license_id, document_id)
+    else:
+        try:
+            document = await issue_for_report(
+                client, license_id=license_id, report_id=str(report["id"]),
+                actor_id=ctx.chann_uid, allow_reissue=reissue,
+            )
+        except ReportNotApproved:
+            return ChatReply(text=_t(REPORT_PDF_NOT_APPROVED, language).format(code=code))
+        except ReportAlreadyIssued:
+            url = document_download_url(license_id, document_id)
+            document = None
+        except Exception as exc:  # noqa: BLE001
+            log.exception("report pdf failed")
+            return ChatReply(text=_t(REPORT_PDF_FAILED, language).format(detail=str(exc)[:160]))
+        if document is not None:
+            url = document_download_url(license_id, str(document.get("id") or ""))
+    if not url:
+        return ChatReply(text=_t(QUOTE_ISSUED_NO_LINK, language).format(quote_id=code, sha=""))
+    return ChatReply(
+        text=_t(REPORT_PDF_READY, language).format(code=code, url=url),
+        entity_type="service_report", entity_id=str(report.get("id") or ""),
+        quick_replies=[("ออกรายงานใหม่", f"ออกรายงานใหม่ {code}")],
+    )
+
 REPORT_LIST_EMPTY = {
     "th": "ยังไม่มีรายงานการซ่อม",
     "en": "No service reports yet.",
@@ -4874,6 +4964,8 @@ async def _handle_approval_act(
         else:
             tail = APPROVAL_NEXT_STEP
         text = _t(APPROVAL_APPROVED, language).format(code=report_code, next=_t(tail, language))
+        if result.get("document_url"):
+            text += f"\nPDF (7 วัน): {result['document_url']}"
     else:
         text = _t(APPROVAL_REJECTED, language).format(
             code=report_code, reason=f": {reason}" if reason else "",
@@ -8199,7 +8291,7 @@ TECHNICIAN_HELP = {
         "3. ซ่อมเสร็จ — พิมพ์ \"ปิดงาน\" แล้วตอบ 3 อย่าง: ปัญหาที่พบ / สิ่งที่แก้ไข / อะไหล่ (ถ้ามี)\n"
         "4. รอ CS ตรวจ — ผ่านหรือตีกลับจะแจ้งมาที่แชทนี้ ตีกลับแก้แล้วส่งใหม่ได้\n\n"
         "รับงานไม่ได้: พิมพ์ \"ปฏิเสธงาน T-000123 เหตุผล\" งานจะกลับไปที่ CS\n"
-        "ดูอื่นๆ: \"งานของฉัน\" · \"งานวันนี้\" · \"รายงานของฉัน\"\n"
+        "ดูอื่นๆ: \"งานของฉัน\" · \"งานวันนี้\" · \"รายงานของฉัน\" · \"ออกรายงาน SR-…\" (PDF เมื่อ CS ตรวจผ่านแล้ว)\n"
         "แก้ข้อมูลตัวเอง: \"แก้เบอร์เป็น 08x-xxx-xxxx\"\n"
         "เปิดหน้าจอเต็มได้จากเมนูด้านล่าง (เปิดหน้าจอช่าง)"
     ),
@@ -9457,6 +9549,11 @@ async def handle_chat_message(
             or _matches_phrase(message, TICKET_DETAIL_TRIGGERS)
         ):
             return await _handle_ticket_detail(
+                client, ctx=ctx, license_id=license_id, message=message,
+                permission_keys=permission_keys, language=language,
+            )
+        if any(t in (message or "").lower() for t in REPORT_PDF_TRIGGERS):
+            return await _handle_report_pdf(
                 client, ctx=ctx, license_id=license_id, message=message,
                 permission_keys=permission_keys, language=language,
             )

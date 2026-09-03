@@ -178,12 +178,22 @@ async def act(
         report = {"id": report_id, "report_id": ""}
 
     status = result.get("report_status")
+    result["document_url"] = None
     if status == "rejected":
         await _notify_submitter(client, license_id, report, reason, language)
-    elif status == "approved" and result.get("survey"):
-        result["survey_sent"] = await send_survey(
-            client, license_id=license_id, survey=result["survey"], language=language,
+    elif status == "approved":
+        # 13.4/13.5: the report becomes paper now — with this approver's
+        # signature line on it. Best effort: a render or storage failure
+        # must not undo the approval; the PDF can be issued again from
+        # "ออกรายงาน SR-…" or the reports page.
+        result["document_url"] = await issue_report_document(
+            client, license_id=license_id, report=report, actor_id=actor_chann_uid,
         )
+        await _notify_submitter_of_document(client, license_id, report, result["document_url"], language)
+        if result.get("survey"):
+            result["survey_sent"] = await send_survey(
+                client, license_id=license_id, survey=result["survey"], language=language,
+            )
     elif status == "submitted":
         # More steps: the next approver hears about it now.
         try:
@@ -192,6 +202,64 @@ async def act(
         except Exception:
             log.exception("could not notify the next approver for %s", report_id)
     return result
+
+
+async def issue_report_document(
+    client: DataClient, *, license_id: str, report: dict, actor_id: str | None,
+) -> str | None:
+    """The approved report's PDF link, issuing it if the report has none.
+    Never raises: the approval already happened."""
+    from .chat import document_download_url
+    from .report_issue import ReportAlreadyIssued, issue_for_report
+
+    report_id = str(report.get("id") or "")
+    if not report_id:
+        return None
+    try:
+        document = await issue_for_report(
+            client, license_id=license_id, report_id=report_id, actor_id=actor_id,
+        )
+    except ReportAlreadyIssued:
+        document_id = str(report.get("generated_document_id") or "")
+        return document_download_url(license_id, document_id) if document_id else None
+    except Exception:
+        log.exception("service report PDF for %s could not be produced", report.get("report_id"))
+        return None
+    return document_download_url(license_id, str(document.get("id") or ""))
+
+
+REPORT_APPROVED_TO_SUBMITTER = {
+    "th": "รายงาน {report} ผ่านการอนุมัติแล้ว{link}",
+    "en": "Report {report} has been approved{link}",
+}
+
+
+async def _notify_submitter_of_document(
+    client: DataClient, license_id: str, report: dict, url: str | None, language: str,
+) -> None:
+    """The technician hears the outcome — and gets the paper."""
+    member_id = str(report.get("technician_member_id") or "")
+    if not member_id:
+        return
+    try:
+        members = await client.list_members(license_id)
+        member = next((m for m in members if str(m.get("id")) == member_id), None)
+        if not member or not member.get("chann_uid"):
+            return
+        uid = str(member["chann_uid"])
+        line_uid = await client.line_target_of(uid)
+        link = f"\nPDF (7 วัน): {url}" if url else ""
+        await send_notification(
+            client, license_id=license_id, target_chann_uid=uid,
+            target_line_user_id=line_uid, type="approval_pending",
+            message=_t(REPORT_APPROVED_TO_SUBMITTER, language).format(
+                report=report.get("report_id") or "", link=link,
+            ),
+            entity_type=ENTITY_TYPE, entity_id=str(report.get("id") or ""),
+            language=language, oa="technician",
+        )
+    except Exception:
+        log.exception("could not tell the technician the report was approved")
 
 
 async def _report_by_id(client: DataClient, license_id: str, report_id: str) -> dict:

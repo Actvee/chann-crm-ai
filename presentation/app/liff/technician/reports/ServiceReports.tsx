@@ -5,7 +5,9 @@ import { useCallback, useState } from "react";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { AppShell } from "../../sales/_components";
-import { Audience, fetchPermissions, initLiffSession, proxyHeaders } from "../../_shared";
+import { Audience, fetchPermissions, initLiffSession, openExternal, proxyHeaders } from "../../_shared";
+
+type PdfResult = { document_id?: string; url?: string | null };
 
 type ServiceReport = {
   id: string;
@@ -13,6 +15,7 @@ type ServiceReport = {
   ticket_id: string;
   status: string;
   report_data?: Record<string, unknown> | null;
+  generated_document_id?: string | null;
   created_at?: string | null;
 };
 
@@ -108,6 +111,39 @@ export default function ServiceReports({
       say(error instanceof Error ? error.message : t.dashboard.openFailed, "error");
     }
   }, [audience, liffId, load, say, t]);
+
+  /**
+   * 13.4/13.5: the report as paper. The route returns the existing
+   * document's link, or issues one (approved reports only). Opened with
+   * liff.openWindow — an anchor or window.open dies in LINE's browser.
+   */
+  async function openPdf(report: ServiceReport) {
+    setBusyId(report.id);
+    say(t.dashboard.reports.pdfWorking);
+    try {
+      const response = await fetch(
+        `/api/phase2/licenses/${licenseId}/service-reports/${report.id}/document`,
+        {
+          method: "POST",
+          headers: proxyHeaders(token, licenseId, audience),
+          body: JSON.stringify({}),
+        },
+      );
+      if (response.status === 409) {
+        say(t.dashboard.reports.pdfNotApproved, "error");
+        return;
+      }
+      if (!response.ok) throw new Error(String(response.status));
+      const result = (await response.json()) as PdfResult;
+      if (!result.url) throw new Error("no url");
+      openExternal(result.url);
+      say("");
+    } catch {
+      say(t.dashboard.reports.pdfFailed, "error");
+    } finally {
+      setBusyId("");
+    }
+  }
 
   async function decide(report: ServiceReport, next: string) {
     setBusyId(report.id);
@@ -218,6 +254,23 @@ export default function ServiceReports({
                   ) : null}
                 </dl>
 
+                {report.status === "approved" && (
+                  <div className="card-actions">
+                    <button
+                      type="button"
+                      className="btn"
+                      data-variant="quiet"
+                      disabled={busyId !== ""}
+                      onClick={() => void openPdf(report)}
+                    >
+                      {busyId === report.id
+                        ? t.dashboard.reports.pdfWorking
+                        : report.generated_document_id
+                          ? t.dashboard.reports.pdf
+                          : t.dashboard.reports.pdfIssue}
+                    </button>
+                  </div>
+                )}
                 {canApprove && report.status === "submitted" && (
                   <div className="card-actions">
                     <button

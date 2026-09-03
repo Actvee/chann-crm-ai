@@ -128,6 +128,8 @@ VERB_SEGMENTS = {
     # customer updating their own row.
     "approve": "approve", "reject": "reject", "answer": "update",
     "pending": "read",
+    # Phase 13.4: POST .../document issues (or returns) the report PDF.
+    "document": "issue",
 }
 
 

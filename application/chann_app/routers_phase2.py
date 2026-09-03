@@ -1057,6 +1057,58 @@ async def my_warranties(
         raise _propagate(exc)
 
 
+@router.post("/licenses/{license_id}/service-reports/{report_id}/document")
+async def issue_service_report_document(
+    license_id: str,
+    report_id: str,
+    payload: dict | None = None,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """The report's PDF (13.4/13.5): produced at approval, and here on
+    demand — the existing document's link, or a fresh issue when the
+    report has none (or `reissue` is asked for). Same call chat's
+    "ออกรายงาน SR-…" makes."""
+    from .services.chat import document_download_url
+    from .services.report_issue import ReportAlreadyIssued, ReportNotApproved, issue_for_report
+
+    _require_same_tenant(principal, license_id)
+    principal.require("service_report.read")
+    reissue = bool((payload or {}).get("reissue"))
+    try:
+        rows = await client.list_service_reports(license_id)
+    except DataTierError as exc:
+        raise _propagate(exc)
+    report = next((r for r in rows if str(r.get("id")) == report_id), None)
+    if report is None:
+        raise HTTPException(status_code=404, detail="report not found")
+    if principal.is_customer and str(report.get("customer_chann_uid") or "") not in ("", principal.chann_uid):
+        raise HTTPException(status_code=404, detail="report not found")
+    document_id = str(report.get("generated_document_id") or "")
+    if document_id and not reissue:
+        document = await client.get_generated_document(license_id, document_id) or {}
+    else:
+        try:
+            document = await issue_for_report(
+                client, license_id=license_id, report_id=report_id,
+                actor_id=principal.chann_uid, allow_reissue=reissue,
+            )
+        except ReportNotApproved as exc:
+            raise HTTPException(status_code=409, detail={"error": "not_approved", "message": str(exc)})
+        except ReportAlreadyIssued as exc:
+            raise HTTPException(status_code=409, detail={"error": "already_issued", "message": str(exc)})
+        except DataTierError as exc:
+            raise _propagate(exc)
+        except Exception as exc:  # noqa: BLE001 — provider/storage failure, phrased for the page
+            log.exception("service report document failed")
+            raise HTTPException(status_code=502, detail={"error": "render_failed", "message": str(exc)[:200]})
+    return {
+        "document_id": str(document.get("id") or ""),
+        "sha256": str(document.get("sha256") or ""),
+        "url": document_download_url(license_id, str(document.get("id") or "")),
+    }
+
+
 # ----------------------------------------------------------------- approvals
 #
 # Phase 14-B. Every route here is a thin wrapper around services/approval.py,

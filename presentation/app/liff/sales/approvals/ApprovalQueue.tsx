@@ -7,7 +7,7 @@ import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { AppShell } from "../_components";
 import { FieldRow } from "../../_field-row";
-import { fetchPermissions, initLiffSession, proxyHeaders } from "../../_shared";
+import { fetchPermissions, initLiffSession, openExternal, proxyHeaders } from "../../_shared";
 
 type Step = {
   id: string;
@@ -31,7 +31,7 @@ type Ticket = {
   issue_description?: string | null;
 };
 type Pending = { step: Step; report: Report | null; ticket: Ticket | null };
-type ActResult = { report_status?: string; survey_sent?: boolean };
+type ActResult = { report_status?: string; survey_sent?: boolean; document_url?: string | null };
 
 /**
  * The approval queue — Phase 14-C, the dashboard side of "อนุมัติ SR-…".
@@ -139,7 +139,12 @@ export default function ApprovalQueue({ liffId }: { liffId: string }) {
       setRejecting("");
       setReason("");
       await load();
-      say(message.replace("{code}", code), "ok");
+      say(
+        message.replace("{code}", code)
+          + (result.document_url ? ` · ${t.dashboard.approvals.pdfReady}` : ""),
+        "ok",
+      );
+      if (result.document_url) openExternal(result.document_url);
     } catch {
       say(t.dashboard.related.actionFailed, "error");
     } finally {
