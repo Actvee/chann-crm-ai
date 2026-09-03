@@ -28,6 +28,24 @@ type Survey = {
   scale_config_json?: Record<string, string> | null;
 };
 
+/** Storefront row — product info and the shop's name, nothing else (9.4). */
+type StoreProduct = {
+  product_id: string;
+  product_name: string;
+  sku?: string | null;
+  unit_price?: string | number | null;
+  license_id: string;
+  company_name: string;
+};
+
+type Order = {
+  id: string;
+  deal_id: string;
+  stage: string;
+  created_at?: string | null;
+  products?: { id: string; product_name: string; qty?: number | null }[];
+};
+
 /**
  * The customer's home — only what a customer does, nothing the shop does.
  *
@@ -64,6 +82,14 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
   const [issueSerial, setIssueSerial] = useState("");
   const [serial, setSerial] = useState("");
 
+  // Spec page 1: the storefront lives on the customer's home too — the
+  // same cross-tenant search the chat's "ค้นหา …" makes, and "สนใจ" is
+  // the same lead-plus-notification the chat's numbered pick makes.
+  const [shopQuery, setShopQuery] = useState("");
+  const [shopResults, setShopResults] = useState<StoreProduct[]>([]);
+  const [shopSearched, setShopSearched] = useState(false);
+  const [orders, setOrders] = useState<Order[]>([]);
+
   const say = useCallback((message: string, kind?: "ok" | "error") => {
     setStatus(message);
     setTone(kind);
@@ -73,16 +99,17 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
     async (currentToken = token, license = licenseId) => {
       if (!currentToken || !license) return;
       const headers = proxyHeaders(currentToken, license, "customer");
-      const [ticketsRes, warrantiesRes, surveyRes] = await Promise.all([
+      const [ticketsRes, warrantiesRes, surveyRes, ordersRes] = await Promise.all([
         fetch(`/api/phase2/licenses/${license}/tickets`, { headers }),
         fetch(`/api/phase2/licenses/${license}/warranties/mine`, { headers }),
         fetch(`/api/phase2/licenses/${license}/surveys/pending`, { headers }),
+        fetch(`/api/phase2/licenses/${license}/deals/mine`, { headers }),
       ]);
       // A failed load must not read as "you have no repairs": the empty
       // state and the error state are different facts, and a customer
       // who sees the first when the second is true stops trusting the
       // page. Same rule the technician home applies.
-      const failed = [ticketsRes, warrantiesRes, surveyRes].find((res) => !res.ok);
+      const failed = [ticketsRes, warrantiesRes, surveyRes, ordersRes].find((res) => !res.ok);
       if (failed) {
         throw new Error(
           failed.status === 403
@@ -92,6 +119,7 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
       }
       setTickets((await ticketsRes.json()) as Ticket[]);
       setWarranties((await warrantiesRes.json()) as Warranty[]);
+      setOrders((await ordersRes.json()) as Order[]);
       const pending = (await surveyRes.json()) as {
         survey: Survey | null;
         ticket: Ticket | null;
@@ -215,6 +243,53 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
     }
   }
 
+  async function searchShop(all: boolean) {
+    const q = all ? "" : shopQuery.trim();
+    if (!all && !q) return;
+    setBusy(true);
+    try {
+      const url = q
+        ? `/api/phase2/storefront/products?q=${encodeURIComponent(q)}`
+        : "/api/phase2/storefront/products";
+      const response = await fetch(url, { headers: proxyHeaders(token, licenseId, "customer") });
+      if (!response.ok) throw new Error(String(response.status));
+      setShopResults((await response.json()) as StoreProduct[]);
+      setShopSearched(true);
+      say("", undefined);
+    } catch {
+      say(t.dashboard.customer.actionFailed, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function expressInterest(product: StoreProduct) {
+    setBusy(true);
+    try {
+      const response = await fetch(`/api/phase2/storefront/interest`, {
+        method: "POST",
+        headers: {
+          ...proxyHeaders(token, licenseId, "customer"),
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          license_id: product.license_id,
+          product_name: product.product_name,
+          company_name: product.company_name,
+        }),
+      });
+      if (!response.ok) throw new Error(String(response.status));
+      say(
+        t.dashboard.customer.shopInterestSent.replace("{shop}", product.company_name),
+        "ok",
+      );
+    } catch {
+      say(t.dashboard.customer.actionFailed, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function switchShop(licenseIdNext: string) {
     const next = shops.find((s) => s.license_id === licenseIdNext);
     if (!next) return;
@@ -276,6 +351,78 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
             </div>
           </section>
         )}
+
+        <section className="section">
+          <div className="section-head">
+            <h2>{t.dashboard.customer.shopSearch}</h2>
+          </div>
+          <p className="card-meta">{t.dashboard.customer.shopSearchHint}</p>
+          <dl className="fields">
+            <FieldRow label={t.dashboard.customer.shopSearch}>
+              {(id) => (
+                <input
+                  id={id}
+                  value={shopQuery}
+                  placeholder={t.dashboard.customer.shopSearchPlaceholder}
+                  onChange={(e) => setShopQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void searchShop(false);
+                  }}
+                />
+              )}
+            </FieldRow>
+            <div className="actions">
+              <button
+                type="button"
+                className="btn"
+                data-variant="primary"
+                disabled={busy || !shopQuery.trim()}
+                onClick={() => void searchShop(false)}
+              >
+                {t.dashboard.customer.shopSearchButton}
+              </button>
+              <button
+                type="button"
+                className="btn"
+                disabled={busy}
+                onClick={() => void searchShop(true)}
+              >
+                {t.dashboard.customer.shopBrowseAll}
+              </button>
+            </div>
+          </dl>
+          {shopSearched && shopResults.length === 0 && (
+            <div className="empty">
+              <p>{t.dashboard.customer.shopNoResults}</p>
+            </div>
+          )}
+          {shopResults.length > 0 && (
+            <ul className="list">
+              {shopResults.map((product) => (
+                <li key={`${product.license_id}-${product.product_id}`} className="card">
+                  <div className="card-title">{product.product_name}</div>
+                  <div className="card-meta">
+                    {t.dashboard.customer.shopFrom} {product.company_name}
+                    {product.unit_price != null && product.unit_price !== ""
+                      ? ` · ${Number(product.unit_price).toLocaleString()}`
+                      : ""}
+                  </div>
+                  <div className="card-actions">
+                    <button
+                      type="button"
+                      className="btn"
+                      data-variant="primary"
+                      disabled={busy}
+                      onClick={() => void expressInterest(product)}
+                    >
+                      {t.dashboard.customer.shopInterested}
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
 
         <section className="section">
           <div className="section-head">
@@ -414,6 +561,37 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
                     {row.warranty_end
                       ? ` · ${t.dashboard.customer.expires} ${shortDate(row.warranty_end)}`
                       : ""}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+
+        <section className="section">
+          <div className="section-head">
+            <h2>
+              {t.dashboard.customer.orders} ({orders.length})
+            </h2>
+          </div>
+          {orders.length === 0 ? (
+            <div className="empty">
+              <p>{t.dashboard.customer.noOrders}</p>
+            </div>
+          ) : (
+            <ul className="list">
+              {orders.map((order) => (
+                <li key={order.id} className="card">
+                  <div className="card-title">
+                    {order.deal_id} ·{" "}
+                    {(t.dashboard.customer.orderStage as Record<string, string>)[order.stage] ??
+                      order.stage}
+                  </div>
+                  <div className="card-meta">
+                    {(order.products ?? [])
+                      .map((p) => `${p.product_name}${(p.qty ?? 1) > 1 ? ` ×${p.qty}` : ""}`)
+                      .join(", ")}
+                    {order.created_at ? ` · ${shortDate(order.created_at)}` : ""}
                   </div>
                 </li>
               ))}

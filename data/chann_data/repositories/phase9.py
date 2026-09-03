@@ -338,6 +338,16 @@ class DealRepository:
             query = query.where(Deal.stage == stage)
         return list(self._s.execute(query.order_by(Deal.created_at.desc())).scalars())
 
+    def list_for_contact(self, scope: TenantScope, contact_id: uuid.UUID) -> list[Deal]:
+        """One customer's deals in this tenant — their purchase history."""
+        return list(self._s.execute(
+            select(Deal).where(
+                Deal.license_id == scope.license_id,
+                Deal.contact_id == contact_id,
+                Deal.archived_at.is_(None),
+            ).order_by(Deal.created_at.desc())
+        ).scalars())
+
     def add_product(
         self, scope: TenantScope, deal_id: uuid.UUID, *,
         product_id: uuid.UUID | None, product_name: str,
@@ -593,6 +603,34 @@ class StorefrontRepository:
 
     def __init__(self, session: Session):
         self._s = session
+
+    def browse_products(self, *, limit: int = 20) -> list[dict]:
+        """"สินค้าทั้งหมด" — the storefront with no search term (spec page 1,
+        tile 2). Same projection and same rule as search_products: product
+        info only, from shops that are open for business."""
+        limit = max(1, min(int(limit or 20), 50))
+        rows = self._s.execute(
+            select(Product, License)
+            .join(License, License.id == Product.license_id)
+            .where(
+                Product.archived_at.is_(None),
+                License.status.in_(("trial", "active")),
+            )
+            .order_by(Product.product_name.asc())
+            .limit(limit)
+        ).all()
+        return [
+            {
+                "product_id": product.product_id,
+                "product_name": product.product_name,
+                "sku": product.sku,
+                "category": product.category,
+                "unit_price": product.unit_price,
+                "license_id": product.license_id,
+                "company_name": license_row.company_name,
+            }
+            for product, license_row in rows
+        ]
 
     def search_products(self, query: str, *, limit: int = 10) -> list[dict]:
         query = (query or "").strip()

@@ -15,6 +15,7 @@ from .config import settings
 from .data_client import DataClient, DataTierError
 from .routers_admin import get_data_client, require_admin
 from .services import approval as approval_service
+from .services import storefront as storefront_service
 from .services.authorization import TenantPrincipal, resolve_tenant_principal
 
 router = APIRouter(prefix="/api/v1", tags=["phase2"])
@@ -533,6 +534,69 @@ async def list_customers(
     principal.require("customer.read")
     try:
         return await client.list_customers(license_id, stage)
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+# ---------------------------------------------------------------- B5
+# The customer's home, spec pages 1–2: the storefront and their history.
+class StorefrontInterestBody(BaseModel):
+    license_id: str
+    product_name: str
+    company_name: str | None = None
+
+
+@router.get("/storefront/products")
+async def storefront_products(
+    q: str = "",
+    limit: int = 20,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Product info across every active shop — the same cross-tenant read
+    the chat's "ค้นหา …" makes. Nothing tenant-specific comes back, so any
+    signed-in person may look (a staff member browsing is harmless)."""
+    try:
+        return await storefront_service.search(client, q=q, limit=max(1, min(limit, 50)))
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.post("/storefront/interest", status_code=201)
+async def storefront_interest(
+    payload: StorefrontInterestBody,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """"สนใจ" — a lead in the shop the customer picked, and that shop told.
+    Customers only: a staff member's tap would create a lead under their
+    own identity in someone else's tenant."""
+    if not principal.is_customer:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail={"error": "customers_only"})
+    try:
+        row = await storefront_service.record_interest(
+            client, chann_uid=principal.chann_uid, license_id=payload.license_id,
+            product_name=payload.product_name, company_name=payload.company_name,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+    return {"id": row.get("id"), "license_id": payload.license_id, "product_name": payload.product_name}
+
+
+@router.get("/licenses/{license_id}/deals/mine")
+async def my_orders(
+    license_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """This customer's deals in this shop — purchase history (spec page 2).
+    Scoped to the caller by construction, like warranties/mine."""
+    _require_same_tenant(principal, license_id)
+    principal.require("customer.read")
+    try:
+        return await storefront_service.my_orders(
+            client, license_id=license_id, chann_uid=principal.chann_uid,
+        )
     except DataTierError as exc:
         raise _propagate(exc)
 

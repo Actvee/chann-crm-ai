@@ -2,6 +2,7 @@
   "_comment": "URL รูปต่อ slot (https เท่านั้น) ว่าง = ไม่ส่ง/ไม่โชว์",
   "images": {
     "customer-link": "",
+    "customer-shop": "",
     "customer-register": "",
     "customer-report": "",
     "customer-status": "",

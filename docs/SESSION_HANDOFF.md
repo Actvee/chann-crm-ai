@@ -269,6 +269,33 @@ deploy data/application/presentation. The new data image's
 serve against an older schema, which is the guard working.
 668 tests pass (656 unit/boundary + 266 integration, 12 of them Phase 14).
 
+### Plan B5 (3 Sep, night) — the customer's home per spec pages 1–2 (`customer-home-v1`)
+
+- **Storefront on the home screen** (`CustomerHome.tsx`): a search box, an
+  "all products" button, results as cards (product · shop · price) with an
+  "สนใจ" button. Routes: `GET /api/v1/storefront/products?q=` (any signed-in
+  person; product info only), `POST /api/v1/storefront/interest` (customers
+  only → lead in the chosen shop). Both go through
+  `services/storefront.py`, which the chat engine now uses too.
+- **"สนใจ" tells the shop**: `storefront.record_interest` creates the lead
+  (Data `public/storefront/interest`, unchanged) and pushes a LINE to the
+  shop's owner/admin/sales ("ลูกค้าสนใจสินค้า: … สร้างเป็น lead ให้แล้ว"). A
+  lead nobody hears about was the gap.
+- **"สินค้าทั้งหมด" on the customer OA is the storefront**: the same words
+  a staff member uses for the shop's own list. `maybe_handle_storefront`
+  (customer OA only, runs first) now answers `PRODUCT_LIST_PHRASES` with
+  `client.storefront_browse` (Data: `q` optional on
+  `public/storefront/products`; `StorefrontRepository.browse_products`,
+  capped at 50). Numbered pick works as before.
+- **Purchase history** (spec page 2): `GET /licenses/{id}/deals/mine` and
+  chat "ประวัติการซื้อ" → `storefront.my_orders`: the customer's own record in
+  this shop (`list_customers?customer_chann_uid=` → `find_by_chann_uid`)
+  then `list_deals?contact_id=` (`DealRepository.list_for_contact`). No
+  record → "ยังไม่มีประวัติการซื้อ", never a ticket.
+- Guides: customer step "ดูสินค้า / สนใจสินค้า" (slot `customer-shop`, both
+  image maps), handout regenerated. Tests: `tests/unit/test_customer_home.py`.
+- Not in this patch: "คุยกับร้าน" (Phase 15, PLAN_3OA B6).
+
 ### Plan B4 (3 Sep, late) — Phase 16 closed: preferences that shape the text, the shop's side of a link
 
 16.3: `thai_datetime` keeps the reader's preferences in a context

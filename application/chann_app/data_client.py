@@ -1166,8 +1166,15 @@ class DataClient:
             return None
         return self._unwrap(resp)
 
-    async def list_customers(self, license_id: str, stage: str | None = None) -> list[dict]:
-        params = {"stage": stage} if stage else None
+    async def list_customers(
+        self, license_id: str, stage: str | None = None, customer_chann_uid: str | None = None,
+    ) -> list[dict]:
+        params = {}
+        if stage:
+            params["stage"] = stage
+        if customer_chann_uid:
+            params["customer_chann_uid"] = customer_chann_uid
+        params = params or None
         resp = await self._client.get(
             f"{self._base}/internal/v1/licenses/{license_id}/customers",
             headers=self._headers, params=params,
@@ -1219,8 +1226,15 @@ class DataClient:
             return None
         return self._unwrap(resp)
 
-    async def list_deals(self, license_id: str, stage: str | None = None) -> list[dict]:
-        params = {"stage": stage} if stage else None
+    async def list_deals(
+        self, license_id: str, stage: str | None = None, contact_id: str | None = None,
+    ) -> list[dict]:
+        params = {}
+        if stage:
+            params["stage"] = stage
+        if contact_id:
+            params["contact_id"] = contact_id
+        params = params or None
         resp = await self._client.get(
             f"{self._base}/internal/v1/licenses/{license_id}/deals",
             headers=self._headers, params=params,
@@ -1284,6 +1298,13 @@ class DataClient:
         resp = await self._client.get(
             f"{self._base}/internal/v1/public/storefront/products",
             headers=self._headers, params={"q": q, "limit": limit},
+        )
+        return self._unwrap(resp)
+
+    async def storefront_browse(self, limit: int = 20) -> list[dict]:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/public/storefront/products",
+            headers=self._headers, params={"limit": limit},
         )
         return self._unwrap(resp)
 

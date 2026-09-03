@@ -1995,10 +1995,17 @@ def get_customer(
 
 @router.get("/licenses/{license_id}/customers", response_model=list[CustomerOut])
 def list_customers(
-    license_id: uuid.UUID, stage: str | None = None, session: Session = Depends(get_session),
+    license_id: uuid.UUID, stage: str | None = None, customer_chann_uid: str | None = None,
+    session: Session = Depends(get_session),
 ):
     scope = TenantScope(license_id=license_id)
-    rows = CustomerRepository(session).list_for_license(scope, stage=stage)
+    repo = CustomerRepository(session)
+    if customer_chann_uid:
+        # The customer's own record in this shop (B5: purchase history).
+        row = repo.find_by_chann_uid(scope, customer_chann_uid)
+        rows = [row] if row is not None and row.archived_at is None else []
+    else:
+        rows = repo.list_for_license(scope, stage=stage)
     return [CustomerOut.model_validate(r, from_attributes=True) for r in rows]
 
 
@@ -2111,11 +2118,15 @@ def get_deal(
 
 @router.get("/licenses/{license_id}/deals", response_model=list[DealOut])
 def list_deals(
-    license_id: uuid.UUID, stage: str | None = None, session: Session = Depends(get_session),
+    license_id: uuid.UUID, stage: str | None = None, contact_id: uuid.UUID | None = None,
+    session: Session = Depends(get_session),
 ):
     scope = TenantScope(license_id=license_id)
     repo = DealRepository(session)
-    rows = repo.list_for_license(scope, stage=stage)
+    if contact_id is not None:
+        rows = repo.list_for_contact(scope, contact_id)
+    else:
+        rows = repo.list_for_license(scope, stage=stage)
     return [_deal_out(r, repo.products_of(r.id)) for r in rows]
 
 
@@ -2203,11 +2214,16 @@ def archive_deal(
 
 
 @router.get("/public/storefront/products", response_model=list[StorefrontProductOut])
-def storefront_search(q: str, limit: int = 10, session: Session = Depends(get_session)):
+def storefront_search(q: str = "", limit: int = 10, session: Session = Depends(get_session)):
     """Public, cross-tenant, un-scoped — same reasoning as
     RegistrationRepository.find_shops: a customer browsing the storefront
-    has no tenant yet, that is what this search is for."""
-    results = StorefrontRepository(session).search_products(q, limit=limit)
+    has no tenant yet, that is what this search is for. No term → the
+    whole storefront ("สินค้าทั้งหมด")."""
+    repo = StorefrontRepository(session)
+    if (q or "").strip():
+        results = repo.search_products(q, limit=limit)
+    else:
+        results = repo.browse_products(limit=limit)
     return [StorefrontProductOut(**r) for r in results]
 
 

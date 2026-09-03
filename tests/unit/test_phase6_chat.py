@@ -803,8 +803,10 @@ class FakeDataClient:
         self._customers.append(row)
         return row
 
-    async def list_customers(self, license_id, stage=None):
+    async def list_customers(self, license_id, stage=None, customer_chann_uid=None):
         self.recorded.append(("list_customers", license_id, stage))
+        if customer_chann_uid:
+            return [c for c in self._customers if c.get("customer_chann_uid") == customer_chann_uid]
         if stage:
             return [c for c in self._customers if c["stage"] == stage]
         return list(self._customers)
@@ -861,8 +863,10 @@ class FakeDataClient:
             None,
         )
 
-    async def list_deals(self, license_id, stage=None):
-        self.recorded.append(("list_deals", license_id, stage))
+    async def list_deals(self, license_id, stage=None, contact_id=None):
+        self.recorded.append(("list_deals", license_id, stage, contact_id))
+        if contact_id:
+            return [d for d in self._deals if d.get("contact_id") == contact_id]
         if stage:
             return [d for d in self._deals if d["stage"] == stage]
         return list(self._deals)
@@ -932,6 +936,10 @@ class FakeDataClient:
 
     async def storefront_search(self, q, limit=10):
         self.recorded.append(("storefront_search", q, limit))
+        return list(self._storefront_results)
+
+    async def storefront_browse(self, limit=20):
+        self.recorded.append(("storefront_browse", limit))
         return list(self._storefront_results)
 
     async def storefront_record_interest(self, *, chann_uid, license_id, product_name):
@@ -5957,6 +5965,7 @@ class TestButtonsTheSystemWritesDoNotNeedTheAI:
         triggers += list(module.LANGUAGE_TO_EN) + list(module.LANGUAGE_TO_TH)
         triggers += list(module.HELP_EXAMPLES_PHRASES) + list(module.CAPABILITY_PHRASES)
         triggers += list(module.TICKET_TEAM_PHRASES)
+        triggers += list(module.PRODUCT_LIST_PHRASES) + list(module.CUSTOMER_ORDERS_PHRASES)
 
         dead = []
         for text in sorted(sent):

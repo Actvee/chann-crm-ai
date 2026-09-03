@@ -31,6 +31,7 @@ from ..line.client import get_message_content
 from .ai.intent import parse_intent, unavailable_reply
 from .identity import ResolvedContext, TenantResolution
 from .registration import COMPANY_CODE_RE
+from . import storefront as storefront_service
 
 # Which permission key an (action, entity) pair requires. This is the real
 # gate — the prompt tells the model what the user holds, but a model that
@@ -2470,6 +2471,40 @@ async def _handle_serial_enquiry(
     return ChatReply(text=_t(SERIAL_SHOPS_FOUND, language).format(serial=serial, shops=shops))
 
 
+async def _handle_orders_mine(
+    client: DataClient, *, ctx: ResolvedContext, license_id, language: str,
+) -> ChatReply:
+    """Spec page 2 "คำสั่งซื้อ/ประวัติ" — the chat side of the home's
+    purchase-history list (parity rule). Same service call as the page."""
+    try:
+        deals = await storefront_service.my_orders(
+            client, license_id=str(license_id), chann_uid=ctx.chann_uid,
+        )
+    except Exception:
+        log.exception("order history failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    if not deals:
+        return ChatReply(
+            text=_t(ORDERS_NONE, language),
+            quick_replies=[("สินค้าทั้งหมด", "สินค้าทั้งหมด"), ("ประกันของฉัน", "ประกันของฉัน")],
+        )
+    lines = [_t(ORDERS_HEAD, language)]
+    for d in deals[:LIST_LIMIT]:
+        stage = str(d.get("stage") or "")
+        stage_text = ORDER_STAGE_LABELS.get(stage, {}).get(language) or stage
+        products = ", ".join(
+            f"{p.get('product_name')}" + (f" ×{p.get('qty')}" if (p.get("qty") or 1) > 1 else "")
+            for p in (d.get("products") or [])
+        )
+        when = _iso_to_thai_date(str(d.get("created_at") or "")[:10]) if d.get("created_at") else ""
+        lines.append(
+            f"{d.get('deal_id') or ''} · {stage_text}"
+            + (f" · {products}" if products else "")
+            + (f" · {when}" if when else "")
+        )
+    return ChatReply(text="\n".join(lines))
+
+
 async def _handle_warranty_mine(
     client: DataClient, *, ctx: ResolvedContext, license_id, language: str,
 ) -> ChatReply:
@@ -2583,6 +2618,22 @@ CUSTOMER_WARRANTY_MINE_PHRASES = (
     "ประกันของฉัน", "ใบรับประกันของฉัน", "รายการประกัน", "สินค้าของฉัน",
     "my warranties", "my products",
 )
+# Spec page 2: "คำสั่งซื้อ/ประวัติ" — this customer's deals in this shop.
+CUSTOMER_ORDERS_PHRASES = (
+    "ประวัติการซื้อ", "ประวัติการสั่งซื้อ", "คำสั่งซื้อของฉัน", "ประวัติของฉัน",
+    "my orders", "order history", "purchase history",
+)
+ORDERS_NONE = {
+    "th": "ยังไม่มีประวัติการซื้อกับร้านนี้ครับ ดูสินค้าได้ด้วย \"สินค้าทั้งหมด\" หรือ \"ค้นหา\" ตามด้วยชื่อสินค้า",
+    "en": "No purchase history with this shop yet. \"all products\" or \"search …\" to browse.",
+}
+ORDERS_HEAD = {"th": "ประวัติการซื้อกับร้านนี้:", "en": "Your history with this shop:"}
+ORDER_STAGE_LABELS = {
+    "new": {"th": "รอเสนอราคา", "en": "new"},
+    "proposed": {"th": "เสนอราคาแล้ว", "en": "quoted"},
+    "won": {"th": "ซื้อแล้ว", "en": "purchased"},
+    "lost": {"th": "ไม่ได้ซื้อ", "en": "not purchased"},
+}
 # A bare "แจ้งซ่อม" is the tile, not a fault: ask what is wrong instead of
 # opening a job whose fault reads "แจ้งซ่อม".
 CUSTOMER_REPORT_BARE = ("แจ้งซ่อม", "แจ้งเสีย", "แจ้งปัญหา", "report a fault", "report")
@@ -2648,7 +2699,7 @@ def _is_customer_command(text: str) -> bool:
     return _matches_phrase(
         text,
         TICKET_MINE_PHRASES + TICKET_LIST_PHRASES + CUSTOMER_STATUS_PHRASES
-        + CUSTOMER_CONTACT_PHRASES + CUSTOMER_WARRANTY_MINE_PHRASES
+        + CUSTOMER_CONTACT_PHRASES + CUSTOMER_WARRANTY_MINE_PHRASES + CUSTOMER_ORDERS_PHRASES
         + CUSTOMER_REPORT_BARE + HELP_TRIGGERS + CUSTOMER_CANCEL_PHRASES,
     ) or any(t in (text or "").lower() for t in CUSTOMER_RESCHEDULE_TRIGGERS)
 CUSTOMER_QUESTION_FORWARDED = {
@@ -9533,6 +9584,15 @@ def _merge_pending(pending: dict, intent: dict) -> dict:
 # keyword lookup, not something that benefits from a model call, and a
 # trigger word keeps this from firing on ordinary conversation.
 STOREFRONT_SEARCH_TRIGGERS = ("ค้นหา", "search")
+# Spec page 1, tile 2: on the customer OA "สินค้าทั้งหมด" is the storefront
+# (every shop's products), not the shop's own product list a staff member
+# gets from the same words on the sales OA.
+STOREFRONT_BROWSE_EXTRA = ("ดูสินค้าทั้งหมด", "all products", "browse products")
+STOREFRONT_BROWSE_LIMIT = 10
+STOREFRONT_EMPTY = {
+    "th": "ยังไม่มีสินค้าในระบบครับ ลองใหม่ภายหลัง หรือพิมพ์ \"ค้นหา\" ตามด้วยชื่อสินค้า",
+    "en": "No products are listed yet. Try later, or type \"search\" and a product name.",
+}
 STOREFRONT_RESULTS_LIMIT = 5
 STOREFRONT_PENDING_TTL_S = 300
 
@@ -9596,6 +9656,23 @@ def _is_storefront_confirmation(message: str) -> bool:
     return any(text == w or text.startswith(w) for w in STOREFRONT_CONFIRM_WORDS)
 
 
+async def _storefront_browse_reply(
+    client: DataClient, *, ctx: ResolvedContext, language: str,
+) -> ChatReply:
+    """The whole storefront as a numbered list, a pick pending — reached
+    from the customer OA pre-pass and from the customer branch of
+    handle_chat_message (a quick-reply button lands there directly)."""
+    results = await client.storefront_browse(limit=STOREFRONT_BROWSE_LIMIT)
+    if not results:
+        return ChatReply(text=_t(STOREFRONT_EMPTY, language))
+    await client.set_pending_intent(
+        ctx.chann_uid, ctx.oa,
+        action="select", entity="storefront", fields={"options": results}, missing=[],
+        ttl_seconds=STOREFRONT_PENDING_TTL_S,
+    )
+    return ChatReply(text=_format_storefront_results(results, language))
+
+
 async def maybe_handle_storefront(
     client: DataClient, *, message: str, ctx: ResolvedContext, language: str,
 ) -> ChatReply | None:
@@ -9604,6 +9681,11 @@ async def maybe_handle_storefront(
     shown), else None so the caller proceeds with its normal tenant-scoped
     handling."""
     pending = await client.get_pending_intent(ctx.chann_uid, ctx.oa)
+
+    if _matches_phrase(message, PRODUCT_LIST_PHRASES + STOREFRONT_BROWSE_EXTRA):
+        if pending is not None and pending.get("entity") in ("storefront", "storefront_confirm"):
+            await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
+        return await _storefront_browse_reply(client, ctx=ctx, language=language)
 
     if pending is not None and pending.get("entity") == "storefront_confirm":
         cached = pending.get("fields") or {}
@@ -9633,9 +9715,10 @@ async def maybe_handle_storefront(
             )
         chosen = options[int(text) - 1]
         await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
-        row = await client.storefront_record_interest(
-            chann_uid=ctx.chann_uid, license_id=chosen["license_id"],
-            product_name=chosen["product_name"],
+        row = await storefront_service.record_interest(
+            client, chann_uid=ctx.chann_uid, license_id=chosen["license_id"],
+            product_name=chosen["product_name"], company_name=chosen.get("company_name"),
+            display_name=ctx.display_name, language=language,
         )
         return ChatReply(
             text=_t(STOREFRONT_INTEREST_RECORDED, language).format(
@@ -9969,6 +10052,14 @@ async def handle_chat_message(
             return await _handle_warranty_mine(
                 client, ctx=ctx, license_id=license_id, language=language,
             )
+        if _matches_phrase(message, CUSTOMER_ORDERS_PHRASES):
+            return await _handle_orders_mine(
+                client, ctx=ctx, license_id=license_id, language=language,
+            )
+        if _matches_phrase(message, PRODUCT_LIST_PHRASES + STOREFRONT_BROWSE_EXTRA):
+            # The storefront, not the shop's list — same as the OA pre-pass;
+            # a quick-reply button reaches this branch directly.
+            return await _storefront_browse_reply(client, ctx=ctx, language=language)
         # Editing your own profile is a customer's other legitimate reason
         # to type here, and it is allowed regardless of permissions
         # (Phase 8 — self-edit is always permitted). Catching everything as

@@ -14,7 +14,17 @@
 
 _EN: Link to your shop — Type the serial number on the sticker, or the shop's name. Several shops → buttons to pick one._
 
-## 2. ลงทะเบียนสินค้า (รับประกัน)
+## 2. ดูสินค้า / สนใจสินค้า
+
+พิมพ์ "สินค้าทั้งหมด" หรือ "ค้นหา" ตามด้วยชื่อสินค้า เช่น "ค้นหา พัดลม" จะเห็นสินค้าจากทุกร้าน พิมพ์เลขข้อที่สนใจ ร้านนั้นจะได้รับแจ้งและติดต่อกลับ · บนหน้าจอลูกค้ามีช่องค้นหาและปุ่ม "สนใจ" เหมือนกัน
+
+พิมพ์: `ค้นหา พัดลม`
+
+[IMAGE: customer-shop — หน้าจอแชท: ลูกค้าพิมพ์ 'ค้นหา พัดลม' บอทตอบรายการ 1. พัดลมไอเย็น (ร้านเย็นสบาย) — 3500 2. … ลูกค้าพิมพ์ '1' บอทตอบ 'ร้านเย็นสบาย จะติดต่อกลับ' พร้อมไอคอนตะกร้าสีส้ม]
+
+_EN: Browse products / show interest — Type "all products" or "search" and a product name, e.g. "search fan". Products from every shop appear; type the number you like and that shop is told and gets back to you. The home screen has the same search and an "interested" button._
+
+## 3. ลงทะเบียนสินค้า (รับประกัน)
 
 พิมพ์ "ลงทะเบียนสินค้า" แล้วตามด้วย S/N ที่ร้านบันทึกไว้ให้ เครื่องจะผูกกับคุณ ถ้าระบบยังไม่รู้จักหมายเลข ให้ติดต่อร้าน
 
@@ -24,7 +34,7 @@ _EN: Link to your shop — Type the serial number on the sticker, or the shop's 
 
 _EN: Register your product (warranty) — Type "register product" then the S/N the shop recorded. Unknown S/N → contact the shop._
 
-## 3. แจ้งซ่อม
+## 4. แจ้งซ่อม
 
 พิมพ์อาการที่เสียมาได้เลย เช่น "แอร์ไม่เย็น" ระบบจะเลือกเครื่องให้ (หรือให้กดเลือกถ้ามีหลายเครื่อง) แล้วถามที่อยู่และวันเวลานัด · ส่งรูปอาการมาในแชทได้ ระบบแนบกับงานให้ช่างดู
 
@@ -34,7 +44,7 @@ _EN: Register your product (warranty) — Type "register product" then the S/N t
 
 _EN: Report a fault — Describe what is wrong, e.g. "air con not cooling". The machine is picked for you, then address and appointment are asked._
 
-## 4. ดูสถานะ / เลื่อนนัด / ยกเลิก
+## 5. ดูสถานะ / เลื่อนนัด / ยกเลิก
 
 พิมพ์ "งานของฉัน" หรือ "สถานะการซ่อม" · เลื่อนนัด: "เลื่อนนัดวันศุกร์ บ่าย 2" · ยกเลิก: "ยกเลิกงาน"
 
@@ -44,7 +54,7 @@ _EN: Report a fault — Describe what is wrong, e.g. "air con not cooling". The 
 
 _EN: Status, reschedule, cancel — "my jobs" / "repair status" · reschedule: "move it to Friday 2pm" · "cancel job"_
 
-## 5. หลังซ่อมเสร็จ
+## 6. หลังซ่อมเสร็จ
 
 เมื่อร้านตรวจงานผ่าน คุณจะได้ปุ่มให้คะแนน 1–3 กดได้เลย และดูประวัติทั้งหมดได้ที่ "เปิดหน้าจอลูกค้า" ในเมนู
 
