@@ -833,7 +833,7 @@ async def _handle_note_create(
         target = await _resolve_target_or_context(client, ctx, license_id, message)
     except _TargetNotFound as exc:
         return ChatReply(
-            text=_t(NOT_FOUND_BY_CODE, language).format(what=exc.entity_type, code=exc.code)
+            text=_t(NOT_FOUND_BY_CODE, language).format(what=_entity_noun(exc.entity_type, language), code=exc.code)
         )
     if target is None:
         return ChatReply(text=_t(NOTE_NEEDS_TARGET, language))
@@ -895,7 +895,7 @@ async def _handle_note_intent(
         target = await _resolve_target_or_context(client, ctx, license_id, lookup_message)
     except _TargetNotFound as exc:
         return ChatReply(
-            text=_t(NOT_FOUND_BY_CODE, language).format(what=exc.entity_type, code=exc.code)
+            text=_t(NOT_FOUND_BY_CODE, language).format(what=_entity_noun(exc.entity_type, language), code=exc.code)
         )
     if target is None:
         return ChatReply(text=_t(NOTE_NEEDS_TARGET, language))
@@ -947,7 +947,7 @@ async def _handle_note_edit(
         target = await _resolve_target_or_context(client, ctx, license_id, message)
     except _TargetNotFound as exc:
         return ChatReply(
-            text=_t(NOT_FOUND_BY_CODE, language).format(what=exc.entity_type, code=exc.code)
+            text=_t(NOT_FOUND_BY_CODE, language).format(what=_entity_noun(exc.entity_type, language), code=exc.code)
         )
     if target is None:
         try:
@@ -1071,7 +1071,7 @@ async def _handle_note_list(
         return _name_choice(message, exc, language)
     except _TargetNotFound as exc:
         return ChatReply(
-            text=_t(NOT_FOUND_BY_CODE, language).format(what=exc.entity_type, code=exc.code)
+            text=_t(NOT_FOUND_BY_CODE, language).format(what=_entity_noun(exc.entity_type, language), code=exc.code)
         )
     if scope is None:
         return ChatReply(text=_t(NOTE_NEEDS_TARGET, language))
@@ -1094,7 +1094,7 @@ async def _handle_note_list(
 
     lines = [f"บันทึกของ {code}:"]
     for note in notes[:LIST_LIMIT]:
-        stamp = str(note.get("created_at") or "")[:10]
+        stamp = _iso_to_thai_date(note.get("created_at"))
         lines.append(f"· {stamp} {note.get('body') or ''}")
     return ChatReply(
         text="\n".join(lines),
@@ -1192,7 +1192,7 @@ async def _handle_reminder_list(
         return _name_choice(message, exc, language)
     except _TargetNotFound as exc:
         return ChatReply(
-            text=_t(NOT_FOUND_BY_CODE, language).format(what=exc.entity_type, code=exc.code)
+            text=_t(NOT_FOUND_BY_CODE, language).format(what=_entity_noun(exc.entity_type, language), code=exc.code)
         )
 
     try:
@@ -1366,7 +1366,7 @@ async def _handle_reminder_move(
         target = await _resolve_target_or_context(client, ctx, license_id, message)
     except _TargetNotFound as exc:
         return ChatReply(
-            text=_t(NOT_FOUND_BY_CODE, language).format(what=exc.entity_type, code=exc.code)
+            text=_t(NOT_FOUND_BY_CODE, language).format(what=_entity_noun(exc.entity_type, language), code=exc.code)
         )
     if target is None:
         try:
@@ -1470,7 +1470,7 @@ async def _handle_reminder_cancel(
         target = await _resolve_target_or_context(client, ctx, license_id, message)
     except _TargetNotFound as exc:
         return ChatReply(
-            text=_t(NOT_FOUND_BY_CODE, language).format(what=exc.entity_type, code=exc.code)
+            text=_t(NOT_FOUND_BY_CODE, language).format(what=_entity_noun(exc.entity_type, language), code=exc.code)
         )
     if target is None:
         return ChatReply(text=_t(REMINDER_CANCEL_NEEDS_TARGET, language))
@@ -1663,7 +1663,7 @@ async def _handle_reminder_create(  # noqa: PLR0913
             target = await _resolve_target_or_context(client, ctx, license_id, message)
         except _TargetNotFound as exc:
             return ChatReply(
-                text=_t(NOT_FOUND_BY_CODE, language).format(what=exc.entity_type, code=exc.code)
+                text=_t(NOT_FOUND_BY_CODE, language).format(what=_entity_noun(exc.entity_type, language), code=exc.code)
             )
     if target is None:
         # Before giving up: a name in the sentence is a target too.
@@ -1862,6 +1862,25 @@ WARRANTY_FOUND = {
     "th": "{number} · {product}\nสถานะ: {status}\nคุ้มครองถึง {end}",
     "en": "{number} · {product}\nStatus: {status}\nCovered until {end}",
 }
+WARRANTY_ALREADY_REGISTERED = {
+    "th": "หมายเลข {serial} ลงทะเบียนไว้แล้วครับ พิมพ์ \"เช็คประกัน {serial}\" เพื่อดูรายละเอียด",
+    "en": "Serial {serial} is already registered. Type \"check warranty {serial}\" for details.",
+}
+# The DB enum is for the machine; a customer reads whether they are covered.
+WARRANTY_STATUS_LABELS = {
+    "active": {"th": "ยังอยู่ในประกัน", "en": "in warranty"},
+    "expired": {"th": "หมดประกันแล้ว", "en": "expired"},
+    "void": {"th": "ยกเลิกแล้ว", "en": "void"},
+}
+WARRANTY_MINE_NONE = {
+    "th": "ยังไม่มีสินค้าที่ลงทะเบียนรับประกันไว้ครับ พิมพ์ \"ลงทะเบียนรับประกัน <หมายเลขเครื่อง>\" ได้เลย",
+    "en": "Nothing registered yet. Type \"register product <serial>\" to add one.",
+}
+WARRANTY_MINE_HEAD = {"th": "สินค้าที่ลงทะเบียนไว้:", "en": "Your registered products:"}
+WARRANTY_MINE_LINE = {
+    "th": "· {number} {product} — {status}{end}",
+    "en": "· {number} {product} — {status}{end}",
+}
 WARRANTY_NOT_FOUND_HERE = {
     "th": "ไม่พบการลงทะเบียนของหมายเลข {serial} ที่ร้านนี้",
     "en": "No registration for {serial} at this shop.",
@@ -1916,7 +1935,15 @@ async def _handle_warranty_register(
     except DataTierError as exc:
         # Already registered is a normal thing to hit — someone checking
         # rather than registering — so it reads as information, not error.
-        return ChatReply(text=str(exc.detail))
+        # In Thai: the Data Tier's sentence is English and names internal
+        # ids, which is not what a customer holding a sticker should read.
+        if exc.status_code == 409:
+            return ChatReply(
+                text=_t(WARRANTY_ALREADY_REGISTERED, language).format(serial=serial),
+                quick_replies=[("เช็คประกัน", f"เช็คประกัน {serial}")],
+            )
+        log.warning("warranty registration refused: %s", exc.detail)
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
     except Exception:
         log.exception("warranty registration failed")
         return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
@@ -1925,7 +1952,7 @@ async def _handle_warranty_register(
         text=_t(WARRANTY_REGISTERED, language).format(
             number=row.get("warranty_number"),
             product=row.get("product_name") or serial,
-            end=row.get("warranty_end"),
+            end=_iso_to_thai_date(row.get("warranty_end")),
         ),
         entity_type="warranty", entity_id=str(row.get("id") or ""),
         quick_replies=[("แจ้งซ่อม", "แจ้งซ่อม")],
@@ -1959,8 +1986,8 @@ async def _handle_serial_enquiry(
                 text=_t(WARRANTY_FOUND, language).format(
                     number=row.get("warranty_number"),
                     product=row.get("product_name") or serial,
-                    status=row.get("status"),
-                    end=row.get("warranty_end"),
+                    status=_label(WARRANTY_STATUS_LABELS, row.get("status"), language),
+                    end=_iso_to_thai_date(row.get("warranty_end")),
                 ),
                 entity_type="warranty", entity_id=str(row.get("id") or ""),
                 quick_replies=[("แจ้งซ่อม", "แจ้งซ่อม")],
@@ -1995,6 +2022,83 @@ async def _handle_serial_enquiry(
     return ChatReply(text=_t(SERIAL_SHOPS_FOUND, language).format(serial=serial, shops=shops))
 
 
+async def _handle_warranty_mine(
+    client: DataClient, *, ctx: ResolvedContext, license_id, language: str,
+) -> ChatReply:
+    """Everything this customer has registered — the chat side of the LIFF
+    home's warranty list (parity rule). Before this, "ประกันของฉัน" fell
+    through the fault-report catch-all and opened a repair ticket."""
+    try:
+        rows = await client.list_warranties(
+            str(license_id), customer_chann_uid=ctx.chann_uid,
+        )
+    except Exception:
+        log.exception("warranty list failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    rows = [r for r in rows if str(r.get("status") or "") != "void"]
+    if not rows:
+        return ChatReply(
+            text=_t(WARRANTY_MINE_NONE, language),
+            quick_replies=[("แจ้งซ่อม", "แจ้งซ่อม"), ("งานของฉัน", "งานของฉัน")],
+        )
+    lines = [_t(WARRANTY_MINE_HEAD, language)] + [
+        _t(WARRANTY_MINE_LINE, language).format(
+            number=r.get("warranty_number") or "",
+            product=r.get("product_name") or r.get("serial_number") or "",
+            status=_label(WARRANTY_STATUS_LABELS, r.get("status"), language),
+            end=(
+                f" · {'ถึง' if language == 'th' else 'until'} "
+                f"{_iso_to_thai_date(r.get('warranty_end'))}"
+                if r.get("warranty_end") else ""
+            ),
+        )
+        for r in rows[:LIST_LIMIT]
+    ]
+    return ChatReply(
+        text="\n".join(lines),
+        quick_replies=[("แจ้งซ่อม", "แจ้งซ่อม"), ("งานของฉัน", "งานของฉัน")],
+    )
+
+
+CUSTOMER_CONTACT_INFO = {
+    "th": "ติดต่อ {company} ได้ที่\n{lines}\n\nหรือพิมพ์เรื่องที่ต้องการติดต่อมาได้เลย ทางร้านจะเห็นและติดต่อกลับครับ",
+    "en": "Reach {company} at\n{lines}\n\nOr just type your message — the shop will see it and get back to you.",
+}
+CUSTOMER_CONTACT_FORWARDED = {
+    "th": "พิมพ์เรื่องที่ต้องการติดต่อมาได้เลยครับ ทางร้านจะเห็นข้อความนี้และติดต่อกลับ",
+    "en": "Type what you need — the shop will see it and get back to you.",
+}
+
+
+async def _handle_customer_contact(
+    client: DataClient, *, license_id, language: str,
+) -> ChatReply:
+    """The "ติดต่อร้าน" rich-menu tile. It used to fall into the fault-report
+    catch-all and file a repair job whose fault was literally "ติดต่อร้าน"."""
+    try:
+        profile = await client.get_company_profile(str(license_id))
+    except Exception:
+        profile = None
+    profile = profile or {}
+    company = str(profile.get("company_name") or "").strip()
+    lines = [
+        f"· {label} {value}"
+        for label, value in (
+            ("โทร" if language == "th" else "Tel", profile.get("phone")),
+            ("อีเมล" if language == "th" else "Email", profile.get("email")),
+            ("ที่อยู่" if language == "th" else "Address", profile.get("company_address")),
+        )
+        if value
+    ]
+    quick = [("แจ้งซ่อม", "แจ้งซ่อม"), ("งานของฉัน", "งานของฉัน")]
+    if not company or not lines:
+        return ChatReply(text=_t(CUSTOMER_CONTACT_FORWARDED, language), quick_replies=quick)
+    return ChatReply(
+        text=_t(CUSTOMER_CONTACT_INFO, language).format(company=company, lines="\n".join(lines)),
+        quick_replies=quick,
+    )
+
+
 # ------------------------------------------- Phase 12 customer fault report
 #
 # The half of 12.4 that was missing: "ลูกค้าแจ้งซ่อม (แชทหรือ LIFF) → สร้าง
@@ -2020,6 +2124,38 @@ CUSTOMER_JOB_STATUS = {
     "th": "งาน {code} ของคุณ: {status}\nนัด: {when}\nช่าง: {tech}",
     "en": "Your job {code}: {status}. Scheduled: {when}. Technician: {tech}.",
 }
+# The rich-menu tiles and the phrases people type for the same things.
+# Each of these used to reach the fault-report catch-all and open a job.
+CUSTOMER_STATUS_PHRASES = (
+    "สถานะการซ่อม", "สถานะงาน", "ดูสถานะงาน", "ดูสถานะ", "สถานะ", "เช็คสถานะ",
+    "repair status", "status",
+)
+CUSTOMER_CONTACT_PHRASES = ("ติดต่อร้าน", "ติดต่อ", "เบอร์ร้าน", "contact shop", "contact")
+CUSTOMER_WARRANTY_MINE_PHRASES = (
+    "ประกันของฉัน", "ใบรับประกันของฉัน", "รายการประกัน", "สินค้าของฉัน",
+    "my warranties", "my products",
+)
+# A bare "แจ้งซ่อม" is the tile, not a fault: ask what is wrong instead of
+# opening a job whose fault reads "แจ้งซ่อม".
+CUSTOMER_REPORT_BARE = ("แจ้งซ่อม", "แจ้งเสีย", "แจ้งปัญหา", "report a fault", "report")
+REPORT_ASK_ISSUE = {
+    "th": "อาการเสียเป็นอย่างไรครับ พิมพ์มาได้เลย เช่น \"แอร์ไม่เย็น มีน้ำหยด\"",
+    "en": "What is wrong? Just describe it, e.g. \"air con not cooling, dripping\".",
+}
+CUSTOMER_PICK_JOB = {
+    "th": "คุณมีงานเปิดอยู่ {n} งาน เลือกงานที่ต้องการดูครับ",
+    "en": "You have {n} open jobs — pick one.",
+}
+
+
+def _is_customer_command(text: str) -> bool:
+    """A rich-menu tile or a known command, as opposed to free text."""
+    return _matches_phrase(
+        text,
+        TICKET_MINE_PHRASES + TICKET_LIST_PHRASES + CUSTOMER_STATUS_PHRASES
+        + CUSTOMER_CONTACT_PHRASES + CUSTOMER_WARRANTY_MINE_PHRASES
+        + CUSTOMER_REPORT_BARE + HELP_TRIGGERS + CUSTOMER_CANCEL_PHRASES,
+    ) or any(t in (text or "").lower() for t in CUSTOMER_RESCHEDULE_TRIGGERS)
 CUSTOMER_QUESTION_FORWARDED = {
     "th": "ผมตอบคำถามนี้เองไม่ได้ครับ แต่ทางร้านจะเห็นข้อความนี้และติดต่อกลับ\nถ้าต้องการแจ้งซ่อม พิมพ์อาการมาได้เลย",
     "en": "I can't answer that myself, but the shop will see this and get back to you.",
@@ -2229,6 +2365,11 @@ async def _handle_customer_report(
             # where the customer lives, and the address was never asked
             # for again.
             and not _looks_like_a_question(text)
+            # Neither is a menu tile or a command: with a report waiting
+            # for its address, tapping "สถานะการซ่อม" saved that as the
+            # street (3 Sep sim). The prompt stays open; the tile is
+            # answered as itself.
+            and not _is_customer_command(text)
         ):
             try:
                 await client.update_ticket(
@@ -2270,10 +2411,18 @@ async def _handle_customer_report(
                         language=language,
                     )
                 return ChatReply(text=_t(REMINDER_NEEDS_DATE, language))
-            due_time = parse_thai_time(text)
-            fields: dict = {"scheduled_date": due_date.isoformat()}
-            if due_time is not None:
-                fields["scheduled_time"] = due_time.isoformat()
+            if due_date < today:
+                return ChatReply(
+                    text=_t(AMEND_PAST_DATE, language).format(date=format_thai_date(due_date)),
+                )
+            # Owner rule 1: no time given means 09:00, and the reply says
+            # so — the shop then sees a real appointment, not a date with
+            # a blank next to it.
+            due_time = parse_thai_time(text) or time(9, 0)
+            fields: dict = {
+                "scheduled_date": due_date.isoformat(),
+                "scheduled_time": due_time.isoformat(),
+            }
             try:
                 await client.update_ticket(
                     license_id, str(ticket_id), fields, actor_id=ctx.chann_uid,
@@ -2288,7 +2437,7 @@ async def _handle_customer_report(
             return ChatReply(
                 text=_t(REPORT_SCHEDULED, language).format(
                     date=format_thai_date(due_date),
-                    time=f" {format_thai_time(due_time)}" if due_time else "",
+                    time=f" {format_thai_time(due_time)}",
                 )
             )
 
@@ -2308,9 +2457,45 @@ async def _handle_customer_report(
             language=language, cancel=False,
         )
 
+    # "งานของฉัน T-2026-0002": one job by code — what the choose-a-job
+    # buttons send when a customer has several open.
+    status_code = TICKET_CODE_RE.search(text)
+    if status_code and any(
+        text.lower().startswith(p.lower())
+        for p in TICKET_MINE_PHRASES + CUSTOMER_STATUS_PHRASES
+    ):
+        try:
+            tickets = await client.list_tickets(license_id)
+        except Exception:
+            log.exception("customer ticket lookup failed")
+            return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+        wanted = status_code.group(1).upper()
+        t = next(
+            (x for x in tickets
+             if x.get("customer_chann_uid") == ctx.chann_uid
+             and str(x.get("ticket_number") or "").upper() == wanted),
+            None,
+        )
+        if t is None:
+            return ChatReply(
+                text=_t(NOT_FOUND_BY_CODE, language).format(what="งาน", code=wanted)
+            )
+        return ChatReply(
+            text=_t(CUSTOMER_JOB_STATUS, language).format(
+                code=t.get("ticket_number"),
+                status=_label(TICKET_STATUS_LABELS, t.get("status"), language),
+                when=_ticket_when(t) or "ยังไม่ได้นัด",
+                tech=t.get("assigned_to_name") or "ยังไม่ได้มอบหมาย",
+            ),
+            quick_replies=[("ดูทุกงาน", "งานของฉัน")],
+        )
+
     # "งานของฉัน" from a customer means their own reports, not a
-    # technician's queue.
-    if _matches_phrase(message, TICKET_MINE_PHRASES + TICKET_LIST_PHRASES):
+    # technician's queue. "สถานะการซ่อม" is the rich-menu tile for the
+    # same thing.
+    if _matches_phrase(
+        message, TICKET_MINE_PHRASES + TICKET_LIST_PHRASES + CUSTOMER_STATUS_PHRASES,
+    ):
         try:
             tickets = await client.list_tickets(license_id)
         except Exception:
@@ -2318,16 +2503,24 @@ async def _handle_customer_report(
             return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
         mine = [t for t in tickets if t.get("customer_chann_uid") == ctx.chann_uid]
         if not mine:
-            return ChatReply(text=_t(REPORT_NONE, language))
+            return ChatReply(
+                text=_t(REPORT_NONE, language),
+                quick_replies=[("แจ้งซ่อม", "แจ้งซ่อม")],
+            )
         lines = [
             _t(REPORT_STATUS_LINE, language).format(
                 code=t.get("ticket_number"),
                 status=_label(TICKET_STATUS_LABELS, t.get("status"), language),
-                when=f" · {t.get('scheduled_date')}" if t.get("scheduled_date") else "",
+                when=f" · {_ticket_when(t)}" if t.get("scheduled_date") else "",
             )
             for t in mine[:LIST_LIMIT]
         ]
         return ChatReply(text="\n".join(lines))
+
+    # The bare tile / word: ask what is wrong rather than log "แจ้งซ่อม"
+    # as the fault.
+    if _matches_phrase(message, CUSTOMER_REPORT_BARE):
+        return ChatReply(text=_t(REPORT_ASK_ISSUE, language))
 
     # A greeting is not a fault report. "สวัสดี" came back as
     # 'รับเรื่องแล้วครับ: "สวัสดี"' — a repair job opened because someone
@@ -2356,11 +2549,19 @@ async def _handle_customer_report(
             if t.get("customer_chann_uid") == ctx.chann_uid
             and str(t.get("status") or "") not in ("completed", "cancelled")
         ]
+        if len(mine) > 1:
+            # Two open jobs: answering about the first one silently would
+            # be a guess. Buttons, one per job (rule 3).
+            return ChatReply(
+                text=_t(CUSTOMER_PICK_JOB, language).format(n=len(mine)),
+                quick_replies=[
+                    (str(t.get("ticket_number") or ""), f"งานของฉัน {t.get('ticket_number')}")
+                    for t in mine[:4]
+                ],
+            )
         if mine:
             t = mine[0]
-            when = " ".join(
-                str(x) for x in (t.get("scheduled_date"), t.get("scheduled_time")) if x
-            )
+            when = _ticket_when(t)
             return ChatReply(
                 text=_t(CUSTOMER_JOB_STATUS, language).format(
                     code=t.get("ticket_number"),
@@ -2416,6 +2617,10 @@ async def _handle_customer_report(
     )
 
 
+AMEND_PAST_DATE = {
+    "th": "วันที่ {date} ผ่านมาแล้วครับ นัดได้ตั้งแต่วันนี้เป็นต้นไป ลองพิมพ์ใหม่ เช่น \"เลื่อนนัด พรุ่งนี้ 10 โมง\"",
+    "en": "{date} is in the past. Pick today or later, e.g. \"reschedule tomorrow 10am\".",
+}
 CUSTOMER_CANCEL_PHRASES = ("ยกเลิก", "ไม่เอาแล้ว", "cancel")
 CUSTOMER_CANCEL_TRIGGERS = ("ยกเลิกงาน", "ยกเลิกนัด", "cancel job")
 CUSTOMER_RESCHEDULE_TRIGGERS = ("เลื่อนนัด", "เปลี่ยนวัน", "เลื่อน", "reschedule")
@@ -2487,7 +2692,16 @@ async def _handle_customer_amend(
     elif not mine:
         return ChatReply(text=_t(AMEND_NO_OPEN_JOB, language))
     else:
-        return ChatReply(text=_t(AMEND_PICK_ONE, language))
+        # The candidates are in hand: one button per job, re-sending the
+        # same sentence with the code added (rule 3 — never make someone
+        # type a code they have to go and look up).
+        return ChatReply(
+            text=_t(AMEND_PICK_ONE, language),
+            quick_replies=[
+                (str(t.get("ticket_number") or ""), f"{message} {t.get('ticket_number')}")
+                for t in mine[:4]
+            ],
+        )
 
     code = str(ticket.get("ticket_number") or "")
     ticket_id = str(ticket.get("id") or "")
@@ -2512,26 +2726,32 @@ async def _handle_customer_amend(
     due_date = parse_thai_date(message, today)
     if due_date is None:
         return ChatReply(text=_t(REMINDER_NEEDS_DATE, language))
-    due_time = parse_thai_time(message)
-    fields: dict = {"scheduled_date": due_date.isoformat()}
-    if due_time is not None:
-        fields["scheduled_time"] = due_time.isoformat()
+    # The same guard reminders have had since Phase 6: a two-digit year or
+    # a typo must not move a visit into the past without anyone noticing.
+    if due_date < today:
+        return ChatReply(
+            text=_t(AMEND_PAST_DATE, language).format(date=format_thai_date(due_date)),
+        )
+    # Owner rule 1: unspecified time is 09:00, and the reply echoes it.
+    due_time = parse_thai_time(message) or time(9, 0)
+    fields: dict = {
+        "scheduled_date": due_date.isoformat(),
+        "scheduled_time": due_time.isoformat(),
+    }
     try:
         await client.update_ticket(license_id, ticket_id, fields, actor_id=ctx.chann_uid)
     except Exception:
         log.exception("customer reschedule failed")
         return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
 
-    when = format_thai_date(due_date) + (
-        f" {format_thai_time(due_time)}" if due_time else ""
-    )
+    when = f"{format_thai_date(due_date)} {format_thai_time(due_time)}"
     await _notify_ticket_change(
         client, license_id, ticket_id, f"ลูกค้าเลื่อนนัด {code} เป็น {when}", language,
     )
     return ChatReply(
         text=_t(AMEND_RESCHEDULED, language).format(
             code=code, date=format_thai_date(due_date),
-            time=f" {format_thai_time(due_time)}" if due_time else "",
+            time=f" {format_thai_time(due_time)}",
         )
     )
 
@@ -2769,7 +2989,9 @@ async def _handle_check_in(
             actor_id=ctx.chann_uid,
         )
     except DataTierError as exc:
-        return ChatReply(text=_t(CHECKIN_FAILED, language).format(detail=exc.detail))
+        return _field_service_failure(
+            exc, code=locals().get("code", ""), language=language, template=CHECKIN_FAILED,
+        )
     except Exception:
         log.exception("check-in failed")
         return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
@@ -2842,7 +3064,9 @@ async def _handle_check_out(
             )
             await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
         except DataTierError as exc:
-            return ChatReply(text=_t(CHECKIN_FAILED, language).format(detail=exc.detail))
+            return _field_service_failure(
+                exc, code=code, language=language, template=CHECKIN_FAILED,
+            )
         except Exception:
             log.exception("check-out failed")
             return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
@@ -2893,16 +3117,12 @@ async def _handle_check_out(
             actor_id=ctx.chann_uid,
         )
     except DataTierError as exc:
-        blocked = exc.structured or {}
-        if blocked.get("error") == "checkout_blocked":
-            # The gate's own list, passed through. The technician is
-            # standing in a customer's house reading this.
-            return ChatReply(
-                text=_t(CHECKOUT_NEEDS_REPORT, language).format(
-                    missing=", ".join(blocked.get("missing") or []), code=code,
-                )
-            )
-        return ChatReply(text=_t(CHECKIN_FAILED, language).format(detail=exc.detail))
+        # The gate's own list is passed through (the technician is standing
+        # in a customer's house reading this); every other refusal is
+        # rendered in Thai by the shared helper.
+        return _field_service_failure(
+            exc, code=locals().get("code", ""), language=language, template=CHECKIN_FAILED,
+        )
     except Exception:
         log.exception("check-out failed")
         return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
@@ -2922,6 +3142,10 @@ TICKET_LIST_PHRASES = (
     "งานค้าง", "tickets",
 )
 TICKET_MINE_PHRASES = ("งานของฉัน", "งานที่รับ", "my tickets")
+# The technician rich-menu tile. Jobs nobody has taken yet, plus the ones
+# handed to this person that they have not accepted — the same set the
+# LIFF home calls "งานที่เปิดรับ".
+TICKET_OPEN_PHRASES = ("งานที่เปิดรับ", "งานเปิดรับ", "งานว่าง", "งานที่ยังไม่มีคนรับ", "open jobs")
 TICKET_DETAIL_TRIGGERS = ("ข้อมูลงาน", "รายละเอียดงาน", "ticket")
 TICKET_ASSIGN_TRIGGERS = ("มอบหมาย", "จ่ายงาน", "assign ticket")
 TICKET_CLAIM_TRIGGERS = ("รับงาน", "claim")
@@ -3098,9 +3322,7 @@ async def _handle_ticket_detail(
         lines.append(f"ที่อยู่: {ticket['service_address']}")
     if ticket.get("issue_description"):
         lines.append(f"อาการ: {ticket['issue_description']}")
-    when = " ".join(
-        str(x) for x in (ticket.get("scheduled_date"), ticket.get("scheduled_time")) if x
-    )
+    when = _ticket_when(ticket)
     if when:
         lines.append(f"นัด: {when}")
     if ticket.get("assigned_to_name"):
@@ -3116,16 +3338,23 @@ async def _handle_ticket_detail(
     )
 
 
+TICKET_OPEN_EMPTY = {
+    "th": "ตอนนี้ไม่มีงานเปิดรับครับ",
+    "en": "No open jobs right now.",
+}
+
+
 async def _handle_ticket_list(
     client: DataClient, *, ctx: ResolvedContext, license_id,
     permission_keys: list[str], language: str, mine: bool = False,
+    open_only: bool = False,
 ) -> ChatReply:
     if "ticket.read" not in set(permission_keys):
         return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
 
     license_id = str(license_id)
     try:
-        if mine:
+        if mine or open_only:
             member = await client.get_member(license_id, ctx.chann_uid)
             if member is None:
                 return ChatReply(text=_t(TICKET_EMPTY, language))
@@ -3135,6 +3364,16 @@ async def _handle_ticket_list(
             tickets = await client.list_tickets(
                 license_id, visible_to=str(member["id"]),
             )
+            if open_only:
+                me = str(member["id"])
+                tickets = [
+                    t for t in tickets
+                    if str(t.get("status") or "") not in ("completed", "cancelled")
+                    and not (
+                        str(t.get("assigned_to_ref") or "") == me
+                        and str(t.get("accept_status") or "") == "accepted"
+                    )
+                ]
         else:
             tickets = await client.list_tickets(license_id)
     except Exception:
@@ -3142,7 +3381,7 @@ async def _handle_ticket_list(
         return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
 
     if not tickets:
-        return ChatReply(text=_t(TICKET_EMPTY, language))
+        return ChatReply(text=_t(TICKET_OPEN_EMPTY if open_only else TICKET_EMPTY, language))
 
     shown = tickets[:LIST_LIMIT]
     lines = [
@@ -3153,7 +3392,8 @@ async def _handle_ticket_list(
     return ChatReply(
         text="\n".join(lines) + _truncation_note(len(shown), len(tickets), language, "index"),
         list_card=_list_card(
-            title="งานซ่อม", section="index", language=language,
+            title="งานที่เปิดรับ" if open_only else ("งานของฉัน" if mine else "งานซ่อม"),
+            section="index", language=language, oa=ctx.oa,
             shown=len(shown), total=len(tickets),
             rows=[
                 {
@@ -3167,8 +3407,12 @@ async def _handle_ticket_list(
                     "stage": {"open": "new", "assigned": "proposed",
                               "in_progress": "proposed", "completed": "won",
                               "cancelled": "lost"}.get(str(t.get("status")), ""),
-                    "action_label": "ดู",
-                    "action_text": f"ข้อมูลงาน {t.get('ticket_number')}",
+                    # On the open list the useful tap is to take the job.
+                    "action_label": "รับงาน" if open_only else "ดู",
+                    "action_text": (
+                        f"รับงาน {t.get('ticket_number')}" if open_only
+                        else f"ข้อมูลงาน {t.get('ticket_number')}"
+                    ),
                 }
                 for t in shown
             ],
@@ -3241,8 +3485,21 @@ async def _handle_ticket_assign(
             person = await _find_member_by_name(client, license_id, target_text)
             if person is None:
                 return ChatReply(text=_t(TICKET_NEEDS_TARGET, language))
-            if person == "ambiguous":
-                return ChatReply(text=_t(TICKET_TARGET_AMBIGUOUS, language))
+            if isinstance(person, list):
+                # Two technicians called สมชาย: one button each, re-sending
+                # the command with the person's id in place of the name —
+                # the id is what _find_member_by_name matches exactly, so
+                # the tap cannot be ambiguous again (rule 3).
+                return ChatReply(
+                    text=_t(TICKET_TARGET_AMBIGUOUS, language),
+                    quick_replies=[
+                        (
+                            f"{m.get('display_name') or m.get('chann_uid')}"[:20],
+                            f"{trigger} {code} ให้ {m.get('chann_uid')}",
+                        )
+                        for m in person[:4]
+                    ],
+                )
             target_type = "technician"
             target_ref = str(person["id"])
             label = str(person.get("display_name") or person.get("chann_uid") or target_text)
@@ -3282,8 +3539,8 @@ async def _handle_ticket_assign(
 AUTO_ASSIGN_WORDS = ("อัตโนมัติ", "ออโต้", "auto", "automatic")
 
 TICKET_TARGET_AMBIGUOUS = {
-    "th": "มีช่างหลายคนที่ชื่อตรงกัน ระบุให้ชัดขึ้นหรือมอบหมายให้ทีมแทน",
-    "en": "Several technicians match that name — be more specific, or assign to a team.",
+    "th": "มีช่างหลายคนที่ชื่อตรงกัน เลือกคนที่ต้องการครับ",
+    "en": "Several technicians match that name — pick one.",
 }
 TICKET_AUTO_ASSIGNED = {
     "th": "มอบหมาย {code} ให้ {name} แล้ว (เลือกโดยกฎมอบหมาย)\n{reason}",
@@ -3296,7 +3553,8 @@ TICKET_AUTO_FAILED = {
 
 
 async def _find_member_by_name(client: DataClient, license_id: str, name: str):
-    """A member whose profile name matches, "ambiguous", or None.
+    """A member whose profile name matches, the list of matches when more
+    than one does (so the caller can offer them as buttons), or None.
 
     Matching on the profile rather than chann_uid: a CS person dispatching
     a job types "สมชาย", not an internal identifier they have never seen.
@@ -3328,9 +3586,14 @@ async def _find_member_by_name(client: DataClient, license_id: str, name: str):
 
     if not matches:
         return None
+    # An exact chann_uid match wins outright: that is what the choose-one
+    # buttons send back, and it must not be ambiguous a second time.
+    exact = [m for m in matches if str(m.get("chann_uid") or "").lower() == needle]
+    if len(exact) == 1:
+        return exact[0]
     # Two people called สมชาย is not a reason to pick one — the job would
     # go to the wrong person's day.
-    return matches[0] if len(matches) == 1 else "ambiguous"
+    return matches[0] if len(matches) == 1 else matches
 
 
 async def _assign_ticket_automatically(
@@ -3486,6 +3749,18 @@ async def _handle_ticket_claim(
                 t for t in tickets
                 if str(t.get("status") or "") in ("assigned", "dispatched", "open")
             ]
+            if len(claimable) > 1:
+                # The candidates are known: buttons, not a typed example.
+                return ChatReply(
+                    text=_t(TICKET_NEEDS_CODE, language),
+                    quick_replies=[
+                        (
+                            f"{t.get('ticket_number')} {str(t.get('customer_name') or '')[:12]}".strip(),
+                            f"รับงาน {t.get('ticket_number')}",
+                        )
+                        for t in claimable[:4]
+                    ],
+                )
             if len(claimable) != 1:
                 return ChatReply(text=_t(TICKET_NEEDS_CODE, language))
             code = str(claimable[0].get("ticket_number", "")).upper()
@@ -3504,8 +3779,8 @@ async def _handle_ticket_claim(
             license_id, str(ticket["id"]), str(member["id"]), actor_id=ctx.chann_uid,
         )
     except DataTierError as exc:
-        return ChatReply(
-            text=_t(TICKET_CLAIM_FAILED, language).format(detail=str(exc.detail))
+        return _field_service_failure(
+            exc, code=code, language=language, template=TICKET_CLAIM_FAILED,
         )
     except Exception:
         log.exception("ticket claim failed")
@@ -3840,20 +4115,34 @@ DASHBOARD_PATHS = {
 }
 
 
-def dashboard_link(section: str) -> str | None:
+def dashboard_link(section: str, oa: str = "sales") -> str | None:
     """A LIFF deep link to a dashboard page, or None when no LIFF id is
     configured.
 
     Returning None rather than a half-formed URL is deliberate: a link that
     opens an error page is worse than no link, because the person taps it,
     waits, and ends up somewhere broken instead of just reading the list.
+
+    Per OA: a technician's ticket list must open the technician LIFF app,
+    not the sales one — the sales pages refuse a technician's token and
+    the tap ended on an error page.
     """
     from ..config import settings
 
-    liff_id = (settings.liff_sales_id or "").strip()
+    liff_id = (
+        {
+            "sales": settings.liff_sales_id,
+            "technician": settings.liff_technician_id,
+            "customer": settings.liff_customer_id,
+        }.get(oa) or ""
+    ).strip()
     path = DASHBOARD_PATHS.get(section)
     if not liff_id or path is None:
         return None
+    # The section paths are the sales dashboard's; the other two OAs have
+    # a single home, which is where their deep link lands.
+    if oa != "sales":
+        return f"https://liff.line.me/{liff_id}"
     return f"https://liff.line.me/{liff_id}/{path}" if path else f"https://liff.line.me/{liff_id}"
 
 CUSTOMER_LIST_PHRASES = ("รายชื่อลูกค้า", "รายการลูกค้า", "ดูลูกค้า", "ลูกค้าทั้งหมด", "customer list")
@@ -3939,6 +4228,64 @@ def _label(table: dict, key, language: str) -> str:
     return _t(entry, language) if entry else str(key or "")
 
 
+def _entity_noun(entity_type, language: str) -> str:
+    """The Thai/English noun for an entity type, for sentences like
+    "ไม่พบ{what}รหัส …" — the raw type ("customer") read as a glitch."""
+    table = GROUP_LABELS.get(str(entity_type or ""), {})
+    noun = table.get(language) or table.get("th")
+    return noun or str(entity_type or "")
+
+
+def _iso_to_thai_date(value) -> str:
+    """An ISO date or timestamp from the Data Tier as a Thai date.
+
+    Every raw `2026-09-06` next to a `6 ก.ย. 2569` in the same reply is one
+    more thing the reader has to convert in their head, and the two eras
+    side by side is exactly what the era bug of 1 Sep looked like from
+    the outside.
+    """
+    from .thai_datetime import format_thai_date
+
+    if not value:
+        return ""
+    try:
+        return format_thai_date(date.fromisoformat(str(value)[:10]))
+    except ValueError:
+        return str(value)
+
+
+# Field-service refusals from the Data Tier (409 on a wrong-state ticket,
+# 404 on a job that is not visible) arrive as English sentences with raw
+# enums in them. The technician reading them is standing in a customer's
+# house; they get Thai, and the code to look the job up.
+TICKET_STATE_CONFLICT = {
+    "th": "ทำรายการนี้กับงาน {code} ในสถานะปัจจุบันไม่ได้ครับ พิมพ์ \"ข้อมูลงาน {code}\" เพื่อดูสถานะ",
+    "en": "That cannot be done to {code} in its current state. Type \"ticket {code}\" to see it.",
+}
+
+
+def _field_service_failure(exc, *, code: str, language: str, template: dict) -> ChatReply:
+    structured = getattr(exc, "structured", None) or {}
+    status = getattr(exc, "status_code", None)
+    if structured.get("error") == "checkout_blocked":
+        return ChatReply(
+            text=_t(CHECKOUT_NEEDS_REPORT, language).format(
+                missing=", ".join(structured.get("missing") or []), code=code,
+            )
+        )
+    if status == 409:
+        return ChatReply(
+            text=_t(TICKET_STATE_CONFLICT, language).format(code=code or "—"),
+            quick_replies=[("ดูข้อมูลงาน", f"ข้อมูลงาน {code}")] if code else [],
+        )
+    if status == 404:
+        return ChatReply(
+            text=_t(NOT_FOUND_BY_CODE, language).format(what="งาน", code=code or "—")
+        )
+    log.warning("field-service call refused (%s): %s", status, getattr(exc, "detail", exc))
+    return ChatReply(text=_t(template, language).format(detail=_t(COMPANY_SAVE_FAILED, language)))
+
+
 def _matches_phrase(message: str, phrases: tuple[str, ...]) -> bool:
     compact = (message or "").strip().lower().replace(" ", "")
     return bool(compact) and any(compact == p.replace(" ", "") for p in phrases)
@@ -3983,7 +4330,7 @@ def _truncation_note(shown: int, total: int, language: str, section: str) -> str
 
 def _list_card(
     *, title: str, rows: list[dict], section: str, language: str,
-    shown: int, total: int,
+    shown: int, total: int, oa: str = "sales",
 ) -> dict:
     """The structured form of a list reply.
 
@@ -3994,7 +4341,7 @@ def _list_card(
     """
     note = f"{shown}/{total}" if total > shown else str(total)
     card = {"title": title, "rows": rows, "note": note}
-    url = dashboard_link(section)
+    url = dashboard_link(section, oa)
     if url:
         card["footer_label"] = _t(OPEN_DASHBOARD, language)
         card["footer_url"] = url
@@ -4681,7 +5028,7 @@ async def _handle_ai_understood_intent(
         catalog = []
     return ChatReply(
         text=suggest_what_you_can_do(
-            permission_keys, catalog, language,
+            _filter_by_oa(permission_keys, ctx.oa), catalog, language,
             requested_action=action, requested_entity=entity,
         )
     )
@@ -5676,7 +6023,7 @@ async def _handle_deal_close_date(
     if not code:
         return ChatReply(text=_t(QUOTE_NEEDS_DEAL, language))
 
-    when = parse_thai_date(message, datetime.now(timezone.utc).date())
+    when = parse_thai_date(message, datetime.now(BANGKOK_TZ).date())
     if when is None:
         return ChatReply(text=_t(DEAL_CLOSE_DATE_NEEDS, language))
 
@@ -5725,7 +6072,7 @@ async def _handle_deal_query(
         log.exception("deal query failed")
         return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
 
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now(BANGKOK_TZ).date()
     open_stages = ("new", "proposed")
 
     def close_of(d: dict):
@@ -5778,7 +6125,7 @@ async def _handle_deal_query(
     lines = []
     for d in rows[:LIST_LIMIT]:
         value = _deal_value(d)
-        when = str(d.get("expected_close_date") or "")
+        when = _iso_to_thai_date(d.get("expected_close_date")) if d.get("expected_close_date") else ""
         extra = f" {value:,.0f}" if value else ""
         extra += f" · {when}" if when else ""
         if kind == "lost" and d.get("lost_reason"):
@@ -6403,20 +6750,28 @@ CUSTOMER_HELP = {
     "th": (
         "พิมพ์คุยได้เลยครับ\n\n"
         "· แจ้งซ่อม — พิมพ์อาการที่เสียมาได้เลย เช่น \"แอร์ไม่เย็น\"\n"
-        "· ดูสถานะงาน — พิมพ์ \"งานของฉัน\"\n\n"
+        "· ดูสถานะงาน — พิมพ์ \"งานของฉัน\"\n"
+        "· เลื่อนหรือยกเลิกนัด — พิมพ์ \"เลื่อนนัด พรุ่งนี้ 10 โมง\" หรือ \"ยกเลิกนัด\"\n"
+        "· ลงทะเบียนรับประกัน — พิมพ์ \"ลงทะเบียนรับประกัน\" ตามด้วยหมายเลขเครื่อง\n"
+        "· เช็คประกัน — พิมพ์ \"เช็คประกัน\" ตามด้วยหมายเลขเครื่อง หรือ \"ประกันของฉัน\"\n"
+        "· ติดต่อร้าน — พิมพ์ \"ติดต่อร้าน\"\n\n"
         "ผมจะถามที่อยู่และวันเวลาที่สะดวกต่อ แล้วส่งเรื่องให้ทางร้าน"
     ),
     "en": (
         "Just type.\n\n"
         "· Report a fault — describe the problem, e.g. \"air con not cooling\"\n"
-        "· Check a job — type \"my jobs\"\n\n"
+        "· Check a job — type \"my jobs\"\n"
+        "· Move or cancel a visit — \"reschedule tomorrow 10am\" or \"cancel job\"\n"
+        "· Register a product — \"register product\" followed by the serial\n"
+        "· Check warranty — \"check warranty\" + serial, or \"my warranties\"\n"
+        "· Contact the shop — \"contact\"\n\n"
         "I will ask for an address and a time, then pass it to the shop."
     ),
 }
 
 HELP_TRIGGERS = (
-    "ช่วยเหลือ", "วิธีใช้", "ใช้ยังไง", "ทำอะไรได้บ้าง", "คำสั่ง",
-    "help", "how to use", "commands", "?",
+    "ช่วยเหลือ", "วิธีใช้", "วิธีใช้งาน", "ใช้ยังไง", "ทำอะไรได้บ้าง", "คำสั่ง", "เมนู",
+    "help", "how to use", "commands", "menu", "?",
 )
 
 # What to show, grouped the way a salesperson's day is shaped rather than the
@@ -6449,6 +6804,7 @@ HELP_SECTIONS = (
     ("งานซ่อม", (
         ("ticket.read", "รายการงาน", "ดูงานซ่อมทั้งหมด"),
         ("ticket.read", "งานของฉัน", "เฉพาะงานที่รับไว้"),
+        ("ticket.read", "งานที่เปิดรับ", "งานที่ยังไม่มีคนรับ"),
         ("ticket.update", "มอบหมาย T-2026-0001 ให้ทีม AC", "จ่ายงานให้ทีมช่าง"),
         ("ticket.update", "รับงาน T-2026-0001", "ช่างกดรับงาน"),
         ("ticket.update", "เช็คอิน T-2026-0001", "แจ้งว่าถึงหน้างานแล้ว"),
@@ -6948,12 +7304,16 @@ async def _handle_customer_intent(
         from .thai_datetime import parse_thai_date
 
         suggested = parse_thai_date(
-            str(fields.get("notes") or ""), datetime.now(timezone.utc).date(),
+            str(fields.get("notes") or ""), datetime.now(BANGKOK_TZ).date(),
         )
         quick: list[tuple[str, str]] = []
         if suggested:
+            from .thai_datetime import format_thai_date
+
+            # Shown in Thai; the button still carries ISO because that
+            # text is parsed back when tapped.
             reply_text += "\n" + _t(APPOINTMENT_OFFER, language).format(
-                date=suggested.isoformat(),
+                date=format_thai_date(suggested),
             )
             quick = [
                 ("ตั้งนัด", f"เตือน {row['customer_id']} {suggested.isoformat()}"),
@@ -7578,6 +7938,11 @@ async def handle_chat_message(
                 client, ctx=ctx, license_id=license_id,
                 permission_keys=permission_keys, language=language, mine=True,
             )
+        if _matches_phrase(message, TICKET_OPEN_PHRASES):
+            return await _handle_ticket_list(
+                client, ctx=ctx, license_id=license_id,
+                permission_keys=permission_keys, language=language, open_only=True,
+            )
         if _matches_phrase(message, TICKET_LIST_PHRASES):
             return await _handle_ticket_list(
                 client, ctx=ctx, license_id=license_id,
@@ -7634,7 +7999,21 @@ async def handle_chat_message(
         if _matches_phrase(message, HELP_TRIGGERS):
             return ChatReply(
                 text=_t(CUSTOMER_HELP, language),
-                quick_replies=[("งานของฉัน", "งานของฉัน")],
+                quick_replies=[
+                    ("แจ้งซ่อม", "แจ้งซ่อม"), ("งานของฉัน", "งานของฉัน"),
+                    ("ประกันของฉัน", "ประกันของฉัน"),
+                ],
+            )
+        # The rich-menu tiles that are not a fault report. Each is an
+        # exact phrase, tested before the catch-all that would otherwise
+        # turn the tile's label into a repair job.
+        if _matches_phrase(message, CUSTOMER_CONTACT_PHRASES):
+            return await _handle_customer_contact(
+                client, license_id=license_id, language=language,
+            )
+        if _matches_phrase(message, CUSTOMER_WARRANTY_MINE_PHRASES):
+            return await _handle_warranty_mine(
+                client, ctx=ctx, license_id=license_id, language=language,
             )
         # Editing your own profile is a customer's other legitimate reason
         # to type here, and it is allowed regardless of permissions
@@ -7661,9 +8040,16 @@ async def handle_chat_message(
     # is telling you they are stuck; routing that through intent parsing to
     # maybe get a permission list back is not an answer.
     if _matches_phrase(message, HELP_TRIGGERS) or (message or "").strip() == "?":
+        # Filtered by OA as well as by permission: a technician whose LINE
+        # account also holds sales keys was shown the customer list on the
+        # Technician OA, where that command is refused.
         return ChatReply(
-            text=usage_help(permission_keys, language),
-            quick_replies=[("รายชื่อลูกค้า", "รายชื่อลูกค้า"), ("งานวันนี้", "งานวันนี้")],
+            text=usage_help(_filter_by_oa(permission_keys, ctx.oa), language),
+            quick_replies=(
+                [("งานของฉัน", "งานของฉัน"), ("งานที่เปิดรับ", "งานที่เปิดรับ")]
+                if ctx.oa == "technician"
+                else [("รายชื่อลูกค้า", "รายชื่อลูกค้า"), ("งานวันนี้", "งานวันนี้")]
+            ),
         )
 
     # Notes and reminders (6.3/6.7). Before the AI path for the same reason
@@ -8236,18 +8622,38 @@ async def handle_chat_message(
     )
 
 
+_ACTION_VERBS = {
+    "create": {"th": "สร้าง", "en": "create"},
+    "read": {"th": "ดู", "en": "view"},
+    "update": {"th": "แก้ไข", "en": "update"},
+    "delete": {"th": "ลบ", "en": "delete"},
+    "archive": {"th": "เก็บถาวร", "en": "archive"},
+    "assign": {"th": "มอบหมาย", "en": "assign"},
+    "approve": {"th": "อนุมัติ", "en": "approve"},
+    "reject": {"th": "ไม่อนุมัติ", "en": "reject"},
+    "manage": {"th": "จัดการ", "en": "manage"},
+}
+
+
 def _pending_execution_reply(intent: dict, language: str) -> str:
-    action = intent.get("action") or "?"
-    entity = intent.get("entity") or "?"
+    """The intent was understood but nothing handles that shape yet.
+
+    Said in words a person uses — "การเก็บถาวรลูกค้า", not "archive
+    customer" — because the raw action/entity pair was the single most
+    common machine token to reach a screen.
+    """
+    action = str(intent.get("action") or "")
+    entity = str(intent.get("entity") or "")
+    verb = _t(_ACTION_VERBS.get(action, {"th": action, "en": action}), language)
+    noun = _entity_noun(entity, language) if entity else ""
     if language == "en":
         return (
-            f"Understood: {action} {entity}. "
-            "This action is not available yet — it arrives with that module."
+            f"Understood — you want to {verb} {noun}".rstrip() + ". "
+            "That is not available in chat yet — try the dashboard, or ask the shop admin."
         )
     return (
-        f"เข้าใจแล้ว: {action} {entity} "
-        "— ฟังก์ชันนี้ยังไม่เปิดใช้งาน จะพร้อมเมื่อโมดูลนั้นเสร็จ"
-    )
+        f"เข้าใจแล้วครับ ต้องการ{verb}{noun} " if noun else "เข้าใจแล้วครับ "
+    ) + "แต่ในแชทยังทำรายการนี้ไม่ได้ ลองใช้แดชบอร์ด หรือแจ้งผู้ดูแลบริษัท"
 
 
 async def handle_reply(

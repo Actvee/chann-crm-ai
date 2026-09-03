@@ -158,6 +158,7 @@ async def handle_webhook(
                         # preview and any client that cannot render Flex
                         # still get the full answer.
                         alt_text=chat.text,
+                        oa=oa,
                         **chat.list_card,
                     )
                     if quick_reply_items:

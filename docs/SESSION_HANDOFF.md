@@ -153,11 +153,43 @@ and fixed, presentation only:
   valid-until); template version status translated; ServiceReports
   back-link for technicians no longer points at the sales menu.
 
-Still open from the audit (chat side, next patch): three customer
-rich-menu tiles (`สถานะการซ่อม`, `ติดต่อร้าน`, `วิธีใช้งาน`) have no chat
-handler and fall through to the fault-report catch-all, opening a junk
-ticket; English/enum error text reaches technicians; Flex bubbles are
-off-palette on every OA; two-digit years parse as 1983.
+**`chat-audit-v1` (3 Sep, after `ui-audit-v1`)** — the chat half of the
+same audit, application tier only (plus two env vars in `cloud_run.tf`):
+- **Customer rich-menu tiles no longer open junk tickets.** `สถานะการซ่อม`
+  lists the customer's jobs, `ติดต่อร้าน` answers with the company
+  profile, `วิธีใช้งาน`/`เมนู` are help, `ประกันของฉัน` lists their
+  registrations (new `_handle_warranty_mine`, the chat side of the LIFF
+  warranty list), and a bare `แจ้งซ่อม` asks what is wrong instead of
+  filing "แจ้งซ่อม" as the fault. `simulate-edge-cases.py` now counts
+  tickets created by the tiles and fails on any.
+- Technician tile `งานที่เปิดรับ` → `_handle_ticket_list(open_only=True)`
+  with "รับงาน" row buttons; claim with several candidates offers buttons.
+- Field-service refusals (409/404) render in Thai through one helper
+  (`_field_service_failure`); `a in_progress ticket cannot be checked in
+  to` never reaches a phone again. Warranty 409 → Thai with the serial.
+- Raw ISO dates → `_iso_to_thai_date` (warranty end, note stamps, deal
+  close dates, customer job status); `_ticket_when` everywhere a ticket
+  date is printed; `WARRANTY_STATUS_LABELS` for the enum.
+- Duplicate technician names: `_find_member_by_name` returns the matches
+  and `มอบหมาย` offers one button per person, re-sending the command with
+  the `chann_uid` (which the matcher then resolves exactly) — rule 3.
+- `_pending_execution_reply` says "เข้าใจแล้วครับ ต้องการสร้างทีมและกลุ่ม …"
+  rather than `create team`; `NOT_FOUND_BY_CODE` gets a Thai noun.
+- Flex footer button is the OA's deep colour (`_OA_BUTTON_COLOUR`,
+  `flex_list_message(oa=…)`, webhook passes it); `dashboard_link(section,
+  oa)` picks the OA's LIFF id — `LIFF_TECHNICIAN_ID`/`LIFF_CUSTOMER_ID` are
+  new application env vars in `cloud_run.tf` from the same `liff_ids`.
+- Customer reschedule: past dates refused, unspecified time = 09:00 and
+  echoed (rule 1); `datetime.now(BANGKOK_TZ)` for every "today" in chat.
+- `to_gregorian_year`: two-digit `00–42` are CE (2000–2042), `43–99` BE;
+  `15/03/26` is 2026, not 1983.
+- Help and "what you can do" are filtered by OA; technician help offers
+  งานของฉัน/งานที่เปิดรับ.
+Tests: `tests/unit/test_chat_audit_fixes.py` (17). Still open from the
+audit: chat cannot attach photos/GPS (webhook drops non-text messages);
+`team/sales_group/role/member/setting/audit_log` intents are accepted by
+`check-parity` but reach the not-yet stub; the English (`en`) reply
+branches are unreachable from LINE (webhook hard-codes `th`).
 
 **This section has now been stale twice in two days**, each time in the
 way the warning at the top of this file describes. On 2 Sep it said

@@ -275,10 +275,21 @@ def _flex_row(row: dict) -> dict:
     return box
 
 
+# Owner rule 5, applied to the one coloured element in a bubble: the footer
+# button is the OA's deep shade (the same value the primary button and the
+# rich-menu tile use), so a technician's bubble is blue and a customer's is
+# orange. The old value was a marigold that belonged to no OA.
+_OA_BUTTON_COLOUR = {
+    "sales": "#0D5C34",
+    "technician": "#134A92",
+    "customer": "#A94F0D",
+}
+
+
 def flex_list_message(
     *, alt_text: str, title: str, rows: list[dict],
     footer_label: str | None = None, footer_url: str | None = None,
-    note: str | None = None,
+    note: str | None = None, oa: str = "sales",
 ) -> dict:
     """A list as a Flex bubble.
 
@@ -323,7 +334,8 @@ def flex_list_message(
             "contents": [{
                 "type": "button",
                 "action": {"type": "uri", "label": footer_label[:20], "uri": footer_url},
-                "style": "primary", "height": "sm", "color": "#E0A422",
+                "style": "primary", "height": "sm",
+                "color": _OA_BUTTON_COLOUR.get(oa, _OA_BUTTON_COLOUR["sales"]),
             }],
             "paddingAll": "md",
         }

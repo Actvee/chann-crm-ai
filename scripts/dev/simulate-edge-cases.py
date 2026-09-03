@@ -57,6 +57,8 @@ async def main():
     await say(t,"technician","ถึงแล้ว")                          # two jobs — must ask
     await say(t,"technician","เช็คอิน T-2026-0002")
     await say(t,"technician","รายงานของฉัน")
+    await say(t,"technician","งานที่เปิดรับ")                    # rich-menu tile (3 Sep audit)
+    await say(t,"technician","วิธีใช้งาน")                       # rich-menu tile → help, not AI
     await say(t,"technician","งานพรุ่งนี้", expect_ok=False)
     await say(t,"technician","ลูกค้าไม่อยู่บ้าน", ai_client=ai({"action":"update","entity":"ticket","fields":{"status":"customer_absent"},"missing":[]}), expect_ok=False)
 
@@ -70,6 +72,16 @@ async def main():
     await say(u,"customer","แจ้งซ่อม เครื่องซักผ้าไม่ปั่น")     # second ticket while one open
     await say(u,"customer","ABC123456")                          # bare serial
     await say(u,"customer","ราคาซ่อมเท่าไหร่", expect_ok=True)
+    # The customer rich-menu tiles (3 Sep audit): none may open a ticket.
+    before = len([r for r in u.recorded if r[0] == "create_ticket"])
+    for tile in ("สถานะการซ่อม", "ติดต่อร้าน", "วิธีใช้งาน", "ประกันของฉัน", "แจ้งซ่อม"):
+        await say(u,"customer",tile)
+    after = len([r for r in u.recorded if r[0] == "create_ticket"])
+    if after != before:
+        findings.append(("customer", "rich-menu tiles", "OPENED_TICKET", f"{after-before} junk ticket(s)"))
+        print("!! rich-menu tiles opened", after - before, "ticket(s)")
+    await say(u,"customer","เลื่อนนัด 1/1/2020", expect_ok=True)   # past date → refused in words
+    await say(u,"customer","เลื่อนนัด พรุ่งนี้", expect_ok=True)    # no time → 09:00 echoed
 
     print(f"\n=== {len(findings)} FINDINGS ===")
     for f in findings: print("  ", f)

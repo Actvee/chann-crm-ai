@@ -52,13 +52,23 @@ _VAGUE_TIMES = {
 
 
 def to_gregorian_year(year: int) -> int:
-    """2569 -> 2026, 26 -> 2026, 2026 -> 2026."""
+    """2569 -> 2026, 69 -> 2026, 26 -> 2026, 2026 -> 2026.
+
+    Two digits are read as a Buddhist short year when that lands in this
+    century ("69" is 2569 = 2026) and as a Gregorian short year otherwise
+    ("26" is 2026). The old rule treated every two-digit year as Buddhist,
+    so "15/03/26" became 2526 = 1983 and a customer could move their
+    appointment into the past without anyone noticing (3 Sep audit).
+    """
     if year >= 2400:
         return year - 543
     if year < 100:
-        # Two digits are a Buddhist short year in Thai usage far more often
-        # than a Gregorian one: "69" means 2569.
-        return 2500 + year - 543
+        # BE 2543–2599 → 2000–2056: "43".."99" are Buddhist short years.
+        if year >= 43:
+            return 2500 + year - 543
+        # "00".."42" as Buddhist would be 1957–1999; nobody books a visit
+        # then. Read them as 2000–2042.
+        return 2000 + year
     return year
 
 

@@ -2840,7 +2840,7 @@ class TestPhase10DashboardHandoff:
     async def test_a_long_list_reports_the_real_total_and_links_onward(self, monkeypatch):
         import chann_app.services.chat as chat
 
-        monkeypatch.setattr(chat, "dashboard_link", lambda section: f"https://liff.line.me/X/{section}")
+        monkeypatch.setattr(chat, "dashboard_link", lambda section, oa="sales": f"https://liff.line.me/X/{section}")
         client = FakeDataClient(permission_keys=["customer.read"])
         await self._many_customers(client, 25)
         reply = await handle_chat_message(client, message="รายชื่อลูกค้า", ctx=_ctx())
@@ -2855,7 +2855,7 @@ class TestPhase10DashboardHandoff:
         full page to act on a record, not just read it."""
         import chann_app.services.chat as chat
 
-        monkeypatch.setattr(chat, "dashboard_link", lambda section: f"https://liff.line.me/X/{section}")
+        monkeypatch.setattr(chat, "dashboard_link", lambda section, oa="sales": f"https://liff.line.me/X/{section}")
         client = FakeDataClient(permission_keys=["customer.read"])
         await self._many_customers(client, 2)
         reply = await handle_chat_message(client, message="รายชื่อลูกค้า", ctx=_ctx())
@@ -2868,7 +2868,7 @@ class TestPhase10DashboardHandoff:
         taps, waits, and lands somewhere broken instead of reading."""
         import chann_app.services.chat as chat
 
-        monkeypatch.setattr(chat, "dashboard_link", lambda section: None)
+        monkeypatch.setattr(chat, "dashboard_link", lambda section, oa="sales": None)
         client = FakeDataClient(permission_keys=["customer.read"])
         await self._many_customers(client, 25)
         reply = await handle_chat_message(client, message="รายชื่อลูกค้า", ctx=_ctx())
@@ -2924,7 +2924,7 @@ class TestPhase10ListCards:
     async def test_every_row_gets_its_own_action(self, monkeypatch):
         import chann_app.services.chat as chat
 
-        monkeypatch.setattr(chat, "dashboard_link", lambda section: None)
+        monkeypatch.setattr(chat, "dashboard_link", lambda section, oa="sales": None)
         client = FakeDataClient(permission_keys=["customer.read"])
         for index, name in enumerate(("สมชาย", "สมหญิง", "สมศรี")):
             await client.create_customer("L1", {
@@ -2943,7 +2943,7 @@ class TestPhase10ListCards:
     async def test_the_dashboard_link_is_a_card_footer_not_a_quick_reply(self, monkeypatch):
         import chann_app.services.chat as chat
 
-        monkeypatch.setattr(chat, "dashboard_link", lambda section: f"https://liff.line.me/X/{section}")
+        monkeypatch.setattr(chat, "dashboard_link", lambda section, oa="sales": f"https://liff.line.me/X/{section}")
         client = FakeDataClient(permission_keys=["deal.read"])
         customer = await client.create_customer("L1", {"first_name": "ก", "last_name": "ข"})
         await client.create_deal("L1", {"contact_id": customer["id"]})
@@ -2957,7 +2957,7 @@ class TestPhase10ListCards:
         preview shows and what any client that cannot render Flex gets."""
         import chann_app.services.chat as chat
 
-        monkeypatch.setattr(chat, "dashboard_link", lambda section: None)
+        monkeypatch.setattr(chat, "dashboard_link", lambda section, oa="sales": None)
         client = FakeDataClient(permission_keys=["customer.read"])
         await client.create_customer("L1", {
             "first_name": "สมชาย", "last_name": "ใจดี", "phone": "0812345678",
@@ -5614,6 +5614,12 @@ class TestButtonsTheSystemWritesDoNotNeedTheAI:
         triggers += list(module.SALES_SUMMARY_PHRASES)
         triggers += list(module.REPORT_LIST_PHRASES)
         triggers += list(module.REMINDER_LIST_TRIGGERS)
+        # Exact-match phrase lists for the rich-menu tiles (3 Sep audit).
+        triggers += list(module.TICKET_MINE_PHRASES)
+        triggers += list(module.TICKET_OPEN_PHRASES)
+        triggers += list(module.CUSTOMER_STATUS_PHRASES)
+        triggers += list(module.CUSTOMER_CONTACT_PHRASES)
+        triggers += list(module.CUSTOMER_WARRANTY_MINE_PHRASES)
 
         dead = []
         for text in sorted(sent):

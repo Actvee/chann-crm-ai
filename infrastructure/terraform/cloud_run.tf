@@ -79,7 +79,9 @@ locals {
     # so a chat reply can hand off to the dashboard. Same value the
     # Presentation tier already gets as NEXT_PUBLIC_LIFF_SALES_ID; it is a
     # public identifier, not a secret.
-    LIFF_SALES_ID = var.liff_ids.sales
+    LIFF_SALES_ID      = var.liff_ids.sales
+    LIFF_TECHNICIAN_ID = var.liff_ids.technician
+    LIFF_CUSTOMER_ID   = var.liff_ids.customer
     # Empty by default: the sweep endpoint refuses every call rather than
     # allowing them through when this is unset (see require_scheduler),
     # so leaving it blank is safe, not silently insecure.

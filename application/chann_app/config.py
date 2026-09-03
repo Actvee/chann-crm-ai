@@ -111,7 +111,13 @@ class Settings(BaseSettings):
     #
     # Empty is a supported state: chat then simply omits the link rather
     # than emitting a broken one.
+    #
+    # One per OA: a technician's ticket list must deep-link into the
+    # technician LIFF app, not the sales one, whose pages refuse their
+    # token (3 Sep chat audit).
     liff_sales_id: str = ""
+    liff_technician_id: str = ""
+    liff_customer_id: str = ""
 
     # This service's own externally reachable base URL, used to build links
     # sent into LINE chats (issued documents, and anything similar later).
