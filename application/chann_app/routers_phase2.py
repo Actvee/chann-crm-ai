@@ -934,9 +934,18 @@ async def upsert_product(
 # ----------------------------------------------------------------- warranties
 
 
+class WarrantyClaimIn(BaseModel):
+    serial_number: str
+
+
 class WarrantyRegisterIn(BaseModel):
     serial_number: str
+    product_id: str | None = None
     product_name: str | None = None
+    # Staff registering a sold unit may name the customer record it
+    # belongs to; the customer later claims it by serial (3 Sep).
+    contact_id: str | None = None
+    customer_chann_uid: str | None = None
     # The Data Tier's own names: coverage starts on the purchase date and
     # runs warranty_months. Inventing "purchase_date" here would have
     # been the MemberOut-never-sends-id seam bug again, one tier over.
@@ -959,18 +968,73 @@ async def register_warranty(
     """
     _require_same_tenant(principal, license_id)
     principal.require("warranty.create")
+    if principal.is_customer:
+        # Owner rule (3 Sep): a customer cannot invent a unit. Their
+        # "register" is a claim on a serial the shop recorded.
+        try:
+            return await client.claim_warranty(
+                license_id,
+                {"serial_number": payload.serial_number,
+                 "customer_chann_uid": principal.chann_uid},
+                actor_id=principal.chann_uid,
+            )
+        except DataTierError as exc:
+            raise _propagate(exc)
     try:
         return await client.register_warranty(
             license_id,
             {
                 "serial_number": payload.serial_number,
+                "product_id": payload.product_id,
                 "product_name": payload.product_name,
+                "contact_id": payload.contact_id,
                 "warranty_start": payload.warranty_start,
                 "warranty_months": payload.warranty_months,
-                "customer_chann_uid": principal.chann_uid,
+                "customer_chann_uid": payload.customer_chann_uid,
             },
             actor_id=principal.chann_uid,
         )
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.post("/licenses/{license_id}/warranties/claim")
+async def claim_warranty(
+    license_id: str,
+    payload: WarrantyClaimIn,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """The customer attaching themselves to a unit the shop registered —
+    404 when the shop has no such serial, 409 when another customer holds
+    it. Same call chat's "ลงทะเบียนสินค้า" makes on the customer OA."""
+    _require_same_tenant(principal, license_id)
+    principal.require("warranty.create")
+    try:
+        return await client.claim_warranty(
+            license_id,
+            {"serial_number": payload.serial_number, "customer_chann_uid": principal.chann_uid},
+            actor_id=principal.chann_uid,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.get("/licenses/{license_id}/warranties")
+async def list_warranties(
+    license_id: str,
+    serial_number: str | None = None,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """The shop's book of registered units (staff). A customer principal
+    gets only their own rows, the same as /mine."""
+    _require_same_tenant(principal, license_id)
+    principal.require("warranty.read")
+    try:
+        if principal.is_customer:
+            return await client.list_warranties(license_id, customer_chann_uid=principal.chann_uid)
+        return await client.list_warranties(license_id, serial_number=serial_number)
     except DataTierError as exc:
         raise _propagate(exc)
 
@@ -1210,7 +1274,11 @@ async def list_tickets(
     _require_same_tenant(principal, license_id)
     principal.require("ticket.read")
     try:
-        return await client.list_tickets(license_id, status=status, visible_to=visible_to)
+        rows = await client.list_tickets(license_id, status=status, visible_to=visible_to)
+        if principal.is_customer:
+            # A customer sees their own repairs, never the shop's queue.
+            rows = [r for r in rows if str(r.get("customer_chann_uid") or "") == principal.chann_uid]
+        return rows
     except DataTierError as exc:
         raise _propagate(exc)
 
@@ -1523,9 +1591,14 @@ async def create_ticket(
     most of them still arrive."""
     _require_same_tenant(principal, license_id)
     principal.require("ticket.create")
+    body = payload.model_dump(exclude_none=True)
+    if principal.is_customer:
+        # Filed from the customer app: the ticket is theirs, whatever the
+        # body says — that is what makes it show on their own list.
+        body["customer_chann_uid"] = principal.chann_uid
     try:
         return await client.create_ticket(
-            license_id, payload.model_dump(exclude_none=True),
+            license_id, body,
             actor_id=principal.chann_uid,
         )
     except DataTierError as exc:

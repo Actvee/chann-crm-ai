@@ -151,6 +151,31 @@ class WarrantyRepository:
             )
         ).scalars().first()
 
+    def claim(
+        self, scope: TenantScope, *, serial_number: str, customer_chann_uid: str,
+    ) -> Warranty:
+        """Attach a customer to a unit the shop already registered.
+
+        Owner rule (3 Sep): a customer cannot invent a serial. The shop
+        records the units it sells (register, above); the customer types
+        the sticker and is matched to that row. Unknown here → NotFound,
+        which the chat turns into "ติดต่อร้าน"; taken by someone else →
+        Conflict. Re-claiming one's own unit is a no-op, not an error.
+        """
+        serial = (serial_number or "").strip()
+        if not serial:
+            raise WarrantyConflict("a serial number is required")
+        row = self.by_serial(scope, serial)
+        if row is None:
+            raise WarrantyNotFound(f"serial {serial} is not registered at this shop")
+        if row.customer_chann_uid and row.customer_chann_uid != customer_chann_uid:
+            raise WarrantyConflict(
+                f"serial {serial} is already claimed by another customer"
+            )
+        row.customer_chann_uid = customer_chann_uid
+        self._s.flush()
+        return row
+
     def by_serial(self, scope: TenantScope, serial_number: str) -> Warranty | None:
         return self._s.execute(
             select(Warranty).where(

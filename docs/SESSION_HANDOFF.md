@@ -266,6 +266,64 @@ deploy data/application/presentation. The new data image's
 serve against an older schema, which is the guard working.
 668 tests pass (656 unit/boundary + 266 integration, 12 of them Phase 14).
 
+### The second walk (3 Sep afternoon) — shops, claims, and the Sales questions
+
+Deployed by `~/cs-complete-deploy.sh` (patch `cs-complete-v1`, all three
+tiers, no migration). The owner walked all three OAs again after
+`cdd2c1a` and found five things, each of which turned out to be a real
+gap rather than a slip:
+
+1. **One account, several shops.** The owner's LINE account is staff at
+   ร้านทดสอบ AND a customer of Dev Company. The customer app used
+   `memberships_of(chann_uid)` WITHOUT the OA scope, so it opened in the
+   staff company ("ลูกค้าของ ร้านทดสอบ", empty lists), while chat's
+   `resolve_context` (scoped) saw two customer links and said
+   "บัญชีนี้ดูแลหลายร้าน" — with nothing reading the answer. Now:
+   `services/authorization.py` scopes by audience; a customer principal
+   is built WITHOUT a members row (fixed `CUSTOMER_PERMISSION_KEYS`,
+   `principal.is_customer`, reads scoped to `principal.chann_uid` —
+   note the tickets list was returning the whole shop's queue to any
+   principal with `ticket.read`); a stored **active tenant** per
+   (chann_uid, oa) lives in Redis (`k_active_tenant`, 90 days) and
+   `identity.apply_active_tenant` narrows several memberships to the
+   chosen one, keeping the rest as `ctx.alternatives`. Chat: MULTIPLE →
+   chooser with buttons ("ใช้ร้าน CODE"), name / code / list number all
+   work, "เปลี่ยนร้าน" reopens it. App: `/liff/{audience}/me` returns the
+   chosen shop first + `active_license_id`; `PUT /liff/{audience}/active-shop`;
+   `_shop-switcher.tsx` on the customer and technician homes.
+2. **Registration validated nothing.** A customer could type any serial
+   and a warranty row appeared. Owner rule: the SHOP records the unit it
+   sold; the customer CLAIMS it by typing the sticker. Data Tier:
+   `WarrantyRepository.claim` + `POST /licenses/{id}/warranties/claim`
+   (404 unknown here, 409 held by another customer, own = no-op).
+   Application: `POST warranties` from a customer principal is a claim;
+   `POST warranties/claim`; `GET warranties` (staff book; customers get
+   their own rows). Chat: on the customer OA "ลงทะเบียนสินค้า S/N" and the
+   register-first flow both claim — unknown serial says "ร้านยังไม่มีเครื่อง
+   หมายเลขนี้ … ติดต่อร้าน" and keeps the held fault; on the Sales OA
+   "ลงทะเบียนสินค้า SN… แอร์ ให้ลูกค้า สมชาย" records the unit
+   (contact resolved through `_customer_named_in`, ambiguity → buttons)
+   and "รายการประกัน" lists the book. UI: `/liff/sales/warranties` (new,
+   menu tile) for staff; the customer home's form is serial-only and
+   explains a 404/409. Spec 7.5's PDF certificate and expiry
+   notification are still NOT built (SmartBrowz / cron work — deferred,
+   say so if asked).
+3. **Sale OA questions answered with the rights catalogue.** "รายชื่อช่าง",
+   "ขอข้อมูลร้านค้า", "รหัสร้านค้า" fell through to the AI and then to
+   `suggest_what_you_can_do`. Deterministic now: `SHOP_INFO_PHRASES` →
+   name, code, contact lines, and what the code is for (any member);
+   `TECHNICIAN_LIST_PHRASES` → technicians by profile name + phone
+   (`ticket.read`), with "ขอรหัสเชิญช่าง" offered when there are none.
+   `SUGGEST_HEADER` now reads as guidance ("ลองพิมพ์ให้ชัดขึ้น เช่น …
+   หรือพิมพ์ วิธีใช้") before the list.
+4. **Technician surfaces wore Sales furniture.** The profile card said
+   "ลูกค้าของ" for a technician and sat off-grid; the reports page showed
+   the Sales section strip. `AppShell` gained `nav` (off for the
+   technician's reports page); the shop is a `FieldRow` labelled per OA.
+5. **Sims + fakes** follow the claim model: the customer sims seed a
+   shop-recorded unit before the fault; `FakeDataClient.claim_warranty`
+   mirrors 404/409; `NoMemberRow` stays the customer fake.
+
 ### Customer OA onboarding — register first, and the bug that hid it (owner walk, 3 Sep)
 
 The owner added the CS OA and typed "ร้าน dev company". Transcript:

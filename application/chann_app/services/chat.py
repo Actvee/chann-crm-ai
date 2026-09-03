@@ -481,6 +481,136 @@ def _is_company_profile_view(message: str) -> bool:
     return any(compact == p.replace(" ", "") for p in COMPANY_VIEW_PHRASES)
 
 
+SHOP_INFO_PHRASES = (
+    "ข้อมูลร้าน", "ข้อมูลร้านค้า", "ขอข้อมูลร้าน", "ขอข้อมูลร้านค้า", "ดูข้อมูลร้าน", "ร้านของเรา",
+    "รหัสร้าน", "รหัสร้านค้า", "รหัสบริษัท", "ขอรหัสร้าน", "ขอรหัสร้านค้า", "ขอรหัสบริษัท",
+    "รหัสร้านคืออะไร", "shop code", "company code", "shop info", "our shop",
+)
+TECHNICIAN_LIST_PHRASES = (
+    "รายชื่อช่าง", "ช่างมีใครบ้าง", "ช่างในร้าน", "ช่างทั้งหมด", "ดูช่าง", "รายชื่อทีมช่าง",
+    "technicians", "list technicians", "technician list",
+)
+SHOP_INFO_TEXT = {
+    "th": (
+        "ร้าน: {name}\nรหัสร้าน: {code}\n{contact}"
+        "\nรหัสนี้ใช้ให้ลูกค้าพิมพ์ใน LINE บริการลูกค้าเพื่อผูกกับร้าน "
+        "ส่วนช่างเข้าร่วมด้วยรหัสเชิญ (พิมพ์ \"ขอรหัสเชิญช่าง\")"
+    ),
+    "en": (
+        "Shop: {name}\nShop code: {code}\n{contact}"
+        "\nCustomers type this code in the customer LINE to link to the shop; "
+        "technicians join with an invite code (\"ขอรหัสเชิญช่าง\")"
+    ),
+}
+TECHNICIAN_LIST_HEAD = {"th": "ช่างในร้าน ({n} คน):", "en": "Technicians ({n}):"}
+TECHNICIAN_LIST_EMPTY = {
+    "th": "ยังไม่มีช่างในร้าน ให้ช่างเพิ่มเพื่อน LINE ช่างแล้วพิมพ์รหัสเชิญ (พิมพ์ \"ขอรหัสเชิญช่าง\" เพื่อออกรหัส)",
+    "en": "No technicians yet — a technician adds the technician LINE and types an invite code (\"ขอรหัสเชิญช่าง\" issues one)",
+}
+
+
+async def _handle_shop_info(
+    client: DataClient, *, ctx: ResolvedContext, license_id, language: str,
+) -> ChatReply:
+    """Name, code and how to reach the shop — for any member. The code is
+    what a customer types to link; staff kept asking for it (3 Sep) and
+    got the permission catalogue back."""
+    member = ctx.memberships[0] if ctx.memberships else {}
+    name = member.get("company_name") or "—"
+    code = member.get("license_code") or "—"
+    contact_lines = []
+    try:
+        profile = await client.get_company_profile(str(license_id)) or {}
+        for key, label_th, label_en in (
+            ("phone", "โทร", "Phone"), ("email", "อีเมล", "Email"), ("address", "ที่อยู่", "Address"),
+        ):
+            if profile.get(key):
+                contact_lines.append(f"{label_th if language != 'en' else label_en}: {profile[key]}")
+    except Exception:
+        log.warning("could not read the company profile for shop info")
+    contact = ("\n".join(contact_lines) + "\n") if contact_lines else ""
+    return ChatReply(
+        text=_t(SHOP_INFO_TEXT, language).format(name=name, code=code, contact=contact),
+        quick_replies=[("รายชื่อช่าง", "รายชื่อช่าง"), ("ข้อมูลบริษัท", "ข้อมูลบริษัท")],
+    )
+
+
+WARRANTY_BOOK_PHRASES = (
+    "รายการประกัน", "ใบรับประกันทั้งหมด", "เครื่องที่ลงทะเบียน", "รายการเครื่องที่ลงทะเบียน",
+    "สินค้าที่ลงทะเบียน", "ทะเบียนสินค้า", "warranties", "registered units",
+)
+WARRANTY_BOOK_HEAD = {"th": "เครื่องที่ลงทะเบียนไว้ ({n} รายการล่าสุด):", "en": "Registered units (latest {n}):"}
+WARRANTY_BOOK_EMPTY = {
+    "th": "ยังไม่มีเครื่องที่ลงทะเบียน พิมพ์ \"ลงทะเบียนสินค้า SN12345678 แอร์ ให้ลูกค้า สมชาย\" เพื่อบันทึกเครื่องที่ขาย",
+    "en": "No registered units yet — type \"register product SN12345678 aircon for Somchai\" to record a sold unit",
+}
+
+
+async def _handle_warranty_book(
+    client: DataClient, *, license_id, permission_keys: list[str], language: str,
+) -> ChatReply:
+    if "warranty.read" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    try:
+        rows = await client.list_warranties(str(license_id))
+    except Exception:
+        log.exception("could not list warranties")
+        return ChatReply(text=unavailable_reply(language))
+    rows = [r for r in rows if str(r.get("status") or "") != "void"]
+    if not rows:
+        return ChatReply(text=_t(WARRANTY_BOOK_EMPTY, language))
+    shown = rows[:15]
+    lines = [
+        f"· {r.get('serial_number')} {r.get('product_name') or ''} "
+        f"{'✓ ลูกค้าผูกแล้ว' if r.get('customer_chann_uid') else '· ยังไม่มีลูกค้าผูก'}"
+        .replace("  ", " ")
+        for r in shown
+    ]
+    return ChatReply(
+        text=_t(WARRANTY_BOOK_HEAD, language).format(n=len(shown)) + "\n" + "\n".join(lines),
+        quick_replies=[("ลงทะเบียนสินค้า", "ลงทะเบียนสินค้า")],
+        quick_reply_url=_dashboard_button("warranties", language),
+    )
+
+
+async def _handle_technician_list(
+    client: DataClient, *, license_id, permission_keys: list[str], language: str,
+) -> ChatReply:
+    if "ticket.read" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    try:
+        members = await client.list_members(str(license_id))
+    except Exception:
+        log.exception("could not list members")
+        return ChatReply(text=unavailable_reply(language))
+    technicians = [
+        m for m in members
+        if str(m.get("status") or "active") == "active"
+        and ("technician" in str(m.get("role") or "").lower() or "ช่าง" in str(m.get("role") or ""))
+    ]
+    if not technicians:
+        return ChatReply(
+            text=_t(TECHNICIAN_LIST_EMPTY, language),
+            quick_replies=[("ขอรหัสเชิญช่าง", "ขอรหัสเชิญช่าง")],
+        )
+    lines = []
+    for m in technicians[:20]:
+        chann_uid = str(m.get("chann_uid") or "")
+        try:
+            profile = await client.get_profile(chann_uid) or {}
+        except Exception:
+            profile = {}
+        name = " ".join(
+            p for p in (profile.get("first_name"), profile.get("last_name")) if p
+        ) or chann_uid
+        phone = f" · {profile['phone']}" if profile.get("phone") else ""
+        lines.append(f"· {name}{phone}")
+    return ChatReply(
+        text=_t(TECHNICIAN_LIST_HEAD, language).format(n=len(technicians)) + "\n" + "\n".join(lines),
+        quick_replies=[("รายการงาน", "รายการงาน"), ("ข้อมูลร้าน", "ข้อมูลร้าน")],
+    )
+
+
 def _format_company_profile(profile: dict, language: str) -> str:
     lines = []
     for field, labels in COMPANY_PROFILE_LABELS.items():
@@ -1915,15 +2045,27 @@ SERIAL_NO_SHOP = {
 
 async def _handle_warranty_register(
     client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
-    language: str,
+    language: str, permission_keys: list[str] | None = None,
 ) -> ChatReply:
-    """A customer registering the thing they bought."""
+    """Registering a unit.
+
+    Two different acts behind one phrase (owner rule, 3 Sep): on the
+    Customer OA the person is CLAIMING a serial the shop recorded — they
+    cannot invent one; on the Sales OA staff are RECORDING a sold unit,
+    optionally against a customer record, for the customer to claim.
+    """
     match = SERIAL_RE.search(message or "")
     if not match:
         return ChatReply(text=_t(WARRANTY_NEEDS_SERIAL, language))
     serial = match.group(1).upper()
 
     license_id = str(license_id)
+    if ctx.oa == "customer":
+        return await _claim_for_customer(
+            client, ctx=ctx, license_id=license_id, serial=serial, language=language,
+        )
+    if "warranty.create" not in set(permission_keys or []):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
     try:
         # The product, if the serial or the message names one we know.
         # Optional by design: the customer has the sticker, not the
@@ -1939,12 +2081,32 @@ async def _handle_warranty_register(
         None,
     )
 
+    # "ให้ลูกค้า สมชาย" / "ของ สมชาย": the customer record the unit was sold
+    # to. Optional — a walk-in sale has none yet. Ambiguous → buttons.
+    contact_id = None
+    contact_name = ""
+    try:
+        named = await _customer_named_in(client, license_id, message, permission_keys or [])
+    except _AmbiguousName as exc:
+        return _name_choice(message, exc, language)
+    except Exception:
+        named = None
+    if named:
+        # ("customer", id, code) — the name comes from the record itself.
+        contact_id = str(named[1])
+        try:
+            row_named = await client.get_customer(license_id, contact_id)
+            contact_name = _display_name(row_named) if row_named else str(named[2])
+        except Exception:
+            contact_name = str(named[2])
+
     try:
         row = await client.register_warranty(
             license_id,
             {
                 "serial_number": serial,
-                "customer_chann_uid": ctx.chann_uid,
+                "customer_chann_uid": None,
+                "contact_id": contact_id,
                 "product_id": str(product["id"]) if product else None,
                 "product_name": (product or {}).get("product_name"),
             },
@@ -1966,15 +2128,94 @@ async def _handle_warranty_register(
         log.exception("warranty registration failed")
         return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
 
-    return ChatReply(
-        text=_t(WARRANTY_REGISTERED, language).format(
-            number=row.get("warranty_number"),
-            product=row.get("product_name") or serial,
-            end=_iso_to_thai_date(row.get("warranty_end")),
-        ),
-        entity_type="warranty", entity_id=str(row.get("id") or ""),
-        quick_replies=[("แจ้งซ่อม", "แจ้งซ่อม")],
+    text = _t(WARRANTY_REGISTERED, language).format(
+        number=row.get("warranty_number"),
+        product=row.get("product_name") or serial,
+        end=_iso_to_thai_date(row.get("warranty_end")),
     )
+    if contact_name:
+        text += f"\n{'สำหรับลูกค้า' if language != 'en' else 'For'} {contact_name}"
+    text += "\n" + _t(WARRANTY_STAFF_NEXT, language).format(serial=serial)
+    return ChatReply(
+        text=text,
+        entity_type="warranty", entity_id=str(row.get("id") or ""),
+        quick_replies=[("รายการประกัน", "รายการประกัน")],
+    )
+
+
+WARRANTY_STAFF_NEXT = {
+    "th": "ลูกค้าพิมพ์ {serial} ใน LINE บริการลูกค้าเพื่อผูกเครื่องนี้กับตัวเอง",
+    "en": "The customer types {serial} in the customer LINE to attach this unit to themselves",
+}
+WARRANTY_CLAIMED = {
+    "th": "ลงทะเบียน {product} (S/N {serial}) เป็นของคุณแล้ว ใบรับประกัน {number} ถึง {end}",
+    "en": "{product} (S/N {serial}) is registered to you — warranty {number} until {end}",
+}
+SERIAL_NOT_AT_SHOP = {
+    "th": (
+        "ร้านยังไม่มีเครื่องหมายเลข {serial} ในระบบครับ ลองเช็คตัวเลขบนสติกเกอร์อีกครั้ง "
+        "ถ้าถูกต้องแล้ว ติดต่อร้านให้ลงทะเบียนเครื่องให้ก่อน (พิมพ์ \"ติดต่อร้าน\")"
+    ),
+    "en": (
+        "The shop has no unit {serial} on record. Check the sticker; if it is right, "
+        "ask the shop to register the unit first (type \"contact the shop\")."
+    ),
+}
+SERIAL_CLAIMED_BY_OTHER = {
+    "th": "หมายเลข {serial} ถูกลงทะเบียนโดยลูกค้าท่านอื่นแล้ว ถ้าเป็นเครื่องของคุณ ติดต่อร้านครับ",
+    "en": "Serial {serial} is registered to another customer. If it is yours, contact the shop.",
+}
+
+
+async def _claim_for_customer(
+    client: DataClient, *, ctx: ResolvedContext, license_id: str, serial: str,
+    language: str,
+) -> ChatReply:
+    outcome, row = await _claim_serial(client, ctx, license_id, serial)
+    if outcome == "ok":
+        return ChatReply(
+            text=_t(WARRANTY_CLAIMED, language).format(
+                product=row.get("product_name") or ("เครื่อง" if language != "en" else "Unit"),
+                serial=serial, number=row.get("warranty_number"),
+                end=_iso_to_thai_date(row.get("warranty_end")),
+            ),
+            entity_type="warranty", entity_id=str(row.get("id") or ""),
+            quick_replies=[("แจ้งซ่อม", "แจ้งซ่อม"), ("ประกันของฉัน", "ประกันของฉัน")],
+        )
+    if outcome == "not_found":
+        return ChatReply(
+            text=_t(SERIAL_NOT_AT_SHOP, language).format(serial=serial),
+            quick_replies=[("ติดต่อร้าน", "ติดต่อร้าน")],
+        )
+    if outcome == "taken":
+        return ChatReply(
+            text=_t(SERIAL_CLAIMED_BY_OTHER, language).format(serial=serial),
+            quick_replies=[("ติดต่อร้าน", "ติดต่อร้าน")],
+        )
+    return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+
+async def _claim_serial(
+    client: DataClient, ctx: ResolvedContext, license_id: str, serial: str,
+) -> tuple[str, dict]:
+    """("ok" | "not_found" | "taken" | "error", row)."""
+    try:
+        row = await client.claim_warranty(
+            license_id,
+            {"serial_number": serial, "customer_chann_uid": ctx.chann_uid},
+            actor_id=ctx.chann_uid,
+        )
+        return "ok", row
+    except DataTierError as exc:
+        if exc.status_code == 404:
+            return "not_found", {}
+        if exc.status_code == 409:
+            return "taken", {}
+        log.warning("claim of %s refused: %s", serial, exc.detail)
+        return "error", {}
+    except Exception:
+        log.exception("claim of %s failed", serial)
+        return "error", {}
 
 
 async def _handle_serial_enquiry(
@@ -2274,25 +2515,6 @@ async def _clear_customer_hold(client: DataClient, ctx: ResolvedContext) -> None
         log.exception("could not clear a held customer message")
 
 
-async def _register_customer_serial(
-    client: DataClient, ctx: ResolvedContext, license_id: str, serial: str,
-) -> None:
-    """Put the machine on this customer's record. A serial the shop already
-    registered answers 409 — that is the machine being known, not an
-    error, and the fault still goes through with it."""
-    try:
-        await client.register_warranty(
-            license_id,
-            {"serial_number": serial, "customer_chann_uid": ctx.chann_uid},
-            actor_id=ctx.chann_uid,
-        )
-    except DataTierError as exc:
-        if exc.status_code != 409:
-            log.warning("could not register %s for a customer: %s", serial, exc.detail)
-    except Exception:
-        log.exception("could not register %s for a customer", serial)
-
-
 def _looks_like_a_question(text: str) -> bool:
     """Is this asking something rather than reporting something?
 
@@ -2461,7 +2683,22 @@ async def _handle_customer_report(
             )
         if held and _is_bare_serial(text):
             serial = text.upper()
-            await _register_customer_serial(client, ctx, license_id, serial)
+            outcome, _row = await _claim_serial(client, ctx, license_id, serial)
+            if outcome == "not_found":
+                # The fault stays held; the serial was not a unit this
+                # shop recorded, and inventing one is what the owner ruled
+                # out (3 Sep). "ไม่มีหมายเลขเครื่อง" still files without.
+                return ChatReply(
+                    text=_t(SERIAL_NOT_AT_SHOP, language).format(serial=serial),
+                    quick_replies=[
+                        ("ไม่มีหมายเลขเครื่อง", "ไม่มีหมายเลขเครื่อง"), ("ติดต่อร้าน", "ติดต่อร้าน"),
+                    ],
+                )
+            if outcome == "taken":
+                return ChatReply(
+                    text=_t(SERIAL_CLAIMED_BY_OTHER, language).format(serial=serial),
+                    quick_replies=[("ไม่มีหมายเลขเครื่อง", "ไม่มีหมายเลขเครื่อง")],
+                )
             await _clear_customer_hold(client, ctx)
             return await _handle_customer_report(
                 client, ctx=ctx, license_id=license_id, message=held,
@@ -4724,6 +4961,7 @@ DASHBOARD_PATHS = {
     "products": "products",
     "quotes": "quotes",
     "company": "company",
+    "warranties": "warranties",
     "index": "",
 }
 
@@ -7163,9 +7401,91 @@ REPLY_NOT_REGISTERED = {
 }
 
 REPLY_CHOOSE_TENANT = {
-    "th": "คุณเป็นสมาชิกหลายบริษัท: {names} — กรุณาเลือก",
-    "en": "You belong to several companies: {names} — please choose one",
+    "th": "บัญชีนี้อยู่กับหลายร้าน กดเลือกร้านที่ต้องการคุยด้วยได้เลย (เปลี่ยนทีหลังได้ด้วย \"เปลี่ยนร้าน\"):\n{names}",
+    "en": "This account belongs to several shops — pick the one to talk to (change later with \"switch shop\"):\n{names}",
 }
+SWITCH_TENANT_PHRASES = (
+    "เปลี่ยนร้าน", "สลับร้าน", "เปลี่ยนบริษัท", "สลับบริษัท", "เลือกร้าน", "เลือกบริษัท",
+    "switch shop", "switch company", "change shop", "change company",
+)
+_USE_TENANT_PREFIXES = ("ใช้ร้าน", "ใช้บริษัท", "เลือกร้าน", "เลือกบริษัท", "ร้าน", "บริษัท", "use shop", "use ")
+TENANT_SWITCHED = {
+    "th": "ตอนนี้คุยในนาม {name} แล้วครับ",
+    "en": "Now talking as {name}.",
+}
+
+
+def _membership_named(
+    message: str, memberships: list[dict], *, explicit_only: bool = False,
+) -> dict | None:
+    """The membership this message names — by company name, licence
+    code, or list number ("2"). explicit_only: only "ใช้ร้าน X" forms and
+    codes count, so an ordinary sentence that happens to contain a shop's
+    name does not switch companies mid-conversation."""
+    text = (message or "").strip()
+    if not text:
+        return None
+    lowered = text.lower()
+    stripped = lowered
+    explicit = False
+    for prefix in _USE_TENANT_PREFIXES:
+        if stripped.startswith(prefix) and len(stripped) > len(prefix):
+            stripped = stripped[len(prefix):].strip()
+            explicit = True
+            break
+    if not explicit_only and stripped.isdigit():
+        index = int(stripped) - 1
+        if 0 <= index < len(memberships):
+            return memberships[index]
+    for m in memberships:
+        code = str(m.get("license_code") or "").lower()
+        name = str(m.get("company_name") or "").lower()
+        if code and stripped == code:
+            return m
+        if not name:
+            continue
+        if stripped == name or (explicit and (name in stripped or stripped in name)):
+            return m
+        if not explicit_only and not explicit and (name in lowered):
+            return m
+    return None
+
+
+def _tenant_chooser(ctx: ResolvedContext, language: str, *, include_current: bool = False) -> ChatReply:
+    options = list(ctx.memberships) + (list(ctx.alternatives) if include_current else [])
+    if not include_current and ctx.resolution is not TenantResolution.MULTIPLE:
+        options = list(ctx.memberships) + list(ctx.alternatives)
+    names = "\n".join(
+        f"{i}. {m.get('company_name') or m.get('license_code') or '—'}"
+        for i, m in enumerate(options, start=1)
+    )
+    return ChatReply(
+        text=_t(REPLY_CHOOSE_TENANT, language).format(names=names),
+        quick_replies=[
+            (str(m.get("company_name") or m.get("license_code") or "")[:20],
+             f"ใช้ร้าน {m.get('license_code') or m.get('company_name')}")
+            for m in options[:13]
+        ],
+    )
+
+
+async def _switch_tenant(
+    client: DataClient, *, ctx: ResolvedContext, membership: dict, language: str,
+) -> ChatReply:
+    try:
+        await client.set_active_tenant(ctx.chann_uid, ctx.oa, str(membership["license_id"]))
+    except Exception:
+        log.exception("could not store the active tenant")
+        return ChatReply(text=unavailable_reply(language))
+    name = membership.get("company_name") or membership.get("license_code") or ""
+    quick = (
+        [("แจ้งซ่อม", "แจ้งซ่อม"), ("งานของฉัน", "งานของฉัน"), ("ข้อมูลของฉัน", "ข้อมูลของฉัน")]
+        if ctx.oa == "customer"
+        else [("งานของฉัน", "งานของฉัน"), ("งานที่เปิดรับ", "งานที่เปิดรับ")]
+        if ctx.oa == "technician"
+        else [("งานวันนี้", "งานวันนี้"), ("รายชื่อลูกค้า", "รายชื่อลูกค้า"), ("วิธีใช้", "วิธีใช้")]
+    )
+    return ChatReply(text=_t(TENANT_SWITCHED, language).format(name=name), quick_replies=quick)
 
 ASK_MISSING = {
     "th": "กรุณาระบุ{fields}",
@@ -7173,8 +7493,14 @@ ASK_MISSING = {
 }
 
 SUGGEST_HEADER = {
-    "th": "คุณสามารถทำสิ่งเหล่านี้ได้:",
-    "en": "Here is what you can do:",
+    "th": (
+        "ยังไม่แน่ใจว่าต้องการอะไรครับ ลองพิมพ์ให้ชัดขึ้น เช่น \"ดูลูกค้า สมชาย\" \"งานวันนี้\" "
+        "\"รายชื่อช่าง\" \"ข้อมูลร้าน\" หรือพิมพ์ \"วิธีใช้\" เพื่อดูตัวอย่างทั้งหมด\n\nสิ่งที่ทำได้ตอนนี้:"
+    ),
+    "en": (
+        "Not sure what you need — try something more specific, e.g. \"show customer Somchai\", "
+        "\"today\", \"technicians\", \"shop info\", or type \"help\" for every example.\n\nWhat you can do now:"
+    ),
 }
 
 # Two different reasons land here, and users need to hear the right one:
@@ -7383,7 +7709,8 @@ def ask_for_missing(missing: list[str], language: str = "th") -> str:
 CUSTOMER_HELP = {
     "th": (
         "พิมพ์คุยได้เลยครับ\n\n"
-        "· ลงทะเบียนสินค้า (ทำครั้งแรกก่อนแจ้งซ่อม) — พิมพ์หมายเลขเครื่อง (S/N บนสติกเกอร์) มาได้เลย\n"
+        "· ลงทะเบียนสินค้า (ทำครั้งแรกก่อนแจ้งซ่อม) — พิมพ์หมายเลขเครื่อง (S/N บนสติกเกอร์) มาได้เลย "
+        "(ร้านต้องบันทึกเครื่องไว้ก่อน ถ้าระบบยังไม่รู้จักหมายเลข ให้ติดต่อร้าน)\n"
         "· แจ้งซ่อม — พิมพ์อาการที่เสียมาได้เลย เช่น \"แอร์ไม่เย็น\"\n"
         "· ดูสถานะงาน — พิมพ์ \"งานของฉัน\"\n"
         "· เลื่อนหรือยกเลิกนัด — พิมพ์ \"เลื่อนนัด พรุ่งนี้ 10 โมง\" หรือ \"ยกเลิกนัด\"\n"
@@ -7507,6 +7834,12 @@ TECHNICIAN_HELP = {
 # a list of capabilities tells someone what exists, an example tells them what
 # to type, and only one of those gets used.
 HELP_SECTIONS = (
+    ("ร้านและทีม", (
+        ("ticket.read", "ข้อมูลร้าน", "ชื่อ รหัสร้าน (ให้ลูกค้าใช้ผูกร้าน) และช่องทางติดต่อ"),
+        ("ticket.read", "รายชื่อช่าง", "ช่างในร้านและเบอร์ติดต่อ"),
+        ("warranty.create", "ลงทะเบียนสินค้า SN12345678 แอร์ ให้ลูกค้า สมชาย", "บันทึกเครื่องที่ขาย ลูกค้าจะพิมพ์ S/N เพื่อผูกเอง"),
+        ("warranty.read", "รายการประกัน", "เครื่องที่ลงทะเบียนไว้ทั้งหมด"),
+    )),
     ("ลูกค้า", (
         ("customer.read", "รายชื่อลูกค้า", "ดูลูกค้าทั้งหมด"),
         ("customer.read", "ค้นหาลูกค้า สมชาย", "ค้นหาด้วยชื่อหรือเบอร์"),
@@ -8587,9 +8920,27 @@ async def handle_chat_message(
     ai_client=None,
 ) -> ChatReply:
     """Spec 6.4's slot-filling pattern, in the order the spec states."""
+    if ctx.resolution is TenantResolution.MULTIPLE:
+        # Several companies and no stored choice: the message is either
+        # the choice itself, or it gets the chooser (buttons, rule 3:
+        # never guess, never go quiet). The owner's account hit the old
+        # text "บัญชีนี้ดูแลหลายร้าน … พิมพ์ชื่อร้าน" and typing the name
+        # brought the same line back, because nothing read the answer.
+        chosen = _membership_named(message, ctx.memberships)
+        if chosen is not None:
+            return await _switch_tenant(client, ctx=ctx, membership=chosen, language=language)
+        return _tenant_chooser(ctx, language)
     if ctx.resolution is not TenantResolution.SINGLE:
-        # No single tenant means no permission set and no place to write to.
+        # No tenant means no permission set and no place to write to.
         return ChatReply(text=greet(ctx, language))
+    if ctx.alternatives:
+        # One company active, others available: "เปลี่ยนร้าน" opens the
+        # chooser, and naming another one switches straight away.
+        if _matches_phrase(message, SWITCH_TENANT_PHRASES):
+            return _tenant_chooser(ctx, language, include_current=True)
+        other = _membership_named(message, ctx.alternatives, explicit_only=True)
+        if other is not None:
+            return await _switch_tenant(client, ctx=ctx, membership=other, language=language)
 
     license_id = ctx.license_id
     member = ctx.memberships[0]
@@ -8827,6 +9178,7 @@ async def handle_chat_message(
             return await _handle_warranty_register(
                 client, ctx=ctx, license_id=license_id, message=message,
                 language=language,
+                permission_keys=permission_keys,
             )
         if any(t in message.lower() for t in SERIAL_LOOKUP_TRIGGERS):
             return await _handle_serial_enquiry(
@@ -9173,6 +9525,22 @@ async def handle_chat_message(
     # customer receives, so they must never pass through a model that could
     # "correct" a tax ID. Sales OA only, since this is a company-management
     # action with no meaning on the Customer or Technician channels.
+    if ctx.oa == "sales" and any(t in (message or "").lower() for t in SERIAL_REGISTER_TRIGGERS):
+        return await _handle_warranty_register(
+            client, ctx=ctx, license_id=license_id, message=message, language=language,
+            permission_keys=permission_keys,
+        )
+    if ctx.oa == "sales" and _matches_phrase(message, SHOP_INFO_PHRASES):
+        return await _handle_shop_info(client, ctx=ctx, license_id=license_id, language=language)
+    if ctx.oa == "sales" and _matches_phrase(message, WARRANTY_BOOK_PHRASES):
+        return await _handle_warranty_book(
+            client, license_id=license_id, permission_keys=permission_keys, language=language,
+        )
+    if ctx.oa == "sales" and _matches_phrase(message, TECHNICIAN_LIST_PHRASES):
+        return await _handle_technician_list(
+            client, license_id=license_id, permission_keys=permission_keys, language=language,
+        )
+
     if ctx.oa == "sales" and _is_company_profile_view(message):
         return await _handle_company_profile_view(
             client, license_id=license_id, permission_keys=permission_keys,

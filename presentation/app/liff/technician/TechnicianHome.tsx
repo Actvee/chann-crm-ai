@@ -7,8 +7,9 @@ import { useLanguage } from "@/lib/i18n/LanguageProvider";
 import { AppShell } from "../sales/_components";
 import { FieldRow } from "../_field-row";
 import { ProfileCard } from "../_profile-card";
+import { ShopSwitcher } from "../_shop-switcher";
 import { Ticket, TicketRow } from "../_tickets";
-import { fetchPermissions, initLiffSession, proxyHeaders } from "../_shared";
+import { Membership, fetchPermissions, initLiffSession, proxyHeaders } from "../_shared";
 
 type ServiceReport = {
   id: string;
@@ -43,6 +44,7 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [reports, setReports] = useState<ServiceReport[]>([]);
   const [shopName, setShopName] = useState("");
+  const [shops, setShops] = useState<Membership[]>([]);
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
   const [busyId, setBusyId] = useState("");
@@ -108,6 +110,7 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
       const member = session.memberships[0]?.member_id ?? "";
       setMemberId(member);
       setShopName(session.memberships[0]?.company_name ?? "");
+      setShops(session.memberships);
       setPermissions(await fetchPermissions(session.token, license, "technician"));
       await load(session.token, license, member);
       say("", undefined);
@@ -220,6 +223,22 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
     }
   }
 
+  async function switchShop(licenseIdNext: string) {
+    const next = shops.find((s) => s.license_id === licenseIdNext);
+    if (!next) return;
+    const member = next.member_id ?? "";
+    setLicenseId(next.license_id);
+    setShopName(next.company_name);
+    setMemberId(member);
+    try {
+      setPermissions(await fetchPermissions(token, next.license_id, "technician"));
+      await load(token, next.license_id, member);
+      say(t.dashboard.customer.shopSwitched, "ok");
+    } catch (error) {
+      say(error instanceof Error ? error.message : t.dashboard.openFailed, "error");
+    }
+  }
+
   const mine = tickets.filter(
     (x) => x.assigned_to_ref === memberId && x.accept_status === "accepted",
   );
@@ -254,6 +273,17 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
         status={status}
         statusTone={tone}
       >
+        {shops.length > 1 && (
+          <ShopSwitcher
+            token={token}
+            audience="technician"
+            shops={shops}
+            current={licenseId}
+            label={t.dashboard.customer.shopSwitch}
+            onSwitched={(id) => void switchShop(id)}
+          />
+        )}
+
         <section className="section">
           <div className="section-head">
             <h2>

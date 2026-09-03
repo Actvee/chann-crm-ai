@@ -28,6 +28,11 @@ from chann_app.services.chat import ACTION_PERMISSIONS  # noqa: E402
 # Deliberately one-sided, with the reason. Keeping these here rather than
 # silently skipping them means the next person sees the decision.
 ACCEPTED = {
+    ("warranty", "claim"): (
+        "both — chat's ลงทะเบียนสินค้า on the customer OA calls the same "
+        "warranties/claim the customer home posts to (owner rule, 3 Sep: the shop "
+        "records the unit, the customer claims it by serial)"
+    ),
     ("audit_log", "read"): "chat only — a compliance trail is read in the dashboard's own screen",
     ("member", "read"): "both, via the roles/members screen",
     ("member", "update"): "both, via the roles/members screen",

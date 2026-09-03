@@ -27,10 +27,15 @@ export function AppShell({
   onSdkError,
   status,
   statusTone,
+  nav = true,
   children,
 }: {
   title: string;
   back?: string | null;
+  /** The Sales section strip. Off for pages a technician or customer
+   *  opens — the strip is Sales' furniture, and on the technician's
+   *  reports page it made the page read as the wrong OA (owner, 3 Sep). */
+  nav?: boolean;
   liffId: string;
   onReady: () => void;
   onSdkError: () => void;
@@ -114,7 +119,7 @@ export function AppShell({
             again — two taps and a full page for what every CRM does with
             a tab strip. Scrolls sideways on a phone rather than wrapping,
             so it stays one row. */}
-        {back && <SectionNav />}
+        {back && nav && <SectionNav />}
         <div className="page">
           {status ? (
             <p className="status" data-tone={statusTone} aria-live="polite">

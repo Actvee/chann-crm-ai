@@ -511,6 +511,21 @@ class PendingIntentIn(BaseModel):
     ttl_seconds: int = 600
 
 
+class ActiveTenantIn(BaseModel):
+    license_id: str
+    ttl_seconds: int = 90 * 24 * 3600
+
+
+class ActiveTenantOut(BaseModel):
+    license_id: str
+
+
+class WarrantyClaimIn(BaseModel):
+    """A customer attaching themselves to a unit the shop registered."""
+    serial_number: str
+    customer_chann_uid: str
+
+
 class PendingIntentOut(BaseModel):
     action: str
     entity: str | None

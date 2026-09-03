@@ -25,6 +25,7 @@ sys.path.insert(0, str(ROOT / "data"))
 from chann_data.repositories.phase16 import (  # noqa: E402
     DisplayPreferenceRepository,
     WarrantyConflict,
+    WarrantyNotFound,
     WarrantyRepository,
 )
 from chann_data.repositories.tenant_scope import TenantScope  # noqa: E402
@@ -312,3 +313,61 @@ class TestDisplayPreferences:
         assert pref["date_format"] == "mm/dd/yyyy"
         # Untouched fields keep their defaults rather than being blanked.
         assert pref["timezone"] == "Asia/Bangkok"
+
+
+class TestClaim:
+    """The customer's half of registration (owner rule, 3 Sep): the shop
+    records the unit, the customer claims it by serial."""
+
+    def test_a_recorded_unit_is_claimed_by_serial(self, shops):
+        with shops["session"]() as session:
+            WarrantyRepository(session).register(shops["a"], serial_number="CLM001")
+            session.commit()
+        with shops["session"]() as session:
+            row = WarrantyRepository(session).claim(
+                shops["a"], serial_number="CLM001", customer_chann_uid="CHN-C-000001",
+            )
+            session.commit()
+            assert row.customer_chann_uid == "CHN-C-000001"
+
+    def test_an_unknown_serial_is_not_invented(self, shops):
+        with shops["session"]() as session:
+            with pytest.raises(WarrantyNotFound):
+                WarrantyRepository(session).claim(
+                    shops["a"], serial_number="NOPE001", customer_chann_uid="CHN-C-000001",
+                )
+
+    def test_another_customers_unit_is_refused(self, shops):
+        with shops["session"]() as session:
+            WarrantyRepository(session).register(
+                shops["a"], serial_number="TAKEN01", customer_chann_uid="CHN-C-000009",
+            )
+            session.commit()
+        with shops["session"]() as session:
+            with pytest.raises(WarrantyConflict):
+                WarrantyRepository(session).claim(
+                    shops["a"], serial_number="TAKEN01", customer_chann_uid="CHN-C-000001",
+                )
+
+    def test_reclaiming_ones_own_unit_is_a_no_op(self, shops):
+        with shops["session"]() as session:
+            WarrantyRepository(session).register(
+                shops["a"], serial_number="MINE001", customer_chann_uid="CHN-C-000001",
+            )
+            session.commit()
+        with shops["session"]() as session:
+            row = WarrantyRepository(session).claim(
+                shops["a"], serial_number="MINE001", customer_chann_uid="CHN-C-000001",
+            )
+            assert row.customer_chann_uid == "CHN-C-000001"
+
+    def test_a_serial_is_per_shop(self, shops):
+        """Shop B's unit cannot be claimed at shop A."""
+        with shops["session"]() as session:
+            WarrantyRepository(session).register(shops["b"], serial_number="ATB001")
+            session.commit()
+        with shops["session"]() as session:
+            with pytest.raises(WarrantyNotFound):
+                WarrantyRepository(session).claim(
+                    shops["a"], serial_number="ATB001", customer_chann_uid="CHN-C-000001",
+                )

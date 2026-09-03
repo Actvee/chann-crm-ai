@@ -164,12 +164,17 @@ class TestRegisterFirst:
         assert not any(r[0] == "create_ticket" for r in client.recorded)
         assert ("ไม่มีหมายเลขเครื่อง", "ไม่มีหมายเลขเครื่อง") in reply.quick_replies
 
-    async def test_the_serial_registers_the_product_and_files_the_held_fault(self):
+    async def test_the_serial_claims_the_shops_unit_and_files_the_held_fault(self):
+        """The shop recorded ABC123456 when it sold it (owner rule, 3 Sep
+        afternoon); the customer's serial attaches them to that row."""
         client = NoMemberRow(role="customer", permission_keys=CUSTOMER_KEYS)
+        client._warranties = [{"id": "w-1", "serial_number": "ABC123456", "product_name": "แอร์",
+                               "status": "active", "customer_chann_uid": None}]
         await handle_chat_message(client, message="แอร์ไม่เย็น", ctx=_customer())
         reply = await handle_chat_message(client, message="ABC123456", ctx=_customer())
-        registered = [r for r in client.recorded if r[0] == "register_warranty"]
-        assert registered and registered[0][2]["serial_number"] == "ABC123456"
+        claimed = [r for r in client.recorded if r[0] == "claim_warranty"]
+        assert claimed and claimed[0][2]["serial_number"] == "ABC123456"
+        assert client._warranties[0]["customer_chann_uid"] == "CHN-S-000001"
         created = [r for r in client.recorded if r[0] == "create_ticket"]
         assert created and created[0][2]["issue_description"] == "แอร์ไม่เย็น"
         assert created[0][2]["serial_number"] == "ABC123456"
@@ -225,10 +230,12 @@ class TestRegisterFirst:
         # Already registered: the 409 is "known", not a failure.
         assert "ที่อยู่" in reply.text
 
-    async def test_a_bare_serial_with_nothing_held_registers_the_product(self):
+    async def test_a_bare_serial_with_nothing_held_claims_the_product(self):
         client = NoMemberRow(role="customer", permission_keys=CUSTOMER_KEYS)
+        client._warranties = [{"id": "w-1", "serial_number": "NEW0000123", "product_name": "แอร์",
+                               "status": "active", "customer_chann_uid": None}]
         reply = await handle_chat_message(client, message="NEW0000123", ctx=_customer())
-        assert any(r[0] == "register_warranty" for r in client.recorded)
+        assert any(r[0] == "claim_warranty" for r in client.recorded)
         assert not any(r[0] == "create_ticket" for r in client.recorded)
         assert "NEW0000123" in reply.text
 

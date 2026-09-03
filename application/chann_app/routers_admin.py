@@ -14,7 +14,7 @@ from .config import settings
 
 log = logging.getLogger(__name__)
 from .data_client import DataClient, DataTierError
-from .services.identity import OA_TO_ROLE
+from .services.identity import OA_TO_ROLE, apply_active_tenant
 
 router = APIRouter(prefix="/api/v1", tags=["auth"])
 
@@ -113,15 +113,46 @@ async def liff_me(
     identity = await client.resolve_identity(
         claims["sub"], OA_TO_ROLE[audience], claims.get("name")
     )
-    memberships = await client.memberships_of(identity["chann_uid"])
+    # oa-scoped (see services/authorization.py): the customer app lists
+    # the shops this person is a customer of, never the companies they
+    # work for. Ordered with the stored choice first; the rest follow so
+    # the app can offer a switcher.
+    memberships = await client.memberships_of(identity["chann_uid"], oa=audience)
+    chosen, alternatives = await apply_active_tenant(
+        client, identity["chann_uid"], audience, memberships,
+    )
     # This returns only the authenticated user's own memberships so they can
     # select a tenant. It is never an endpoint for probing another identity.
     return {
         "sub": claims.get("sub"),
         "audience": audience,
         "chann_uid": identity["chann_uid"],
-        "memberships": memberships,
+        "memberships": chosen + alternatives,
+        "active_license_id": chosen[0]["license_id"] if len(chosen) == 1 else None,
     }
+
+
+@router.put("/liff/{audience}/active-shop")
+async def liff_set_active_shop(
+    audience: str,
+    body: dict,
+    claims: dict = Depends(require_liff),
+    client: DataClient = Depends(get_data_client),
+):
+    """Choose which of several shops this person acts in on this OA — the
+    app twin of chat's "ใช้ร้าน X". Only an id among their own memberships
+    is accepted."""
+    if audience not in OA_TO_ROLE:
+        raise HTTPException(status_code=404, detail="unknown LIFF audience")
+    license_id = str(body.get("license_id") or "")
+    identity = await client.resolve_identity(
+        claims["sub"], OA_TO_ROLE[audience], claims.get("name")
+    )
+    memberships = await client.memberships_of(identity["chann_uid"], oa=audience)
+    if not any(str(m.get("license_id")) == license_id for m in memberships):
+        raise HTTPException(status_code=403, detail="not one of your shops")
+    await client.set_active_tenant(identity["chann_uid"], audience, license_id)
+    return {"active_license_id": license_id}
 
 
 # The person's own profile (Phase 8 fields) from the LIFF app — the

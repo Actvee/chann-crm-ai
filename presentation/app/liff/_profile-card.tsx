@@ -111,11 +111,6 @@ export function ProfileCard({
           </button>
         )}
       </div>
-      {shopName && (
-        // Which shop this person belongs to — the one fact a customer
-        // asked "ลูกค้าร้านไหน" could not see anywhere on the old page.
-        <p className="card-meta">{copy.shopOf.replace("{shop}", shopName)}</p>
-      )}
       {note && (
         <p className="card-meta" data-tone={note.tone} role="status">
           {note.text}
@@ -123,6 +118,15 @@ export function ProfileCard({
       )}
       {!editing && profile && (
         <dl className="fields">
+          {shopName && (
+            // Which shop this person belongs to — a row like the others,
+            // worded for the OA: a technician is the shop's, a customer
+            // is a customer of it (owner, 3 Sep: "ลูกค้าของ" on the
+            // technician home was wrong, and the loose line sat off-grid).
+            <FieldRow label={audience === "technician" ? copy.shopTechnician : copy.shopCustomer}>
+              {shopName}
+            </FieldRow>
+          )}
           <FieldRow label={copy.name} empty={!fullName}>
             {fullName || copy.notSet}
           </FieldRow>

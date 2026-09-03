@@ -418,6 +418,30 @@ class FakeDataClient:
         self._warranties.append(row)
         return row
 
+    async def claim_warranty(self, license_id, payload, actor_id=None):
+        # Mirrors the Data Tier claim: 404 when the shop never recorded
+        # the serial, 409 when another customer holds it, own = no-op.
+        self.recorded.append(("claim_warranty", license_id, payload, actor_id))
+        from chann_app.data_client import DataTierError
+        serial = str(payload.get("serial_number", "")).upper()
+        for w in getattr(self, "_warranties", []):
+            if str(w.get("serial_number", "")).upper() == serial and w.get("status") != "void":
+                owner = w.get("customer_chann_uid")
+                if owner and owner != payload.get("customer_chann_uid"):
+                    raise DataTierError(409, "serial already claimed by another customer")
+                w["customer_chann_uid"] = payload.get("customer_chann_uid")
+                return dict(w)
+        raise DataTierError(404, "serial is not registered at this shop")
+
+    async def get_active_tenant(self, chann_uid, oa):
+        return getattr(self, "_active_tenant", {}).get((chann_uid, oa))
+
+    async def set_active_tenant(self, chann_uid, oa, license_id):
+        self.recorded.append(("set_active_tenant", chann_uid, oa, license_id))
+        if not hasattr(self, "_active_tenant"):
+            self._active_tenant = {}
+        self._active_tenant[(chann_uid, oa)] = str(license_id)
+
     async def my_shops(self, chann_uid):
         return [{
             "license_id": LICENSE_ID, "license_code": "TESTCO",
@@ -5823,6 +5847,11 @@ class TestButtonsTheSystemWritesDoNotNeedTheAI:
         triggers += list(module.CUSTOMER_CONTACT_PHRASES)
         triggers += list(module.CUSTOMER_WARRANTY_MINE_PHRASES)
         triggers += list(module.NO_SERIAL_PHRASES)
+        triggers += list(module.TICKET_LIST_PHRASES)
+        triggers += list(module.TECHNICIAN_LIST_PHRASES)
+        triggers += list(module.SHOP_INFO_PHRASES)
+        triggers += list(module.WARRANTY_BOOK_PHRASES)
+        triggers += list(module.SWITCH_TENANT_PHRASES)
 
         dead = []
         for text in sorted(sent):

@@ -922,6 +922,35 @@ class DataClient:
         )
         return self._unwrap(resp)
 
+    # ------------------------------------------------ active tenant (3 Sep)
+
+    async def get_active_tenant(self, chann_uid: str, oa: str) -> str | None:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/chat/active-tenant/{oa}/{chann_uid}",
+            headers=self._headers,
+        )
+        if resp.status_code == 404:
+            return None
+        return str(self._unwrap(resp).get("license_id") or "") or None
+
+    async def set_active_tenant(self, chann_uid: str, oa: str, license_id: str) -> None:
+        resp = await self._client.put(
+            f"{self._base}/internal/v1/chat/active-tenant/{oa}/{chann_uid}",
+            headers=self._headers, json={"license_id": str(license_id)},
+        )
+        self._unwrap(resp)
+
+    async def claim_warranty(
+        self, license_id: str, payload: dict, actor_id: str | None = None,
+    ) -> dict:
+        """Attach a customer to a unit the shop registered (404 unknown
+        here, 409 held by another customer)."""
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/warranties/claim",
+            headers=self._headers_for(actor_id), json=payload,
+        )
+        return self._unwrap(resp)
+
     async def check_profile_edit(
         self, license_id: str, actor_chann_uid: str, target_chann_uid: str
     ) -> bool:

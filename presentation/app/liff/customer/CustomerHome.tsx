@@ -8,8 +8,9 @@ import { AppShell } from "../sales/_components";
 import { FieldRow } from "../_field-row";
 import { shortDate } from "../_list-controls";
 import { ProfileCard } from "../_profile-card";
+import { ShopSwitcher } from "../_shop-switcher";
 import { Ticket, TicketRow } from "../_tickets";
-import { initLiffSession, proxyHeaders } from "../_shared";
+import { Membership, initLiffSession, proxyHeaders } from "../_shared";
 
 type Warranty = {
   id: string;
@@ -48,6 +49,7 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
   const [token, setToken] = useState("");
   const [licenseId, setLicenseId] = useState("");
   const [shopName, setShopName] = useState("");
+  const [shops, setShops] = useState<Membership[]>([]);
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [warranties, setWarranties] = useState<Warranty[]>([]);
   // Phase 14-C: the survey card, the home-screen twin of the quick reply
@@ -61,8 +63,6 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
   const [issue, setIssue] = useState("");
   const [issueSerial, setIssueSerial] = useState("");
   const [serial, setSerial] = useState("");
-  const [productName, setProductName] = useState("");
-  const [purchaseDate, setPurchaseDate] = useState("");
 
   const say = useCallback((message: string, kind?: "ok" | "error") => {
     setStatus(message);
@@ -140,6 +140,7 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
       setToken(session.token);
       setLicenseId(license);
       setShopName(session.memberships[0]?.company_name ?? "");
+      setShops(session.memberships);
       await load(session.token, license);
       say("", undefined);
     } catch (error) {
@@ -174,29 +175,37 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
     }
   }
 
+  /**
+   * Registration is a CLAIM (owner rule, 3 Sep): the shop records the
+   * unit it sold; the customer types the sticker and is matched to that
+   * row. A serial the shop never recorded is refused with a reason, not
+   * turned into a record — same call chat's "ลงทะเบียนสินค้า" makes.
+   */
   async function registerWarranty() {
     if (!serial.trim()) return;
     setBusy(true);
     try {
       const response = await fetch(
-        `/api/phase2/licenses/${licenseId}/warranties`,
+        `/api/phase2/licenses/${licenseId}/warranties/claim`,
         {
           method: "POST",
           headers: {
             ...proxyHeaders(token, licenseId, "customer"),
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({
-            serial_number: serial.trim(),
-            product_name: productName.trim() || undefined,
-            warranty_start: purchaseDate || undefined,
-          }),
+          body: JSON.stringify({ serial_number: serial.trim() }),
         },
       );
+      if (response.status === 404) {
+        say(t.dashboard.customer.claimNotFound, "error");
+        return;
+      }
+      if (response.status === 409) {
+        say(t.dashboard.customer.claimTaken, "error");
+        return;
+      }
       if (!response.ok) throw new Error(String(response.status));
       setSerial("");
-      setProductName("");
-      setPurchaseDate("");
       say(t.dashboard.customer.warrantyRegistered, "ok");
       await load();
     } catch {
@@ -204,6 +213,15 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
     } finally {
       setBusy(false);
     }
+  }
+
+  async function switchShop(licenseIdNext: string) {
+    const next = shops.find((s) => s.license_id === licenseIdNext);
+    if (!next) return;
+    setLicenseId(next.license_id);
+    setShopName(next.company_name);
+    say(t.dashboard.customer.shopSwitched, "ok");
+    await load(token, next.license_id);
   }
 
   return (
@@ -217,6 +235,17 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
         status={status}
         statusTone={tone}
       >
+        {shops.length > 1 && (
+          <ShopSwitcher
+            token={token}
+            audience="customer"
+            shops={shops}
+            current={licenseId}
+            label={t.dashboard.customer.shopSwitch}
+            onSwitched={(id) => void switchShop(id)}
+          />
+        )}
+
         {survey && (
           // First on the page: it exists only while an answer is owed,
           // and it is the one thing the shop asked of the customer.
@@ -330,34 +359,17 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
 
         <section className="section">
           <div className="section-head">
-            <h2>{t.dashboard.customer.warranty}</h2>
+            <h2>{t.dashboard.customer.registerProduct}</h2>
           </div>
+          <p className="card-meta">{t.dashboard.customer.claimHint}</p>
           <dl className="fields">
             <FieldRow label={t.dashboard.customer.serialNumber}>
               {(id) => (
                 <input
                   id={id}
                   value={serial}
+                  autoCapitalize="characters"
                   onChange={(e) => setSerial(e.target.value)}
-                />
-              )}
-            </FieldRow>
-            <FieldRow label={t.dashboard.customer.productName}>
-              {(id) => (
-                <input
-                  id={id}
-                  value={productName}
-                  onChange={(e) => setProductName(e.target.value)}
-                />
-              )}
-            </FieldRow>
-            <FieldRow label={t.dashboard.customer.purchaseDate}>
-              {(id) => (
-                <input
-                  id={id}
-                  type="date"
-                  value={purchaseDate}
-                  onChange={(e) => setPurchaseDate(e.target.value)}
                 />
               )}
             </FieldRow>

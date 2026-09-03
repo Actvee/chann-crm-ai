@@ -140,6 +140,7 @@ async def customer_day():
     await say(c, "customer", "สวัสดีครับ")
     await say(c, "customer", "วิธีใช้")
     await say(c, "customer", "แจ้งซ่อม")
+    c._warranties = [{"id": "w-1", "serial_number": "SN12345678", "product_name": "แอร์", "status": "active", "customer_chann_uid": None}]  # recorded by the shop
     await say(c, "customer", "แอร์ไม่เย็นครับ")
     await say(c, "customer", "SN12345678")   # register-first: the serial registers the product and files the held fault
     await say(c, "customer", "ลงทะเบียนสินค้า")

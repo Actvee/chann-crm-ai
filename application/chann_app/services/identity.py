@@ -12,7 +12,9 @@ The flow the spec mandates:
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+import logging
+
+from dataclasses import dataclass, field
 from enum import Enum
 
 from ..data_client import DataClient
@@ -40,6 +42,10 @@ class ResolvedContext:
     # this project's three OAs are set up. Anything deciding "what does THIS
     # message's channel allow" must read oa, never primary_role.
     oa: str = ""
+    # The person's OTHER companies on this OA, when a stored choice made
+    # one of several the active one (3 Sep). Lets the chat offer
+    # "เปลี่ยนร้าน" without a second lookup; empty for the ordinary case.
+    alternatives: list[dict] = field(default_factory=list)
 
     @property
     def license_id(self) -> str | None:
@@ -69,6 +75,9 @@ async def resolve_context(client: DataClient, oa: str, line_user_id: str,
     # that happen to share one LINE userId. See
     # MemberRepository.memberships_of for the full reasoning.
     memberships = await client.memberships_of(identity["chann_uid"], oa=oa)
+    memberships, alternatives = await apply_active_tenant(
+        client, identity["chann_uid"], oa, memberships,
+    )
 
     if len(memberships) == 1:
         resolution = TenantResolution.SINGLE
@@ -84,4 +93,36 @@ async def resolve_context(client: DataClient, oa: str, line_user_id: str,
         resolution=resolution,
         memberships=memberships,
         oa=oa,
+        alternatives=alternatives,
     )
+
+
+log = logging.getLogger(__name__)
+
+
+async def apply_active_tenant(
+    client: DataClient, chann_uid: str, oa: str, memberships: list[dict],
+) -> tuple[list[dict], list[dict]]:
+    """Narrow several memberships to the one the person chose on this OA.
+
+    Owner walk, 3 Sep: one LINE account that is staff at ร้านทดสอบ and a
+    customer of Dev Company got the staff shop on the Customer OA's home
+    and "บัญชีนี้ดูแลหลายร้าน" in chat, with no way to say which. The
+    stored choice (Data Tier Redis, k_active_tenant) is honoured only when
+    it is still one of the memberships — a revoked link can never keep
+    someone acting in a shop they left. Returns (memberships, alternatives):
+    the chosen one alone, and the rest for "เปลี่ยนร้าน".
+    """
+    if len(memberships) < 2:
+        return memberships, []
+    try:
+        active = await client.get_active_tenant(chann_uid, oa)
+    except Exception:  # noqa: BLE001 — a cache miss must degrade to "which shop?"
+        log.warning("could not read the active tenant for %s on %s", chann_uid, oa)
+        active = None
+    if not active:
+        return memberships, []
+    chosen = [m for m in memberships if str(m.get("license_id")) == str(active)]
+    if not chosen:
+        return memberships, []
+    return chosen, [m for m in memberships if str(m.get("license_id")) != str(active)]

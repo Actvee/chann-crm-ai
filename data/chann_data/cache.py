@@ -150,6 +150,21 @@ def k_pending_intent(chann_uid: str, oa: str) -> str:
     return f"pending_intent:{chann_uid}:{oa}"
 
 
+def k_active_tenant(chann_uid: str, oa: str) -> str:
+    """Which company this person is currently acting in, when they belong
+    to more than one (owner walk, 3 Sep: a LINE account that is staff at
+    ร้านทดสอบ AND a customer of Dev Company, and the customer OA showed the
+    staff shop). Per (chann_uid, oa) for the same reason as pending_intent:
+    the choice on the Customer OA says nothing about the Sales OA.
+
+    Redis with a long TTL rather than a column: it is a preference the
+    person can re-state in one tap, and losing it degrades to "which shop?"
+    — never to acting in the wrong one, because resolve_context only
+    honours a stored id that is still among their memberships.
+    """
+    return f"active_tenant:{chann_uid}:{oa}"
+
+
 def k_last_customer_ref(chann_uid: str, oa: str) -> str:
     """Phase 9 — "which customer was this conversation just about?"
 

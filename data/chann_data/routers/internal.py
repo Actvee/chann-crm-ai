@@ -19,6 +19,7 @@ from ..cache import (
     CacheFailureMode,
     CacheUnavailable,
     cache,
+    k_active_tenant,
     k_admin_session,
     k_identity,
     k_last_customer_ref,
@@ -142,6 +143,9 @@ from ..schemas import (
     NoteOut,
     FollowUpOut,
     FollowUpStatusIn,
+    ActiveTenantIn,
+    ActiveTenantOut,
+    WarrantyClaimIn,
     PendingIntentIn,
     PendingIntentOut,
     LastCustomerRefIn,
@@ -1800,6 +1804,27 @@ def get_pending_intent(oa: str, chann_uid: str):
 @router.delete("/chat/pending-intent/{oa}/{chann_uid}", status_code=204)
 def clear_pending_intent(oa: str, chann_uid: str):
     cache.invalidate(k_pending_intent(chann_uid, oa))
+
+
+@router.put("/chat/active-tenant/{oa}/{chann_uid}", status_code=204)
+def set_active_tenant(oa: str, chann_uid: str, payload: ActiveTenantIn):
+    """Remember which company this person acts in on this OA. See
+    cache.k_active_tenant. The Application checks the id is one of the
+    person's memberships before honouring it."""
+    cache.set(k_active_tenant(chann_uid, oa), {"license_id": payload.license_id}, payload.ttl_seconds)
+
+
+@router.get("/chat/active-tenant/{oa}/{chann_uid}", response_model=ActiveTenantOut)
+def get_active_tenant(oa: str, chann_uid: str):
+    raw = cache.get_or_load(k_active_tenant(chann_uid, oa), ttl_s=0, loader=lambda: None)
+    if raw is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="no active tenant")
+    return ActiveTenantOut(**raw)
+
+
+@router.delete("/chat/active-tenant/{oa}/{chann_uid}", status_code=204)
+def clear_active_tenant(oa: str, chann_uid: str):
+    cache.invalidate(k_active_tenant(chann_uid, oa))
 
 
 @router.put("/chat/last-customer/{oa}/{chann_uid}", status_code=204)
@@ -3793,6 +3818,41 @@ def list_warranties(
         }
         for r in rows
     ]
+
+
+@router.post("/licenses/{license_id}/warranties/claim")
+def claim_warranty(
+    license_id: uuid.UUID,
+    payload: WarrantyClaimIn,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    """The customer's side of registration (owner rule, 3 Sep): match the
+    sticker to a unit the shop registered. 404 when the shop has no such
+    unit, 409 when another customer holds it."""
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = WarrantyRepository(session).claim(
+            scope, serial_number=payload.serial_number,
+            customer_chann_uid=payload.customer_chann_uid,
+        )
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="warranty", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="update",
+            field_changes=diff_fields({}, {"customer_chann_uid": row.customer_chann_uid}),
+        )
+        session.commit()
+        session.refresh(row)
+        return {
+            "id": str(row.id), "warranty_number": row.warranty_number,
+            "serial_number": row.serial_number, "product_name": row.product_name,
+            "customer_chann_uid": row.customer_chann_uid,
+            "warranty_start": row.warranty_start.isoformat(),
+            "warranty_end": row.warranty_end.isoformat(), "status": row.status,
+        }
+    except Exception as exc:
+        session.rollback()
+        raise _warranty_error(exc)
 
 
 @router.get("/warranties/lookup")

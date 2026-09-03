@@ -142,6 +142,7 @@ export default function ServiceReports({
     <AppShell
       title={t.dashboard.reports.title}
       back={audience === "sales" ? "/liff/sales" : "/liff/technician"}
+      nav={audience === "sales"}
       liffId={liffId}
       onReady={() => void initialize()}
       onSdkError={() => say(t.liff.sdkLoadFailed, "error")}
