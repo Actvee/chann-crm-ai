@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { FieldRow } from "../../_field-row";
 import { AppShell, CompanyPicker, Count, Empty } from "../_components";
+import { CsvImport } from "../_csv-import";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { Membership, fetchPermissions, initLiffSession, proxyHeaders } from "../_lib";
@@ -159,6 +160,10 @@ export default function ProductList({ liffId }: { liffId: string }) {
       </label>
 
       <Count shown={visible.length} total={products.length} />
+
+      {permissions.has("product.manage") && (
+        <CsvImport kind="products" token={token} licenseId={licenseId} onDone={() => load()} />
+      )}
 
       {permissions.has("product.manage") && (
         <section className="section" style={{ margin: "12px 0 16px" }}>

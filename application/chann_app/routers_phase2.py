@@ -16,7 +16,7 @@ from .data_client import DataClient, DataTierError
 from .routers_admin import get_data_client, require_admin
 from .services import approval as approval_service
 from .services import storefront as storefront_service
-from .services import live_chat
+from .services import csv_import, live_chat
 from .services.authorization import TenantPrincipal, resolve_tenant_principal
 
 router = APIRouter(prefix="/api/v1", tags=["phase2"])
@@ -971,6 +971,38 @@ class ProductIn(BaseModel):
     description: str | None = None
 
 
+class CsvBody(BaseModel):
+    csv: str = Field(min_length=1, max_length=2_000_000)
+
+
+def _csv_rejected(exc: csv_import.CsvRejected) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        detail={"error": "csv_rejected", "message": str(exc)},
+    )
+
+
+@router.post("/licenses/{license_id}/products/import")
+async def import_products(
+    license_id: str,
+    payload: CsvBody,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """A spreadsheet export into the catalogue (owner, 4 Sep): one verdict
+    per row; the file as a whole is refused only when it cannot be read."""
+    _require_same_tenant(principal, license_id)
+    principal.require("product.manage")
+    try:
+        return await csv_import.import_products(
+            client, license_id=license_id, text=payload.csv, actor_id=principal.chann_uid,
+        )
+    except csv_import.CsvRejected as exc:
+        raise _csv_rejected(exc)
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
 @router.put("/licenses/{license_id}/products/{product_id}")
 async def upsert_product(
     license_id: str,
@@ -1016,6 +1048,29 @@ class WarrantyRegisterIn(BaseModel):
     # been the MemberOut-never-sends-id seam bug again, one tier over.
     warranty_start: str | None = None
     warranty_months: int | None = None
+
+
+@router.post("/licenses/{license_id}/warranties/import")
+async def import_warranties(
+    license_id: str,
+    payload: CsvBody,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """The register of sold units from a spreadsheet (owner, 4 Sep). A
+    serial the shop already holds is reported as a duplicate, not lost."""
+    _require_same_tenant(principal, license_id)
+    principal.require("warranty.create")
+    if principal.is_customer:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail={"error": "staff_only"})
+    try:
+        return await csv_import.import_warranties(
+            client, license_id=license_id, text=payload.csv, actor_id=principal.chann_uid,
+        )
+    except csv_import.CsvRejected as exc:
+        raise _csv_rejected(exc)
+    except DataTierError as exc:
+        raise _propagate(exc)
 
 
 @router.post("/licenses/{license_id}/warranties", status_code=201)

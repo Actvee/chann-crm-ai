@@ -1,3 +1,24 @@
+### Plan C3 (4 Sep) — CSV import + the guide as a file (`csv-import-v1`)
+
+- `services/csv_import.py`: `import_products` / `import_warranties` read a
+  spreadsheet export (Thai or English headers, BOM tolerated, prices with
+  commas, dates `2026-09-01` / `01/09/2026` / BE years), apply one row at a
+  time and return `{saved, failed, rows:[{row,key,status,message}]}`; a
+  file that cannot be read at all is `CsvRejected` → 422 with the reason.
+  Routes: `POST /licenses/{id}/products/import` (product.manage) and
+  `POST /licenses/{id}/warranties/import` (warranty.create, staff only).
+  ≤500 rows.
+- `presentation/app/liff/sales/_csv-import.tsx` (`CsvImport`): sample link
+  (`/samples/products.csv`, `/samples/warranties.csv` — the parser's own
+  samples, a test keeps them equal), labelled file input with helper text,
+  loading state, error beside the button, per-row refusal table. Placed on
+  the products and warranties pages for those with the key.
+- Guide as a file: `guide_as_html(oa)` beside `guide_as_markdown`;
+  `GET /api/v1/liff/{oa}/guide?format=md|html` returns an attachment; the
+  LIFF proxy streams it; `GuidePage` has two download buttons (blob →
+  anchor) with a hint that the LINE in-app browser may need an external
+  browser.
+
 ### Plan C2 (4 Sep) — UI polish from the owner's test round (`ui-polish-v1`, presentation only)
 
 - `SalesChats.tsx` rebuilt as an inbox (reference: Zoho SalesIQ): conversation

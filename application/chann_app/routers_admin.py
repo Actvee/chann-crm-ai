@@ -183,13 +183,26 @@ async def liff_set_display_preferences(
 
 
 @router.get("/liff/{audience}/guide")
-async def liff_guide(audience: str, lang: str = "th", claims: dict = Depends(require_liff)):
+async def liff_guide(
+    audience: str, lang: str = "th", format: str = "json", claims: dict = Depends(require_liff),
+):
     """The illustrated how-to for this OA — the same steps chat's
-    "วิธีใช้" prints, with the owner's image per step when one exists."""
-    from .services.guides import GUIDES, help_image_url
+    "วิธีใช้" prints, with the owner's image per step when one exists.
+    `format=md` / `format=html` returns the handout as a file (owner,
+    4 Sep: a file per OA to take away, illustrate, and send to customers)."""
+    from fastapi.responses import Response
+
+    from .services.guides import GUIDES, guide_as_html, guide_as_markdown, help_image_url
 
     if audience not in OA_TO_ROLE:
         raise HTTPException(status_code=404, detail="unknown LIFF audience")
+    if format in ("md", "html"):
+        content = guide_as_markdown(audience) if format == "md" else guide_as_html(audience)
+        media = "text/markdown; charset=utf-8" if format == "md" else "text/html; charset=utf-8"
+        return Response(
+            content=content, media_type=media,
+            headers={"Content-Disposition": f'attachment; filename="guide-{audience}.{format}"'},
+        )
     language = "en" if lang == "en" else "th"
     guide = GUIDES[audience]
     return {

@@ -329,3 +329,42 @@ def guide_as_markdown(oa: str) -> str:
         out.append(f"_EN: {step['title']['en']} — {step['body']['en']}_")
         out.append("")
     return "\n".join(out).rstrip() + "\n"
+
+
+def guide_as_html(oa: str) -> str:
+    """The same handout as a self-contained web page — what the owner
+    downloads, fills with pictures, and sends on to customers. Each step
+    keeps a visible slot with the image prompt until a picture replaces it."""
+    import html as _html
+
+    guide = GUIDES[oa]
+    accent = {"sales": "#178a50", "technician": "#1f6fd6", "customer": "#e8731a"}.get(oa, "#178a50")
+    parts = [
+        "<!doctype html><html lang=\"th\"><head><meta charset=\"utf-8\">",
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
+        f"<title>{_html.escape(guide['title']['th'])}</title>",
+        "<style>body{font-family:'IBM Plex Sans Thai','Noto Sans Thai',system-ui,sans-serif;max-width:720px;margin:0 auto;padding:24px;line-height:1.6;color:#1f2328}"
+        f"h1{{color:{accent};font-size:26px}}h2{{font-size:19px;margin:28px 0 8px;border-left:5px solid {accent};padding-left:10px}}"
+        ".slot{border:2px dashed #b9b5ab;border-radius:10px;padding:18px;margin:10px 0;color:#6b6f76;font-size:14px;background:#fafaf8}"
+        ".slot img{max-width:100%;display:block;border-radius:8px}.type{font-family:ui-monospace,monospace;background:#f0f0ee;padding:2px 6px;border-radius:4px}"
+        ".en{color:#6b6f76;font-size:14px}</style></head><body>",
+        f"<h1>{_html.escape(guide['title']['th'])}</h1>",
+        f"<p>{_html.escape(guide['intro']['th'])}</p>",
+    ]
+    for i, step in enumerate(guide["steps"], start=1):
+        parts.append(f"<h2>{i}. {_html.escape(step['title']['th'])}</h2>")
+        parts.append(f"<p>{_html.escape(step['body']['th'])}</p>")
+        if step.get("example"):
+            parts.append(f"<p>พิมพ์: <span class=\"type\">{_html.escape(step['example'])}</span></p>")
+        url = help_image_url(step["image"])
+        if url:
+            parts.append(f"<div class=\"slot\" data-slot=\"{step['image']}\"><img src=\"{_html.escape(url)}\" alt=\"{_html.escape(step['title']['th'])}\"></div>")
+        else:
+            parts.append(
+                f"<div class=\"slot\" data-slot=\"{step['image']}\">[IMAGE: {step['image']} — "
+                f"{_html.escape(step['image_prompt'])}]</div>"
+            )
+        parts.append(f"<p class=\"en\">{_html.escape(step['title']['en'])} — {_html.escape(step['body']['en'])}</p>")
+    parts.append("</body></html>")
+    return "\n".join(parts) + "\n"
+

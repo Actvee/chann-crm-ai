@@ -5,6 +5,7 @@ import { useCallback, useState } from "react";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { AppShell } from "../_components";
+import { CsvImport } from "../_csv-import";
 import { FieldRow } from "../../_field-row";
 import { shortDate } from "../../_list-controls";
 import { PickerOption, SearchablePicker } from "../../_searchable-picker";
@@ -162,6 +163,10 @@ export default function SalesWarranties({ liffId }: { liffId: string }) {
       statusTone={tone}
     >
       <p className="page-intro">{copy.intro}</p>
+
+      {canCreate && (
+        <CsvImport kind="warranties" token={token} licenseId={licenseId} onDone={() => load()} />
+      )}
 
       {canCreate && (
         <section className="section">
