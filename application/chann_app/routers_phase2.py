@@ -16,6 +16,7 @@ from .data_client import DataClient, DataTierError
 from .routers_admin import get_data_client, require_admin
 from .services import approval as approval_service
 from .services import storefront as storefront_service
+from .services import live_chat
 from .services.authorization import TenantPrincipal, resolve_tenant_principal
 
 router = APIRouter(prefix="/api/v1", tags=["phase2"])
@@ -2661,5 +2662,166 @@ async def list_notes(
     principal.require(f"{entity_type}.read")
     try:
         return await client.list_notes(license_id, entity_type, entity_id)
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+
+# ---------------------------------------------------------------- Phase 15
+# Live chat (PLAN_3OA B6). The customer's side is scoped to their own
+# conversation by construction; the shop's side is gated by the
+# chat_session.* keys the Data tier already defines for Sales/CS.
+
+class ChatLineBody(BaseModel):
+    content: str = Field(min_length=1, max_length=4000)
+
+
+class ChatOpenBody(BaseModel):
+    content: str | None = Field(default=None, max_length=4000)
+    product_id: str | None = None
+
+
+async def _chat_session_for(
+    client: DataClient, principal: TenantPrincipal, license_id: str, session_id: str,
+) -> dict:
+    try:
+        session = await client.get_chat_session(license_id, session_id)
+    except DataTierError as exc:
+        raise _propagate(exc)
+    if session is None or (
+        principal.is_customer and str(session.get("customer_chann_uid")) != principal.chann_uid
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"error": "chat_session_not_found"})
+    return session
+
+
+@router.get("/licenses/{license_id}/chat-sessions")
+async def list_chat_sessions(
+    license_id: str,
+    status_filter: str | None = None,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Staff: every conversation of the shop (live first). Customer: their
+    own. `status_filter` = live | closed | timeout | all (default live)."""
+    _require_same_tenant(principal, license_id)
+    wanted = status_filter or "live"
+    if principal.is_customer:
+        try:
+            rows = await client.list_chat_sessions(
+                license_id, status=None if wanted == "all" else wanted,
+                customer_chann_uid=principal.chann_uid, limit=20,
+            )
+        except DataTierError as exc:
+            raise _propagate(exc)
+        return rows
+    principal.require("chat_session.view")
+    # The dashboard list is also the platform's most frequent clock tick:
+    # overdue answers are escalated and dead conversations closed here,
+    # so a shop without a scheduler still gets both.
+    try:
+        await live_chat.sweep(client)
+    except Exception:
+        logging.getLogger(__name__).exception("chat sweep from the dashboard failed")
+    try:
+        return await client.list_chat_sessions(
+            license_id, status=None if wanted == "all" else wanted, limit=200,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.post("/licenses/{license_id}/chat-sessions", status_code=201)
+async def open_chat_session(
+    license_id: str,
+    payload: ChatOpenBody,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """"คุยกับร้าน" from the home screen — the same start as the chat's."""
+    _require_same_tenant(principal, license_id)
+    if not principal.is_customer:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail={"error": "customers_only"})
+    principal.require("customer.read")  # the customer set always carries it; staff never reach here
+    try:
+        session, created = await live_chat.start_session(
+            client, license_id=license_id, chann_uid=principal.chann_uid,
+            first_message=payload.content, product_id=payload.product_id,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+    return {**session, "created": created}
+
+
+@router.get("/licenses/{license_id}/chat-sessions/{session_id}/messages")
+async def list_chat_messages(
+    license_id: str,
+    session_id: str,
+    since: str | None = None,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    _require_same_tenant(principal, license_id)
+    if not principal.is_customer:
+        principal.require("chat_session.view")
+    session = await _chat_session_for(client, principal, license_id, session_id)
+    try:
+        rows = await client.list_chat_messages(license_id, session_id, since=since)
+        # Reading is acknowledging: the list's unread count is for the
+        # other side's lines the reader has not yet opened.
+        await client.mark_chat_read(
+            license_id, session_id, reader="customer" if principal.is_customer else "agent",
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+    return {"session": session, "messages": rows}
+
+
+@router.post("/licenses/{license_id}/chat-sessions/{session_id}/messages", status_code=201)
+async def send_chat_message(
+    license_id: str,
+    session_id: str,
+    payload: ChatLineBody,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Customer: a line into their conversation. Staff: the shop's answer —
+    it reaches the customer's LINE, and the sender owns the conversation."""
+    _require_same_tenant(principal, license_id)
+    session = await _chat_session_for(client, principal, license_id, session_id)
+    if str(session.get("status")) not in ("open", "assigned"):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"error": "chat_session_closed"})
+    try:
+        if principal.is_customer:
+            return await live_chat.customer_message(
+                client, license_id=license_id, session=session, chann_uid=principal.chann_uid,
+                text=payload.content,
+            )
+        principal.require("chat_session.reply")
+        member = await client.get_member(license_id, principal.chann_uid)
+        return await live_chat.agent_reply(
+            client, license_id=license_id, session=session, agent_chann_uid=principal.chann_uid,
+            member_id=str(member.get("id")) if member else None, text=payload.content,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.post("/licenses/{license_id}/chat-sessions/{session_id}/close")
+async def close_chat_session(
+    license_id: str,
+    session_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    _require_same_tenant(principal, license_id)
+    session = await _chat_session_for(client, principal, license_id, session_id)
+    if not principal.is_customer:
+        principal.require("chat_session.reply")
+    try:
+        return await live_chat.close_session(
+            client, license_id=license_id, session=session,
+            by="customer" if principal.is_customer else "agent", actor_chann_uid=principal.chann_uid,
+        )
     except DataTierError as exc:
         raise _propagate(exc)

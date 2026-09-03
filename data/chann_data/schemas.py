@@ -977,3 +977,60 @@ class WarrantyOut(BaseModel):
     warranty_start: str
     warranty_end: str
     status: str
+
+
+# ---------------------------------------------------------------- Phase 15
+class ChatSessionOpenIn(BaseModel):
+    customer_chann_uid: str
+    product_id: uuid.UUID | None = None
+    sla_minutes: int = 30
+    timeout_minutes: int = 120
+
+
+class ChatMessageIn(BaseModel):
+    sender_type: Literal["customer", "agent", "ai", "system"]
+    content: str
+    sender_chann_uid: str | None = None
+    content_en: str | None = None
+    sla_minutes: int = 30
+    timeout_minutes: int = 120
+
+
+class ChatSessionAssignIn(BaseModel):
+    member_id: uuid.UUID
+
+
+class ChatMessageOut(BaseModel):
+    id: uuid.UUID
+    session_id: uuid.UUID
+    sender_type: str
+    sender_chann_uid: str | None
+    content: str
+    content_en: str | None
+    is_read: bool
+    created_at: datetime
+
+
+class ChatSessionOut(BaseModel):
+    id: uuid.UUID
+    license_id: uuid.UUID
+    customer_chann_uid: str
+    customer_name: str | None = None
+    status: str
+    assigned_to: uuid.UUID | None
+    product_id: uuid.UUID | None
+    sla_deadline: datetime | None
+    timeout_at: datetime | None
+    escalated_at: datetime | None
+    closed_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+    last_message: str | None = None
+    last_sender_type: str | None = None
+    last_message_at: datetime | None = None
+    unread_from_customer: int = 0
+
+
+class ChatSweepOut(BaseModel):
+    escalated: list[ChatSessionOut]
+    timed_out: list[ChatSessionOut]

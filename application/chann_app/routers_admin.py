@@ -394,9 +394,31 @@ async def run_reminder_sweep(
     Returns the sweep's own summary so a failing schedule is visible in the
     Scheduler job's history rather than only in logs.
     """
+    from .services import live_chat
     from .services.reminders import sweep_due_follow_ups
 
-    return await sweep_due_follow_ups(client, days=max(0, min(days, 7)))
+    summary = await sweep_due_follow_ups(client, days=max(0, min(days, 7)))
+    # Phase 15: the same tick escalates overdue chats and closes dead ones,
+    # so one Scheduler job serves both. A dedicated, more frequent job can
+    # call /platform/chat/sweep instead.
+    try:
+        summary["chat"] = await live_chat.sweep(client)
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).exception("chat sweep inside the reminder sweep failed")
+    return summary
+
+
+@router.post("/platform/chat/sweep")
+async def run_chat_sweep(
+    _: None = Depends(require_scheduler),
+    client: DataClient = Depends(get_data_client),
+):
+    """Phase 15 SLA + timeout sweep (Master Spec 15.4), for a Scheduler job
+    that runs every few minutes. Same shared-secret auth as the reminder
+    sweep. The dashboard's chat list ticks the same clock on every load."""
+    from .services import live_chat
+
+    return await live_chat.sweep(client)
 
 
 @router.post("/platform/quotes/expire-overdue")

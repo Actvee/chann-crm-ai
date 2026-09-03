@@ -7,10 +7,10 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -68,6 +68,11 @@ from ..repositories.phase9 import (
     StorefrontRepository,
 )
 from ..repositories.phase11 import AssignmentRuleRepository
+from ..repositories.phase15 import (
+    ChatSessionConflict,
+    ChatSessionNotFound,
+    ChatSessionRepository,
+)
 from ..repositories.phase16 import (
     DisplayPreferenceRepository,
     WarrantyConflict,
@@ -113,6 +118,12 @@ from ..repositories.phase6 import (
     Phase6NotFound,
 )
 from ..schemas import (
+    ChatMessageIn,
+    ChatMessageOut,
+    ChatSessionAssignIn,
+    ChatSessionOpenIn,
+    ChatSessionOut,
+    ChatSweepOut,
     AuditLogOut,
     CompanyProfileIn,
     CompanyProfileOut,
@@ -4195,3 +4206,227 @@ def set_quote_terms(
     except Exception as exc:
         session.rollback()
         raise _phase10_http_error(exc)
+
+
+
+# ==================================================================== Phase 15
+# Live chat — Master Spec 15. Tenant-scoped reads and writes, plus the
+# platform sweep that is the clock ticking over every shop at once.
+
+def _chat_http_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, ChatSessionNotFound):
+        return HTTPException(status_code=404, detail={"error": "chat_session_not_found"})
+    if isinstance(exc, ChatSessionConflict):
+        return HTTPException(status_code=409, detail={"error": "chat_session_conflict", "message": str(exc)})
+    if isinstance(exc, HTTPException):
+        return exc
+    log.exception("chat session operation failed")
+    return HTTPException(status_code=500, detail={"error": "chat_session_failed"})
+
+
+def _chat_sessions_out(session: Session, scope: TenantScope, rows: list) -> list[ChatSessionOut]:
+    repo = ChatSessionRepository(session)
+    summaries = repo.summaries(scope, [r.id for r in rows])
+    uids = sorted({r.customer_chann_uid for r in rows})
+    names: dict[str, str | None] = {}
+    if uids:
+        for identity in session.execute(
+            select(ChannIdentity).where(ChannIdentity.chann_uid.in_(uids))
+        ).scalars():
+            names[identity.chann_uid] = identity.display_name
+    out = []
+    for r in rows:
+        summary = summaries.get(r.id, {})
+        out.append(ChatSessionOut(
+            id=r.id, license_id=r.license_id, customer_chann_uid=r.customer_chann_uid,
+            customer_name=names.get(r.customer_chann_uid), status=r.status,
+            assigned_to=r.assigned_to, product_id=r.product_id, sla_deadline=r.sla_deadline,
+            timeout_at=r.timeout_at, escalated_at=r.escalated_at, closed_at=r.closed_at,
+            created_at=r.created_at, updated_at=r.updated_at,
+            last_message=summary.get("last_message"),
+            last_sender_type=summary.get("last_sender_type"),
+            last_message_at=summary.get("last_message_at"),
+            unread_from_customer=int(summary.get("unread_from_customer") or 0),
+        ))
+    return out
+
+
+@router.post("/licenses/{license_id}/chat-sessions", response_model=ChatSessionOut)
+def open_chat_session(
+    license_id: uuid.UUID, payload: ChatSessionOpenIn, response: Response,
+    session: Session = Depends(get_session), x_actor_id: str = Header(default=""),
+):
+    """The customer's live conversation with this shop: 201 when it was
+    just opened, 200 when they were already in one."""
+    scope = TenantScope(license_id=license_id)
+    try:
+        row, created = ChatSessionRepository(session).open_session(
+            scope, customer_chann_uid=payload.customer_chann_uid, product_id=payload.product_id,
+            sla_minutes=payload.sla_minutes, timeout_minutes=payload.timeout_minutes,
+        )
+        if created:
+            AuditRepository(session).write(
+                license_id=license_id, entity_type="chat_session", entity_id=row.id,
+                actor_type="user", actor_id=x_actor_id or payload.customer_chann_uid,
+                action="create", field_changes=diff_fields({}, {"status": row.status}),
+            )
+        session.commit()
+        session.refresh(row)
+        response.status_code = 201 if created else 200
+        return _chat_sessions_out(session, scope, [row])[0]
+    except Exception as exc:
+        session.rollback()
+        raise _chat_http_error(exc)
+
+
+@router.get("/licenses/{license_id}/chat-sessions", response_model=list[ChatSessionOut])
+def list_chat_sessions(
+    license_id: uuid.UUID, status: str | None = None, customer_chann_uid: str | None = None,
+    limit: int = 100, session: Session = Depends(get_session),
+):
+    scope = TenantScope(license_id=license_id)
+    rows = ChatSessionRepository(session).list_for_license(
+        scope, status=status, customer_chann_uid=customer_chann_uid, limit=limit,
+    )
+    return _chat_sessions_out(session, scope, rows)
+
+
+@router.get("/licenses/{license_id}/chat-sessions/{session_id}", response_model=ChatSessionOut)
+def get_chat_session(
+    license_id: uuid.UUID, session_id: uuid.UUID, session: Session = Depends(get_session),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = ChatSessionRepository(session).require(scope, session_id)
+    except Exception as exc:
+        raise _chat_http_error(exc)
+    return _chat_sessions_out(session, scope, [row])[0]
+
+
+@router.get(
+    "/licenses/{license_id}/chat-sessions/{session_id}/messages",
+    response_model=list[ChatMessageOut],
+)
+def list_chat_messages(
+    license_id: uuid.UUID, session_id: uuid.UUID, since: datetime | None = None,
+    limit: int = 200, session: Session = Depends(get_session),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        rows = ChatSessionRepository(session).list_messages(scope, session_id, since=since, limit=limit)
+    except Exception as exc:
+        raise _chat_http_error(exc)
+    return [ChatMessageOut.model_validate(r, from_attributes=True) for r in rows]
+
+
+@router.post(
+    "/licenses/{license_id}/chat-sessions/{session_id}/messages",
+    response_model=ChatMessageOut, status_code=201,
+)
+def add_chat_message(
+    license_id: uuid.UUID, session_id: uuid.UUID, payload: ChatMessageIn,
+    session: Session = Depends(get_session),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = ChatSessionRepository(session).add_message(
+            scope, session_id, sender_type=payload.sender_type, content=payload.content,
+            sender_chann_uid=payload.sender_chann_uid, content_en=payload.content_en,
+            sla_minutes=payload.sla_minutes, timeout_minutes=payload.timeout_minutes,
+        )
+        session.commit()
+        session.refresh(row)
+        return ChatMessageOut.model_validate(row, from_attributes=True)
+    except Exception as exc:
+        session.rollback()
+        raise _chat_http_error(exc)
+
+
+@router.post("/licenses/{license_id}/chat-sessions/{session_id}/assign", response_model=ChatSessionOut)
+def assign_chat_session(
+    license_id: uuid.UUID, session_id: uuid.UUID, payload: ChatSessionAssignIn,
+    session: Session = Depends(get_session), x_actor_id: str = Header(default=""),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        repo = ChatSessionRepository(session)
+        before = repo.require(scope, session_id)
+        previous = {"status": before.status, "assigned_to": str(before.assigned_to or "")}
+        row = repo.assign(scope, session_id, payload.member_id)
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="chat_session", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="update",
+            field_changes=diff_fields(previous, {"status": row.status, "assigned_to": str(row.assigned_to)}),
+        )
+        session.commit()
+        session.refresh(row)
+        return _chat_sessions_out(session, scope, [row])[0]
+    except Exception as exc:
+        session.rollback()
+        raise _chat_http_error(exc)
+
+
+@router.post("/licenses/{license_id}/chat-sessions/{session_id}/close", response_model=ChatSessionOut)
+def close_chat_session(
+    license_id: uuid.UUID, session_id: uuid.UUID,
+    session: Session = Depends(get_session), x_actor_id: str = Header(default=""),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        repo = ChatSessionRepository(session)
+        before = repo.require(scope, session_id)
+        previous = {"status": before.status}
+        row = repo.close(scope, session_id)
+        if previous["status"] != row.status:
+            AuditRepository(session).write(
+                license_id=license_id, entity_type="chat_session", entity_id=row.id,
+                actor_type="user", actor_id=x_actor_id or None, action="update",
+                field_changes=diff_fields(previous, {"status": row.status}),
+            )
+        session.commit()
+        session.refresh(row)
+        return _chat_sessions_out(session, scope, [row])[0]
+    except Exception as exc:
+        session.rollback()
+        raise _chat_http_error(exc)
+
+
+@router.post("/licenses/{license_id}/chat-sessions/{session_id}/read")
+def mark_chat_read(
+    license_id: uuid.UUID, session_id: uuid.UUID, reader: str = "agent",
+    session: Session = Depends(get_session),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        count = ChatSessionRepository(session).mark_read(scope, session_id, reader=reader)
+        session.commit()
+        return {"marked": count}
+    except Exception as exc:
+        session.rollback()
+        raise _chat_http_error(exc)
+
+
+@router.post("/platform/chat-sessions/sweep", response_model=ChatSweepOut)
+def sweep_chat_sessions(session: Session = Depends(get_session)):
+    """Cross-tenant by nature: the platform's clock. Returns what changed
+    so the Application tier can tell the right people; the rows are
+    marked here so the next run does not repeat them."""
+    repo = ChatSessionRepository(session)
+    try:
+        overdue = repo.sla_overdue()
+        for row in overdue:
+            repo.mark_escalated(row)
+        timed_out = repo.time_out()
+        session.commit()
+        escalated_out = []
+        for row in overdue:
+            session.refresh(row)
+            escalated_out.extend(_chat_sessions_out(session, TenantScope(license_id=row.license_id), [row]))
+        timed_out_out = []
+        for row in timed_out:
+            session.refresh(row)
+            timed_out_out.extend(_chat_sessions_out(session, TenantScope(license_id=row.license_id), [row]))
+        return ChatSweepOut(escalated=escalated_out, timed_out=timed_out_out)
+    except Exception as exc:
+        session.rollback()
+        raise _chat_http_error(exc)

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
@@ -37,6 +37,9 @@ type StoreProduct = {
   license_id: string;
   company_name: string;
 };
+
+type ChatSessionView = { id: string; status: string };
+type ChatLine = { id: string; sender_type: string; content: string; created_at: string };
 
 type Order = {
   id: string;
@@ -90,6 +93,13 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
   const [shopSearched, setShopSearched] = useState(false);
   const [orders, setOrders] = useState<Order[]>([]);
 
+  // Phase 15: the customer's conversation with this shop — the same
+  // thread the chat's "คุยกับร้าน" runs; the shop answers from its
+  // dashboard and the answer lands here and in LINE.
+  const [chatSession, setChatSession] = useState<ChatSessionView | null>(null);
+  const [chatLines, setChatLines] = useState<ChatLine[]>([]);
+  const [chatDraft, setChatDraft] = useState("");
+
   const say = useCallback((message: string, kind?: "ok" | "error") => {
     setStatus(message);
     setTone(kind);
@@ -129,6 +139,90 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
     },
     [token, licenseId, t],
   );
+
+  const loadChat = useCallback(
+    async (currentToken = token, license = licenseId) => {
+      if (!currentToken || !license) return;
+      const headers = proxyHeaders(currentToken, license, "customer");
+      const response = await fetch(
+        `/api/phase2/licenses/${license}/chat-sessions?status_filter=live`,
+        { headers },
+      );
+      if (!response.ok) return;
+      const rows = (await response.json()) as ChatSessionView[];
+      const live = rows[0] ?? null;
+      setChatSession(live);
+      if (!live) {
+        setChatLines([]);
+        return;
+      }
+      const thread = await fetch(
+        `/api/phase2/licenses/${license}/chat-sessions/${live.id}/messages`,
+        { headers },
+      );
+      if (thread.ok) {
+        const body = (await thread.json()) as { messages: ChatLine[] };
+        setChatLines(body.messages);
+      }
+    },
+    [token, licenseId],
+  );
+
+  useEffect(() => {
+    if (!token || !licenseId || !chatSession) return;
+    const timer = setInterval(() => {
+      void loadChat().catch(() => undefined);
+    }, 10000);
+    return () => clearInterval(timer);
+  }, [token, licenseId, chatSession, loadChat]);
+
+  async function sendChat() {
+    const text = chatDraft.trim();
+    if (!chatSession && !text) return;
+    setBusy(true);
+    try {
+      const headers = {
+        ...proxyHeaders(token, licenseId, "customer"),
+        "Content-Type": "application/json",
+      };
+      const response = chatSession
+        ? await fetch(
+            `/api/phase2/licenses/${licenseId}/chat-sessions/${chatSession.id}/messages`,
+            { method: "POST", headers, body: JSON.stringify({ content: text }) },
+          )
+        : await fetch(`/api/phase2/licenses/${licenseId}/chat-sessions`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ content: text || null }),
+          });
+      if (!response.ok) throw new Error(String(response.status));
+      setChatDraft("");
+      await loadChat();
+      say(t.dashboard.customer.chatWaiting, "ok");
+    } catch {
+      say(t.dashboard.customer.actionFailed, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function endChat() {
+    if (!chatSession) return;
+    setBusy(true);
+    try {
+      const response = await fetch(
+        `/api/phase2/licenses/${licenseId}/chat-sessions/${chatSession.id}/close`,
+        { method: "POST", headers: proxyHeaders(token, licenseId, "customer") },
+      );
+      if (!response.ok) throw new Error(String(response.status));
+      await loadChat();
+      say(t.dashboard.customer.chatEnded, "ok");
+    } catch {
+      say(t.dashboard.customer.actionFailed, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function answerSurvey(score: string) {
     if (!survey) return;
@@ -170,6 +264,7 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
       setShopName(session.memberships[0]?.company_name ?? "");
       setShops(session.memberships);
       await load(session.token, license);
+      await loadChat(session.token, license).catch(() => undefined);
       say("", undefined);
     } catch (error) {
       say(error instanceof Error ? error.message : t.dashboard.openFailed, "error");
@@ -297,6 +392,7 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
     setShopName(next.company_name);
     say(t.dashboard.customer.shopSwitched, "ok");
     await load(token, next.license_id);
+    await loadChat(token, next.license_id).catch(() => undefined);
   }
 
   return (
@@ -351,6 +447,63 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
             </div>
           </section>
         )}
+
+        <section className="section">
+          <div className="section-head">
+            <h2>{t.dashboard.customer.chatTitle}</h2>
+            {chatSession && (
+              <span className="card-meta">
+                {chatSession.status === "assigned"
+                  ? t.dashboard.customer.chatStatusAssigned
+                  : t.dashboard.customer.chatStatusOpen}
+              </span>
+            )}
+          </div>
+          <p className="card-meta">{t.dashboard.customer.chatHint}</p>
+          {chatLines.length > 0 && (
+            <ul className="list chat-thread">
+              {chatLines.map((line) => (
+                <li key={line.id} className="card chat-line" data-sender={line.sender_type}>
+                  <div className="card-meta">
+                    {line.sender_type === "customer"
+                      ? t.dashboard.customer.chatYou
+                      : t.dashboard.customer.chatShop}
+                  </div>
+                  <div>{line.content}</div>
+                </li>
+              ))}
+            </ul>
+          )}
+          <dl className="fields">
+            <FieldRow label={t.dashboard.customer.chatTitle}>
+              {(id) => (
+                <textarea
+                  id={id}
+                  rows={2}
+                  value={chatDraft}
+                  placeholder={t.dashboard.customer.chatPlaceholder}
+                  onChange={(e) => setChatDraft(e.target.value)}
+                />
+              )}
+            </FieldRow>
+            <div className="actions">
+              <button
+                type="button"
+                className="btn"
+                data-variant="primary"
+                disabled={busy || (!chatSession && !chatDraft.trim()) || (!!chatSession && !chatDraft.trim())}
+                onClick={() => void sendChat()}
+              >
+                {chatSession ? t.dashboard.customer.chatSend : t.dashboard.customer.chatStart}
+              </button>
+              {chatSession && (
+                <button type="button" className="btn" disabled={busy} onClick={() => void endChat()}>
+                  {t.dashboard.customer.chatEnd}
+                </button>
+              )}
+            </div>
+          </dl>
+        </section>
 
         <section className="section">
           <div className="section-head">

@@ -1142,3 +1142,24 @@ fieldset.group legend {
   font-size: 13.5px;
   padding: 6px 8px;
 }
+
+/* Phase 15 — live chat threads (dashboard and customer home). */
+.chat-thread {
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.chat-line[data-sender="customer"] {
+  border-left: 3px solid #e8731a;
+}
+.chat-line[data-sender="agent"] {
+  border-left: 3px solid #178a50;
+}
+.card-button {
+  all: unset;
+  display: block;
+  width: 100%;
+  cursor: pointer;
+}
+.card[data-selected="true"] {
+  outline: 2px solid var(--accent, #178a50);
+}

@@ -1169,3 +1169,67 @@ class SatisfactionSurvey(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+# --------------------------------------------------------------- Phase 15
+class ChatSession(TimestampMixin, Base):
+    """Phase 15 (Master Spec 15.3) — a customer's "คุยกับร้าน" conversation.
+
+    One OPEN conversation per (shop, customer): a second "คุยกับร้าน" while
+    one is running joins it rather than starting another, so the shop sees
+    one thread per person. Closed ones stay as history.
+
+    `sla_deadline` is set when the customer is waiting (their message is
+    the latest) and cleared when the shop answers — so "SLA reset" in the
+    spec is literally "no deadline until the customer speaks again".
+    `escalated_at` is not in the spec's column list; without it the sweep
+    would nag about the same overdue conversation every run.
+    """
+
+    __tablename__ = "chat_sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    license_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("licenses.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    customer_chann_uid: Mapped[str] = mapped_column(
+        String(32), ForeignKey("chann_identities.chann_uid", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="open")
+    assigned_to: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("license_members.id", ondelete="SET NULL"),
+    )
+    product_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("products.id", ondelete="SET NULL"),
+    )
+    sla_deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    timeout_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    escalated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ChatMessage(Base):
+    """One line of a Phase 15 conversation. `sender_type` is customer,
+    agent, ai or system; `sender_chann_uid` is null for the last two."""
+
+    __tablename__ = "chat_messages"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("chat_sessions.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    license_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("licenses.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    sender_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    sender_chann_uid: Mapped[str | None] = mapped_column(String(32))
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    content_en: Mapped[str | None] = mapped_column(Text)
+    is_read: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )

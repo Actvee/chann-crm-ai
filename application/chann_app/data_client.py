@@ -1318,6 +1318,109 @@ class DataClient:
         )
         return self._unwrap(resp)
 
+    # ------------------------------------------------------------ Phase 15
+
+    async def open_chat_session(
+        self, license_id: str, *, customer_chann_uid: str, product_id: str | None = None,
+        sla_minutes: int = 30, timeout_minutes: int = 120, actor_id: str | None = None,
+    ) -> dict:
+        """The customer's live conversation with this shop. The returned
+        dict carries `_created` (True when this call opened it)."""
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/chat-sessions",
+            headers=self._headers_for(actor_id),
+            json={
+                "customer_chann_uid": customer_chann_uid, "product_id": product_id,
+                "sla_minutes": sla_minutes, "timeout_minutes": timeout_minutes,
+            },
+        )
+        row = self._unwrap(resp)
+        row["_created"] = resp.status_code == 201
+        return row
+
+    async def list_chat_sessions(
+        self, license_id: str, status: str | None = None, customer_chann_uid: str | None = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        params: dict = {"limit": limit}
+        if status:
+            params["status"] = status
+        if customer_chann_uid:
+            params["customer_chann_uid"] = customer_chann_uid
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/chat-sessions",
+            headers=self._headers, params=params,
+        )
+        return self._unwrap(resp)
+
+    async def get_chat_session(self, license_id: str, session_id: str) -> dict | None:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/chat-sessions/{session_id}",
+            headers=self._headers,
+        )
+        if resp.status_code == 404:
+            return None
+        return self._unwrap(resp)
+
+    async def list_chat_messages(
+        self, license_id: str, session_id: str, since: str | None = None, limit: int = 200,
+    ) -> list[dict]:
+        params: dict = {"limit": limit}
+        if since:
+            params["since"] = since
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/chat-sessions/{session_id}/messages",
+            headers=self._headers, params=params,
+        )
+        return self._unwrap(resp)
+
+    async def add_chat_message(
+        self, license_id: str, session_id: str, *, sender_type: str, content: str,
+        sender_chann_uid: str | None = None, content_en: str | None = None,
+        sla_minutes: int = 30, timeout_minutes: int = 120,
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/chat-sessions/{session_id}/messages",
+            headers=self._headers,
+            json={
+                "sender_type": sender_type, "content": content,
+                "sender_chann_uid": sender_chann_uid, "content_en": content_en,
+                "sla_minutes": sla_minutes, "timeout_minutes": timeout_minutes,
+            },
+        )
+        return self._unwrap(resp)
+
+    async def assign_chat_session(
+        self, license_id: str, session_id: str, member_id: str, actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/chat-sessions/{session_id}/assign",
+            headers=self._headers_for(actor_id), json={"member_id": member_id},
+        )
+        return self._unwrap(resp)
+
+    async def close_chat_session(
+        self, license_id: str, session_id: str, actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/chat-sessions/{session_id}/close",
+            headers=self._headers_for(actor_id),
+        )
+        return self._unwrap(resp)
+
+    async def mark_chat_read(self, license_id: str, session_id: str, reader: str = "agent") -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/chat-sessions/{session_id}/read",
+            headers=self._headers, params={"reader": reader},
+        )
+        return self._unwrap(resp)
+
+    async def sweep_chat_sessions(self) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/platform/chat-sessions/sweep", headers=self._headers,
+        )
+        return self._unwrap(resp)
+
     # ------------------------------------------------------------ Phase 10
 
     async def create_quote(

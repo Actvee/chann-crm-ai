@@ -34,7 +34,17 @@ _EN: Record sold units — "register product SN12345678 aircon for Somchai" — 
 
 _EN: Repairs: dispatch — You hear when a customer reports · "tickets" for the queue · "assign T-2026-0001 to team AC" (name, phone, address, appointment required — it tells you what is missing) · or dashboard > tickets_
 
-## 4. งานซ่อม: ตรวจรายงาน
+## 4. แชทลูกค้า
+
+ลูกค้าที่กด "คุยกับร้าน" ใน LINE บริการลูกค้า จะขึ้นที่ หน้าจอ > แชทลูกค้า และทุกคนได้ LINE แจ้ง ตอบที่หน้านั้นเท่านั้น (ตอบใน LINE ร้านไม่ถึงลูกค้า) คนแรกที่ตอบเป็นเจ้าของการสนทนา ถ้าปล่อยเกินเวลาตอบ (ตั้งค่า chat_sla_minutes, ค่าเริ่มต้น 30 นาที) ระบบเตือน ไม่มีข้อความ 2 ชั่วโมงปิดให้เอง
+
+พิมพ์: `หน้าจอ > แชทลูกค้า`
+
+[IMAGE: sales-chats — หน้าจอแดชบอร์ดสีเขียว รายการแชทลูกค้า 2 รายการ รายการแรกมีป้าย 'ลูกค้ารอคำตอบ' ด้านล่างเป็นบทสนทนาและช่องพิมพ์คำตอบ ปุ่ม 'ส่ง' และ 'ปิดการสนทนา']
+
+_EN: Customer chats — A customer who taps "talk to the shop" appears under home > Customer chats, and everyone is pushed a LINE. Answer there only (a reply in the shop's LINE never reaches them). The first to answer owns it. Past the reply time (chat_sla_minutes, default 30) you are reminded; two quiet hours and it closes itself._
+
+## 5. งานซ่อม: ตรวจรายงาน
 
 ช่างปิดงานแล้วคุณได้ LINE · "รายการรออนุมัติ" · "อนุมัติ SR-2026-0001" หรือ "ตีกลับ SR-… เหตุผล" · ผ่านครบ → ลูกค้าได้แบบประเมิน + PDF รายงานออกอัตโนมัติ · ตั้งขั้นตอน: "ตั้งการอนุมัติ"
 
@@ -44,7 +54,7 @@ _EN: Repairs: dispatch — You hear when a customer reports · "tickets" for the
 
 _EN: Repairs: review reports — "pending approvals" · "approve SR-2026-0001" or "reject SR-… reason" · all steps passed → the customer gets the survey and the PDF is produced · "approval policy" to change the flow_
 
-## 5. ลูกค้า ดีล ใบเสนอราคา
+## 6. ลูกค้า ดีล ใบเสนอราคา
 
 "รายชื่อลูกค้า" · "สร้างลูกค้า สมชาย ใจดี 0812345678" · "สร้างดีลให้ สมชาย" · "ออกเอกสาร Q-2026-0001" · "งานวันนี้" ดูสิ่งที่ต้องทำ · "เตือน D-… พรุ่งนี้"
 
@@ -54,7 +64,7 @@ _EN: Repairs: review reports — "pending approvals" · "approve SR-2026-0001" o
 
 _EN: Customers, deals, quotes — "customers" · "create customer …" · "create deal for Somchai" · "issue quote Q-…" · "today" · "remind D-… tomorrow"_
 
-## 6. ติดขัด
+## 7. ติดขัด
 
 "วิธีใช้" ดูตัวอย่างที่คุณมีสิทธิ์ · "ทำอะไรได้บ้าง" ดูสิทธิ์ทั้งหมด · สิทธิ์ขอได้จากเจ้าของร้าน (แดชบอร์ด > บทบาทและทีม) · "เปลี่ยนภาษาเป็นอังกฤษ"
 

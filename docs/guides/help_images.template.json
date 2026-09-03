@@ -3,6 +3,7 @@
   "images": {
     "customer-link": "",
     "customer-shop": "",
+    "customer-chat": "",
     "customer-register": "",
     "customer-report": "",
     "customer-status": "",
@@ -15,6 +16,7 @@
     "sales-setup": "",
     "sales-units": "",
     "sales-dispatch": "",
+    "sales-chats": "",
     "sales-approve": "",
     "sales-crm": "",
     "sales-help": "",

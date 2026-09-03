@@ -32,6 +32,7 @@ from .ai.intent import parse_intent, unavailable_reply
 from .identity import ResolvedContext, TenantResolution
 from .registration import COMPANY_CODE_RE
 from . import storefront as storefront_service
+from . import live_chat
 
 # Which permission key an (action, entity) pair requires. This is the real
 # gate — the prompt tells the model what the user holds, but a model that
@@ -2471,6 +2472,75 @@ async def _handle_serial_enquiry(
     return ChatReply(text=_t(SERIAL_SHOPS_FOUND, language).format(serial=serial, shops=shops))
 
 
+def _chat_start_text(message: str) -> str | None:
+    """The first line typed after "คุยกับร้าน", "" for the bare tile, None
+    when this is not a request to talk to the shop."""
+    text = (message or "").strip()
+    lowered = text.lower()
+    for phrase in CUSTOMER_CHAT_PHRASES:
+        if lowered == phrase or lowered.startswith(phrase + " "):
+            return text[len(phrase):].strip(" \t:：-—")
+    return None
+
+
+async def _handle_customer_chat_start(
+    client: DataClient, *, ctx: ResolvedContext, license_id, first_message: str, language: str,
+) -> ChatReply:
+    """Phase 15.4: open (or rejoin) the conversation; every agent hears."""
+    try:
+        session, created = await live_chat.start_session(
+            client, license_id=str(license_id), chann_uid=ctx.chann_uid,
+            display_name=ctx.display_name, first_message=first_message or None, language=language,
+        )
+        shop = await live_chat.company_name(client, str(license_id))
+        sla, _ = await live_chat.chat_settings(client, str(license_id))
+    except Exception:
+        log.exception("could not open a chat session")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    return ChatReply(
+        text=_t(CHAT_STARTED if created else CHAT_RESUMED, language).format(shop=shop, sla=sla),
+        entity_type="chat_session", entity_id=str(session.get("id") or ""),
+        quick_replies=[("จบการสนทนา", "จบการสนทนา"), ("สินค้าทั้งหมด", "สินค้าทั้งหมด")],
+    )
+
+
+async def _handle_customer_chat_end(
+    client: DataClient, *, ctx: ResolvedContext, license_id, language: str,
+) -> ChatReply:
+    try:
+        session = await live_chat.live_session(client, license_id=str(license_id), chann_uid=ctx.chann_uid)
+        if session is None:
+            return ChatReply(text=_t(CHAT_NONE_TO_END, language), quick_replies=[("คุยกับร้าน", "คุยกับร้าน")])
+        await live_chat.close_session(
+            client, license_id=str(license_id), session=session, by="customer",
+            actor_chann_uid=ctx.chann_uid, language=language,
+        )
+    except Exception:
+        log.exception("could not close a chat session")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    return ChatReply(text=_t(CHAT_ENDED, language), quick_replies=[("แจ้งซ่อม", "แจ้งซ่อม"), ("งานของฉัน", "งานของฉัน")])
+
+
+async def _handle_customer_chat_line(
+    client: DataClient, *, ctx: ResolvedContext, license_id, session: dict, message: str, language: str,
+) -> ChatReply:
+    """A line in the running conversation — stored and routed to the
+    agent, never turned into a repair job (15.4 "AI ไม่ auto-create")."""
+    try:
+        await live_chat.customer_message(
+            client, license_id=str(license_id), session=session, chann_uid=ctx.chann_uid,
+            text=message, language=language,
+        )
+    except Exception:
+        log.exception("could not store a chat line")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    return ChatReply(
+        text=_t(CHAT_LINE_SENT, language),
+        entity_type="chat_session", entity_id=str(session.get("id") or ""),
+        quick_replies=[("จบการสนทนา", "จบการสนทนา")],
+    )
+
+
 async def _handle_orders_mine(
     client: DataClient, *, ctx: ResolvedContext, license_id, language: str,
 ) -> ChatReply:
@@ -2573,7 +2643,7 @@ async def _handle_customer_contact(
         )
         if value
     ]
-    quick = [("แจ้งซ่อม", "แจ้งซ่อม"), ("งานของฉัน", "งานของฉัน")]
+    quick = [("คุยกับร้าน", "คุยกับร้าน"), ("แจ้งซ่อม", "แจ้งซ่อม"), ("งานของฉัน", "งานของฉัน")]
     if not company or not lines:
         return ChatReply(text=_t(CUSTOMER_CONTACT_FORWARDED, language), quick_replies=quick)
     return ChatReply(
@@ -2633,6 +2703,35 @@ ORDER_STAGE_LABELS = {
     "proposed": {"th": "เสนอราคาแล้ว", "en": "quoted"},
     "won": {"th": "ซื้อแล้ว", "en": "purchased"},
     "lost": {"th": "ไม่ได้ซื้อ", "en": "not purchased"},
+}
+# Phase 15 — "คุยกับร้าน": a live conversation with a person at the shop.
+# A prefix, so "คุยกับร้าน ราคาแอร์เท่าไหร่" opens it with that first line.
+CUSTOMER_CHAT_PHRASES = (
+    "คุยกับร้าน", "แชทกับร้าน", "คุยกับเจ้าหน้าที่", "คุยกับพนักงาน",
+    "talk to the shop", "chat with the shop", "live chat",
+)
+CUSTOMER_CHAT_END_PHRASES = (
+    "จบการสนทนา", "จบแชท", "ปิดแชท", "ปิดการสนทนา", "end chat", "close chat",
+)
+CHAT_STARTED = {
+    "th": "เปิดการสนทนากับ {shop} แล้ว พิมพ์ข้อความได้เลย ทางร้านจะตอบกลับในแชทนี้ (ปกติภายใน {sla} นาที)\nพิมพ์ \"จบการสนทนา\" เมื่อเสร็จ",
+    "en": "You are now talking to {shop}. Just type — they answer here (usually within {sla} minutes).\nType \"end chat\" when done.",
+}
+CHAT_RESUMED = {
+    "th": "คุณกำลังคุยกับ {shop} อยู่แล้ว พิมพ์ข้อความต่อได้เลย",
+    "en": "You are already talking to {shop} — just keep typing.",
+}
+CHAT_LINE_SENT = {
+    "th": "ส่งถึงร้านแล้ว รอคำตอบในแชทนี้ครับ",
+    "en": "Sent to the shop — their answer will appear here.",
+}
+CHAT_ENDED = {
+    "th": "จบการสนทนาแล้ว ขอบคุณครับ พิมพ์ \"คุยกับร้าน\" ได้อีกเมื่อต้องการ",
+    "en": "Conversation ended, thank you. Type \"talk to the shop\" any time.",
+}
+CHAT_NONE_TO_END = {
+    "th": "ตอนนี้ไม่มีการสนทนาที่เปิดอยู่ พิมพ์ \"คุยกับร้าน\" เพื่อเริ่ม",
+    "en": "No conversation is open. Type \"talk to the shop\" to start one.",
 }
 # A bare "แจ้งซ่อม" is the tile, not a fault: ask what is wrong instead of
 # opening a job whose fault reads "แจ้งซ่อม".
@@ -2700,6 +2799,7 @@ def _is_customer_command(text: str) -> bool:
         text,
         TICKET_MINE_PHRASES + TICKET_LIST_PHRASES + CUSTOMER_STATUS_PHRASES
         + CUSTOMER_CONTACT_PHRASES + CUSTOMER_WARRANTY_MINE_PHRASES + CUSTOMER_ORDERS_PHRASES
+        + CUSTOMER_CHAT_PHRASES + CUSTOMER_CHAT_END_PHRASES
         + CUSTOMER_REPORT_BARE + HELP_TRIGGERS + CUSTOMER_CANCEL_PHRASES,
     ) or any(t in (text or "").lower() for t in CUSTOMER_RESCHEDULE_TRIGGERS)
 CUSTOMER_QUESTION_FORWARDED = {
@@ -10060,6 +10160,15 @@ async def handle_chat_message(
             # The storefront, not the shop's list — same as the OA pre-pass;
             # a quick-reply button reaches this branch directly.
             return await _storefront_browse_reply(client, ctx=ctx, language=language)
+        chat_first = _chat_start_text(message)
+        if chat_first is not None:
+            return await _handle_customer_chat_start(
+                client, ctx=ctx, license_id=license_id, first_message=chat_first, language=language,
+            )
+        if _matches_phrase(message, CUSTOMER_CHAT_END_PHRASES):
+            return await _handle_customer_chat_end(
+                client, ctx=ctx, license_id=license_id, language=language,
+            )
         # Editing your own profile is a customer's other legitimate reason
         # to type here, and it is allowed regardless of permissions
         # (Phase 8 — self-edit is always permitted). Catching everything as
@@ -10077,6 +10186,21 @@ async def handle_chat_message(
                 language=language,
             )
         if not _looks_like_profile_edit(message):
+            # Phase 15: while a conversation with the shop is running, free
+            # text is a line in it, not a repair job. Commands above still
+            # work, and the storefront pre-pass still searches (15.4).
+            try:
+                live = await live_chat.live_session(
+                    client, license_id=str(license_id), chann_uid=ctx.chann_uid,
+                )
+            except Exception:
+                log.exception("live chat lookup failed")
+                live = None
+            if live is not None and not _is_customer_command(message):
+                return await _handle_customer_chat_line(
+                    client, ctx=ctx, license_id=license_id, session=live, message=message,
+                    language=language,
+                )
             return await _handle_customer_report(
                 client, ctx=ctx, license_id=license_id, message=message,
                 language=language,

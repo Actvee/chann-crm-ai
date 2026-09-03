@@ -942,6 +942,10 @@ class FakeDataClient:
         self.recorded.append(("storefront_browse", limit))
         return list(self._storefront_results)
 
+    async def list_chat_sessions(self, license_id, status=None, customer_chann_uid=None, limit=100):
+        # Phase 15: no conversation running unless a test's fake says so.
+        return []
+
     async def storefront_record_interest(self, *, chann_uid, license_id, product_name):
         self.recorded.append(
             ("storefront_record_interest", chann_uid, license_id, product_name)
@@ -5966,6 +5970,7 @@ class TestButtonsTheSystemWritesDoNotNeedTheAI:
         triggers += list(module.HELP_EXAMPLES_PHRASES) + list(module.CAPABILITY_PHRASES)
         triggers += list(module.TICKET_TEAM_PHRASES)
         triggers += list(module.PRODUCT_LIST_PHRASES) + list(module.CUSTOMER_ORDERS_PHRASES)
+        triggers += list(module.CUSTOMER_CHAT_PHRASES) + list(module.CUSTOMER_CHAT_END_PHRASES)
 
         dead = []
         for text in sorted(sent):

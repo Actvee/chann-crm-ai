@@ -24,7 +24,17 @@ _EN: Link to your shop — Type the serial number on the sticker, or the shop's 
 
 _EN: Browse products / show interest — Type "all products" or "search" and a product name, e.g. "search fan". Products from every shop appear; type the number you like and that shop is told and gets back to you. The home screen has the same search and an "interested" button._
 
-## 3. ลงทะเบียนสินค้า (รับประกัน)
+## 3. คุยกับร้าน
+
+พิมพ์ "คุยกับร้าน" (ต่อด้วยคำถามได้เลย เช่น "คุยกับร้าน ราคาแอร์ 12000 BTU") เจ้าหน้าที่ของร้านจะตอบกลับในแชทนี้ ระหว่างคุย ข้อความที่พิมพ์จะส่งถึงร้านทั้งหมด ไม่เปิดเป็นงานซ่อม · พิมพ์ "จบการสนทนา" เมื่อเสร็จ ไม่มีข้อความสักพักระบบปิดให้เอง · บนหน้าจอลูกค้ามีช่องแชทเดียวกัน
+
+พิมพ์: `คุยกับร้าน ราคาแอร์ 12000 BTU เท่าไหร่`
+
+[IMAGE: customer-chat — หน้าจอแชท LINE: ลูกค้าพิมพ์ 'คุยกับร้าน ราคาแอร์ 12000 BTU' บอทตอบ 'เปิดการสนทนากับ ร้านเย็นสบาย แล้ว' แล้วมีข้อความจากร้าน '💬 ร้านเย็นสบาย: 15,900 บาทครับ' ไอคอนคนสวมหูฟังสีส้ม]
+
+_EN: Talk to the shop — Type "talk to the shop" (a question may follow, e.g. "talk to the shop price of a 12000 BTU air con"). A person at the shop answers here. While talking, what you type goes to the shop and does not open a repair job. "end chat" when done; it closes itself after a quiet while. The home screen has the same chat box._
+
+## 4. ลงทะเบียนสินค้า (รับประกัน)
 
 พิมพ์ "ลงทะเบียนสินค้า" แล้วตามด้วย S/N ที่ร้านบันทึกไว้ให้ เครื่องจะผูกกับคุณ ถ้าระบบยังไม่รู้จักหมายเลข ให้ติดต่อร้าน
 
@@ -34,7 +44,7 @@ _EN: Browse products / show interest — Type "all products" or "search" and a p
 
 _EN: Register your product (warranty) — Type "register product" then the S/N the shop recorded. Unknown S/N → contact the shop._
 
-## 4. แจ้งซ่อม
+## 5. แจ้งซ่อม
 
 พิมพ์อาการที่เสียมาได้เลย เช่น "แอร์ไม่เย็น" ระบบจะเลือกเครื่องให้ (หรือให้กดเลือกถ้ามีหลายเครื่อง) แล้วถามที่อยู่และวันเวลานัด · ส่งรูปอาการมาในแชทได้ ระบบแนบกับงานให้ช่างดู
 
@@ -44,7 +54,7 @@ _EN: Register your product (warranty) — Type "register product" then the S/N t
 
 _EN: Report a fault — Describe what is wrong, e.g. "air con not cooling". The machine is picked for you, then address and appointment are asked._
 
-## 5. ดูสถานะ / เลื่อนนัด / ยกเลิก
+## 6. ดูสถานะ / เลื่อนนัด / ยกเลิก
 
 พิมพ์ "งานของฉัน" หรือ "สถานะการซ่อม" · เลื่อนนัด: "เลื่อนนัดวันศุกร์ บ่าย 2" · ยกเลิก: "ยกเลิกงาน"
 
@@ -54,7 +64,7 @@ _EN: Report a fault — Describe what is wrong, e.g. "air con not cooling". The 
 
 _EN: Status, reschedule, cancel — "my jobs" / "repair status" · reschedule: "move it to Friday 2pm" · "cancel job"_
 
-## 6. หลังซ่อมเสร็จ
+## 7. หลังซ่อมเสร็จ
 
 เมื่อร้านตรวจงานผ่าน คุณจะได้ปุ่มให้คะแนน 1–3 กดได้เลย และดูประวัติทั้งหมดได้ที่ "เปิดหน้าจอลูกค้า" ในเมนู
 

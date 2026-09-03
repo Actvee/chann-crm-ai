@@ -21,6 +21,7 @@ import { LIFF_SDK_SRC, completeLiffRedirect } from "./_lib";
  */
 
 const SECTIONS = [
+  { href: "/liff/sales/chats", key: "chats" },
   { href: "/liff/sales/customers", key: "customers" },
   { href: "/liff/sales/deals", key: "deals" },
   { href: "/liff/sales/quotes", key: "quotes" },
@@ -85,6 +86,7 @@ export default function SalesMenu({ liffId }: { liffId: string }) {
     };
   }, [liffId, router]);
   const titles: Record<string, string> = {
+    chats: t.dashboard.chats.title,
     customers: t.customer.title,
     deals: t.deal.title,
     quotes: t.quote.title,

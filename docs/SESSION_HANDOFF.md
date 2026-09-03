@@ -1,3 +1,36 @@
+### Plan B6 (4 Sep, small hours) — Phase 15 live chat + SLA (`live-chat-v1`)
+
+- **Migration `0022_chat_sessions`** (`chat_sessions`, `chat_messages` per
+  15.3, plus `escalated_at` so the sweep tells the shop once). Data:
+  `repositories/phase15.py` (`ChatSessionRepository`: one LIVE conversation
+  per (shop, customer) via a partial unique index; the SLA deadline exists
+  only while the customer's line is the latest; `sla_overdue`/`time_out`
+  are the cross-tenant sweeps), routes under
+  `/licenses/{id}/chat-sessions…` and `POST /platform/chat-sessions/sweep`.
+  `EXPECTED_MIGRATION_HEAD` bumped.
+- **Application `services/live_chat.py`**: `start_session` (announces to
+  owner/admin/sales/cs), `customer_message` (LINE to the owner of the
+  conversation, dashboard-only to everyone before it is owned),
+  `agent_reply` (assigns to the answerer, pushes to the Customer OA),
+  `close_session`, `sweep` (escalation → `sla_warning` on the sales OA;
+  timeouts → the customer is told). Settings: `chat_sla_minutes`/`chat_sla`,
+  `chat_timeout_minutes`/`session_timeout` in license_settings.
+- **Chat engine**: "คุยกับร้าน …" opens/rejoins (first line may follow),
+  "จบการสนทนา" closes; while a conversation is live, the customer's free
+  text becomes a line in it and never a repair job (15.4). Commands and the
+  storefront pre-pass still work. "ติดต่อร้าน" now offers "คุยกับร้าน".
+- **Dashboard** `/liff/sales/chats` (`SalesChats.tsx`, menu tile "แชทลูกค้า",
+  needs `chat_session.view`; replying needs `chat_session.reply`): list with
+  unread count and SLA state, thread, reply box, close. Polls every 8 s and
+  ticks the sweep on every list load. **Customer home**: "คุยกับร้าน" section
+  (start / thread / send / end), polls every 10 s while live.
+- Sweeps: `/platform/reminders/sweep` now also runs the chat sweep; a
+  dedicated `/platform/chat/sweep` (same secret) exists for a 5-minute
+  Scheduler job the owner may add later — none is defined in Terraform yet.
+- Tests: `tests/unit/test_live_chat.py`, `tests/integration/test_live_chat_data.py`
+  (15.5 multi-tenant isolation, SLA clock, sweeps). Guides: customer step
+  "คุยกับร้าน" (slot `customer-chat`), sales step "แชทลูกค้า" (slot `sales-chats`).
+
 # Session Handoff — 3 Sep 2026
 
 Written because the conversations doing Phases 3-13 repeatedly hit their

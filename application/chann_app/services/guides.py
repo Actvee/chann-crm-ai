@@ -64,6 +64,17 @@ GUIDES: dict[str, dict] = {
                 "image_prompt": "หน้าจอแชท: ลูกค้าพิมพ์ 'ค้นหา พัดลม' บอทตอบรายการ 1. พัดลมไอเย็น (ร้านเย็นสบาย) — 3500 2. … ลูกค้าพิมพ์ '1' บอทตอบ 'ร้านเย็นสบาย จะติดต่อกลับ' พร้อมไอคอนตะกร้าสีส้ม",
             },
             {
+                "key": "talk", "title": {"th": "คุยกับร้าน", "en": "Talk to the shop"},
+                "body": {
+                    "th": "พิมพ์ \"คุยกับร้าน\" (ต่อด้วยคำถามได้เลย เช่น \"คุยกับร้าน ราคาแอร์ 12000 BTU\") เจ้าหน้าที่ของร้านจะตอบกลับในแชทนี้ ระหว่างคุย ข้อความที่พิมพ์จะส่งถึงร้านทั้งหมด ไม่เปิดเป็นงานซ่อม · พิมพ์ \"จบการสนทนา\" เมื่อเสร็จ ไม่มีข้อความสักพักระบบปิดให้เอง · บนหน้าจอลูกค้ามีช่องแชทเดียวกัน",
+                    "en": "Type \"talk to the shop\" (a question may follow, e.g. \"talk to the shop price of a 12000 BTU air con\"). A person at the shop answers here. While talking, what you type goes to the shop and does not open a repair job. \"end chat\" when done; it closes itself after a quiet while. The home screen has the same chat box.",
+                },
+                "commands": ["คุยกับร้าน", "จบการสนทนา"],
+                "example": "คุยกับร้าน ราคาแอร์ 12000 BTU เท่าไหร่",
+                "image": "customer-chat",
+                "image_prompt": "หน้าจอแชท LINE: ลูกค้าพิมพ์ 'คุยกับร้าน ราคาแอร์ 12000 BTU' บอทตอบ 'เปิดการสนทนากับ ร้านเย็นสบาย แล้ว' แล้วมีข้อความจากร้าน '💬 ร้านเย็นสบาย: 15,900 บาทครับ' ไอคอนคนสวมหูฟังสีส้ม",
+            },
+            {
                 "key": "register", "title": {"th": "ลงทะเบียนสินค้า (รับประกัน)", "en": "Register your product (warranty)"},
                 "body": {
                     "th": "พิมพ์ \"ลงทะเบียนสินค้า\" แล้วตามด้วย S/N ที่ร้านบันทึกไว้ให้ เครื่องจะผูกกับคุณ ถ้าระบบยังไม่รู้จักหมายเลข ให้ติดต่อร้าน",
@@ -212,6 +223,17 @@ GUIDES: dict[str, dict] = {
                 "example": "มอบหมาย T-2026-0001 ให้ทีม แอร์",
                 "image": "sales-dispatch",
                 "image_prompt": "หน้าจอ 'งานซ่อม' บนแดชบอร์ด การ์ดงาน T-2026-0001 มีช่อง 'มอบหมายให้…' เลือกทีมแอร์ และปุ่มมอบหมายสีเขียว",
+            },
+            {
+                "key": "chats", "title": {"th": "แชทลูกค้า", "en": "Customer chats"},
+                "body": {
+                    "th": "ลูกค้าที่กด \"คุยกับร้าน\" ใน LINE บริการลูกค้า จะขึ้นที่ หน้าจอ > แชทลูกค้า และทุกคนได้ LINE แจ้ง ตอบที่หน้านั้นเท่านั้น (ตอบใน LINE ร้านไม่ถึงลูกค้า) คนแรกที่ตอบเป็นเจ้าของการสนทนา ถ้าปล่อยเกินเวลาตอบ (ตั้งค่า chat_sla_minutes, ค่าเริ่มต้น 30 นาที) ระบบเตือน ไม่มีข้อความ 2 ชั่วโมงปิดให้เอง",
+                    "en": "A customer who taps \"talk to the shop\" appears under home > Customer chats, and everyone is pushed a LINE. Answer there only (a reply in the shop's LINE never reaches them). The first to answer owns it. Past the reply time (chat_sla_minutes, default 30) you are reminded; two quiet hours and it closes itself.",
+                },
+                "commands": ["ตั้งค่ารับลูกค้าใหม่อัตโนมัติ"],
+                "example": "หน้าจอ > แชทลูกค้า",
+                "image": "sales-chats",
+                "image_prompt": "หน้าจอแดชบอร์ดสีเขียว รายการแชทลูกค้า 2 รายการ รายการแรกมีป้าย 'ลูกค้ารอคำตอบ' ด้านล่างเป็นบทสนทนาและช่องพิมพ์คำตอบ ปุ่ม 'ส่ง' และ 'ปิดการสนทนา'",
             },
             {
                 "key": "approve", "title": {"th": "งานซ่อม: ตรวจรายงาน", "en": "Repairs: review reports"},
