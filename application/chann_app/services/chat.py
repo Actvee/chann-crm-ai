@@ -25,6 +25,7 @@ from .ai.client import AIUnavailable, AINotConfigured
 # in chat must never disagree with what the customer receives on the PDF.
 from .documents.snapshot import build_line_items
 from .guides import guide_images, render_help_text
+from .thai_datetime import DATE_FORMATS, local_today
 from .photos import PhotoRefused, store_ticket_photo
 from ..line.client import get_message_content
 from .ai.intent import parse_intent, unavailable_reply
@@ -1600,7 +1601,7 @@ async def _reminder_list_line(
     """
     from .thai_datetime import format_thai_date as _fmt_date
 
-    today = datetime.now(BANGKOK_TZ).date()
+    today = local_today()
     raw = str(row.get("due_date") or "")
     try:
         due_on = date.fromisoformat(raw)
@@ -1628,7 +1629,7 @@ def _mentions_a_datetime(message: str) -> bool:
     """
     from .thai_datetime import parse_thai_date, parse_thai_time
 
-    today = datetime.now(BANGKOK_TZ).date()
+    today = local_today()
     return parse_thai_date(message, today) is not None or parse_thai_time(message) is not None
 
 
@@ -1727,7 +1728,7 @@ async def _handle_reminder_move(
 
     from .thai_datetime import format_thai_date, format_thai_time, parse_thai_date, parse_thai_time
 
-    today = datetime.now(BANGKOK_TZ).date()
+    today = local_today()
     new_date = parse_thai_date(message, today)
     new_time = parse_thai_time(message)
     if new_date is None and new_time is None:
@@ -2015,7 +2016,7 @@ async def _handle_reminder_create(  # noqa: PLR0913
 
     # Parse against the tenant's own day, not UTC: at 23:00 in Bangkok, UTC
     # is still yesterday, and "พรุ่งนี้" would land on today.
-    today = datetime.now(BANGKOK_TZ).date()
+    today = local_today()
     due_date = parse_thai_date(message, today)
     if due_date is None:
         return ChatReply(text=_t(REMINDER_NEEDS_DATE, language))
@@ -2129,7 +2130,7 @@ async def _handle_work_list(
     # names only work that has not passed. due_follow_ups includes overdue
     # rows on purpose so they are never lost — they stay visible in
     # รายการเตือน, flagged เลยกำหนด, which is where cancelling lives too.
-    today_local = datetime.now(BANGKOK_TZ).date()
+    today_local = local_today()
 
     def _not_past(item) -> bool:
         try:
@@ -2765,6 +2766,109 @@ LANGUAGE_SWITCHED = {
 }
 
 
+# 16.3: the other two preferences, by prefix — "รูปแบบวันที่ yyyy-mm-dd",
+# "เขตเวลา Asia/Tokyo". Validated here so a typo never becomes a stored
+# preference that breaks every date afterwards.
+DATE_FORMAT_PHRASES = ("รูปแบบวันที่", "ตั้งรูปแบบวันที่", "date format")
+TIMEZONE_PHRASES = ("เขตเวลา", "ตั้งเขตเวลา", "timezone", "time zone")
+DATE_FORMAT_SET = {
+    "th": "ตั้งรูปแบบวันที่เป็น {fmt} แล้ว ตัวอย่าง: {sample}",
+    "en": "Date format set to {fmt}, e.g. {sample}",
+}
+DATE_FORMAT_CHOICES = {
+    "th": "เลือกรูปแบบวันที่ได้: dd/mm/yyyy · mm/dd/yyyy · yyyy-mm-dd  เช่น \"รูปแบบวันที่ dd/mm/yyyy\"",
+    "en": "Choose one of: dd/mm/yyyy · mm/dd/yyyy · yyyy-mm-dd, e.g. \"date format dd/mm/yyyy\"",
+}
+TIMEZONE_SET = {"th": "ตั้งเขตเวลาเป็น {tz} แล้ว", "en": "Time zone set to {tz}"}
+TIMEZONE_CHOICES = {
+    "th": "ระบุเขตเวลาเป็นชื่อมาตรฐาน เช่น \"เขตเวลา Asia/Bangkok\" (Asia/Tokyo, Asia/Singapore, UTC)",
+    "en": "Give a standard zone name, e.g. \"timezone Asia/Bangkok\" (Asia/Tokyo, Asia/Singapore, UTC)",
+}
+
+
+async def _maybe_set_display_pref(
+    client: DataClient, *, ctx: ResolvedContext, message: str, language: str,
+) -> ChatReply | None:
+    text = (message or "").strip()
+    lowered = text.lower()
+    for prefix in DATE_FORMAT_PHRASES:
+        if lowered.startswith(prefix):
+            wanted = text[len(prefix):].strip().lower()
+            if wanted not in DATE_FORMATS:
+                return ChatReply(text=_t(DATE_FORMAT_CHOICES, language))
+            try:
+                await client.set_display_preferences(ctx.chann_uid, {"date_format": wanted})
+            except Exception:
+                log.exception("could not store the date format")
+                return ChatReply(text=unavailable_reply(language))
+            from .thai_datetime import format_thai_date, set_display_prefs, display_prefs
+
+            set_display_prefs({**display_prefs(), "date_format": wanted, "language": language})
+            return ChatReply(text=_t(DATE_FORMAT_SET, language).format(fmt=wanted, sample=format_thai_date(local_today())))
+    for prefix in TIMEZONE_PHRASES:
+        if lowered.startswith(prefix):
+            wanted = text[len(prefix):].strip()
+            from zoneinfo import ZoneInfo
+
+            try:
+                ZoneInfo(wanted)
+            except Exception:
+                return ChatReply(text=_t(TIMEZONE_CHOICES, language))
+            try:
+                await client.set_display_preferences(ctx.chann_uid, {"timezone": wanted})
+            except Exception:
+                log.exception("could not store the timezone")
+                return ChatReply(text=unavailable_reply(language))
+            return ChatReply(text=_t(TIMEZONE_SET, language).format(tz=wanted))
+    return None
+
+
+# 16.4: whether a customer who links becomes a CRM record at once.
+AUTO_ACCEPT_PHRASES = ("ตั้งค่ารับลูกค้าใหม่อัตโนมัติ", "รับลูกค้าใหม่อัตโนมัติ", "auto accept customers", "auto-accept customers")
+AUTO_ACCEPT_VIEW = ("การตั้งค่ารับลูกค้าใหม่", "ดูการตั้งค่ารับลูกค้าใหม่", "auto accept setting")
+AUTO_ACCEPT_STATE = {
+    "th": "รับลูกค้าใหม่อัตโนมัติ: {state}\n{meaning}\nเปลี่ยน: \"ตั้งค่ารับลูกค้าใหม่อัตโนมัติ เปิด\" หรือ \"… ปิด\"",
+    "en": "Auto-accept new customers: {state}\n{meaning}\nChange: \"auto accept customers on\" / \"… off\"",
+}
+AUTO_ACCEPT_MEANING = {
+    ("th", True): "ลูกค้าที่ผูกร้านผ่าน LINE และมีชื่อ+เบอร์ จะเข้ารายชื่อลูกค้าทันที",
+    ("th", False): "ลูกค้าที่ผูกร้านผ่าน LINE จะแจ้งให้ CS เพิ่มเข้ารายชื่อเอง",
+    ("en", True): "A customer who links in LINE with a name and phone joins the customer list at once",
+    ("en", False): "A customer who links in LINE is announced to CS to add by hand",
+}
+
+
+async def _maybe_auto_accept_setting(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
+    permission_keys: list[str], language: str,
+) -> ChatReply | None:
+    from .onboarding import SETTING_KEY, auto_accept_enabled
+
+    text = (message or "").strip()
+    lowered = text.lower()
+    matched = next((p for p in AUTO_ACCEPT_PHRASES if lowered.startswith(p)), None)
+    if matched is None and not _matches_phrase(text, AUTO_ACCEPT_VIEW):
+        return None
+    if "setting.manage" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    rest = text[len(matched):].strip().lower() if matched else ""
+    if rest in ("เปิด", "on", "true", "yes"):
+        await client.put_license_setting(str(license_id), SETTING_KEY, True, actor_id=ctx.chann_uid)
+        state = True
+    elif rest in ("ปิด", "off", "false", "no"):
+        await client.put_license_setting(str(license_id), SETTING_KEY, False, actor_id=ctx.chann_uid)
+        state = False
+    else:
+        state = await auto_accept_enabled(client, str(license_id))
+    lang = "en" if language == "en" else "th"
+    return ChatReply(
+        text=_t(AUTO_ACCEPT_STATE, language).format(
+            state=("เปิด" if state else "ปิด") if lang == "th" else ("on" if state else "off"),
+            meaning=AUTO_ACCEPT_MEANING[(lang, state)],
+        ),
+    )
+
+
 def _language_switch_requested(message: str) -> str | None:
     if _matches_phrase(message, LANGUAGE_TO_EN):
         return "en"
@@ -3126,7 +3230,7 @@ async def _handle_customer_report(
                 format_thai_date, format_thai_time, parse_thai_date, parse_thai_time,
             )
 
-            today = datetime.now(BANGKOK_TZ).date()
+            today = local_today()
             due_date = parse_thai_date(text, today)
             if due_date is None:
                 # Not a date. If it does not even look like an attempt at
@@ -3498,7 +3602,7 @@ async def _handle_customer_amend(
         )
         return ChatReply(text=_t(AMEND_CANCELLED, language).format(code=code))
 
-    today = datetime.now(BANGKOK_TZ).date()
+    today = local_today()
     due_date = parse_thai_date(message, today)
     if due_date is None:
         return ChatReply(text=_t(REMINDER_NEEDS_DATE, language))
@@ -7519,7 +7623,7 @@ async def _handle_deal_close_date(
     if not code:
         return ChatReply(text=_t(QUOTE_NEEDS_DEAL, language))
 
-    when = parse_thai_date(message, datetime.now(BANGKOK_TZ).date())
+    when = parse_thai_date(message, local_today())
     if when is None:
         return ChatReply(text=_t(DEAL_CLOSE_DATE_NEEDS, language))
 
@@ -7568,7 +7672,7 @@ async def _handle_deal_query(
         log.exception("deal query failed")
         return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
 
-    today = datetime.now(BANGKOK_TZ).date()
+    today = local_today()
     open_stages = ("new", "proposed")
 
     def close_of(d: dict):
@@ -9036,7 +9140,7 @@ async def _handle_customer_intent(
         from .thai_datetime import parse_thai_date
 
         suggested = parse_thai_date(
-            str(fields.get("notes") or ""), datetime.now(BANGKOK_TZ).date(),
+            str(fields.get("notes") or ""), local_today(),
         )
         quick: list[tuple[str, str]] = []
         if suggested:
@@ -9820,6 +9924,16 @@ async def handle_chat_message(
     wanted = _language_switch_requested(message)
     if wanted:
         return await _switch_language(client, ctx=ctx, language=wanted)
+    pref_reply = await _maybe_set_display_pref(client, ctx=ctx, message=message, language=language)
+    if pref_reply is not None:
+        return pref_reply
+    if ctx.oa == "sales":
+        setting_reply = await _maybe_auto_accept_setting(
+            client, ctx=ctx, license_id=license_id, message=message,
+            permission_keys=permission_keys, language=language,
+        )
+        if setting_reply is not None:
+            return setting_reply
 
     if ctx.oa == "customer":
         if _matches_phrase(message, HELP_TRIGGERS):

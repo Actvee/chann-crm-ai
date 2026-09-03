@@ -13,8 +13,11 @@ year the system will ever see is above it, and no Buddhist year below it.
 """
 from __future__ import annotations
 
+from contextvars import ContextVar
+from zoneinfo import ZoneInfo
+
 import re
-from datetime import date, time, timedelta
+from datetime import datetime, date, time, timedelta
 
 # Weekday names, including the common short forms. Monday is 0, matching
 # date.weekday().
@@ -230,13 +233,60 @@ def parse_thai_time(text: str) -> time | None:
     return None
 
 
+# Phase 16.3 — the reader's display preferences, set once per request by
+# the webhook (and the LIFF routes) and read wherever a date is printed.
+# A context variable rather than a parameter threaded through ~30
+# handlers: the preference belongs to the person, not to the call.
+_DISPLAY: ContextVar[dict] = ContextVar("display_prefs", default={})
+DATE_FORMATS = ("dd/mm/yyyy", "mm/dd/yyyy", "yyyy-mm-dd")
+DEFAULT_TIMEZONE = "Asia/Bangkok"
+
+
+def set_display_prefs(prefs: dict | None) -> None:
+    _DISPLAY.set(dict(prefs or {}))
+
+
+def display_prefs() -> dict:
+    return _DISPLAY.get()
+
+
+def local_tz():
+    """The reader's zone; Bangkok when unset or unknown."""
+    name = str(display_prefs().get("timezone") or DEFAULT_TIMEZONE)
+    try:
+        return ZoneInfo(name)
+    except Exception:
+        return ZoneInfo(DEFAULT_TIMEZONE)
+
+
+def local_today() -> date:
+    return datetime.now(local_tz()).date()
+
+
+_EN_MONTHS = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+
 def format_thai_date(value: date) -> str:
-    """Buddhist-era, because that is what the reader expects to see."""
+    """The date the way this reader asked for it: Thai text with the
+    Buddhist year by default; a numeric format from the preference; the
+    Gregorian year and English months for an English reader."""
+    prefs = display_prefs()
+    english = str(prefs.get("language") or "th") == "en"
+    year = value.year if english else value.year + 543
+    fmt = str(prefs.get("date_format") or "")
+    if fmt == "dd/mm/yyyy":
+        return f"{value.day:02d}/{value.month:02d}/{year}"
+    if fmt == "mm/dd/yyyy":
+        return f"{value.month:02d}/{value.day:02d}/{year}"
+    if fmt == "yyyy-mm-dd":
+        return f"{year}-{value.month:02d}-{value.day:02d}"
+    if english:
+        return f"{value.day} {_EN_MONTHS[value.month]} {year}"
     months = [
         "", "ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.",
         "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค.",
     ]
-    return f"{value.day} {months[value.month]} {value.year + 543}"
+    return f"{value.day} {months[value.month]} {year}"
 
 
 def format_thai_time(value: time | None) -> str:

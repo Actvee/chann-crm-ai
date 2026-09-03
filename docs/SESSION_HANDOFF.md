@@ -76,9 +76,9 @@ clone.
 
 ## Where things stand
 
-**The commit carrying this text** is the photos-and-signature patch
-(`photos-v1`, all three tiers, no migration), deployed by
-`~/photos-deploy.sh`; before it the team-flow commit (B2) and `4ef77f4`
+**The commit carrying this text** is the Phase 16 closing patch
+(`phase16-v1`, application + presentation, no migration), deployed by
+`~/phase16-deploy.sh`; before it the photos-and-signature commit (B3); before it the team-flow commit (B2) and `4ef77f4`
 the help-guide; before it on 3 Sep: `9bfa0ec` service report
 PDF, then `34942a2` the Sales tickets page dispatch (B1); earlier the
 same day `cdd2c1a` customer onboarding, `4b53f60` shops-chosen/units-
@@ -268,6 +268,24 @@ deploy data/application/presentation. The new data image's
 `EXPECTED_MIGRATION_HEAD` is `0021_approvals` and it will refuse to
 serve against an older schema, which is the guard working.
 668 tests pass (656 unit/boundary + 266 integration, 12 of them Phase 14).
+
+### Plan B4 (3 Sep, late) — Phase 16 closed: preferences that shape the text, the shop's side of a link
+
+16.3: `thai_datetime` keeps the reader's preferences in a context
+variable (`set_display_prefs`, set by the webhook's `_language_of` for
+every message); `format_thai_date` prints the numeric format they chose
+(dd/mm/yyyy, mm/dd/yyyy, yyyy-mm-dd — Buddhist year for Thai, Gregorian
+for English readers), `local_today()` replaces every
+`datetime.now(BANGKOK_TZ).date()` in chat so "พรุ่งนี้" is tomorrow in
+their zone. Set from chat ("รูปแบบวันที่ yyyy-mm-dd", "เขตเวลา Asia/Tokyo",
+validated) and the profile card. 16.4: `auto_accept_new_customers` is a
+license setting that now does something — `services/onboarding.
+after_customer_linked` runs after every link (`registration.
+_link_and_continue`): on + profile has name and phone → a customer
+record with `customer_chann_uid` at once; otherwise owner/admin/CS are
+told and handed the exact "สร้างลูกค้า …" to type. Owner sets it with
+"ตั้งค่ารับลูกค้าใหม่อัตโนมัติ เปิด/ปิด" (setting.manage) or the switch on
+the company page. Cross-tenant serial lookups were already audited.
 
 ### Plan B3 (3 Sep, late) — pictures on the job, the approver's signature
 

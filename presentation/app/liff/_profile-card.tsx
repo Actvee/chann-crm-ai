@@ -40,6 +40,8 @@ export function ProfileCard({
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ text: string; tone: "ok" | "error" } | null>(null);
   const [language, setLanguage] = useState<string>("th");
+  const [dateFormat, setDateFormat] = useState<string>("");
+  const [timezone, setTimezone] = useState<string>("Asia/Bangkok");
   const [signature, setSignature] = useState<string | null>(null);
 
   const headers = useCallback(
@@ -63,8 +65,10 @@ export function ProfileCard({
           headers: headers(),
         });
         if (prefs.ok && !cancelled) {
-          const p = (await prefs.json()) as { language?: string | null };
+          const p = (await prefs.json()) as { language?: string | null; date_format?: string | null; timezone?: string | null };
           setLanguage(p.language === "en" ? "en" : "th");
+          setDateFormat(p.date_format && p.date_format !== "dd/mm/yyyy" ? p.date_format : (p.date_format ?? ""));
+          setTimezone(p.timezone || "Asia/Bangkok");
         }
         // 13.5: whether a signature is on file (printed on approved reports).
         const sig = await fetch(`/api/liff/${audience}/signature`, { headers: headers() });
@@ -107,6 +111,20 @@ export function ProfileCard({
   }
 
   const fullName = [profile?.first_name, profile?.last_name].filter(Boolean).join(" ");
+
+  async function savePref(fields: Record<string, string>) {
+    try {
+      const response = await fetch(`/api/liff/${audience}/display-preferences`, {
+        method: "PUT",
+        headers: headers(),
+        body: JSON.stringify(fields),
+      });
+      if (!response.ok) throw new Error(String(response.status));
+      setNote({ text: copy.languageSaved, tone: "ok" });
+    } catch {
+      setNote({ text: copy.saveFailed, tone: "error" });
+    }
+  }
 
   async function chooseLanguage(next: string) {
     setLanguage(next);
@@ -179,6 +197,39 @@ export function ProfileCard({
               <select id={id} value={language} onChange={(e) => void chooseLanguage(e.target.value)}>
                 <option value="th">{copy.languageTh}</option>
                 <option value="en">{copy.languageEn}</option>
+              </select>
+            )}
+          </FieldRow>
+          <FieldRow label={copy.dateFormat}>
+            {(id) => (
+              <select
+                id={id}
+                value={dateFormat}
+                onChange={(e) => {
+                  setDateFormat(e.target.value);
+                  void savePref({ date_format: e.target.value || "dd/mm/yyyy" });
+                }}
+              >
+                <option value="">{copy.dateFormatDefault}</option>
+                <option value="dd/mm/yyyy">dd/mm/yyyy</option>
+                <option value="mm/dd/yyyy">mm/dd/yyyy</option>
+                <option value="yyyy-mm-dd">yyyy-mm-dd</option>
+              </select>
+            )}
+          </FieldRow>
+          <FieldRow label={copy.timezone}>
+            {(id) => (
+              <select
+                id={id}
+                value={timezone}
+                onChange={(e) => {
+                  setTimezone(e.target.value);
+                  void savePref({ timezone: e.target.value });
+                }}
+              >
+                {["Asia/Bangkok", "Asia/Kuala_Lumpur", "Asia/Singapore", "Asia/Jakarta", "Asia/Tokyo", "UTC"].map((z) => (
+                  <option key={z} value={z}>{z}</option>
+                ))}
               </select>
             )}
           </FieldRow>

@@ -49,6 +49,8 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
   // are stored differently (null vs 0).
   const [vatPercent, setVatPercent] = useState("");
   const [vatRegistered, setVatRegistered] = useState(true);
+  // 16.4: whether a customer who links in LINE joins the list at once.
+  const [autoAccept, setAutoAccept] = useState<boolean | null>(null);
 
   const say = useCallback((message: string, kind?: "ok" | "error") => {
     setStatus(message);
@@ -102,10 +104,36 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
       setMemberships(session.memberships);
       setLicenseId(session.memberships[0]?.license_id ?? "");
       if (!session.memberships.length) say(t.liff.noCompany, "error");
+      else void loadAutoAccept(session.token, session.memberships[0].license_id);
     } catch (error) {
       say(error instanceof Error ? error.message : t.dashboard.openFailed, "error");
     }
   }, [liffId, say]);
+
+  async function loadAutoAccept(currentToken: string, license: string) {
+    const response = await fetch(`/api/phase2/licenses/${license}/settings`, {
+      headers: proxyHeaders(currentToken, license),
+    });
+    if (!response.ok) return;  // no setting.manage: the switch stays hidden
+    const rows = (await response.json()) as { setting_key: string; setting_value: unknown }[];
+    const row = rows.find((r) => r.setting_key === "auto_accept_new_customers");
+    setAutoAccept(row ? row.setting_value === true || String(row.setting_value).toLowerCase() === "true" : false);
+  }
+
+  async function saveAutoAccept(next: boolean) {
+    setAutoAccept(next);
+    try {
+      const response = await fetch(`/api/phase2/licenses/${licenseId}/settings/auto_accept_new_customers`, {
+        method: "PUT",
+        headers: proxyHeaders(token, licenseId),
+        body: JSON.stringify({ setting_value: next }),
+      });
+      if (!response.ok) throw new Error(String(response.status));
+      say(c.autoAcceptSaved, "ok");
+    } catch {
+      say(t.common.error, "error");
+    }
+  }
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -257,6 +285,23 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
           {saving ? t.dashboard.saving : t.common.save}
         </button>
       </form>
+
+      {autoAccept !== null && (
+        <section className="section" style={{ marginTop: 16 }}>
+          <label className="field">
+            <span>
+              <input
+                type="checkbox"
+                checked={autoAccept}
+                onChange={(e) => void saveAutoAccept(e.target.checked)}
+                style={{ marginRight: 8 }}
+              />
+              {c.autoAccept}
+            </span>
+            <span className="hint">{c.autoAcceptHint}</span>
+          </label>
+        </section>
+      )}
     </AppShell>
   );
 }

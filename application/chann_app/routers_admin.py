@@ -164,6 +164,15 @@ async def liff_set_display_preferences(
     fields = {f: body[f] for f in _PREF_FIELDS if body.get(f)}
     if "language" in fields and fields["language"] not in _PREF_LANGUAGES:
         raise HTTPException(status_code=422, detail="language must be th or en")
+    if "date_format" in fields and fields["date_format"] not in ("dd/mm/yyyy", "mm/dd/yyyy", "yyyy-mm-dd"):
+        raise HTTPException(status_code=422, detail="date_format must be dd/mm/yyyy, mm/dd/yyyy or yyyy-mm-dd")
+    if "timezone" in fields:
+        from zoneinfo import ZoneInfo
+
+        try:
+            ZoneInfo(str(fields["timezone"]))
+        except Exception:
+            raise HTTPException(status_code=422, detail="timezone must be a valid zone name")
     if not fields:
         raise HTTPException(status_code=422, detail="nothing to update")
     identity = await client.resolve_identity(

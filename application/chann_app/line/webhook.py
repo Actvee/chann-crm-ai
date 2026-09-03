@@ -53,14 +53,22 @@ def _is_reply(event: dict) -> str | None:
 
 
 async def _language_of(client: DataClient, chann_uid: str) -> str:
-    """"th" unless the person chose otherwise. A failed read is Thai, not
-    an error: the preference is a courtesy, the reply is the point."""
+    """"th" unless the person chose otherwise — and, as a side effect,
+    the date format and time zone they chose are set for this request
+    (16.3), so every date the reply prints is in their shape. A failed
+    read is Thai, not an error: the preference is a courtesy, the reply
+    is the point."""
+    from ..services.thai_datetime import set_display_prefs
+
     try:
-        prefs = await client.get_display_preferences(chann_uid)
+        prefs = dict(await client.get_display_preferences(chann_uid) or {})
     except Exception:  # noqa: BLE001
+        set_display_prefs({})
         return "th"
-    language = str((prefs or {}).get("language") or "th").lower()
-    return language if language in ("th", "en") else "th"
+    language = str(prefs.get("language") or "th").lower()
+    language = language if language in ("th", "en") else "th"
+    set_display_prefs({**prefs, "language": language})
+    return language
 
 
 @router.post("/{oa}")

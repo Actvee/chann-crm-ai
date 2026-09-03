@@ -33,6 +33,7 @@ from chann_app.services.chat import (  # noqa: E402
     suggest_what_you_can_do,
 )
 from chann_app.services.identity import ResolvedContext, TenantResolution  # noqa: E402
+from chann_app.services.thai_datetime import local_today  # noqa: E402
 
 
 class ProfileConflictForTest(Exception):
@@ -647,6 +648,16 @@ class FakeDataClient:
 
     async def list_ticket_photos(self, license_id, ticket_id):
         return [p for p in getattr(self, "_photos", []) if p.get("ticket_id") == ticket_id]
+
+    async def list_license_settings(self, license_id):
+        return list(getattr(self, "_settings", []))
+
+    async def put_license_setting(self, license_id, setting_key, setting_value, actor_id=None):
+        self.recorded.append(("put_license_setting", license_id, setting_key, setting_value))
+        rows = [r for r in getattr(self, "_settings", []) if r.get("setting_key") != setting_key]
+        rows.append({"setting_key": setting_key, "setting_value": setting_value})
+        self._settings = rows
+        return rows[-1]
 
     async def get_display_preferences(self, chann_uid):
         return dict(getattr(self, "_prefs", {}).get(chann_uid) or {"language": "th", "date_format": "dd/mm/yyyy", "timezone": "Asia/Bangkok"})
@@ -4030,7 +4041,7 @@ class TestWorkListShowsNames:
         })
         client._follow_ups = [{
             "id": "FU-1", "entity_type": "customer", "entity_id": customer["id"],
-            "due_date": _dt.date.today().isoformat(), "due_time": None, "notes": None,
+            "due_date": local_today().isoformat(), "due_time": None, "notes": None,
         }]
         reply = await handle_chat_message(client, message="งานวันนี้", ctx=_ctx())
         assert "สมชาย ใจดี" in reply.text
@@ -4044,7 +4055,7 @@ class TestWorkListShowsNames:
         deal = await client.create_deal("L1", {"contact_id": customer["id"]})
         client._follow_ups = [{
             "id": "FU-2", "entity_type": "deal", "entity_id": deal["id"],
-            "due_date": _dt.date.today().isoformat(), "due_time": "14:00:00", "notes": "ปิดการขาย",
+            "due_date": local_today().isoformat(), "due_time": "14:00:00", "notes": "ปิดการขาย",
         }]
         reply = await handle_chat_message(client, message="งานวันนี้", ctx=_ctx())
         assert deal["deal_id"] in reply.text
@@ -4056,7 +4067,7 @@ class TestWorkListShowsNames:
         client = FakeDataClient(permission_keys=["followup.read", "customer.read"])
         client._follow_ups = [{
             "id": "FU-3", "entity_type": "customer", "entity_id": "does-not-exist",
-            "due_date": _dt.date.today().isoformat(), "due_time": None, "notes": None,
+            "due_date": local_today().isoformat(), "due_time": None, "notes": None,
         }]
         reply = await handle_chat_message(client, message="งานวันนี้", ctx=_ctx())
         assert "customer" in reply.text  # falls back to the bare type
@@ -4070,7 +4081,7 @@ class TestWorkListShowsNames:
         customer = await client.create_customer("L1", {
             "first_name": "จิตวิทยา", "last_name": "ลายดอก", "phone": "0879876646",
         })
-        past = (_dt.date.today() - _dt.timedelta(days=3)).isoformat()
+        past = (local_today() - _dt.timedelta(days=3)).isoformat()
         client._follow_ups = [
             {"id": "FU-4", "entity_type": "customer", "entity_id": customer["id"],
              "due_date": past, "due_time": None, "notes": None, "status": "pending"},

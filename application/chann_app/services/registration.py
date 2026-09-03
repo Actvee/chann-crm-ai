@@ -421,6 +421,19 @@ async def _link_and_continue(
 
     linked = _t(LINKED, language).format(name=name)
 
+    # 16.4: the shop's side — a CRM record at once when the shop opted
+    # in, a note to CS otherwise. Best effort: the link already stands.
+    if license_id:
+        try:
+            from .onboarding import after_customer_linked
+
+            await after_customer_linked(
+                client, license_id=license_id, chann_uid=ctx.chann_uid,
+                display_name=ctx.display_name, language=language,
+            )
+        except Exception:
+            log.exception("could not run the new-customer step for %s", ctx.chann_uid)
+
     try:
         pending = await client.get_pending_intent(ctx.chann_uid, "customer")
     except Exception:
