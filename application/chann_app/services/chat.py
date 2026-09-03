@@ -2911,6 +2911,9 @@ LANGUAGE_TO_EN = (
 LANGUAGE_TO_TH = (
     "เปลี่ยนภาษาเป็นไทย", "เปลี่ยนเป็นภาษาไทย", "ใช้ภาษาไทย", "ภาษาไทย", "switch to thai", "use thai", "thai",
 )
+# One rich-menu tile for both languages (Phase 19 page 2): flips whichever
+# the person is reading now.
+LANGUAGE_TOGGLE_PHRASES = ("สลับภาษา", "เปลี่ยนภาษา", "switch language", "toggle language")
 LANGUAGE_SWITCHED = {
     "th": "เปลี่ยนเป็นภาษาไทยแล้วครับ ข้อความจากระบบทุกช่องทางจะเป็นภาษาไทย",
     "en": "Switched to English. Every message from the system, on every channel, will be in English.",
@@ -10105,6 +10108,8 @@ async def handle_chat_message(
     # Their boundary is the shop they are linked to, which license_id
     # already is.
     wanted = _language_switch_requested(message)
+    if wanted is None and _matches_phrase(message, LANGUAGE_TOGGLE_PHRASES):
+        wanted = "en" if language == "th" else "th"
     if wanted:
         return await _switch_language(client, ctx=ctx, language=wanted)
     pref_reply = await _maybe_set_display_pref(client, ctx=ctx, message=message, language=language)

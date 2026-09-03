@@ -24,8 +24,10 @@ would ask for them:
   reachability guideline; the 12px gutters exist to stop mis-taps
   between tiles, not to look airy.
 
-Sizes per LINE spec: 2500×1686, six areas. Output: richmenu-<oa>.png +
-richmenu-<oa>.json (areas ready for the API) next to this script.
+Sizes per LINE spec: 2500×1686, six tiles + two header tabs. Two pages
+per OA (Phase 19): richmenu-<oa>.png/.json is page 1 ("หน้าหลัก"),
+richmenu-<oa>-more.png/.json page 2 ("เพิ่มเติม"); the tabs switch
+through rich-menu aliases that richmenu-apply.sh creates.
 """
 
 from __future__ import annotations
@@ -33,7 +35,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
 
 W, H = 2500, 1686
 HEADER_H = 280
@@ -79,34 +80,6 @@ THEMES = {
 # them. Anything a person would not reach for weekly is cut; the chat
 # and the app still do it. Message tiles send the exact phrase the chat's
 # deterministic triggers match, so a tap never falls through to the AI.
-TILES = {
-    "sales": [
-        ("งานวันนี้", "Today's work", "sun", {"type": "message", "text": "งานวันนี้"}),
-        ("รายชื่อลูกค้า", "Customers", "people", {"type": "message", "text": "รายชื่อลูกค้า"}),
-        ("รายการรออนุมัติ", "Awaiting approval", "check", {"type": "message", "text": "รายการรออนุมัติ"}),
-        ("นัดหมาย", "Appointments", "calendar", {"type": "message", "text": "นัดหมายทั้งหมด"}),
-        ("เปิดแดชบอร์ด", "Open the dashboard", "grid", {"type": "uri", "uri": "{LIFF_SALES}"}),
-        ("วิธีใช้", "How this works", "help", {"type": "message", "text": "วิธีใช้"}),
-    ],
-    "technician": [
-        ("งานของฉัน", "My jobs", "wrench", {"type": "message", "text": "งานของฉัน"}),
-        ("งานที่เปิดรับ", "Jobs to take", "inbox", {"type": "message", "text": "งานที่เปิดรับ"}),
-        ("เช็คอิน", "Check in on site", "pin", {"type": "message", "text": "เช็คอิน"}),
-        ("ปิดงาน+รายงาน", "Finish + report", "check", {"type": "message", "text": "ปิดงาน"}),
-        ("เปิดหน้าจอช่าง", "Open the dashboard", "grid", {"type": "uri", "uri": "{LIFF_TECHNICIAN}"}),
-        ("วิธีใช้", "How this works", "help", {"type": "message", "text": "วิธีใช้"}),
-    ],
-    "customer": [
-        ("แจ้งซ่อม", "Report a fault", "wrench", {"type": "message", "text": "แจ้งซ่อม"}),
-        ("สถานะการซ่อม", "Repair status", "clock", {"type": "message", "text": "สถานะการซ่อม"}),
-        ("ลงทะเบียนสินค้า", "Register a product", "shield", {"type": "message", "text": "ลงทะเบียนสินค้า"}),
-        ("เปิดหน้าจอลูกค้า", "Open the dashboard", "grid", {"type": "uri", "uri": "{LIFF_CUSTOMER}"}),
-        ("ติดต่อร้าน", "Contact the shop", "chat", {"type": "message", "text": "ติดต่อร้าน"}),
-        ("วิธีใช้", "How this works", "help", {"type": "message", "text": "วิธีใช้"}),
-    ],
-}
-
-
 def _rounded(draw, box, radius, fill):
     draw.rounded_rectangle(box, radius=radius, fill=fill)
 
@@ -183,33 +156,202 @@ def _icon(draw: ImageDraw.ImageDraw, name: str, cx: int, cy: int, color: str):
         draw.rounded_rectangle([cx - 65, cy - 55, cx + 65, cy + 30], 26, outline=color, width=w)
         draw.polygon([(cx - 25, cy + 28), (cx + 8, cy + 28), (cx - 20, cy + 62)], fill=color)
     elif name == "help":
+        from PIL import ImageFont
+
         draw.ellipse([cx - s, cy - s, cx + s, cy + s], outline=color, width=w)
         font = ImageFont.truetype(FONT_BOLD, 88)
         draw.text((cx, cy - 6), "?", font=font, fill=color, anchor="mm")
+    elif name == "briefcase":
+        draw.rounded_rectangle([cx - s, cy - 40, cx + s, cy + 60], 14, outline=color, width=w)
+        draw.rounded_rectangle([cx - 30, cy - 70, cx + 30, cy - 40], 8, outline=color, width=w - 6)
+        draw.line([cx - s, cy + 5, cx + s, cy + 5], fill=color, width=w - 8)
+    elif name == "tag":
+        draw.polygon(
+            [(cx - 65, cy - 60), (cx + 10, cy - 60), (cx + 65, cy - 5), (cx + 5, cy + 60), (cx - 65, cy - 10)],
+            outline=color, width=w,
+        )
+        draw.ellipse([cx - 44, cy - 42, cx - 20, cy - 18], fill=color)
+    elif name == "building":
+        draw.rounded_rectangle([cx - 60, cy - s, cx + 60, cy + s], 10, outline=color, width=w)
+        for dy in (-40, -5, 30):
+            for dx in (-32, 8):
+                draw.rectangle([cx + dx, cy + dy, cx + dx + 22, cy + dy + 20], fill=color)
+    elif name == "globe":
+        draw.ellipse([cx - s, cy - s, cx + s, cy + s], outline=color, width=w)
+        draw.ellipse([cx - 32, cy - s, cx + 32, cy + s], outline=color, width=w - 8)
+        draw.line([cx - s, cy, cx + s, cy], fill=color, width=w - 8)
+    elif name == "user":
+        draw.ellipse([cx - 34, cy - 70, cx + 34, cy - 2], outline=color, width=w)
+        draw.arc([cx - 70, cy + 5, cx + 70, cy + 120], 180, 360, fill=color, width=w)
+    elif name == "key":
+        draw.ellipse([cx - 70, cy - 30, cx - 10, cy + 30], outline=color, width=w)
+        draw.line([cx - 12, cy, cx + 70, cy], fill=color, width=w)
+        draw.line([cx + 40, cy, cx + 40, cy + 28], fill=color, width=w - 4)
+        draw.line([cx + 64, cy, cx + 64, cy + 28], fill=color, width=w - 4)
+    elif name == "cart":
+        draw.line([cx - 70, cy - 55, cx - 45, cy - 55, cx - 20, cy + 25, cx + 55, cy + 25, cx + 70, cy - 25, cx - 35, cy - 25],
+                  fill=color, width=w - 4, joint="curve")
+        draw.ellipse([cx - 22, cy + 40, cx + 2, cy + 64], fill=color)
+        draw.ellipse([cx + 30, cy + 40, cx + 54, cy + 64], fill=color)
+    elif name == "phone":
+        draw.rounded_rectangle([cx - 40, cy - s, cx + 40, cy + s], 16, outline=color, width=w)
+        draw.line([cx - 14, cy + 50, cx + 14, cy + 50], fill=color, width=w - 8)
+    elif name == "cross":
+        draw.line([cx - 50, cy - 50, cx + 50, cy + 50], fill=color, width=w + 6)
+        draw.line([cx - 50, cy + 50, cx + 50, cy - 50], fill=color, width=w + 6)
 
 
-def build(oa: str, out_dir: Path):
+# Two pages per OA (Master Spec §19 / PLAN_3OA B7). The header carries the
+# page tabs — a tap swaps the menu through a rich-menu alias, so to the
+# person it is one menu with two pages: page 1 the everyday verbs (the
+# six the owner signed off on 3 Sep), page 2 the rest. Every tile is a
+# phrase the chat engine handles literally or a LIFF link; nothing here
+# reaches the AI.
+PAGES = ("main", "more")
+ALIAS = "chann-{oa}-{page}"
+PAGE_TABS = {"main": ("หน้าหลัก", "Main"), "more": ("เพิ่มเติม", "More")}
+# "สลับภาษา" is one tile that works in either language: the chat engine
+# flips whichever language the person is reading now.
+_LANG = ("สลับภาษา EN/TH", "Switch language", "globe", {"type": "message", "text": "สลับภาษา"})
+TILES = {
+    "sales": {
+        "main": [
+            ("งานวันนี้", "Today's work", "sun", {"type": "message", "text": "งานวันนี้"}),
+            ("รายชื่อลูกค้า", "Customers", "people", {"type": "message", "text": "รายชื่อลูกค้า"}),
+            ("รายการรออนุมัติ", "Awaiting approval", "check", {"type": "message", "text": "รายการรออนุมัติ"}),
+            ("นัดหมาย", "Appointments", "calendar", {"type": "message", "text": "นัดหมายทั้งหมด"}),
+            ("เปิดแดชบอร์ด", "Open the dashboard", "grid", {"type": "uri", "uri": "{LIFF_SALES}"}),
+            ("วิธีใช้", "How this works", "help", {"type": "message", "text": "วิธีใช้"}),
+        ],
+        "more": [
+            ("แชทลูกค้า", "Customer chats", "chat", {"type": "uri", "uri": "{LIFF_SALES}/chats"}),
+            ("รายการดีล", "Deals", "briefcase", {"type": "message", "text": "รายการดีล"}),
+            ("รายการสินค้า", "Products", "tag", {"type": "message", "text": "รายการสินค้า"}),
+            ("ทีมช่าง", "Technician teams", "people", {"type": "message", "text": "ทีมช่าง"}),
+            ("ข้อมูลบริษัท", "Company profile", "building", {"type": "message", "text": "ข้อมูลบริษัท"}),
+            _LANG,
+        ],
+    },
+    "technician": {
+        "main": [
+            ("งานของฉัน", "My jobs", "wrench", {"type": "message", "text": "งานของฉัน"}),
+            ("งานที่เปิดรับ", "Jobs to take", "inbox", {"type": "message", "text": "งานที่เปิดรับ"}),
+            ("เช็คอิน", "Check in on site", "pin", {"type": "message", "text": "เช็คอิน"}),
+            ("ปิดงาน+รายงาน", "Finish + report", "check", {"type": "message", "text": "ปิดงาน"}),
+            ("เปิดหน้าจอช่าง", "Open the dashboard", "grid", {"type": "uri", "uri": "{LIFF_TECHNICIAN}"}),
+            ("วิธีใช้", "How this works", "help", {"type": "message", "text": "วิธีใช้"}),
+        ],
+        "more": [
+            ("รายงานของฉัน", "My reports", "doc", {"type": "uri", "uri": "{LIFF_TECHNICIAN_REPORTS}"}),
+            ("งานของทีม", "Team jobs", "people", {"type": "message", "text": "งานของทีม"}),
+            ("ปฏิเสธงาน", "Decline a job", "cross", {"type": "message", "text": "ปฏิเสธงาน"}),
+            ("ข้อมูลของฉัน", "My profile", "user", {"type": "message", "text": "ข้อมูลของฉัน"}),
+            ("สิทธิ์ของฉัน", "What I may do", "key", {"type": "message", "text": "สิทธิ์ของฉัน"}),
+            _LANG,
+        ],
+    },
+    "customer": {
+        "main": [
+            ("แจ้งซ่อม", "Report a fault", "wrench", {"type": "message", "text": "แจ้งซ่อม"}),
+            ("สถานะการซ่อม", "Repair status", "clock", {"type": "message", "text": "สถานะการซ่อม"}),
+            ("คุยกับร้าน", "Talk to the shop", "chat", {"type": "message", "text": "คุยกับร้าน"}),
+            ("ลงทะเบียนสินค้า", "Register a product", "shield", {"type": "message", "text": "ลงทะเบียนสินค้า"}),
+            ("เปิดหน้าจอลูกค้า", "Open the dashboard", "grid", {"type": "uri", "uri": "{LIFF_CUSTOMER}"}),
+            ("วิธีใช้", "How this works", "help", {"type": "message", "text": "วิธีใช้"}),
+        ],
+        "more": [
+            ("สินค้าทั้งหมด", "All products", "cart", {"type": "message", "text": "สินค้าทั้งหมด"}),
+            ("ประวัติการซื้อ", "Purchase history", "doc", {"type": "message", "text": "ประวัติการซื้อ"}),
+            ("ประกันของฉัน", "My warranties", "shield", {"type": "message", "text": "ประกันของฉัน"}),
+            ("ติดต่อร้าน", "Contact the shop", "phone", {"type": "message", "text": "ติดต่อร้าน"}),
+            ("ข้อมูลของฉัน", "My profile", "user", {"type": "message", "text": "ข้อมูลของฉัน"}),
+            _LANG,
+        ],
+    },
+}
+
+
+def layout(oa: str, page: str) -> dict:
+    """The JSON LINE needs for one page — areas for six tiles and the two
+    header tabs — without drawing anything. Pure, so it is testable where
+    Pillow is not installed; build() draws the picture to match."""
+    tile_w = (W - GUTTER * (COLS + 1)) // COLS
+    tile_h = (H - HEADER_H - GUTTER * (ROWS + 1)) // ROWS
+    areas = []
+    # Header tabs: the right half of the band, one tab per page. Tapping
+    # the page you are on switches to itself — harmless, and it means a
+    # mis-tap never fires a verb the person did not see.
+    tab_w = TAB_W
+    for i, tab_page in enumerate(PAGES):
+        x = W - GUTTER - (len(PAGES) - i) * (tab_w + GUTTER)
+        areas.append({
+            "bounds": {"x": x, "y": TAB_Y, "width": tab_w, "height": TAB_H},
+            "action": {
+                "type": "richmenuswitch",
+                "richMenuAliasId": ALIAS.format(oa=oa, page=tab_page),
+                "data": f"page={tab_page}",
+            },
+        })
+    for i, (_thai, _en, _icon_name, action) in enumerate(TILES[oa][page]):
+        col, row = i % COLS, i // COLS
+        x = GUTTER + col * (tile_w + GUTTER)
+        y = HEADER_H + GUTTER + row * (tile_h + GUTTER)
+        areas.append({
+            "bounds": {"x": x, "y": y, "width": tile_w, "height": tile_h},
+            "action": action,
+        })
+    return {
+        "size": {"width": W, "height": H},
+        "selected": True,
+        "name": f"chann-{oa}-v2-{page}",
+        "chatBarText": "เมนู",
+        "areas": areas,
+        # Stripped by richmenu-apply.sh before the POST; it is how the
+        # script knows which alias this page answers to.
+        "_alias": ALIAS.format(oa=oa, page=page),
+    }
+
+
+TAB_W, TAB_H, TAB_Y = 600, 170, (HEADER_H - 14 - 170) // 2
+
+
+def build(oa: str, page: str, out_dir: Path):
+    from PIL import Image, ImageDraw, ImageFont
+
     theme = THEMES[oa]
     img = Image.new("RGB", (W, H), theme["soft"])
     draw = ImageDraw.Draw(img)
 
-    # Header band: brand + which OA this is, at a glance in the chat list.
+    # Header band: brand + which OA this is, at a glance in the chat list;
+    # the page tabs on the right.
     draw.rectangle([0, 0, W, HEADER_H], fill=theme["accent"])
     draw.rectangle([0, HEADER_H - 14, W, HEADER_H], fill=theme["deep"])
     title_font = ImageFont.truetype(FONT_BOLD, 110)
     draw.text((70, HEADER_H // 2 - 8), theme["title"], font=title_font,
               fill="#ffffff", anchor="lm")
-    tag_font = ImageFont.truetype(FONT_REG, 66)
-    draw.text((W - 70, HEADER_H // 2 - 4), "LINE Official Account",
-              font=tag_font, fill="#ffffff", anchor="rm")
+    for i, tab_page in enumerate(PAGES):
+        x = W - GUTTER - (len(PAGES) - i) * (TAB_W + GUTTER)
+        active = tab_page == page
+        box = [x, TAB_Y, x + TAB_W, TAB_Y + TAB_H]
+        if active:
+            draw.rounded_rectangle(box, 30, fill="#ffffff")
+        else:
+            draw.rounded_rectangle(box, 30, outline="#ffffff", width=6)
+        thai, en = PAGE_TABS[tab_page]
+        label = f"{thai} · {en}"
+        # The largest size that stays inside the pill with 30px each side.
+        tab_font = ImageFont.truetype(FONT_BOLD, 56)
+        for size in (76, 70, 64, 58):
+            candidate = ImageFont.truetype(FONT_BOLD, size)
+            if draw.textlength(label, font=candidate) <= TAB_W - 60:
+                tab_font = candidate
+                break
+        draw.text((x + TAB_W // 2, TAB_Y + TAB_H // 2 + 2), label,
+                  font=tab_font, fill=theme["accent"] if active else "#ffffff", anchor="mm")
 
     tile_w = (W - GUTTER * (COLS + 1)) // COLS
     tile_h = (H - HEADER_H - GUTTER * (ROWS + 1)) // ROWS
 
-    # The whole 2500px image is shown about 375px wide on a phone — a
-    # 0.15 scale — so a 52px sub-label landed at ~8px on screen, below
-    # the 12px floor any body text needs. 84px is ~13px rendered; the
-    # Thai label at 96px is ~14-15px bold, which is why it was readable.
     def fitted(text: str, bold: bool = True,
                sizes=(96, 86, 76, 68, 60), floor: int = 54) -> ImageFont.FreeTypeFont:
         """The largest size that keeps the label inside its tile.
@@ -225,18 +367,13 @@ def build(oa: str, out_dir: Path):
                 return font
         return ImageFont.truetype(face, floor)
 
-    areas = []
-    for i, (thai, en, icon, action) in enumerate(TILES[oa]):
+    for i, (thai, en, icon, _action) in enumerate(TILES[oa][page]):
         col, row = i % COLS, i // COLS
         x = GUTTER + col * (tile_w + GUTTER)
         y = HEADER_H + GUTTER + row * (tile_h + GUTTER)
-        # Six identical tiles (owner, 3 Sep): the earlier design filled the
-        # first tile in the deep shade to mark "the main thing", and in
-        # use it read as one tile being different in kind, not in
-        # importance. The header carries the OA's colour; every tile is
-        # white with the accent icon and baseline.
+        # Six identical tiles (owner, 3 Sep): every tile is white with the
+        # accent icon and baseline; the header carries the OA's colour.
         _rounded(draw, [x, y, x + tile_w, y + tile_h], 34, "#ffffff")
-        # The 6px accent baseline: theme presence without shouting.
         draw.rounded_rectangle(
             [x + 34, y + tile_h - 18, x + tile_w - 34, y + tile_h - 12],
             3, fill=theme["accent"],
@@ -244,31 +381,22 @@ def build(oa: str, out_dir: Path):
         _icon(draw, icon, x + tile_w // 2, y + 205, theme["accent"])
         draw.text((x + tile_w // 2, y + 400), thai, font=fitted(thai),
                   fill=theme["ink"], anchor="mm")
-        # 60% black over white is ~5.7:1; the 45% it was is ~3.3:1 and
-        # fails for text this small.
+        # 60% black over white is ~5.7:1 for text this small.
         draw.text((x + tile_w // 2, y + 505), en,
                   font=fitted(en, bold=False, sizes=(84, 76, 68), floor=60),
                   fill="#00000099", anchor="mm")
-        areas.append({
-            "bounds": {"x": x, "y": y, "width": tile_w, "height": tile_h},
-            "action": action,
-        })
 
-    # Header taps do nothing on purpose: a mis-tap at the top should not
-    # fire an action the person cannot see they chose.
     out_dir.mkdir(parents=True, exist_ok=True)
-    img.save(out_dir / f"richmenu-{oa}.png", optimize=True)
-    (out_dir / f"richmenu-{oa}.json").write_text(json.dumps({
-        "size": {"width": W, "height": H},
-        "selected": True,
-        "name": f"chann-{oa}-v1",
-        "chatBarText": "เมนู",
-        "areas": areas,
-    }, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"{oa}: richmenu-{oa}.png + .json")
+    suffix = "" if page == "main" else f"-{page}"
+    img.save(out_dir / f"richmenu-{oa}{suffix}.png", optimize=True)
+    (out_dir / f"richmenu-{oa}{suffix}.json").write_text(
+        json.dumps(layout(oa, page), ensure_ascii=False, indent=2), encoding="utf-8",
+    )
+    print(f"{oa}/{page}: richmenu-{oa}{suffix}.png + .json")
 
 
 if __name__ == "__main__":
     out = Path(__file__).parent / "out"
     for oa in THEMES:
-        build(oa, out)
+        for page in PAGES:
+            build(oa, page, out)

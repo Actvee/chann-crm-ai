@@ -51,7 +51,10 @@ spec (ทีม, ภาษา, ค้นสินค้า, คุยกับ�
    (`chat_sla_minutes` ค่าเริ่มต้น 30) เลย → เตือนเจ้าของ/ทุกคน ครั้งเดียว · ไม่มีข้อความ
    (`chat_timeout_minutes` ค่าเริ่มต้น 120) → ปิดเอง + บอกลูกค้า · sweep: ทุกครั้งที่เปิดหน้าแชท,
    `/platform/reminders/sweep`, และ `/platform/chat/sweep` สำหรับ Scheduler ทุก 5 นาที (ยังไม่มี job)
-7. **Rich menu หน้าที่ 2 ต่อ OA (Phase 19)** — เมื่อ 5–6 ขึ้นแล้วเมนู 6 ช่องไม่พอ
+7. ~~Rich menu หน้าที่ 2 ต่อ OA (Phase 19)~~ — **ทำแล้ว** (`richmenu-pages-v1`): `generate.py` ออก
+   2 หน้าต่อ OA (หน้าหลัก = 6 ช่องเดิม, เพิ่มเติม = แชท/สินค้า/ประวัติ/โปรไฟล์/สิทธิ์/สลับภาษา) แท็บบน
+   หัวเมนูสลับด้วย rich menu alias; `richmenu-apply.sh` สร้าง 2 เมนู + alias + ตั้งหน้าหลักเป็น default,
+   uri `{LIFF_X}/path` แทนค่าได้ · แชท "สลับภาษา" สลับ TH/EN · **เจ้าของรัน `bash ~/rm.sh`** ให้เมนูขึ้นจริง
 8. **Phase 20 polish** — i18n EN ให้ครบทุกข้อความบอท/notification (ตอนนี้ EN มีแต่
    ข้อความหลัก), loading/error state, accessibility pass ซ้ำ, ปิดด้วย evidence
    ทุก phase

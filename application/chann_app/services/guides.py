@@ -37,8 +37,8 @@ GUIDES: dict[str, dict] = {
     "customer": {
         "title": {"th": "วิธีใช้ LINE บริการลูกค้า", "en": "Using the customer LINE"},
         "intro": {
-            "th": "พิมพ์คุยได้เลย ไม่ต้องจำคำสั่ง ทำตามลำดับนี้ครั้งแรกครั้งเดียว แล้วแจ้งซ่อมได้ทุกเมื่อ",
-            "en": "Just type. Do these once, then report a fault any time.",
+            "th": "พิมพ์คุยได้เลย ไม่ต้องจำคำสั่ง ทำตามลำดับนี้ครั้งแรกครั้งเดียว แล้วแจ้งซ่อมได้ทุกเมื่อ · เมนูด้านล่างมี 2 หน้า แตะ \"เพิ่มเติม\" บนหัวเมนูเพื่อดูสินค้า ประวัติการซื้อ ประกัน โปรไฟล์ และสลับภาษา",
+            "en": "Just type. Do these once, then report a fault any time. The menu has two pages: tap \"More\" on the menu header for products, history, warranties, profile and language.",
         },
         "steps": [
             {
@@ -123,7 +123,7 @@ GUIDES: dict[str, dict] = {
     "technician": {
         "title": {"th": "วิธีใช้ LINE ช่าง", "en": "Using the technician LINE"},
         "intro": {
-            "th": "วันทำงานของช่างมี 4 ขั้น ทำตามลำดับ ระบบจะบอกขั้นถัดไปให้ทุกครั้ง",
+            "th": "วันทำงานของช่างมี 4 ขั้น ทำตามลำดับ ระบบจะบอกขั้นถัดไปให้ทุกครั้ง · เมนูมี 2 หน้า แตะ \"เพิ่มเติม\" บนหัวเมนู: รายงานของฉัน งานของทีม ปฏิเสธงาน โปรไฟล์ สิทธิ์ สลับภาษา",
             "en": "A technician's day has four steps, in order. The system names the next one each time.",
         },
         "steps": [
@@ -187,7 +187,7 @@ GUIDES: dict[str, dict] = {
     "sales": {
         "title": {"th": "วิธีใช้ LINE ทีมขาย / CS", "en": "Using the sales / CS LINE"},
         "intro": {
-            "th": "ทุกอย่างที่ทำได้บนแดชบอร์ด พิมพ์ในแชทได้เหมือนกัน ตั้งร้านให้พร้อมก่อน แล้วเดินงานซ่อมตามลำดับ",
+            "th": "ทุกอย่างที่ทำได้บนแดชบอร์ด พิมพ์ในแชทได้เหมือนกัน ตั้งร้านให้พร้อมก่อน แล้วเดินงานซ่อมตามลำดับ · เมนูมี 2 หน้า แตะ \"เพิ่มเติม\" บนหัวเมนู: แชทลูกค้า ดีล สินค้า ทีมช่าง ข้อมูลบริษัท สลับภาษา",
             "en": "Everything on the dashboard can be typed here. Set the shop up first, then run repairs in order.",
         },
         "steps": [

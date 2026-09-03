@@ -1,3 +1,21 @@
+### Plan B7 (4 Sep) — rich menu page 2 per OA (`richmenu-pages-v1`)
+
+- `scripts/richmenu/generate.py` now builds two pages per OA: `TILES[oa]["main"]`
+  (the six tiles the owner approved on 3 Sep, customer page 1 now has
+  "คุยกับร้าน" and "ติดต่อร้าน" moved to page 2) and `TILES[oa]["more"]`. The header's
+  right half is two tabs whose areas are `richmenuswitch` actions on the
+  aliases `chann-<oa>-main` / `chann-<oa>-more`. `layout(oa, page)` is the
+  pure JSON (tested without Pillow); `build()` draws. Output keeps the old
+  file names for page 1 and adds `richmenu-<oa>-more.*`.
+- `scripts/richmenu/richmenu-apply.sh`: deletes aliases and every
+  `chann-<oa>-*` menu, creates both pages, uploads, creates the aliases, sets
+  page 1 as the default. `{LIFF_X}/path` links are substituted in place
+  (before, a path suffix was lost). The owner's `~/rm.sh` needs no change.
+- Chat: "สลับภาษา" / "เปลี่ยนภาษา" flips the reader's language (one tile serves
+  both languages). Tests: `tests/unit/test_richmenu.py` — every message tile
+  is a phrase the engine answers literally.
+- **Owner action:** `bash ~/rm.sh` (rich-menu tokens live in tfvars).
+
 ### Plan B6 (4 Sep, small hours) — Phase 15 live chat + SLA (`live-chat-v1`)
 
 - **Migration `0022_chat_sessions`** (`chat_sessions`, `chat_messages` per

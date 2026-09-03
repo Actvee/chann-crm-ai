@@ -76,7 +76,8 @@ async def main():
     await say(u,"customer","ราคาซ่อมเท่าไหร่", expect_ok=True)
     # The customer rich-menu tiles (3 Sep audit): none may open a ticket.
     before = len([r for r in u.recorded if r[0] == "create_ticket"])
-    for tile in ("สถานะการซ่อม", "ติดต่อร้าน", "วิธีใช้งาน", "ประกันของฉัน", "แจ้งซ่อม"):
+    for tile in ("สถานะการซ่อม", "ติดต่อร้าน", "วิธีใช้งาน", "ประกันของฉัน", "แจ้งซ่อม",
+                 "สินค้าทั้งหมด", "ประวัติการซื้อ", "ข้อมูลของฉัน", "สลับภาษา", "ภาษาไทย"):
         await say(u,"customer",tile)
     after = len([r for r in u.recorded if r[0] == "create_ticket"])
     if after != before:
