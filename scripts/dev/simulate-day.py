@@ -261,9 +261,87 @@ async def reminder_lifecycle_day():
           and sum(1 for w in c.recorded if w[0] == "create_follow_up") >= 2,
           r.text)
 
+async def approval_day():
+    """Phase 14-B end to end: technician closes → CS is asked → approves
+    → customer answers the survey; then a reject; then the flow is
+    changed by typing. One FakeDataClient plays every OA so the steps and
+    the survey row carry across."""
+    print("\n=== PHASE 14: check-out → approve → survey ===")
+    from chann_app.services import approval as approval_service, notify as notify_module
+    pushed = []
+    async def _push_text(oa, to, text, client=None):
+        pushed.append((oa, to, text)); return [f"m{len(pushed)}"]
+    async def _push_messages(oa, to, messages, client=None):
+        pushed.append((oa, to, messages)); return [f"m{len(pushed)}"]
+    notify_module.push_text = _push_text
+    approval_service.push_messages = _push_messages
+
+    def check(label, ok, detail=""):
+        print(f"{'  ' if ok else '!!'} [assert    ] {label:56} -> {'ok' if ok else 'FAIL'}  {str(detail)[:60]}")
+        if not ok:
+            findings.append(("assert", label, "FAIL", str(detail)[:70]))
+
+    c = T.FakeDataClient(permission_keys=[
+        "ticket.read","ticket.update","service_report.create","service_report.read",
+        "approval.view","approval.approve","approval.reject","approval.manage",
+    ], role="cs")
+    c._member_id = "cs-1"
+    c._tickets = [{
+        "id":"t1","ticket_number":"T-2026-0001","status":"in_progress","accept_status":"accepted",
+        "assigned_to_ref":"member-1","customer_name":"สมชาย","customer_chann_uid":"CHN-C-1",
+        "owner_member_id":"cs-1","service_address":"99/1","issue_description":"แอร์ไม่เย็น",
+    }]
+    c._reports = [{"id":"sr-1","report_id":"SR-2026-0001","ticket_id":"t1",
+                   "technician_member_id":"member-1","status":"submitted",
+                   "report_data":{"found_issue":"คอมเพรสเซอร์รั่ว","work_done":"เปลี่ยนแล้ว"}}]
+    c._members = [
+        {"id":"cs-1","chann_uid":"CHN-S-000001","role":"cs","status":"active"},
+        {"id":"member-1","chann_uid":"CHN-T-000001","role":"technician","status":"active"},
+    ]
+    c._line_targets = {"CHN-S-000001":"U-cs","CHN-T-000001":"U-tech","CHN-C-1":"U-cust"}
+
+    # Technician closes the job through the terse form.
+    await say(c, "technician", "ปิดงาน T-2026-0001\nพบ: คอมเพรสเซอร์รั่ว\nแก้: เปลี่ยนแล้ว")
+    check("check-out opened approval steps", any(r[0] == "open_approval_steps" for r in c.recorded))
+    check("the CS was pushed the request now", any(to == "U-cs" for _, to, _ in pushed), pushed[-1:] )
+
+    await say(c, "sales", "รายการรออนุมัติ", role="cs")
+    r = await say(c, "sales", "อนุมัติ", role="cs")                       # one pending → no code needed
+    check("approve without a code acts on the only report", "SR-2026-0001" in r.text and "แล้ว" in r.text, r.text)
+    check("report is approved", c._reports[0]["status"] == "approved", c._reports[0]["status"])
+    check("customer got the survey quick reply", any(to == "U-cust" for _, to, _ in pushed))
+
+    c._tickets[0]["status"] = "completed"
+    u = T._ctx(oa="customer", primary_role="customer"); u.chann_uid = "CHN-C-1"
+    r = await T.handle_chat_message(c, message="3", ctx=u)
+    print(f"   [customer  ] {'3':40} -> {classify(r.text):15} {r.text.splitlines()[0][:70]}")
+    check("survey answer recorded", any(x[0] == "answer_survey" and x[3] == 3 for x in c.recorded), r.text)
+    check("no junk ticket from the digit", not any(x[0] == "create_ticket" for x in c.recorded))
+
+    # A second report, rejected with a reason.
+    c._tickets.append({**c._tickets[0], "id":"t2","ticket_number":"T-2026-0002","status":"in_progress"})
+    c._reports.append({**c._reports[0], "id":"sr-2","report_id":"SR-2026-0002","ticket_id":"t2","status":"submitted"})
+    await approval_service.on_report_submitted(c, license_id=T.LICENSE_ID, report=c._reports[1])
+    r = await say(c, "sales", "ไม่อนุมัติ SR-2026-0002", role="cs", expect_ok=True)
+    check("reject without a reason asks for one", "เหตุผล" in r.text, r.text)
+    r = await say(c, "sales", "ไม่อนุมัติ SR-2026-0002 รูปไม่ครบ", role="cs")
+    check("technician was told why", any(to == "U-tech" and "รูปไม่ครบ" in str(t) for _, to, t in pushed))
+
+    # Changing the flow by typing.
+    r = await say(c, "sales", "ตั้งการอนุมัติ ให้ CS ก่อน แล้วต่อด้วย admin", role="cs",
+                  ai_client=ai({"version":1,"entity_type":"service_report","steps":[
+                      {"order":1,"approver_type":"user","approver_ref":"ticket_owner"},
+                      {"order":2,"approver_type":"role","approver_ref":"admin"}]}))
+    check("policy shown back before saving", "ขั้น 2" in r.text and not any(x[0]=="replace_approval_workflow" for x in c.recorded), r.text)
+    r = await say(c, "sales", "ยืนยันการอนุมัติ", role="cs")
+    check("confirm saved the two-step flow", any(x[0]=="replace_approval_workflow" for x in c.recorded), r.text)
+    await say(c, "sales", "ดูการอนุมัติปัจจุบัน", role="cs")
+
+
 async def main():
     await sales_day(); await tech_day(); await customer_day()
     await reminder_lifecycle_day()
+    await approval_day()
     print(f"\n=== {len(findings)} FINDINGS ===")
     for oa, msg, kind, first in findings:
         print(f"  [{oa}] {msg!r} -> {kind}: {first}")

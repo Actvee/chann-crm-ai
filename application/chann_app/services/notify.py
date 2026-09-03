@@ -22,6 +22,8 @@ log = logging.getLogger(__name__)
 TYPE_TO_OA = {
     "chat_session_new": "sales",
     "approval_pending": "sales",
+    # Phase 14-B: a rejected report goes back to the technician who filed it.
+    "approval_rejected": "technician",
     "transfer_request": "sales",
     "sla_warning": "technician",
     "followup_due": "sales",
@@ -73,10 +75,23 @@ async def send_notification(
 
     text = message_en if (language == "en" and message_en) else message
     try:
-        await push_text(oa or TYPE_TO_OA.get(type, DEFAULT_OA), target_line_user_id, text)
+        sent_ids = await push_text(oa or TYPE_TO_OA.get(type, DEFAULT_OA), target_line_user_id, text)
     except LineReplyError as exc:
         # Deliberately swallowed: the notification is already durable, and
         # raising here would fail whatever business action triggered it —
         # a LINE hiccup must not roll back an approval or a ticket assignment.
         log.error("LINE push failed for notification %s: %s", row.get("id"), exc)
+        return row
+
+    # The pushed message is now something a person can reply to: map its
+    # id to the record, exactly as the webhook does for bot replies, so
+    # "reply to this and type อนุมัติ" resolves the report it names.
+    if entity_type and entity_id:
+        for message_id in sent_ids or []:
+            try:
+                await client.record_message_entity(
+                    license_id, str(message_id), entity_type, str(entity_id),
+                )
+            except Exception:  # noqa: BLE001
+                log.exception("could not map pushed message %s to %s", message_id, entity_type)
     return row

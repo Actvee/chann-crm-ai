@@ -133,11 +133,147 @@ class FakeDataClient:
         return self._company_out()
 
     async def authorization_context(self, license_id, chann_uid):
+        # Mirrors AuthorizationContextOut: member_id is part of the real
+        # payload (Phase 14 reads it to act on approval steps).
         return {
+            "member_id": getattr(self, "_member_id", "member-1"),
+            "chann_uid": chann_uid,
             "role": self._role,
-            "is_owner": False,
+            "is_owner": getattr(self, "_is_owner", False),
             "permission_keys": self._permission_keys,
         }
+
+    # ---------------------------------------------------------- Phase 14
+    # Approval steps and surveys. The fake keeps the Data Tier's rules that
+    # the Application tier relies on: only the lowest pending step per
+    # report is offered, acting on it closes it, and the last approval
+    # flips the report and creates the survey row.
+
+    def _approval_state(self):
+        if not hasattr(self, "_approval_steps"):
+            self._approval_steps = []
+            self._surveys = []
+            self._workflow = {
+                "id": "wf-1", "entity_type": "service_report", "is_active": True,
+                "rules_json": {"version": 1, "entity_type": "service_report",
+                               "steps": [{"order": 1, "approver_type": "user",
+                                          "approver_ref": "ticket_owner"}],
+                               "on_reject": "notify_submitter",
+                               "on_all_approved": "send_survey"},
+            }
+        return self
+
+    async def get_approval_workflow(self, license_id, entity_type):
+        self._approval_state()
+        return dict(self._workflow)
+
+    async def replace_approval_workflow(self, license_id, entity_type, rules_json, *, updated_by=None, actor_id=None):
+        self._approval_state()
+        self.recorded.append(("replace_approval_workflow", license_id, entity_type, rules_json))
+        self._workflow = {"id": "wf-2", "entity_type": entity_type, "is_active": True,
+                          "rules_json": rules_json, "updated_by": updated_by}
+        return dict(self._workflow)
+
+    async def open_approval_steps(self, license_id, report_id):
+        self._approval_state()
+        self.recorded.append(("open_approval_steps", license_id, report_id))
+        self._approval_steps = [s for s in self._approval_steps if s["entity_id"] != report_id]
+        report = next((r for r in getattr(self, "_reports", []) if r["id"] == report_id), {})
+        ticket = next((t for t in getattr(self, "_tickets", []) if t["id"] == report.get("ticket_id")), {})
+        owner = ticket.get("owner_member_id")
+        created = []
+        for spec in self._workflow["rules_json"]["steps"]:
+            kind, ref = spec["approver_type"], spec["approver_ref"]
+            if kind == "user" and ref == "ticket_owner":
+                kind, ref = ("user", str(owner)) if owner else ("role", "admin")
+            step = {"id": f"step-{report_id}-{spec['order']}", "entity_type": "service_report",
+                    "entity_id": report_id, "workflow_id": self._workflow["id"],
+                    "step_order": spec["order"], "approver_type": kind, "approver_ref": ref,
+                    "status": "pending", "acted_by": None, "acted_at": None, "reason": None}
+            self._approval_steps.append(step)
+            created.append(dict(step))
+        return created
+
+    async def pending_approval_steps(self, license_id, *, member_id=None, roles=()):
+        self._approval_state()
+        lowest = {}
+        for s in sorted(self._approval_steps, key=lambda s: s["step_order"]):
+            if s["status"] == "pending" and s["entity_id"] not in lowest:
+                lowest[s["entity_id"]] = s
+        return [
+            dict(s) for s in lowest.values()
+            if (s["approver_type"] == "user" and s["approver_ref"] == str(member_id))
+            or (s["approver_type"] == "role" and s["approver_ref"] in set(roles))
+        ]
+
+    async def approval_steps_for_entity(self, license_id, entity_type, entity_id):
+        self._approval_state()
+        return [dict(s) for s in sorted(self._approval_steps, key=lambda s: s["step_order"])
+                if s["entity_id"] == entity_id]
+
+    async def act_on_approval_step(self, license_id, step_id, *, approve, member_id=None, roles=(), reason=None, actor_id=None):
+        from chann_app.data_client import DataTierError
+
+        self._approval_state()
+        self.recorded.append(("act_on_approval_step", license_id, step_id, approve, reason))
+        step = next((s for s in self._approval_steps if s["id"] == step_id), None)
+        if step is None:
+            raise DataTierError(404, "not found")
+        if step["status"] != "pending":
+            raise DataTierError(409, "step already acted on")
+        mine = (step["approver_type"] == "user" and step["approver_ref"] == str(member_id)) or (
+            step["approver_type"] == "role" and step["approver_ref"] in set(roles))
+        if not mine:
+            raise DataTierError(409, "not this member's step to act on")
+        step["status"] = "approved" if approve else "rejected"
+        step["acted_by"] = member_id
+        step["reason"] = reason
+        report = next((r for r in getattr(self, "_reports", []) if r["id"] == step["entity_id"]), None)
+        survey = None
+        if not approve:
+            report_status = "rejected"
+        elif any(s["status"] == "pending" and s["entity_id"] == step["entity_id"] for s in self._approval_steps):
+            report_status = "submitted"
+        else:
+            report_status = "approved"
+            ticket_id = (report or {}).get("ticket_id")
+            survey = next((v for v in self._surveys if v["ticket_id"] == ticket_id), None)
+            if survey is None:
+                survey = {"id": f"survey-{ticket_id}", "ticket_id": ticket_id,
+                          "scale_config_json": {"1": "ไม่ดี", "2": "พอใช้", "3": "ดีเยี่ยม"},
+                          "score": None, "comment": None, "sent_at": None, "submitted_at": None}
+                self._surveys.append(survey)
+        if report is not None:
+            report["status"] = report_status
+        return {"step": dict(step), "report_status": report_status,
+                "survey": dict(survey) if survey else None}
+
+    async def pending_survey_for_ticket(self, license_id, ticket_id):
+        self._approval_state()
+        survey = next((v for v in self._surveys if v["ticket_id"] == ticket_id and not v["submitted_at"]), None)
+        return dict(survey) if survey else None
+
+    async def mark_survey_sent(self, license_id, survey_id):
+        self._approval_state()
+        self.recorded.append(("mark_survey_sent", license_id, survey_id))
+        survey = next(v for v in self._surveys if v["id"] == survey_id)
+        survey["sent_at"] = "2026-09-03T09:00:00+07:00"
+        return dict(survey)
+
+    async def answer_survey(self, license_id, survey_id, *, score, comment=None, actor_id=None):
+        from chann_app.data_client import DataTierError
+
+        self._approval_state()
+        self.recorded.append(("answer_survey", license_id, survey_id, score, comment))
+        survey = next((v for v in self._surveys if v["id"] == survey_id), None)
+        if survey is None:
+            raise DataTierError(404, "not found")
+        if survey["submitted_at"]:
+            raise DataTierError(409, "survey already answered")
+        if str(score) not in survey["scale_config_json"]:
+            raise DataTierError(409, f"score {score} is not on this survey's scale")
+        survey.update(score=score, comment=comment, submitted_at="2026-09-03T10:00:00+07:00")
+        return dict(survey)
 
     async def permission_catalog(self):
         return _catalog()
@@ -371,7 +507,11 @@ class FakeDataClient:
         if blocked:
             from chann_app.data_client import DataTierError
             raise DataTierError(409, str(blocked), blocked)
-        return {"id": "sr-1", "report_id": "SR-2026-0001"}
+        # ServiceReportOut carries ticket_id and technician_member_id; the
+        # approval executor reads both (who to ask, who to tell on reject).
+        return {"id": "sr-1", "report_id": "SR-2026-0001", "ticket_id": ticket_id,
+                "technician_member_id": member_id, "status": "submitted",
+                "report_data": dict(report_data)}
 
     async def claim_ticket(self, license_id, ticket_id, member_id, actor_id=None):
         self.recorded.append(("claim_ticket", license_id, ticket_id, member_id))
@@ -388,6 +528,28 @@ class FakeDataClient:
 
     async def get_assignment_rules(self, license_id):
         return list(getattr(self, "_assignment_rules", []))
+
+    async def list_roles(self, license_id):
+        # Mirrors RoleOut's shape as far as chat reads it (role_name).
+        return list(getattr(self, "_roles", [
+            {"role_name": "owner", "is_owner": True, "permission_keys": []},
+            {"role_name": "admin", "is_owner": False, "permission_keys": []},
+            {"role_name": "cs", "is_owner": False, "permission_keys": []},
+            {"role_name": "technician", "is_owner": False, "permission_keys": []},
+        ]))
+
+    # Notification pipeline (Phase 6), as the approval executor drives it.
+    async def line_target_of(self, chann_uid):
+        return getattr(self, "_line_targets", {}).get(chann_uid)
+
+    async def create_notification(self, license_id, *, target_chann_uid, type, message,
+                                  message_en=None, entity_type=None, entity_id=None,
+                                  delivery_line=True, delivery_dashboard=True):
+        row = {"id": f"notif-{len(self.recorded)}", "target_chann_uid": target_chann_uid,
+               "type": type, "message": message, "entity_type": entity_type,
+               "entity_id": entity_id}
+        self.recorded.append(("create_notification", license_id, target_chann_uid, type, message))
+        return row
 
     async def get_last_entity_ref(self, chann_uid, oa):
         self.recorded.append(("get_last_entity_ref", chann_uid, oa))

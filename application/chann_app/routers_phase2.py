@@ -1,6 +1,7 @@
 """Phase 2 business API: roles, permissions, settings and owner transfer."""
 from __future__ import annotations
 
+import logging
 import re
 import uuid
 
@@ -13,9 +14,11 @@ from pydantic import BaseModel, Field
 from .config import settings
 from .data_client import DataClient, DataTierError
 from .routers_admin import get_data_client, require_admin
+from .services import approval as approval_service
 from .services.authorization import TenantPrincipal, resolve_tenant_principal
 
 router = APIRouter(prefix="/api/v1", tags=["phase2"])
+log = logging.getLogger(__name__)
 
 
 class RoleWriteIn(BaseModel):
@@ -990,6 +993,204 @@ async def my_warranties(
         raise _propagate(exc)
 
 
+# ----------------------------------------------------------------- approvals
+#
+# Phase 14-B. Every route here is a thin wrapper around services/approval.py,
+# which is also what chat calls — Master Spec 14.6's chat-vs-dashboard
+# parity is a property of the code, not of a test that hopes the two
+# paths stayed in step.
+
+
+@router.get("/licenses/{license_id}/approvals/pending")
+async def pending_approvals(
+    license_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """What is waiting on THIS person: the step, the report and its ticket."""
+    _require_same_tenant(principal, license_id)
+    principal.require("approval.view")
+    try:
+        steps = await approval_service.pending_for_actor(
+            client, license_id=license_id, chann_uid=principal.chann_uid,
+        )
+        if not steps:
+            return []
+        reports = {str(r.get("id")): r for r in await client.list_service_reports(license_id)}
+        tickets = {str(t.get("id")): t for t in await client.list_tickets(license_id)}
+    except DataTierError as exc:
+        raise _propagate(exc)
+    out = []
+    for step in steps:
+        report = reports.get(str(step.get("entity_id")))
+        ticket = tickets.get(str((report or {}).get("ticket_id") or "")) if report else None
+        out.append({"step": step, "report": report, "ticket": ticket})
+    return out
+
+
+@router.post("/licenses/{license_id}/approvals/{step_id}/approve")
+async def approve_step(
+    license_id: str,
+    step_id: str,
+    payload: dict | None = None,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    _require_same_tenant(principal, license_id)
+    principal.require("approval.approve")
+    try:
+        return await approval_service.act(
+            client, license_id=license_id, step_id=step_id, approve=True,
+            actor_chann_uid=principal.chann_uid,
+            reason=str((payload or {}).get("reason") or "") or None,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.post("/licenses/{license_id}/approvals/{step_id}/reject")
+async def reject_step(
+    license_id: str,
+    step_id: str,
+    payload: dict,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    _require_same_tenant(principal, license_id)
+    principal.require("approval.reject")
+    reason = str(payload.get("reason") or "").strip()
+    if not reason:
+        # The technician has to be told what to fix; a reject with no
+        # reason is a dead end for them. Chat enforces the same.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"error": "reason_required"},
+        )
+    try:
+        return await approval_service.act(
+            client, license_id=license_id, step_id=step_id, approve=False,
+            actor_chann_uid=principal.chann_uid, reason=reason,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.get("/licenses/{license_id}/approval-workflows/{entity_type}")
+async def get_approval_workflow(
+    license_id: str,
+    entity_type: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    _require_same_tenant(principal, license_id)
+    principal.require("approval.view")
+    try:
+        workflow = await approval_service.current_workflow(
+            client, license_id=license_id, entity_type=entity_type,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+    return {
+        **(workflow or {}),
+        "summary": approval_service.describe_workflow((workflow or {}).get("rules_json") or {}),
+    }
+
+
+@router.put("/licenses/{license_id}/approval-workflows/{entity_type}")
+async def put_approval_workflow(
+    license_id: str,
+    entity_type: str,
+    payload: dict,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Replace the flow — from a typed policy (the same model call chat
+    uses) or from structured rules the config page assembled."""
+    from .services.ai.approval_policy import policy_to_workflow, validate_workflow
+
+    _require_same_tenant(principal, license_id)
+    principal.require("approval.manage")
+    try:
+        roles = [str(r.get("role_name")) for r in await client.list_roles(license_id) if r.get("role_name")]
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+    policy = str(payload.get("policy") or "").strip()
+    rules = payload.get("rules_json")
+    if policy:
+        rules, problems = await policy_to_workflow(policy, roles=roles)
+        if rules is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"error": "policy_not_understood", "problems": problems},
+            )
+    elif isinstance(rules, dict):
+        problems = validate_workflow(rules, roles=roles)
+        if problems:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"error": "workflow_invalid", "problems": problems},
+            )
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"error": "policy_or_rules_required"},
+        )
+    try:
+        saved = await approval_service.replace_workflow(
+            client, license_id=license_id, rules_json=rules,
+            actor_chann_uid=principal.chann_uid, entity_type=entity_type,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+    return {**(saved or {}), "summary": approval_service.describe_workflow(rules)}
+
+
+@router.get("/licenses/{license_id}/surveys/pending")
+async def pending_survey(
+    license_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """The customer's own unanswered survey, for the home-screen card
+    (parity with the quick reply chat pushes)."""
+    _require_same_tenant(principal, license_id)
+    principal.require("ticket.read")
+    try:
+        survey, ticket = await approval_service.pending_survey_for_customer(
+            client, license_id=license_id, customer_chann_uid=principal.chann_uid,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+    return {"survey": survey, "ticket": ticket}
+
+
+@router.post("/licenses/{license_id}/surveys/{survey_id}/answer")
+async def answer_survey(
+    license_id: str,
+    survey_id: str,
+    payload: dict,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    _require_same_tenant(principal, license_id)
+    principal.require("ticket.read")
+    try:
+        score = int(payload.get("score"))
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"error": "score_required"},
+        )
+    try:
+        return await approval_service.answer_survey(
+            client, license_id=license_id, survey_id=survey_id, score=score,
+            comment=str(payload.get("comment") or "") or None,
+            actor_chann_uid=principal.chann_uid,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
 # ------------------------------------------------------------------- tickets
 #
 # Phase 12/13 built these in the Data tier and nowhere else, so every
@@ -1066,7 +1267,7 @@ async def check_out_ticket(
     _require_same_tenant(principal, license_id)
     principal.require("ticket.update")
     try:
-        return await client.check_out_ticket(
+        report = await client.check_out_ticket(
             license_id, ticket_id,
             member_id=str(payload.get("member_id") or ""),
             # Check-out IS the service report: the Data Tier writes the
@@ -1077,6 +1278,14 @@ async def check_out_ticket(
             photo_url=payload.get("photo_url"),
             actor_id=principal.chann_uid,
         )
+        # Phase 14-B: the same hook chat calls — open the approval steps
+        # and tell the first approver now. Best-effort: the check-out is
+        # committed, and a LINE failure must not turn it into a 500.
+        try:
+            await approval_service.on_report_submitted(client, license_id=license_id, report=report)
+        except Exception:  # noqa: BLE001
+            log.exception("approval steps could not be opened for %s", report.get("report_id"))
+        return report
     except DataTierError as exc:
         raise _propagate(exc)
 

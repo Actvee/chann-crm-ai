@@ -51,6 +51,11 @@ ACCEPTED = {
     ("line_item", "read"): "chat shows a quote's lines inside the quote detail, not as its own command",
     ("role", "delete"): "dashboard only — deleting a role is an admin screen job, with the members list in view",
     ("setting", "create"): "the settings screen upserts; chat updates the same keys",
+    # Phase 14: a customer answers the survey from the quick reply chat
+    # pushes and from the home-screen card; there is no staff permission
+    # behind it, so it is not an (action, entity) in ACTION_PERMISSIONS.
+    ("survey", "read"): "customer home card; chat pushes the survey itself",
+    ("survey", "update"): "customer answers in chat (quick reply) and on the home card",
 }
 
 # Real gaps, planned rather than accepted. Listed separately so the
@@ -61,12 +66,20 @@ KNOWN_GAPS = {
     ("ticket", "close"): "closing is chat-only, same reason",
     ("ticket", "update"): "editing a ticket is chat-only, same reason",
     ("product", "delete"): "the catalogue screen upserts but cannot remove; no Application route for it either",
+    # Phase 14-B registered the chat side; the queue + config pages are 14-C.
+    ("approval", "read"): "approval queue page lands in 14-C",
+    ("approval", "approve"): "approval queue page lands in 14-C",
+    ("approval", "reject"): "approval queue page lands in 14-C",
+    ("approval", "update"): "approval config page lands in 14-C",
 }
 
 # URL fragment -> entity. Longest match wins, so "quotes/X/products"
 # resolves to line_item rather than quote.
 URL_ENTITIES = [
+    ("approval-workflows", "approval"),
     ("service-reports", "service_report"),
+    ("approvals", "approval"),
+    ("surveys", "survey"),
     ("follow-ups", "followup"),
     ("audit", "audit_log"),
     ("sales-groups", "sales_group"),
@@ -96,6 +109,10 @@ VERB_SEGMENTS = {
     "issue": "update", "status": "update", "check-in": "check_in",
     "check-out": "check_out", "link": "read", "preview": "read",
     "publish": "update", "reopen": "update",
+    # Phase 14: acting on an approval step; answering a survey is the
+    # customer updating their own row.
+    "approve": "approve", "reject": "reject", "answer": "update",
+    "pending": "read",
 }
 
 

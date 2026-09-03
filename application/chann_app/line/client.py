@@ -169,17 +169,21 @@ async def push_text(
     to_line_user_id: str,
     text: str,
     client: httpx.AsyncClient | None = None,
-) -> None:
-    """Unsolicited push — Master Spec 6.8.
+) -> list[str]:
+    """Unsolicited push — Master Spec 6.8. Returns the sent message ids.
 
     Separate from reply_text because push has no replyToken and is billed and
     rate-limited differently by LINE; a reply token is also single-use and
     expires, so it cannot serve a notification raised minutes later.
+
+    The ids used to be discarded, so a pushed notification could never be
+    replied to: "reply to the approval request and type อนุมัติ" had nothing
+    to map the reply onto (Phase 14-B).
     """
     if not to_line_user_id:
         raise LineReplyError("push requires a target LINE user id")
 
-    await _send(
+    return await _send(
         LINE_PUSH_URL, oa,
         {"to": to_line_user_id, "messages": [text_message(text)]},
         client, "push",
@@ -191,12 +195,12 @@ async def push_messages(
     to_line_user_id: str,
     messages: list[dict],
     client: httpx.AsyncClient | None = None,
-) -> None:
+) -> list[str]:
     if not to_line_user_id:
         raise LineReplyError("push requires a target LINE user id")
     if not messages:
         raise LineReplyError("push requires at least one message")
-    await _send(
+    return await _send(
         LINE_PUSH_URL, oa,
         {"to": to_line_user_id, "messages": messages[:MAX_MESSAGES_PER_REQUEST]},
         client, "push",

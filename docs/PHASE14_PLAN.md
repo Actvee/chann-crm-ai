@@ -89,10 +89,50 @@
 
 ---
 
-## สถานะ 14-A (3 ก.ย.) — เสร็จ รอ deploy
+## สถานะ 14-A (3 ก.ย.) — deploy แล้ว (`5598ad1`)
 
 Data tier ทั้งหมดของ Phase 14: migration `0021_approvals`, model 3 ตัว,
 `repositories/phase14.py`, internal routes 9 เส้น, integration tests 12
 ตัว (รวม HTTP และ multi-tenant) — ทั้งหมดผ่านบน Postgres จริง
 `EXPECTED_MIGRATION_HEAD` ของ data tier เป็น `0021_approvals` แล้ว จึงต้อง
 **รัน migration job ก่อน deploy data image** (script จัดลำดับให้)
+ชื่อจริงใน repo ต่างจากแผน: `active_workflow` / `open_steps_for_report` /
+`act` / `_ensure_survey` / `submit_survey` — ดู `phase14.py`
+
+## สถานะ 14-B (3 ก.ย.) — เสร็จ (`phase14b-v1`)
+
+Application tier ครบตามแผน โดยยึด **domain service ตัวเดียว**
+`application/chann_app/services/approval.py` ที่ทั้งแชทและ route เรียก:
+
+- `on_report_submitted` — hook หลัง check-out สำเร็จ **ทั้ง 2 ทาง** (route
+  `tickets/{id}/check-out` และแชท 2 จุดใน `_handle_check_out`): เปิด steps
+  แล้ว push LINE ถึงผู้อนุมัติขั้นแรก **ทันที** (ข้อ 2) ข้อความที่ push ถูก
+  map ใน `line_message_entity_map` (notify.py บันทึก id ที่ `push_text` คืน
+  มา) จึง **reply ข้อความแจ้งเตือนแล้วพิมพ์ "อนุมัติ" ได้**
+- `act` — อนุมัติ/ไม่อนุมัติ ผ่าน `act_on_approval_step` ของ data tier (กฎ
+  อยู่ฝั่งนั้น) แล้วทำผลลัพธ์: rejected → แจ้งช่างทาง Technician OA พร้อม
+  เหตุผล · approved (ขั้นสุดท้าย) → `send_survey` quick reply 1–3 ไปที่
+  Customer OA (message action ส่งตัวเลข ไม่ใช่ postback — webhook เดิมรับได้)
+  → `mark_survey_sent` · ยังมีขั้นต่อ → แจ้งผู้อนุมัติขั้นถัดไป
+- แชท Sale OA (longest-first: ตั้งการอนุมัติ → ยืนยันการอนุมัติ → ดูการอนุมัติ
+  ปัจจุบัน → รายการรออนุมัติ → ไม่อนุมัติ → อนุมัติ): ระบุรายงานได้ 4 ทาง
+  รหัส `SR-…` / บริบทที่เพิ่งดู / reply ข้อความแจ้งเตือน / มีรายการเดียว —
+  หลายรายการได้ปุ่มเลือก (กติกา 3) · ไม่อนุมัติต้องมีเหตุผล · 409/404 เป็นไทย
+- นโยบายด้วยภาษาคน: `services/ai/approval_policy.py` (prompt ปิด vocab,
+  validate โครงสร้างเหมือน `replace_workflow` + บทบาทต้องมีจริง) → โชว์กลับ
+  → `ยืนยันการอนุมัติ` → `replace_approval_workflow` · gate `approval.manage`
+  (key ใหม่ใน catalogue — data tier; owner/admin/cs ได้ตาม template)
+- Customer OA: ตอบ survey ด้วยเลข 1–3 หรือคำในสเกล ก่อน catch-all แจ้งซ่อม;
+  ไม่มี survey ค้าง = ข้อความเดิมเป็นอะไรก็เป็นอย่างนั้น
+- Routes สำหรับ 14-C: `GET approvals/pending`, `POST approvals/{step}/approve|
+  reject`, `GET|PUT approval-workflows/{entity}` (PUT รับ `policy` ข้อความ
+  หรือ `rules_json`), `GET surveys/pending`, `POST surveys/{id}/answer`
+- `ACTION_PERMISSIONS` ลงทะเบียน read/approve/reject/update ของ `approval`;
+  check-parity ถือเป็น KNOWN_GAPS จนกว่า 14-C จะมา
+- Tests: `tests/unit/test_phase14_chat.py` (รวม chat-vs-dashboard parity:
+  route กับ handler บันทึก call เดียวกัน) · simulate-day มี scene
+  `approval_day` (check-out → approve → survey → reject → ตั้ง flow)
+
+**ยังไม่ทำใน 14-B**: ลายเซ็นบน PDF ตอน approve (spec 14.5 บรรทัดสุดท้าย —
+ต่อกับ Phase 13 PDF ซึ่งยังไม่มี renderer จริง); AI ตัดสินอนุมัติเอง
+(`ai_reasoning` วางคอลัมน์ไว้เฉยๆ ตามแผน)

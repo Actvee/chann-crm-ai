@@ -185,7 +185,24 @@ same audit, application tier only (plus two env vars in `cloud_run.tf`):
   `15/03/26` is 2026, not 1983.
 - Help and "what you can do" are filtered by OA; technician help offers
   งานของฉัน/งานที่เปิดรับ.
-Tests: `tests/unit/test_chat_audit_fixes.py` (17). Still open from the
+**`phase14b-v1` (3 Sep, after `chat-audit-v1`)** — Phase 14-B, the
+application half of approvals. One domain service
+(`services/approval.py`) behind both surfaces; the check-out hook in the
+route and in both chat check-out paths; chat commands รายการรออนุมัติ /
+อนุมัติ / ไม่อนุมัติ <เหตุผล> / ตั้งการอนุมัติ … / ยืนยันการอนุมัติ / ดูการอนุมัติ
+ปัจจุบัน; reply-to-notification works because `push_text` now returns the
+sent ids and `send_notification` maps them; the survey goes out as 1–3
+quick replies on the Customer OA and the customer's digit is recorded
+before the fault-report catch-all can see it. New permission key
+`approval.manage` (data tier — the deploy rebuilds the data image; no
+migration). Routes for 14-C are in `routers_phase2.py` under "approvals".
+Details and what was deliberately left out: `docs/PHASE14_PLAN.md`
+"สถานะ 14-B". Tests: `tests/unit/test_phase14_chat.py`; simulate-day
+scene `approval_day`. Next: **14-C** — queue page, config page, survey
+card, then the runtime acceptance walk (ช่าง check-out → CS LINE →
+อนุมัติในแชท → ลูกค้าได้ survey → ตอบ) on DEV with real OAs.
+
+Tests for the chat audit: `tests/unit/test_chat_audit_fixes.py` (17). Still open from the
 audit: chat cannot attach photos/GPS (webhook drops non-text messages);
 `team/sales_group/role/member/setting/audit_log` intents are accepted by
 `check-parity` but reach the not-yet stub; the English (`en`) reply

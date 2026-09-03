@@ -99,6 +99,12 @@ ACTION_PERMISSIONS: dict[tuple[str, str], str] = {
     ("read", "service_report"): "service_report.read",
     ("create", "service_report"): "service_report.create",
     ("update", "service_report"): "service_report.update",
+    # Phase 14-B — approvals. Registered here first so check-parity holds
+    # 14-C (the queue and config pages) to the same set.
+    ("read", "approval"): "approval.view",
+    ("approve", "approval"): "approval.approve",
+    ("reject", "approval"): "approval.reject",
+    ("update", "approval"): "approval.manage",
     ("read", "warranty"): "warranty.read",
     ("create", "warranty"): "warranty.create",
     ("update", "warranty"): "warranty.update",
@@ -724,6 +730,10 @@ WORK_HEADING = {
 # Codes are how a person names a record in chat. The prefix tells us which
 # kind it is, so one regex covers all three without the caller having to say.
 ENTITY_CODE_RE = re.compile(r"\b([CDQ]-\d{4}-\d{4})\b", re.IGNORECASE)
+# Service reports (SR-2026-0001). Lookarounds, not \b: Thai letters are
+# word characters, so \b never fires between "ของ" and "SR-…" and the code
+# in "อนุมัติรายงานของSR-2026-0001" would be invisible.
+SERVICE_REPORT_CODE_RE = re.compile(r"(?<![A-Za-z0-9])(SR-\d{4}-\d{4})(?![0-9])", re.IGNORECASE)
 
 CODE_PREFIX_TO_ENTITY = {"C": "customer", "D": "deal", "Q": "quote"}
 
@@ -746,6 +756,9 @@ async def _resolve_entity(client: DataClient, license_id: str, entity_type: str,
     if entity_type == "deal":
         rows = await client.list_deals(license_id)
         return next((r for r in rows if str(r.get("deal_id", "")).upper() == code), None)
+    if entity_type == "service_report":
+        rows = await client.list_service_reports(license_id)
+        return next((r for r in rows if str(r.get("report_id", "")).upper() == code), None)
     rows = await client.list_quotes(license_id)
     return next((r for r in rows if str(r.get("quote_id", "")).upper() == code), None)
 
@@ -779,6 +792,11 @@ async def _code_for_entity(
         elif entity_type == "quote":
             rows = await client.list_quotes(license_id)
             key = "quote_id"
+        elif entity_type == "service_report":
+            # So that replying to the approval notification and typing
+            # "อนุมัติ" resolves the report the notification was about.
+            rows = await client.list_service_reports(license_id)
+            key = "report_id"
         else:
             return None
     except Exception:
@@ -3070,6 +3088,7 @@ async def _handle_check_out(
         except Exception:
             log.exception("check-out failed")
             return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+        await _after_report_submitted(client, license_id, result, language)
         return ChatReply(
             text=_t(CHECKOUT_DONE, language).format(
                 code=code, report=result.get("report_id") or "",
@@ -3127,12 +3146,27 @@ async def _handle_check_out(
         log.exception("check-out failed")
         return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
 
+    await _after_report_submitted(client, license_id, result, language)
     return ChatReply(
         text=_t(CHECKOUT_DONE, language).format(
             code=code, report=result.get("report_id") or "",
         ),
         entity_type="service_report", entity_id=str(result.get("id") or ""),
     )
+
+
+async def _after_report_submitted(client: DataClient, license_id, result: dict, language: str) -> None:
+    """Phase 14-B: the check-out committed; open its approval steps and
+    tell the first approver now. Best-effort — a notification failure
+    must never read as a failed check-out to the technician."""
+    from . import approval as approval_service
+
+    try:
+        await approval_service.on_report_submitted(
+            client, license_id=str(license_id), report=result, language=language,
+        )
+    except Exception:
+        log.exception("approval steps could not be opened for %s", result.get("report_id"))
 
 
 # ------------------------------------------------------- Phase 12 tickets
@@ -3796,6 +3830,425 @@ async def _handle_ticket_claim(
             when=_ticket_when(claimed),
         ),
         entity_type="service_ticket", entity_id=str(claimed.get("id") or ""),
+    )
+
+
+# ------------------------------------------------------ Phase 14-B approvals
+#
+# The chat side of the approval workflow. Every write goes through
+# services/approval.py — the same function the dashboard routes call — so
+# an approval from a phone and one from the queue page are the same
+# transaction, the same notifications, the same survey.
+
+APPROVAL_POLICY_TRIGGERS = (
+    "ตั้งการอนุมัติ", "ตั้งขั้นตอนอนุมัติ", "ตั้งกฎอนุมัติ", "approval policy",
+)
+APPROVAL_POLICY_CONFIRM = ("ยืนยันการอนุมัติ", "ยืนยันขั้นตอนอนุมัติ", "confirm approval flow")
+APPROVAL_POLICY_SHOW = (
+    "ดูการอนุมัติปัจจุบัน", "การอนุมัติปัจจุบัน", "ดูขั้นตอนอนุมัติ", "ขั้นตอนอนุมัติ",
+    "show approval flow",
+)
+APPROVAL_LIST_PHRASES = (
+    "รายการรออนุมัติ", "รออนุมัติ", "งานรออนุมัติ", "รายงานรออนุมัติ", "รอตรวจ",
+    "pending approvals",
+)
+APPROVAL_REJECT_TRIGGERS = ("ไม่อนุมัติ", "ตีกลับ", "reject")
+APPROVAL_APPROVE_TRIGGERS = ("อนุมัติ", "approve")
+
+APPROVAL_NONE_PENDING = {
+    "th": "ไม่มีรายงานที่รอคุณอนุมัติตอนนี้ครับ",
+    "en": "Nothing is waiting for your approval right now.",
+}
+APPROVAL_LIST_HEAD = {"th": "รายงานที่รอคุณตรวจ:", "en": "Waiting for your review:"}
+APPROVAL_LIST_LINE = {
+    "th": "· {report} — {ticket}{customer}{found}",
+    "en": "· {report} — {ticket}{customer}{found}",
+}
+APPROVAL_PICK_ONE = {
+    "th": "มีหลายรายการรออยู่ เลือกรายงานที่ต้องการครับ",
+    "en": "Several are waiting — pick one.",
+}
+APPROVAL_NOT_YOURS = {
+    "th": "ไม่มีรายงาน {code} ที่รอคุณอนุมัติครับ อาจอนุมัติไปแล้ว หรือยังไม่ถึงขั้นของคุณ",
+    "en": "{code} is not waiting for you — it may be done already, or not at your step yet.",
+}
+APPROVAL_APPROVED = {
+    "th": "อนุมัติ {code} แล้ว{next}",
+    "en": "Approved {code}.{next}",
+}
+APPROVAL_NEXT_SURVEY_SENT = {
+    "th": "\nครบทุกขั้นแล้ว ส่งแบบประเมินความพึงพอใจให้ลูกค้าแล้ว",
+    "en": "\nAll steps passed — the customer has been sent the survey.",
+}
+APPROVAL_NEXT_SURVEY_NOT_SENT = {
+    "th": "\nครบทุกขั้นแล้ว (ลูกค้าไม่มี LINE ที่ผูกไว้ จึงยังไม่ได้ส่งแบบประเมิน)",
+    "en": "\nAll steps passed (the customer has no LINE on file, so no survey was sent).",
+}
+APPROVAL_NEXT_STEP = {
+    "th": "\nส่งต่อให้ขั้นถัดไปแล้ว",
+    "en": "\nPassed on to the next approver.",
+}
+APPROVAL_REJECTED = {
+    "th": "ตีกลับ {code} แล้ว{reason}\nแจ้งช่างให้แก้แล้ว",
+    "en": "Rejected {code}{reason}. The technician has been told.",
+}
+APPROVAL_REJECT_NEEDS_REASON = {
+    "th": "บอกเหตุผลด้วยครับ เช่น \"ไม่อนุมัติ {code} รูปไม่ครบ\" — ช่างจะได้รู้ว่าต้องแก้อะไร",
+    "en": "Add a reason, e.g. \"reject {code} photos missing\" — the technician needs to know what to fix.",
+}
+APPROVAL_ACT_CONFLICT = {
+    "th": "ทำรายการกับ {code} ไม่ได้ครับ อาจมีคนอนุมัติไปแล้ว หรือยังไม่ถึงขั้นของคุณ",
+    "en": "Could not act on {code} — someone may have already, or it is not at your step.",
+}
+APPROVAL_POLICY_NEEDS_TEXT = {
+    "th": "พิมพ์นโยบายต่อท้ายด้วย เช่น \"ตั้งการอนุมัติ ให้ CS ก่อน แล้วต่อด้วย admin\"",
+    "en": "Add the policy, e.g. \"approval policy: CS first, then admin\".",
+}
+APPROVAL_POLICY_NOT_UNDERSTOOD = {
+    "th": "ยังแปลงเป็นขั้นตอนอนุมัติไม่ได้:\n{problems}\n\nบอกได้ว่าใครตรวจก่อน ใครตรวจต่อ เช่น \"ให้ CS ก่อน แล้วต่อด้วย admin\"",
+    "en": "Could not turn that into an approval flow:\n{problems}",
+}
+APPROVAL_POLICY_REVIEW = {
+    "th": "นี่คือขั้นตอนที่ได้ ตรวจดูก่อนบันทึก:\n\n{summary}\n\nถ้าถูกต้องพิมพ์ \"ยืนยันการอนุมัติ\"",
+    "en": "Here is the flow — check it before saving:\n\n{summary}\n\nType \"confirm approval flow\" to save.",
+}
+APPROVAL_POLICY_SAVED = {
+    "th": "บันทึกขั้นตอนอนุมัติแล้ว รายงานที่ปิดงานหลังจากนี้จะเดินตามนี้\n\n{summary}",
+    "en": "Approval flow saved. Reports checked out from now on follow it.\n\n{summary}",
+}
+APPROVAL_POLICY_NOTHING_PENDING = {
+    "th": "ยังไม่มีขั้นตอนที่รอยืนยัน พิมพ์ \"ตั้งการอนุมัติ ...\" ก่อน",
+    "en": "No approval flow is waiting for confirmation.",
+}
+APPROVAL_POLICY_CURRENT = {
+    "th": "ขั้นตอนอนุมัติปัจจุบัน:\n{summary}",
+    "en": "Current approval flow:\n{summary}",
+}
+SURVEY_THANKS = {
+    "th": "ขอบคุณครับ บันทึกคะแนน \"{label}\" ให้งาน {ticket} แล้ว",
+    "en": "Thank you — \"{label}\" recorded for job {ticket}.",
+}
+SURVEY_ALREADY_ANSWERED = {
+    "th": "ตอบแบบประเมินของงานนี้ไปแล้วครับ ขอบคุณครับ",
+    "en": "This job's survey was already answered — thank you.",
+}
+SURVEY_OFF_SCALE = {
+    "th": "เลือกได้เฉพาะ {scale} ครับ",
+    "en": "Please pick one of {scale}.",
+}
+APPROVAL_DRAFT_TTL_S = 900
+
+
+async def _approval_candidates(
+    client: DataClient, *, ctx: ResolvedContext, license_id: str,
+) -> list[tuple[dict, dict, dict]]:
+    """(step, report, ticket) for every step waiting on this person."""
+    from . import approval as approval_service
+
+    steps = await approval_service.pending_for_actor(
+        client, license_id=license_id, chann_uid=ctx.chann_uid,
+    )
+    if not steps:
+        return []
+    reports = {str(r.get("id")): r for r in await client.list_service_reports(license_id)}
+    tickets = {str(t.get("id")): t for t in await client.list_tickets(license_id)}
+    out = []
+    for step in steps:
+        report = reports.get(
+            str(step.get("entity_id")), {"id": step.get("entity_id"), "report_id": ""},
+        )
+        ticket = tickets.get(str(report.get("ticket_id") or ""), {})
+        out.append((step, report, ticket))
+    return out
+
+
+def _approval_line(report: dict, ticket: dict, language: str) -> str:
+    found = str((report.get("report_data") or {}).get("found_issue") or "").strip()
+    return _t(APPROVAL_LIST_LINE, language).format(
+        report=report.get("report_id") or "",
+        ticket=ticket.get("ticket_number") or "",
+        customer=f" · {ticket['customer_name']}" if ticket.get("customer_name") else "",
+        found=f"\n   {found[:60]}" if found else "",
+    )
+
+
+async def _handle_approval_list(
+    client: DataClient, *, ctx: ResolvedContext, license_id,
+    permission_keys: list[str], language: str,
+) -> ChatReply:
+    if "approval.view" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    try:
+        candidates = await _approval_candidates(client, ctx=ctx, license_id=str(license_id))
+    except Exception:
+        log.exception("approval list failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    if not candidates:
+        return ChatReply(text=_t(APPROVAL_NONE_PENDING, language))
+    lines = [_t(APPROVAL_LIST_HEAD, language)] + [
+        _approval_line(report, ticket, language)
+        for _, report, ticket in candidates[:LIST_LIMIT]
+    ]
+    return ChatReply(
+        text="\n".join(lines),
+        quick_replies=[
+            (str(report.get("report_id") or ""), f"อนุมัติ {report.get('report_id')}")
+            for _, report, _ in candidates[:4] if report.get("report_id")
+        ],
+    )
+
+
+async def _handle_approval_act(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
+    permission_keys: list[str], language: str, approve: bool, trigger: str,
+) -> ChatReply:
+    """Approve or reject one report: by code, by the record just looked at
+    (or replied to), or — when exactly one is waiting — by itself."""
+    from . import approval as approval_service
+
+    needed = "approval.approve" if approve else "approval.reject"
+    if needed not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    license_id = str(license_id)
+
+    match = SERVICE_REPORT_CODE_RE.search(message or "")
+    code = match.group(1).upper() if match else ""
+    if not code:
+        # The report we were just looking at — or the one whose
+        # notification this message replies to (handle_reply seeds it).
+        try:
+            ref = await client.get_last_entity_ref(ctx.chann_uid, ctx.oa)
+        except Exception:
+            ref = None
+        if ref and ref.get("entity_type") == "service_report" and ref.get("code"):
+            code = str(ref["code"]).upper()
+
+    try:
+        candidates = await _approval_candidates(client, ctx=ctx, license_id=license_id)
+    except Exception:
+        log.exception("could not list pending approvals")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    if code:
+        chosen = next(
+            (c for c in candidates if str(c[1].get("report_id") or "").upper() == code), None,
+        )
+        if chosen is None:
+            return ChatReply(text=_t(APPROVAL_NOT_YOURS, language).format(code=code))
+    elif len(candidates) == 1:
+        chosen = candidates[0]
+    elif not candidates:
+        return ChatReply(text=_t(APPROVAL_NONE_PENDING, language))
+    else:
+        # Buttons, one per report, re-sending the same command with the
+        # code — never a guess (rule 3).
+        return ChatReply(
+            text=_t(APPROVAL_PICK_ONE, language) + "\n"
+            + "\n".join(_approval_line(r, t, language) for _, r, t in candidates[:LIST_LIMIT]),
+            quick_replies=[
+                (str(r.get("report_id") or ""), f"{trigger} {r.get('report_id')}")
+                for _, r, _ in candidates[:4] if r.get("report_id")
+            ],
+        )
+
+    step, report, _ticket = chosen
+    report_code = str(report.get("report_id") or code)
+    reason: str | None = None
+    if not approve:
+        rest = message or ""
+        if code:
+            rest = re.sub(re.escape(code), " ", rest, flags=re.IGNORECASE)
+        index = rest.lower().find(trigger.lower())
+        if index >= 0:
+            rest = rest[index + len(trigger):]
+        reason = rest.strip(" :·-\n") or None
+        if not reason:
+            return ChatReply(
+                text=_t(APPROVAL_REJECT_NEEDS_REASON, language).format(code=report_code),
+            )
+
+    try:
+        result = await approval_service.act(
+            client, license_id=license_id, step_id=str(step.get("id") or ""),
+            approve=approve, actor_chann_uid=ctx.chann_uid, reason=reason, language=language,
+        )
+    except DataTierError as exc:
+        if exc.status_code in (404, 409):
+            return ChatReply(text=_t(APPROVAL_ACT_CONFLICT, language).format(code=report_code))
+        log.exception("approval act refused: %s", exc.detail)
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    except Exception:
+        log.exception("approval act failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    await _remember_entity(
+        client, ctx, entity_type="service_report",
+        entity_id=str(report.get("id") or ""), code=report_code,
+    )
+    if approve:
+        status = result.get("report_status")
+        if status == "approved":
+            tail = APPROVAL_NEXT_SURVEY_SENT if result.get("survey_sent") else APPROVAL_NEXT_SURVEY_NOT_SENT
+        else:
+            tail = APPROVAL_NEXT_STEP
+        text = _t(APPROVAL_APPROVED, language).format(code=report_code, next=_t(tail, language))
+    else:
+        text = _t(APPROVAL_REJECTED, language).format(
+            code=report_code, reason=f": {reason}" if reason else "",
+        )
+    return ChatReply(
+        text=text, entity_type="service_report", entity_id=str(report.get("id") or ""),
+        quick_replies=[("รายการรออนุมัติ", "รายการรออนุมัติ")],
+    )
+
+
+async def _handle_approval_policy(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
+    trigger: str, permission_keys: list[str], language: str, ai_client=None,
+) -> ChatReply:
+    """Owner decision 3 (PHASE14_PLAN): the flow is changed by typing it.
+    Same shape as the assignment policy — model once, show back, confirm."""
+    from . import approval as approval_service
+    from .ai.approval_policy import policy_to_workflow
+
+    if "approval.manage" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+
+    lowered = message.lower()
+    index = lowered.find(trigger.lower())
+    policy = message[index + len(trigger):].strip(" :·-") if index >= 0 else ""
+    if not policy:
+        return ChatReply(text=_t(APPROVAL_POLICY_NEEDS_TEXT, language))
+
+    license_id = str(license_id)
+    try:
+        roles = [str(r.get("role_name")) for r in await client.list_roles(license_id) if r.get("role_name")]
+    except Exception:
+        log.exception("could not read roles for an approval policy")
+        roles = []
+
+    rules, problems = await policy_to_workflow(policy, roles=roles, client=ai_client)
+    if rules is None:
+        return ChatReply(
+            text=_t(APPROVAL_POLICY_NOT_UNDERSTOOD, language).format(
+                problems="\n".join(f"· {p}" for p in problems)
+            )
+        )
+    await client.set_pending_intent(
+        ctx.chann_uid, ctx.oa,
+        action="confirm", entity="approval_workflow",
+        fields={"rules": rules}, missing=[], ttl_seconds=APPROVAL_DRAFT_TTL_S,
+    )
+    return ChatReply(
+        text=_t(APPROVAL_POLICY_REVIEW, language).format(
+            summary=approval_service.describe_workflow(rules, language),
+        ),
+        quick_replies=[("ยืนยันการอนุมัติ", "ยืนยันการอนุมัติ")],
+    )
+
+
+async def _handle_approval_policy_confirm(
+    client: DataClient, *, ctx: ResolvedContext, license_id,
+    pending: dict | None, permission_keys: list[str], language: str,
+) -> ChatReply:
+    from . import approval as approval_service
+
+    if "approval.manage" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    if not pending or pending.get("entity") != "approval_workflow":
+        return ChatReply(text=_t(APPROVAL_POLICY_NOTHING_PENDING, language))
+    rules = (pending.get("fields") or {}).get("rules")
+    if not isinstance(rules, dict):
+        return ChatReply(text=_t(APPROVAL_POLICY_NOTHING_PENDING, language))
+    try:
+        await approval_service.replace_workflow(
+            client, license_id=str(license_id), rules_json=rules, actor_chann_uid=ctx.chann_uid,
+        )
+        await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
+    except Exception:
+        log.exception("saving an approval workflow failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    return ChatReply(
+        text=_t(APPROVAL_POLICY_SAVED, language).format(
+            summary=approval_service.describe_workflow(rules, language),
+        ),
+    )
+
+
+async def _handle_approval_policy_show(
+    client: DataClient, *, license_id, permission_keys: list[str], language: str,
+) -> ChatReply:
+    from . import approval as approval_service
+
+    if not {"approval.manage", "approval.view"} & set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    try:
+        workflow = await approval_service.current_workflow(client, license_id=str(license_id))
+    except Exception:
+        log.exception("could not read the approval workflow")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    return ChatReply(
+        text=_t(APPROVAL_POLICY_CURRENT, language).format(
+            summary=approval_service.describe_workflow(
+                (workflow or {}).get("rules_json") or {}, language,
+            ),
+        ),
+    )
+
+
+async def _maybe_answer_survey(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str, language: str,
+) -> ChatReply | None:
+    """A customer's "2" (or "ดีเยี่ยม") when a survey is waiting for them.
+    None when nothing is waiting or the text is not an answer, so the
+    message falls through to whatever it was before."""
+    from . import approval as approval_service
+
+    text = (message or "").strip()
+    score: int | None = None
+    if text.isdigit() and len(text) == 1:
+        score = int(text)
+    else:
+        for key, label in approval_service.DEFAULT_SCALE.items():
+            if text == label:
+                score = int(key)
+    if score is None:
+        return None
+    try:
+        survey, ticket = await approval_service.pending_survey_for_customer(
+            client, license_id=str(license_id), customer_chann_uid=ctx.chann_uid,
+        )
+    except Exception:
+        log.exception("could not look for a pending survey")
+        return None
+    if survey is None:
+        return None
+    scale = survey.get("scale_config_json") or approval_service.DEFAULT_SCALE
+    if str(score) not in scale:
+        return ChatReply(
+            text=_t(SURVEY_OFF_SCALE, language).format(
+                scale=", ".join(f"{k} ({v})" for k, v in sorted(scale.items())),
+            ),
+            quick_replies=[(f"{k} {v}", str(k)) for k, v in sorted(scale.items())],
+        )
+    try:
+        await approval_service.answer_survey(
+            client, license_id=str(license_id), survey_id=str(survey["id"]),
+            score=score, comment=None, actor_chann_uid=ctx.chann_uid,
+        )
+    except DataTierError as exc:
+        if exc.status_code == 409:
+            return ChatReply(text=_t(SURVEY_ALREADY_ANSWERED, language))
+        log.exception("survey answer refused: %s", exc.detail)
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    except Exception:
+        log.exception("survey answer failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    return ChatReply(
+        text=_t(SURVEY_THANKS, language).format(
+            label=scale.get(str(score), str(score)),
+            ticket=(ticket or {}).get("ticket_number") or "",
+        ),
     )
 
 
@@ -4946,6 +5399,27 @@ async def _handle_ai_understood_intent(
             return await _handle_check_out(
                 client, ctx=ctx, license_id=license_id,
                 message=_joined("ปิดงาน", code),
+                permission_keys=permission_keys, language=language,
+            )
+
+    if entity == "approval":
+        # "ผ่านได้เลย SR-2026-0001" / "รายงานนี้ไม่ผ่าน ภาพไม่ครบ": the
+        # model's reading, re-synthesised into the sentence the typed
+        # handler already parses, so both paths share one set of rules.
+        if action in ("approve", "reject"):
+            approve = action == "approve"
+            return await _handle_approval_act(
+                client, ctx=ctx, license_id=license_id,
+                message=_joined(
+                    "อนุมัติ" if approve else "ไม่อนุมัติ", code,
+                    None if approve else fields.get("reason"),
+                ),
+                permission_keys=permission_keys, language=language,
+                approve=approve, trigger="อนุมัติ" if approve else "ไม่อนุมัติ",
+            )
+        if action == "read":
+            return await _handle_approval_list(
+                client, ctx=ctx, license_id=license_id,
                 permission_keys=permission_keys, language=language,
             )
 
@@ -6810,6 +7284,13 @@ HELP_SECTIONS = (
         ("ticket.update", "เช็คอิน T-2026-0001", "แจ้งว่าถึงหน้างานแล้ว"),
         ("ticket.update", "ปิดงาน T-2026-0001\nพบ: ...\nแก้: ...", "ปิดงานพร้อมรายงาน"),
     )),
+    ("การอนุมัติ", (
+        ("approval.view", "รายการรออนุมัติ", "รายงานบริการที่รอคุณตรวจ"),
+        ("approval.approve", "อนุมัติ SR-2026-0001", "อนุมัติรายงาน (ครบทุกขั้น = ส่งแบบประเมินให้ลูกค้า)"),
+        ("approval.reject", "ไม่อนุมัติ SR-2026-0001 รูปไม่ครบ", "ตีกลับพร้อมเหตุผล แจ้งช่างให้แก้"),
+        ("approval.manage", "ตั้งการอนุมัติ ให้ CS ก่อน แล้วต่อด้วย admin", "กำหนดขั้นตอนอนุมัติด้วยภาษาคน"),
+        ("approval.manage", "ดูการอนุมัติปัจจุบัน", "ดูขั้นตอนที่ตั้งไว้"),
+    )),
     ("ทีมงาน", (
         ("member.manage", "เพิ่มช่าง", "ขอรหัสเชิญให้ช่างเข้าร่วมบริษัท"),
         ("setting.manage", "ตั้งกฎมอบหมาย ช่างแอร์ให้ทีม AC วันละ 5 งาน", "ตั้งกฎจ่ายงานอัตโนมัติ"),
@@ -7900,6 +8381,53 @@ async def handle_chat_message(
                 language=language, ai_client=ai_client,
             )
 
+        # Approvals (Phase 14-B). Longest phrase first, always: "อนุมัติ" is
+        # a substring of "ไม่อนุมัติ", "รายการรออนุมัติ" and "ตั้งการอนุมัติ",
+        # and the bare trigger would swallow every one of them.
+        approval_policy_trigger = next(
+            (t for t in APPROVAL_POLICY_TRIGGERS if t in message.lower()), None,
+        )
+        if approval_policy_trigger:
+            return await _handle_approval_policy(
+                client, ctx=ctx, license_id=license_id, message=message,
+                trigger=approval_policy_trigger, permission_keys=permission_keys,
+                language=language, ai_client=ai_client,
+            )
+        if _matches_phrase(message, APPROVAL_POLICY_CONFIRM):
+            return await _handle_approval_policy_confirm(
+                client, ctx=ctx, license_id=license_id,
+                pending=await client.get_pending_intent(ctx.chann_uid, ctx.oa),
+                permission_keys=permission_keys, language=language,
+            )
+        if _matches_phrase(message, APPROVAL_POLICY_SHOW):
+            return await _handle_approval_policy_show(
+                client, license_id=license_id,
+                permission_keys=permission_keys, language=language,
+            )
+        if _matches_phrase(message, APPROVAL_LIST_PHRASES):
+            return await _handle_approval_list(
+                client, ctx=ctx, license_id=license_id,
+                permission_keys=permission_keys, language=language,
+            )
+        reject_trigger = next(
+            (t for t in APPROVAL_REJECT_TRIGGERS if t in message.lower()), None,
+        )
+        if reject_trigger:
+            return await _handle_approval_act(
+                client, ctx=ctx, license_id=license_id, message=message,
+                permission_keys=permission_keys, language=language,
+                approve=False, trigger=reject_trigger,
+            )
+        approve_trigger = next(
+            (t for t in APPROVAL_APPROVE_TRIGGERS if t in message.lower()), None,
+        )
+        if approve_trigger:
+            return await _handle_approval_act(
+                client, ctx=ctx, license_id=license_id, message=message,
+                permission_keys=permission_keys, language=language,
+                approve=True, trigger=approve_trigger,
+            )
+
     # Tickets are checked AFTER assignment policy on purpose: "ตั้งกฎมอบหมาย"
     # contains "มอบหมาย", so matching the ticket trigger first swallowed
     # every attempt to configure a rule and refused it for lacking
@@ -8004,6 +8532,14 @@ async def handle_chat_message(
                     ("ประกันของฉัน", "ประกันของฉัน"),
                 ],
             )
+        # A survey answer (Phase 14-B): "2", or a scale label. Only when a
+        # survey is actually waiting — otherwise a bare digit is whatever
+        # it was before, and the catch-all below must not see it first.
+        survey_reply = await _maybe_answer_survey(
+            client, ctx=ctx, license_id=license_id, message=message, language=language,
+        )
+        if survey_reply is not None:
+            return survey_reply
         # The rich-menu tiles that are not a fault report. Each is an
         # exact phrase, tested before the catch-all that would otherwise
         # turn the tile's label into a repair job.

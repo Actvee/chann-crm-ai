@@ -40,6 +40,10 @@ PERMISSION_KEYS = frozenset(
         "approval.view",
         "approval.approve",
         "approval.reject",
+        # Phase 14-B: who may change the approval flow itself (by typing a
+        # policy in chat or on the config page). Owner/Admin by the
+        # templates below; CS approves but does not redesign the flow.
+        "approval.manage",
         "chat_session.view",
         "chat_session.claim",
         "chat_session.reply",
@@ -160,6 +164,7 @@ PERMISSION_DESCRIPTIONS: dict[str, dict[str, str]] = {
     "approval.view": {"th": "ดูรายการรออนุมัติ", "en": "View approvals"},
     "approval.approve": {"th": "อนุมัติ", "en": "Approve"},
     "approval.reject": {"th": "ไม่อนุมัติ", "en": "Reject"},
+    "approval.manage": {"th": "ตั้งค่าขั้นตอนอนุมัติ", "en": "Manage approval flows"},
     "chat_session.view": {"th": "ดูห้องแชท", "en": "View chat sessions"},
     "chat_session.claim": {"th": "รับห้องแชท", "en": "Claim chat sessions"},
     "chat_session.reply": {"th": "ตอบแชทลูกค้า", "en": "Reply to chats"},

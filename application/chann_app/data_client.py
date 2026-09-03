@@ -1409,3 +1409,102 @@ class DataClient:
             headers=self._headers_for(actor_id), json=payload,
         )
         return self._unwrap(resp)
+
+    # ---------------------------------------------------------- Phase 14
+    # Approval workflows, steps and satisfaction surveys. The Data Tier
+    # owns every rule (who may act, what "all approved" means); these are
+    # thin calls, one per route, with the same 404→None convention as the
+    # rest of this file.
+
+    async def get_approval_workflow(self, license_id: str, entity_type: str) -> dict:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/approval-workflows/{entity_type}",
+            headers=self._headers,
+        )
+        return self._unwrap(resp)
+
+    async def replace_approval_workflow(
+        self, license_id: str, entity_type: str, rules_json: dict, *,
+        updated_by: str | None = None, actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.put(
+            f"{self._base}/internal/v1/licenses/{license_id}/approval-workflows/{entity_type}",
+            headers=self._headers_for(actor_id),
+            json={"rules_json": rules_json, "updated_by": updated_by},
+        )
+        return self._unwrap(resp)
+
+    async def open_approval_steps(self, license_id: str, report_id: str) -> list[dict]:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}"
+            f"/service-reports/{report_id}/approval-steps",
+            headers=self._headers,
+        )
+        return self._unwrap(resp) or []
+
+    async def pending_approval_steps(
+        self, license_id: str, *, member_id: str | None = None, roles: list[str] | tuple[str, ...] = (),
+    ) -> list[dict]:
+        params: dict = {}
+        if member_id:
+            params["member_id"] = member_id
+        if roles:
+            params["roles"] = ",".join(roles)
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/approval-steps/pending",
+            headers=self._headers, params=params,
+        )
+        return self._unwrap(resp) or []
+
+    async def approval_steps_for_entity(
+        self, license_id: str, entity_type: str, entity_id: str,
+    ) -> list[dict]:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}"
+            f"/approval-steps/for/{entity_type}/{entity_id}",
+            headers=self._headers,
+        )
+        return self._unwrap(resp) or []
+
+    async def act_on_approval_step(
+        self, license_id: str, step_id: str, *, approve: bool,
+        member_id: str | None = None, roles: list[str] | tuple[str, ...] = (),
+        reason: str | None = None, actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/approval-steps/{step_id}/act",
+            headers=self._headers_for(actor_id),
+            json={
+                "approve": approve, "member_id": member_id,
+                "roles": list(roles), "reason": reason,
+            },
+        )
+        return self._unwrap(resp)
+
+    async def pending_survey_for_ticket(self, license_id: str, ticket_id: str) -> dict | None:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}"
+            f"/surveys/pending-for-ticket/{ticket_id}",
+            headers=self._headers,
+        )
+        if resp.status_code == 404:
+            return None
+        return self._unwrap(resp)
+
+    async def mark_survey_sent(self, license_id: str, survey_id: str) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/surveys/{survey_id}/sent",
+            headers=self._headers,
+        )
+        return self._unwrap(resp)
+
+    async def answer_survey(
+        self, license_id: str, survey_id: str, *, score: int,
+        comment: str | None = None, actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/surveys/{survey_id}/answer",
+            headers=self._headers_for(actor_id),
+            json={"score": score, "comment": comment},
+        )
+        return self._unwrap(resp)
