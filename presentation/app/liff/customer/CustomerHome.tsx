@@ -20,6 +20,12 @@ type Warranty = {
   status?: string | null;
 };
 
+type Survey = {
+  id: string;
+  ticket_id: string;
+  scale_config_json?: Record<string, string> | null;
+};
+
 /**
  * The customer's home — only what a customer does, nothing the shop does.
  *
@@ -42,6 +48,10 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
   const [licenseId, setLicenseId] = useState("");
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [warranties, setWarranties] = useState<Warranty[]>([]);
+  // Phase 14-C: the survey card, the home-screen twin of the quick reply
+  // chat pushes after the last approval.
+  const [survey, setSurvey] = useState<Survey | null>(null);
+  const [surveyTicket, setSurveyTicket] = useState<Ticket | null>(null);
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
   const [busy, setBusy] = useState(false);
@@ -61,15 +71,16 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
     async (currentToken = token, license = licenseId) => {
       if (!currentToken || !license) return;
       const headers = proxyHeaders(currentToken, license, "customer");
-      const [ticketsRes, warrantiesRes] = await Promise.all([
+      const [ticketsRes, warrantiesRes, surveyRes] = await Promise.all([
         fetch(`/api/phase2/licenses/${license}/tickets`, { headers }),
         fetch(`/api/phase2/licenses/${license}/warranties/mine`, { headers }),
+        fetch(`/api/phase2/licenses/${license}/surveys/pending`, { headers }),
       ]);
       // A failed load must not read as "you have no repairs": the empty
       // state and the error state are different facts, and a customer
       // who sees the first when the second is true stops trusting the
       // page. Same rule the technician home applies.
-      const failed = [ticketsRes, warrantiesRes].find((res) => !res.ok);
+      const failed = [ticketsRes, warrantiesRes, surveyRes].find((res) => !res.ok);
       if (failed) {
         throw new Error(
           failed.status === 403
@@ -79,9 +90,41 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
       }
       setTickets((await ticketsRes.json()) as Ticket[]);
       setWarranties((await warrantiesRes.json()) as Warranty[]);
+      const pending = (await surveyRes.json()) as {
+        survey: Survey | null;
+        ticket: Ticket | null;
+      };
+      setSurvey(pending.survey);
+      setSurveyTicket(pending.ticket);
     },
     [token, licenseId, t],
   );
+
+  async function answerSurvey(score: string) {
+    if (!survey) return;
+    setBusy(true);
+    try {
+      const response = await fetch(
+        `/api/phase2/licenses/${licenseId}/surveys/${survey.id}/answer`,
+        {
+          method: "POST",
+          headers: {
+            ...proxyHeaders(token, licenseId, "customer"),
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ score: Number(score) }),
+        },
+      );
+      if (!response.ok) throw new Error(String(response.status));
+      setSurvey(null);
+      setSurveyTicket(null);
+      say(t.dashboard.customer.surveyThanks, "ok");
+    } catch {
+      say(t.dashboard.customer.actionFailed, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   const onReady = useCallback(async () => {
     try {
@@ -171,6 +214,37 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
         status={status}
         statusTone={tone}
       >
+        {survey && (
+          // First on the page: it exists only while an answer is owed,
+          // and it is the one thing the shop asked of the customer.
+          <section className="section callout" data-tone="ok">
+            <div className="section-head">
+              <h2>{t.dashboard.customer.surveyTitle}</h2>
+            </div>
+            <p className="card-meta">
+              {t.dashboard.customer.surveyIntro.replace(
+                "{code}", surveyTicket?.ticket_number ?? "",
+              )}
+            </p>
+            <div className="card-actions">
+              {Object.entries(survey.scale_config_json ?? { "1": "ไม่ดี", "2": "พอใช้", "3": "ดีเยี่ยม" })
+                .sort(([a], [b]) => a.localeCompare(b))
+                .map(([score, label]) => (
+                  <button
+                    key={score}
+                    type="button"
+                    className="btn"
+                    data-variant={score === "3" ? "primary" : undefined}
+                    disabled={busy}
+                    onClick={() => void answerSurvey(score)}
+                  >
+                    {score} · {label}
+                  </button>
+                ))}
+            </div>
+          </section>
+        )}
+
         <section className="section">
           <div className="section-head">
             <h2>{t.dashboard.customer.reportFault}</h2>

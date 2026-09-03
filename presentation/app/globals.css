@@ -450,6 +450,30 @@ body {
   letter-spacing: 0.02em;
 }
 
+/* The one-paragraph explanation at the top of a page (approvals,
+   templates, the menu). One class, so the three copies of the same
+   inline style stop drifting. */
+.page-intro {
+  color: var(--ink-soft);
+  font-size: 14.5px;
+  margin: 0 0 16px;
+}
+
+/* A flow or rule described in words, line per step. Preformatted so the
+   description generated from the structure keeps its line breaks, in the
+   text font — it is prose, not code. */
+.flow-summary {
+  margin: 0;
+  padding: 12px 14px;
+  white-space: pre-wrap;
+  font: inherit;
+  font-size: 14.5px;
+  line-height: 1.55;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
 fieldset.group {
   border: 1px solid var(--line);
   border-radius: var(--radius);

@@ -56,6 +56,10 @@ ACCEPTED = {
     # behind it, so it is not an (action, entity) in ACTION_PERMISSIONS.
     ("survey", "read"): "customer home card; chat pushes the survey itself",
     ("survey", "update"): "customer answers in chat (quick reply) and on the home card",
+    # PUT approval-workflows replaces the whole flow (the Data Tier retires
+    # the old row); there is no separate create, and chat's ตั้งการอนุมัติ
+    # is the same replace — registered as ("update", "approval").
+    ("approval", "create"): "PUT replaces the flow; both surfaces do that as 'update'",
 }
 
 # Real gaps, planned rather than accepted. Listed separately so the
@@ -66,11 +70,6 @@ KNOWN_GAPS = {
     ("ticket", "close"): "closing is chat-only, same reason",
     ("ticket", "update"): "editing a ticket is chat-only, same reason",
     ("product", "delete"): "the catalogue screen upserts but cannot remove; no Application route for it either",
-    # Phase 14-B registered the chat side; the queue + config pages are 14-C.
-    ("approval", "read"): "approval queue page lands in 14-C",
-    ("approval", "approve"): "approval queue page lands in 14-C",
-    ("approval", "reject"): "approval queue page lands in 14-C",
-    ("approval", "update"): "approval config page lands in 14-C",
 }
 
 # URL fragment -> entity. Longest match wins, so "quotes/X/products"

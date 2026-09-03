@@ -198,9 +198,19 @@ before the fault-report catch-all can see it. New permission key
 migration). Routes for 14-C are in `routers_phase2.py` under "approvals".
 Details and what was deliberately left out: `docs/PHASE14_PLAN.md`
 "สถานะ 14-B". Tests: `tests/unit/test_phase14_chat.py`; simulate-day
-scene `approval_day`. Next: **14-C** — queue page, config page, survey
-card, then the runtime acceptance walk (ช่าง check-out → CS LINE →
-อนุมัติในแชท → ลูกค้าได้ survey → ตอบ) on DEV with real OAs.
+scene `approval_day`.
+
+**`phase14c-v1` (3 Sep, after `phase14b-v1`)** — Phase 14-C, presentation:
+`/liff/sales/approvals` (queue: approve / reject-with-reason, the report
+beside its ticket, honest result messages), `/liff/sales/approvals/
+settings` (current flow in words + a policy box through the same model
+call as chat; read-only without `approval.manage`), the survey card on
+the customer home (1–3 buttons from `scale_config_json`, POST
+`surveys/{id}/answer`), a menu tile, i18n both locales, two CSS classes.
+check-parity is clean with **no** approval entries in KNOWN_GAPS. What
+remains for Phase 14 is the runtime acceptance walk on DEV with the real
+OAs (ช่าง check-out → CS LINE ทันที → อนุมัติในแชทหรือหน้า queue → ลูกค้าได้
+survey → ตอบ → score บันทึก) — see `docs/PHASE14_PLAN.md` §14.7.
 
 Tests for the chat audit: `tests/unit/test_chat_audit_fixes.py` (17). Still open from the
 audit: chat cannot attach photos/GPS (webhook drops non-text messages);

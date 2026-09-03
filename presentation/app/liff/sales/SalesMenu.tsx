@@ -26,6 +26,7 @@ const SECTIONS = [
   { href: "/liff/sales/quotes", key: "quotes" },
     { href: "/liff/sales/tickets", key: "tickets" },
     { href: "/liff/sales/reports", key: "reports" },
+  { href: "/liff/sales/approvals", key: "approvals" },
   { href: "/liff/sales/products", key: "products" },
   { href: "/liff/sales/templates", key: "templates" },
   { href: "/liff/sales/company", key: "company" },
@@ -89,6 +90,7 @@ export default function SalesMenu({ liffId }: { liffId: string }) {
     roles: t.role.title,
     tickets: t.dashboard.tickets.title,
     reports: t.dashboard.reports.title,
+    approvals: t.dashboard.approvals.title,
     templates: t.dashboard.templates.title,
   };
 

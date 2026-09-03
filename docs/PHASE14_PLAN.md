@@ -128,10 +128,37 @@ Application tier ครบตามแผน โดยยึด **domain service
   reject`, `GET|PUT approval-workflows/{entity}` (PUT รับ `policy` ข้อความ
   หรือ `rules_json`), `GET surveys/pending`, `POST surveys/{id}/answer`
 - `ACTION_PERMISSIONS` ลงทะเบียน read/approve/reject/update ของ `approval`;
-  check-parity ถือเป็น KNOWN_GAPS จนกว่า 14-C จะมา
+  check-parity เห็นครบทั้งสองฝั่งตั้งแต่ 14-C (ก่อนหน้านั้นอยู่ใน KNOWN_GAPS)
 - Tests: `tests/unit/test_phase14_chat.py` (รวม chat-vs-dashboard parity:
   route กับ handler บันทึก call เดียวกัน) · simulate-day มี scene
   `approval_day` (check-out → approve → survey → reject → ตั้ง flow)
+
+## สถานะ 14-C (3 ก.ย.) — เสร็จ (`phase14c-v1`)
+
+Presentation ครบตามแผน ทุกปุ่มเรียก route เดิมของ 14-B (parity โดยโครงสร้าง):
+
+- **`/liff/sales/approvals`** (`ApprovalQueue.tsx`) — รายการที่รอ "คน
+  นี้" ตรวจ (`GET approvals/pending`): รหัสรายงาน + ขั้นที่ + ticket/ลูกค้า/
+  อาการ + ปัญหาที่พบ/สิ่งที่แก้ไข/อะไหล่ · ปุ่มอนุมัติ (`approval.approve`)
+  และตีกลับ (`approval.reject`) ซึ่งเปิดช่องเหตุผลก่อน (บังคับเหมือนแชท) ·
+  ข้อความหลังทำรายการบอกผลจริง: ส่งแบบประเมินแล้ว / ลูกค้าไม่มี LINE /
+  ส่งต่อขั้นถัดไป · 409/404 เป็นข้อความคน · tile ใหม่ในเมนูขาย
+- **`/liff/sales/approvals/settings`** (`ApprovalSettings.tsx`) — ขั้นตอน
+  ปัจจุบันเป็นข้อความ (summary จาก structure ตัวเดียวกับแชท) + ช่องพิมพ์
+  นโยบายภาษาคน → `PUT approval-workflows/service_report {policy}` (AI ตัว
+  เดียวกับ "ตั้งการอนุมัติ") · 422 แสดง problems · ไม่มี `approval.manage`
+  = ดูได้อย่างเดียวและบอกว่าทำไม
+- **Customer home** — การ์ด "ประเมินความพึงพอใจ" ขึ้นบนสุดเมื่อ
+  `GET surveys/pending` มีรายการ ปุ่ม 1–3 จาก `scale_config_json` →
+  `POST surveys/{id}/answer` (คู่กับ quick reply ในแชท)
+- i18n `dashboard.approvals.*`, `dashboard.customer.survey*`,
+  `sections.approvals` ทั้ง th/en · CSS `.page-intro`, `.flow-summary`
+- check-parity: ปลด approval ออกจาก KNOWN_GAPS — "every capability is
+  reachable from both surfaces" โดยไม่มีข้อยกเว้นใหม่
+
+**เกณฑ์ปิด Phase ที่ยังต้องเดินจริงบน DEV** (§14.7): ช่าง check-out จาก
+LIFF/แชท → CS ได้ LINE ทันที → อนุมัติในแชทหรือหน้า queue → ลูกค้าได้
+survey → ตอบ → score ใน DB ต้องทำกับ OA จริงหลัง deploy 14-C
 
 **ยังไม่ทำใน 14-B**: ลายเซ็นบน PDF ตอน approve (spec 14.5 บรรทัดสุดท้าย —
 ต่อกับ Phase 13 PDF ซึ่งยังไม่มี renderer จริง); AI ตัดสินอนุมัติเอง
