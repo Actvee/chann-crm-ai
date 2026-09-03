@@ -93,12 +93,12 @@ spec (ทีม, ภาษา, ค้นสินค้า, คุยกับ�
    ร้านยกเลิก) มี EN · เทสต์ 20.5 ที่ทำได้โดยไม่ต้องเปิดเบราว์เซอร์ (`tests/boundary/test_a11y.py`: ทุก
    input/select/textarea มี label, คู่สีข้อความ ≥4.5:1 ทั้ง 3 ธีม, สี accent ดิบไม่ใช้เป็นตัวอักษร) · เคสทดสอบ
    D-01…D-16 สำหรับ C1–C5 · handoff "Immediate next actions" เขียนใหม่ตามสภาพจริง
-7. (C7) Cloud Scheduler 3 job (`scheduler-v1`, infra) — เตือน 08:00 / หมดอายุใบเสนอราคา 00:30 / sweep แชททุก 5 นาที
+7. ~~(C7) Cloud Scheduler~~ — **ทำแล้ว** (`scheduler-v1`, infra): 3 job เตือน 08:00 / หมดอายุใบเสนอราคา 00:30 / sweep แชททุก 5 นาที (`scheduler.tf`)
 
 ## D. งานค้างที่เหลือ (4 ก.ย. ดึก)
 
 - เจ้าของเดินเคสทดสอบ (รวม Phase 14.7) · ใส่รูปคู่มือลง `help_images.json` ทั้งสองไฟล์
-- C7 scheduler (รอ apply) · หมุน secret LINE Sales (เจ้าของ) · Phase 16.5/17/17.5/18 · 20.4 performance · CI
+- หมุน secret LINE Sales (เจ้าของ) · Phase 16.5/17/17.5/18 · 20.4 performance · CI
 
 ## B++. เคสทดสอบ (4 ก.ย.)
 

@@ -206,6 +206,11 @@ class TestInfrastructureSafetyBoundary:
             "google_sql_user",
             "google_cloud_run_v2_service",
             "google_storage_bucket",
+            # 4 Sep 2026: the platform's clock (reminder digest, quote
+            # expiry, chat SLA sweep) — jobs that POST to the application's
+            # sweep endpoints with the shared secret. Not IAM, not a
+            # service account, not Secret Manager.
+            "google_cloud_scheduler_job",
         }
         declared = set()
         for line in terraform.splitlines():

@@ -1,3 +1,12 @@
+### Plan C7 (4 Sep) — Cloud Scheduler (`scheduler-v1`, infrastructure)
+
+- `infrastructure/terraform/scheduler.tf`: three `google_cloud_scheduler_job`
+  (reminders 08:00, quote expiry 00:30, chat sweep */5, Asia/Bangkok) posting
+  to the application's `/api/v1/platform/...` sweep endpoints with the
+  `X-Sweep-Secret` header from `var.reminder_sweep_secret`. Not gated on the
+  secret (a sensitive value cannot shape `for_each` keys); with it blank the
+  endpoints refuse. First plan shows 3 to add.
+
 ### Plan C5 (4 Sep) — files inside the LINE webview (`liff-files-v1`)
 
 - The LINE in-app browser blocks blob downloads and ignores `download`
