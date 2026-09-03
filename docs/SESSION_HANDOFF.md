@@ -1,3 +1,12 @@
+### Plan B9 (4 Sep) — the test-case book (`test-cases-v1`, docs only)
+
+- `docs/TEST_CASES_3OA.md`: 12 cross-OA end-to-end cases (X-), Sale OA
+  chat/dashboard/rich-menu cases (S-), Technician OA (T-), Customer OA (C-),
+  and 24 UI/UX checks (U-) ordered by the ui-ux-pro-max priority table
+  (accessibility → touch → layout → typography/color → forms → navigation).
+  Each row is prepare → do → expect, with a result column. The owner walks
+  these on the real OAs after B1–B8; failed rows become the next patches.
+
 ### Plan B8 (4 Sep) — Phase 20 i18n pass for the three OAs (`phase20-i18n-v1`)
 
 - `services/notify.py`: when a caller supplies `message_en`, the push is

@@ -62,6 +62,12 @@ spec (ทีม, ภาษา, ค้นสินค้า, คุยกับ�
    **ยังไม่ทำ:** ticket_changed (ข้อความมาจากผู้เรียก ภาษาเดียว), reminder sweep (รวมหลายร้าน ไทย),
    performance p95 / cache hit (20.4), accessibility pass (20.5 test_accessibility), evidence ปิด phase
 
+## B++. เคสทดสอบ (4 ก.ย.)
+
+`docs/TEST_CASES_3OA.md` — เคสทดสอบตาม workflow ข้าม OA (X-), ตามฟังก์ชันของแต่ละ OA
+(S-/T-/C-: แชท, หน้าจอ, rich menu) และ UI/UX ตามสกิล ui-ux-pro-max (U-) พร้อมช่องกรอกผล
+ใช้เดินกับ OA จริงหลัง B1–B8 ขึ้น dev ครบ; เคสที่ ❌ คืองานถัดไป
+
 ## B+. งานคู่ขนานที่ทำแล้ว (3 ก.ย. ค่ำ)
 
 - **คู่มือวิธีใช้แหล่งเดียว** (`help-guide-v1`): `services/guides.py` → แชท "วิธีใช้", หน้า
