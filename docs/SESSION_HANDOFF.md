@@ -1182,51 +1182,39 @@ Worth reading as a class rather than as a list:
 All three are now pinned by boundary tests that read the source as text.
 
 
-## Immediate next actions (in order)
+## Immediate next actions (in order) — rewritten 4 Sep 2026, small hours
 
-0. **Deploy `appointments-editable-v1-*.patch`** via
-   `assistant-understanding-deploy.sh` — application image only, no
-   migration. Same one-shot shape as before (apply → verify → test →
-   commit → push → build into `chann1-dev`, never `--source` → digest
-   into tfvars → dev-infra-plan gate → terraform apply, gcloud
-   services update as the IPv6 fallback), now re-runnable after a push:
-   STAGE 4 recognises its own commit at HEAD and continues instead of
-   halting. Then replay the screenshot in chat to confirm live.
+Everything in PLAN_3OA B1–B9 and the owner's 4 Sep lists C1–C6 is on dev
+(`/health` echoes the SHA each time; see "Plan B3…C6" below). What is
+left, in the order it matters:
 
-1. **Rotate the LINE Sales channel secret.** It was printed in full in a
-   chat transcript while debugging environment variables. This is
-   separate from, and more urgent than, the deferred rotation above.
-
-2. **Service reports still have no PDF.** Everything up to
-   `attach_document` exists; nothing renders one. Wire it to SmartBrowz
-   the way quotes are, with `document_type='service_report'` on the
-   generic template tables — Master Spec 13.3 requires that, not a second
-   template model.
-
-3. **Nothing calls `/platform/quotes/expire-overdue`.** The endpoint and
-   its scheduler auth exist and a Cloud Scheduler job has never been
-   created, so `valid_until` passes and quotes stay "sent". The reminder
-   sweep's job is the template.
-
-4. **Phase 14** (approval + satisfaction survey) is next by the spec.
-   Service reports already carry submitted/approved/rejected and the
-   dashboard can move between them, so 14 is the survey and the rest of
-   the approval flow. **Phase 15, 17, 17.5, 18** remain; **16.5 (PDPA)**
-   is untouched. Phase 16 was pulled forward and is done.
-
-5. **CI is still manual.** WIF vs SA key vs Cloud Build undecided, and
-   the deploying account cannot configure WIF itself.
+1. **Owner walk-through** of `docs/TEST_CASES_3OA.md` (X-, S-, T-, C-, U-
+   and the D- rows for C1–C5) on the real OAs; each ❌ becomes the next
+   patch. Phase 14.7 runtime acceptance is inside X-01.
+2. **Cloud Scheduler jobs** (`scheduler-v1`, `infrastructure/terraform/scheduler.tf`):
+   reminders 08:00, quote expiry 00:30, chat sweep every 5 min — three
+   `google_cloud_scheduler_job` on the shared `X-Sweep-Secret`. Until it is
+   applied the chat sweep is only ticked by messages and dashboard loads,
+   the reminder digest and quote expiry never run on their own.
+3. **Pictures for the guides**: the owner generates them from the prompts
+   in `docs/guides/*.md` and puts URLs in `help_images.json` (both files);
+   chat, the guide page and the downloadable handout pick them up.
+4. **Rich menu**: `bash ~/rm.sh` was run on 4 Sep (two pages per OA live).
+   Any tile change → `scripts/richmenu/generate.py` + rm.sh again.
+5. **Secrets**: the LINE Sales channel secret rotation the owner deferred;
+   an agent must not touch Secret Manager / IAM (CLAUDE.md §-1).
+6. **Phases outside the 3-OA plan**: 16.5 (PDPA), 17, 17.5, 18; Phase 20
+   performance targets (20.4) and keyboard-navigation checks (20.5 — the
+   label and contrast checks are automated in `tests/boundary/test_a11y.py`).
+7. **CI is still manual** (WIF vs SA key vs Cloud Build undecided).
 
 ### Things deliberately not done
-
 * **`ลบลูกค้า`** — no delete anywhere, by design. Archiving exists;
   deleting a customer with deals and tickets behind them is a decision
   nobody has made yet.
 * **`งานพรุ่งนี้`** for technicians — only "today" and "mine" exist.
-* Free-form status from a technician ("ลูกค้าไม่อยู่บ้าน") has no
-  handler and falls to the suggestion path.
-* **B2C only**, at the owner's direction: a customer is a person, there
-  is no company/organisation entity.
+* **Warranty-expiry notice (7.5)** — deferred by the owner with the
+  warranty PDF.
 
 ## Already deployed, section by section (oldest first)
 

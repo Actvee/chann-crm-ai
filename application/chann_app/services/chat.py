@@ -3876,7 +3876,7 @@ async def _handle_customer_amend(
         # technician driving to an empty house.
         await _notify_ticket_change(
             client, license_id, ticket_id,
-            f"ลูกค้ายกเลิกงาน {code}", language,
+            f"ลูกค้ายกเลิกงาน {code}", language, text_en=f"The customer cancelled job {code}",
         )
         return ChatReply(text=_t(AMEND_CANCELLED, language).format(code=code))
 
@@ -3905,6 +3905,7 @@ async def _handle_customer_amend(
     when = f"{format_thai_date(due_date)} {format_thai_time(due_time)}"
     await _notify_ticket_change(
         client, license_id, ticket_id, f"ลูกค้าเลื่อนนัด {code} เป็น {when}", language,
+        text_en=f"The customer moved job {code} to {when}",
     )
     return ChatReply(
         text=_t(AMEND_RESCHEDULED, language).format(
@@ -3916,6 +3917,7 @@ async def _handle_customer_amend(
 
 async def _notify_ticket_change(
     client: DataClient, license_id: str, ticket_id: str, text: str, language: str,
+    text_en: str | None = None,
 ) -> None:
     """Tell the shop, and the assigned technician, that a job changed.
 
@@ -3952,6 +3954,7 @@ async def _notify_ticket_change(
                 target_line_user_id=line_target,
                 type="ticket_changed",
                 message=text,
+                message_en=text_en,
                 entity_type="service_ticket",
                 entity_id=ticket_id,
                 oa="sales",
@@ -5240,8 +5243,9 @@ async def notify_ticket_rejected(
     of not auto-reassigning is that a person decides next."""
     code = str(row.get("ticket_number") or "")
     text = f"ช่างปฏิเสธงาน {code}" + (f": {reason}" if reason else "") + "\nงานกลับมารอมอบหมายใหม่"
+    text_en = f"The technician declined job {code}" + (f": {reason}" if reason else "") + "\nIt is back in the queue for reassignment"
     try:
-        await _notify_ticket_change(client, str(license_id), str(row.get("id") or ""), text, language)
+        await _notify_ticket_change(client, str(license_id), str(row.get("id") or ""), text, language, text_en=text_en)
     except Exception:
         log.exception("could not announce a rejected ticket")
 

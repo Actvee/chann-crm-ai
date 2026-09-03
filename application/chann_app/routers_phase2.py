@@ -1976,6 +1976,7 @@ async def set_ticket_status_from_dashboard(
             await _notify_ticket_change(
                 client, license_id, ticket_id,
                 f"งาน {row.get('ticket_number') or ''} ถูกยกเลิกโดยร้าน", "th",
+                text_en=f"Job {row.get('ticket_number') or ''} was cancelled by the shop",
             )
         except Exception:  # noqa: BLE001
             log.exception("could not announce a dashboard cancellation")
