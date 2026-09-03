@@ -42,6 +42,11 @@ async def record_interest(
         f"จาก: {shown}\n"
         "สร้างเป็น lead ให้แล้ว — ดูที่ \"รายชื่อลูกค้า\" หรือหน้าจอ > ลูกค้า แล้วติดต่อกลับ"
     )
+    text_en = (
+        f"A customer is interested in: {product_name}\n"
+        f"From: {shown}\n"
+        "Saved as a lead — see \"customers\" or home > Customers, then get in touch"
+    )
     try:
         members = await client.list_members(str(license_id))
     except Exception:
@@ -59,6 +64,7 @@ async def record_interest(
             await send_notification(
                 client, license_id=str(license_id), target_chann_uid=uid,
                 target_line_user_id=line_uid, type="chat_session_new", message=text,
+                message_en=text_en,
                 entity_type="customer", entity_id=str(row.get("id") or ""),
                 language=language, oa="sales",
             )

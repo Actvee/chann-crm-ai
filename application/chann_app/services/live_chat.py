@@ -87,7 +87,7 @@ async def _agents(client: DataClient, license_id: str) -> list[dict]:
 
 async def _tell(
     client: DataClient, *, license_id: str, members: list[dict], text: str, type: str,
-    session_id: str, language: str, line: bool = True,
+    session_id: str, language: str, line: bool = True, text_en: str | None = None,
 ) -> int:
     sent = 0
     for member in members:
@@ -96,7 +96,7 @@ async def _tell(
             line_uid = await client.line_target_of(uid) if line else None
             await send_notification(
                 client, license_id=str(license_id), target_chann_uid=uid,
-                target_line_user_id=line_uid, type=type, message=text,
+                target_line_user_id=line_uid, type=type, message=text, message_en=text_en,
                 entity_type="chat_session", entity_id=session_id,
                 delivery_line=line, language=language, oa="sales",
             )
@@ -106,11 +106,24 @@ async def _tell(
     return sent
 
 
-async def _push_customer(client: DataClient, *, chann_uid: str, text: str) -> bool:
+async def _customer_language(client: DataClient, chann_uid: str) -> str:
+    try:
+        prefs = await client.get_display_preferences(chann_uid) or {}
+        return "en" if str(prefs.get("language") or "th") == "en" else "th"
+    except Exception:  # noqa: BLE001
+        return "th"
+
+
+async def _push_customer(
+    client: DataClient, *, chann_uid: str, text: str, text_en: str | None = None,
+) -> bool:
+    """A line to the customer's LINE, in the language they read."""
     try:
         line_uid = await client.line_target_of(chann_uid)
         if not line_uid:
             return False
+        if text_en and await _customer_language(client, chann_uid) == "en":
+            text = text_en
         await push_text("customer", line_uid, text)
         return True
     except (LineReplyError, Exception):  # noqa: BLE001
@@ -143,12 +156,17 @@ async def start_session(
     if created:
         shown = (display_name or "").strip() or _shown(session)
         text = f"💬 ลูกค้า {shown} ขอคุยกับร้าน"
+        text_en = f"💬 Customer {shown} wants to talk to the shop"
         if first_message and first_message.strip():
-            text += f"\n\"{first_message.strip()[:200]}\""
+            quoted = f"\n\"{first_message.strip()[:200]}\""
+            text += quoted
+            text_en += quoted
         text += "\nตอบได้ที่ หน้าจอ > แชทลูกค้า (ตอบใน LINE ตรงไม่ถึงลูกค้า)"
+        text_en += "\nAnswer under home > Customer chats (a reply in LINE itself does not reach them)"
         await _tell(
             client, license_id=license_id, members=await _agents(client, license_id),
-            text=text, type="chat_session_new", session_id=str(session["id"]), language=language,
+            text=text, text_en=text_en, type="chat_session_new", session_id=str(session["id"]),
+            language=language,
         )
     return session, created
 
@@ -172,12 +190,12 @@ async def customer_message(
     line = f"💬 {shown}: {text.strip()[:300]}"
     if owner:
         await _tell(
-            client, license_id=license_id, members=owner, text=line, type="chat_message",
+            client, license_id=license_id, members=owner, text=line, text_en=line, type="chat_message",
             session_id=str(session["id"]), language=language,
         )
     else:
         await _tell(
-            client, license_id=license_id, members=agents, text=line, type="chat_message",
+            client, license_id=license_id, members=agents, text=line, text_en=line, type="chat_message",
             session_id=str(session["id"]), language=language, line=False,
         )
     return message
@@ -206,6 +224,7 @@ async def agent_reply(
     await _push_customer(
         client, chann_uid=str(session["customer_chann_uid"]),
         text=f"💬 {shop}: {text.strip()}\n(ตอบกลับได้เลยในแชทนี้ · พิมพ์ \"จบการสนทนา\" เมื่อเสร็จ)",
+        text_en=f"💬 {shop}: {text.strip()}\n(reply right here · type \"end chat\" when done)",
     )
     return message
 
@@ -221,6 +240,7 @@ async def close_session(
         await _push_customer(
             client, chann_uid=str(session["customer_chann_uid"]),
             text=f"💬 {shop} ปิดการสนทนาแล้ว ขอบคุณครับ พิมพ์ \"คุยกับร้าน\" ได้อีกเมื่อต้องการ",
+            text_en=f"💬 {shop} closed the conversation. Thank you — type \"talk to the shop\" any time.",
         )
     else:
         assigned = str(session.get("assigned_to") or "")
@@ -229,7 +249,8 @@ async def close_session(
         if owner:
             await _tell(
                 client, license_id=license_id, members=owner,
-                text=f"💬 ลูกค้า {_shown(session)} จบการสนทนาแล้ว", type="chat_message",
+                text=f"💬 ลูกค้า {_shown(session)} จบการสนทนาแล้ว",
+                text_en=f"💬 Customer {_shown(session)} ended the conversation", type="chat_message",
                 session_id=str(session["id"]), language=language, line=False,
             )
     return closed
@@ -261,9 +282,14 @@ async def sweep(client: DataClient) -> dict:
             except ValueError:
                 waited = ""
         text = f"⏰ ลูกค้า {_shown(session)} ยังไม่ได้รับคำตอบ{waited}\nตอบได้ที่ หน้าจอ > แชทลูกค้า"
+        text_en = (
+            f"⏰ Customer {_shown(session)} is still waiting for an answer"
+            + (waited.replace("เลยกำหนดตอบ", "reply overdue by").replace("นาที", "min") if waited else "")
+            + "\nAnswer under home > Customer chats"
+        )
         escalated += await _tell(
-            client, license_id=license_id, members=owner or agents, text=text, type="sla_warning",
-            session_id=str(session.get("id")), language="th",
+            client, license_id=license_id, members=owner or agents, text=text, text_en=text_en,
+            type="sla_warning", session_id=str(session.get("id")), language="th",
         )
     timed_out = 0
     for session in result.get("timed_out") or []:
@@ -272,6 +298,7 @@ async def sweep(client: DataClient) -> dict:
         await _push_customer(
             client, chann_uid=str(session.get("customer_chann_uid") or ""),
             text=f"💬 การสนทนากับ {shop} ปิดอัตโนมัติเพราะไม่มีข้อความสักพัก พิมพ์ \"คุยกับร้าน\" ได้อีกเมื่อต้องการ",
+            text_en=f"💬 Your conversation with {shop} closed after a quiet while. Type \"talk to the shop\" any time.",
         )
         timed_out += 1
     return {"escalated": escalated, "timed_out": timed_out}

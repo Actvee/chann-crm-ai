@@ -49,6 +49,15 @@ async def send_notification(
     oa: str | None = None,
 ) -> dict:
     """Record, then push. Returns the stored notification either way."""
+    # Phase 20 i18n: the READER's language, not the sender's. A caller that
+    # supplies message_en is asking for the recipient's preference to
+    # decide; one that has only one text gets no lookup, nothing to gain.
+    if message_en:
+        try:
+            prefs = await client.get_display_preferences(target_chann_uid) or {}
+            language = str(prefs.get("language") or language or "th")
+        except Exception:  # noqa: BLE001
+            pass
     row = await client.create_notification(
         license_id,
         target_chann_uid=target_chann_uid,

@@ -71,25 +71,41 @@ async def after_customer_linked(
         except Exception:
             log.exception("auto-create of a linked customer failed")
 
+    head = f"ลูกค้าใหม่ผูกร้านผ่าน LINE: {shown}" + (f" · {phone}" if phone else "")
+    head_en = f"New customer linked via LINE: {shown}" + (f" · {phone}" if phone else "")
     if created:
-        text = f"ลูกค้าใหม่ผูกร้านผ่าน LINE: {shown}" + (f" · {phone}" if phone else "") + "\nเพิ่มเข้ารายชื่อลูกค้าให้แล้ว (ตั้งค่ารับลูกค้าใหม่อัตโนมัติ: เปิด)"
+        text = head + "\nเพิ่มเข้ารายชื่อลูกค้าให้แล้ว (ตั้งค่ารับลูกค้าใหม่อัตโนมัติ: เปิด)"
+        text_en = head_en + "\nAdded to your customer list (auto-accept new customers: on)"
     elif auto:
         text = (
             f"ลูกค้าใหม่ผูกร้านผ่าน LINE: {shown}\n"
             "ยังเพิ่มเข้ารายชื่อให้ไม่ได้เพราะไม่มีชื่อ/เบอร์ในโปรไฟล์ — "
             f"เพิ่มเองด้วย \"สร้างลูกค้า {shown} <เบอร์>\""
         )
+        text_en = (
+            f"New customer linked via LINE: {shown}\n"
+            "Not added yet — no name/phone in their profile. "
+            f"Add them with \"create customer {shown} <phone>\""
+        )
     else:
         text = (
-            f"ลูกค้าใหม่ผูกร้านผ่าน LINE: {shown}" + (f" · {phone}" if phone else "") + "\n"
+            head + "\n"
             f"เพิ่มเข้ารายชื่อลูกค้าด้วย \"สร้างลูกค้า {shown}{' ' + phone if phone else ''}\" "
             "(หรือเปิดรับอัตโนมัติ: \"ตั้งค่ารับลูกค้าใหม่อัตโนมัติ เปิด\")"
         )
-    notified = await _tell_the_shop(client, license_id, text, chann_uid, language)
+        text_en = (
+            head_en + "\n"
+            f"Add them with \"create customer {shown}{' ' + phone if phone else ''}\" "
+            "(or switch auto-accept on: \"auto accept new customers on\")"
+        )
+    notified = await _tell_the_shop(client, license_id, text, chann_uid, language, text_en=text_en)
     return {"created": created, "notified": notified}
 
 
-async def _tell_the_shop(client: DataClient, license_id: str, text: str, about_uid: str, language: str) -> int:
+async def _tell_the_shop(
+    client: DataClient, license_id: str, text: str, about_uid: str, language: str,
+    text_en: str | None = None,
+) -> int:
     try:
         members = await client.list_members(license_id)
     except Exception:
@@ -107,7 +123,7 @@ async def _tell_the_shop(client: DataClient, license_id: str, text: str, about_u
             line_uid = await client.line_target_of(uid)
             await send_notification(
                 client, license_id=license_id, target_chann_uid=uid, target_line_user_id=line_uid,
-                type="chat_session_new", message=text, entity_type="customer_link",
+                type="chat_session_new", message=text, message_en=text_en, entity_type="customer_link",
                 entity_id=about_uid, language=language, oa="sales",
             )
             sent += 1

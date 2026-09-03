@@ -430,7 +430,13 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
               )}
             </p>
             <div className="card-actions">
-              {Object.entries(survey.scale_config_json ?? { "1": "ไม่ดี", "2": "พอใช้", "3": "ดีเยี่ยม" })
+              {Object.entries(
+                survey.scale_config_json ?? {
+                  "1": t.dashboard.customer.scaleBad,
+                  "2": t.dashboard.customer.scaleFair,
+                  "3": t.dashboard.customer.scaleGreat,
+                },
+              )
                 .sort(([a], [b]) => a.localeCompare(b))
                 .map(([score, label]) => (
                   <button

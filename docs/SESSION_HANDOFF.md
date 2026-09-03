@@ -1,3 +1,25 @@
+### Plan B8 (4 Sep) — Phase 20 i18n pass for the three OAs (`phase20-i18n-v1`)
+
+- `services/notify.py`: when a caller supplies `message_en`, the push is
+  chosen by the RECIPIENT's display preference (one preference read per
+  push), not by the sender's `language`. Before this, an English-reading
+  owner got the Thai line whenever the actor read Thai.
+- English variants added at every notification the three-OA flows raise:
+  ticket created / assigned / team accepted (`chat.py`), approval request,
+  approved, rejected (`approval.py`), live chat announcements and SLA
+  escalation (`live_chat.py`, plus the customer-facing pushes via
+  `_push_customer(text_en=…)` chosen by the customer's preference),
+  new-customer link (`onboarding.py`), storefront lead (`storefront.py`).
+  Left Thai-only on purpose: `ticket_changed` (its text arrives from the
+  caller already rendered) and the batched reminder sweep.
+- Pages: `LiffShell.tsx` (diagnostic shell) reads English; the templates
+  placeholder legend is `t.dashboard.templates.placeholderLegend` in both
+  languages; the survey scale fallback uses dictionary keys.
+- Tests: `tests/unit/test_phase20_i18n.py` — recipient language, English
+  on every flow, and "no hardcoded Thai outside the dictionary" over every
+  page (comments excluded). Not done here: 20.4 performance targets and
+  the 20.5 accessibility/performance test suites.
+
 ### Plan B7 (4 Sep) — rich menu page 2 per OA (`richmenu-pages-v1`)
 
 - `scripts/richmenu/generate.py` now builds two pages per OA: `TILES[oa]["main"]`

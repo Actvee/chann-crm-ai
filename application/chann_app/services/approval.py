@@ -118,11 +118,13 @@ async def _notify_current_approvers(
         log.exception("could not resolve approvers for %s", report.get("report_id"))
         return
     ticket = ticket or {}
-    text = _t(APPROVAL_REQUEST, language).format(
+    fields = dict(
         report=report.get("report_id") or "",
         ticket=ticket.get("ticket_number") or "",
         customer=f" · {ticket['customer_name']}" if ticket.get("customer_name") else "",
     )
+    text = _t(APPROVAL_REQUEST, "th").format(**fields)
+    text_en = _t(APPROVAL_REQUEST, "en").format(**fields)
     for member in approvers_for(current, members):
         uid = str(member.get("chann_uid") or "")
         if not uid:
@@ -132,6 +134,7 @@ async def _notify_current_approvers(
             await send_notification(
                 client, license_id=license_id, target_chann_uid=uid,
                 target_line_user_id=line_uid, type="approval_pending", message=text,
+                message_en=text_en,
                 entity_type=ENTITY_TYPE, entity_id=str(report["id"]),
                 language=language, oa="sales",
             )
@@ -252,7 +255,10 @@ async def _notify_submitter_of_document(
         await send_notification(
             client, license_id=license_id, target_chann_uid=uid,
             target_line_user_id=line_uid, type="approval_pending",
-            message=_t(REPORT_APPROVED_TO_SUBMITTER, language).format(
+            message=_t(REPORT_APPROVED_TO_SUBMITTER, "th").format(
+                report=report.get("report_id") or "", link=link,
+            ),
+            message_en=_t(REPORT_APPROVED_TO_SUBMITTER, "en").format(
                 report=report.get("report_id") or "", link=link,
             ),
             entity_type=ENTITY_TYPE, entity_id=str(report.get("id") or ""),
@@ -284,7 +290,10 @@ async def _notify_submitter(
         await send_notification(
             client, license_id=license_id, target_chann_uid=uid,
             target_line_user_id=line_uid, type="approval_rejected",
-            message=_t(REJECTED_TO_SUBMITTER, language).format(
+            message=_t(REJECTED_TO_SUBMITTER, "th").format(
+                report=report.get("report_id") or "", reason=f": {reason}" if reason else "",
+            ),
+            message_en=_t(REJECTED_TO_SUBMITTER, "en").format(
                 report=report.get("report_id") or "", reason=f": {reason}" if reason else "",
             ),
             entity_type=ENTITY_TYPE, entity_id=str(report.get("id") or ""),

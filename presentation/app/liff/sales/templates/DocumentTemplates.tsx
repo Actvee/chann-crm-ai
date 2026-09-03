@@ -285,29 +285,7 @@ export default function DocumentTemplates({ liffId }: { liffId: string }) {
             margin: "12px 0 0",
             color: "var(--ink-soft)",
           }}
-        >{`{{company.legal_name}}   ชื่อบริษัท
-{{company.address}}      ที่อยู่
-{{company.phone}}        เบอร์โทร
-{{company.tax_id}}       เลขประจำตัวผู้เสียภาษี
-
-{{customer.name}}        ชื่อลูกค้า
-{{customer.address}}     ที่อยู่ลูกค้า
-
-{{quote.quote_id}}       เลขที่ใบเสนอราคา
-{{quote.valid_until}}    วันหมดอายุ
-
-{{#line_items}}
-  {{item.index}}         ลำดับ
-  {{item.name}}          ชื่อสินค้า
-  {{item.qty}}           จำนวน
-  {{item.unit_price}}    ราคาต่อหน่วย
-  {{item.line_total}}    รวมบรรทัด
-{{/line_items}}
-
-{{totals.subtotal}}      รวมเป็นเงิน
-{{totals.discount_amount}} ส่วนลด
-{{totals.vat_amount}}    ภาษีมูลค่าเพิ่ม
-{{totals.grand_total}}   จำนวนเงินรวมทั้งสิ้น`}</pre>
+        >{t.dashboard.templates.placeholderLegend}</pre>
       </details>
 
       {templates.length === 0 ? (

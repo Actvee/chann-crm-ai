@@ -165,6 +165,9 @@ export const en: Dictionary = {
       surveyTitle: "How did we do?",
       surveyIntro: "Job {code} is complete — please rate the service.",
       surveyThanks: "Thank you for the rating.",
+      scaleBad: "Poor",
+      scaleFair: "Fair",
+      scaleGreat: "Excellent",
       products: "Registered products",
       noProducts: "No product registered yet — register your first one below, then report a fault",
       registerFirst: "Report a fault after registering a product (below) so the shop knows which machine",
@@ -356,6 +359,29 @@ export const en: Dictionary = {
       title: "Document templates",
       intro: "Upload an HTML file to use as your own quote layout. Values are filled into the placeholders you mark. Uploads stay as drafts until you publish them.",
       upload: "Upload template",
+      placeholderLegend: `{{company.legal_name}}   company name
+{{company.address}}      address
+{{company.phone}}        phone
+{{company.tax_id}}       tax ID
+
+{{customer.name}}        customer name
+{{customer.address}}     customer address
+
+{{quote.quote_id}}       quote number
+{{quote.valid_until}}    valid until
+
+{{#line_items}}
+  {{item.index}}         line number
+  {{item.name}}          product name
+  {{item.qty}}           quantity
+  {{item.unit_price}}    unit price
+  {{item.line_total}}    line total
+{{/line_items}}
+
+{{totals.subtotal}}      subtotal
+{{totals.discount_amount}} discount
+{{totals.vat_amount}}    VAT
+{{totals.grand_total}}   grand total`,
       name: "Template name",
       namePlaceholder: "e.g. Quote with logo",
       file: "HTML file",

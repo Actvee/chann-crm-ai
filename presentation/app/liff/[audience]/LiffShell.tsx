@@ -18,7 +18,7 @@ declare global {
 }
 
 export default function LiffShell({ audience, liffId }: { audience: Audience; liffId: string }) {
-  const [status, setStatus] = useState("กำลังเริ่ม LIFF…");
+  const [status, setStatus] = useState("Starting LIFF…");
 
   const initialize = useCallback(async () => {
     if (!liffId || !window.liff) {
@@ -38,7 +38,7 @@ export default function LiffShell({ audience, liffId }: { audience: Audience; li
       });
       if (!response.ok) throw new Error(`authentication failed (${response.status})`);
       const profile = (await response.json()) as { sub: string };
-      setStatus(`พร้อมใช้งาน — LINE user ${profile.sub}`);
+      setStatus(`Ready — LINE user ${profile.sub}`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "LIFF initialization failed");
     }
@@ -54,7 +54,7 @@ export default function LiffShell({ audience, liffId }: { audience: Audience; li
       />
       <h1>Chann CRM AI — {audience}</h1>
       <p>{status}</p>
-      {audience === "sales" && <a href="/liff/sales/roles">จัดการ Role & Permission</a>}
+      {audience === "sales" && <a href="/liff/sales/roles">Roles &amp; permissions</a>}
     </main>
   );
 }

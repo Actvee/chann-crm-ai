@@ -167,6 +167,9 @@ export const th = {
       surveyTitle: "ประเมินความพึงพอใจ",
       surveyIntro: "งาน {code} เสร็จเรียบร้อยแล้ว ช่วยให้คะแนนบริการหน่อยครับ",
       surveyThanks: "ขอบคุณสำหรับคะแนนครับ",
+      scaleBad: "ไม่ดี",
+      scaleFair: "พอใช้",
+      scaleGreat: "ดีเยี่ยม",
       products: "สินค้าที่ลงทะเบียน",
       noProducts: "ยังไม่มีสินค้าที่ลงทะเบียน — ลงทะเบียนเครื่องแรกด้านล่าง แล้วจึงแจ้งซ่อมได้",
       registerFirst: "แจ้งซ่อมได้หลังลงทะเบียนสินค้า (ด้านล่าง) เพื่อให้ร้านรู้ว่าเครื่องไหน",
@@ -358,6 +361,29 @@ export const th = {
       title: "แบบฟอร์มเอกสาร",
       intro: "อัปโหลดไฟล์ HTML ที่ใช้เป็นแบบใบเสนอราคาของร้านคุณเอง ระบบจะเติมข้อมูลลงในช่องที่กำหนด ไฟล์ที่อัปโหลดจะเป็นฉบับร่างจนกว่าจะกดเผยแพร่",
       upload: "อัปโหลดแบบฟอร์ม",
+      placeholderLegend: `{{company.legal_name}}   ชื่อบริษัท
+{{company.address}}      ที่อยู่
+{{company.phone}}        เบอร์โทร
+{{company.tax_id}}       เลขประจำตัวผู้เสียภาษี
+
+{{customer.name}}        ชื่อลูกค้า
+{{customer.address}}     ที่อยู่ลูกค้า
+
+{{quote.quote_id}}       เลขที่ใบเสนอราคา
+{{quote.valid_until}}    วันหมดอายุ
+
+{{#line_items}}
+  {{item.index}}         ลำดับ
+  {{item.name}}          ชื่อสินค้า
+  {{item.qty}}           จำนวน
+  {{item.unit_price}}    ราคาต่อหน่วย
+  {{item.line_total}}    รวมบรรทัด
+{{/line_items}}
+
+{{totals.subtotal}}      รวมเป็นเงิน
+{{totals.discount_amount}} ส่วนลด
+{{totals.vat_amount}}    ภาษีมูลค่าเพิ่ม
+{{totals.grand_total}}   จำนวนเงินรวมทั้งสิ้น`,
       name: "ชื่อแบบฟอร์ม",
       namePlaceholder: "เช่น ใบเสนอราคาแบบมีโลโก้",
       file: "ไฟล์ HTML",

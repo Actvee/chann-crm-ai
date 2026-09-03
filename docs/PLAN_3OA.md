@@ -55,9 +55,12 @@ spec (ทีม, ภาษา, ค้นสินค้า, คุยกับ�
    2 หน้าต่อ OA (หน้าหลัก = 6 ช่องเดิม, เพิ่มเติม = แชท/สินค้า/ประวัติ/โปรไฟล์/สิทธิ์/สลับภาษา) แท็บบน
    หัวเมนูสลับด้วย rich menu alias; `richmenu-apply.sh` สร้าง 2 เมนู + alias + ตั้งหน้าหลักเป็น default,
    uri `{LIFF_X}/path` แทนค่าได้ · แชท "สลับภาษา" สลับ TH/EN · **เจ้าของรัน `bash ~/rm.sh`** ให้เมนูขึ้นจริง
-8. **Phase 20 polish** — i18n EN ให้ครบทุกข้อความบอท/notification (ตอนนี้ EN มีแต่
-   ข้อความหลัก), loading/error state, accessibility pass ซ้ำ, ปิดด้วย evidence
-   ทุก phase
+8. **Phase 20 polish** — **i18n ทำแล้ว** (`phase20-i18n-v1`): LINE push อ่านภาษาของ*ผู้รับ*
+   (display preference) ไม่ใช่ของผู้ส่ง; ทุก notification ของ 3 OA flow มี EN (แจ้งซ่อมใหม่/มอบหมาย/
+   ทีมรับงาน/รออนุมัติ/อนุมัติ-ตีกลับ/แชท/SLA/ลูกค้าใหม่/lead); push ถึงลูกค้าใน live chat ตามภาษาลูกค้า;
+   หน้า LIFF ไม่มีไทย hardcode (เทสต์กัน) · ข้อความบอทในแชท 347 ชุดมี TH/EN ครบอยู่แล้ว ·
+   **ยังไม่ทำ:** ticket_changed (ข้อความมาจากผู้เรียก ภาษาเดียว), reminder sweep (รวมหลายร้าน ไทย),
+   performance p95 / cache hit (20.4), accessibility pass (20.5 test_accessibility), evidence ปิด phase
 
 ## B+. งานคู่ขนานที่ทำแล้ว (3 ก.ย. ค่ำ)
 

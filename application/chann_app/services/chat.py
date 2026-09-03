@@ -3870,6 +3870,11 @@ async def _notify_new_ticket(
         f"{ticket.get('customer_name') or '—'}\n"
         f"{ticket.get('issue_description') or ''}"
     )
+    text_en = (
+        f"New repair request {ticket.get('ticket_number')}\n"
+        f"{ticket.get('customer_name') or '—'}\n"
+        f"{ticket.get('issue_description') or ''}"
+    )
     for member in targets:
         chann_uid = str(member.get("chann_uid") or "")
         if not chann_uid:
@@ -3883,6 +3888,7 @@ async def _notify_new_ticket(
                 target_line_user_id=line_target,
                 type="ticket_created",
                 message=text,
+                message_en=text_en,
                 entity_type="service_ticket",
                 entity_id=ticket_id,
                 oa="sales",
@@ -4855,6 +4861,12 @@ async def _notify_assigned_ticket(
         f"{ticket.get('service_address') or '—'}\n"
         f"{ticket.get('issue_description') or ''}"
     )
+    text_en = (
+        f"New job {ticket.get('ticket_number')} ({target_label})\n"
+        f"{ticket.get('customer_name') or '—'}\n"
+        f"{ticket.get('service_address') or '—'}\n"
+        f"{ticket.get('issue_description') or ''}"
+    )
     for member in members:
         chann_uid = str(member.get("chann_uid") or "")
         if not chann_uid:
@@ -4868,6 +4880,7 @@ async def _notify_assigned_ticket(
                 target_line_user_id=line_target,
                 type="ticket_assigned",
                 message=text,
+                message_en=text_en,
                 entity_type="service_ticket",
                 entity_id=str(ticket.get("id") or ""),
                 # The technician OA, not sales: this is the channel they
@@ -4994,6 +5007,7 @@ async def _notify_team_open(client: DataClient, license_id: str, ticket: dict, l
         return
     code = str(ticket.get("ticket_number") or "")
     text = f"หัวหน้าทีมรับงาน {code} ให้ทีมแล้ว ใครไปพิมพ์ \"รับงาน {code}\"\n{ticket.get('service_address') or ''}".strip()
+    text_en = f"Your team lead accepted job {code} for the team. Whoever goes: type \"take job {code}\"\n{ticket.get('service_address') or ''}".strip()
     for member in members:
         uid = str(member.get("chann_uid") or "")
         if not uid:
@@ -5002,7 +5016,7 @@ async def _notify_team_open(client: DataClient, license_id: str, ticket: dict, l
             line_uid = await client.line_target_of(uid)
             await send_notification(
                 client, license_id=license_id, target_chann_uid=uid, target_line_user_id=line_uid,
-                type="sla_warning", message=text, entity_type="service_ticket",
+                type="sla_warning", message=text, message_en=text_en, entity_type="service_ticket",
                 entity_id=str(ticket.get("id") or ""), language=language, oa="technician",
             )
         except Exception:
