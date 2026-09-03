@@ -200,6 +200,54 @@ async def liff_guide(audience: str, lang: str = "th", claims: dict = Depends(req
     }
 
 
+@router.get("/liff/{audience}/signature")
+async def liff_signature(
+    audience: str,
+    claims: dict = Depends(require_liff),
+    client: DataClient = Depends(get_data_client),
+):
+    """13.5 — a link to this person's signature image, or null."""
+    from .services.photos import signature_link
+
+    if audience not in OA_TO_ROLE:
+        raise HTTPException(status_code=404, detail="unknown LIFF audience")
+    identity = await client.resolve_identity(claims["sub"], OA_TO_ROLE[audience], claims.get("name"))
+    return {"url": await signature_link(client, chann_uid=identity["chann_uid"])}
+
+
+@router.post("/liff/{audience}/signature")
+async def liff_set_signature(
+    audience: str,
+    body: dict,
+    claims: dict = Depends(require_liff),
+    client: DataClient = Depends(get_data_client),
+):
+    """Save a drawn signature (a data: URL from the canvas)."""
+    import base64
+
+    from .services.photos import PhotoRefused, signature_link, store_signature
+
+    if audience not in OA_TO_ROLE:
+        raise HTTPException(status_code=404, detail="unknown LIFF audience")
+    data_url = str(body.get("image") or "")
+    head, _, payload = data_url.partition(",")
+    if not head.startswith("data:image/") or not payload:
+        raise HTTPException(status_code=422, detail="image must be a data:image/... URL")
+    try:
+        content = base64.b64decode(payload)
+    except Exception:
+        raise HTTPException(status_code=422, detail="image is not valid base64")
+    identity = await client.resolve_identity(claims["sub"], OA_TO_ROLE[audience], claims.get("name"))
+    try:
+        await store_signature(
+            client, chann_uid=identity["chann_uid"], content=content,
+            content_type=head[5:].split(";")[0] or "image/png",
+        )
+    except PhotoRefused as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return {"url": await signature_link(client, chann_uid=identity["chann_uid"])}
+
+
 @router.put("/liff/{audience}/active-shop")
 async def liff_set_active_shop(
     audience: str,

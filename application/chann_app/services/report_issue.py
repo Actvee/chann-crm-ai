@@ -145,7 +145,7 @@ async def _ensure_builtin_template_version(
 async def issue_service_report_document(
     client: DataClient, *, license_id: str, report: dict, ticket: dict, company: dict,
     technician: dict | None = None, approvals: list[dict] | None = None,
-    actor_id: str | None = None, allow_reissue: bool = False,
+    actor_id: str | None = None, allow_reissue: bool = False, photos: list[str] | None = None,
 ) -> dict:
     """Render, store, record, link. Returns the generated_documents row.
 
@@ -161,7 +161,7 @@ async def issue_service_report_document(
     issued_at = datetime.now(timezone.utc)
     snapshot = build_service_report_snapshot(
         report=report, ticket=ticket, company=company, technician=technician,
-        approvals=approvals, issued_at=issued_at,
+        approvals=approvals, issued_at=issued_at, photos=photos,
     )
     template_version_id, html = await _resolve_template(client, license_id, snapshot, actor_id=actor_id)
 
@@ -248,10 +248,26 @@ async def issue_for_report(
             "signature_url": person.get("signature_url") or "",
         })
 
+    # 13.1: the visit's pictures, signed for the render — through this
+    # module's store reference, which is the one the tests patch.
+    photos: list[str] = []
+    try:
+        store = get_document_store()
+        for row in await client.list_ticket_photos(license_id, str(report.get("ticket_id") or "")):
+            path = str(row.get("photo_url") or "")
+            if not path:
+                continue
+            photos.append(
+                path if path.startswith("http")
+                else await store.signed_url(path=path, expires_seconds=SIGNATURE_LINK_TTL_SECONDS)
+            )
+    except Exception:
+        log.exception("could not gather photos for %s", report.get("report_id"))
+
     return await issue_service_report_document(
         client, license_id=license_id, report=report, ticket=ticket, company=company,
         technician=technician, approvals=approvals, actor_id=actor_id,
-        allow_reissue=allow_reissue,
+        allow_reissue=allow_reissue, photos=photos,
     )
 
 

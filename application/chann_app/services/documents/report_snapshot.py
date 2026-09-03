@@ -33,6 +33,7 @@ def build_service_report_snapshot(
     technician: dict | None = None,
     approvals: list[dict] | None = None,
     issued_at: datetime | None = None,
+    photos: list[str] | None = None,
 ) -> dict:
     """The complete, frozen input to a service report render.
 
@@ -80,6 +81,9 @@ def build_service_report_snapshot(
             or _name_of(technician, str((technician or {}).get("chann_uid") or "")),
             "phone": str((technician or {}).get("phone") or ""),
         },
+        # 13.1: evidence from the visit — fetchable links the renderer
+        # resolves during the render (signed by the caller).
+        "photos": [str(u) for u in (photos or []) if u][:4],
         "approvals": [
             {
                 "name": str(a.get("name") or ""),

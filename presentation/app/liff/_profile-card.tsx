@@ -40,6 +40,7 @@ export function ProfileCard({
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ text: string; tone: "ok" | "error" } | null>(null);
   const [language, setLanguage] = useState<string>("th");
+  const [signature, setSignature] = useState<string | null>(null);
 
   const headers = useCallback(
     () => ({ "X-Liff-ID-Token": token, "Content-Type": "application/json" }),
@@ -64,6 +65,12 @@ export function ProfileCard({
         if (prefs.ok && !cancelled) {
           const p = (await prefs.json()) as { language?: string | null };
           setLanguage(p.language === "en" ? "en" : "th");
+        }
+        // 13.5: whether a signature is on file (printed on approved reports).
+        const sig = await fetch(`/api/liff/${audience}/signature`, { headers: headers() });
+        if (sig.ok && !cancelled) {
+          const body = (await sig.json()) as { url?: string | null };
+          setSignature(body.url ?? null);
         }
       } catch {
         if (!cancelled) setNote({ text: copy.loadFailed, tone: "error" });
@@ -159,6 +166,13 @@ export function ProfileCard({
           </FieldRow>
           <FieldRow label={copy.address} empty={!profile.address}>
             {profile.address || copy.notSet}
+          </FieldRow>
+          <FieldRow label={copy.signature}>
+            <span>
+              {signature ? copy.signatureSet : copy.signatureNone}
+              {" · "}
+              <a href={`/liff/${audience}/signature`}>{copy.signatureEdit}</a>
+            </span>
           </FieldRow>
           <FieldRow label={copy.language}>
             {(id) => (

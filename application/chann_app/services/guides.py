@@ -66,7 +66,7 @@ GUIDES: dict[str, dict] = {
             {
                 "key": "report", "title": {"th": "แจ้งซ่อม", "en": "Report a fault"},
                 "body": {
-                    "th": "พิมพ์อาการที่เสียมาได้เลย เช่น \"แอร์ไม่เย็น\" ระบบจะเลือกเครื่องให้ (หรือให้กดเลือกถ้ามีหลายเครื่อง) แล้วถามที่อยู่และวันเวลานัด",
+                    "th": "พิมพ์อาการที่เสียมาได้เลย เช่น \"แอร์ไม่เย็น\" ระบบจะเลือกเครื่องให้ (หรือให้กดเลือกถ้ามีหลายเครื่อง) แล้วถามที่อยู่และวันเวลานัด · ส่งรูปอาการมาในแชทได้ ระบบแนบกับงานให้ช่างดู",
                     "en": "Describe what is wrong, e.g. \"air con not cooling\". The machine is picked for you, then address and appointment are asked.",
                 },
                 "commands": ["แจ้งซ่อม", "ไม่มีหมายเลขเครื่อง"],
@@ -130,8 +130,8 @@ GUIDES: dict[str, dict] = {
             {
                 "key": "checkin", "title": {"th": "เช็คอินเมื่อถึงหน้างาน", "en": "Check in on site"},
                 "body": {
-                    "th": "ถึงบ้านลูกค้าแล้วพิมพ์ \"เช็คอิน\" (มีงานเดียวระบบรู้เอง) งานจะเปลี่ยนเป็น กำลังทำ — ปิดงานได้หลังจากนี้เท่านั้น",
-                    "en": "On arrival type \"check in\" (one job: it knows which). The job becomes in progress — finishing is only possible after this.",
+                    "th": "ถึงบ้านลูกค้าแล้วพิมพ์ \"เช็คอิน\" (มีงานเดียวระบบรู้เอง) งานจะเปลี่ยนเป็น กำลังทำ — ปิดงานได้หลังจากนี้เท่านั้น · ส่งรูปหน้างานมาในแชทได้เลย ระบบแนบกับงานและใส่ในรายงาน PDF",
+                    "en": "On arrival type \"check in\" (one job: it knows which). The job becomes in progress — finishing is only possible after this. Send photos of the site here; they go on the job and into the PDF.",
                 },
                 "commands": ["เช็คอิน"],
                 "example": "เช็คอิน T-2026-0001",
@@ -152,7 +152,7 @@ GUIDES: dict[str, dict] = {
             {
                 "key": "approved", "title": {"th": "รอ CS ตรวจ → PDF", "en": "CS review → PDF"},
                 "body": {
-                    "th": "ผ่านหรือตีกลับจะแจ้งมาที่แชทนี้ ตีกลับให้แก้แล้วส่งใหม่ · ผ่านแล้วจะได้ลิงก์ PDF รายงาน (หรือพิมพ์ \"ออกรายงาน SR-…\")",
+                    "th": "ผ่านหรือตีกลับจะแจ้งมาที่แชทนี้ ตีกลับให้แก้แล้วส่งใหม่ · ผ่านแล้วจะได้ลิงก์ PDF รายงาน (หรือพิมพ์ \"ออกรายงาน SR-…\") · วาดลายเซ็นไว้ครั้งเดียวที่ หน้าจอ > ข้อมูลของฉัน > ลายเซ็น จะติดบน PDF ที่คุณเกี่ยวข้อง",
                     "en": "Approved or sent back, you hear here. Approved → the report PDF link (or \"issue report SR-…\").",
                 },
                 "commands": ["ออกรายงาน", "เปลี่ยนภาษาเป็นอังกฤษ", "วิธีใช้"],

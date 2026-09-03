@@ -26,13 +26,13 @@ _EN: Take a job — "open jobs" then tap one, or "claim T-2026-0001". A job give
 
 ## 3. เช็คอินเมื่อถึงหน้างาน
 
-ถึงบ้านลูกค้าแล้วพิมพ์ "เช็คอิน" (มีงานเดียวระบบรู้เอง) งานจะเปลี่ยนเป็น กำลังทำ — ปิดงานได้หลังจากนี้เท่านั้น
+ถึงบ้านลูกค้าแล้วพิมพ์ "เช็คอิน" (มีงานเดียวระบบรู้เอง) งานจะเปลี่ยนเป็น กำลังทำ — ปิดงานได้หลังจากนี้เท่านั้น · ส่งรูปหน้างานมาในแชทได้เลย ระบบแนบกับงานและใส่ในรายงาน PDF
 
 พิมพ์: `เช็คอิน T-2026-0001`
 
 [IMAGE: tech-checkin — ช่างยืนหน้าบ้านลูกค้า กดปุ่ม 'เช็คอินเริ่มงาน' บนโทรศัพท์ มีหมุดตำแหน่งสีน้ำเงิน]
 
-_EN: Check in on site — On arrival type "check in" (one job: it knows which). The job becomes in progress — finishing is only possible after this._
+_EN: Check in on site — On arrival type "check in" (one job: it knows which). The job becomes in progress — finishing is only possible after this. Send photos of the site here; they go on the job and into the PDF._
 
 ## 4. ปิดงาน + รายงาน
 
@@ -46,7 +46,7 @@ _EN: Finish + report — Type "finish" and answer three things: what you found /
 
 ## 5. รอ CS ตรวจ → PDF
 
-ผ่านหรือตีกลับจะแจ้งมาที่แชทนี้ ตีกลับให้แก้แล้วส่งใหม่ · ผ่านแล้วจะได้ลิงก์ PDF รายงาน (หรือพิมพ์ "ออกรายงาน SR-…")
+ผ่านหรือตีกลับจะแจ้งมาที่แชทนี้ ตีกลับให้แก้แล้วส่งใหม่ · ผ่านแล้วจะได้ลิงก์ PDF รายงาน (หรือพิมพ์ "ออกรายงาน SR-…") · วาดลายเซ็นไว้ครั้งเดียวที่ หน้าจอ > ข้อมูลของฉัน > ลายเซ็น จะติดบน PDF ที่คุณเกี่ยวข้อง
 
 พิมพ์: `ออกรายงาน SR-2026-0001`
 

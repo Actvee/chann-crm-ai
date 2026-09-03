@@ -25,6 +25,8 @@ from .ai.client import AIUnavailable, AINotConfigured
 # in chat must never disagree with what the customer receives on the PDF.
 from .documents.snapshot import build_line_items
 from .guides import guide_images, render_help_text
+from .photos import PhotoRefused, store_ticket_photo
+from ..line.client import get_message_content
 from .ai.intent import parse_intent, unavailable_reply
 from .identity import ResolvedContext, TenantResolution
 from .registration import COMPANY_CODE_RE
@@ -2780,6 +2782,85 @@ async def _switch_language(client: DataClient, *, ctx: ResolvedContext, language
     return ChatReply(text=_t(LANGUAGE_SWITCHED, language))
 
 
+# ------------------------------------------------- a picture, not words (13.1)
+
+PHOTO_ATTACHED = {
+    "th": "แนบรูปกับงาน {code} แล้วครับ ({n} รูป) ส่งเพิ่มได้เรื่อยๆ",
+    "en": "Photo attached to {code} ({n} so far). Send more any time.",
+}
+PHOTO_NO_JOB = {
+    "th": "ยังไม่มีงานที่กำลังทำให้แนบรูปครับ รับงานและเช็คอินก่อน แล้วค่อยส่งรูป",
+    "en": "No job to attach this to yet — take a job and check in, then send the picture.",
+}
+PHOTO_NO_JOB_CUSTOMER = {
+    "th": "ยังไม่มีงานซ่อมที่เปิดอยู่ให้แนบรูปครับ พิมพ์อาการที่เสียก่อน แล้วค่อยส่งรูป",
+    "en": "No open repair to attach this to — describe the fault first, then send the picture.",
+}
+PHOTO_FAILED = {
+    "th": "รับรูปไม่สำเร็จ ลองส่งใหม่อีกครั้งครับ",
+    "en": "Could not take the picture — please send it again.",
+}
+
+
+async def handle_incoming_image(
+    client: DataClient, *, ctx: ResolvedContext, oa: str, message_id: str, language: str = "th",
+) -> ChatReply:
+    """An image message on any OA. A technician's picture is evidence on
+    the job they are on (13.1: check-in / evidence / check-out — the
+    job's status says which); a customer's picture goes on their open
+    repair for CS and the technician to see. Nowhere to put it → say so,
+    and do not store it."""
+    if ctx.resolution is not TenantResolution.SINGLE:
+        return ChatReply(text=greet(ctx, language))
+    license_id = str(ctx.license_id)
+    ticket = None
+    member_id = None
+    photo_type = "evidence"
+    try:
+        if oa == "customer":
+            rows = await client.list_tickets(license_id)
+            mine = [
+                t for t in rows
+                if str(t.get("customer_chann_uid") or "") == ctx.chann_uid
+                and str(t.get("status") or "") not in ("completed", "cancelled")
+            ]
+            ticket = mine[0] if mine else None
+        else:
+            member, ticket, _inferred = await _ticket_for_action(
+                client, license_id, ctx, "", prefer_status=("in_progress", "assigned"),
+            )
+            member_id = str((member or {}).get("id") or "") or None
+            if ticket and str(ticket.get("status") or "") == "in_progress":
+                photo_type = "evidence"
+            elif ticket:
+                photo_type = "checkin"
+    except Exception:
+        log.exception("could not find a ticket for a picture")
+        ticket = None
+    if ticket is None:
+        return ChatReply(text=_t(PHOTO_NO_JOB_CUSTOMER if oa == "customer" else PHOTO_NO_JOB, language))
+    try:
+        content, content_type = await get_message_content(oa, message_id)
+        await store_ticket_photo(
+            client, license_id=license_id, ticket_id=str(ticket["id"]), content=content,
+            content_type=content_type, photo_type=photo_type, uploaded_by_member_id=member_id,
+        )
+        try:
+            count = len(await client.list_ticket_photos(license_id, str(ticket["id"])))
+        except Exception:
+            count = 1
+    except PhotoRefused as exc:
+        log.warning("picture refused: %s", exc)
+        return ChatReply(text=_t(PHOTO_FAILED, language))
+    except Exception:
+        log.exception("picture could not be stored")
+        return ChatReply(text=_t(PHOTO_FAILED, language))
+    return ChatReply(
+        text=_t(PHOTO_ATTACHED, language).format(code=ticket.get("ticket_number") or "", n=count),
+        entity_type="service_ticket", entity_id=str(ticket.get("id") or ""),
+    )
+
+
 def _looks_like_a_question(text: str) -> bool:
     """Is this asking something rather than reporting something?
 
@@ -4673,6 +4754,10 @@ async def _notify_team_open(client: DataClient, license_id: str, ticket: dict, l
 TICKET_CLAIMED_NEXT = {
     "th": "ถึงหน้างานแล้วพิมพ์ \"เช็คอิน\" ก่อน แล้วค่อย \"ปิดงาน\" พร้อมรายงาน",
     "en": "On site, type \"check in\" first; \"finish\" with the report comes after.",
+}
+CHECKIN_PHOTO_HINT = {
+    "th": "\nส่งรูปหน้างานมาในแชทนี้ได้เลย ระบบจะแนบกับงาน",
+    "en": "\nSend a photo of the site here and it is attached to the job.",
 }
 CHECKOUT_NEEDS_CHECKIN = {
     "th": "งาน {code} ยังไม่ได้เช็คอินครับ ถึงหน้างานแล้วพิมพ์ \"เช็คอิน {code}\" ก่อน แล้วค่อยปิดงาน",

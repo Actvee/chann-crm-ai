@@ -49,6 +49,7 @@ export default function ServiceReports({
 }) {
   const { t } = useLanguage();
   const [reports, setReports] = useState<ServiceReport[]>([]);
+  const [photos, setPhotos] = useState<Record<string, { id: string; url?: string | null }[]>>({});
   const [tickets, setTickets] = useState<Record<string, Ticket>>({});
   const [permissions, setPermissions] = useState<Set<string>>(new Set());
   const [licenseId, setLicenseId] = useState("");
@@ -78,6 +79,15 @@ export default function ServiceReports({
       }
       const rows = (await response.json()) as ServiceReport[];
       setReports(rows);
+      // 13.1: the pictures behind each report, by ticket.
+      const byTicket: Record<string, { id: string; url?: string | null }[]> = {};
+      await Promise.all(
+        Array.from(new Set(rows.map((r) => r.ticket_id))).map(async (ticketId) => {
+          const res = await fetch(`/api/phase2/licenses/${license}/tickets/${ticketId}/photos`, { headers });
+          byTicket[ticketId] = res.ok ? ((await res.json()) as { id: string; url?: string | null }[]) : [];
+        }),
+      );
+      setPhotos(byTicket);
 
       // The ticket gives the report a customer and an address; a report
       // id alone tells a reader nothing about which visit it describes.
@@ -254,6 +264,15 @@ export default function ServiceReports({
                   ) : null}
                 </dl>
 
+                {(photos[report.ticket_id] ?? []).some((p) => p.url) && (
+                  <div className="photo-strip">
+                    {(photos[report.ticket_id] ?? []).filter((p) => p.url).map((p) => (
+                      <a key={p.id} href={p.url ?? "#"} target="_blank" rel="noreferrer">
+                        <img src={p.url ?? ""} alt="" />
+                      </a>
+                    ))}
+                  </div>
+                )}
                 {report.status === "approved" && (
                   <div className="card-actions">
                     <button

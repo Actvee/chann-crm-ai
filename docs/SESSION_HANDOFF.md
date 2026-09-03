@@ -76,9 +76,10 @@ clone.
 
 ## Where things stand
 
-**The commit carrying this text** is the help-guide patch
-(`help-guide-v1`, application + presentation, no migration), deployed by
-`~/help-guide-deploy.sh`; before it on 3 Sep: `9bfa0ec` service report
+**The commit carrying this text** is the photos-and-signature patch
+(`photos-v1`, all three tiers, no migration), deployed by
+`~/photos-deploy.sh`; before it the team-flow commit (B2) and `4ef77f4`
+the help-guide; before it on 3 Sep: `9bfa0ec` service report
 PDF, then `34942a2` the Sales tickets page dispatch (B1); earlier the
 same day `cdd2c1a` customer onboarding, `4b53f60` shops-chosen/units-
 claimed, `e0ba461` the technician's day. Each is "deployed" only
@@ -267,6 +268,29 @@ deploy data/application/presentation. The new data image's
 `EXPECTED_MIGRATION_HEAD` is `0021_approvals` and it will refuse to
 serve against an older schema, which is the guard working.
 668 tests pass (656 unit/boundary + 266 integration, 12 of them Phase 14).
+
+### Plan B3 (3 Sep, late) — pictures on the job, the approver's signature
+
+13.1 and 13.5, on the plumbing Phase 13 already had (`ticket_photos`,
+`chann_identities.signature_url`) and the store the documents use.
+`services/photos.py`: `store_ticket_photo` (object first, row second;
+refuses non-images and >10 MB), `photo_links` (hour-long signed links),
+`store_signature` / `signature_link`. In LINE, an image message on any
+OA reaches `chat.handle_incoming_image` (webhook branches on
+`message.type`): a technician's picture goes on the job they are on
+(`_ticket_for_action`, in_progress → "evidence", assigned → "checkin"),
+a customer's on their open repair; nowhere to put it → told, not
+stored. The bytes come from LINE's content API
+(`line/client.get_message_content`) inside the webhook, since LINE
+keeps them only briefly. Home screens: "ถ่าย/แนบรูปหน้างาน" on the
+technician's jobs (`POST tickets/{id}/photos`, a data: URL — no
+multipart dependency), the reports page shows each visit's pictures
+(`GET tickets/{id}/photos`, customers only their own). The PDF prints
+up to four (`report_snapshot.photos`, signed by `report_issue`).
+Signature: `/liff/{oa}/signature` (canvas, finger), `GET/POST
+/liff/{oa}/signature`, Data `PUT identities/{uid}/signature`; the
+profile card says whether one is on file. Not done: GPS with chat
+photos (LINE sends none with an image).
 
 ### Plan B2 (3 Sep, late) — the team flow as 12.4 states it, without a migration
 

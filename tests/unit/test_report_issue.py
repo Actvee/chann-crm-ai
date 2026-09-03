@@ -141,6 +141,10 @@ class _FakeClient:
     async def approval_steps_for_entity(self, license_id, entity_type, entity_id):
         return list(self.steps)
 
+    async def list_ticket_photos(self, license_id, ticket_id):
+        return [{"id": "p1", "ticket_id": ticket_id, "photo_url": "documents/lic-1/tickets/t-1/photos/a.jpg",
+                 "photo_type": "evidence"}]
+
 
 def _fixtures(status="approved"):
     return {
@@ -230,3 +234,6 @@ class TestIssue:
         assert snap["approvals"][0]["signature_url"].startswith("https://signed.example/signatures/")
         assert "สมหญิง ตรวจดี" in renderer.last_html
         assert client.reports[0]["generated_document_id"] == "doc-1"
+        # 13.1: the visit's pictures are on the paper, via a signed link.
+        assert snap["photos"] and snap["photos"][0].startswith("https://signed.example/documents/")
+        assert 'class="photo"' in renderer.last_html

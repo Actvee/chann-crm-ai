@@ -1369,6 +1369,85 @@ async def claim_ticket(
         raise _propagate(exc)
 
 
+class PhotoUploadIn(BaseModel):
+    """A data: URL from the browser (FileReader / canvas) — JSON, so no
+    multipart dependency and the same shape the signature uses."""
+    image: str
+    photo_type: str = "evidence"
+
+
+def _decode_data_url(data_url: str) -> tuple[bytes, str]:
+    import base64
+
+    head, _, body = (data_url or "").partition(",")
+    if not head.startswith("data:") or not body:
+        raise HTTPException(status_code=422, detail="image must be a data: URL")
+    content_type = head[5:].split(";")[0] or "image/jpeg"
+    try:
+        return base64.b64decode(body), content_type
+    except Exception:
+        raise HTTPException(status_code=422, detail="image is not valid base64")
+
+
+@router.get("/licenses/{license_id}/tickets/{ticket_id}/photos")
+async def ticket_photos(
+    license_id: str,
+    ticket_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """13.1 — the job's pictures with an hour-long link each. A customer
+    sees only their own job's."""
+    from .services.photos import photo_links
+
+    _require_same_tenant(principal, license_id)
+    principal.require("ticket.read")
+    if principal.is_customer:
+        rows = await client.list_tickets(license_id)
+        if not any(str(t.get("id")) == ticket_id and str(t.get("customer_chann_uid") or "") == principal.chann_uid for t in rows):
+            raise HTTPException(status_code=404, detail="ticket not found")
+    return await photo_links(client, license_id=license_id, ticket_id=ticket_id)
+
+
+@router.post("/licenses/{license_id}/tickets/{ticket_id}/photos", status_code=201)
+async def upload_ticket_photo(
+    license_id: str,
+    ticket_id: str,
+    payload: PhotoUploadIn,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """13.1 — a picture from the home screen (the twin of sending one in
+    chat). Technicians attach to any job they can see; a customer to
+    their own."""
+    from .services.photos import PhotoRefused, store_ticket_photo
+
+    _require_same_tenant(principal, license_id)
+    principal.require("ticket.create" if principal.is_customer else "ticket.update")
+    member_id = None
+    if principal.is_customer:
+        rows = await client.list_tickets(license_id)
+        if not any(str(t.get("id")) == ticket_id and str(t.get("customer_chann_uid") or "") == principal.chann_uid for t in rows):
+            raise HTTPException(status_code=404, detail="ticket not found")
+    else:
+        try:
+            member = await client.get_member(license_id, principal.chann_uid)
+            member_id = str((member or {}).get("id") or "") or None
+        except Exception:  # noqa: BLE001
+            member_id = None
+    content, content_type = _decode_data_url(payload.image)
+    photo_type = payload.photo_type if payload.photo_type in ("checkin", "checkout", "evidence") else "evidence"
+    try:
+        return await store_ticket_photo(
+            client, license_id=license_id, ticket_id=ticket_id, content=content,
+            content_type=content_type, photo_type=photo_type, uploaded_by_member_id=member_id,
+        )
+    except PhotoRefused as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
 @router.post("/licenses/{license_id}/tickets/{ticket_id}/reject")
 async def reject_ticket(
     license_id: str,

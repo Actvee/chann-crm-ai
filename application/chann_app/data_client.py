@@ -947,6 +947,20 @@ class DataClient:
         )
         return self._unwrap(resp)
 
+    async def list_ticket_photos(self, license_id: str, ticket_id: str) -> list[dict]:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/tickets/{ticket_id}/photos",
+            headers=self._headers,
+        )
+        return self._unwrap(resp)
+
+    async def set_identity_signature(self, chann_uid: str, signature_url: str) -> dict:
+        resp = await self._client.put(
+            f"{self._base}/internal/v1/identities/{chann_uid}/signature",
+            headers=self._headers, json={"signature_url": signature_url},
+        )
+        return self._unwrap(resp)
+
     async def identity_signature(self, chann_uid: str) -> str | None:
         resp = await self._client.get(
             f"{self._base}/internal/v1/identities/{chann_uid}/signature",

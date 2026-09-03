@@ -18,6 +18,7 @@ from ..services.chat import (
     maybe_handle_storefront,
     greet,
     handle_chat_message,
+    handle_incoming_image,
     handle_reply,
 )
 from ..services.ai.intent import unavailable_reply
@@ -142,12 +143,23 @@ async def handle_webhook(
             # failure with a plain apology is always better than silence.
             try:
                 storefront_reply = None
-                if oa == "customer" and user_text.strip():
+                message_type = str((event.get("message") or {}).get("type") or "text")
+                if message_type == "image" and not is_unregistered(ctx):
+                    # 13.1: a picture is evidence on the job — stored now,
+                    # while LINE still serves the bytes.
+                    chat = await handle_incoming_image(
+                        client, ctx=ctx, oa=oa,
+                        message_id=str((event.get("message") or {}).get("id") or ""),
+                        language=language,
+                    )
+                elif oa == "customer" and user_text.strip():
                     storefront_reply = await maybe_handle_storefront(
                         client, message=user_text, ctx=ctx, language=language,
                     )
 
-                if storefront_reply is not None:
+                if message_type == "image" and not is_unregistered(ctx):
+                    pass
+                elif storefront_reply is not None:
                     chat = storefront_reply
                 elif is_unregistered(ctx):
                     # Phase 6.5: someone with no tenant gets the registration

@@ -144,6 +144,26 @@ async def _send(
             await client.aclose()
 
 
+LINE_CONTENT_URL = "https://api-data.line.me/v2/bot/message/{id}/content"
+
+
+async def get_message_content(oa: str, message_id: str) -> tuple[bytes, str]:
+    """The bytes of an image (or file) a person sent, and its content
+    type. LINE keeps them for a short while only, so this is done in the
+    webhook, not later."""
+    access_token = channel_access_token(oa)
+    if not access_token:
+        raise LineReplyError(f"LINE_{oa.upper()}_CHANNEL_ACCESS_TOKEN is REQUIRED_NOT_CONFIGURED")
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        response = await client.get(
+            LINE_CONTENT_URL.format(id=message_id),
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+    if response.status_code >= 400:
+        raise LineReplyError(f"LINE content fetch failed: {response.status_code}")
+    return response.content, response.headers.get("content-type", "image/jpeg")
+
+
 async def reply_messages(
     oa: str,
     reply_token: str,

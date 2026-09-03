@@ -630,6 +630,24 @@ class FakeDataClient:
     async def identity_signature(self, chann_uid):
         return getattr(self, "_signatures", {}).get(chann_uid)
 
+    async def set_identity_signature(self, chann_uid, signature_url):
+        self.recorded.append(("set_identity_signature", chann_uid, signature_url))
+        if not hasattr(self, "_signatures"):
+            self._signatures = {}
+        self._signatures[chann_uid] = signature_url
+        return {"chann_uid": chann_uid, "signature_url": signature_url}
+
+    async def add_ticket_photo(self, license_id, ticket_id, payload):
+        self.recorded.append(("add_ticket_photo", license_id, ticket_id, payload))
+        if not hasattr(self, "_photos"):
+            self._photos = []
+        row = {"id": f"p-{len(self._photos) + 1}", "ticket_id": ticket_id, **payload}
+        self._photos.append(row)
+        return row
+
+    async def list_ticket_photos(self, license_id, ticket_id):
+        return [p for p in getattr(self, "_photos", []) if p.get("ticket_id") == ticket_id]
+
     async def get_display_preferences(self, chann_uid):
         return dict(getattr(self, "_prefs", {}).get(chann_uid) or {"language": "th", "date_format": "dd/mm/yyyy", "timezone": "Asia/Bangkok"})
 

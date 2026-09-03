@@ -48,6 +48,15 @@ def _approvals(rows: list[dict]) -> str:
     return "".join(cells)
 
 
+def _photos(urls: list[str]) -> str:
+    if not urls:
+        return ""
+    cells = "".join(
+        f'<img class="photo" src="{escape(u, quote=True)}" alt="">' for u in urls[:4]
+    )
+    return f'<section class="block"><h2>รูปหน้างาน</h2><div class="photos">{cells}</div></section>'
+
+
 def render_service_report_html(snapshot: dict) -> str:
     company = snapshot["company"]
     report = snapshot["report"]
@@ -88,6 +97,8 @@ def render_service_report_html(snapshot: dict) -> str:
   .block {{ margin: 14px 0; }}
   .block p {{ margin: 0; padding: 10px 12px; border: 1px solid #bbb; min-height: 44px;
               white-space: pre-wrap; }}
+  .photos {{ display: flex; gap: 8px; flex-wrap: wrap; }}
+  .photos .photo {{ width: 23%; height: 150px; object-fit: cover; border: 1px solid #bbb; }}
   footer {{ margin-top: 36px; display: flex; justify-content: space-between; gap: 16px;
             flex-wrap: wrap; }}
   .sign {{ width: 45%; text-align: center; }}
@@ -136,6 +147,8 @@ def render_service_report_html(snapshot: dict) -> str:
 {_para("สิ่งที่แก้ไข", report["work_done"])}
 {_para("อะไหล่ที่เปลี่ยน", report["parts_changed"])}
 {_para("หมายเหตุ", report["notes"]) if report["notes"] else ""}
+
+{_photos(snapshot.get("photos") or [])}
 
 <footer>
   <div class="sign"><div class="signature blank"></div><div class="line">ช่างผู้ปฏิบัติงาน<br><span class="muted">{escape(technician["name"])}</span></div></div>

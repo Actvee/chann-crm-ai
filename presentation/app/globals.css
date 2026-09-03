@@ -453,6 +453,14 @@ body {
 /* The one-paragraph explanation at the top of a page (approvals,
    templates, the menu). One class, so the three copies of the same
    inline style stop drifting. */
+/* Signature pad (13.5) and site photos (13.1). */
+.signature-pad { display: block; width: 100%; height: 220px; background: #fff; border: 1px dashed var(--accent);
+  border-radius: 12px; touch-action: none; }
+.signature-preview { display: block; max-width: 100%; height: 90px; object-fit: contain; background: #fff;
+  border: 1px solid var(--line, #ddd); border-radius: 8px; padding: 6px; }
+.photo-strip { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.photo-strip img { width: 72px; height: 72px; object-fit: cover; border-radius: 8px; border: 1px solid var(--line, #ddd); }
+
 /* The illustrated guide: numbered steps, each with an optional picture. */
 .guide { list-style: none; padding: 0; margin: 0; }
 .guide-step h2 { display: flex; align-items: center; gap: 10px; }

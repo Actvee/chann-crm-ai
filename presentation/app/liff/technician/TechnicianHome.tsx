@@ -187,6 +187,38 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
     }
   }
 
+  /** 13.1: a picture from the phone's camera goes on the job (the twin
+   *  of sending it in chat). Read as a data: URL — no multipart. */
+  async function addPhoto(ticket: Ticket, file: File | null) {
+    if (!file) return;
+    setBusyId(ticket.id);
+    try {
+      const image = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(file);
+      });
+      const response = await fetch(
+        `/api/phase2/licenses/${licenseId}/tickets/${ticket.id}/photos`,
+        {
+          method: "POST",
+          headers: { ...proxyHeaders(token, licenseId, "technician"), "Content-Type": "application/json" },
+          body: JSON.stringify({
+            image,
+            photo_type: ticket.status === "in_progress" ? "evidence" : "checkin",
+          }),
+        },
+      );
+      if (!response.ok) throw new Error(String(response.status));
+      say(`${ticket.ticket_number} — ${t.dashboard.technician.photoAdded}`, "ok");
+    } catch {
+      say(t.dashboard.technician.photoFailed, "error");
+    } finally {
+      setBusyId("");
+    }
+  }
+
   /** 12.4: say no; the job returns to CS, nobody is auto-assigned. */
   async function decline() {
     if (!declineFor) return;
@@ -417,6 +449,20 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
                           {t.dashboard.technician.checkOut}
                         </button>
                       )}
+                      <label className="btn" data-variant="quiet">
+                        {t.dashboard.technician.addPhoto}
+                        <input
+                          type="file"
+                          accept="image/*"
+                          capture="environment"
+                          hidden
+                          disabled={busyId !== ""}
+                          onChange={(e) => {
+                            void addPhoto(ticket, e.target.files?.[0] ?? null);
+                            e.target.value = "";
+                          }}
+                        />
+                      </label>
                     </div>
                   )}
                   {reportFor?.id === ticket.id && (

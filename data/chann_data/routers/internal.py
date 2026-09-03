@@ -3952,6 +3952,20 @@ def get_identity_signature(chann_uid: str, session: Session = Depends(get_sessio
     return {"chann_uid": chann_uid, "signature_url": row.signature_url}
 
 
+@router.put("/identities/{chann_uid}/signature")
+def set_identity_signature(chann_uid: str, payload: dict, session: Session = Depends(get_session)):
+    """13.5 — record where this person's signature image now lives (the
+    Application stored the bytes first)."""
+    row = session.execute(
+        select(ChannIdentity).where(ChannIdentity.chann_uid == chann_uid)
+    ).scalars().first()
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="identity not found")
+    row.signature_url = str(payload.get("signature_url") or "") or None
+    session.commit()
+    return {"chann_uid": chann_uid, "signature_url": row.signature_url}
+
+
 @router.get("/identities/{chann_uid}/display-preferences")
 def get_display_preferences(chann_uid: str, session: Session = Depends(get_session)):
     return DisplayPreferenceRepository(session).get(chann_uid)
