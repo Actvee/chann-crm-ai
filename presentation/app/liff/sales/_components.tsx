@@ -28,10 +28,17 @@ export function AppShell({
   status,
   statusTone,
   nav = true,
+  guideHref,
+  wide = false,
   children,
 }: {
   title: string;
   back?: string | null;
+  /** Where "วิธีใช้" goes. Derived from the path when not given, so every
+   *  page of every OA carries it in the same spot (owner, 4 Sep). */
+  guideHref?: string | null;
+  /** Two-pane pages (the chat inbox) get the wider shell. */
+  wide?: boolean;
   /** The Sales section strip. Off for pages a technician or customer
    *  opens — the strip is Sales' furniture, and on the technician's
    *  reports page it made the page read as the wrong OA (owner, 3 Sep). */
@@ -44,6 +51,14 @@ export function AppShell({
   children: ReactNode;
 }) {
   const { t } = useLanguage();
+  const pathname = usePathname() ?? "";
+  const audience = pathname.startsWith("/liff/customer")
+    ? "customer"
+    : pathname.startsWith("/liff/technician")
+      ? "technician"
+      : "sales";
+  const guide = guideHref === null ? null : guideHref ?? `/liff/${audience}/guide`;
+  const onGuidePage = pathname.endsWith("/guide");
   // Start on window.liff appearing, not only on next/script's onReady.
   //
   // onReady is a single callback with no retry: if it does not fire — the
@@ -89,7 +104,7 @@ export function AppShell({
       {/* Loads the SDK; startup is driven by the poll above rather than
           by onReady, for the reason given there. */}
       <Script src={LIFF_SDK_SRC} strategy="afterInteractive" onError={onSdkError} />
-      <div className="shell">
+      <div className="shell" data-wide={wide ? "true" : undefined}>
         <header className="topbar">
           {/* Plain anchor rather than next/link: each page
               initialises LIFF on load, and a full navigation
@@ -110,7 +125,13 @@ export function AppShell({
           {/* The switcher lives in the bar so it is reachable from every
               page, which is what Phase 5 asks for — a language choice that
               only exists on one screen is not a language choice. */}
-          <div style={{ marginLeft: "auto" }}>
+          <div className="topbar-tools">
+            {guide && !onGuidePage && (
+              <a className="guidelink" href={guide}>
+                <span aria-hidden="true">?</span>
+                {t.dashboard.guide.title}
+              </a>
+            )}
             <LanguageSwitcher />
           </div>
         </header>
@@ -207,11 +228,13 @@ export function Count({ shown, total }: { shown: number; total: number }) {
 
 
 const NAV = [
+  { href: "/liff/sales/chats", key: "chats" },
   { href: "/liff/sales/customers", key: "customers" },
   { href: "/liff/sales/deals", key: "deals" },
   { href: "/liff/sales/quotes", key: "quotes" },
   { href: "/liff/sales/tickets", key: "tickets" },
   { href: "/liff/sales/reports", key: "reports" },
+  { href: "/liff/sales/approvals", key: "approvals" },
   { href: "/liff/sales/products", key: "products" },
 ] as const;
 
@@ -221,6 +244,8 @@ function SectionNav() {
   const pathname = usePathname();
   const router = useRouter();
   const labels: Record<string, string> = {
+    chats: t.dashboard.chats.title,
+    approvals: t.dashboard.approvals.title,
     customers: t.customer.title,
     deals: t.deal.title,
     quotes: t.quote.title,

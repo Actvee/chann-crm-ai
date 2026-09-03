@@ -115,7 +115,13 @@ export default function SalesMenu({ liffId }: { liffId: string }) {
           SDK sets up the LIFF context the sub-pages then rely on. */}
       <Script src={LIFF_SDK_SRC} strategy="afterInteractive" />
       <header className="topbar">
-        <h1>{t.dashboard.menuTitle}</h1>
+        <div className="topbar-tools" style={{ marginLeft: 0, justifyContent: "space-between" }}>
+          <h1>{t.dashboard.menuTitle}</h1>
+          <a className="guidelink" href="/liff/sales/guide">
+            <span aria-hidden="true">?</span>
+            {t.dashboard.guide.title}
+          </a>
+        </div>
         <div style={{ marginLeft: "auto" }}>
           <LanguageSwitcher />
         </div>

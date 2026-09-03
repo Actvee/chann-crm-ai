@@ -1,3 +1,23 @@
+### Plan C2 (4 Sep) — UI polish from the owner's test round (`ui-polish-v1`, presentation only)
+
+- `SalesChats.tsx` rebuilt as an inbox (reference: Zoho SalesIQ): conversation
+  list (avatar initials, name, last line, time, status/SLA/unread chips) |
+  thread (day separators, customer bubbles left, shop bubbles right, system
+  lines centred) with the composer pinned at the bottom (Enter sends,
+  Shift+Enter newline). Two panes from 760px, two screens on a phone.
+  Polling keeps identity: the list array is kept when nothing changed and
+  the thread only re-renders on a new last message; auto-scroll only when
+  the reader was at the bottom.
+- "ตัวอักษรเคลื่อน": Google Fonts now `display=optional` (no swap reflow in
+  the LINE webview; cached after the first load), and `.status` keeps a
+  42px slot whether or not it has text, so content never jumps.
+- `AppShell` derives the OA from the path and puts "วิธีใช้" in the top bar
+  on every page (`guideHref` to override, `null` to hide; hidden on the
+  guide page). The inline guide buttons on the technician and customer
+  homes are gone; `SalesMenu` carries the same link beside its title.
+- Section strip (`SectionNav`) gains แชทลูกค้า and รออนุมัติ; the main menu
+  already listed every page.
+
 ### Plan C1 (4 Sep) — the owner's first test-round list (`fixes-3oa-v1`)
 
 - Chat "รายการสินค้า" printed "-" for every name: the list read `name`, the

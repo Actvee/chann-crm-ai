@@ -415,9 +415,6 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
             <a className="btn" data-variant="quiet" href="/liff/technician/reports">
               {t.dashboard.technician.myReports}
             </a>
-            <a className="btn" data-variant="quiet" href="/liff/technician/guide">
-              {t.dashboard.guide.title}
-            </a>
           </div>
           {mine.length === 0 ? (
             <div className="empty">
