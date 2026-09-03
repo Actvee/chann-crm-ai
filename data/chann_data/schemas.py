@@ -938,3 +938,22 @@ class SmartBrowzTokenIn(BaseModel):
 class SmartBrowzTokenOut(BaseModel):
     access_token: str
     api_domain: str | None
+
+
+class WarrantyOut(BaseModel):
+    """The shape the warranty routes have always returned as a plain dict.
+
+    Declared so scripts/dev/check-fields.py can hold the dashboard to it:
+    the customer home screen's Warranty type was flagged as matching no
+    schema, which was true only because none existed — the dict and the
+    TS type agreed by hand-checking, which is how MemberOut once shipped
+    without an id.
+    """
+
+    id: str
+    warranty_number: str
+    serial_number: str
+    product_name: str | None = None
+    warranty_start: str
+    warranty_end: str
+    status: str

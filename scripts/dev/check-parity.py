@@ -45,9 +45,7 @@ ACCEPTED = {
     ("setting", "update"): "dashboard has the settings screen",
     ("customer", "archive"): "chat only by design — archiving from a list tap is too easy to do by accident",
     ("deal", "archive"): "chat only by design — same reason as customer archive",
-    ("warranty", "create"): "chat only for now; the warranty screen is Phase 15",
-    ("warranty", "read"): "chat only for now; the warranty screen is Phase 15",
-    ("warranty", "update"): "chat only for now; the warranty screen is Phase 15",
+    ("warranty", "update"): "chat only — a customer registers and reads from the home screen; corrections are staff work in chat",
     ("service_report", "create"): "created by checking in; both surfaces do that",
     ("followup", "cancel"): "the dashboard cancels via PATCH status — same operation, different verb",
     ("line_item", "read"): "chat shows a quote's lines inside the quote detail, not as its own command",
@@ -59,12 +57,10 @@ ACCEPTED = {
 # accepted list stays a statement of intent and this stays a backlog —
 # collapsing the two would let a genuine gap hide behind a reason.
 KNOWN_GAPS = {
-    ("ticket", "create"): "no create-ticket form on the dashboard yet",
     ("ticket", "assign"): "assigning is chat-only; the dashboard lists tickets read-only",
     ("ticket", "close"): "closing is chat-only, same reason",
     ("ticket", "update"): "editing a ticket is chat-only, same reason",
     ("product", "delete"): "the catalogue screen upserts but cannot remove; no Application route for it either",
-    ("service_report", "check_out"): "the technician screen can check IN but not out; needs an Application route too, which chat bypasses by calling the Data Tier",
 }
 
 # URL fragment -> entity. Longest match wins, so "quotes/X/products"
@@ -148,8 +144,12 @@ def dashboard_capabilities() -> set[tuple[str, str]]:
     found: set[tuple[str, str]] = set()
     for path in Path("presentation/app").rglob("*.tsx"):
         text = path.read_text()
+        # The context window is a LOOKAHEAD, not a consuming group: two
+        # fetches in one Promise.all sit closer than 400 chars apart, and
+        # the first match's tail was swallowing the second call whole —
+        # /warranties/mine simply vanished from the scan.
         for match in re.finditer(
-            r"/api/phase2/([A-Za-z0-9_\-/${}.()\[\]]*)(.{0,400})", text, re.S,
+            r"/api/phase2/([A-Za-z0-9_\-/${}.()\[\]]*)(?=(.{0,400}))", text, re.S,
         ):
             tail = match.group(2)
             explicit = re.search(r'method:\s*"(GET|POST|PATCH|PUT|DELETE)"', tail)

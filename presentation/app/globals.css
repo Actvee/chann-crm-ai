@@ -55,6 +55,28 @@
   --font-data: "IBM Plex Mono", ui-monospace, monospace;
 }
 
+/* Per-OA themes (owner spec, 2 Sep): Sale=green, Tech=blue, CS=orange.
+   One variable set, three values — components never know which OA they
+   are on; the wrapper's data-theme decides, so the same <button
+   data-variant="primary"> is green for a salesperson and blue for a
+   technician without a line of component code changing. Shades chosen
+   for AA contrast with white text at button sizes. */
+[data-theme="sales"] {
+  --accent: #178a50;
+  --accent-ink: #06341c;
+  --accent-soft: #e7f6ee;
+}
+[data-theme="technician"] {
+  --accent: #1f6fd6;
+  --accent-ink: #0a2a55;
+  --accent-soft: #e8f1fd;
+}
+[data-theme="customer"] {
+  --accent: #e8731a;
+  --accent-ink: #4a2405;
+  --accent-soft: #fdefe2;
+}
+
 * {
   box-sizing: border-box;
 }

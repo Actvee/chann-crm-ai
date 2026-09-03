@@ -928,6 +928,68 @@ async def upsert_product(
         raise _propagate(exc)
 
 
+# ----------------------------------------------------------------- warranties
+
+
+class WarrantyRegisterIn(BaseModel):
+    serial_number: str
+    product_name: str | None = None
+    # The Data Tier's own names: coverage starts on the purchase date and
+    # runs warranty_months. Inventing "purchase_date" here would have
+    # been the MemberOut-never-sends-id seam bug again, one tier over.
+    warranty_start: str | None = None
+    warranty_months: int | None = None
+
+
+@router.post("/licenses/{license_id}/warranties", status_code=201)
+async def register_warranty(
+    license_id: str,
+    payload: WarrantyRegisterIn,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """A customer registering their own purchase from the LIFF dashboard.
+
+    Chat has registered warranties since the warranty phase landed; the
+    dashboard had no route at all, so the customer home screen the owner
+    asked for (2 Sep) had nothing to submit to.
+    """
+    _require_same_tenant(principal, license_id)
+    principal.require("warranty.create")
+    try:
+        return await client.register_warranty(
+            license_id,
+            {
+                "serial_number": payload.serial_number,
+                "product_name": payload.product_name,
+                "warranty_start": payload.warranty_start,
+                "warranty_months": payload.warranty_months,
+                "customer_chann_uid": principal.chann_uid,
+            },
+            actor_id=principal.chann_uid,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.get("/licenses/{license_id}/warranties/mine")
+async def my_warranties(
+    license_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    # Scoped to the caller by construction — a customer sees their own
+    # registrations, never the shop's whole book.
+    _require_same_tenant(principal, license_id)
+    principal.require("warranty.read")
+    try:
+        return await client.list_warranties(
+            license_id, customer_chann_uid=principal.chann_uid,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
 # ------------------------------------------------------------------- tickets
 #
 # Phase 12/13 built these in the Data tier and nowhere else, so every
@@ -980,6 +1042,39 @@ async def claim_ticket(
     try:
         return await client.claim_ticket(
             license_id, ticket_id, str(payload.get("member_id") or ""),
+            actor_id=principal.chann_uid,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.post("/licenses/{license_id}/tickets/{ticket_id}/check-out")
+async def check_out_ticket(
+    license_id: str,
+    ticket_id: str,
+    payload: dict,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Finish a visit from the technician dashboard.
+
+    The screen could start a visit (check-in) but not end one — chat
+    reached the Data Tier directly, so no Application route existed for
+    the dashboard to call, and check-out sat on the parity backlog until
+    the owner asked for a technician home screen (2 Sep).
+    """
+    _require_same_tenant(principal, license_id)
+    principal.require("ticket.update")
+    try:
+        return await client.check_out_ticket(
+            license_id, ticket_id,
+            member_id=str(payload.get("member_id") or ""),
+            # Check-out IS the service report: the Data Tier writes the
+            # report row in the same transaction as the status change, so
+            # the two can never disagree about whether a visit happened.
+            report_data=payload.get("report_data") or {},
+            gps_lat=payload.get("gps_lat"), gps_lng=payload.get("gps_lng"),
+            photo_url=payload.get("photo_url"),
             actor_id=principal.chann_uid,
         )
     except DataTierError as exc:

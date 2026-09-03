@@ -1099,3 +1099,73 @@ class GeneratedDocument(Base):
     generated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+# ------------------------------------------------------------ Phase 14
+# Approval workflows and satisfaction surveys. Owner decisions (3 Sep):
+# the default flow is a single step, the CS who owns the ticket; "ปิดงาน"
+# means the last approver passing, and the survey goes out in that same
+# moment. See database/alembic/versions/0021_approvals.py.
+
+
+class ApprovalWorkflow(TimestampMixin, Base):
+    __tablename__ = "approval_workflows"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    license_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("licenses.id", ondelete="CASCADE"), nullable=False
+    )
+    entity_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    rules_json: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("license_members.id", ondelete="SET NULL")
+    )
+
+
+class ApprovalStep(Base):
+    __tablename__ = "approval_steps"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    license_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("licenses.id", ondelete="CASCADE"), nullable=False
+    )
+    entity_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    entity_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    workflow_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("approval_workflows.id", ondelete="SET NULL")
+    )
+    step_order: Mapped[int] = mapped_column(Integer, nullable=False)
+    approver_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    approver_ref: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    acted_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("license_members.id", ondelete="SET NULL")
+    )
+    acted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reason: Mapped[str | None] = mapped_column(Text)
+    ai_reasoning: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class SatisfactionSurvey(Base):
+    __tablename__ = "satisfaction_surveys"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    license_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("licenses.id", ondelete="CASCADE"), nullable=False
+    )
+    ticket_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("service_tickets.id", ondelete="CASCADE"),
+        nullable=False, unique=True,
+    )
+    scale_config_json: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    score: Mapped[int | None] = mapped_column(Integer)
+    comment: Mapped[str | None] = mapped_column(Text)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

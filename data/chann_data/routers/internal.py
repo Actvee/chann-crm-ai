@@ -3483,6 +3483,235 @@ def list_technician_team_members(
     return rows
 
 
+# --------------------------------------------------------- Phase 14 approvals
+
+
+def _approval_error(exc: Exception):
+    from ..repositories.phase14 import ApprovalConflict, ApprovalNotFound
+    from ..repositories.tenant_scope import CrossTenantAccessDenied
+
+    if isinstance(exc, CrossTenantAccessDenied):
+        return HTTPException(status_code=404, detail="not found")
+    if isinstance(exc, ApprovalNotFound):
+        return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, ApprovalConflict):
+        return HTTPException(status_code=409, detail=str(exc))
+    if isinstance(exc, HTTPException):
+        return exc
+    raise exc
+
+
+def _step_out(row) -> dict:
+    return {
+        "id": str(row.id), "entity_type": row.entity_type, "entity_id": str(row.entity_id),
+        "workflow_id": str(row.workflow_id) if row.workflow_id else None,
+        "step_order": row.step_order, "approver_type": row.approver_type,
+        "approver_ref": row.approver_ref, "status": row.status,
+        "acted_by": str(row.acted_by) if row.acted_by else None,
+        "acted_at": row.acted_at.isoformat() if row.acted_at else None,
+        "reason": row.reason, "created_at": row.created_at.isoformat(),
+    }
+
+
+def _survey_out(row) -> dict:
+    return {
+        "id": str(row.id), "ticket_id": str(row.ticket_id),
+        "scale_config_json": row.scale_config_json, "score": row.score,
+        "comment": row.comment,
+        "sent_at": row.sent_at.isoformat() if row.sent_at else None,
+        "submitted_at": row.submitted_at.isoformat() if row.submitted_at else None,
+    }
+
+
+def _workflow_out(row) -> dict:
+    return {
+        "id": str(row.id), "entity_type": row.entity_type, "rules_json": row.rules_json,
+        "is_active": row.is_active,
+        "updated_by": str(row.updated_by) if row.updated_by else None,
+        "updated_at": row.updated_at.isoformat(),
+    }
+
+
+@router.get("/licenses/{license_id}/approval-workflows/{entity_type}")
+def get_approval_workflow(
+    license_id: uuid.UUID, entity_type: str, session: Session = Depends(get_session),
+):
+    from ..repositories.phase14 import ApprovalRepository
+
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = ApprovalRepository(session).active_workflow(scope, entity_type)
+        session.commit()
+        return _workflow_out(row)
+    except Exception as exc:
+        session.rollback()
+        raise _approval_error(exc)
+
+
+@router.put("/licenses/{license_id}/approval-workflows/{entity_type}")
+def replace_approval_workflow(
+    license_id: uuid.UUID, entity_type: str, payload: dict,
+    session: Session = Depends(get_session), x_actor_id: str = Header(default=""),
+):
+    from ..repositories.phase14 import ApprovalRepository
+
+    scope = TenantScope(license_id=license_id)
+    try:
+        updated_by = payload.get("updated_by")
+        row = ApprovalRepository(session).replace_workflow(
+            scope, entity_type, payload.get("rules_json") or {},
+            updated_by=uuid.UUID(updated_by) if updated_by else None,
+        )
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="approval_workflow", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="update",
+            field_changes=diff_fields({}, {"rules_json": row.rules_json}),
+        )
+        session.commit()
+        return _workflow_out(row)
+    except Exception as exc:
+        session.rollback()
+        raise _approval_error(exc)
+
+
+@router.post(
+    "/licenses/{license_id}/service-reports/{report_id}/approval-steps", status_code=201,
+)
+def open_approval_steps(
+    license_id: uuid.UUID, report_id: uuid.UUID, session: Session = Depends(get_session),
+):
+    """Start (or restart, after a reject) the approval flow for a report."""
+    from ..models import ServiceReport
+    from ..repositories.phase14 import ApprovalNotFound, ApprovalRepository
+
+    scope = TenantScope(license_id=license_id)
+    try:
+        report = session.get(ServiceReport, report_id)
+        if report is None:
+            raise ApprovalNotFound("service report not found")
+        steps = ApprovalRepository(session).open_steps_for_report(scope, report)
+        session.commit()
+        return [_step_out(s) for s in steps]
+    except Exception as exc:
+        session.rollback()
+        raise _approval_error(exc)
+
+
+@router.get("/licenses/{license_id}/approval-steps/pending")
+def pending_approval_steps(
+    license_id: uuid.UUID, member_id: uuid.UUID | None = None, roles: str = "",
+    session: Session = Depends(get_session),
+):
+    from ..repositories.phase14 import ApprovalRepository
+
+    scope = TenantScope(license_id=license_id)
+    role_names = [r for r in roles.split(",") if r]
+    rows = ApprovalRepository(session).pending_for(scope, member_id=member_id, role_names=role_names)
+    return [_step_out(s) for s in rows]
+
+
+@router.get("/licenses/{license_id}/approval-steps/for/{entity_type}/{entity_id}")
+def approval_steps_for_entity(
+    license_id: uuid.UUID, entity_type: str, entity_id: uuid.UUID,
+    session: Session = Depends(get_session),
+):
+    from ..repositories.phase14 import ApprovalRepository
+
+    scope = TenantScope(license_id=license_id)
+    rows = ApprovalRepository(session).steps_for_entity(scope, entity_type, entity_id)
+    return [_step_out(s) for s in rows]
+
+
+@router.post("/licenses/{license_id}/approval-steps/{step_id}/act")
+def act_on_approval_step(
+    license_id: uuid.UUID, step_id: uuid.UUID, payload: dict,
+    session: Session = Depends(get_session), x_actor_id: str = Header(default=""),
+):
+    """Approve or reject. Response carries the report's resulting status
+    and, when this was the last approval, the survey to send — so the
+    caller acts on the same facts this transaction committed."""
+    from ..repositories.phase14 import ApprovalRepository
+
+    scope = TenantScope(license_id=license_id)
+    try:
+        member_id = payload.get("member_id")
+        step, report_status, survey = ApprovalRepository(session).act(
+            scope, step_id, approve=bool(payload.get("approve")),
+            member_id=uuid.UUID(member_id) if member_id else None,
+            role_names=list(payload.get("roles") or []),
+            reason=payload.get("reason"),
+        )
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="service_report", entity_id=step.entity_id,
+            actor_type="user", actor_id=x_actor_id or None,
+            action="status" if payload.get("approve") else "reject",
+            field_changes=diff_fields({}, {"status": report_status, "step": step.step_order}),
+        )
+        session.commit()
+        return {
+            "step": _step_out(step), "report_status": report_status,
+            "survey": _survey_out(survey) if survey else None,
+        }
+    except Exception as exc:
+        session.rollback()
+        raise _approval_error(exc)
+
+
+@router.get("/licenses/{license_id}/surveys/pending-for-ticket/{ticket_id}")
+def pending_survey(
+    license_id: uuid.UUID, ticket_id: uuid.UUID, session: Session = Depends(get_session),
+):
+    from ..repositories.phase14 import ApprovalRepository
+
+    row = ApprovalRepository(session).pending_survey_for_ticket(
+        TenantScope(license_id=license_id), ticket_id,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="no pending survey")
+    return _survey_out(row)
+
+
+@router.post("/licenses/{license_id}/surveys/{survey_id}/sent")
+def mark_survey_sent(
+    license_id: uuid.UUID, survey_id: uuid.UUID, session: Session = Depends(get_session),
+):
+    from ..repositories.phase14 import ApprovalRepository
+
+    try:
+        row = ApprovalRepository(session).mark_survey_sent(
+            TenantScope(license_id=license_id), survey_id,
+        )
+        session.commit()
+        return _survey_out(row)
+    except Exception as exc:
+        session.rollback()
+        raise _approval_error(exc)
+
+
+@router.post("/licenses/{license_id}/surveys/{survey_id}/answer")
+def answer_survey(
+    license_id: uuid.UUID, survey_id: uuid.UUID, payload: dict,
+    session: Session = Depends(get_session), x_actor_id: str = Header(default=""),
+):
+    from ..repositories.phase14 import ApprovalRepository
+
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = ApprovalRepository(session).submit_survey(
+            scope, survey_id, score=int(payload.get("score")), comment=payload.get("comment"),
+        )
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="satisfaction_survey", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="update",
+            field_changes=diff_fields({}, {"score": row.score}),
+        )
+        session.commit()
+        return _survey_out(row)
+    except Exception as exc:
+        session.rollback()
+        raise _approval_error(exc)
+
+
 # ------------------------------------------- Phase 7.5 / 16 warranties
 
 
