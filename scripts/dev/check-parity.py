@@ -32,6 +32,10 @@ ACCEPTED = {
         "both — technician-teams/{id}/members is team membership, which chat does as "
         "\"เพิ่ม <ชื่อ> เข้าทีม <ทีม>\" (registered as update/team)"
     ),
+    ("ticket", "close"): (
+        "both — the dashboard closes/cancels through PATCH tickets/{id}/status (the "
+        "update verb); chat's ปิดงาน is the technician's check-out"
+    ),
     ("team", "delete"): (
         "both — SalesTeams.tsx sends DELETE technician-teams/{id}; the checker reads the "
         "id segment as the entity, and chat's \"ลบทีมช่าง <ทีม>\" is the same call"
@@ -82,9 +86,6 @@ ACCEPTED = {
 # accepted list stays a statement of intent and this stays a backlog —
 # collapsing the two would let a genuine gap hide behind a reason.
 KNOWN_GAPS = {
-    ("ticket", "assign"): "assigning is chat-only; the dashboard lists tickets read-only",
-    ("ticket", "close"): "closing is chat-only, same reason",
-    ("ticket", "update"): "editing a ticket is chat-only, same reason",
     ("product", "delete"): "the catalogue screen upserts but cannot remove; no Application route for it either",
 }
 

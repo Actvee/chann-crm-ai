@@ -1699,15 +1699,88 @@ async def assign_ticket_from_dashboard(
     instead of switching to LINE to type a code they can see on screen."""
     _require_same_tenant(principal, license_id)
     principal.require("ticket.update")
+    target_type = str(payload.get("target_type") or "")
+    target_ref = str(payload.get("target_ref") or "")
     try:
-        return await client.assign_ticket(
-            license_id, ticket_id,
-            target_type=str(payload.get("target_type") or ""),
-            target_ref=str(payload.get("target_ref") or ""),
+        row = await client.assign_ticket(
+            license_id, ticket_id, target_type=target_type, target_ref=target_ref,
             actor_id=principal.chann_uid,
         )
     except DataTierError as exc:
         raise _propagate(exc)
+    # The technician (or team) hears about it in LINE, exactly as after
+    # chat's "มอบหมาย …" — this route used to dispatch silently (owner
+    # plan B1, 3 Sep), which made the dashboard the one place a job could
+    # be given to someone without telling them.
+    try:
+        from .services.chat import _notify_assigned_ticket
+        label = target_ref
+        if target_type == "technician_team":
+            teams = await client.list_technician_teams(license_id)
+            label = next((str(t.get("team_name")) for t in teams if str(t.get("id")) == target_ref), target_ref)
+        await _notify_assigned_ticket(client, license_id, row, label, "th")
+    except Exception:  # noqa: BLE001 — the assignment stands; the notice is best effort
+        log.exception("could not tell the assignee about a dashboard dispatch")
+    return row
+
+
+@router.patch("/licenses/{license_id}/tickets/{ticket_id}")
+async def update_ticket_from_dashboard(
+    license_id: str,
+    ticket_id: str,
+    payload: dict,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Fill in what the dispatch gate says is missing — name, phone,
+    address, appointment, serial — from the queue itself. The Data Tier
+    owns the allowed-field list; anything else is ignored there."""
+    _require_same_tenant(principal, license_id)
+    principal.require("ticket.update")
+    fields = {
+        k: v for k, v in (payload or {}).items()
+        if k in ("customer_name", "customer_phone", "service_address", "serial_number",
+                 "issue_description", "scheduled_date", "scheduled_time")
+        and v not in (None, "")
+    }
+    if not fields:
+        raise HTTPException(status_code=422, detail="nothing to update")
+    try:
+        return await client.update_ticket(license_id, ticket_id, fields, actor_id=principal.chann_uid)
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.patch("/licenses/{license_id}/tickets/{ticket_id}/status")
+async def set_ticket_status_from_dashboard(
+    license_id: str,
+    ticket_id: str,
+    payload: dict,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Cancel (or close) from the queue. The assigned technician is told,
+    as chat's cancellation does — a cancelled job nobody mentions is a
+    drive to an empty house."""
+    _require_same_tenant(principal, license_id)
+    principal.require("ticket.update")
+    new_status = str((payload or {}).get("status") or "")
+    if new_status not in ("cancelled", "completed", "open"):
+        raise HTTPException(status_code=422, detail="status must be cancelled, completed or open")
+    try:
+        row = await client.set_ticket_status(license_id, ticket_id, new_status, actor_id=principal.chann_uid)
+    except DataTierError as exc:
+        raise _propagate(exc)
+    if new_status == "cancelled":
+        try:
+            from .services.chat import _notify_ticket_change
+            await _notify_ticket_change(
+                client, license_id, ticket_id,
+                f"งาน {row.get('ticket_number') or ''} ถูกยกเลิกโดยร้าน", "th",
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("could not announce a dashboard cancellation")
+    return row
 
 
 @router.get("/licenses/{license_id}/technician-teams")

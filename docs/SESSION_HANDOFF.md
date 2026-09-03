@@ -76,9 +76,9 @@ clone.
 
 ## Where things stand
 
-**The commit carrying this text** is the service-report-PDF patch
-(`report-pdf-v1`, all three tiers, no migration), deployed by
-`~/report-pdf-deploy.sh`. Before it, on 3 Sep: `cdd2c1a` customer
+**The commit carrying this text** is the dashboard-dispatch patch
+(`dispatch-ui-v1`, application + presentation, no migration), deployed by
+`~/dispatch-ui-deploy.sh`; `9bfa0ec` (service report PDF) came just before it. Before it, on 3 Sep: `cdd2c1a` customer
 onboarding, `4b53f60` shops-chosen/units-claimed, `e0ba461` the
 technician's day (tech-flow). Each is "deployed" only
 when `/health` on both services echoes its SHA — the scripts' STAGE 9
@@ -266,6 +266,22 @@ deploy data/application/presentation. The new data image's
 `EXPECTED_MIGRATION_HEAD` is `0021_approvals` and it will refuse to
 serve against an older schema, which is the guard working.
 668 tests pass (656 unit/boundary + 266 integration, 12 of them Phase 14).
+
+### Plan B1 (3 Sep, late) — the Sales tickets page can dispatch, edit and cancel
+
+Chat could assign ("มอบหมาย T-… ให้ทีม แอร์"), fix a ticket and cancel it
+since Phase 12; the page only listed. check-parity carried three
+KNOWN_GAPS for it. Now `SalesTickets.tsx` has, per job that nobody has
+taken yet: a target picker (teams, then technicians — from
+`/technician-teams` and `/technicians`) → `POST tickets/{id}/assign`,
+which runs the Data Tier's dispatch gate (a 409 names the missing
+fields on the row) and now ALSO tells the assignee in LINE, as chat
+always did — the route used to dispatch silently; an edit form for the
+gate's fields → new `PATCH tickets/{id}` (allowed fields only, 422 on
+nothing); cancel with a confirm → new `PATCH tickets/{id}/status`
+(cancelled/completed/open), the assigned technician told. Finished jobs
+are hidden behind a toggle. KNOWN_GAPS for tickets are gone; ("ticket",
+"close") is ACCEPTED as the status route.
 
 ### Service Report PDF (3 Sep, late) — 13.4/13.5 through the Phase 10 engine
 
