@@ -32,12 +32,14 @@ export default function AdminLogin() {
     <main style={{ padding: 32, maxWidth: 360 }}>
       <h1>Platform Admin</h1>
       <input
+        aria-label="username"
         placeholder="username"
         value={username}
         onChange={(e) => setUsername(e.target.value)}
         style={{ display: "block", width: "100%", marginBottom: 8 }}
       />
       <input
+        aria-label="password"
         placeholder="password"
         type="password"
         value={password}

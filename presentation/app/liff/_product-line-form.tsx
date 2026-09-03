@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
+import { FieldRow } from "./_field-row";
 import { proxyHeaders } from "./_shared";
 
 export type CatalogueProduct = {
@@ -92,10 +93,13 @@ export function ProductLineForm({
   return (
     <dl className="fields">
       {catalogue.length > 0 && !initial && (
-        <div className="field-row">
-          <dt>{t.product.title}</dt>
-          <dd>
-            <select value={pickedId} onChange={(event) => pick(event.target.value)}>
+        <FieldRow label={t.product.title}>
+          {(id) => (
+            <select
+              id={id}
+              value={pickedId}
+              onChange={(event) => pick(event.target.value)}
+            >
               <option value="">{t.dashboard.deals.pickProduct}</option>
               {catalogue.map((product) => (
                 <option key={product.id} value={product.id}>
@@ -108,14 +112,16 @@ export function ProductLineForm({
                 </option>
               ))}
             </select>
-          </dd>
-        </div>
+          )}
+        </FieldRow>
       )}
 
-      <div className="field-row">
-        <dt>{catalogue.length > 0 ? t.dashboard.deals.orTypeName : t.product.title}</dt>
-        <dd>
+      <FieldRow
+        label={catalogue.length > 0 ? t.dashboard.deals.orTypeName : t.product.title}
+      >
+        {(id) => (
           <input
+            id={id}
             value={name}
             placeholder={t.dashboard.deals.oneOffExample}
             onChange={(event) => {
@@ -126,31 +132,31 @@ export function ProductLineForm({
               if (pickedId) setPickedId("");
             }}
           />
-        </dd>
-      </div>
+        )}
+      </FieldRow>
 
-      <div className="field-row">
-        <dt>{t.dashboard.deals.qty}</dt>
-        <dd>
+      <FieldRow label={t.dashboard.deals.qty}>
+        {(id) => (
           <input
+            id={id}
             inputMode="numeric"
             value={qty}
             onChange={(event) => setQty(event.target.value)}
           />
-        </dd>
-      </div>
+        )}
+      </FieldRow>
 
-      <div className="field-row">
-        <dt>{t.dashboard.products.price}</dt>
-        <dd>
+      <FieldRow label={t.dashboard.products.price}>
+        {(id) => (
           <input
+            id={id}
             inputMode="decimal"
             value={price}
             placeholder="0.00"
             onChange={(event) => setPrice(event.target.value)}
           />
-        </dd>
-      </div>
+        )}
+      </FieldRow>
 
       {/* The line total, so a wrong quantity is caught here rather than
           on a document the customer is reading. */}

@@ -5,6 +5,7 @@ import { useCallback, useState } from "react";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { AppShell } from "../sales/_components";
+import { FieldRow } from "../_field-row";
 import { Ticket, TicketRow } from "../_tickets";
 import { initLiffSession, proxyHeaders } from "../_shared";
 
@@ -63,11 +64,22 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
         fetch(`/api/phase2/licenses/${license}/tickets`, { headers }),
         fetch(`/api/phase2/licenses/${license}/warranties/mine`, { headers }),
       ]);
-      if (ticketsRes.ok) setTickets((await ticketsRes.json()) as Ticket[]);
-      if (warrantiesRes.ok)
-        setWarranties((await warrantiesRes.json()) as Warranty[]);
+      // A failed load must not read as "you have no repairs": the empty
+      // state and the error state are different facts, and a customer
+      // who sees the first when the second is true stops trusting the
+      // page. Same rule the technician home applies.
+      const failed = [ticketsRes, warrantiesRes].find((res) => !res.ok);
+      if (failed) {
+        throw new Error(
+          failed.status === 403
+            ? t.dashboard.noPermission
+            : `${t.dashboard.loadFailed} (${failed.status})`,
+        );
+      }
+      setTickets((await ticketsRes.json()) as Ticket[]);
+      setWarranties((await warrantiesRes.json()) as Warranty[]);
     },
-    [token, licenseId],
+    [token, licenseId, t],
   );
 
   const onReady = useCallback(async () => {
@@ -163,26 +175,26 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
             <h2>{t.dashboard.customer.reportFault}</h2>
           </div>
           <dl className="fields">
-            <div className="field-row">
-              <dt>{t.dashboard.customer.whatIsWrong}</dt>
-              <dd>
+            <FieldRow label={t.dashboard.customer.whatIsWrong}>
+              {(id) => (
                 <textarea
+                  id={id}
                   rows={3}
                   value={issue}
                   onChange={(e) => setIssue(e.target.value)}
                   placeholder={t.dashboard.customer.faultPlaceholder}
                 />
-              </dd>
-            </div>
-            <div className="field-row">
-              <dt>{t.dashboard.customer.serialOptional}</dt>
-              <dd>
+              )}
+            </FieldRow>
+            <FieldRow label={t.dashboard.customer.serialOptional}>
+              {(id) => (
                 <input
+                  id={id}
                   value={issueSerial}
                   onChange={(e) => setIssueSerial(e.target.value)}
                 />
-              </dd>
-            </div>
+              )}
+            </FieldRow>
             <div className="actions">
               <button
                 type="button"
@@ -224,31 +236,34 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
             <h2>{t.dashboard.customer.warranty}</h2>
           </div>
           <dl className="fields">
-            <div className="field-row">
-              <dt>{t.dashboard.customer.serialNumber}</dt>
-              <dd>
-                <input value={serial} onChange={(e) => setSerial(e.target.value)} />
-              </dd>
-            </div>
-            <div className="field-row">
-              <dt>{t.dashboard.customer.productName}</dt>
-              <dd>
+            <FieldRow label={t.dashboard.customer.serialNumber}>
+              {(id) => (
                 <input
+                  id={id}
+                  value={serial}
+                  onChange={(e) => setSerial(e.target.value)}
+                />
+              )}
+            </FieldRow>
+            <FieldRow label={t.dashboard.customer.productName}>
+              {(id) => (
+                <input
+                  id={id}
                   value={productName}
                   onChange={(e) => setProductName(e.target.value)}
                 />
-              </dd>
-            </div>
-            <div className="field-row">
-              <dt>{t.dashboard.customer.purchaseDate}</dt>
-              <dd>
+              )}
+            </FieldRow>
+            <FieldRow label={t.dashboard.customer.purchaseDate}>
+              {(id) => (
                 <input
+                  id={id}
                   type="date"
                   value={purchaseDate}
                   onChange={(e) => setPurchaseDate(e.target.value)}
                 />
-              </dd>
-            </div>
+              )}
+            </FieldRow>
             <div className="actions">
               <button
                 type="button"

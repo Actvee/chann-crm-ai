@@ -108,6 +108,7 @@ export const th = {
       checkedOut: "ปิดงานและส่งรายงานแล้ว",
       submitReport: "ส่งรายงาน",
       workSummary: "สรุปงานที่ทำ",
+      workSummaryHint: "กรอกสรุปงานก่อน ปุ่มส่งรายงานจึงจะกดได้",
       myReports: "รายงานของฉัน",
       actionFailed: "ทำรายการไม่สำเร็จ ลองใหม่อีกครั้ง",
     },

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
+import { FieldRow } from "../_field-row";
 import { fullDateTime } from "../_list-controls";
 import { proxyHeaders } from "./_lib";
 import { RelatedHeading } from "./_record";
@@ -273,35 +274,35 @@ export function RelatedActivity({
         </div>
         {form !== null && (
           <dl className="fields">
-            <div className="field-row">
-              <dt>{t.dashboard.related.appointmentDate}</dt>
-              <dd>
+            <FieldRow label={t.dashboard.related.appointmentDate}>
+              {(id) => (
                 <input
+                  id={id}
                   type="date"
                   value={form.date}
                   onChange={(e) => setForm({ ...form, date: e.target.value })}
                 />
-              </dd>
-            </div>
-            <div className="field-row">
-              <dt>{t.dashboard.related.appointmentTime}</dt>
-              <dd>
+              )}
+            </FieldRow>
+            <FieldRow label={t.dashboard.related.appointmentTime}>
+              {(id) => (
                 <input
+                  id={id}
                   type="time"
                   value={form.time}
                   onChange={(e) => setForm({ ...form, time: e.target.value })}
                 />
-              </dd>
-            </div>
-            <div className="field-row">
-              <dt>{t.dashboard.related.appointmentNote}</dt>
-              <dd>
+              )}
+            </FieldRow>
+            <FieldRow label={t.dashboard.related.appointmentNote}>
+              {(id) => (
                 <input
+                  id={id}
                   value={form.note}
                   onChange={(e) => setForm({ ...form, note: e.target.value })}
                 />
-              </dd>
-            </div>
+              )}
+            </FieldRow>
             <div className="actions">
               <button
                 type="button"
@@ -417,16 +418,16 @@ export function RelatedActivity({
         </div>
         {noteForm !== null && (
           <dl className="fields">
-            <div className="field-row">
-              <dt>{t.dashboard.related.noteBody}</dt>
-              <dd>
+            <FieldRow label={t.dashboard.related.noteBody}>
+              {(id) => (
                 <textarea
+                  id={id}
                   rows={3}
                   value={noteForm}
                   onChange={(e) => setNoteForm(e.target.value)}
                 />
-              </dd>
-            </div>
+              )}
+            </FieldRow>
             <div className="actions">
               <button
                 type="button"

@@ -33,6 +33,16 @@
   --accent-ink: #3d2c05;
   --accent-soft: #fdf4de;
 
+  /* The primary button's own three tokens. Marigold is light enough that
+     dark ink on it reads (6.1:1). The per-OA accents below are mid-tones
+     where neither dark ink nor white clears AA for 14.5px text (blue
+     2.9:1, green 3.2:1), so each theme points these at a deeper shade
+     with white text rather than asking one rule to suit four colours.
+     The border hex lives here and nowhere else. */
+  --btn-primary-bg: var(--accent);
+  --btn-primary-ink: var(--accent-ink);
+  --btn-primary-line: #c8901a;
+
   /* Stage colours double as the row rail. Ordered so the pipeline reads
      left to right the way it actually progresses. */
   --stage-new: #7c89a3;
@@ -59,22 +69,39 @@
    One variable set, three values — components never know which OA they
    are on; the wrapper's data-theme decides, so the same <button
    data-variant="primary"> is green for a salesperson and blue for a
-   technician without a line of component code changing. Shades chosen
-   for AA contrast with white text at button sizes. */
+   technician without a line of component code changing.
+
+   `--accent` is the identity colour (rails, chips on --accent-soft, the
+   rich menu); `--accent-deep` is the same hue dark enough to carry white
+   text at AA (green 8.1:1, blue 8.7:1, orange 5.5:1) and is what the
+   primary button uses — the rich-menu generator's "deep" values, so the
+   button in the app and the tile in LINE are the same colour. */
 [data-theme="sales"] {
   --accent: #178a50;
   --accent-ink: #06341c;
   --accent-soft: #e7f6ee;
+  --accent-deep: #0d5c34;
+  --btn-primary-bg: var(--accent-deep);
+  --btn-primary-ink: #ffffff;
+  --btn-primary-line: var(--accent-deep);
 }
 [data-theme="technician"] {
   --accent: #1f6fd6;
   --accent-ink: #0a2a55;
   --accent-soft: #e8f1fd;
+  --accent-deep: #134a92;
+  --btn-primary-bg: var(--accent-deep);
+  --btn-primary-ink: #ffffff;
+  --btn-primary-line: var(--accent-deep);
 }
 [data-theme="customer"] {
   --accent: #e8731a;
   --accent-ink: #4a2405;
   --accent-soft: #fdefe2;
+  --accent-deep: #a94f0d;
+  --btn-primary-bg: var(--accent-deep);
+  --btn-primary-ink: #ffffff;
+  --btn-primary-line: var(--accent-deep);
 }
 
 * {
@@ -311,9 +338,10 @@ body {
   font-size: 14.5px;
   font-weight: 500;
   padding: 9px 14px;
-  /* 40px minimum height: this is tapped with a thumb, often while holding
+  /* 44px minimum height (iOS 44pt; Android asks 48dp, which the row gap
+     makes up): this is tapped with a thumb, often while holding
      something else. */
-  min-height: 40px;
+  min-height: 44px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--line-strong);
   background: var(--surface);
@@ -336,9 +364,9 @@ body {
 }
 
 .btn[data-variant="primary"] {
-  background: var(--accent);
-  border-color: #c8901a;
-  color: var(--accent-ink);
+  background: var(--btn-primary-bg);
+  border-color: var(--btn-primary-line);
+  color: var(--btn-primary-ink);
   font-weight: 600;
 }
 
@@ -392,11 +420,14 @@ body {
   border-color: var(--stage-proposed);
 }
 
-.field .hint {
+.field .hint,
+.fields .hint {
   display: block;
   margin-top: 5px;
   font-size: 13px;
-  color: var(--ink-faint);
+  /* --ink-soft, not --ink-faint: faint is 3.1:1 on white, which is fine
+     for a decorative chevron and not for a sentence someone has to read. */
+  color: var(--ink-soft);
   font-weight: 400;
 }
 
@@ -718,6 +749,13 @@ fieldset.group legend {
   font-size: 13.5px;
 }
 
+/* In edit rows the <dt> text is a real <label> (see _field-row.tsx) so
+   the control has a name for screen readers; same look, and tapping the
+   label focuses the box. */
+.field-row dt label {
+  cursor: pointer;
+}
+
 .field-row dd {
   margin: 0;
   flex: 1;
@@ -738,7 +776,11 @@ fieldset.group legend {
   font: inherit;
   font-size: 16px;
   width: 100%;
-  padding: 7px 10px;
+  /* 16px text + 10px above and below + the border = a 44px box, the
+     same tap target the buttons get. 16px also stops iOS zooming in
+     on focus. */
+  padding: 10px 12px;
+  min-height: 44px;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-sm);
   background: var(--paper);

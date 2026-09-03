@@ -4,6 +4,7 @@ import { useState } from "react";
 
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
+import { FieldRow } from "./_field-row";
 import { PickerOption, SearchablePicker } from "./_searchable-picker";
 
 export type CreateField = {
@@ -82,14 +83,14 @@ export function InlineCreateForm({
       </div>
       <dl className="fields">
         {fields.map((field) => (
-          <div className="field-row" key={field.name}>
-            <dt>{field.label}</dt>
-            <dd>
-              {field.type === "select" ? (
+          <FieldRow key={field.name} label={field.label}>
+            {(id) =>
+              field.type === "select" ? (
                 // Searchable, not a native select: a shop with a real
                 // customer list cannot scroll to find someone, and on a
                 // phone the list closes the moment you look away.
                 <SearchablePicker
+                  id={id}
                   options={field.options ?? []}
                   value={values[field.name] ?? ""}
                   placeholder={field.searchHint}
@@ -99,6 +100,7 @@ export function InlineCreateForm({
                 />
               ) : (
                 <input
+                  id={id}
                   type={field.type === "tel" ? "tel" : "text"}
                   inputMode={field.type === "tel" ? "tel" : undefined}
                   value={values[field.name] ?? ""}
@@ -107,9 +109,9 @@ export function InlineCreateForm({
                     setValues({ ...values, [field.name]: event.target.value })
                   }
                 />
-              )}
-            </dd>
-          </div>
+              )
+            }
+          </FieldRow>
         ))}
         <div className="actions">
           <button

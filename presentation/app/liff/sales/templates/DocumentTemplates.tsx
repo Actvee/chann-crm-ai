@@ -4,6 +4,7 @@ import { useCallback, useState } from "react";
 
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
+import { FieldRow } from "../../_field-row";
 import { AppShell } from "../_components";
 import { fetchPermissions, initLiffSession, proxyHeaders } from "../_lib";
 
@@ -199,20 +200,20 @@ export default function DocumentTemplates({ liffId }: { liffId: string }) {
             <h2>{t.dashboard.templates.upload}</h2>
           </div>
           <dl className="fields">
-            <div className="field-row">
-              <dt>{t.dashboard.templates.name}</dt>
-              <dd>
+            <FieldRow label={t.dashboard.templates.name}>
+              {(id) => (
                 <input
+                  id={id}
                   value={name}
                   placeholder={t.dashboard.templates.namePlaceholder}
                   onChange={(event) => setName(event.target.value)}
                 />
-              </dd>
-            </div>
-            <div className="field-row">
-              <dt>{t.dashboard.templates.file}</dt>
-              <dd>
+              )}
+            </FieldRow>
+            <FieldRow label={t.dashboard.templates.file}>
+              {(id) => (
                 <input
+                  id={id}
                   type="file"
                   accept=".html,.htm,text/html"
                   onChange={(event) => {
@@ -220,8 +221,8 @@ export default function DocumentTemplates({ liffId }: { liffId: string }) {
                     if (file) void readFile(file);
                   }}
                 />
-              </dd>
-            </div>
+              )}
+            </FieldRow>
             {html && (
               <div className="field-row">
                 <dt>{t.dashboard.templates.loaded}</dt>

@@ -24,11 +24,14 @@ export type PickerOption = {
  * code from a chat message — not by the name the list happens to show.
  */
 export function SearchablePicker({
+  id,
   options,
   value,
   placeholder,
   onChange,
 }: {
+  /** From a FieldRow label; without one the search hint names the box. */
+  id?: string;
   options: PickerOption[];
   value: string;
   placeholder?: string;
@@ -75,6 +78,8 @@ export function SearchablePicker({
   return (
     <div className="picker">
       <input
+        id={id}
+        aria-label={id ? undefined : placeholder}
         type="search"
         value={query}
         placeholder={placeholder}

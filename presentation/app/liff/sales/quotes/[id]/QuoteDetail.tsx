@@ -6,6 +6,7 @@ import { useCallback, useState } from "react";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { AppShell, Badge } from "../../_components";
+import { FieldRow } from "../../../_field-row";
 import { ProductLineForm } from "../../../_product-line-form";
 import { RecordHead, RelatedHeading } from "../../_record";
 import { RelatedActivity } from "../../_related";
@@ -443,42 +444,38 @@ export default function QuoteDetail({
               )}
             </div>
             <dl className="fields">
-              <div className="field-row">
-                <dt>{t.dashboard.quotes.validUntil}</dt>
-                <dd>
-                  {editingTerms ? (
-                    <input
-                      type="date"
-                      value={terms.valid_until}
-                      onChange={(event) =>
-                        setTerms({ ...terms, valid_until: event.target.value })
-                      }
-                    />
-                  ) : (
-                    String(detail.quote.valid_until ?? "—")
-                  )}
-                </dd>
-              </div>
-              <div className="field-row">
-                <dt>{t.dashboard.quotes.discount}</dt>
-                <dd>
-                  {editingTerms ? (
-                    <input
-                      value={terms.discount}
-                      placeholder={t.dashboard.quotes.discountHint}
-                      onChange={(event) =>
-                        setTerms({ ...terms, discount: event.target.value })
-                      }
-                    />
-                  ) : detail.quote.discount_percent ? (
-                    `${detail.quote.discount_percent}%`
-                  ) : detail.quote.discount_amount ? (
-                    money(detail.quote.discount_amount)
-                  ) : (
-                    "—"
-                  )}
-                </dd>
-              </div>
+              <FieldRow label={t.dashboard.quotes.validUntil}>
+                {editingTerms
+                  ? (id) => (
+                      <input
+                        id={id}
+                        type="date"
+                        value={terms.valid_until}
+                        onChange={(event) =>
+                          setTerms({ ...terms, valid_until: event.target.value })
+                        }
+                      />
+                    )
+                  : String(detail.quote.valid_until ?? "—")}
+              </FieldRow>
+              <FieldRow label={t.dashboard.quotes.discount}>
+                {editingTerms
+                  ? (id) => (
+                      <input
+                        id={id}
+                        value={terms.discount}
+                        placeholder={t.dashboard.quotes.discountHint}
+                        onChange={(event) =>
+                          setTerms({ ...terms, discount: event.target.value })
+                        }
+                      />
+                    )
+                  : detail.quote.discount_percent
+                    ? `${detail.quote.discount_percent}%`
+                    : detail.quote.discount_amount
+                      ? money(detail.quote.discount_amount)
+                      : "—"}
+              </FieldRow>
               {editingTerms && (
                 <div className="actions">
                   <button

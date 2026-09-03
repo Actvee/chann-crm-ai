@@ -5,6 +5,7 @@ import { useCallback, useState } from "react";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { AppShell } from "../sales/_components";
+import { FieldRow } from "../_field-row";
 import { Ticket, TicketRow } from "../_tickets";
 import { fetchPermissions, initLiffSession, proxyHeaders } from "../_shared";
 
@@ -238,16 +239,29 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
                   )}
                   {reportFor?.id === ticket.id && (
                     <dl className="fields">
-                      <div className="field-row">
-                        <dt>{t.dashboard.technician.workSummary}</dt>
-                        <dd>
-                          <textarea
-                            rows={3}
-                            value={reportNotes}
-                            onChange={(e) => setReportNotes(e.target.value)}
-                          />
-                        </dd>
-                      </div>
+                      <FieldRow label={t.dashboard.technician.workSummary}>
+                        {(id) => (
+                          <>
+                            {/* The form appears because they just tapped
+                                "ปิดงาน"; putting the caret in the box is
+                                the next thing they would do anyway. */}
+                            <textarea
+                              id={id}
+                              rows={3}
+                              autoFocus
+                              value={reportNotes}
+                              onChange={(e) => setReportNotes(e.target.value)}
+                              aria-describedby={`${id}-hint`}
+                            />
+                            {/* Says why the submit button is not yet
+                                live, rather than leaving a dead button
+                                to be explained by trial. */}
+                            <span id={`${id}-hint`} className="hint">
+                              {t.dashboard.technician.workSummaryHint}
+                            </span>
+                          </>
+                        )}
+                      </FieldRow>
                       <div className="actions">
                         <button
                           type="button"

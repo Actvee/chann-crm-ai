@@ -106,7 +106,8 @@ export const en: Dictionary = {
       checkedOut: "Finished — report filed",
       submitReport: "Submit report",
       workSummary: "Work summary",
-      myReports: "รายMy jobs",
+      workSummaryHint: "Write the summary first — then the report can be sent",
+      myReports: "My reports",
       actionFailed: "That did not go through — try again.",
     },
     customer: {

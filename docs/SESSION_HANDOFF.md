@@ -76,19 +76,52 @@ clone.
 
 ## Where things stand
 
-`origin/main` HEAD is **`c7c4a8a`** (3 Sep, docs only: CLAUDE.md now
-opens with the operating reality). The last **code** commit, `1ccd301`
-(every list knows whose it is), is **deployed** — verified 3 Sep by
-reading `/health` on both services, not by reading this file:
+**`5598ad1`** (technician/customer homes, per-OA themes, rich menus,
+Phase 14-A) is pushed AND **deployed** — verified 3 Sep 06:00 by reading
+`/health` on both services after `homes-and-phase14a-deploy.sh` ran end
+to end, not by reading this file:
 
 | tier | `git_commit` | notes |
 |---|---|---|
-| application | `1ccd301…` | `platform_version dev-20260903-1ccd301` |
-| data | `1ccd301…` | `schema_state: up-to-date`, head `0020_crm_essentials` |
+| application | `5598ad1…` | `platform_version dev-20260903-5598ad1` |
+| data | `5598ad1…` | `schema_state: up-to-date`, head **`0021_approvals`** = expected |
 | presentation | — | `/api/ready` → `ready` (it exposes no `/health`; the one "mismatch" finding check-client has always carried) |
 
-So runtime and repo differ only by documentation. Migration head is
-**`0020_crm_essentials`** until the patch below is deployed.
+Migration head is **`0021_approvals`**; execution
+`chann-crm-ai-dev-migrate-n24xq` succeeded before the service images
+were applied (plan: 0 add / 3 change / 0 destroy).
+
+**Lesson from that deploy (paid once, do not pay again):** the script's
+first run halted at STAGE 5 with `"/data/chann_data": not found` because
+it built the migration image with `./database` as the context.
+`database/Dockerfile` says so in its own header: it must be built from
+the **repo root** — `docker build -f database/Dockerfile .` — and pushed
+into the existing `migrate` package, exactly as `phase10-quotes-deploy.sh`
+did for `0020`. The push had already happened, so the rerun guard
+(HEAD subject == COMMIT_SUBJECT) skipped apply/commit and continued from
+the migration as designed. Any future script with a migration stage:
+check that one line before running it.
+
+**Rich menus are generated but not yet applied to LINE.** The PNG/JSON
+for all three OAs are produced (`scripts/richmenu/out/`, gitignored;
+Thai fonts came from `apt-get download fonts-tlwg-garuda-ttf` +
+`dpkg-deb -x` because Cloud Shell has no sudo for the agent). The
+upload step reads the three channel tokens and LIFF ids from
+`terraform.tfvars`, which the agent's permission classifier refuses to
+let it do — the owner runs the apply. **Regenerate before applying**
+(`python3 scripts/richmenu/generate.py`): the UI review of the homes
+and menus (3 Sep, `ui-ux-pro-max` skill — use it for all UI/UX work
+from here) led to `ui-review-fixes-v1`: primary button on a per-theme
+deep shade with white text (the accent mid-tones cleared neither ink
+nor white at AA), the button border hex moved into a token, every
+`.field-row` control gets a real `<label>` via `_field-row.tsx`, 44px
+tap targets, the customer home reports a failed load instead of
+showing "no repairs", the report textarea autofocuses and says why
+submit is disabled, and the rich-menu generator's EN sub-labels went
+from ~8px to ~13px rendered with the primary tile on the deep shade.
+Still open, the owner's call because it is a visible change: the sales
+pages never set `data-theme="sales"`, so the sales dashboard is still
+marigold, not the green rule 5 specifies.
 
 **This section has now been stale twice in two days**, each time in the
 way the warning at the top of this file describes. On 2 Sep it said
@@ -101,9 +134,9 @@ pending — that patch was in fact `1ccd301`, pushed AND deployed, and the
 fix each time was the same: `git log` for what is pushed, `/health` for
 what is running; this file only records what those two said.
 
-**One patch is prepared and NOT deployed**:
-`homes-and-phase14a-v1-*.patch` on `1ccd301` — the owner asked for one
-patch. It is two independent pieces of work in one diff:
+**What `5598ad1` was** (`homes-and-phase14a-v1-2700.patch` on
+`1ccd301`, kept here because the reasoning still applies) — the owner
+asked for one patch. It is two independent pieces of work in one diff:
 
 1. Technician + customer homes, per-OA themes, rich menus (see "Three
    OAs" below). Application + presentation.

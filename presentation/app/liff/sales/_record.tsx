@@ -4,6 +4,7 @@ import { ReactNode, useEffect, useState } from "react";
 
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
+import { FieldRow } from "../_field-row";
 import { fullDateTime } from "../_list-controls";
 
 /**
@@ -139,38 +140,40 @@ export function FieldSection({
           const value = record?.[field.name];
           const isEditingThis = editing && field.editable;
           return (
-            <div className="field-row" key={field.name}>
-              <dt>{field.label}</dt>
-              <dd data-empty={!isEditingThis && (value == null || value === "")}>
-                {isEditingThis ? (
-                  field.type === "textarea" ? (
-                    <textarea
-                      rows={3}
-                      value={draft[field.name] ?? ""}
-                      placeholder={field.placeholder}
-                      onChange={(event) =>
-                        setDraft({ ...draft, [field.name]: event.target.value })
-                      }
-                    />
-                  ) : (
-                    <input
-                      type={field.type ?? "text"}
-                      value={draft[field.name] ?? ""}
-                      placeholder={field.placeholder}
-                      onChange={(event) =>
-                        setDraft({ ...draft, [field.name]: event.target.value })
-                      }
-                    />
-                  )
-                ) : value == null || value === "" ? (
-                  "—"
-                ) : field.display ? (
-                  field.display(value)
-                ) : (
-                  String(value)
-                )}
-              </dd>
-            </div>
+            <FieldRow
+              key={field.name}
+              label={field.label}
+              empty={!isEditingThis && (value == null || value === "")}
+            >
+              {isEditingThis
+                ? (id) =>
+                    field.type === "textarea" ? (
+                      <textarea
+                        id={id}
+                        rows={3}
+                        value={draft[field.name] ?? ""}
+                        placeholder={field.placeholder}
+                        onChange={(event) =>
+                          setDraft({ ...draft, [field.name]: event.target.value })
+                        }
+                      />
+                    ) : (
+                      <input
+                        id={id}
+                        type={field.type ?? "text"}
+                        value={draft[field.name] ?? ""}
+                        placeholder={field.placeholder}
+                        onChange={(event) =>
+                          setDraft({ ...draft, [field.name]: event.target.value })
+                        }
+                      />
+                    )
+                : value == null || value === ""
+                  ? "—"
+                  : field.display
+                    ? field.display(value)
+                    : String(value)}
+            </FieldRow>
           );
         })}
       </dl>

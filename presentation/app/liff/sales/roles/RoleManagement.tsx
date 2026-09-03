@@ -265,9 +265,9 @@ export default function RoleManagement({ liffId }: { liffId: string }) {
                       display: "flex",
                       alignItems: "center",
                       gap: 10,
-                      // 40px so it is a real tap target on a phone, not a
+                      // 44px so it is a real tap target on a phone, not a
                       // 13px checkbox someone has to aim at.
-                      minHeight: 40,
+                      minHeight: 44,
                       fontSize: 15,
                     }}
                   >

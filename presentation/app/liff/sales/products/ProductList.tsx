@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+import { FieldRow } from "../../_field-row";
 import { AppShell, CompanyPicker, Count, Empty } from "../_components";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
@@ -184,10 +185,10 @@ export default function ProductList({ liffId }: { liffId: string }) {
                 ["sku", t.dashboard.products.sku, ""],
                 ["description", t.dashboard.products.description, ""],
               ] as const).map(([field, label, placeholder]) => (
-                <div className="field-row" key={field}>
-                  <dt>{label}</dt>
-                  <dd>
+                <FieldRow key={field} label={label}>
+                  {(id) => (
                     <input
+                      id={id}
                       value={draft[field]}
                       placeholder={placeholder}
                       inputMode={field === "unit_price" ? "decimal" : undefined}
@@ -195,8 +196,8 @@ export default function ProductList({ liffId }: { liffId: string }) {
                         setDraft({ ...draft, [field]: event.target.value })
                       }
                     />
-                  </dd>
-                </div>
+                  )}
+                </FieldRow>
               ))}
               <div className="actions">
                 <button

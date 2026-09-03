@@ -179,26 +179,31 @@ def build(oa: str, out_dir: Path):
     title_font = ImageFont.truetype(FONT_BOLD, 110)
     draw.text((70, HEADER_H // 2 - 8), theme["title"], font=title_font,
               fill="#ffffff", anchor="lm")
-    tag_font = ImageFont.truetype(FONT_REG, 54)
+    tag_font = ImageFont.truetype(FONT_REG, 66)
     draw.text((W - 70, HEADER_H // 2 - 4), "LINE Official Account",
-              font=tag_font, fill="#ffffffcc", anchor="rm")
+              font=tag_font, fill="#ffffff", anchor="rm")
 
     tile_w = (W - GUTTER * (COLS + 1)) // COLS
     tile_h = (H - HEADER_H - GUTTER * (ROWS + 1)) // ROWS
-    sub_font = ImageFont.truetype(FONT_REG, 52)
 
-    def fitted(text: str) -> ImageFont.FreeTypeFont:
-        """The largest bold size that keeps the label inside its tile.
+    # The whole 2500px image is shown about 375px wide on a phone — a
+    # 0.15 scale — so a 52px sub-label landed at ~8px on screen, below
+    # the 12px floor any body text needs. 84px is ~13px rendered; the
+    # Thai label at 96px is ~14-15px bold, which is why it was readable.
+    def fitted(text: str, bold: bool = True,
+               sizes=(96, 86, 76, 68, 60), floor: int = 54) -> ImageFont.FreeTypeFont:
+        """The largest size that keeps the label inside its tile.
 
         Thai compounds run long ("ลงทะเบียนรับประกัน") and clipped a tile
         edge in review; shrinking beats wrapping here because a rich menu
         label is a button, and two-line buttons read as two buttons.
         """
-        for size in (96, 86, 76, 68, 60):
-            font = ImageFont.truetype(FONT_BOLD, size)
+        face = FONT_BOLD if bold else FONT_REG
+        for size in sizes:
+            font = ImageFont.truetype(face, size)
             if draw.textlength(text, font=font) <= tile_w - 90:
                 return font
-        return ImageFont.truetype(FONT_BOLD, 54)
+        return ImageFont.truetype(face, floor)
 
     areas = []
     for i, (thai, en, icon, action) in enumerate(TILES[oa]):
@@ -206,7 +211,12 @@ def build(oa: str, out_dir: Path):
         x = GUTTER + col * (tile_w + GUTTER)
         y = HEADER_H + GUTTER + row * (tile_h + GUTTER)
         primary = i == 0
-        bg = theme["accent"] if primary else "#ffffff"
+        # The primary tile is the deep shade, not the accent: white text
+        # on the customer OA's orange is 3.0:1, fine for the big Thai
+        # label and not for the sub-label. Deep carries white at 5.5:1
+        # (orange) to 8.7:1 (blue), and it is the same colour the app's
+        # primary button uses, so the tile and the button match.
+        bg = theme["deep"] if primary else "#ffffff"
         fg = "#ffffff" if primary else theme["ink"]
         icon_color = "#ffffff" if primary else theme["accent"]
         _rounded(draw, [x, y, x + tile_w, y + tile_h], 34, bg)
@@ -219,8 +229,11 @@ def build(oa: str, out_dir: Path):
         _icon(draw, icon, x + tile_w // 2, y + 205, icon_color)
         draw.text((x + tile_w // 2, y + 400), thai, font=fitted(thai),
                   fill=fg, anchor="mm")
-        draw.text((x + tile_w // 2, y + 500), en, font=sub_font,
-                  fill=fg if primary else "#00000073", anchor="mm")
+        # 60% black over white is ~5.7:1; the 45% it was is ~3.3:1 and
+        # fails for text this small.
+        draw.text((x + tile_w // 2, y + 505), en,
+                  font=fitted(en, bold=False, sizes=(84, 76, 68), floor=60),
+                  fill=fg if primary else "#00000099", anchor="mm")
         areas.append({
             "bounds": {"x": x, "y": y, "width": tile_w, "height": tile_h},
             "action": action,
