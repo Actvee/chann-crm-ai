@@ -124,6 +124,60 @@ async def liff_me(
     }
 
 
+# The person's own profile (Phase 8 fields) from the LIFF app — the
+# UI twin of "แก้เบอร์เป็น 08x" in chat, so the parity rule holds for the
+# customer and technician OAs (owner, 3 Sep). Only the caller's own
+# record is reachable here: the chann_uid comes from the verified ID
+# token, never from the request.
+_PROFILE_FIELDS = ("first_name", "last_name", "phone", "email", "address")
+
+
+@router.get("/liff/{audience}/profile")
+async def liff_profile(
+    audience: str,
+    claims: dict = Depends(require_liff),
+    client: DataClient = Depends(get_data_client),
+):
+    if audience not in OA_TO_ROLE:
+        raise HTTPException(status_code=404, detail="unknown LIFF audience")
+    identity = await client.resolve_identity(
+        claims["sub"], OA_TO_ROLE[audience], claims.get("name")
+    )
+    profile = await client.get_profile(identity["chann_uid"]) or {}
+    return {
+        "chann_uid": identity["chann_uid"],
+        **{field: profile.get(field) for field in _PROFILE_FIELDS},
+    }
+
+
+@router.patch("/liff/{audience}/profile")
+async def liff_profile_update(
+    audience: str,
+    body: dict,
+    claims: dict = Depends(require_liff),
+    client: DataClient = Depends(get_data_client),
+):
+    if audience not in OA_TO_ROLE:
+        raise HTTPException(status_code=404, detail="unknown LIFF audience")
+    fields = {
+        field: (str(body[field]).strip() or None)
+        for field in _PROFILE_FIELDS
+        if field in body and body[field] is not None
+    }
+    if not fields:
+        raise HTTPException(status_code=422, detail="nothing to update")
+    identity = await client.resolve_identity(
+        claims["sub"], OA_TO_ROLE[audience], claims.get("name")
+    )
+    updated = await client.update_profile(
+        identity["chann_uid"], fields, actor_id=identity["chann_uid"],
+    )
+    return {
+        "chann_uid": identity["chann_uid"],
+        **{field: updated.get(field) for field in _PROFILE_FIELDS},
+    }
+
+
 @router.post("/platform/smartbrowz/verify-connection")
 async def smartbrowz_verify_connection(claims: dict = Depends(require_admin)):
     """Phase 10 / Master Spec 10.6 — verify the SmartBrowz OAuth auth path

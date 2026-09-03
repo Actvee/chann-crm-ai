@@ -30,10 +30,16 @@ from test_phase6_chat import FakeDataClient, LICENSE_ID, _ctx  # noqa: E402
 
 
 def _customer_client(**kw):
-    return FakeDataClient(
+    client = FakeDataClient(
         permission_keys=["customer.read", "ticket.create", "ticket.read",
                          "warranty.read", "warranty.create"], **kw,
     )
+    # Register-first (3 Sep): one machine on file, so a fault can be filed.
+    client._warranties = [{
+        "id": "w-1", "serial_number": "ONLY00001", "product_name": "แอร์",
+        "status": "active", "customer_chann_uid": _ctx(**CUSTOMER).chann_uid,
+    }]
+    return client
 
 
 def _created_tickets(client):

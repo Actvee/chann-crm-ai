@@ -65,6 +65,7 @@ async def main():
     print("\n=== EDGE CASES: customer ===")
     u = T.FakeDataClient(permission_keys=["customer.read","ticket.create","ticket.read","warranty.read","warranty.create"])
     await say(u,"customer","แอร์เสีย น้ำหยด เสียงดัง")
+    await say(u,"customer","SN12345678")   # register-first: serial → product registered, fault filed
     await say(u,"customer","99/1 ถ.สุขุมวิท")
     await say(u,"customer","พรุ่งนี้ 10 โมง")
     await say(u,"customer","งานของฉัน")

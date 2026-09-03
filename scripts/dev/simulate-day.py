@@ -141,6 +141,7 @@ async def customer_day():
     await say(c, "customer", "วิธีใช้")
     await say(c, "customer", "แจ้งซ่อม")
     await say(c, "customer", "แอร์ไม่เย็นครับ")
+    await say(c, "customer", "SN12345678")   # register-first: the serial registers the product and files the held fault
     await say(c, "customer", "ลงทะเบียนสินค้า")
     await say(c, "customer", "เช็คประกัน")
     await say(c, "customer", "งานของฉัน")

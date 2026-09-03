@@ -1,9 +1,14 @@
-import CustomerTickets from "./CustomerTickets";
+import { redirect } from "next/navigation";
 
+/**
+ * The pre-Phase-14 customer page. LIFF endpoints registered in the LINE
+ * console before the customer home existed still point here, which is how
+ * the owner saw a screen with only claim/report on it (3 Sep) while the
+ * full home was one path up. Whichever endpoint LINE opens, the person
+ * lands on the home.
+ */
 export const dynamic = "force-dynamic";
 
 export default function CustomerTicketsPage() {
-  return (
-    <CustomerTickets liffId={process.env.NEXT_PUBLIC_LIFF_CUSTOMER_ID ?? ""} />
-  );
+  redirect("/liff/customer");
 }

@@ -398,6 +398,32 @@ class FakeDataClient:
                 return {"found": True, **w}
         return {"found": False}
 
+    async def register_warranty(self, license_id, payload, actor_id=None):
+        # Mirrors the Data Tier: one row per serial per shop, 409 on a
+        # repeat (chat treats 409 as "already known", not as an error).
+        self.recorded.append(("register_warranty", license_id, payload, actor_id))
+        from chann_app.data_client import DataTierError
+        if not hasattr(self, "_warranties"):
+            self._warranties = []
+        serial = str(payload.get("serial_number", "")).upper()
+        for w in self._warranties:
+            if str(w.get("serial_number", "")).upper() == serial:
+                raise DataTierError(409, "serial already registered")
+        n = len(self._warranties) + 1
+        row = {
+            "id": f"w-{n}", "warranty_number": f"W-2026-{n:04d}", "status": "active",
+            "product_name": None, "warranty_start": None, "warranty_end": None,
+            "customer_chann_uid": None, **payload,
+        }
+        self._warranties.append(row)
+        return row
+
+    async def my_shops(self, chann_uid):
+        return [{
+            "license_id": LICENSE_ID, "license_code": "TESTCO",
+            "company_name": "บริษัททดสอบ",
+        }]
+
     async def set_quote_status(self, license_id, quote_id, status, actor_id=None):
         self.recorded.append(("set_quote_status", license_id, quote_id, status))
         for q in self._quotes:
@@ -789,6 +815,16 @@ class FakeDataClient:
             ("storefront_record_interest", chann_uid, license_id, product_name)
         )
         return {"id": "CUST-STOREFRONT-1", "license_id": license_id, "stage": "lead"}
+
+
+def _one_product(chann_uid="CHN-S-000001"):
+    """A customer with one registered machine — the owner's rule (3 Sep)
+    is that a fault is filed against a registered product, so the fault-
+    report tests start where a real customer starts: registered."""
+    return [{
+        "id": "w-1", "serial_number": "ONLY00001", "product_name": "แอร์",
+        "status": "active", "customer_chann_uid": chann_uid,
+    }]
 
 
 def _ctx(resolution=TenantResolution.SINGLE, display_name="LINE Name",
@@ -4581,6 +4617,7 @@ class TestCustomerFaultReport:
 
     async def test_a_described_fault_becomes_a_ticket(self):
         client = FakeDataClient(permission_keys=[])
+        client._warranties = _one_product(_ctx(oa="customer").chann_uid)
         reply = await handle_chat_message(
             client, message="แอร์ไม่เย็น มีน้ำหยด", ctx=_ctx(oa="customer"),
         )
@@ -4592,6 +4629,7 @@ class TestCustomerFaultReport:
 
     async def test_the_address_answer_is_saved_against_the_ticket(self):
         client = FakeDataClient(permission_keys=[])
+        client._warranties = _one_product(_ctx(oa="customer").chann_uid)
         await handle_chat_message(
             client, message="แอร์ไม่เย็น", ctx=_ctx(oa="customer"),
         )
@@ -4755,6 +4793,7 @@ class TestCustomerGreeting:
     async def test_a_real_fault_still_opens_one(self):
         """The greeting filter must not have swallowed the actual feature."""
         client = FakeDataClient(permission_keys=[])
+        client._warranties = _one_product(_ctx(oa="customer").chann_uid)
         await handle_chat_message(
             client, message="แอร์ไม่เย็น", ctx=_ctx(oa="customer"),
         )
@@ -4764,6 +4803,7 @@ class TestCustomerGreeting:
         """"สวัสดีครับ แอร์เสีย" is a person being polite, not a person
         saying hello."""
         client = FakeDataClient(permission_keys=[])
+        client._warranties = _one_product(_ctx(oa="customer").chann_uid)
         await handle_chat_message(
             client, message="สวัสดีครับ แอร์เสียครับ", ctx=_ctx(oa="customer"),
         )
@@ -5782,6 +5822,7 @@ class TestButtonsTheSystemWritesDoNotNeedTheAI:
         triggers += list(module.CUSTOMER_STATUS_PHRASES)
         triggers += list(module.CUSTOMER_CONTACT_PHRASES)
         triggers += list(module.CUSTOMER_WARRANTY_MINE_PHRASES)
+        triggers += list(module.NO_SERIAL_PHRASES)
 
         dead = []
         for text in sorted(sent):
@@ -6337,6 +6378,7 @@ class TestTheSecondDayOfSimulation:
         """"ช่างจะมากี่โมง" opened a repair job, because every message
         that was not a command became one."""
         client = FakeDataClient(permission_keys=["ticket.create", "ticket.read"])
+        client._warranties = _one_product(_ctx(oa="customer").chann_uid)
         await handle_chat_message(
             client, message="แอร์ไม่เย็นครับ", ctx=_ctx(oa="customer"),
         )

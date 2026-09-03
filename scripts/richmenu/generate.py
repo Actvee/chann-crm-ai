@@ -39,8 +39,22 @@ W, H = 2500, 1686
 HEADER_H = 280
 COLS, ROWS = 3, 2
 GUTTER = 12
-FONT_BOLD = "/usr/share/fonts/truetype/tlwg/Garuda-Bold.ttf"
-FONT_REG = "/usr/share/fonts/truetype/tlwg/Garuda.ttf"
+# Bundled with the script (scripts/richmenu/fonts/, TLWG Garuda, GPL-2+
+# with font exception) so this runs on any machine — Cloud Shell has no
+# sudo for apt and resets installed fonts on every restart. A system copy
+# is used when present; RICHMENU_FONT_DIR overrides both.
+_FONT_DIRS = [
+    p for p in (
+        __import__("os").environ.get("RICHMENU_FONT_DIR"),
+        str(Path(__file__).parent / "fonts"),
+        "/usr/share/fonts/truetype/tlwg",
+    ) if p
+]
+_FONT_DIR = next(
+    (d for d in _FONT_DIRS if (Path(d) / "Garuda-Bold.ttf").exists()), _FONT_DIRS[-1],
+)
+FONT_BOLD = str(Path(_FONT_DIR) / "Garuda-Bold.ttf")
+FONT_REG = str(Path(_FONT_DIR) / "Garuda.ttf")
 
 THEMES = {
     "sales": {
@@ -59,30 +73,36 @@ THEMES = {
 
 # (thai, en, icon, action) per tile, reading order; first tile is the
 # accent tile — the one thing this audience does most.
+# Owner (3 Sep): every OA gets the same two anchors — one tile that
+# plainly opens the full-screen app ("เปิดแดชบอร์ด"), one that explains
+# what this OA can do ("วิธีใช้") — and only the everyday verbs beside
+# them. Anything a person would not reach for weekly is cut; the chat
+# and the app still do it. Message tiles send the exact phrase the chat's
+# deterministic triggers match, so a tap never falls through to the AI.
 TILES = {
     "sales": [
-        ("งานวันนี้", "Today", "sun", {"type": "message", "text": "งานวันนี้"}),
+        ("งานวันนี้", "Today's work", "sun", {"type": "message", "text": "งานวันนี้"}),
         ("รายชื่อลูกค้า", "Customers", "people", {"type": "message", "text": "รายชื่อลูกค้า"}),
-        ("นัดหมาย", "Diary", "calendar", {"type": "message", "text": "นัดหมายทั้งหมด"}),
-        ("สร้างลูกค้า", "New customer", "plus", {"type": "message", "text": "สร้างลูกค้า"}),
-        ("ใบเสนอราคา", "Quotes", "doc", {"type": "message", "text": "รายการใบเสนอราคา"}),
-        ("แดชบอร์ด", "Dashboard", "grid", {"type": "uri", "uri": "{LIFF_SALES}"}),
+        ("รายการรออนุมัติ", "Awaiting approval", "check", {"type": "message", "text": "รายการรออนุมัติ"}),
+        ("นัดหมาย", "Appointments", "calendar", {"type": "message", "text": "นัดหมายทั้งหมด"}),
+        ("เปิดแดชบอร์ด", "Open the dashboard", "grid", {"type": "uri", "uri": "{LIFF_SALES}"}),
+        ("วิธีใช้", "How this works", "help", {"type": "message", "text": "วิธีใช้"}),
     ],
     "technician": [
-        ("งานของฉัน", "My jobs", "wrench", {"type": "uri", "uri": "{LIFF_TECHNICIAN}"}),
-        ("งานที่เปิดรับ", "Open jobs", "inbox", {"type": "message", "text": "งานที่เปิดรับ"}),
-        ("เช็คอิน", "Check in", "pin", {"type": "message", "text": "เช็คอิน"}),
-        ("ปิดงาน+รายงาน", "Finish job", "check", {"type": "message", "text": "ปิดงาน"}),
-        ("รายงานของฉัน", "My reports", "doc", {"type": "uri", "uri": "{LIFF_TECHNICIAN_REPORTS}"}),
-        ("งานวันนี้", "Today", "sun", {"type": "message", "text": "งานวันนี้"}),
+        ("งานของฉัน", "My jobs", "wrench", {"type": "message", "text": "งานของฉัน"}),
+        ("งานที่เปิดรับ", "Jobs to take", "inbox", {"type": "message", "text": "งานที่เปิดรับ"}),
+        ("เช็คอิน", "Check in on site", "pin", {"type": "message", "text": "เช็คอิน"}),
+        ("ปิดงาน+รายงาน", "Finish + report", "check", {"type": "message", "text": "ปิดงาน"}),
+        ("เปิดหน้าจอช่าง", "Open the dashboard", "grid", {"type": "uri", "uri": "{LIFF_TECHNICIAN}"}),
+        ("วิธีใช้", "How this works", "help", {"type": "message", "text": "วิธีใช้"}),
     ],
     "customer": [
-        ("แจ้งซ่อม", "Report a fault", "wrench", {"type": "uri", "uri": "{LIFF_CUSTOMER}"}),
+        ("แจ้งซ่อม", "Report a fault", "wrench", {"type": "message", "text": "แจ้งซ่อม"}),
         ("สถานะการซ่อม", "Repair status", "clock", {"type": "message", "text": "สถานะการซ่อม"}),
-        ("ลงทะเบียนรับประกัน", "Warranty", "shield", {"type": "uri", "uri": "{LIFF_CUSTOMER}"}),
-        ("เช็คประกันจาก S/N", "Check S/N", "search", {"type": "message", "text": "เช็คประกัน"}),
-        ("ติดต่อร้าน", "Contact us", "chat", {"type": "message", "text": "ติดต่อร้าน"}),
-        ("วิธีใช้งาน", "How to", "help", {"type": "message", "text": "วิธีใช้งาน"}),
+        ("ลงทะเบียนสินค้า", "Register a product", "shield", {"type": "message", "text": "ลงทะเบียนสินค้า"}),
+        ("เปิดหน้าจอลูกค้า", "Open the dashboard", "grid", {"type": "uri", "uri": "{LIFF_CUSTOMER}"}),
+        ("ติดต่อร้าน", "Contact the shop", "chat", {"type": "message", "text": "ติดต่อร้าน"}),
+        ("วิธีใช้", "How this works", "help", {"type": "message", "text": "วิธีใช้"}),
     ],
 }
 
@@ -210,30 +230,25 @@ def build(oa: str, out_dir: Path):
         col, row = i % COLS, i // COLS
         x = GUTTER + col * (tile_w + GUTTER)
         y = HEADER_H + GUTTER + row * (tile_h + GUTTER)
-        primary = i == 0
-        # The primary tile is the deep shade, not the accent: white text
-        # on the customer OA's orange is 3.0:1, fine for the big Thai
-        # label and not for the sub-label. Deep carries white at 5.5:1
-        # (orange) to 8.7:1 (blue), and it is the same colour the app's
-        # primary button uses, so the tile and the button match.
-        bg = theme["deep"] if primary else "#ffffff"
-        fg = "#ffffff" if primary else theme["ink"]
-        icon_color = "#ffffff" if primary else theme["accent"]
-        _rounded(draw, [x, y, x + tile_w, y + tile_h], 34, bg)
-        if not primary:
-            # The 6px accent baseline: theme presence without shouting.
-            draw.rounded_rectangle(
-                [x + 34, y + tile_h - 18, x + tile_w - 34, y + tile_h - 12],
-                3, fill=theme["accent"],
-            )
-        _icon(draw, icon, x + tile_w // 2, y + 205, icon_color)
+        # Six identical tiles (owner, 3 Sep): the earlier design filled the
+        # first tile in the deep shade to mark "the main thing", and in
+        # use it read as one tile being different in kind, not in
+        # importance. The header carries the OA's colour; every tile is
+        # white with the accent icon and baseline.
+        _rounded(draw, [x, y, x + tile_w, y + tile_h], 34, "#ffffff")
+        # The 6px accent baseline: theme presence without shouting.
+        draw.rounded_rectangle(
+            [x + 34, y + tile_h - 18, x + tile_w - 34, y + tile_h - 12],
+            3, fill=theme["accent"],
+        )
+        _icon(draw, icon, x + tile_w // 2, y + 205, theme["accent"])
         draw.text((x + tile_w // 2, y + 400), thai, font=fitted(thai),
-                  fill=fg, anchor="mm")
+                  fill=theme["ink"], anchor="mm")
         # 60% black over white is ~5.7:1; the 45% it was is ~3.3:1 and
         # fails for text this small.
         draw.text((x + tile_w // 2, y + 505), en,
                   font=fitted(en, bold=False, sizes=(84, 76, 68), floor=60),
-                  fill=fg if primary else "#00000099", anchor="mm")
+                  fill="#00000099", anchor="mm")
         areas.append({
             "bounds": {"x": x, "y": y, "width": tile_w, "height": tile_h},
             "action": action,

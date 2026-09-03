@@ -2231,6 +2231,68 @@ def _is_bare_serial(text: str) -> bool:
     )
 
 
+NO_SERIAL_PHRASES = (
+    "ไม่มีหมายเลขเครื่อง", "ไม่มีหมายเลข", "ไม่มีสติกเกอร์", "ไม่ทราบหมายเลข", "หาไม่เจอ",
+    "ไม่มี s/n", "ไม่มี sn", "no serial",
+)
+REPORT_REGISTER_FIRST = {
+    "th": (
+        "รับเรื่อง \"{issue}\" ไว้แล้วครับ\n\n"
+        "ก่อนแจ้งซ่อม ขอลงทะเบียนสินค้าก่อน 1 ครั้ง เพื่อให้ร้านรู้ว่าเครื่องไหน: "
+        "พิมพ์หมายเลขเครื่อง (S/N บนสติกเกอร์) มาได้เลย ผมจะแจ้งซ่อมเรื่องนี้ให้ต่อทันที\n"
+        "ถ้าหาหมายเลขไม่เจอ พิมพ์ \"ไม่มีหมายเลขเครื่อง\""
+    ),
+    "en": (
+        "Noted: \"{issue}\"\n\n"
+        "Before filing it, register the product once so the shop knows which "
+        "machine: type the serial number (S/N on the sticker) and I will file this "
+        "right after. If you cannot find it, type \"no serial\"."
+    ),
+}
+REPORT_WHICH_PRODUCT = {
+    "th": "เครื่องไหนครับ เลือกได้เลย",
+    "en": "Which machine? Pick one.",
+}
+
+
+async def _hold_customer_message(client: DataClient, ctx: ResolvedContext, text: str) -> None:
+    try:
+        await client.set_pending_intent(
+            ctx.chann_uid, ctx.oa,
+            action="report", entity="pending_customer_message",
+            fields={"message": text[:500]}, missing=["serial"],
+            ttl_seconds=CUSTOMER_TICKET_TTL_S,
+        )
+    except Exception:
+        log.exception("could not hold a customer's fault while asking for the product")
+
+
+async def _clear_customer_hold(client: DataClient, ctx: ResolvedContext) -> None:
+    try:
+        await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
+    except Exception:
+        log.exception("could not clear a held customer message")
+
+
+async def _register_customer_serial(
+    client: DataClient, ctx: ResolvedContext, license_id: str, serial: str,
+) -> None:
+    """Put the machine on this customer's record. A serial the shop already
+    registered answers 409 — that is the machine being known, not an
+    error, and the fault still goes through with it."""
+    try:
+        await client.register_warranty(
+            license_id,
+            {"serial_number": serial, "customer_chann_uid": ctx.chann_uid},
+            actor_id=ctx.chann_uid,
+        )
+    except DataTierError as exc:
+        if exc.status_code != 409:
+            log.warning("could not register %s for a customer: %s", serial, exc.detail)
+    except Exception:
+        log.exception("could not register %s for a customer", serial)
+
+
 def _looks_like_a_question(text: str) -> bool:
     """Is this asking something rather than reporting something?
 
@@ -2354,13 +2416,17 @@ def _looks_like_profile_edit(message: str) -> bool:
 
 async def _handle_customer_report(
     client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
-    language: str,
+    language: str, serial_hint: str | None = None, skip_serial: bool = False,
 ) -> ChatReply:
     """A customer reporting a fault, or answering the follow-up questions.
 
     No permission check: a customer is not a tenant member and holds no
     permission keys at all. The tenant boundary is the shop they are linked
     to, which is what license_id already is here.
+
+    serial_hint: the machine the fault is about, when the caller already
+    knows it. skip_serial: the person said they have no serial — file the
+    job without one rather than asking again.
     """
     license_id = str(license_id)
     text = (message or "").strip()
@@ -2371,6 +2437,58 @@ async def _handle_customer_report(
         pending = await client.get_pending_intent(ctx.chann_uid, ctx.oa)
     except Exception:
         pending = None
+
+    # A fault held while we waited for the product (owner rule: register
+    # first). What arrives now is the serial, "no serial", or a new
+    # sentence — each continues the same report.
+    if pending and pending.get("entity") == "pending_customer_message":
+        held = str((pending.get("fields") or {}).get("message") or "")
+        linked_serial = str((pending.get("fields") or {}).get("serial") or "")
+        if held and text == held.strip():
+            # Re-entered by registration right after the shop was linked:
+            # the held sentence is being replayed, with the serial that
+            # found the shop (if one did). Not a restatement.
+            await _clear_customer_hold(client, ctx)
+            return await _handle_customer_report(
+                client, ctx=ctx, license_id=license_id, message=held,
+                language=language, serial_hint=linked_serial or None,
+            )
+        if held and _matches_phrase(text, NO_SERIAL_PHRASES):
+            await _clear_customer_hold(client, ctx)
+            return await _handle_customer_report(
+                client, ctx=ctx, license_id=license_id, message=held,
+                language=language, skip_serial=True,
+            )
+        if held and _is_bare_serial(text):
+            serial = text.upper()
+            await _register_customer_serial(client, ctx, license_id, serial)
+            await _clear_customer_hold(client, ctx)
+            return await _handle_customer_report(
+                client, ctx=ctx, license_id=license_id, message=held,
+                language=language, serial_hint=serial,
+            )
+        if held and not _is_customer_command(text) and not _matches_phrase(text, HELP_TRIGGERS):
+            # Not a serial, not a menu tap: most often the address or a
+            # restatement typed before reading the question. The fault
+            # is kept and the question asked once more — replacing the
+            # held sentence with "99/1 ถ.สุขุมวิท" would file a repair
+            # called "99/1 ถ.สุขุมวิท".
+            return ChatReply(
+                text=_t(REPORT_REGISTER_FIRST, language).format(issue=held[:60]),
+                quick_replies=[("ไม่มีหมายเลขเครื่อง", "ไม่มีหมายเลขเครื่อง")],
+            )
+        # A menu tap while a fault is held: the person moved on. Drop the
+        # hold so it cannot swallow the next thing they type.
+        await _clear_customer_hold(client, ctx)
+        pending = None
+    elif _is_bare_serial(text) and not serial_hint:
+        # A bare serial with nothing held is the product being registered
+        # (the rich-menu tile, or the welcome's instruction) — not a fault
+        # called "ABC123456".
+        return await _handle_warranty_register(
+            client, ctx=ctx, license_id=license_id,
+            message=f"ลงทะเบียนสินค้า {text}", language=language,
+        )
 
     if pending and pending.get("entity") == "customer_ticket":
         ticket_id = (pending.get("fields") or {}).get("ticket_id")
@@ -2594,6 +2712,47 @@ async def _handle_customer_report(
             quick_replies=[("แจ้งซ่อม", "แจ้งซ่อม"), ("วิธีใช้", "วิธีใช้")],
         )
 
+    # Owner rule (3 Sep): a fault is reported against a registered
+    # product, so the shop knows which machine. The serial comes from the
+    # message that linked the shop (held in the pending slot), from the one
+    # product this customer has on file, from a choice when they have
+    # several, or is asked for — with "ไม่มีหมายเลขเครื่อง" as the way out.
+    held_serial = ""
+    if pending and pending.get("entity") == "pending_customer_message":
+        held_serial = str((pending.get("fields") or {}).get("serial") or "")
+    serial = held_serial or (serial_hint or "")
+    if not serial and not skip_serial:
+        try:
+            registered = [
+                w for w in await client.list_warranties(
+                    license_id, customer_chann_uid=ctx.chann_uid,
+                )
+                if str(w.get("status") or "") != "void" and w.get("serial_number")
+            ]
+        except Exception:
+            log.exception("could not read a customer's registered products")
+            registered = []
+        if len(registered) == 1:
+            serial = str(registered[0]["serial_number"])
+        elif len(registered) > 1:
+            await _hold_customer_message(client, ctx, text)
+            return ChatReply(
+                text=_t(REPORT_WHICH_PRODUCT, language),
+                quick_replies=[
+                    (
+                        f"{w.get('product_name') or ''} {w['serial_number']}".strip()[:20],
+                        str(w["serial_number"]),
+                    )
+                    for w in registered[:4]
+                ] + [("ไม่มีหมายเลขเครื่อง", "ไม่มีหมายเลขเครื่อง")],
+            )
+        else:
+            await _hold_customer_message(client, ctx, text)
+            return ChatReply(
+                text=_t(REPORT_REGISTER_FIRST, language).format(issue=text[:60]),
+                quick_replies=[("ไม่มีหมายเลขเครื่อง", "ไม่มีหมายเลขเครื่อง")],
+            )
+
     try:
         profile = await client.get_profile(ctx.chann_uid)
     except Exception:
@@ -2614,6 +2773,7 @@ async def _handle_customer_report(
                     ) if p
                 ) or ctx.display_name,
                 "customer_phone": (profile or {}).get("phone"),
+                **({"serial_number": serial} if serial else {}),
             },
             actor_id=ctx.chann_uid,
         )
@@ -7223,6 +7383,7 @@ def ask_for_missing(missing: list[str], language: str = "th") -> str:
 CUSTOMER_HELP = {
     "th": (
         "พิมพ์คุยได้เลยครับ\n\n"
+        "· ลงทะเบียนสินค้า (ทำครั้งแรกก่อนแจ้งซ่อม) — พิมพ์หมายเลขเครื่อง (S/N บนสติกเกอร์) มาได้เลย\n"
         "· แจ้งซ่อม — พิมพ์อาการที่เสียมาได้เลย เช่น \"แอร์ไม่เย็น\"\n"
         "· ดูสถานะงาน — พิมพ์ \"งานของฉัน\"\n"
         "· เลื่อนหรือยกเลิกนัด — พิมพ์ \"เลื่อนนัด พรุ่งนี้ 10 โมง\" หรือ \"ยกเลิกนัด\"\n"
@@ -7233,6 +7394,7 @@ CUSTOMER_HELP = {
     ),
     "en": (
         "Just type.\n\n"
+        "· Register your product first (once) — type the serial number (S/N on the sticker)\n"
         "· Report a fault — describe the problem, e.g. \"air con not cooling\"\n"
         "· Check a job — type \"my jobs\"\n"
         "· Move or cancel a visit — \"reschedule tomorrow 10am\" or \"cancel job\"\n"
@@ -7247,6 +7409,97 @@ HELP_TRIGGERS = (
     "ช่วยเหลือ", "วิธีใช้", "วิธีใช้งาน", "ใช้ยังไง", "ทำอะไรได้บ้าง", "คำสั่ง", "เมนู",
     "help", "how to use", "commands", "menu", "?",
 )
+
+# "Who am I here?" for a customer: their own details, the shop they belong
+# to, what is registered. The chat twin of the home screen's profile card.
+CUSTOMER_PROFILE_PHRASES = (
+    "ข้อมูลของฉัน", "ข้อมูลส่วนตัว", "โปรไฟล์", "โปรไฟล์ของฉัน", "ดูข้อมูลของฉัน",
+    "ลูกค้าร้านไหน", "ร้านของฉัน", "my profile", "my details",
+)
+CUSTOMER_PROFILE_TEXT = {
+    "th": (
+        "ข้อมูลของคุณครับ\n\n"
+        "ชื่อ: {name}\nเบอร์: {phone}\nที่อยู่: {address}\n"
+        "ลูกค้าของ: {shop}\nสินค้าที่ลงทะเบียน: {products}\n\n"
+        "แก้ได้เลย เช่น \"แก้เบอร์เป็น 08x-xxx-xxxx\" หรือ \"แก้ที่อยู่เป็น ...\""
+    ),
+    "en": (
+        "Your details\n\n"
+        "Name: {name}\nPhone: {phone}\nAddress: {address}\n"
+        "Customer of: {shop}\nRegistered products: {products}\n\n"
+        "Change any of it, e.g. \"change my phone to 08x-xxx-xxxx\""
+    ),
+}
+_NOT_SET = {"th": "ยังไม่ระบุ", "en": "not set"}
+
+
+async def _handle_customer_profile_view(
+    client: DataClient, *, ctx: ResolvedContext, license_id, language: str,
+) -> ChatReply:
+    try:
+        profile = await client.get_profile(ctx.chann_uid) or {}
+    except Exception:
+        log.exception("could not read a customer's profile")
+        profile = {}
+    try:
+        products = [
+            w for w in await client.list_warranties(
+                str(license_id), customer_chann_uid=ctx.chann_uid,
+            )
+            if str(w.get("status") or "") != "void"
+        ]
+    except Exception:
+        products = []
+    blank = _t(_NOT_SET, language)
+    name = " ".join(
+        p for p in (profile.get("first_name"), profile.get("last_name")) if p
+    ) or ctx.display_name or blank
+    shop = next(
+        (
+            m.get("company_name") for m in ctx.memberships
+            if str(m.get("license_id")) == str(license_id)
+        ),
+        None,
+    ) or blank
+    listed = ", ".join(
+        f"{w.get('product_name') or ''} {w.get('serial_number') or ''}".strip()
+        for w in products[:5]
+    )
+    return ChatReply(
+        text=_t(CUSTOMER_PROFILE_TEXT, language).format(
+            name=name, phone=profile.get("phone") or blank,
+            address=profile.get("address") or blank, shop=shop,
+            products=listed or ("ยังไม่มี" if language == "th" else "none yet"),
+        ),
+        quick_replies=[("แจ้งซ่อม", "แจ้งซ่อม"), ("ลงทะเบียนสินค้า", "ลงทะเบียนสินค้า")],
+    )
+
+# The technician's "วิธีใช้": a day's order of operations, not a catalogue.
+# usage_help() below is shaped around a salesperson's day and lists
+# customers, quotes and diaries a technician never touches — the owner
+# asked for a guide per OA that "อ่านแล้วเข้าใจว่าทำอะไรได้" (3 Sep).
+TECHNICIAN_HELP = {
+    "th": (
+        "งานช่างเดินตามลำดับนี้ครับ\n\n"
+        "1. รับงาน — พิมพ์ \"งานที่เปิดรับ\" แล้วเลือกงาน หรือพิมพ์ \"รับงาน T-000123\"\n"
+        "2. ถึงหน้างาน — พิมพ์ \"เช็คอิน\" (ถ้ามีงานเดียวระบบรู้เอง)\n"
+        "3. ซ่อมเสร็จ — พิมพ์ \"ปิดงาน\" แล้วตอบ 3 อย่าง: ปัญหาที่พบ / สิ่งที่แก้ไข / อะไหล่ (ถ้ามี)\n"
+        "4. รอ CS ตรวจ — ผ่านหรือตีกลับจะแจ้งมาที่แชทนี้ ตีกลับแก้แล้วส่งใหม่ได้\n\n"
+        "ดูอื่นๆ: \"งานของฉัน\" · \"งานวันนี้\" · \"รายงานของฉัน\"\n"
+        "แก้ข้อมูลตัวเอง: \"แก้เบอร์เป็น 08x-xxx-xxxx\"\n"
+        "เปิดหน้าจอเต็มได้จากเมนูด้านล่าง (เปิดหน้าจอช่าง)"
+    ),
+    "en": (
+        "A technician's day, in order\n\n"
+        "1. Take a job — type \"open jobs\" and pick one, or \"claim T-000123\"\n"
+        "2. On site — type \"check in\" (one job open: it knows which)\n"
+        "3. Done — type \"finish\" and answer three things: what you found / what you did / parts (if any)\n"
+        "4. CS reviews — approved or sent back, you hear here; fix and resend\n\n"
+        "Also: \"my jobs\" · \"today\" · \"my reports\"\n"
+        "Your own details: \"change my phone to 08x-xxx-xxxx\"\n"
+        "The full screen is on the menu below (Open the dashboard)"
+    ),
+}
 
 # What to show, grouped the way a salesperson's day is shaped rather than the
 # way the permission catalogue is organised. Each entry is
@@ -8341,10 +8594,20 @@ async def handle_chat_message(
     license_id = ctx.license_id
     member = ctx.memberships[0]
 
-    context = await client.authorization_context(str(license_id), ctx.chann_uid)
-    if context is None:
-        return ChatReply(text=_t(REPLY_NOT_REGISTERED, language))
-    permission_keys = list(context.get("permission_keys") or [])
+    if ctx.oa == "customer":
+        # A customer is linked through customer_license_links and holds no
+        # license_members row BY DESIGN (Phase 6.5: linking must never
+        # grant tenant permissions). The authorization lookup below is a
+        # members query and 404s for every customer — so every linked
+        # customer was told "ยังไม่พบบริษัทที่ผูกไว้" and could not report a
+        # fault at all (3 Sep). Their branch checks no permission keys.
+        permission_keys: list[str] = []
+        context: dict = {}
+    else:
+        context = await client.authorization_context(str(license_id), ctx.chann_uid)
+        if context is None:
+            return ChatReply(text=_t(REPLY_NOT_REGISTERED, language))
+        permission_keys = list(context.get("permission_keys") or [])
 
     # Closed, trigger-matched flow (see registration.py's create-company /
     # invite-code paths for the same pattern) — checked before the AI
@@ -8532,6 +8795,10 @@ async def handle_chat_message(
                     ("ประกันของฉัน", "ประกันของฉัน"),
                 ],
             )
+        if _matches_phrase(message, CUSTOMER_PROFILE_PHRASES):
+            return await _handle_customer_profile_view(
+                client, ctx=ctx, license_id=license_id, language=language,
+            )
         # A survey answer (Phase 14-B): "2", or a scale label. Only when a
         # survey is actually waiting — otherwise a bare digit is whatever
         # it was before, and the catch-all below must not see it first.
@@ -8579,13 +8846,14 @@ async def handle_chat_message(
         # Filtered by OA as well as by permission: a technician whose LINE
         # account also holds sales keys was shown the customer list on the
         # Technician OA, where that command is refused.
+        if ctx.oa == "technician":
+            return ChatReply(
+                text=_t(TECHNICIAN_HELP, language),
+                quick_replies=[("งานของฉัน", "งานของฉัน"), ("งานที่เปิดรับ", "งานที่เปิดรับ")],
+            )
         return ChatReply(
             text=usage_help(_filter_by_oa(permission_keys, ctx.oa), language),
-            quick_replies=(
-                [("งานของฉัน", "งานของฉัน"), ("งานที่เปิดรับ", "งานที่เปิดรับ")]
-                if ctx.oa == "technician"
-                else [("รายชื่อลูกค้า", "รายชื่อลูกค้า"), ("งานวันนี้", "งานวันนี้")]
-            ),
+            quick_replies=[("รายชื่อลูกค้า", "รายชื่อลูกค้า"), ("งานวันนี้", "งานวันนี้")],
         )
 
     # Notes and reminders (6.3/6.7). Before the AI path for the same reason

@@ -46,7 +46,7 @@ class FakeRegClient:
             "company_name": "ร้านสมชาย", "company_code": "ABCD2345"
         }
         self._member = member or {"company_name": "ร้านสมชาย", "role": "member"}
-        self._link = link or {"company_name": "ร้านสมชาย"}
+        self._link = link or {"company_name": "ร้านสมชาย", "license_id": "lic-1"}
         self._shops = shops if shops is not None else []
         self._raises = raises
         self.calls: list[str] = []
@@ -72,6 +72,28 @@ class FakeRegClient:
     async def search_shops(self, q, limit=10):
         self.calls.append("search_shops")
         return self._shops
+
+    # Linking now continues into the report flow (3 Sep): the same client
+    # must answer the calls that flow makes.
+    async def my_shops(self, chann_uid):
+        self.calls.append("my_shops")
+        return [{"license_id": "lic-1", "license_code": self._link.get("company_code", "ABCD2345"),
+                 "company_name": self._link.get("company_name", "ร้านสมชาย")}]
+
+    async def get_profile(self, chann_uid):
+        return None
+
+    async def list_warranties(self, license_id, serial_number=None, customer_chann_uid=None):
+        return list(getattr(self, "warranties", []))
+
+    async def register_warranty(self, license_id, payload, actor_id=None):
+        self.calls.append("register_warranty")
+        return {"id": "w-1", "status": "active", **payload}
+
+    async def create_ticket(self, license_id, payload, actor_id=None):
+        self.calls.append("create_ticket")
+        self.tickets = getattr(self, "tickets", []) + [payload]
+        return {"id": "tk-1", "ticket_number": "T-2026-0001", "status": "open", **payload}
 
 
 class Conflict(Exception):
@@ -383,10 +405,12 @@ class TestSerialFirstOnboarding:
         reply = await handle_registration(
             client, message="ABC123456", ctx=_ctx(), audience="customer",
         )
-        # The name comes from the link that was actually made, not from
-        # the lookup result — the authoritative one is the row we wrote.
-        assert "ลงทะเบียนไว้ที่" in reply
-        assert "ABC123456" in reply
+        # Linked, and told what to do next (3 Sep: the link is the start
+        # of the report, not the end of onboarding).
+        text = str(getattr(reply, "text", reply))
+        assert "ผูกกับร้าน" in text
+        assert "ABC123456" in text
+        reply = text
         # Confirming the only possible answer is a question with no purpose.
         assert "พิมพ์รหัสร้าน" not in reply
 

@@ -74,6 +74,97 @@ ASK_COMPANY_NAME = {
     "en": 'Please include the company name, e.g. "create company Somchai Repairs"',
 }
 
+# The Customer OA's first words. Owner rule (3 Sep): a customer registers
+# the product BEFORE reporting a fault — that is how the shop learns which
+# customer and which machine — so the welcome says exactly that, in the
+# order the person will do it, and names the escape hatch (shop name or
+# code) for someone whose shop never registered the serial.
+#
+# This constant was referenced before it existed: typing "วิธีใช้" while
+# unlinked raised NameError and the person got "ระบบไม่พร้อมใช้งาน".
+WELCOME_CUSTOMER = {
+    "th": (
+        "ยินดีต้อนรับครับ\n\n"
+        "ก่อนแจ้งซ่อม ขอลงทะเบียนสินค้าก่อน 1 ครั้ง เพื่อให้ร้านรู้ว่าเป็นเครื่องไหนของใคร:\n"
+        "· พิมพ์หมายเลขเครื่อง (S/N บนสติกเกอร์) ถ้าร้านลงทะเบียนไว้ให้แล้ว\n"
+        "· หรือพิมพ์ชื่อร้าน / รหัสร้าน 8 หลักที่ร้านให้มา\n\n"
+        "หลังจากนั้นพิมพ์อาการที่เสียมาได้เลย"
+    ),
+    "en": (
+        "Welcome.\n\n"
+        "Before reporting a fault, register your product once so the shop knows "
+        "which machine and whose it is:\n"
+        "· type the serial number (S/N on the sticker) if the shop registered it\n"
+        "· or type the shop's name, or its 8-character shop code\n\n"
+        "After that, just describe the fault."
+    ),
+}
+
+# Reply to a fault typed before any shop is linked. The old text said
+# "บัญชีนี้ดูแลหลายร้าน" — true of the OA, meaningless to the person — and
+# then looped, because "ร้าน dev company" never matched a shop named
+# "Dev Company" (3 Sep, live).
+CUSTOMER_UNLINKED_HELD = {
+    "th": (
+        "รับเรื่องแล้วครับ: \"{text}\"\n\n"
+        "ผมยังไม่ทราบว่าคุณเป็นลูกค้าร้านไหน "
+        "พิมพ์หมายเลขเครื่อง (S/N บนสติกเกอร์) หรือชื่อร้าน / รหัสร้าน มาได้เลย "
+        "แล้วผมจะแจ้งซ่อมเรื่องนี้ให้ทันที"
+    ),
+    "en": (
+        "Got it: \"{text}\"\n\n"
+        "I do not know which shop you are a customer of yet. Type the serial "
+        "number (S/N on the sticker) or the shop's name or code, and I will file "
+        "this fault straight away."
+    ),
+}
+SERIAL_UNKNOWN_HERE = {
+    "th": (
+        "ไม่พบหมายเลข {serial} ในระบบครับ อาจเป็นเพราะร้านยังไม่ได้ลงทะเบียนเครื่องนี้\n"
+        "พิมพ์ชื่อร้านหรือรหัสร้าน 8 หลักมาได้เลย ผมจะผูกให้แล้วลงทะเบียนเครื่องต่อ"
+    ),
+    "en": (
+        "Serial {serial} is not in the system — the shop may not have registered "
+        "it yet. Type the shop's name or 8-character code and I will link you and "
+        "register the machine."
+    ),
+}
+LINKED_NEXT_CUSTOMER = {
+    "th": "\n\nพิมพ์หมายเลขเครื่อง (S/N) เพื่อลงทะเบียนสินค้า แล้วแจ้งซ่อมได้เลย หรือพิมพ์ \"งานของฉัน\" เพื่อดูสถานะ",
+    "en": '\n\nType the serial (S/N) to register your product, then describe any fault. Type "my jobs" to check one.',
+}
+
+# Words to strip before searching shops by name: people write the label
+# in front of the name ("ร้าน dev company"), the table stores the name.
+_SHOP_PREFIXES = ("ร้าน", "บริษัท", "บจก.", "บจก", "หจก.", "หจก", "บ.", "shop", "company", "co.")
+# The legal tail people copy off a receipt; the shop's own name is
+# what is searched.
+_SHOP_SUFFIXES = (
+    "จำกัด (มหาชน)", "จำกัด(มหาชน)", "จำกัด", "co., ltd.", "co.,ltd.", "co., ltd",
+    "co.,ltd", "co. ltd", "ltd.", "ltd", "limited", "inc.", "inc", "plc",
+)
+
+
+def shop_query(text: str) -> str:
+    """The searchable part of "ร้าน dev company": prefixes and punctuation off,
+    inner whitespace collapsed."""
+    q = (text or "").strip().strip(" \t:：-—\"'“”")
+    lowered = q.lower()
+    changed = True
+    while changed and lowered:
+        changed = False
+        for prefix in _SHOP_PREFIXES:
+            if lowered.startswith(prefix) and len(lowered) > len(prefix):
+                q = q[len(prefix):].lstrip(" \t.")
+                lowered = q.lower()
+                changed = True
+        for suffix in _SHOP_SUFFIXES:
+            if lowered.endswith(suffix) and len(lowered) > len(suffix):
+                q = q[: len(q) - len(suffix)].rstrip(" \t.,")
+                lowered = q.lower()
+                changed = True
+    return " ".join(q.split())
+
 CREATED = {
     "th": (
         "สร้างบริษัท \"{name}\" เรียบร้อย\n"
@@ -183,6 +274,34 @@ def parse_create_company(message: str) -> str | None:
     return None
 
 
+def first_contact(oa: str, ctx: ResolvedContext, language: str = "th") -> tuple[str, list[tuple[str, str]]]:
+    """What to say on the LINE `follow` event — the moment someone adds an
+    OA — as (text, quick replies).
+
+    Before this, a follow event was dropped by the webhook, so adding the
+    OA produced nothing at all (3 Sep, all three OAs). Someone already
+    linked gets the ordinary greeting; a stranger gets the OA's welcome,
+    which for the Customer OA is the register-first instruction.
+    """
+    if ctx.resolution is not TenantResolution.NONE:
+        from .chat import greet  # lazy: chat imports this module
+
+        text = greet(ctx, language)
+        quick = {
+            "customer": [("แจ้งซ่อม", "แจ้งซ่อม"), ("งานของฉัน", "งานของฉัน"), ("วิธีใช้", "วิธีใช้")],
+            "technician": [("งานของฉัน", "งานของฉัน"), ("งานที่เปิดรับ", "งานที่เปิดรับ"), ("วิธีใช้", "วิธีใช้")],
+            "sales": [("งานวันนี้", "งานวันนี้"), ("รายชื่อลูกค้า", "รายชื่อลูกค้า"), ("วิธีใช้", "วิธีใช้")],
+        }.get(oa, [("วิธีใช้", "วิธีใช้")])
+        return text, quick
+    if oa == "customer":
+        return _t(WELCOME_CUSTOMER, language), [
+            ("ลงทะเบียนสินค้า", "ลงทะเบียนสินค้า"), ("วิธีใช้", "วิธีใช้"),
+        ]
+    if oa == "technician":
+        return _t(WELCOME_TECHNICIAN, language), []
+    return _t(WELCOME, language), [("เปิดบริษัทใหม่", "เปิดบริษัทใหม่")]
+
+
 async def handle_registration(
     client: DataClient,
     *,
@@ -190,8 +309,14 @@ async def handle_registration(
     ctx: ResolvedContext,
     audience: str = "sales",
     language: str = "th",
-) -> str:
-    """Handle a message from someone with no tenant. Returns reply text."""
+):
+    """Handle a message from someone with no tenant.
+
+    Returns reply text — or, on the Customer OA when linking also delivers
+    a fault the person typed earlier, the ChatReply the report flow
+    produced (it carries the follow-up question and buttons). The webhook
+    accepts either.
+    """
     text = (message or "").strip()
 
     # Customer OA: the only thing to do is bind to a shop. Offering "create a
@@ -255,46 +380,99 @@ def _is_a_command_not_a_message(text: str) -> bool:
     return (text or "").strip().lower() in _CUSTOMER_COMMAND_WORDS
 
 
+async def _link_and_continue(
+    client: DataClient, ctx: ResolvedContext, *, company_code: str,
+    company_name: str = "", serial: str | None = None, language: str = "th",
+    license_id: str | None = None,
+):
+    """Bind the customer to the shop, then do what they came for.
+
+    If a fault was typed before the link existed it is held in the
+    pending slot; after linking, that message goes through the real
+    report flow (services/chat) so a ticket exists and the address
+    question follows — the old code said "ส่งเรื่องให้ทางร้านแล้ว" and had
+    written nothing anywhere.
+    """
+    try:
+        link = await client.link_customer(chann_uid=ctx.chann_uid, company_code=company_code)
+    except Exception as exc:  # noqa: BLE001
+        if _is_not_found(exc) or _is_conflict(exc):
+            return _t(BAD_CODE, language)
+        raise
+    license_id = str(link.get("license_id") or license_id or "")
+    name = company_name or str(link.get("company_name") or "")
+    if not name or not license_id:
+        # CustomerLinkOut carries the license id, not the name; the shops
+        # endpoint has both. Matched by id when we have one, else by the
+        # code we just linked with.
+        try:
+            shops = await client.my_shops(ctx.chann_uid)
+            shop = next(
+                (s for s in shops
+                 if (license_id and str(s.get("license_id")) == license_id)
+                 or str(s.get("license_code") or "").upper() == company_code.upper()),
+                None,
+            )
+            if shop:
+                name = name or str(shop.get("company_name") or "")
+                license_id = license_id or str(shop.get("license_id") or "")
+        except Exception:
+            log.exception("could not read the linked shop's name")
+
+    linked = _t(LINKED, language).format(name=name)
+
+    try:
+        pending = await client.get_pending_intent(ctx.chann_uid, "customer")
+    except Exception:
+        pending = None
+    held = ((pending or {}).get("fields") or {}).get("message")
+    if held and (pending or {}).get("entity") == "pending_customer_message" and license_id:
+        from .chat import _handle_customer_report  # lazy: chat imports this module
+
+        # The serial that found the shop is the machine the fault is
+        # about; the report flow reads it from the same pending slot.
+        try:
+            await client.set_pending_intent(
+                ctx.chann_uid, "customer",
+                action="report", entity="pending_customer_message",
+                fields={"message": held[:500], "serial": serial or ""}, missing=[],
+                ttl_seconds=CUSTOMER_PENDING_TTL_S,
+            )
+        except Exception:
+            log.exception("could not carry a held message into the report flow")
+        linked_ctx = ResolvedContext(
+            chann_uid=ctx.chann_uid, primary_role=ctx.primary_role,
+            display_name=ctx.display_name, resolution=TenantResolution.SINGLE,
+            memberships=[{"license_id": license_id, "company_name": name}], oa="customer",
+        )
+        reply = await _handle_customer_report(
+            client, ctx=linked_ctx, license_id=license_id, message=held, language=language,
+        )
+        reply.text = linked + "\n\n" + reply.text
+        return reply
+
+    if serial:
+        return linked + (
+            f"\n\nเครื่อง {serial} ผูกกับร้านนี้แล้ว พิมพ์อาการที่เสียมาได้เลย หรือพิมพ์ \"งานของฉัน\" เพื่อดูสถานะ"
+            if language != "en"
+            else f'\n\n{serial} is on file with this shop — describe any fault. Type "my jobs" to check one.'
+        )
+    return linked + _t(LINKED_NEXT_CUSTOMER, language)
+
+
 async def _handle_customer(
     client: DataClient, text: str, ctx: ResolvedContext, language: str
-) -> str:
+):
     if COMPANY_CODE_RE.match(text.upper()):
-        try:
-            link = await client.link_customer(
-                chann_uid=ctx.chann_uid, company_code=text.upper()
-            )
-        except Exception as exc:  # noqa: BLE001
-            if _is_not_found(exc) or _is_conflict(exc):
-                return _t(BAD_CODE, language)
-            raise
-        linked = _t(LINKED, language).format(
-            name=link.get("company_name", "")
-        ) + (
-            "\n\nแจ้งซ่อมได้เลย พิมพ์อาการที่เสียมา หรือพิมพ์ \"งานของฉัน\" เพื่อดูสถานะ"
-            if language != "en"
-            else '\n\nTo report a fault, just describe it. Type "my jobs" to check one.'
+        return await _link_and_continue(
+            client, ctx, company_code=text.upper(), language=language,
         )
 
-        # Deliver whatever they said before they were linked. Making
-        # someone repeat themselves after they have already explained a
-        # problem is how a chat product loses people.
-        try:
-            pending = await client.get_pending_intent(ctx.chann_uid, "customer")
-        except Exception:
-            pending = None
-        held = ((pending or {}).get("fields") or {}).get("message")
-        if held and (pending or {}).get("entity") == "pending_customer_message":
-            try:
-                await client.clear_pending_intent(ctx.chann_uid, "customer")
-            except Exception:
-                log.exception("could not clear a held customer message")
-            follow_up = (
-                f'\n\nส่งเรื่อง "{held[:80]}" ให้ทางร้านแล้วครับ'
-                if language != "en"
-                else f'\n\nI have passed on: "{held[:80]}"'
-            )
-            return linked + follow_up
-        return linked
+    # A command word from someone not yet linked: answer with how this
+    # works, never with "got your message" (the bot mistaking its own
+    # vocabulary for a customer's problem).
+    if _is_a_command_not_a_message(text):
+        return _t(WELCOME_CUSTOMER, language)
 
     # A serial number identifies the shop without the customer knowing
     # which one it is (16.4). This is the case the shop-code question was
@@ -316,25 +494,11 @@ async def _handle_customer(
             # Asking someone to confirm the only possible answer is a
             # question with no purpose.
             shop = matches[0]
-            try:
-                link = await client.link_customer(
-                    chann_uid=ctx.chann_uid, company_code=str(shop["company_code"]),
-                )
-            except Exception:
-                log.exception("could not link a customer found by serial")
-                link = None
-            if link is not None:
-                name = link.get("company_name", shop.get("company_name", ""))
-                if language == "en":
-                    return (
-                        f'Serial {serial} is registered at "{name}".\n'
-                        "You are now connected to them — describe the fault and "
-                        "I will pass it on."
-                    )
-                return (
-                    f"หมายเลข {serial} ลงทะเบียนไว้ที่ \"{name}\"\n"
-                    "เชื่อมต่อให้แล้วครับ พิมพ์อาการที่เสียมาได้เลย"
-                )
+            return await _link_and_continue(
+                client, ctx, company_code=str(shop["company_code"]),
+                company_name=str(shop.get("company_name") or ""), serial=serial,
+                language=language, license_id=str(shop.get("license_id") or ""),
+            )
 
         if len(matches) > 1:
             listed = "\n".join(
@@ -347,31 +511,43 @@ async def _handle_customer(
             )
             return f"{header}\n{listed}"
 
-    if len(text) >= 2:
-        shops = await client.search_shops(text)
-        if shops:
-            lines = "\n".join(
-                f"• {s['company_name']} — {s['company_code']}" for s in shops[:5]
-            )
-            header = (
-                "พบร้านเหล่านี้ พิมพ์รหัสร้านเพื่อผูก:"
-                if language != "en"
-                else "Found these shops — type the code to link:"
-            )
-            return f"{header}\n{lines}"
+        # A bare serial nobody registered: say so, rather than treating
+        # the serial as a fault description.
+        if _is_bare_token(text):
+            return _t(SERIAL_UNKNOWN_HERE, language).format(serial=serial)
+
+    # A shop by name. "ร้าน dev company" is searched as "dev company";
+    # exactly one hit links straight away (the same rule as the serial —
+    # confirming the only answer is a question with no purpose).
+    query = shop_query(text)
+    shops: list[dict] = []
+    if len(query) >= 2:
+        shops = await client.search_shops(query)
+        if not shops and query != text and len(text) >= 2:
+            shops = await client.search_shops(text)
+    if len(shops) == 1:
+        shop = shops[0]
+        return await _link_and_continue(
+            client, ctx, company_code=str(shop["company_code"]),
+            company_name=str(shop.get("company_name") or ""), language=language,
+        )
+    if shops:
+        lines = "\n".join(
+            f"• {s['company_name']} — {s['company_code']}" for s in shops[:5]
+        )
+        header = (
+            "พบร้านเหล่านี้ พิมพ์รหัสร้านเพื่อผูก:"
+            if language != "en"
+            else "Found these shops — type the code to link:"
+        )
+        return f"{header}\n{lines}"
 
     # Nothing matched. What the person typed is almost certainly not a
     # shop name — it is what they actually wanted to say, usually a fault.
-    #
-    # The old reply here was "พิมพ์รหัสร้าน หรือชื่อร้านเพื่อค้นหา", which
-    # asks for a code they have never seen, does not explain why, and
-    # throws away what they just wrote. Someone who scanned a QR code at a
-    # shop and typed "แอร์เสีย" got a demand for paperwork.
-    #
-    # Their message is kept and repeated back, so they can see it was not
-    # lost, and the question is asked in terms they can answer: the shop's
-    # NAME, which they know, rather than its code, which they do not.
-    if text and not COMPANY_CODE_RE.match(text.upper()):
+    # It is kept (and repeated back, so they can see it was not lost) and
+    # filed the moment a shop is linked; the question is asked in terms
+    # they can answer: the sticker on the machine, or the shop's name.
+    if text:
         # Best-effort: holding the message is a courtesy, and a cache
         # failure must not stop a person who is trying to report a fault
         # from getting an answer at all.
@@ -384,37 +560,14 @@ async def _handle_customer(
             )
         except Exception:
             log.exception("could not hold a customer's message while unlinked")
-        # A command, not something to pass on. "วิธีใช้" and "แจ้งซ่อม"
-        # are the words for asking how this works and for starting a
-        # repair — repeating them back as "got your message" is the bot
-        # mistaking its own vocabulary for a customer's problem.
-        if _is_a_command_not_a_message(text):
-            return _t(WELCOME_CUSTOMER, language)
+        return _t(CUSTOMER_UNLINKED_HELD, language).format(text=text[:80])
 
-        if language == "en":
-            return (
-                f'Got it: "{text[:80]}"\n\n'
-                "This account serves several shops, so I do not yet know which "
-                "one you are contacting.\n"
-                "Type the shop's name and I will pass your message straight on."
-            )
-        return (
-            f"รับเรื่องแล้วครับ: \"{text[:80]}\"\n\n"
-            "บัญชีนี้ดูแลหลายร้าน ผมยังไม่ทราบว่าคุณติดต่อร้านไหน\n"
-            "พิมพ์ชื่อร้านมาได้เลย แล้วผมจะส่งเรื่องให้ทางร้านทันที"
-        )
+    return _t(WELCOME_CUSTOMER, language)
 
-    if language == "en":
-        return (
-            "Welcome.\n"
-            "This account serves several shops. Type the name of the shop you "
-            "are contacting, or its code if you have one."
-        )
-    return (
-        "ยินดีต้อนรับครับ\n"
-        "บัญชีนี้ดูแลหลายร้าน พิมพ์ชื่อร้านที่คุณติดต่อมาได้เลย "
-        "หรือถ้ามีรหัสร้านก็พิมพ์รหัสได้"
-    )
+
+def _is_bare_token(text: str) -> bool:
+    token = (text or "").strip()
+    return " " not in token and not re.search(r"[฀-๿]", token)
 
 
 async def _redeem_invite_reply(

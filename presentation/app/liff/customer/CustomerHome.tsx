@@ -7,6 +7,7 @@ import { useLanguage } from "@/lib/i18n/LanguageProvider";
 import { AppShell } from "../sales/_components";
 import { FieldRow } from "../_field-row";
 import { shortDate } from "../_list-controls";
+import { ProfileCard } from "../_profile-card";
 import { Ticket, TicketRow } from "../_tickets";
 import { initLiffSession, proxyHeaders } from "../_shared";
 
@@ -46,6 +47,7 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
 
   const [token, setToken] = useState("");
   const [licenseId, setLicenseId] = useState("");
+  const [shopName, setShopName] = useState("");
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [warranties, setWarranties] = useState<Warranty[]>([]);
   // Phase 14-C: the survey card, the home-screen twin of the quick reply
@@ -137,6 +139,7 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
       }
       setToken(session.token);
       setLicenseId(license);
+      setShopName(session.memberships[0]?.company_name ?? "");
       await load(session.token, license);
       say("", undefined);
     } catch (error) {
@@ -249,39 +252,56 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
           <div className="section-head">
             <h2>{t.dashboard.customer.reportFault}</h2>
           </div>
-          <dl className="fields">
-            <FieldRow label={t.dashboard.customer.whatIsWrong}>
-              {(id) => (
-                <textarea
-                  id={id}
-                  rows={3}
-                  value={issue}
-                  onChange={(e) => setIssue(e.target.value)}
-                  placeholder={t.dashboard.customer.faultPlaceholder}
-                />
-              )}
-            </FieldRow>
-            <FieldRow label={t.dashboard.customer.serialOptional}>
-              {(id) => (
-                <input
-                  id={id}
-                  value={issueSerial}
-                  onChange={(e) => setIssueSerial(e.target.value)}
-                />
-              )}
-            </FieldRow>
-            <div className="actions">
-              <button
-                type="button"
-                className="btn"
-                data-variant="primary"
-                disabled={busy || !issue.trim()}
-                onClick={() => void reportFault()}
-              >
-                {busy ? t.dashboard.related.saving : t.dashboard.customer.submitFault}
-              </button>
+          {warranties.length === 0 ? (
+            // Owner rule (3 Sep): register the product first, so the
+            // shop knows which machine the fault is about. Same gate the
+            // chat applies; the form appears once one product exists.
+            <div className="empty">
+              <p>{t.dashboard.customer.registerFirst}</p>
             </div>
-          </dl>
+          ) : (
+            <dl className="fields">
+              <FieldRow label={t.dashboard.customer.whatIsWrong}>
+                {(id) => (
+                  <textarea
+                    id={id}
+                    rows={3}
+                    value={issue}
+                    onChange={(e) => setIssue(e.target.value)}
+                    placeholder={t.dashboard.customer.faultPlaceholder}
+                  />
+                )}
+              </FieldRow>
+              <FieldRow label={t.dashboard.customer.whichProduct}>
+                {(id) => (
+                  <select
+                    id={id}
+                    value={issueSerial}
+                    onChange={(e) => setIssueSerial(e.target.value)}
+                  >
+                    {warranties.map((row) => (
+                      <option key={row.id} value={row.serial_number ?? ""}>
+                        {row.product_name ? `${row.product_name} · ` : ""}
+                        S/N {row.serial_number}
+                      </option>
+                    ))}
+                    <option value="">{t.dashboard.customer.noSerialOption}</option>
+                  </select>
+                )}
+              </FieldRow>
+              <div className="actions">
+                <button
+                  type="button"
+                  className="btn"
+                  data-variant="primary"
+                  disabled={busy || !issue.trim()}
+                  onClick={() => void reportFault()}
+                >
+                  {busy ? t.dashboard.related.saving : t.dashboard.customer.submitFault}
+                </button>
+              </div>
+            </dl>
+          )}
         </section>
 
         <section className="section">
@@ -355,8 +375,20 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
               </button>
             </div>
           </dl>
-          {warranties.length > 0 && (
-            <ul className="list" style={{ marginTop: 12 }}>
+        </section>
+
+        <section className="section">
+          <div className="section-head">
+            <h2>
+              {t.dashboard.customer.products} ({warranties.length})
+            </h2>
+          </div>
+          {warranties.length === 0 ? (
+            <div className="empty">
+              <p>{t.dashboard.customer.noProducts}</p>
+            </div>
+          ) : (
+            <ul className="list">
               {warranties.map((row) => (
                 <li key={row.id} className="card">
                   <div className="card-title">
@@ -373,6 +405,10 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
             </ul>
           )}
         </section>
+
+        {token && (
+          <ProfileCard token={token} audience="customer" shopName={shopName} />
+        )}
       </AppShell>
     </div>
   );

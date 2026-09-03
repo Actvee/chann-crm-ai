@@ -6,8 +6,16 @@ import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { AppShell } from "../sales/_components";
 import { FieldRow } from "../_field-row";
+import { ProfileCard } from "../_profile-card";
 import { Ticket, TicketRow } from "../_tickets";
 import { fetchPermissions, initLiffSession, proxyHeaders } from "../_shared";
+
+type ServiceReport = {
+  id: string;
+  ticket_id: string;
+  status: string;
+  created_at?: string | null;
+};
 
 /**
  * The technician's home — their own, not the sales dashboard reskinned.
@@ -33,6 +41,8 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
   const [memberId, setMemberId] = useState("");
   const [permissions, setPermissions] = useState<Set<string>>(new Set());
   const [tickets, setTickets] = useState<Ticket[]>([]);
+  const [reports, setReports] = useState<ServiceReport[]>([]);
+  const [shopName, setShopName] = useState("");
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
   const [busyId, setBusyId] = useState("");
@@ -60,10 +70,15 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
   const load = useCallback(
     async (currentToken = token, license = licenseId, member = memberId) => {
       if (!currentToken || !license) return;
-      const response = await fetch(
-        `/api/phase2/licenses/${license}/tickets${member ? `?visible_to=${member}` : ""}`,
-        { headers: proxyHeaders(currentToken, license, "technician") },
-      );
+      const headers = proxyHeaders(currentToken, license, "technician");
+      const [response, reportsRes] = await Promise.all([
+        fetch(
+          `/api/phase2/licenses/${license}/tickets${member ? `?visible_to=${member}` : ""}`,
+          { headers },
+        ),
+        // The server scopes the list to this technician's own reports.
+        fetch(`/api/phase2/licenses/${license}/service-reports`, { headers }),
+      ]);
       if (!response.ok) {
         throw new Error(
           response.status === 403
@@ -72,6 +87,9 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
         );
       }
       setTickets((await response.json()) as Ticket[]);
+      // Reports are the secondary fact on this page; a failure there
+      // shows as an empty list rather than blocking the jobs.
+      setReports(reportsRes.ok ? ((await reportsRes.json()) as ServiceReport[]) : []);
     },
     [token, licenseId, memberId, t],
   );
@@ -89,6 +107,7 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
       }
       const member = session.memberships[0]?.member_id ?? "";
       setMemberId(member);
+      setShopName(session.memberships[0]?.company_name ?? "");
       setPermissions(await fetchPermissions(session.token, license, "technician"));
       await load(session.token, license, member);
       say("", undefined);
@@ -214,6 +233,15 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
       !(x.assigned_to_ref === memberId && x.accept_status === "accepted"),
   );
   const canWork = permissions.has("ticket.update");
+  const reportStatus = (code: string) =>
+    (t.dashboard.reports.status as Record<string, string>)[code] ?? code;
+  const ticketNumber = (ticketId: string) =>
+    tickets.find((x) => x.id === ticketId)?.ticket_number ?? "";
+  // Newest three: passed, sent back, or still with CS — the answer to
+  // "did my last report go through?" without opening the full list.
+  const recentReports = [...reports]
+    .sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? ""))
+    .slice(0, 3);
 
   return (
     <div data-theme="technician">
@@ -390,6 +418,47 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
             </ul>
           )}
         </section>
+
+        <section className="section">
+          <div className="section-head">
+            <h2>{t.dashboard.technician.recentReports}</h2>
+            <a className="btn" data-variant="quiet" href="/liff/technician/reports">
+              {t.dashboard.technician.allReports}
+            </a>
+          </div>
+          {recentReports.length === 0 ? (
+            <div className="empty">
+              <p>{t.dashboard.technician.noReports}</p>
+            </div>
+          ) : (
+            <ul className="list">
+              {recentReports.map((report) => (
+                <li key={report.id} className="card">
+                  <div className="card-title">
+                    {ticketNumber(report.ticket_id) || report.id.slice(0, 8)}
+                    <span
+                      className="badge"
+                      data-tone={
+                        report.status === "approved"
+                          ? "ok"
+                          : report.status === "rejected"
+                            ? "danger"
+                            : undefined
+                      }
+                      style={{ marginLeft: 8 }}
+                    >
+                      {reportStatus(report.status)}
+                    </span>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+
+        {token && (
+          <ProfileCard token={token} audience="technician" shopName={shopName} />
+        )}
       </AppShell>
     </div>
   );

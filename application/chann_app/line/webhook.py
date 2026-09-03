@@ -21,7 +21,7 @@ from ..services.chat import (
     handle_reply,
 )
 from ..services.ai.intent import unavailable_reply
-from ..services.registration import handle_registration, is_unregistered
+from ..services.registration import first_contact, handle_registration, is_unregistered
 from ..services.identity import resolve_context
 from .client import (
     LineReplyError,
@@ -76,13 +76,38 @@ async def handle_webhook(
     replies = []
     try:
         for event in payload.get("events", []):
-            if event.get("type") != "message":
+            event_type = event.get("type")
+            # `follow` is the moment someone adds the OA. It used to be
+            # dropped with every other non-message event, so adding any
+            # of the three OAs produced silence — the first thing a new
+            # customer or technician saw was nothing (3 Sep). It carries
+            # a replyToken like a message does.
+            if event_type not in ("message", "follow"):
                 continue
             line_user_id = event.get("source", {}).get("userId")
             if not line_user_id:
                 continue
             ctx = await resolve_context(client, oa, line_user_id)
             user_text = (event.get("message") or {}).get("text") or ""
+
+            if event_type == "follow":
+                try:
+                    text, quick = first_contact(oa, ctx, "th")
+                    chat = ChatReply(text=text, quick_replies=quick)
+                except Exception as exc:  # noqa: BLE001
+                    log.exception("could not build a welcome for oa=%s: %s", oa, exc)
+                    chat = ChatReply(text=greet(ctx))
+                try:
+                    await reply_messages(
+                        oa, event.get("replyToken", ""),
+                        [text_message(chat.text, quick_reply=[
+                            quick_reply_item(label, send) for label, send in chat.quick_replies
+                        ] or None)],
+                    )
+                except LineReplyError as exc:
+                    log.error("LINE welcome failed for oa=%s: %s", oa, exc)
+                replies.append({"chann_uid": ctx.chann_uid, "text": chat.text})
+                continue
 
             # 9.4 storefront browsing is checked before registration status
             # at all: a customer with no shop link yet, and one already
@@ -113,10 +138,14 @@ async def handle_webhook(
                     # flow, not the intent parser. There is nothing to authorise
                     # against and no tenant to act in, so a model call here would
                     # spend money to reach the same dead end.
-                    chat = ChatReply(
-                        text=await handle_registration(
-                            client, message=user_text, ctx=ctx, audience=oa
-                        )
+                    registered = await handle_registration(
+                        client, message=user_text, ctx=ctx, audience=oa
+                    )
+                    # Text, or the report flow's own reply when linking
+                    # also filed a fault the person typed earlier.
+                    chat = (
+                        registered if isinstance(registered, ChatReply)
+                        else ChatReply(text=str(registered))
                     )
                 elif not user_text.strip():
                     chat = ChatReply(text=greet(ctx))

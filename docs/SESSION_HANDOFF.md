@@ -76,10 +76,13 @@ clone.
 
 ## Where things stand
 
-**`34e464c`** (Phase 14-C) is the last **code** commit and it is
-**deployed** — verified 3 Sep by reading `/health` on both services after
-`phase14c-deploy.sh` ran end to end, not by reading this file. Anything
-after `34e464c` on `origin/main` is documentation only (this file).
+**The commit carrying this text** is the customer-onboarding patch
+(`customer-onboarding-v1`, application + presentation, no migration),
+deployed by `~/customer-onboarding-deploy.sh`. It supersedes **`34e464c`**
+(Phase 14-C) as the last code commit **only once `/health` on both
+services echoes its SHA** — the script's STAGE 9 checks that; if you are
+reading this and `/health` still says `34e464c`, the deploy did not
+finish. What it changes is under "Customer OA onboarding" below.
 
 | tier | `git_commit` | notes |
 |---|---|---|
@@ -262,6 +265,70 @@ deploy data/application/presentation. The new data image's
 `EXPECTED_MIGRATION_HEAD` is `0021_approvals` and it will refuse to
 serve against an older schema, which is the guard working.
 668 tests pass (656 unit/boundary + 266 integration, 12 of them Phase 14).
+
+### Customer OA onboarding — register first, and the bug that hid it (owner walk, 3 Sep)
+
+The owner added the CS OA and typed "ร้าน dev company". Transcript:
+silence on add; then "บัญชีนี้ดูแลหลายร้าน … พิมพ์ชื่อร้าน" on every
+message, forever. Five distinct faults, all in this patch:
+
+1. **`follow` events were dropped** (`line/webhook.py` only handled
+   `message`), so adding any of the three OAs said nothing. Now every OA
+   greets on add (`registration.first_contact`): staff get the code
+   instruction, a customer gets "พิมพ์หมายเลขเครื่อง หรือชื่อร้าน", a
+   person already linked gets their normal greeting.
+2. **The shop-name loop.** `_handle_customer` searched the literal text;
+   "ร้าน dev company" never matched "Dev Company". `shop_query()` strips
+   ร้าน/บริษัท/บจก./หจก./co./ltd./จำกัด; exactly one hit links without a
+   confirmation round; several list with codes; none holds the sentence
+   and says so once (`CUSTOMER_UNLINKED_HELD`). `WELCOME_CUSTOMER` was
+   referenced and never defined — a `NameError` behind one branch.
+3. **Bug C — every linked customer was locked out of chat.**
+   `handle_chat_message` called `authorization_context`, which is a
+   *license_members* query; a customer is linked through
+   `customer_license_links` and has no member row BY DESIGN, so the Data
+   Tier answered 404, the client returned None, and the reply was
+   "ยังไม่พบบริษัทที่ผูกไว้". The fake in tests always returned a context,
+   which is why ~30 customer tests were green over a flow that had never
+   worked live. `ctx.oa == "customer"` now skips the lookup
+   (`permission_keys = []`, the customer branch checks none). New test
+   class `NoMemberRow` returns None like the real tier.
+4. **Register first (owner rule).** A fault is filed against a registered
+   product so the shop knows which customer and which machine. In
+   `_handle_customer_report`: 0 products → hold the sentence, ask for the
+   S/N (escape: "ไม่มีหมายเลขเครื่อง" files without one); 1 → used
+   silently; several → buttons; a bare serial with a held fault →
+   `register_warranty` (409 = already known) then the ticket, with
+   `serial_number`; a bare serial with nothing held → the product
+   registration flow. An address typed too early re-asks instead of
+   filing a repair called "99/1 ถ.สุขุมวิท"; a menu tap drops the hold.
+   A fault typed BEFORE linking is carried through the link
+   (`_link_and_continue`) into the same flow. The home screen applies the
+   same gate: the fault form shows once one product exists, with a
+   product picker.
+5. **The old LIFF pages were still the LINE endpoints.** The owner's
+   "technician UI only claims, customer UI only reports" was
+   `/liff/technician/tickets` and `/liff/customer/tickets` — pre-14
+   pages the console endpoints still pointed at. Both now `redirect()` to
+   the homes, so the endpoint setting no longer matters.
+
+Also in the patch, from the same message: a profile card on both homes
+(`_profile-card.tsx`, `GET/PATCH /api/v1/liff/{audience}/profile`, own
+record only — the chann_uid comes from the ID token) with the shop
+name; a "รายงานล่าสุด" list on the technician home showing
+รอตรวจ/อนุมัติแล้ว/ตีกลับ; chat "ข้อมูลของฉัน" for customers
+(`CUSTOMER_PROFILE_PHRASES`); a technician-shaped "วิธีใช้"
+(`TECHNICIAN_HELP`, the day in four steps — `usage_help` is a sales
+catalogue); rich menus redrawn as six identical white tiles (owner: the
+deep-coloured first tile "ไม่เวิร์ค"), each OA with the same two anchors
+"เปิดแดชบอร์ด" (uri) and "วิธีใช้", and the fonts bundled in
+`scripts/richmenu/fonts/` so `generate.py` runs on a fresh Cloud Shell.
+Re-apply with `bash ~/rm.sh` (regenerates, then applies).
+
+Sims: `simulate-day.py` / `simulate-edge-cases.py` gained the S/N step
+after the fault; still 0 findings. The older fault-report tests now start
+with one registered product (`_one_product()`), which is where a real
+customer starts.
 
 ### Phase 14-A — approvals in the Data Tier (owner decisions, 3 Sep)
 
