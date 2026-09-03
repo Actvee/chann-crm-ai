@@ -76,20 +76,37 @@ clone.
 
 ## Where things stand
 
-**`5598ad1`** (technician/customer homes, per-OA themes, rich menus,
-Phase 14-A) is pushed AND **deployed** — verified 3 Sep 06:00 by reading
-`/health` on both services after `homes-and-phase14a-deploy.sh` ran end
-to end, not by reading this file:
+**`34e464c`** (Phase 14-C) is the last **code** commit and it is
+**deployed** — verified 3 Sep by reading `/health` on both services after
+`phase14c-deploy.sh` ran end to end, not by reading this file. Anything
+after `34e464c` on `origin/main` is documentation only (this file).
 
 | tier | `git_commit` | notes |
 |---|---|---|
-| application | `5598ad1…` | `platform_version dev-20260903-5598ad1` |
-| data | `5598ad1…` | `schema_state: up-to-date`, head **`0021_approvals`** = expected |
-| presentation | — | `/api/ready` → `ready` (it exposes no `/health`; the one "mismatch" finding check-client has always carried) |
+| application | `34e464c…` | `platform_version dev-20260903-34e464c` |
+| data | `34e464c…` | `schema_state: up-to-date`, head **`0021_approvals`** = expected |
+| presentation | — | `/api/ready` → `ready`; `/liff/sales/approvals` → HTTP 200 (it exposes no `/health`; the one "mismatch" finding check-client has always carried) |
 
-Migration head is **`0021_approvals`**; execution
-`chann-crm-ai-dev-migrate-n24xq` succeeded before the service images
-were applied (plan: 0 add / 3 change / 0 destroy).
+Migration head is still **`0021_approvals`** (14-A's; 14-B/14-C added no
+migration — the only Data Tier change since was the `approval.manage`
+catalogue key, shipped by rebuilding the data image).
+
+Six deploys landed on 3 Sep, in this order, each through its own gated
+script and each verified the same way: `5598ad1` homes + themes + rich
+menus + 14-A (migration `0021`), `37c7183` UI review fixes, `ca7c78e`
+rich-menu 411 fix, `5e1cc01` UI audit, `cf31f17` chat audit, `1a3f515`
+Phase 14-B, `34e464c` Phase 14-C. Rich menus are applied to all three
+OAs. **What is NOT done is Phase 14's runtime acceptance (§14.7)** — it
+needs three real LINE accounts (ช่าง / CS เจ้าของ ticket / ลูกค้า); the
+walk is written at the end of `~/phase14c-deploy.sh` and in
+`docs/PHASE14_PLAN.md` "สถานะ 14-C". Until it has been walked, Phase 14
+is code-complete, not closed.
+
+The owner's standing instruction since 3 Sep: the agent runs the deploy
+scripts itself, including the `ALLOW_APPLY=YES` re-run — the scripts'
+gates (line count, apply-check on a fresh clone, tests, no-destroy plan,
+`/health` echoing the SHA) are the safety net, not a human at the
+keyboard. IAM / Service Accounts / Secret Manager stay off-limits.
 
 **Lesson from that deploy (paid once, do not pay again):** the script's
 first run halted at STAGE 5 with `"/data/chann_data": not found` because
