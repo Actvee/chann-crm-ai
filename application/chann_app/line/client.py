@@ -31,6 +31,12 @@ class LineReplyError(RuntimeError):
     pass
 
 
+def image_message(url: str) -> dict:
+    """An image the person sees inline (LINE needs https for both URLs;
+    the same picture serves as its own preview)."""
+    return {"type": "image", "originalContentUrl": url, "previewImageUrl": url}
+
+
 def text_message(text: str, quick_reply: list[dict] | None = None) -> dict:
     """A text message, optionally with quick-reply buttons.
 

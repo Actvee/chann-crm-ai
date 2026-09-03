@@ -173,6 +173,33 @@ async def liff_set_display_preferences(
     return {field: prefs.get(field) for field in _PREF_FIELDS}
 
 
+@router.get("/liff/{audience}/guide")
+async def liff_guide(audience: str, lang: str = "th", claims: dict = Depends(require_liff)):
+    """The illustrated how-to for this OA — the same steps chat's
+    "วิธีใช้" prints, with the owner's image per step when one exists."""
+    from .services.guides import GUIDES, help_image_url
+
+    if audience not in OA_TO_ROLE:
+        raise HTTPException(status_code=404, detail="unknown LIFF audience")
+    language = "en" if lang == "en" else "th"
+    guide = GUIDES[audience]
+    return {
+        "title": guide["title"][language],
+        "intro": guide["intro"][language],
+        "steps": [
+            {
+                "key": step["key"],
+                "title": step["title"][language],
+                "body": step["body"][language],
+                "example": step.get("example"),
+                "image_slot": step["image"],
+                "image_url": help_image_url(step["image"]) or None,
+            }
+            for step in guide["steps"]
+        ],
+    }
+
+
 @router.put("/liff/{audience}/active-shop")
 async def liff_set_active_shop(
     audience: str,

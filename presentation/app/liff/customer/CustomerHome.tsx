@@ -280,6 +280,9 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
         <section className="section">
           <div className="section-head">
             <h2>{t.dashboard.customer.reportFault}</h2>
+            <a className="btn" data-variant="quiet" href="/liff/customer/guide">
+              {t.dashboard.guide.title}
+            </a>
           </div>
           {warranties.length === 0 ? (
             // Owner rule (3 Sep): register the product first, so the

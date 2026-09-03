@@ -207,6 +207,10 @@ export const en: Dictionary = {
       expires: "Warranty ends",
       actionFailed: "Could not save — try again",
     },
+    guide: {
+      title: "How to",
+      type: "Type",
+    },
     teams: {
       title: "Technician teams",
       intro: "Form teams and add technicians. CS can dispatch to a whole team (\"assign T-… to team AC\") and any member takes the job",
@@ -387,6 +391,7 @@ export const en: Dictionary = {
       roles: "Team roles and company settings.",
       warranties: "Units sold and registered; customers type the S/N to attach a unit to themselves",
       teams: "Technician teams and leads, so a job can be dispatched to a whole team",
+      guide: "Step-by-step how-to with pictures, to share with the team",
     },
     customers: {
       searchHint: "Name, phone, or customer code",

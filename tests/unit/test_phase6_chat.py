@@ -5926,6 +5926,7 @@ class TestButtonsTheSystemWritesDoNotNeedTheAI:
         triggers += list(module.TEAM_LIST_PHRASES)
         triggers += list(module.TICKET_REJECT_TRIGGERS)
         triggers += list(module.LANGUAGE_TO_EN) + list(module.LANGUAGE_TO_TH)
+        triggers += list(module.HELP_EXAMPLES_PHRASES) + list(module.CAPABILITY_PHRASES)
 
         dead = []
         for text in sorted(sent):

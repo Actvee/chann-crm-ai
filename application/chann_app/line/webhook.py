@@ -26,6 +26,7 @@ from ..services.identity import resolve_context
 from .client import (
     LineReplyError,
     flex_list_message,
+    image_message,
     quick_reply_item,
     quick_reply_uri,
     reply_messages,
@@ -211,8 +212,11 @@ async def handle_webhook(
                 else:
                     message = text_message(chat.text, quick_reply=quick_reply_items)
 
+                # Pictures first, then the words (LINE shows them in
+                # order; a reply carries at most five messages).
+                pictures = [image_message(url) for url in (chat.images or [])[:4] if url.startswith("https://")]
                 sent_ids = await reply_messages(
-                    oa, event.get("replyToken", ""), [message]
+                    oa, event.get("replyToken", ""), [*pictures, message]
                 )
             except LineReplyError as exc:
                 log.error("LINE reply failed for oa=%s: %s", oa, exc)

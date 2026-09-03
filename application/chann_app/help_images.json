@@ -1,0 +1,22 @@
+{
+  "_comment": "URL รูปต่อ slot (https เท่านั้น) ว่าง = ไม่ส่ง/ไม่โชว์ — แก้ทั้งสองไฟล์ให้เหมือนกัน (application/chann_app/help_images.json, presentation/lib/help-images.json)",
+  "images": {
+    "customer-link": "",
+    "customer-register": "",
+    "customer-report": "",
+    "customer-status": "",
+    "customer-after": "",
+    "tech-join": "",
+    "tech-take": "",
+    "tech-checkin": "",
+    "tech-finish": "",
+    "tech-approved": "",
+    "sales-setup": "",
+    "sales-units": "",
+    "sales-dispatch": "",
+    "sales-approve": "",
+    "sales-crm": "",
+    "sales-help": "",
+    "permissions-overview": ""
+  }
+}

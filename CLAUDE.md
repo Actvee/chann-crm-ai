@@ -62,6 +62,11 @@
 4. ไม่มี key ดิบ (`due_time`) โผล่ให้คนเห็น · ไม่ถามสิ่งที่ระบบตอบเองได้
 5. ธีมสีต่อ OA: Sale เขียว `#178a50` · Tech น้ำเงิน `#1f6fd6` · CS ส้ม `#e8731a`
    (`[data-theme]` ใน `presentation/app/globals.css`)
+6. **วิธีใช้ต้องอัปเดตตลอด** (เจ้าของ 3 ก.ย.): คำสั่งใหม่/เปลี่ยนชื่อ → แก้
+   `application/chann_app/services/guides.py` แล้วรัน `python3 scripts/dev/render-guides.py`
+   (`tests/unit/test_guides.py` บังคับ) · คำแนะนำที่ควรมีรูป → ใส่ slot + prompt ในขั้นนั้น
+   เจ้าของจะ generate รูปแล้วใส่ URL ใน `help_images.json` ทั้งสองไฟล์ · ข้อความสิทธิ์ต้อง
+   จัดหมวด/อ่านง่าย และบอกว่าขอสิทธิ์อะไรจากใคร
 
 ### เครื่องมือตรวจที่ต้องรันก่อนบอกว่า "เสร็จ"
 ```

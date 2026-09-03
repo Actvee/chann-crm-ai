@@ -76,11 +76,12 @@ clone.
 
 ## Where things stand
 
-**The commit carrying this text** is the dashboard-dispatch patch
-(`dispatch-ui-v1`, application + presentation, no migration), deployed by
-`~/dispatch-ui-deploy.sh`; `9bfa0ec` (service report PDF) came just before it. Before it, on 3 Sep: `cdd2c1a` customer
-onboarding, `4b53f60` shops-chosen/units-claimed, `e0ba461` the
-technician's day (tech-flow). Each is "deployed" only
+**The commit carrying this text** is the help-guide patch
+(`help-guide-v1`, application + presentation, no migration), deployed by
+`~/help-guide-deploy.sh`; before it on 3 Sep: `9bfa0ec` service report
+PDF, then `34942a2` the Sales tickets page dispatch (B1); earlier the
+same day `cdd2c1a` customer onboarding, `4b53f60` shops-chosen/units-
+claimed, `e0ba461` the technician's day. Each is "deployed" only
 when `/health` on both services echoes its SHA — the scripts' STAGE 9
 checks that, and this file is not evidence. The plan for everything the
 three OAs still need is `docs/PLAN_3OA.md`; read it before starting work.
@@ -267,6 +268,36 @@ deploy data/application/presentation. The new data image's
 serve against an older schema, which is the guard working.
 668 tests pass (656 unit/boundary + 266 integration, 12 of them Phase 14).
 
+### The guides (3 Sep, late) — one source for "วิธีใช้", the app page, and the handout
+
+Owner: keep the how-to current with every change; guidance that is
+clearer with a picture gets one (they will generate the images — we
+prepare the text and the slot); permission replies must read well.
+
+`application/chann_app/services/guides.py` is the single source: per OA,
+numbered steps with body (th/en), the exact `commands` chat recognises,
+an `example` to type, an `image` slot and an `image_prompt` for the
+generator. From it: chat's "วิธีใช้" (`render_help_text`, numbered steps,
+"▸ พิมพ์:"; the Sales OA appends the permission-filtered `usage_help`
+examples), the LIFF page `/liff/{oa}/guide` (`GET /liff/{oa}/guide`,
+`_guide/GuidePage.tsx`, image per step when the slot has a URL), and the
+handouts `docs/guides/{customer,technician,sales}.md` + `PERMISSIONS.md`
++ `help_images.template.json`, rendered by `scripts/dev/render-guides.py`.
+Images: `application/chann_app/help_images.json` and
+`presentation/lib/help-images.json` (must be identical — tested) map
+slot → https URL; chat sends the images ahead of the help text
+(`ChatReply.images`, `image_message`), the page shows them.
+
+**The rule, enforced by `tests/unit/test_guides.py`:** every command in
+a guide step must be a real chat trigger; `render-guides.py --check`
+must be clean; the two image maps must agree. **When you add or rename a
+command, edit guides.py and run `python3 scripts/dev/render-guides.py`.**
+
+Permission replies: `SUGGEST_NO_PERMISSION_LEAD` says who to ask and how
+to see what is allowed; `suggest_what_you_can_do` names the missing
+permission in the catalogue's words (`SUGGEST_NO_PERMISSION_NAMED`).
+"สิทธิ์ของฉัน" lists permissions deterministically (`CAPABILITY_PHRASES`),
+"ตัวอย่างคำสั่ง" gives the filtered examples, "วิธีใช้" the guide.
 ### Plan B1 (3 Sep, late) — the Sales tickets page can dispatch, edit and cancel
 
 Chat could assign ("มอบหมาย T-… ให้ทีม แอร์"), fix a ticket and cancel it

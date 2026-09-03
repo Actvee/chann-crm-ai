@@ -24,6 +24,7 @@ from .ai.client import AIUnavailable, AINotConfigured
 # Reused rather than reimplemented on purpose: what a salesperson reads
 # in chat must never disagree with what the customer receives on the PDF.
 from .documents.snapshot import build_line_items
+from .guides import guide_images, render_help_text
 from .ai.intent import parse_intent, unavailable_reply
 from .identity import ResolvedContext, TenantResolution
 from .registration import COMPANY_CODE_RE
@@ -5440,6 +5441,7 @@ DASHBOARD_PATHS = {
     "company": "company",
     "warranties": "warranties",
     "teams": "teams",
+    "guide": "guide",
     "index": "",
 }
 
@@ -7973,7 +7975,7 @@ ASK_MISSING = {
 SUGGEST_HEADER = {
     "th": (
         "ยังไม่แน่ใจว่าต้องการอะไรครับ ลองพิมพ์ให้ชัดขึ้น เช่น \"ดูลูกค้า สมชาย\" \"งานวันนี้\" "
-        "\"รายชื่อช่าง\" \"ข้อมูลร้าน\" หรือพิมพ์ \"วิธีใช้\" เพื่อดูตัวอย่างทั้งหมด\n\nสิ่งที่ทำได้ตอนนี้:"
+        "\"รายชื่อช่าง\" \"ข้อมูลร้าน\" หรือพิมพ์ \"วิธีใช้\" เพื่อดูขั้นตอนทั้งหมด\n\n📋 สิ่งที่คุณทำได้ตอนนี้"
     ),
     "en": (
         "Not sure what you need — try something more specific, e.g. \"show customer Somchai\", "
@@ -7984,12 +7986,24 @@ SUGGEST_HEADER = {
 # Two different reasons land here, and users need to hear the right one:
 # not knowing a feature exists reads very differently from being denied it.
 SUGGEST_NO_PERMISSION_LEAD = {
-    "th": "คุณยังไม่มีสิทธิ์ทำสิ่งนี้ แต่คุณสามารถทำสิ่งเหล่านี้ได้:",
-    "en": "You do not have permission for that, but here is what you can do:",
+    "th": (
+        "⛔ คุณยังไม่มีสิทธิ์ทำสิ่งนี้\n"
+        "ขอสิทธิ์ได้จากเจ้าของร้านหรือแอดมิน (แดชบอร์ด > บทบาทและทีม)\n"
+        "พิมพ์ \"ทำอะไรได้บ้าง\" เพื่อดูสิ่งที่ทำได้ตอนนี้"
+    ),
+    "en": (
+        "⛔ You do not have permission for that\n"
+        "Ask the shop owner or an admin (dashboard > roles and team)\n"
+        "Type \"what can I do\" to see what you can do now"
+    ),
+}
+SUGGEST_NO_PERMISSION_NAMED = {
+    "th": "⛔ คุณยังไม่มีสิทธิ์ทำสิ่งนี้ — ต้องมีสิทธิ์ «{needed}»\nขอได้จากเจ้าของร้านหรือแอดมิน (แดชบอร์ด > บทบาทและทีม)\n\n📋 สิ่งที่คุณทำได้ตอนนี้",
+    "en": "⛔ Not allowed — this needs «{needed}»\nAsk the owner or an admin (dashboard > roles and team)\n\n📋 What you can do now",
 }
 SUGGEST_UNKNOWN_FEATURE_LEAD = {
-    "th": "ระบบยังไม่มีฟังก์ชันนี้ ตอนนี้คุณสามารถทำสิ่งเหล่านี้ได้:",
-    "en": "That is not a feature yet — here is what you can do right now:",
+    "th": "ระบบยังไม่มีฟังก์ชันนี้ครับ\n\n📋 สิ่งที่คุณทำได้ตอนนี้",
+    "en": "That is not a feature yet.\n\n📋 What you can do now",
 }
 
 # Thai/English group headers, keyed to the catalogue's "group" field
@@ -8050,6 +8064,10 @@ class ChatReply:
     """
 
     text: str
+    # Owner (3 Sep): guidance that is clearer with a picture carries one.
+    # https URLs the LINE adapter sends as image messages ahead of the
+    # text; empty for the ordinary reply.
+    images: list[str] = field(default_factory=list)
     entity_type: str | None = None
     entity_id: str | None = None
     intent: dict | None = field(default=None, repr=False)
@@ -8211,9 +8229,20 @@ CUSTOMER_HELP = {
 }
 
 HELP_TRIGGERS = (
-    "ช่วยเหลือ", "วิธีใช้", "วิธีใช้งาน", "ใช้ยังไง", "ทำอะไรได้บ้าง", "คำสั่ง", "เมนู",
-    "help", "how to use", "commands", "menu", "?",
+    "ช่วยเหลือ", "วิธีใช้", "วิธีใช้งาน", "ใช้ยังไง", "ทำอะไรได้บ้าง", "เมนู", "คู่มือ",
+    "help", "how to use", "menu", "guide", "?",
 )
+# The permission-filtered example list (usage_help) — the guide's steps
+# answer "how does this work"; this answers "what exactly can I type".
+HELP_EXAMPLES_PHRASES = ("ตัวอย่างคำสั่ง", "คำสั่งทั้งหมด", "ดูคำสั่ง", "examples", "commands")
+# "What am I allowed to do" — the grouped permission list, without a model
+# call: it used to reach suggest_what_you_can_do only through the AI.
+CAPABILITY_PHRASES = ("สิทธิ์ของฉัน", "ฉันมีสิทธิ์อะไรบ้าง", "ดูสิทธิ์", "my permissions", "what am i allowed to do")
+
+
+def _guide_button(oa: str, language: str) -> tuple[str, str] | None:
+    url = dashboard_link("guide", oa)
+    return (("คู่มือพร้อมรูป" if language != "en" else "Illustrated guide"), url) if url else None
 
 # "Who am I here?" for a customer: their own details, the shop they belong
 # to, what is registered. The chat twin of the home screen's profile card.
@@ -8510,6 +8539,7 @@ def suggest_what_you_can_do(
         items = groups[group]
         cap = SUGGEST_GROUP_LIMIT if is_priority else SUGGEST_LIMIT
         shown_items = items[:cap]
+        lines.append("")
         lines.append(f"{_group_label(group, language)}:")
         lines.extend(f"  • {label}" for label in shown_items)
         if len(items) > len(shown_items):
@@ -8526,7 +8556,16 @@ def suggest_what_you_can_do(
     if requested_entity and not feature_is_known:
         lead = _t(SUGGEST_UNKNOWN_FEATURE_LEAD, language)
     elif requested_entity:
-        lead = _t(SUGGEST_NO_PERMISSION_LEAD, language)
+        # Name the permission in the catalogue's own words, so the person
+        # can ask for exactly it.
+        needed_label = next(
+            (
+                ((e.get("label") or {}).get(language) or (e.get("label") or {}).get("th"))
+                for e in catalog if e.get("key") == needed
+            ),
+            needed,
+        ) or needed
+        lead = _t(SUGGEST_NO_PERMISSION_NAMED, language).format(needed=needed_label)
     else:
         lead = _t(SUGGEST_HEADER, language)
 
@@ -9636,11 +9675,13 @@ async def handle_chat_message(
     if ctx.oa == "customer":
         if _matches_phrase(message, HELP_TRIGGERS):
             return ChatReply(
-                text=_t(CUSTOMER_HELP, language),
+                text=render_help_text("customer", language),
+                images=guide_images("customer"),
                 quick_replies=[
                     ("แจ้งซ่อม", "แจ้งซ่อม"), ("งานของฉัน", "งานของฉัน"),
                     ("ประกันของฉัน", "ประกันของฉัน"),
                 ],
+                quick_reply_url=_guide_button("customer", language),
             )
         if _matches_phrase(message, CUSTOMER_PROFILE_PHRASES):
             return await _handle_customer_profile_view(
@@ -9690,18 +9731,44 @@ async def handle_chat_message(
     # Help, before anything else and on every OA. Someone who types "ใช้ยังไง"
     # is telling you they are stuck; routing that through intent parsing to
     # maybe get a permission list back is not an answer.
-    if _matches_phrase(message, HELP_TRIGGERS) or (message or "").strip() == "?":
+    if (
+        _matches_phrase(message, HELP_TRIGGERS) or _matches_phrase(message, HELP_EXAMPLES_PHRASES)
+        or _matches_phrase(message, CAPABILITY_PHRASES) or (message or "").strip() == "?"
+    ):
         # Filtered by OA as well as by permission: a technician whose LINE
         # account also holds sales keys was shown the customer list on the
         # Technician OA, where that command is refused.
         if ctx.oa == "technician":
             return ChatReply(
-                text=_t(TECHNICIAN_HELP, language),
+                text=render_help_text("technician", language),
+                images=guide_images("technician"),
                 quick_replies=[("งานของฉัน", "งานของฉัน"), ("งานที่เปิดรับ", "งานที่เปิดรับ")],
+                quick_reply_url=_guide_button("technician", language),
             )
+        if _matches_phrase(message, HELP_EXAMPLES_PHRASES):
+            return ChatReply(
+                text=usage_help(_filter_by_oa(permission_keys, ctx.oa), language),
+                quick_replies=[("รายชื่อลูกค้า", "รายชื่อลูกค้า"), ("งานวันนี้", "งานวันนี้")],
+            )
+        if _matches_phrase(message, CAPABILITY_PHRASES):
+            try:
+                catalog = await client.permission_catalog()
+            except Exception:
+                log.exception("could not read the permission catalogue")
+                catalog = []
+            return ChatReply(
+                text=suggest_what_you_can_do(_filter_by_oa(permission_keys, ctx.oa), catalog, language),
+                quick_replies=[("วิธีใช้", "วิธีใช้"), ("ตัวอย่างคำสั่ง", "ตัวอย่างคำสั่ง")],
+            )
+        # The staff guide, then the examples this person may actually
+        # run (usage_help is permission-filtered; with none it says who
+        # to ask).
         return ChatReply(
-            text=usage_help(_filter_by_oa(permission_keys, ctx.oa), language),
-            quick_replies=[("รายชื่อลูกค้า", "รายชื่อลูกค้า"), ("งานวันนี้", "งานวันนี้")],
+            text=render_help_text("sales", language) + "\n\n"
+            + usage_help(_filter_by_oa(permission_keys, ctx.oa), language),
+            images=guide_images("sales"),
+            quick_replies=[("งานวันนี้", "งานวันนี้"), ("รายชื่อลูกค้า", "รายชื่อลูกค้า")],
+            quick_reply_url=_guide_button("sales", language),
         )
 
     # Notes and reminders (6.3/6.7). Before the AI path for the same reason

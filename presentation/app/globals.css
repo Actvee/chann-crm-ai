@@ -453,6 +453,17 @@ body {
 /* The one-paragraph explanation at the top of a page (approvals,
    templates, the menu). One class, so the three copies of the same
    inline style stop drifting. */
+/* The illustrated guide: numbered steps, each with an optional picture. */
+.guide { list-style: none; padding: 0; margin: 0; }
+.guide-step h2 { display: flex; align-items: center; gap: 10px; }
+.guide-no {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: #fff;
+  font-size: 14px; font-weight: 700; flex: none;
+}
+.guide-image { display: block; width: 100%; border-radius: 12px; margin: 8px 0 10px; }
+.guide-step code { background: var(--soft, #f3f3f3); padding: 2px 6px; border-radius: 6px; }
+
 .page-intro {
   color: var(--ink-soft);
   font-size: 14.5px;
