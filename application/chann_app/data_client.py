@@ -1401,10 +1401,11 @@ class DataClient:
 
     async def close_chat_session(
         self, license_id: str, session_id: str, actor_id: str | None = None,
+        status: str = "closed",
     ) -> dict:
         resp = await self._client.post(
             f"{self._base}/internal/v1/licenses/{license_id}/chat-sessions/{session_id}/close",
-            headers=self._headers_for(actor_id),
+            headers=self._headers_for(actor_id), params={"status": status},
         )
         return self._unwrap(resp)
 

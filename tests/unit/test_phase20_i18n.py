@@ -81,7 +81,7 @@ class TestRecipientLanguage:
 class TestEveryFlowCarriesEnglish:
     async def test_live_chat_announcements(self, pushed):
         client = Capturing(role="customer", permission_keys=[])
-        session, _ = await live_chat.start_session(
+        session, _, _ = await live_chat.start_session(
             client, license_id=LICENSE_ID, chann_uid="CHN-S-000001", display_name="Somchai",
         )
         session = await client.assign_chat_session(LICENSE_ID, session["id"], "m-cs")
@@ -100,7 +100,7 @@ class TestEveryFlowCarriesEnglish:
     async def test_the_customers_own_pushes_follow_their_language(self, pushed):
         client = Capturing(role="customer", permission_keys=[])
         client._prefs = {"CHN-S-000001": {"language": "en"}}
-        session, _ = await live_chat.start_session(client, license_id=LICENSE_ID, chann_uid="CHN-S-000001")
+        session, _, _ = await live_chat.start_session(client, license_id=LICENSE_ID, chann_uid="CHN-S-000001")
         await live_chat.agent_reply(
             client, license_id=LICENSE_ID, session=session, agent_chann_uid="CHN-CS", member_id="m-cs",
             text="15,900 baht",

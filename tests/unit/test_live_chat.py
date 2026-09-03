@@ -96,11 +96,11 @@ class ChatFake(FakeDataClient):
                 return dict(s)
         raise AssertionError("unknown session")
 
-    async def close_chat_session(self, license_id, session_id, actor_id=None):
+    async def close_chat_session(self, license_id, session_id, actor_id=None, status="closed"):
         self.recorded.append(("close_chat_session", session_id))
         for s in self._chat_sessions:
             if s["id"] == session_id:
-                s["status"] = "closed"
+                s["status"] = status
                 return dict(s)
         raise AssertionError("unknown session")
 
@@ -191,7 +191,7 @@ class TestStartFromChat:
 class TestAgentReply:
     async def test_the_answer_reaches_the_customer_and_the_answerer_owns_it(self, pushes):
         client = ChatFake(role="customer", permission_keys=[])
-        session, created = await live_chat.start_session(
+        session, created, _ = await live_chat.start_session(
             client, license_id=LICENSE_ID, chann_uid="CHN-S-000001", first_message="สวัสดี",
         )
         assert created
@@ -205,7 +205,7 @@ class TestAgentReply:
 
     async def test_a_customer_line_reaches_only_the_owner_of_the_conversation(self, pushes):
         client = ChatFake(role="customer", permission_keys=[])
-        session, _ = await live_chat.start_session(client, license_id=LICENSE_ID, chann_uid="CHN-S-000001")
+        session, _, _ = await live_chat.start_session(client, license_id=LICENSE_ID, chann_uid="CHN-S-000001")
         session = await client.assign_chat_session(LICENSE_ID, session["id"], "m-cs")
         client.recorded.clear()
         await live_chat.customer_message(
@@ -229,7 +229,8 @@ class TestSweep:
         assert result == {"escalated": 1, "timed_out": 1}
         told = [r for r in client.recorded if r[0] == "create_notification"]
         assert len(told) == 1 and "CHN-CS" in str(told[0]) and "ยังไม่ได้รับคำตอบ" in str(told[0])
-        assert pushes and "ปิดอัตโนมัติ" in pushes[0][2]
+        # The parked conversation is pushed first, the timed-out one after.
+        assert any("ปิดอัตโนมัติ" in p[2] for p in pushes)
 
     async def test_an_unowned_overdue_conversation_goes_to_every_agent(self, pushes):
         client = ChatFake(role="customer", permission_keys=[])
@@ -251,7 +252,7 @@ class TestSettings:
         ]
         assert await live_chat.chat_settings(client, LICENSE_ID) == (15, 24 * 60)
         client._settings = [{"setting_key": "chat_sla_minutes", "setting_value": "abc"}]
-        assert await live_chat.chat_settings(client, LICENSE_ID) == (30, 60)
+        assert await live_chat.chat_settings(client, LICENSE_ID) == (15, 60)
 
 
 def _harness(principal: TenantPrincipal):

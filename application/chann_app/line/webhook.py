@@ -20,6 +20,7 @@ from ..services.chat import (
     greet,
     handle_chat_message,
     handle_incoming_image,
+    handle_incoming_location,
     handle_reply,
 )
 from ..services.ai.intent import unavailable_reply
@@ -161,12 +162,21 @@ async def handle_webhook(
                         message_id=str((event.get("message") or {}).get("id") or ""),
                         language=language,
                     )
+                elif message_type == "location" and not is_unregistered(ctx):
+                    # A shared location on the technician OA is the check-in
+                    # with coordinates (owner, 4 Sep: "เช็คอินบันทึกตำแหน่งไว้ด้วยไหม").
+                    _loc = event.get("message") or {}
+                    chat = await handle_incoming_location(
+                        client, ctx=ctx, oa=oa,
+                        latitude=float(_loc.get("latitude") or 0), longitude=float(_loc.get("longitude") or 0),
+                        language=language,
+                    )
                 elif oa == "customer" and user_text.strip():
                     storefront_reply = await maybe_handle_storefront(
                         client, message=user_text, ctx=ctx, language=language,
                     )
 
-                if message_type == "image" and not is_unregistered(ctx):
+                if message_type in ("image", "location") and not is_unregistered(ctx):
                     pass
                 elif storefront_reply is not None:
                     chat = storefront_reply

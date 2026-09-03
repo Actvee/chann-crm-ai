@@ -152,7 +152,7 @@ GUIDES: dict[str, dict] = {
             {
                 "key": "checkin", "title": {"th": "เช็คอินเมื่อถึงหน้างาน", "en": "Check in on site"},
                 "body": {
-                    "th": "ถึงบ้านลูกค้าแล้วพิมพ์ \"เช็คอิน\" (มีงานเดียวระบบรู้เอง) งานจะเปลี่ยนเป็น กำลังทำ — ปิดงานได้หลังจากนี้เท่านั้น · ส่งรูปหน้างานมาในแชทได้เลย ระบบแนบกับงานและใส่ในรายงาน PDF",
+                    "th": "ถึงบ้านลูกค้าแล้วพิมพ์ \"เช็คอิน\" หรือ **ส่งตำแหน่ง** (LINE > + > ตำแหน่ง) เพื่อเช็คอินพร้อมพิกัด (มีงานเดียวระบบรู้เอง) งานจะเปลี่ยนเป็น กำลังทำ — ปิดงานได้หลังจากนี้เท่านั้น · ส่งรูปหน้างานมาในแชทได้เลย ระบบแนบกับงานและใส่ในรายงาน PDF",
                     "en": "On arrival type \"check in\" (one job: it knows which). The job becomes in progress — finishing is only possible after this. Send photos of the site here; they go on the job and into the PDF.",
                 },
                 "commands": ["เช็คอิน"],
@@ -197,7 +197,7 @@ GUIDES: dict[str, dict] = {
                     "th": "\"ข้อมูลร้าน\" ดูรหัสร้าน (ให้ลูกค้าใช้ผูก) · \"ขอรหัสเชิญช่าง\" ให้ช่างเข้าร่วม · \"สร้างทีมช่าง แอร์\" แล้ว \"เพิ่ม สมศักดิ์ เข้าทีม แอร์ เป็นหัวหน้า\" · \"ข้อมูลบริษัท\" สำหรับเอกสาร · \"ตั้งค่ารับลูกค้าใหม่อัตโนมัติ เปิด\" ให้ลูกค้าที่ผูกร้านเข้ารายชื่อทันที",
                     "en": "\"shop info\" (the code customers link with) · \"invite technician\" · \"create technician team AC\" then \"add Somsak to team AC as lead\" · \"company profile\" for documents",
                 },
-                "commands": ["ข้อมูลร้าน", "ขอรหัสเชิญช่าง", "สร้างทีมช่าง", "ทีมช่าง", "รายชื่อช่าง", "ข้อมูลบริษัท", "ตั้งค่ารับลูกค้าใหม่อัตโนมัติ"],
+                "commands": ["ข้อมูลร้าน", "ขอรหัสเชิญช่าง", "สร้างทีมช่าง", "ทีมช่าง", "รายชื่อช่าง", "ข้อมูลบริษัท", "ตั้งค่ารับลูกค้าใหม่อัตโนมัติ", "ตั้งค่าแชท"],
                 "example": "สร้างทีมช่าง แอร์",
                 "image": "sales-setup",
                 "image_prompt": "แผนผังร้าน: กล่อง 'ร้าน (รหัส ABCD01)' เชื่อมไป 'ทีมช่าง แอร์ (หัวหน้า สมศักดิ์)' และ 'ลูกค้า' ธีมเขียว",
@@ -227,8 +227,8 @@ GUIDES: dict[str, dict] = {
             {
                 "key": "chats", "title": {"th": "แชทลูกค้า", "en": "Customer chats"},
                 "body": {
-                    "th": "ลูกค้าที่กด \"คุยกับร้าน\" ใน LINE บริการลูกค้า จะขึ้นที่ หน้าจอ > แชทลูกค้า และทุกคนได้ LINE แจ้ง ตอบที่หน้านั้นเท่านั้น (ตอบใน LINE ร้านไม่ถึงลูกค้า) คนแรกที่ตอบเป็นเจ้าของการสนทนา ถ้าปล่อยเกินเวลาตอบ (ตั้งค่า chat_sla_minutes, ค่าเริ่มต้น 30 นาที) ระบบเตือน ไม่มีข้อความ 1 ชั่วโมงปิดให้เอง",
-                    "en": "A customer who taps \"talk to the shop\" appears under home > Customer chats, and everyone is pushed a LINE. Answer there only (a reply in the shop's LINE never reaches them). The first to answer owns it. Past the reply time (chat_sla_minutes, default 30) you are reminded; an hour of silence and it closes itself.",
+                    "th": "ลูกค้าที่กด \"คุยกับร้าน\" ใน LINE บริการลูกค้า จะขึ้นที่ หน้าจอ > แชทลูกค้า และทุกคนได้ LINE แจ้ง ตอบที่หน้านั้นเท่านั้น (ตอบใน LINE ร้านไม่ถึงลูกค้า) คนแรกที่ตอบเป็นเจ้าของการสนทนา ถ้าปล่อยเกินเวลาตอบ (ค่าเริ่มต้น 15 นาที) ระบบแจ้งลูกค้าว่าจะติดต่อกลับและพักการสนทนา — ตอบทีหลังได้ ลูกค้าจะได้รับคำเชิญให้เปิดแชทต่อ · ลูกค้าเงียบ 1 ชั่วโมงปิดให้เอง · ตั้งเวลาเองได้ด้วย \"ตั้งค่าแชท\" หรือหน้าข้อมูลบริษัท",
+                    "en": "A customer who taps \"talk to the shop\" appears under home > Customer chats, and everyone is pushed a LINE. Answer there only (a reply in the shop's LINE never reaches them). The first to answer owns it. Past the reply time (default 15 min) the customer is told you will get back and the chat is paused — answer later and they are invited to reopen it. An hour of customer silence closes it. Set both with \"chat settings\" or on the company page.",
                 },
                 "commands": ["ตั้งค่ารับลูกค้าใหม่อัตโนมัติ"],
                 "example": "หน้าจอ > แชทลูกค้า",

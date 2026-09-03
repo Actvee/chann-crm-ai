@@ -36,13 +36,13 @@ _EN: Repairs: dispatch — You hear when a customer reports · "tickets" for the
 
 ## 4. แชทลูกค้า
 
-ลูกค้าที่กด "คุยกับร้าน" ใน LINE บริการลูกค้า จะขึ้นที่ หน้าจอ > แชทลูกค้า และทุกคนได้ LINE แจ้ง ตอบที่หน้านั้นเท่านั้น (ตอบใน LINE ร้านไม่ถึงลูกค้า) คนแรกที่ตอบเป็นเจ้าของการสนทนา ถ้าปล่อยเกินเวลาตอบ (ตั้งค่า chat_sla_minutes, ค่าเริ่มต้น 30 นาที) ระบบเตือน ไม่มีข้อความ 1 ชั่วโมงปิดให้เอง
+ลูกค้าที่กด "คุยกับร้าน" ใน LINE บริการลูกค้า จะขึ้นที่ หน้าจอ > แชทลูกค้า และทุกคนได้ LINE แจ้ง ตอบที่หน้านั้นเท่านั้น (ตอบใน LINE ร้านไม่ถึงลูกค้า) คนแรกที่ตอบเป็นเจ้าของการสนทนา ถ้าปล่อยเกินเวลาตอบ (ค่าเริ่มต้น 15 นาที) ระบบแจ้งลูกค้าว่าจะติดต่อกลับและพักการสนทนา — ตอบทีหลังได้ ลูกค้าจะได้รับคำเชิญให้เปิดแชทต่อ · ลูกค้าเงียบ 1 ชั่วโมงปิดให้เอง · ตั้งเวลาเองได้ด้วย "ตั้งค่าแชท" หรือหน้าข้อมูลบริษัท
 
 พิมพ์: `หน้าจอ > แชทลูกค้า`
 
 [IMAGE: sales-chats — หน้าจอแดชบอร์ดสีเขียว รายการแชทลูกค้า 2 รายการ รายการแรกมีป้าย 'ลูกค้ารอคำตอบ' ด้านล่างเป็นบทสนทนาและช่องพิมพ์คำตอบ ปุ่ม 'ส่ง' และ 'ปิดการสนทนา']
 
-_EN: Customer chats — A customer who taps "talk to the shop" appears under home > Customer chats, and everyone is pushed a LINE. Answer there only (a reply in the shop's LINE never reaches them). The first to answer owns it. Past the reply time (chat_sla_minutes, default 30) you are reminded; an hour of silence and it closes itself._
+_EN: Customer chats — A customer who taps "talk to the shop" appears under home > Customer chats, and everyone is pushed a LINE. Answer there only (a reply in the shop's LINE never reaches them). The first to answer owns it. Past the reply time (default 15 min) the customer is told you will get back and the chat is paused — answer later and they are invited to reopen it. An hour of customer silence closes it. Set both with "chat settings" or on the company page._
 
 ## 5. งานซ่อม: ตรวจรายงาน
 

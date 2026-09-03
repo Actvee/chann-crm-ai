@@ -550,7 +550,7 @@ class FakeDataClient:
         return {"id": ticket_id, "ticket_number": "T-2026-0001"}
 
     async def check_in_ticket(self, license_id, ticket_id, *, member_id, gps_lat=None, gps_lng=None, photo_url=None, actor_id=None):
-        self.recorded.append(("check_in_ticket", license_id, ticket_id, member_id))
+        self.recorded.append(("check_in_ticket", license_id, ticket_id, member_id, gps_lat, gps_lng))
         # 13.4: arriving opens the visit — mirrored so the chat's
         # check-out precondition sees what the real tier would.
         for t in getattr(self, "_tickets", []):
@@ -5972,6 +5972,7 @@ class TestButtonsTheSystemWritesDoNotNeedTheAI:
         triggers += list(module.TICKET_TEAM_PHRASES)
         triggers += list(module.PRODUCT_LIST_PHRASES) + list(module.CUSTOMER_ORDERS_PHRASES)
         triggers += list(module.CUSTOMER_CHAT_PHRASES) + list(module.CUSTOMER_CHAT_END_PHRASES)
+        triggers += list(module.TICKET_OPEN_PHRASES)
 
         dead = []
         for text in sorted(sent):

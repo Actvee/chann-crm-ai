@@ -2799,7 +2799,7 @@ async def open_chat_session(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail={"error": "customers_only"})
     principal.require("customer.read")  # the customer set always carries it; staff never reach here
     try:
-        session, created = await live_chat.start_session(
+        session, created, _unseen = await live_chat.start_session(
             client, license_id=license_id, chann_uid=principal.chann_uid,
             first_message=payload.content, product_id=payload.product_id,
         )
@@ -2844,7 +2844,9 @@ async def send_chat_message(
     it reaches the customer's LINE, and the sender owns the conversation."""
     _require_same_tenant(principal, license_id)
     session = await _chat_session_for(client, principal, license_id, session_id)
-    if str(session.get("status")) not in ("open", "assigned"):
+    if principal.is_customer and str(session.get("status")) not in ("open", "assigned"):
+        # The customer reopens with "คุยกับร้าน"; the shop may answer a
+        # parked conversation — that answer invites the customer back.
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"error": "chat_session_closed"})
     try:
         if principal.is_customer:

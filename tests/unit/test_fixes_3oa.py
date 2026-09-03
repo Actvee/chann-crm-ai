@@ -63,7 +63,7 @@ class TestLiveChatQuiet:
 
     async def test_the_quiet_close_defaults_to_one_hour(self):
         client = ChatFake()
-        assert await live_chat.chat_settings(client, "L1") == (30, 60)
+        assert await live_chat.chat_settings(client, "L1") == (15, 60)
 
 
 class TestDiaryShowsWhatIsAhead:

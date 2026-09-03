@@ -156,7 +156,10 @@ class ChatSessionRepository:
         if not content:
             raise ChatSessionConflict("empty message")
         row = self.require(scope, session_id)
-        if row.status not in LIVE_STATUSES:
+        # The customer speaks only into a live conversation; the shop may
+        # answer a parked or closed one — that answer is what invites the
+        # customer back (owner, 4 Sep), so it must be kept.
+        if sender_type == "customer" and row.status not in LIVE_STATUSES:
             raise ChatSessionConflict("conversation is closed")
         message = ChatMessage(
             session_id=row.id, license_id=scope.license_id, sender_type=sender_type,
@@ -164,6 +167,10 @@ class ChatSessionRepository:
         )
         self._s.add(message)
         now = _now()
+        if row.status not in LIVE_STATUSES:
+            row.updated_at = now
+            self._s.flush()
+            return message
         row.timeout_at = now + timedelta(minutes=max(1, timeout_minutes))
         if sender_type == "customer":
             # The shop's clock starts when the customer is left waiting —

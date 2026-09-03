@@ -16,14 +16,14 @@ import logging
 from datetime import datetime, timezone
 
 from ..data_client import DataClient, DataTierError
-from ..line.client import LineReplyError, push_text
+from ..line.client import LineReplyError, push_messages, push_text, quick_reply_item, text_message
 from .notify import send_notification
 
 log = logging.getLogger(__name__)
 
 AGENT_ROLES = ("owner", "admin", "sales", "cs")
 LIVE = ("open", "assigned")
-DEFAULT_SLA_MINUTES = 30
+DEFAULT_SLA_MINUTES = 15  # owner, 4 Sep: the shop answers within 15 minutes
 DEFAULT_TIMEOUT_MINUTES = 60  # owner, 4 Sep: an hour of silence closes it
 SLA_KEYS = ("chat_sla_minutes", "chat_sla")
 TIMEOUT_KEYS = ("chat_timeout_minutes", "session_timeout")
@@ -131,19 +131,44 @@ async def _push_customer(
         return False
 
 
+async def catch_up(client: DataClient, *, license_id: str, session_id: str) -> str:
+    """What the shop said while the conversation was parked or closed —
+    the lines the customer has not seen. Marked read once fetched."""
+    try:
+        rows = await client.list_chat_messages(str(license_id), str(session_id))
+    except Exception:
+        log.exception("could not read the catch-up lines")
+        return ""
+    unseen = [
+        str(r.get("content") or "") for r in rows
+        if str(r.get("sender_type")) == "agent" and not r.get("is_read")
+    ]
+    if not unseen:
+        return ""
+    try:
+        await client.mark_chat_read(str(license_id), str(session_id), reader="customer")
+    except Exception:
+        log.exception("could not mark the catch-up lines read")
+    return "\n".join(f"💬 {line}" for line in unseen[-5:])
+
+
 async def start_session(
     client: DataClient, *, license_id: str, chann_uid: str, display_name: str | None = None,
     first_message: str | None = None, product_id: str | None = None, language: str = "th",
-) -> tuple[dict, bool]:
-    """The customer's conversation with this shop — opened now, or the one
-    already running. A new one is announced to every agent; a first line
-    typed with it is stored and is what they see."""
+) -> tuple[dict, bool, str]:
+    """The customer's conversation with this shop — opened now, reopened,
+    or the one already running. A new or reopened one is announced to
+    every agent; a first line typed with it is stored and is what they
+    see. The third value is what the shop said meanwhile (4 Sep): a
+    reopened conversation begins by showing the answer that invited the
+    customer back."""
     sla, timeout = await chat_settings(client, license_id)
     session = await client.open_chat_session(
         str(license_id), customer_chann_uid=chann_uid, product_id=product_id,
         sla_minutes=sla, timeout_minutes=timeout, actor_id=chann_uid,
     )
     created = bool(session.pop("_created", False))
+    unseen = await catch_up(client, license_id=license_id, session_id=str(session["id"]))
     if first_message and first_message.strip():
         try:
             await client.add_chat_message(
@@ -168,7 +193,7 @@ async def start_session(
             text=text, text_en=text_en, type="chat_session_new", session_id=str(session["id"]),
             language=language,
         )
-    return session, created
+    return session, created, unseen
 
 
 async def customer_message(
@@ -207,7 +232,29 @@ async def agent_reply(
 ) -> dict:
     """The shop answers — from the dashboard, never LINE directly (15.4).
     Whoever answers owns the conversation from then on, the SLA clock
-    stops, and the words reach the customer's LINE."""
+    stops, and the words reach the customer's LINE.
+
+    A parked or closed conversation (owner, 4 Sep): the answer is kept on
+    the thread and the customer is INVITED back — one LINE with the
+    answer and a "คุยกับร้าน" button; reopening shows the answer again
+    and continues as usual. Nothing is assigned until they do."""
+    if str(session.get("status") or "") not in LIVE:
+        message = await client.add_chat_message(
+            str(license_id), str(session["id"]), sender_type="agent", content=text,
+            sender_chann_uid=agent_chann_uid,
+        )
+        shop = await company_name(client, license_id)
+        preview = text.strip()[:300]
+        th = (
+            f"💬 {shop} ตอบกลับแล้ว:\n\"{preview}\"\n\n"
+            "เปิดแชทคุยกับร้านนี้ต่อไหมครับ แตะ \"คุยกับร้าน\" (ข้อความที่ร้านตอบจะขึ้นให้อีกครั้ง)"
+        )
+        en = (
+            f"💬 {shop} has answered:\n\"{preview}\"\n\n"
+            "Reopen the chat with this shop? Tap \"talk to the shop\" (their answer is shown again)."
+        )
+        await _push_customer_invite(client, chann_uid=str(session["customer_chann_uid"]), text=th, text_en=en)
+        return message
     if member_id and str(session.get("assigned_to") or "") != str(member_id):
         try:
             session = await client.assign_chat_session(
@@ -227,6 +274,26 @@ async def agent_reply(
         text_en=f"💬 {shop}: {text.strip()}\n(reply right here · type \"end chat\" when done)",
     )
     return message
+
+
+async def _push_customer_invite(
+    client: DataClient, *, chann_uid: str, text: str, text_en: str | None = None,
+) -> bool:
+    """A push with the one button that reopens the conversation."""
+    try:
+        line_uid = await client.line_target_of(chann_uid)
+        if not line_uid:
+            return False
+        if text_en and await _customer_language(client, chann_uid) == "en":
+            text = text_en
+        await push_messages(
+            "customer", line_uid,
+            [text_message(text, quick_reply=[quick_reply_item("คุยกับร้าน", "คุยกับร้าน")])],
+        )
+        return True
+    except (LineReplyError, Exception):  # noqa: BLE001
+        log.exception("could not push a reopen invitation to %s", chann_uid)
+        return False
 
 
 async def close_session(
@@ -290,6 +357,26 @@ async def sweep(client: DataClient) -> dict:
         escalated += await _tell(
             client, license_id=license_id, members=owner or agents, text=text, text_en=text_en,
             type="sla_warning", session_id=str(session.get("id")), language="th",
+        )
+        # Owner, 4 Sep: past the answer time the conversation is parked and
+        # the customer told; the shop's later answer invites them back.
+        try:
+            await client.close_chat_session(
+                license_id, str(session.get("id")), actor_id="system", status="unanswered",
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("could not park an unanswered chat: %s", exc)
+        shop = await company_name(client, license_id)
+        await _push_customer(
+            client, chann_uid=str(session.get("customer_chann_uid") or ""),
+            text=(
+                f"💬 ขออภัยครับ เจ้าหน้าที่ของ {shop} ยังไม่ว่างตอบในตอนนี้ จะติดต่อกลับโดยเร็ว "
+                "ขอปิดการสนทนาไว้ก่อน — เมื่อร้านตอบ ระบบจะแจ้งให้เปิดแชทต่อ"
+            ),
+            text_en=(
+                f"💬 Sorry — nobody at {shop} is free to answer right now; they will get back to you soon. "
+                "The chat is paused; you will be told when the shop answers."
+            ),
         )
     timed_out = 0
     for session in result.get("timed_out") or []:

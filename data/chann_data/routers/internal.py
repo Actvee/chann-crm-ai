@@ -4368,15 +4368,19 @@ def assign_chat_session(
 
 @router.post("/licenses/{license_id}/chat-sessions/{session_id}/close", response_model=ChatSessionOut)
 def close_chat_session(
-    license_id: uuid.UUID, session_id: uuid.UUID,
+    license_id: uuid.UUID, session_id: uuid.UUID, status: str = "closed",
     session: Session = Depends(get_session), x_actor_id: str = Header(default=""),
 ):
+    """`status` = closed (someone ended it) | unanswered (parked by the
+    SLA sweep: the shop did not answer in time) | timeout (quiet)."""
+    if status not in ("closed", "unanswered", "timeout"):
+        raise HTTPException(status_code=422, detail={"error": "bad_status"})
     scope = TenantScope(license_id=license_id)
     try:
         repo = ChatSessionRepository(session)
         before = repo.require(scope, session_id)
         previous = {"status": before.status}
-        row = repo.close(scope, session_id)
+        row = repo.close(scope, session_id, status=status)
         if previous["status"] != row.status:
             AuditRepository(session).write(
                 license_id=license_id, entity_type="chat_session", entity_id=row.id,

@@ -51,6 +51,10 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
   const [vatRegistered, setVatRegistered] = useState(true);
   // 16.4: whether a customer who links in LINE joins the list at once.
   const [autoAccept, setAutoAccept] = useState<boolean | null>(null);
+  // Owner, 4 Sep: the chat timers are the company's to set here and in chat.
+  const [chatSla, setChatSla] = useState("");
+  const [chatTimeout, setChatTimeout] = useState("");
+  const [policySaving, setPolicySaving] = useState(false);
 
   const say = useCallback((message: string, kind?: "ok" | "error") => {
     setStatus(message);
@@ -118,6 +122,35 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
     const rows = (await response.json()) as { setting_key: string; setting_value: unknown }[];
     const row = rows.find((r) => r.setting_key === "auto_accept_new_customers");
     setAutoAccept(row ? row.setting_value === true || String(row.setting_value).toLowerCase() === "true" : false);
+    const sla = rows.find((r) => r.setting_key === "chat_sla_minutes" || r.setting_key === "chat_sla");
+    const quiet = rows.find((r) => r.setting_key === "chat_timeout_minutes" || r.setting_key === "session_timeout");
+    setChatSla(sla ? String(sla.setting_value) : "15");
+    setChatTimeout(quiet ? String(quiet.setting_value) : "60");
+  }
+
+  async function saveChatPolicy() {
+    const sla = Number(chatSla);
+    const quiet = Number(chatTimeout);
+    if (!Number.isInteger(sla) || sla < 1 || sla > 1440 || !Number.isInteger(quiet) || quiet < 1 || quiet > 1440) {
+      say(c.chatPolicyInvalid, "error");
+      return;
+    }
+    setPolicySaving(true);
+    try {
+      for (const [key, value] of [["chat_sla_minutes", sla], ["chat_timeout_minutes", quiet]] as const) {
+        const response = await fetch(`/api/phase2/licenses/${licenseId}/settings/${key}`, {
+          method: "PUT",
+          headers: proxyHeaders(token, licenseId),
+          body: JSON.stringify({ setting_value: value }),
+        });
+        if (!response.ok) throw new Error(String(response.status));
+      }
+      say(c.autoAcceptSaved, "ok");
+    } catch {
+      say(t.common.error, "error");
+    } finally {
+      setPolicySaving(false);
+    }
   }
 
   async function saveAutoAccept(next: boolean) {
@@ -300,6 +333,55 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
             </span>
             <span className="hint">{c.autoAcceptHint}</span>
           </label>
+        </section>
+      )}
+
+      {autoAccept !== null && (
+        <section className="section" style={{ marginTop: 16 }}>
+          <div className="section-head">
+            <h2>{c.chatPolicy}</h2>
+          </div>
+          <dl className="fields">
+            <div className="field">
+              <label htmlFor="chat-sla">{c.chatSla}</label>
+              <input
+                id="chat-sla"
+                type="number"
+                inputMode="numeric"
+                min={1}
+                max={1440}
+                value={chatSla}
+                onChange={(e) => setChatSla(e.target.value)}
+                aria-describedby="chat-sla-hint"
+              />
+              <span id="chat-sla-hint" className="hint">{c.chatSlaHint}</span>
+            </div>
+            <div className="field">
+              <label htmlFor="chat-timeout">{c.chatTimeout}</label>
+              <input
+                id="chat-timeout"
+                type="number"
+                inputMode="numeric"
+                min={1}
+                max={1440}
+                value={chatTimeout}
+                onChange={(e) => setChatTimeout(e.target.value)}
+                aria-describedby="chat-timeout-hint"
+              />
+              <span id="chat-timeout-hint" className="hint">{c.chatTimeoutHint}</span>
+            </div>
+            <div className="actions">
+              <button
+                type="button"
+                className="btn"
+                data-variant="primary"
+                disabled={policySaving}
+                onClick={() => void saveChatPolicy()}
+              >
+                {policySaving ? t.dashboard.related.saving : c.chatPolicySave}
+              </button>
+            </div>
+          </dl>
         </section>
       )}
     </AppShell>

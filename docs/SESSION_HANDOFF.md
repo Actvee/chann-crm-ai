@@ -1,3 +1,28 @@
+### Plan C4 (4 Sep) — the shop's 15 minutes, parking and the invitation back; timers per company; check-in with GPS (`chat-sla-v1`)
+
+- `DEFAULT_SLA_MINUTES` 15. The sweep still tells the agents, then parks the
+  conversation (`close … status=unanswered`, a new Data status) and pushes
+  the customer "จะติดต่อกลับ, พักไว้ก่อน". `add_message` lets the shop write
+  into a parked/closed conversation; the customer cannot.
+- `agent_reply` on a non-live conversation keeps the answer on the thread
+  and pushes the customer one LINE with the answer and a "คุยกับร้าน" quick
+  reply (`_push_customer_invite` → `push_messages`). Nothing is assigned
+  until they reopen. `start_session` returns a third value — the unseen
+  agent lines (`catch_up`, marked read) — and the chat's "คุยกับร้าน" reply
+  opens with them.
+- Company policy in both surfaces (parity): chat "ตั้งค่าเวลาตอบแชท N" /
+  "ตั้งค่าปิดแชทเมื่อเงียบ N" / "ตั้งค่าแชท" (setting.manage) and Company
+  profile > "นโยบายแชทลูกค้า" (two numbers) → `chat_sla_minutes`,
+  `chat_timeout_minutes` in license_settings; `auto_accept_new_customers`
+  already lived there.
+- Check-in position: the technician home asks the phone for GPS (8 s cap;
+  declined → checks in anyway and says "ไม่มีพิกัด"); a LINE location message
+  on the technician OA is a check-in with coordinates
+  (`handle_incoming_location`; webhook `message.type == "location"`).
+  Coordinates land on the check-in photo row (13.3), as before.
+- Dashboard: the composer works on closed/parked threads with a note; the
+  status chip reads "รอเจ้าหน้าที่ติดต่อกลับ".
+
 ### Plan C3 (4 Sep) — CSV import + the guide as a file (`csv-import-v1`)
 
 - `services/csv_import.py`: `import_products` / `import_warranties` read a

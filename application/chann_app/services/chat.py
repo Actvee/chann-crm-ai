@@ -2498,7 +2498,7 @@ async def _handle_customer_chat_start(
 ) -> ChatReply:
     """Phase 15.4: open (or rejoin) the conversation; every agent hears."""
     try:
-        session, created = await live_chat.start_session(
+        session, created, unseen = await live_chat.start_session(
             client, license_id=str(license_id), chann_uid=ctx.chann_uid,
             display_name=ctx.display_name, first_message=first_message or None, language=language,
         )
@@ -2507,8 +2507,11 @@ async def _handle_customer_chat_start(
     except Exception:
         log.exception("could not open a chat session")
         return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    opened = _t(CHAT_STARTED if created else CHAT_RESUMED, language).format(shop=shop, sla=sla)
+    if unseen:
+        opened = _t(CHAT_CATCH_UP, language).format(shop=shop) + "\n" + unseen + "\n\n" + opened
     return ChatReply(
-        text=_t(CHAT_STARTED if created else CHAT_RESUMED, language).format(shop=shop, sla=sla),
+        text=opened,
         entity_type="chat_session", entity_id=str(session.get("id") or ""),
         quick_replies=[("จบการสนทนา", "จบการสนทนา"), ("สินค้าทั้งหมด", "สินค้าทั้งหมด")],
     )
@@ -2739,6 +2742,34 @@ CHAT_ENDED = {
     "th": "จบการสนทนาแล้ว ขอบคุณครับ พิมพ์ \"คุยกับร้าน\" ได้อีกเมื่อต้องการ",
     "en": "Conversation ended, thank you. Type \"talk to the shop\" any time.",
 }
+CHAT_CATCH_UP = {
+    "th": "ข้อความจาก {shop} ระหว่างที่ปิดไป:",
+    "en": "From {shop} while the chat was paused:",
+}
+# Owner, 4 Sep: the timers are the company's to set — here and on the
+# dashboard (Company profile > chat policy). setting.manage.
+CHAT_POLICY_SLA_PHRASES = ("ตั้งค่าเวลาตอบแชท", "ตั้งเวลาตอบแชท", "เวลาตอบแชท", "chat answer time", "chat sla")
+CHAT_POLICY_TIMEOUT_PHRASES = ("ตั้งค่าปิดแชทเมื่อเงียบ", "ตั้งปิดแชทเมื่อเงียบ", "ปิดแชทเมื่อเงียบ", "chat quiet close", "chat timeout")
+CHAT_POLICY_VIEW = ("ตั้งค่าแชท", "นโยบายแชท", "การตั้งค่าแชท", "chat policy", "chat settings")
+CHAT_POLICY_STATE = {
+    "th": (
+        "นโยบายแชทของร้าน:\n"
+        "· ร้านต้องตอบภายใน {sla} นาที — เกินแล้วระบบแจ้งลูกค้าว่าจะติดต่อกลับและพักการสนทนา\n"
+        "· ปิดเองเมื่อลูกค้าเงียบ {timeout} นาที\n"
+        "เปลี่ยน: \"ตั้งค่าเวลาตอบแชท 15\" · \"ตั้งค่าปิดแชทเมื่อเงียบ 60\" (นาที)"
+    ),
+    "en": (
+        "Chat policy:\n"
+        "· the shop answers within {sla} min — past that the customer is told and the chat is paused\n"
+        "· closes after {timeout} quiet minutes\n"
+        "Change: \"chat answer time 15\" · \"chat quiet close 60\" (minutes)"
+    ),
+}
+CHAT_POLICY_BAD_NUMBER = {
+    "th": "ระบุเป็นจำนวนนาที 1–1440 เช่น \"ตั้งค่าเวลาตอบแชท 15\"",
+    "en": "Give minutes 1–1440, e.g. \"chat answer time 15\"",
+}
+
 CHAT_NONE_TO_END = {
     "th": "ตอนนี้ไม่มีการสนทนาที่เปิดอยู่ พิมพ์ \"คุยกับร้าน\" เพื่อเริ่ม",
     "en": "No conversation is open. Type \"talk to the shop\" to start one.",
@@ -3033,6 +3064,39 @@ async def _maybe_auto_accept_setting(
     )
 
 
+async def _maybe_chat_policy_setting(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
+    permission_keys: list[str], language: str,
+) -> ChatReply | None:
+    text = (message or "").strip()
+    lowered = text.lower()
+    key = None
+    matched = None
+    for phrases, setting in ((CHAT_POLICY_SLA_PHRASES, "chat_sla_minutes"),
+                             (CHAT_POLICY_TIMEOUT_PHRASES, "chat_timeout_minutes")):
+        matched = next((p for p in phrases if lowered.startswith(p)), None)
+        if matched:
+            key = setting
+            break
+    if key is None and not _matches_phrase(text, CHAT_POLICY_VIEW):
+        return None
+    if "setting.manage" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    if key is not None:
+        rest = text[len(matched):].strip().rstrip("นาที").strip() if matched else ""
+        try:
+            minutes = int(rest)
+            if not 1 <= minutes <= 1440:
+                raise ValueError
+        except ValueError:
+            if rest:
+                return ChatReply(text=_t(CHAT_POLICY_BAD_NUMBER, language))
+        else:
+            await client.put_license_setting(str(license_id), key, minutes, actor_id=ctx.chann_uid)
+    sla, timeout = await live_chat.chat_settings(client, str(license_id))
+    return ChatReply(text=_t(CHAT_POLICY_STATE, language).format(sla=sla, timeout=timeout))
+
+
 def _language_switch_requested(message: str) -> str | None:
     if _matches_phrase(message, LANGUAGE_TO_EN):
         return "en"
@@ -3068,6 +3132,56 @@ PHOTO_FAILED = {
     "th": "รับรูปไม่สำเร็จ ลองส่งใหม่อีกครั้งครับ",
     "en": "Could not take the picture — please send it again.",
 }
+
+
+LOCATION_NO_JOB = {
+    "th": "ได้รับตำแหน่งแล้ว แต่ยังไม่มีงานที่รับไว้ให้เช็คอินครับ พิมพ์ \"งานที่เปิดรับ\" เพื่อรับงานก่อน",
+    "en": "Location received, but there is no job of yours to check in to. \"open jobs\" to take one first.",
+}
+LOCATION_NOTED = {
+    "th": "ได้รับตำแหน่งแล้วครับ ตอนนี้ระบบใช้ตำแหน่งสำหรับการเช็คอินของช่างเท่านั้น",
+    "en": "Location received. Right now locations are used for technician check-ins only.",
+}
+
+
+async def handle_incoming_location(
+    client: DataClient, *, ctx: ResolvedContext, oa: str, latitude: float, longitude: float,
+    language: str = "th",
+) -> ChatReply:
+    """A LINE location message. On the technician OA it IS the check-in,
+    with the coordinates the text command cannot carry (13.3: GPS on the
+    visit). Anywhere else it is acknowledged and not stored."""
+    if oa != "technician" or not ctx.license_id:
+        return ChatReply(text=_t(LOCATION_NOTED, language))
+    license_id = str(ctx.license_id)
+    try:
+        member, ticket, _inferred = await _ticket_for_action(
+            client, license_id, ctx, "", prefer_status=("assigned",),
+        )
+        if member is None or ticket is None:
+            return ChatReply(text=_t(LOCATION_NO_JOB, language), quick_replies=[("งานที่เปิดรับ", "งานที่เปิดรับ")])
+        code = str(ticket.get("ticket_number") or "")
+        result = await client.check_in_ticket(
+            license_id, str(ticket["id"]), member_id=str(member["id"]),
+            gps_lat=float(latitude), gps_lng=float(longitude), actor_id=ctx.chann_uid,
+        )
+    except DataTierError as exc:
+        return _field_service_failure(
+            exc, code=locals().get("code", ""), language=language, template=CHECKIN_FAILED,
+        )
+    except Exception:
+        log.exception("location check-in failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    done = _t(CHECKIN_DONE, language).format(
+        code=code,
+        customer=" ".join(p for p in (result.get("customer_name"), result.get("customer_phone")) if p) or "—",
+        address=result.get("service_address") or "—",
+    )
+    done += "\n" + ("(บันทึกตำแหน่งที่เช็คอินไว้แล้ว)" if language != "en" else "(check-in location recorded)")
+    return ChatReply(
+        text=done, entity_type="service_ticket", entity_id=str(result.get("id") or ""),
+        quick_replies=[("ปิดงาน", f"ปิดงาน {code}\nพบ: \nแก้: ")],
+    )
 
 
 async def handle_incoming_image(
@@ -10146,6 +10260,12 @@ async def handle_chat_message(
         )
         if setting_reply is not None:
             return setting_reply
+        policy_reply = await _maybe_chat_policy_setting(
+            client, ctx=ctx, license_id=license_id, message=message,
+            permission_keys=permission_keys, language=language,
+        )
+        if policy_reply is not None:
+            return policy_reply
 
     if ctx.oa == "customer":
         if _matches_phrase(message, HELP_TRIGGERS):

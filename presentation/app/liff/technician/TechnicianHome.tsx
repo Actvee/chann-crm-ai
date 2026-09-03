@@ -163,9 +163,36 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
     }
   }
 
+  /** Where the phone is, or null when the person declined or the device
+   *  cannot say within 8 s — a check-in never waits on GPS. */
+  function whereAmI(): Promise<{ lat: number; lng: number } | null> {
+    return new Promise((resolve) => {
+      if (typeof navigator === "undefined" || !navigator.geolocation) {
+        resolve(null);
+        return;
+      }
+      const timer = setTimeout(() => resolve(null), 8000);
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          clearTimeout(timer);
+          resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+        },
+        () => {
+          clearTimeout(timer);
+          resolve(null);
+        },
+        { enableHighAccuracy: true, timeout: 7000, maximumAge: 60000 },
+      );
+    });
+  }
+
   async function checkIn(ticket: Ticket) {
     setBusyId(ticket.id);
     try {
+      // 13.3: the visit's position lives on the check-in photo row; the
+      // owner asked (4 Sep) that check-in records where the technician
+      // stood. Declined GPS still checks in, and says so.
+      const here = await whereAmI();
       const response = await fetch(
         `/api/phase2/licenses/${licenseId}/tickets/${ticket.id}/check-in`,
         {
@@ -174,7 +201,9 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
             ...proxyHeaders(token, licenseId, "technician"),
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ member_id: memberId }),
+          body: JSON.stringify(
+            here ? { member_id: memberId, gps_lat: here.lat, gps_lng: here.lng } : { member_id: memberId },
+          ),
         },
       );
       if (!response.ok) {
@@ -193,7 +222,12 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
         await load();
         return;
       }
-      say(`${ticket.ticket_number} — ${t.dashboard.technician.checkedIn}`, "ok");
+      say(
+        `${ticket.ticket_number} — ${t.dashboard.technician.checkedIn} ${
+          here ? t.dashboard.technician.gpsRecorded : t.dashboard.technician.gpsMissing
+        }`,
+        "ok",
+      );
       await load();
     } catch {
       say(t.dashboard.technician.actionFailed, "error");

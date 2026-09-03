@@ -232,10 +232,6 @@ export default function SalesChats({ liffId }: { liffId: string }) {
           body: JSON.stringify({ content: draft.trim() }),
         },
       );
-      if (response.status === 409) {
-        say(copy.closedAlready, "error");
-        return;
-      }
       if (!response.ok) throw new Error(String(response.status));
       setDraft("");
       stickToBottom.current = true;
@@ -272,6 +268,7 @@ export default function SalesChats({ liffId }: { liffId: string }) {
     (copy.status as Record<string, string>)[value] ?? value;
   const isLive = (row: ChatSession) => row.status === "open" || row.status === "assigned";
   const slaChip = (row: ChatSession): { text: string; tone: "wait" | "late" } | null => {
+    if (row.status === "unanswered") return { text: copy.status.unanswered, tone: "late" };
     if (!row.sla_deadline || !isLive(row)) return null;
     const deadline = new Date(row.sla_deadline).getTime();
     if (deadline < Date.now()) {
@@ -408,8 +405,11 @@ export default function SalesChats({ liffId }: { liffId: string }) {
           ))
         )}
       </div>
-      {isLive(selected) ? (
-        canReply ? (
+      {!isLive(selected) && canReply && (
+        <p className="chat-note" data-tone="info">{copy.parkedNote}</p>
+      )}
+      {canReply ? (
+        (
           <form
             className="chat-composer"
             onSubmit={(e) => {
@@ -435,11 +435,9 @@ export default function SalesChats({ liffId }: { liffId: string }) {
               {busy ? t.dashboard.related.saving : copy.send}
             </button>
           </form>
-        ) : (
-          <p className="chat-note">{copy.readOnly}</p>
         )
       ) : (
-        <p className="chat-note">{copy.closedAlready}</p>
+        <p className="chat-note">{copy.readOnly}</p>
       )}
     </section>
   ) : (
