@@ -66,8 +66,8 @@ GUIDES: dict[str, dict] = {
             {
                 "key": "talk", "title": {"th": "คุยกับร้าน", "en": "Talk to the shop"},
                 "body": {
-                    "th": "พิมพ์ \"คุยกับร้าน\" (ต่อด้วยคำถามได้เลย เช่น \"คุยกับร้าน ราคาแอร์ 12000 BTU\") เจ้าหน้าที่ของร้านจะตอบกลับในแชทนี้ ระหว่างคุย ข้อความที่พิมพ์จะส่งถึงร้านทั้งหมด ไม่เปิดเป็นงานซ่อม · พิมพ์ \"จบการสนทนา\" เมื่อเสร็จ ไม่มีข้อความสักพักระบบปิดให้เอง · บนหน้าจอลูกค้ามีช่องแชทเดียวกัน",
-                    "en": "Type \"talk to the shop\" (a question may follow, e.g. \"talk to the shop price of a 12000 BTU air con\"). A person at the shop answers here. While talking, what you type goes to the shop and does not open a repair job. \"end chat\" when done; it closes itself after a quiet while. The home screen has the same chat box.",
+                    "th": "พิมพ์ \"คุยกับร้าน\" (ต่อด้วยคำถามได้เลย เช่น \"คุยกับร้าน ราคาแอร์ 12000 BTU\") เจ้าหน้าที่ของร้านจะตอบกลับในแชทนี้ ระหว่างคุย ข้อความที่พิมพ์จะส่งถึงร้านทั้งหมด (ไม่มีข้อความยืนยันทุกครั้ง ถ้าส่งไม่ได้ระบบจะบอก) ไม่เปิดเป็นงานซ่อม กลับมาคุยใหม่ก็ต่อจากแชทเดิม · พิมพ์ \"จบการสนทนา\" เมื่อเสร็จ ไม่มีข้อความสักพักระบบปิดให้เอง · บนหน้าจอลูกค้ามีช่องแชทเดียวกัน",
+                    "en": "Type \"talk to the shop\" (a question may follow, e.g. \"talk to the shop price of a 12000 BTU air con\"). A person at the shop answers here. While talking, what you type goes to the shop (no confirmation each time; a failure is reported) and does not open a repair job. Coming back later continues the same conversation. \"end chat\" when done; it closes itself after a quiet while. The home screen has the same chat box.",
                 },
                 "commands": ["คุยกับร้าน", "จบการสนทนา"],
                 "example": "คุยกับร้าน ราคาแอร์ 12000 BTU เท่าไหร่",
@@ -227,8 +227,8 @@ GUIDES: dict[str, dict] = {
             {
                 "key": "chats", "title": {"th": "แชทลูกค้า", "en": "Customer chats"},
                 "body": {
-                    "th": "ลูกค้าที่กด \"คุยกับร้าน\" ใน LINE บริการลูกค้า จะขึ้นที่ หน้าจอ > แชทลูกค้า และทุกคนได้ LINE แจ้ง ตอบที่หน้านั้นเท่านั้น (ตอบใน LINE ร้านไม่ถึงลูกค้า) คนแรกที่ตอบเป็นเจ้าของการสนทนา ถ้าปล่อยเกินเวลาตอบ (ตั้งค่า chat_sla_minutes, ค่าเริ่มต้น 30 นาที) ระบบเตือน ไม่มีข้อความ 2 ชั่วโมงปิดให้เอง",
-                    "en": "A customer who taps \"talk to the shop\" appears under home > Customer chats, and everyone is pushed a LINE. Answer there only (a reply in the shop's LINE never reaches them). The first to answer owns it. Past the reply time (chat_sla_minutes, default 30) you are reminded; two quiet hours and it closes itself.",
+                    "th": "ลูกค้าที่กด \"คุยกับร้าน\" ใน LINE บริการลูกค้า จะขึ้นที่ หน้าจอ > แชทลูกค้า และทุกคนได้ LINE แจ้ง ตอบที่หน้านั้นเท่านั้น (ตอบใน LINE ร้านไม่ถึงลูกค้า) คนแรกที่ตอบเป็นเจ้าของการสนทนา ถ้าปล่อยเกินเวลาตอบ (ตั้งค่า chat_sla_minutes, ค่าเริ่มต้น 30 นาที) ระบบเตือน ไม่มีข้อความ 1 ชั่วโมงปิดให้เอง",
+                    "en": "A customer who taps \"talk to the shop\" appears under home > Customer chats, and everyone is pushed a LINE. Answer there only (a reply in the shop's LINE never reaches them). The first to answer owns it. Past the reply time (chat_sla_minutes, default 30) you are reminded; an hour of silence and it closes itself.",
                 },
                 "commands": ["ตั้งค่ารับลูกค้าใหม่อัตโนมัติ"],
                 "example": "หน้าจอ > แชทลูกค้า",

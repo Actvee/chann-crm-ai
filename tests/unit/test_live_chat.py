@@ -164,7 +164,7 @@ class TestStartFromChat:
         reply = await handle_chat_message(client, message="แอร์ไม่เย็น ซ่อมได้ไหม", ctx=_customer())
         assert [r for r in client.recorded if r[0] == "add_chat_message"]
         assert not [r for r in client.recorded if r[0] == "create_ticket"]
-        assert "ส่งถึงร้านแล้ว" in reply.text or "ร้าน" in reply.text
+        assert reply.text == ""  # silence is the confirmation (owner, 4 Sep)
 
     async def test_commands_still_work_during_a_conversation(self, pushes):
         client = ChatFake(role="customer", permission_keys=[])
@@ -251,7 +251,7 @@ class TestSettings:
         ]
         assert await live_chat.chat_settings(client, LICENSE_ID) == (15, 24 * 60)
         client._settings = [{"setting_key": "chat_sla_minutes", "setting_value": "abc"}]
-        assert await live_chat.chat_settings(client, LICENSE_ID) == (30, 120)
+        assert await live_chat.chat_settings(client, LICENSE_ID) == (30, 60)
 
 
 def _harness(principal: TenantPrincipal):

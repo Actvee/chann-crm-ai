@@ -177,7 +177,22 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
           body: JSON.stringify({ member_id: memberId }),
         },
       );
-      if (!response.ok) throw new Error(String(response.status));
+      if (!response.ok) {
+        // The Data tier says why (its wording is stable); the person gets
+        // the reason in their language, not "try again".
+        const body = (await response.json().catch(() => null)) as { detail?: unknown } | null;
+        const detail = typeof body?.detail === "string" ? body.detail : "";
+        const reason = detail.includes("already")
+          ? t.dashboard.technician.alreadyCheckedIn
+          : detail.includes("not assigned")
+            ? t.dashboard.technician.notYours
+            : detail.includes("cannot be checked")
+              ? t.dashboard.technician.jobClosed
+              : t.dashboard.technician.actionFailed;
+        say(reason, "error");
+        await load();
+        return;
+      }
       say(`${ticket.ticket_number} — ${t.dashboard.technician.checkedIn}`, "ok");
       await load();
     } catch {

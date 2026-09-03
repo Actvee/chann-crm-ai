@@ -13,6 +13,7 @@ from fastapi import APIRouter, Header, HTTPException, Request, status
 
 from ..config import OA_CHANNELS, channel_secret
 from ..data_client import DataClient
+from ..services import live_chat
 from ..services.chat import (
     ChatReply,
     maybe_handle_storefront,
@@ -203,6 +204,17 @@ async def handle_webhook(
                 )
                 chat = ChatReply(text=unavailable_reply(language))
 
+            if not ((chat.text or "").strip() or chat.list_card or chat.images):
+                # An empty reply is a deliberate silence (a line into a live
+                # conversation); LINE gets no message, the log keeps a row.
+                replies.append({"chann_uid": ctx.chann_uid, "text": ""})
+                if oa in ("customer", "sales"):
+                    try:
+                        await live_chat.sweep(client)
+                    except Exception as exc:  # noqa: BLE001
+                        log.warning("chat sweep from the webhook failed: %s", exc)
+                continue
+
             try:
                 quick_reply_items = (
                     [
@@ -273,6 +285,14 @@ async def handle_webhook(
                         log.warning("could not record message entity map: %s", exc)
 
             replies.append({"chann_uid": ctx.chann_uid, "text": chat.text})
+            # Phase 15 clock: every message on the two OAs that hold
+            # conversations ticks the SLA/timeout sweep, so a quiet hour
+            # closes a conversation even when nobody opens the dashboard.
+            if oa in ("customer", "sales"):
+                try:
+                    await live_chat.sweep(client)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("chat sweep from the webhook failed: %s", exc)
     finally:
         await client.aclose()
 

@@ -55,7 +55,7 @@ class ChatSessionRepository:
 
     def open_session(
         self, scope: TenantScope, *, customer_chann_uid: str,
-        product_id: uuid.UUID | None = None, sla_minutes: int = 30, timeout_minutes: int = 120,
+        product_id: uuid.UUID | None = None, sla_minutes: int = 30, timeout_minutes: int = 60,
     ) -> tuple[ChatSession, bool]:
         """The customer's live conversation with this shop — the one that
         is running, or a new one. Returns (session, created)."""
@@ -66,6 +66,27 @@ class ChatSessionRepository:
                 existing.product_id = product_id
             self._s.flush()
             return existing, False
+        # The same person coming back (same LINE identity) continues the
+        # conversation they had — the shop sees one thread with its whole
+        # history, not a new empty one each time (owner, 4 Sep). Reopening
+        # counts as "created" for the caller: the agents are told again.
+        previous = self._s.execute(
+            select(ChatSession).where(
+                ChatSession.license_id == scope.license_id,
+                ChatSession.customer_chann_uid == customer_chann_uid,
+            ).order_by(ChatSession.updated_at.desc())
+        ).scalars().first()
+        if previous is not None:
+            previous.status = "open" if previous.assigned_to is None else "assigned"
+            previous.closed_at = None
+            previous.escalated_at = None
+            previous.sla_deadline = _now() + timedelta(minutes=max(1, sla_minutes))
+            previous.timeout_at = _now() + timedelta(minutes=max(1, timeout_minutes))
+            if product_id:
+                previous.product_id = product_id
+            previous.updated_at = _now()
+            self._s.flush()
+            return previous, True
         row = ChatSession(
             license_id=scope.license_id, customer_chann_uid=customer_chann_uid,
             status="open", product_id=product_id,
@@ -127,7 +148,7 @@ class ChatSessionRepository:
     def add_message(
         self, scope: TenantScope, session_id: uuid.UUID, *,
         sender_type: str, content: str, sender_chann_uid: str | None = None,
-        content_en: str | None = None, sla_minutes: int = 30, timeout_minutes: int = 120,
+        content_en: str | None = None, sla_minutes: int = 30, timeout_minutes: int = 60,
     ) -> ChatMessage:
         if sender_type not in SENDER_TYPES:
             raise ChatSessionConflict(f"unknown sender type: {sender_type!r}")

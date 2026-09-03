@@ -1,3 +1,26 @@
+### Plan C1 (4 Sep) — the owner's first test-round list (`fixes-3oa-v1`)
+
+- Chat "รายการสินค้า" printed "-" for every name: the list read `name`, the
+  Data tier sends `product_name`.
+- A line typed inside a live conversation gets no echo (`ChatReply(text="")`;
+  the webhook sends nothing for an empty reply and logs a row) — a failure
+  still answers. Owner: "แจ้งแค่ตอนที่ผิดพลาด".
+- Quiet close after ONE hour (`DEFAULT_TIMEOUT_MINUTES` 60, Data defaults
+  60). The webhook ticks `live_chat.sweep` after every message on the
+  customer and sales OAs, so the close and the customer's notice happen
+  without anyone opening the dashboard.
+- `ChatSessionRepository.open_session` reopens the customer's previous
+  conversation (any status) instead of creating a new one — one thread per
+  (shop, LINE identity) with its whole history; agents are told again.
+- The diary ("ดูนัดหมาย" / "นัดหมายทั้งหมด") lists only rows whose date is
+  today or later and carries no "(เลยกำหนด)" flag; past rows stay on record
+  (`_is_ahead`). Owner: appointments have no status.
+- Check-in: the Data tier now refuses a second check-in with "already
+  checked in"; the technician home maps the three refusals to words
+  (`alreadyCheckedIn`, `notYours`, `jobClosed`) instead of "try again".
+  Cloud Run logs on 3 Sep showed exactly this: 200, then 409 on the same
+  ticket a minute later.
+
 ### Plan B9 (4 Sep) — the test-case book (`test-cases-v1`, docs only)
 
 - `docs/TEST_CASES_3OA.md`: 12 cross-OA end-to-end cases (X-), Sale OA

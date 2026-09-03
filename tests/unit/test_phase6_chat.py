@@ -3624,7 +3624,7 @@ class TestTheAssistantUnderstandsAppointments:
         # whose it is — and one word widens it back to everyone's.
         assert "นัดหมายของ" in listing.text and customer["customer_id"] in listing.text
         everything = await handle_chat_message(client, message="นัดหมายทั้งหมด", ctx=_ctx())
-        assert "นัดหมายที่ค้างอยู่" in everything.text
+        assert "นัดหมายที่จะถึง" in everything.text
 
 
 
@@ -3845,7 +3845,7 @@ class TestListsFollowTheRecord:
         await handle_chat_message(client, message=f"ข้อมูลลูกค้า {a['customer_id']}", ctx=_ctx())
         reply = await handle_chat_message(client, message="นัดหมายทั้งหมด", ctx=_ctx())
         assert a["customer_id"] in reply.text and b["customer_id"] in reply.text
-        assert "นัดหมายที่ค้างอยู่" in reply.text
+        assert "นัดหมายที่จะถึง" in reply.text
 
     async def test_no_deals_reply_carries_the_person_it_resolved(self):
         """So replying to it works — the 21:49 dead end."""
@@ -4101,9 +4101,10 @@ class TestWorkListShowsNames:
         reply = await handle_chat_message(client, message="งานวันนี้", ctx=_ctx())
         assert "จิตวิทยา" not in reply.text, reply.text
         assert "ยังไม่มี" in reply.text or "ไม่มีงาน" in reply.text, reply.text
-        # The row is dropped from THIS list only — รายการเตือน still shows it.
+        # Owner, 4 Sep: an appointment has no status — a past row stays on
+        # record and is listed nowhere as ahead, the diary included.
         listing = await handle_chat_message(client, message="รายการเตือน", ctx=_ctx())
-        assert "จิตวิทยา" in listing.text and "เลยกำหนด" in listing.text
+        assert "จิตวิทยา" not in listing.text and "เลยกำหนด" not in listing.text
 
 
 class TestAIRoutedNotes:
@@ -6006,13 +6007,17 @@ class TestSeeingWhatIsComingUp:
         client = FakeDataClient(
             permission_keys=["followup.read", "followup.create", "customer.read"],
         )
+        from datetime import timedelta
+
+        self.soon = local_today() + timedelta(days=2)
+        self.later = local_today() + timedelta(days=5)
         client._follow_ups = [
             {
-                "due_date": "2026-09-06", "due_time": "14:00:00",
+                "due_date": self.later.isoformat(), "due_time": "14:00:00",
                 "notes": "ลูกค้ามาดูสินค้า", "status": "pending",
                 "entity_code": "C-2026-0009",
             },
-            {"due_date": "2026-09-03", "notes": "โทรตาม", "status": "pending"},
+            {"due_date": self.soon.isoformat(), "notes": "โทรตาม", "status": "pending"},
             {"due_date": "2026-08-01", "notes": "เก่า", "status": "done"},
         ]
         return client
@@ -6026,19 +6031,20 @@ class TestSeeingWhatIsComingUp:
     async def test_the_soonest_comes_first(self):
         """A list in insertion order is a list nobody can act on."""
         client = await self._with_reminders()
+        from chann_app.services.thai_datetime import format_thai_date
+
         reply = await handle_chat_message(client, message="ดูนัดหมาย", ctx=_ctx())
-        assert reply.text.index("3 ก.ย.") < reply.text.index("6 ก.ย.")
+        assert reply.text.index(format_thai_date(self.soon)) < reply.text.index(format_thai_date(self.later))
 
-    async def test_rows_name_their_record_and_flag_overdue(self):
-        """The list must print each row's code and mark slipped dates.
+    async def test_rows_name_their_record_and_do_not_flag_status(self):
+        """The list must print each row's code — ยกเลิกเตือน needs it — and
+        carries no status: an appointment is a date, and one that has
+        passed is simply not ahead any more (owner, 4 Sep). The old
+        rendering read entity_code off the row, a field the data tier
+        never sends, so no code ever showed."""
+        from datetime import timedelta
 
-        With the digest silent about overdue work (owner decision), this
-        list is the one place a misfiled row — like the one the old parser
-        put on 26 ก.ย. 2506 — can be found, and ยกเลิกเตือน needs the code
-        printed here to act on it. The old rendering read entity_code off
-        the row, a field the data tier never sends, so no code ever showed.
-        """
-        from datetime import date, timedelta
+        from chann_app.services.thai_datetime import local_today as _today
 
         client = FakeDataClient(
             permission_keys=["followup.read", "customer.read"],
@@ -6046,18 +6052,18 @@ class TestSeeingWhatIsComingUp:
         customer = await client.create_customer("L1", {
             "first_name": "จิตวิทยา", "last_name": "ลายดอก", "phone": "0879876646",
         })
-        slipped = date.today() - timedelta(days=3)
+        ahead = _today() + timedelta(days=3)
         client._follow_ups = [{
-            "due_date": slipped.isoformat(), "notes": "ตามใบเสนอราคา",
-            "status": "pending", "entity_type": "customer",
-            "entity_id": customer["id"],
+            "id": "f-1", "entity_type": "customer", "entity_id": customer["id"],
+            "due_date": ahead.isoformat(), "due_time": None, "notes": "โทรตาม",
+            "status": "pending", "owner_chann_uid": "CHN-S-000001",
         }]
         reply = await handle_chat_message(client, message="รายการเตือน", ctx=_ctx())
         assert customer["customer_id"] in reply.text, reply.text
-        assert "เลยกำหนด" in reply.text, reply.text
+        assert "เลยกำหนด" not in reply.text, reply.text
         # Thai (BE) date, like everything else the reader sees — not raw ISO.
-        assert str(slipped.year + 543) in reply.text, reply.text
-        assert slipped.isoformat() not in reply.text, reply.text
+        assert str(ahead.year + 543) in reply.text, reply.text
+        assert ahead.isoformat() not in reply.text, reply.text
 
     async def test_completed_reminders_are_not_shown(self):
         client = await self._with_reminders()

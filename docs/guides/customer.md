@@ -26,13 +26,13 @@ _EN: Browse products / show interest — Type "all products" or "search" and a p
 
 ## 3. คุยกับร้าน
 
-พิมพ์ "คุยกับร้าน" (ต่อด้วยคำถามได้เลย เช่น "คุยกับร้าน ราคาแอร์ 12000 BTU") เจ้าหน้าที่ของร้านจะตอบกลับในแชทนี้ ระหว่างคุย ข้อความที่พิมพ์จะส่งถึงร้านทั้งหมด ไม่เปิดเป็นงานซ่อม · พิมพ์ "จบการสนทนา" เมื่อเสร็จ ไม่มีข้อความสักพักระบบปิดให้เอง · บนหน้าจอลูกค้ามีช่องแชทเดียวกัน
+พิมพ์ "คุยกับร้าน" (ต่อด้วยคำถามได้เลย เช่น "คุยกับร้าน ราคาแอร์ 12000 BTU") เจ้าหน้าที่ของร้านจะตอบกลับในแชทนี้ ระหว่างคุย ข้อความที่พิมพ์จะส่งถึงร้านทั้งหมด (ไม่มีข้อความยืนยันทุกครั้ง ถ้าส่งไม่ได้ระบบจะบอก) ไม่เปิดเป็นงานซ่อม กลับมาคุยใหม่ก็ต่อจากแชทเดิม · พิมพ์ "จบการสนทนา" เมื่อเสร็จ ไม่มีข้อความสักพักระบบปิดให้เอง · บนหน้าจอลูกค้ามีช่องแชทเดียวกัน
 
 พิมพ์: `คุยกับร้าน ราคาแอร์ 12000 BTU เท่าไหร่`
 
 [IMAGE: customer-chat — หน้าจอแชท LINE: ลูกค้าพิมพ์ 'คุยกับร้าน ราคาแอร์ 12000 BTU' บอทตอบ 'เปิดการสนทนากับ ร้านเย็นสบาย แล้ว' แล้วมีข้อความจากร้าน '💬 ร้านเย็นสบาย: 15,900 บาทครับ' ไอคอนคนสวมหูฟังสีส้ม]
 
-_EN: Talk to the shop — Type "talk to the shop" (a question may follow, e.g. "talk to the shop price of a 12000 BTU air con"). A person at the shop answers here. While talking, what you type goes to the shop and does not open a repair job. "end chat" when done; it closes itself after a quiet while. The home screen has the same chat box._
+_EN: Talk to the shop — Type "talk to the shop" (a question may follow, e.g. "talk to the shop price of a 12000 BTU air con"). A person at the shop answers here. While talking, what you type goes to the shop (no confirmation each time; a failure is reported) and does not open a repair job. Coming back later continues the same conversation. "end chat" when done; it closes itself after a quiet while. The home screen has the same chat box._
 
 ## 4. ลงทะเบียนสินค้า (รับประกัน)
 

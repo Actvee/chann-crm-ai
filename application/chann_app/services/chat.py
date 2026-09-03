@@ -1498,7 +1498,7 @@ REMINDER_LIST_TRIGGERS = (
 )
 
 REMINDER_LIST_EMPTY = {
-    "th": "ยังไม่มีนัดหมายที่ค้างอยู่",
+    "th": "ยังไม่มีนัดหมายที่จะถึง",
     "en": "Nothing scheduled.",
 }
 REMINDER_LIST_HEAD_FOR = {
@@ -1510,7 +1510,7 @@ REMINDER_LIST_EMPTY_FOR = {
     "en": "No appointments for {code} yet.",
 }
 REMINDER_LIST_HEAD = {
-    "th": "นัดหมายที่ค้างอยู่ {count} รายการ",
+    "th": "นัดหมายที่จะถึง {count} รายการ",
     "en": "{count} upcoming",
 }
 
@@ -1539,6 +1539,10 @@ async def _handle_reminder_list(
     except Exception:
         log.exception("could not list follow-ups")
         return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    # An appointment has no status (owner, 4 Sep): the diary answers "what
+    # is still ahead"; anything already past stays on record and is not
+    # listed here.
+    rows = [r for r in rows if _is_ahead(r)]
 
     if scope is not None:
         entity_type, entity_id, code = scope
@@ -1590,10 +1594,18 @@ async def _handle_reminder_list(
     )
 
 
+def _is_ahead(row: dict) -> bool:
+    raw = str(row.get("due_date") or "")
+    try:
+        return date.fromisoformat(raw) >= local_today()
+    except ValueError:
+        return True
+
+
 async def _reminder_list_line(
     client: DataClient, license_id: str, row: dict, language: str,
 ) -> str:
-    """One diary row: real date (BE), เลยกำหนด flag, who, and what.
+    """One diary row: real date (BE), who, and what — no status.
 
     With the digest silent about overdue work (owner decision — see
     reminders.py), this list is the ONE place a slipped or misfiled row
@@ -1608,8 +1620,6 @@ async def _reminder_list_line(
     try:
         due_on = date.fromisoformat(raw)
         when = _fmt_date(due_on) if language == "th" else raw
-        if language == "th" and due_on < today:
-            when += " (เลยกำหนด)"
     except ValueError:
         when = raw
     if row.get("due_time"):
@@ -2534,11 +2544,11 @@ async def _handle_customer_chat_line(
     except Exception:
         log.exception("could not store a chat line")
         return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
-    return ChatReply(
-        text=_t(CHAT_LINE_SENT, language),
-        entity_type="chat_session", entity_id=str(session.get("id") or ""),
-        quick_replies=[("จบการสนทนา", "จบการสนทนา")],
-    )
+    # No echo: the customer is talking to a person, and "sent" after every
+    # line reads like a robot in the middle of the conversation (owner,
+    # 4 Sep). The webhook sends nothing for an empty reply; a failure
+    # above still answers in words.
+    return ChatReply(text="", entity_type="chat_session", entity_id=str(session.get("id") or ""))
 
 
 async def _handle_orders_mine(
@@ -8117,7 +8127,7 @@ async def _handle_product_list(
     for p in shown:
         price = p.get("unit_price")
         price_text = f" · {Decimal(str(price)):,.2f}" if price not in (None, "") else ""
-        lines.append(f"{p.get('sku') or '-'} · {p.get('name') or '-'}{price_text}")
+        lines.append(f"{p.get('sku') or '-'} · {p.get('product_name') or p.get('name') or '-'}{price_text}")
     text = "\n".join(lines) + _truncation_note(len(shown), len(products), language, "products")
     return ChatReply(
         text=text,

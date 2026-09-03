@@ -139,6 +139,10 @@ class FieldServiceRepository:
             raise ReportConflict(f"a {ticket.status} ticket cannot be checked in to")
         if ticket.assigned_to_ref != member_id:
             raise ReportConflict("this ticket is not assigned to you")
+        if ticket.status == "in_progress":
+            # A second tap after a successful check-in used to fail with a
+            # bare 409 the screen rendered as "try again" (4 Sep).
+            raise ReportConflict("already checked in")
 
         if photo_url or gps_lat is not None:
             self.add_photo(

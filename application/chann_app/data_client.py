@@ -1322,7 +1322,7 @@ class DataClient:
 
     async def open_chat_session(
         self, license_id: str, *, customer_chann_uid: str, product_id: str | None = None,
-        sla_minutes: int = 30, timeout_minutes: int = 120, actor_id: str | None = None,
+        sla_minutes: int = 30, timeout_minutes: int = 60, actor_id: str | None = None,
     ) -> dict:
         """The customer's live conversation with this shop. The returned
         dict carries `_created` (True when this call opened it)."""
@@ -1377,7 +1377,7 @@ class DataClient:
     async def add_chat_message(
         self, license_id: str, session_id: str, *, sender_type: str, content: str,
         sender_chann_uid: str | None = None, content_en: str | None = None,
-        sla_minutes: int = 30, timeout_minutes: int = 120,
+        sla_minutes: int = 30, timeout_minutes: int = 60,
     ) -> dict:
         resp = await self._client.post(
             f"{self._base}/internal/v1/licenses/{license_id}/chat-sessions/{session_id}/messages",

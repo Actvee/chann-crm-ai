@@ -984,7 +984,7 @@ class ChatSessionOpenIn(BaseModel):
     customer_chann_uid: str
     product_id: uuid.UUID | None = None
     sla_minutes: int = 30
-    timeout_minutes: int = 120
+    timeout_minutes: int = 60
 
 
 class ChatMessageIn(BaseModel):
@@ -993,7 +993,7 @@ class ChatMessageIn(BaseModel):
     sender_chann_uid: str | None = None
     content_en: str | None = None
     sla_minutes: int = 30
-    timeout_minutes: int = 120
+    timeout_minutes: int = 60
 
 
 class ChatSessionAssignIn(BaseModel):

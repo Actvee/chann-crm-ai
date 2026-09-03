@@ -81,9 +81,11 @@ class TestConversations:
             assert row.status == "closed" and row.closed_at is not None
             with pytest.raises(ChatSessionConflict):
                 repo.add_message(scope_a, row.id, sender_type="customer", content="x")
+            # The same customer comes back: the conversation they had is
+            # reopened with its history, not replaced (owner, 4 Sep).
             fresh, created = repo.open_session(scope_a, customer_chann_uid=customer)
-            assert created and fresh.id != row.id
-            assert len(repo.list_for_license(scope_a, status="all" if False else None)) == 2
+            assert created and fresh.id == row.id and fresh.status == "open" and fresh.closed_at is None
+            assert len(repo.list_for_license(scope_a)) == 1
             session.commit()
 
 

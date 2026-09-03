@@ -24,7 +24,7 @@ log = logging.getLogger(__name__)
 AGENT_ROLES = ("owner", "admin", "sales", "cs")
 LIVE = ("open", "assigned")
 DEFAULT_SLA_MINUTES = 30
-DEFAULT_TIMEOUT_MINUTES = 120
+DEFAULT_TIMEOUT_MINUTES = 60  # owner, 4 Sep: an hour of silence closes it
 SLA_KEYS = ("chat_sla_minutes", "chat_sla")
 TIMEOUT_KEYS = ("chat_timeout_minutes", "session_timeout")
 
