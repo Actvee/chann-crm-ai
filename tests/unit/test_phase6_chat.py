@@ -3286,7 +3286,11 @@ class TestTheAssistantUnderstandsAppointments:
         writes = [r for r in client.recorded if r[0] == "create_follow_up"]
         assert len(writes) == 1, reply.text
         listing = await handle_chat_message(client, message="นัดหมาย", ctx=_ctx())
-        assert "นัดหมายที่ค้างอยู่" in listing.text
+        # With that customer in context, the diary scopes to them and says
+        # whose it is — and one word widens it back to everyone's.
+        assert "นัดหมายของ" in listing.text and customer["customer_id"] in listing.text
+        everything = await handle_chat_message(client, message="นัดหมายทั้งหมด", ctx=_ctx())
+        assert "นัดหมายที่ค้างอยู่" in everything.text
 
 
 
@@ -3374,6 +3378,173 @@ class TestTheDueTimeLoop:
 
         missing = ["due_time", "phone"]
         assert _prune_missing(missing, {"entity": "customer"}, "อะไรก็ได้") == missing
+
+
+class TestAmbiguousNamesOfferAChoice:
+    """Owner requirement, 2 Sep: ชื่อซ้ำต้องมีให้เลือกคนได้ — everywhere.
+
+    Before this, _customer_named_in returned None on two matches, so
+    every path that used it either fell to the record in context (the
+    wrong person, answered confidently) or demanded a code. The choice
+    buttons re-send the person's own sentence with the name swapped for
+    a code: no pending state, no reply parser, and tapping one exercises
+    the exact deterministic path a typed code would.
+    """
+
+    async def _two_sombats(self, *extra_keys):
+        client = FakeDataClient(permission_keys=[
+            "customer.read", "deal.read", "note.read", "note.create", "note.update",
+            "followup.create", "followup.read", "followup.update", *extra_keys,
+        ])
+        a = await client.create_customer("L1", {
+            "first_name": "สมบัติ", "last_name": "ราชเทวี", "phone": "0879707586",
+        })
+        b = await client.create_customer("L1", {
+            "first_name": "สมบัติ", "last_name": "ชายทุ่ง", "phone": "0811111111",
+        })
+        return client, a, b
+
+    def _codes_in(self, reply, a, b):
+        texts = [t for _, t in (reply.quick_replies or [])]
+        return (
+            any(a["customer_id"] in t for t in texts)
+            and any(b["customer_id"] in t for t in texts)
+        )
+
+    async def test_the_diary_asks_which_sombat(self):
+        client, a, b = await self._two_sombats()
+        reply = await handle_chat_message(client, message="ดูนัดหมายของสมบัติ", ctx=_ctx())
+        assert a["customer_id"] in reply.text and b["customer_id"] in reply.text
+        assert self._codes_in(reply, a, b), reply.quick_replies
+
+    async def test_tapping_a_choice_runs_the_original_command(self):
+        client, a, b = await self._two_sombats()
+        await handle_chat_message(client, message=f"เตือน {a['customer_id']} พรุ่งนี้", ctx=_ctx())
+        picker = await handle_chat_message(client, message="ดูนัดหมายของสมบัติ", ctx=_ctx())
+        tapped = next(t for _, t in picker.quick_replies if a["customer_id"] in t)
+        reply = await handle_chat_message(client, message=tapped, ctx=_ctx())
+        assert "นัดหมายของ" in reply.text and a["customer_id"] in reply.text
+        assert b["customer_id"] not in reply.text
+
+    async def test_booking_an_appointment_asks_instead_of_guessing(self):
+        client, a, b = await self._two_sombats()
+        reply = await handle_chat_message(client, message="เตือน สมบัติ พรุ่งนี้", ctx=_ctx())
+        assert not [r for r in client.recorded if r[0] == "create_follow_up"]
+        assert self._codes_in(reply, a, b), reply.text
+
+    async def test_editing_a_note_asks_too(self):
+        client, a, b = await self._two_sombats()
+        reply = await handle_chat_message(
+            client, message="แก้บันทึก สมบัติ เป็น อะไรสักอย่าง", ctx=_ctx(),
+        )
+        assert not [r for r in client.recorded if r[0] == "update_note"]
+        assert self._codes_in(reply, a, b), reply.text
+
+    async def test_deals_of_a_duplicate_name_are_pickable_not_just_listed(self):
+        client, a, b = await self._two_sombats()
+        reply = await handle_chat_message(client, message="ดูดีลของ สมบัติ", ctx=_ctx())
+        assert self._codes_in(reply, a, b), reply.quick_replies
+
+    async def test_bare_customer_detail_follows_a_reply(self):
+        """"ข้อมูลลูกค้า" as a reply to a message about someone — the
+        person is right there in what was quoted."""
+        from chann_app.services.chat import handle_reply
+
+        client, a, b = await self._two_sombats()
+        client._mapping = {"entity_type": "customer", "entity_id": a["id"]}
+        reply = await handle_reply(
+            client, message_id="msg-x", reply_text="ข้อมูลลูกค้า", ctx=_ctx(),
+        )
+        assert a["customer_id"] in reply.text, reply.text
+        assert "ระบุคำค้น" not in reply.text
+
+
+class TestListsFollowTheRecord:
+    """The 21:48-21:49 screenshots.
+
+    Replying to สมบัติ's card with "ดูนัดหมายของลูกค้า" answered with the
+    whole shop's diary — nine records, one dated 1963 — and replying to
+    "สมบัติ ยังไม่มีดีล" answered "ไม่พบข้อความต้นฉบับ" because that reply
+    never carried the person it had just resolved. One pattern underneath:
+    list handlers read their trigger and threw the rest of the sentence,
+    and the context, away.
+    """
+
+    async def _two_customers_with_reminders(self):
+        client = FakeDataClient(permission_keys=[
+            "customer.read", "deal.read", "note.read", "note.create",
+            "followup.create", "followup.read", "followup.update",
+        ])
+        a = await client.create_customer("L1", {
+            "first_name": "สมบัติ", "last_name": "ราชเทวี", "phone": "0879707586",
+        })
+        b = await client.create_customer("L1", {
+            "first_name": "จิตวิทยา", "last_name": "ลายดอก", "phone": "0812345678",
+        })
+        await handle_chat_message(client, message=f"เตือน {a['customer_id']} วันที่ 4", ctx=_ctx())
+        await handle_chat_message(client, message=f"เตือน {b['customer_id']} วันที่ 5", ctx=_ctx())
+        return client, a, b
+
+    async def test_replying_to_a_card_scopes_the_diary_to_that_customer(self):
+        from chann_app.services.chat import handle_reply
+
+        client, a, b = await self._two_customers_with_reminders()
+        client._mapping = {"entity_type": "customer", "entity_id": a["id"]}
+        reply = await handle_reply(
+            client, message_id="msg-card", reply_text="ดูนัดหมายของลูกค้า", ctx=_ctx(),
+        )
+        assert a["customer_id"] in reply.text, reply.text
+        assert "จิตวิทยา" not in reply.text and b["customer_id"] not in reply.text
+        assert "นัดหมายของ" in reply.text
+
+    async def test_a_name_in_the_sentence_beats_the_record_in_context(self):
+        """"ดูนัดหมายของสมบัติ" typed while จิตวิทยา's card is open is about
+        สมบัติ — context answering here would be confidently wrong."""
+        client, a, b = await self._two_customers_with_reminders()
+        await handle_chat_message(client, message=f"ข้อมูลลูกค้า {b['customer_id']}", ctx=_ctx())
+        reply = await handle_chat_message(client, message="ดูนัดหมายของสมบัติ", ctx=_ctx())
+        assert a["customer_id"] in reply.text, reply.text
+        assert b["customer_id"] not in reply.text
+
+    async def test_thang_mod_widens_back_to_the_whole_diary(self):
+        client, a, b = await self._two_customers_with_reminders()
+        await handle_chat_message(client, message=f"ข้อมูลลูกค้า {a['customer_id']}", ctx=_ctx())
+        reply = await handle_chat_message(client, message="นัดหมายทั้งหมด", ctx=_ctx())
+        assert a["customer_id"] in reply.text and b["customer_id"] in reply.text
+        assert "นัดหมายที่ค้างอยู่" in reply.text
+
+    async def test_no_deals_reply_carries_the_person_it_resolved(self):
+        """So replying to it works — the 21:49 dead end."""
+        client, a, b = await self._two_customers_with_reminders()
+        reply = await handle_chat_message(client, message="ดูดีลของ สมบัติ", ctx=_ctx())
+        assert "ยังไม่มีดีล" in reply.text
+        assert reply.entity_type == "customer"
+        assert str(reply.entity_id) == str(a["id"])
+
+    async def test_the_notes_list_follows_context_instead_of_demanding_a_code(self):
+        client, a, b = await self._two_customers_with_reminders()
+        await handle_chat_message(
+            client, message=f"บันทึกว่า {a['customer_id']} ลูกค้าขอส่วนลด", ctx=_ctx(),
+        )
+        await handle_chat_message(client, message=f"ข้อมูลลูกค้า {a['customer_id']}", ctx=_ctx())
+        reply = await handle_chat_message(client, message="ดูบันทึก", ctx=_ctx())
+        assert "ระบุรหัส" not in reply.text, reply.text
+        assert "ลูกค้าขอส่วนลด" in reply.text
+
+    async def test_the_ai_reads_the_diary_through_a_typo(self):
+        """"ดูนักหมายของสมบัติ" — no trigger matches นักหมาย, but the model
+        reads it, and followup/read now has somewhere to go."""
+        client, a, b = await self._two_customers_with_reminders()
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "read", "entity": "followup",
+             "fields": {"target_name": "สมบัติ"}},
+            ensure_ascii=False,
+        )))
+        reply = await handle_chat_message(
+            client, message="ดูนักหมายของสมบัติ", ctx=_ctx(), ai_client=ai,
+        )
+        assert a["customer_id"] in reply.text, reply.text
+        assert b["customer_id"] not in reply.text
 
 
 class TestNotesCanBeCorrected:

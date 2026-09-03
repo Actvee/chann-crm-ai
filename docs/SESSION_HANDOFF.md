@@ -93,10 +93,75 @@ git: at 22:54 on 1 Sep the Sales OA still parsed `2026-09-06` as
 26 ก.ย. 2506, a bug `67f5a04` fixes.
 
 **One patch is prepared and NOT deployed**:
-`records-editable-everywhere-v2-*.patch`, on top of the deployed
-`e737bcf`. 898 tests pass (644 unit/boundary + 254 integration);
-presentation typechecks and builds. Application + presentation images,
-no migration. `bfe7aee`, `8251537` and `e737bcf` are deployed and live.
+`lists-follow-the-record-v2-*.patch`, on top of the deployed `d257f92`
+(records-editable). Supersedes v1, which was never deployed — v2 is
+cumulative and includes everything v1 had. 910 tests pass (656
+unit/boundary + 254 integration). Application image only — chat + tests
++ docs; the presentation tier is untouched. No migration.
+
+### The 21:48 screenshots — every list learns whose it is
+
+Replying to สมบัติ's card with "ดูนัดหมายของลูกค้า" answered with the
+whole shop's diary — nine records, one dated 1963 — and replying to
+"สมบัติ ยังไม่มีดีล" answered "ไม่พบข้อความต้นฉบับ". One pattern
+underneath, now fixed at the pattern level:
+
+19. **`_record_scope`** — the shared answer to "which record is this
+    list about": explicit code, then a NAME IN THE SENTENCE, then the
+    record in context — name before context, because "ดูนัดหมายของ
+    สมบัติ" typed over จิตวิทยา's open card is about สมบัติ, and context
+    would answer about the wrong person while sounding confident.
+    "ทั้งหมด" anywhere opts out to the license-wide view.
+20. **Reminder list and note list use it.** Scoped views name the record
+    in the heading, remember it as context, carry entity fields (so they
+    can be replied to), and offer ดูทั้งหมด/เพิ่มนัด. The note list had
+    demanded a typed code even with the record on screen.
+21. **Replies that resolve a person carry that person.** "สมบัติ ยังไม่
+    มีดีล" now sets entity fields and remembers — that reply resolving a
+    customer and then dropping them is exactly why replying to it died.
+22. **AI `followup`/`read` finally routes** — to the scoped list, so
+    "ดูนักหมายของสมบัติ" (typo, no trigger) still answers about สมบัติ.
+
+### The resolution audit (owner request, 2 Sep evening)
+
+"เอาแค่ตามฟีเจอร์ที่มี ยังมีส่วนที่ทำงานไม่สมบูรณ์อยู่ไหม ... ตรวจในทุกๆ
+ความเป็นไปได้" — so the audit question for every existing command became:
+can it be reached by code, by a name in the sentence, from context, and
+from a reply — and what happens when the name fits two people. Found and
+fixed:
+
+23. **Silent ambiguity in five paths.** `_customer_named_in` returned
+    None on two matches, so reminder create/move, note edit, and both
+    scoped lists either used the record in context (the wrong person,
+    confidently) or demanded a code. It now raises `_AmbiguousName`, and
+    every caller answers with `_name_choice`: buttons that re-send the
+    person's OWN sentence with the name swapped for each candidate's
+    code. No pending state, no reply parser — tapping simply runs the
+    command the way it would have been typed with the code known, so it
+    works identically for every command shape, present and future.
+24. **The glued-code trap, caught by the simulator.** The first rewrite
+    produced "ดูนัดหมายของC-2026-0002" — Thai letters are word
+    characters, so ENTITY_CODE_RE's `\b` cannot see a code glued to
+    "ของ", and the button resolved to nothing. Codes are now
+    space-padded on rewrite. This is the second latent bug this audit's
+    own tooling caught before a person did.
+25. **Bare "ข้อมูลลูกค้า" follows a reply.** Replying to a message about
+    someone and asking for their details answered "ระบุคำค้น" — the
+    detail handler now falls back to the customer in context.
+26. **The deals-of ambiguity is pickable.** It listed candidates as text
+    and asked the person to retype; now the same tap-to-choose buttons
+    as everywhere else.
+
+Deliberately NOT in scope, per the owner's framing (no new features):
+everything in CRM_COMPLETENESS's gap list, and per-row reply on lists.
+
+`docs/CRM_COMPLETENESS.md` (new) answers the owner's other question —
+"ครบตามแบบที่ระบบ CRM ในตลาดมีไหม" — as a table grounded in the parity
+checker and this week's live use: what is ✅/💬-only/🖥-only/⛔, what the
+market has that we do not (global search, CSV import/export, kanban,
+unified timeline, attachments), what we do better (Thai-natural LINE
+control with context), and a proposed order starting with tickets-on-UI.
+Keep it and check-parity's backlog telling the same story.
 
 ### The 12:39 screenshot + the owner's parity rule
 

@@ -157,7 +157,8 @@ async def reminder_lifecycle_day():
     print("\n=== SALES OA: managing reminders (2 Sep incident flows) ===")
     from datetime import date, timedelta
     c = T.FakeDataClient(permission_keys=[
-        "customer.read", "followup.create", "followup.read", "followup.update",
+        "customer.read", "deal.read", "note.read", "note.create",
+        "followup.create", "followup.read", "followup.update",
     ])
     cust = await c.create_customer("L1", {
         "first_name": "จิตวิทยา", "last_name": "ลายดอก", "phone": "0879876646",
@@ -210,6 +211,46 @@ async def reminder_lifecycle_day():
           "due_time" not in r.text and "service_address" not in r.text, r.text)
     check("a named customer with a date books the appointment",
           "สมบัติ" in r.text or "C-2026" in r.text, r.text)
+
+    # 21:48 tonight, as one salesperson would actually work: open a card,
+    # then ask about THAT person without retyping who they are.
+    await c.create_customer("L1", {
+        "first_name": "จิตวิทยา", "last_name": "ลายดอก", "phone": "0812340000",
+    })
+    r = await say(c, "sales", "เตือน C-2026-0002 วันที่ 5")
+    r = await say(c, "sales", f"ข้อมูลลูกค้า {code}")
+    r = await say(c, "sales", "ดูนัดหมายของลูกค้า")
+    check("the diary scopes to the customer on screen",
+          code in r.text and "C-2026-0002" not in r.text and "นัดหมายของ" in r.text,
+          r.text)
+    r = await say(c, "sales", "นัดหมายทั้งหมด")
+    check("one word widens it back to everyone's",
+          code in r.text and "C-2026-0002" in r.text, r.text)
+    r = await say(c, "sales", "ดูดีลของ สมบัติ")
+    check("the no-deals reply carries the person it resolved",
+          r.entity_type == "customer" and "ยังไม่มีดีล" in r.text, r.text)
+    r = await say(c, "sales", "ดูบันทึก")
+    check("notes follow the record in context, no code demanded",
+          "ระบุรหัส" not in r.text, r.text)
+
+    # Duplicate names must be pickable (owner rule, 2 Sep) — and the tap
+    # must land on the right person's diary.
+    dup = await c.create_customer("L1", {
+        "first_name": "สมบัติ", "last_name": "ชายทุ่ง", "phone": "0899999999",
+    })
+    await say(c, "sales", f"เตือน {dup['customer_id']} วันที่ 6")
+    r = await say(c, "sales", "ดูนัดหมายของสมบัติ")
+    check("a duplicate name becomes a choice, not a guess",
+          bool(r.quick_replies) and len(r.quick_replies) >= 2, r.text)
+    tapped = next(
+        (t for _, t in (r.quick_replies or []) if dup["customer_id"] in t), None,
+    )
+    check("one of the choices carries the original command with the code",
+          tapped is not None, str(r.quick_replies))
+    if tapped:
+        r = await say(c, "sales", tapped)
+        check("tapping it answers about that person only",
+              dup["customer_id"] in r.text and "ราชเทวี" not in r.text, r.text)
 
     unknown = ai({"action": "suggest", "entity": None, "fields": {}})
     r = await say(c, "sales", "ลูกค้าอยากดูสินค้าวันที่ 6 ที่จะถึงนี้ตอน 9 โมงเช้า",

@@ -950,7 +950,10 @@ async def _handle_note_edit(
             text=_t(NOT_FOUND_BY_CODE, language).format(what=exc.entity_type, code=exc.code)
         )
     if target is None:
-        target = await _customer_named_in(client, license_id, message, permission_keys)
+        try:
+            target = await _customer_named_in(client, license_id, message, permission_keys)
+        except _AmbiguousName as exc:
+            return _name_choice(message, exc, language)
     if target is None:
         return ChatReply(text=_t(NOTE_NEEDS_TARGET, language))
     entity_type, entity_id, code = target
@@ -1010,38 +1013,93 @@ def _note_body_after_trigger(message: str) -> str:
     return text.strip(" -–—")
 
 
+async def _record_scope(
+    client: DataClient, ctx: ResolvedContext, license_id: str, message: str,
+    permission_keys: list[str],
+) -> tuple[str, str, str] | None:
+    """Which single record a list request is about, if any.
+
+    The 21:48 screenshots: replying to สมบัติ's card with "ดูนัดหมายของ
+    ลูกค้า" answered with the whole shop's diary — nine records, one of
+    them from 1963 — because every list handler read only its trigger and
+    threw the rest of the sentence, and the context, away.
+
+    Order matters and is not the create-handler's order: an explicit code
+    wins, then a NAME IN THE SENTENCE, then the record in context — name
+    before context because "ดูนัดหมายของสมบัติ" typed while จิตวิทยา's
+    card is open is about สมบัติ, and context would answer about the wrong
+    person while looking perfectly confident.
+
+    "ทั้งหมด" anywhere opts out: the whole point of scoping by default is
+    that the person can always widen with one word, but can never tell a
+    wrongly-widened list apart from a complete one.
+    """
+    if "ทั้งหมด" in (message or ""):
+        return None
+    if _find_entity_code(message) is not None:
+        try:
+            return await _resolve_target_or_context(client, ctx, license_id, message)
+        except _TargetNotFound:
+            raise
+    named = await _customer_named_in(client, license_id, message, permission_keys)
+    if named is not None:
+        return named
+    try:
+        return await _resolve_target_or_context(client, ctx, license_id, message)
+    except _TargetNotFound:
+        return None
+
+
 async def _handle_note_list(
-    client: DataClient, *, license_id, message: str,
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
     permission_keys: list[str], language: str,
 ) -> ChatReply:
+    """A record's notes — resolved the same three ways every list now is.
+
+    This handler demanded a typed code and nothing else: "ดูบันทึก" with
+    the customer's card open, or "ดูบันทึกของสมบัติ", both answered
+    "ระบุรหัสด้วย" about a record already on screen — the exact
+    form-shaped failure the 21:48 screenshots showed for appointments.
+    """
     if "note.read" not in set(permission_keys):
         return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
 
-    found = _find_entity_code(message)
-    if found is None:
-        return ChatReply(text=_t(NOTE_NEEDS_TARGET, language))
-    entity_type, code = found
-
     license_id = str(license_id)
     try:
-        row = await _resolve_entity(client, license_id, entity_type, code)
-        if row is None:
-            return ChatReply(
-                text=_t(NOT_FOUND_BY_CODE, language).format(what=entity_type, code=code)
-            )
-        notes = await client.list_notes(license_id, entity_type, str(row["id"]))
+        scope = await _record_scope(client, ctx, license_id, message, permission_keys)
+    except _AmbiguousName as exc:
+        return _name_choice(message, exc, language)
+    except _TargetNotFound as exc:
+        return ChatReply(
+            text=_t(NOT_FOUND_BY_CODE, language).format(what=exc.entity_type, code=exc.code)
+        )
+    if scope is None:
+        return ChatReply(text=_t(NOTE_NEEDS_TARGET, language))
+    entity_type, entity_id, code = scope
+
+    try:
+        notes = await client.list_notes(license_id, entity_type, str(entity_id))
     except Exception:
         log.exception("note list failed")
         return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
 
+    await _remember_entity(
+        client, ctx, entity_type=entity_type, entity_id=str(entity_id), code=code,
+    )
     if not notes:
-        return ChatReply(text=_t(NOTE_EMPTY, language).format(code=code))
+        return ChatReply(
+            text=_t(NOTE_EMPTY, language).format(code=code),
+            entity_type=entity_type, entity_id=entity_id,
+        )
 
     lines = [f"บันทึกของ {code}:"]
     for note in notes[:LIST_LIMIT]:
         stamp = str(note.get("created_at") or "")[:10]
         lines.append(f"· {stamp} {note.get('body') or ''}")
-    return ChatReply(text="\n".join(lines))
+    return ChatReply(
+        text="\n".join(lines),
+        entity_type=entity_type, entity_id=entity_id,
+    )
 
 
 # Words that only tell us WHEN, not WHAT. Stripped so a reminder's subject
@@ -1104,6 +1162,14 @@ REMINDER_LIST_EMPTY = {
     "th": "ยังไม่มีนัดหมายที่ค้างอยู่",
     "en": "Nothing scheduled.",
 }
+REMINDER_LIST_HEAD_FOR = {
+    "th": "นัดหมายของ {code} — {count} รายการ",
+    "en": "{count} appointment(s) for {code}",
+}
+REMINDER_LIST_EMPTY_FOR = {
+    "th": "ยังไม่มีนัดหมายของ {code}",
+    "en": "No appointments for {code} yet.",
+}
 REMINDER_LIST_HEAD = {
     "th": "นัดหมายที่ค้างอยู่ {count} รายการ",
     "en": "{count} upcoming",
@@ -1112,17 +1178,59 @@ REMINDER_LIST_HEAD = {
 
 async def _handle_reminder_list(
     client: DataClient, *, ctx: ResolvedContext, license_id,
-    permission_keys: list[str], language: str,
+    permission_keys: list[str], language: str, message: str = "",
 ) -> ChatReply:
-    """What is coming up, soonest first."""
+    """What is coming up, soonest first — for one record when one is meant."""
     if "followup.read" not in set(permission_keys):
         return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+
+    try:
+        scope = await _record_scope(
+            client, ctx, str(license_id), message, permission_keys,
+        )
+    except _AmbiguousName as exc:
+        return _name_choice(message, exc, language)
+    except _TargetNotFound as exc:
+        return ChatReply(
+            text=_t(NOT_FOUND_BY_CODE, language).format(what=exc.entity_type, code=exc.code)
+        )
 
     try:
         rows = await client.list_follow_ups(str(license_id), status="pending")
     except Exception:
         log.exception("could not list follow-ups")
         return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    if scope is not None:
+        entity_type, entity_id, code = scope
+        shown = sorted(
+            (r for r in rows if str(r.get("entity_id")) == str(entity_id)),
+            key=lambda r: str(r.get("due_date") or "9999-12-31"),
+        )
+        await _remember_entity(
+            client, ctx, entity_type=entity_type, entity_id=str(entity_id), code=code,
+        )
+        if not shown:
+            return ChatReply(
+                text=_t(REMINDER_LIST_EMPTY_FOR, language).format(code=code),
+                entity_type=entity_type, entity_id=entity_id,
+                quick_replies=[
+                    ("เพิ่มนัด", f"เตือน {code} พรุ่งนี้"),
+                    ("ดูทั้งหมด", "นัดหมายทั้งหมด"),
+                ],
+            )
+        lines = []
+        for row in shown[:LIST_LIMIT]:
+            lines.append(await _reminder_list_line(client, str(license_id), row, language))
+        return ChatReply(
+            text=_t(REMINDER_LIST_HEAD_FOR, language).format(code=code, count=len(shown))
+            + "\n" + "\n".join(lines),
+            entity_type=entity_type, entity_id=entity_id,
+            quick_replies=[
+                ("เพิ่มนัด", f"เตือน {code} พรุ่งนี้"),
+                ("ดูทั้งหมด", "นัดหมายทั้งหมด"),
+            ],
+        )
 
     # Mine first, then everyone's — a salesperson opening this wants their
     # own day, not the shop's whole diary.
@@ -1133,38 +1241,46 @@ async def _handle_reminder_list(
     if not shown:
         return ChatReply(text=_t(REMINDER_LIST_EMPTY, language))
 
-    # With the digest silent about overdue work (owner decision — see
-    # reminders.py), this list is the ONE place a slipped or misfiled row
-    # can be seen, and ยกเลิกเตือน needs the code printed here to act on.
-    # The rows carry only entity_id, so name each the way the digest does;
-    # raw ISO dates and code-less lines made the list unusable for exactly
-    # the cleanup it exists to serve.
-    from .thai_datetime import format_thai_date as _fmt_date
-
-    today = datetime.now(BANGKOK_TZ).date()
     lines = []
     for row in shown[:LIST_LIMIT]:
-        raw = str(row.get("due_date") or "")
-        try:
-            due_on = date.fromisoformat(raw)
-            when = _fmt_date(due_on) if language == "th" else raw
-            if language == "th" and due_on < today:
-                when += " (เลยกำหนด)"
-        except ValueError:
-            when = raw
-        if row.get("due_time"):
-            when = f"{when} {str(row['due_time'])[:5]}"
-        who = await _describe_entity_by_id(
-            client, str(license_id), str(row.get("entity_type") or ""),
-            str(row.get("entity_id") or ""),
-        )
-        what = str(row.get("notes") or "").strip()
-        lines.append(f"· {when} · {who}{f' — {what}' if what else ''}")
+        lines.append(await _reminder_list_line(client, str(license_id), row, language))
 
     return ChatReply(
         text=_t(REMINDER_LIST_HEAD, language).format(count=len(shown))
         + "\n" + "\n".join(lines)
     )
+
+
+async def _reminder_list_line(
+    client: DataClient, license_id: str, row: dict, language: str,
+) -> str:
+    """One diary row: real date (BE), เลยกำหนด flag, who, and what.
+
+    With the digest silent about overdue work (owner decision — see
+    reminders.py), this list is the ONE place a slipped or misfiled row
+    can be seen, and ยกเลิกเตือน needs the code printed here to act on.
+    Shared by the whole-diary view and the one-record view so the two can
+    never drift apart in format.
+    """
+    from .thai_datetime import format_thai_date as _fmt_date
+
+    today = datetime.now(BANGKOK_TZ).date()
+    raw = str(row.get("due_date") or "")
+    try:
+        due_on = date.fromisoformat(raw)
+        when = _fmt_date(due_on) if language == "th" else raw
+        if language == "th" and due_on < today:
+            when += " (เลยกำหนด)"
+    except ValueError:
+        when = raw
+    if row.get("due_time"):
+        when = f"{when} {str(row['due_time'])[:5]}"
+    who = await _describe_entity_by_id(
+        client, license_id, str(row.get("entity_type") or ""),
+        str(row.get("entity_id") or ""),
+    )
+    what = str(row.get("notes") or "").strip()
+    return f"· {when} · {who}{f' — {what}' if what else ''}"
 
 
 def _mentions_a_datetime(message: str) -> bool:
@@ -1253,7 +1369,10 @@ async def _handle_reminder_move(
             text=_t(NOT_FOUND_BY_CODE, language).format(what=exc.entity_type, code=exc.code)
         )
     if target is None:
-        target = await _customer_named_in(client, license_id, message, permission_keys)
+        try:
+            target = await _customer_named_in(client, license_id, message, permission_keys)
+        except _AmbiguousName as exc:
+            return _name_choice(message, exc, language)
     if target is None:
         return ChatReply(text=_t(REMINDER_CANCEL_NEEDS_TARGET, language))
     entity_type, entity_id, code = target
@@ -1433,6 +1552,55 @@ async def _appointment_net(
     )
 
 
+class _AmbiguousName(Exception):
+    """Two people fit the name the sentence used.
+
+    Raised instead of returning None because silence here was a live bug:
+    with two สมชาย, "ดูนัดหมายของสมชาย" fell through to the record in
+    context — the wrong person, answered confidently — or to "ระบุรหัส".
+    The owner's requirement (2 Sep) is explicit: a duplicate name must
+    become a CHOICE.
+    """
+
+    def __init__(self, matches: list[dict], fragments: dict[str, str]):
+        self.matches = matches
+        # customer id -> the exact substring of the sentence that matched
+        # them, so the picker can rewrite the sentence per candidate.
+        self.fragments = fragments
+
+
+def _name_choice(message: str, exc: _AmbiguousName, language: str) -> ChatReply:
+    """The picker: same sentence, each button swaps the name for a code.
+
+    Tapping re-sends the person's own command with the ambiguity removed
+    — no pending state, no special reply parser, and it works identically
+    for every command shape present and future, because the command is
+    simply run again the way the person would have typed it had they
+    known the code.
+    """
+    lead = _t(CUSTOMER_AMBIGUOUS_LEAD, language).format(
+        name=next(iter(exc.fragments.values()), ""),
+    )
+    lines = [
+        f"· {c.get('customer_id')} {_display_name(c)}"
+        for c in exc.matches[:LIST_LIMIT]
+    ]
+    buttons = []
+    for c in exc.matches[:4]:
+        code = str(c.get("customer_id") or "")
+        frag = exc.fragments.get(str(c.get("id")), "")
+        # Padded with spaces: Thai letters count as word characters, so a
+        # code glued to "ของ" is invisible to ENTITY_CODE_RE's \b — the
+        # simulator caught the button "ดูนัดหมายของC-2026-0002" resolving
+        # to nothing at all.
+        if frag and frag in message:
+            rewritten = " ".join(message.replace(frag, f" {code} ", 1).split())
+        else:
+            rewritten = f"{message} {code}"
+        buttons.append((_display_name(c)[:20], rewritten))
+    return ChatReply(text=lead + "\n" + "\n".join(lines), quick_replies=buttons)
+
+
 async def _customer_named_in(
     client: DataClient, license_id: str, message: str, permission_keys: list[str],
 ) -> tuple[str, str, str] | None:
@@ -1444,8 +1612,8 @@ async def _customer_named_in(
     names a customer without a code, without a field, and without the word
     order any lookup helper expects.
 
-    Exactly one match or nothing: two Somchais in one sentence is a
-    question to ask, not a coin to flip.
+    One match resolves; several raise _AmbiguousName so the caller can
+    offer the choice; none returns None.
     """
     if "customer.read" not in set(permission_keys):
         return None
@@ -1453,19 +1621,26 @@ async def _customer_named_in(
     try:
         rows = await client.list_customers(license_id)
     except Exception:
-        log.exception("could not list customers to resolve a reminder target")
+        log.exception("could not list customers to resolve a target")
         return None
-    matches = []
+    matches: list[dict] = []
+    fragments: dict[str, str] = {}
     for row in rows:
         first = str(row.get("first_name") or "").strip()
         last = str(row.get("last_name") or "").strip()
         full = f"{first} {last}".strip()
         # Full name first, then the given name alone — "คุณสมบัติ" is how
         # people write it, with the honorific glued on and no surname.
-        if (full and full.lower() in text) or (len(first) >= 2 and first.lower() in text):
+        if full and full.lower() in text:
             matches.append(row)
-    if len(matches) != 1:
+            fragments[str(row["id"])] = full
+        elif len(first) >= 2 and first.lower() in text:
+            matches.append(row)
+            fragments[str(row["id"])] = first
+    if not matches:
         return None
+    if len(matches) > 1:
+        raise _AmbiguousName(matches, fragments)
     row = matches[0]
     return "customer", str(row["id"]), str(row.get("customer_id") or "")
 
@@ -1492,7 +1667,12 @@ async def _handle_reminder_create(  # noqa: PLR0913
             )
     if target is None:
         # Before giving up: a name in the sentence is a target too.
-        target = await _customer_named_in(client, license_id, message, permission_keys)
+        try:
+            target = await _customer_named_in(client, license_id, message, permission_keys)
+        except _AmbiguousName as exc:
+            # Two people fit — booking against either would be a guess
+            # written into the diary. The choice keeps the whole command.
+            return _name_choice(message, exc, language)
     if target is None:
         return ChatReply(text=_t(REMINDER_NEEDS_TARGET, language))
     entity_type, entity_id, code = target
@@ -3911,6 +4091,17 @@ async def _handle_customer_detail(
 ) -> ChatReply:
     if "customer.read" not in set(permission_keys):
         return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    if not code and ctx is not None:
+        # Bare "ข้อมูลลูกค้า" as a REPLY to a message about someone, or
+        # right after working on them, means that person — asking "ระบุ
+        # คำค้น" about the record the conversation is already on was the
+        # 21:49 dead end wearing different words.
+        try:
+            ref = await client.get_last_entity_ref(ctx.chann_uid, ctx.oa)
+        except Exception:
+            ref = None
+        if ref and ref.get("entity_type") == "customer":
+            code = str(ref.get("code") or "")
     if not code:
         return ChatReply(text=_t(SEARCH_NEEDS_TERM, language))
     try:
@@ -4439,6 +4630,15 @@ async def _handle_ai_understood_intent(
             client, ctx=ctx, license_id=license_id, message=text,
             permission_keys=permission_keys, language=language,
             actor_id=ctx.chann_uid, target=resolved,
+        )
+
+    if entity == "followup" and action == "read":
+        # "ดูนักหมายของสมบัติ" — a typo the triggers cannot catch but the
+        # model reads fine. Routes to the same scoped list, target and all.
+        return await _handle_reminder_list(
+            client, ctx=ctx, license_id=license_id,
+            message=_joined(code, target, message),
+            permission_keys=permission_keys, language=language,
         )
 
     if entity == "followup" and action == "update":
@@ -5592,7 +5792,8 @@ async def _handle_deal_query(
 
 
 async def _handle_deal_list(
-    client: DataClient, *, license_id, permission_keys: list[str], language: str,
+    client: DataClient, *, ctx: ResolvedContext, license_id,
+    permission_keys: list[str], language: str,
     open_only: bool = False, for_customer: str | None = None,
 ) -> ChatReply:
     if "deal.read" not in set(permission_keys):
@@ -5630,12 +5831,19 @@ async def _handle_deal_list(
             )
         if len(matches) > 1:
             # Guessing which "สมชาย" was meant would attach the answer to the
-            # wrong person's pipeline, so ask instead.
+            # wrong person's pipeline — so the choice, as buttons that
+            # re-send this very command with the name swapped for a code
+            # (owner requirement 2 Sep: a duplicate name must be pickable,
+            # not just listed).
             names = ", ".join(
                 f"{_customer_name(c)} ({c.get('customer_id')})" for c in matches[:5]
             )
             return ChatReply(
-                text=_t(DEAL_CUSTOMER_AMBIGUOUS, language).format(names=names)
+                text=_t(DEAL_CUSTOMER_AMBIGUOUS, language).format(names=names),
+                quick_replies=[
+                    (_customer_name(c)[:20], f"ดูดีลของ {c.get('customer_id')}")
+                    for c in matches[:4]
+                ],
             )
         matched_customer = matches[0]
         deals = [
@@ -5652,9 +5860,18 @@ async def _handle_deal_list(
 
     if not deals:
         if matched_customer is not None:
+            # The reply that resolved a person must carry that person:
+            # this one did not, so replying to "สมบัติ ยังไม่มีดีล" with a
+            # follow-up question answered "ไม่พบข้อความต้นฉบับ" (21:49).
             name = _customer_name(matched_customer)
+            await _remember_entity(
+                client, ctx, entity_type="customer",
+                entity_id=str(matched_customer["id"]),
+                code=str(matched_customer.get("customer_id") or ""),
+            )
             return ChatReply(
                 text=_t(DEAL_NONE_FOR_CUSTOMER, language).format(name=name),
+                entity_type="customer", entity_id=matched_customer["id"],
                 quick_replies=[("สร้างดีล", f"สร้างดีลให้ {name}")],
             )
         return ChatReply(
@@ -7493,7 +7710,7 @@ async def handle_chat_message(
             )
         if any(t in message.lower() for t in NOTE_LIST_TRIGGERS):
             return await _handle_note_list(
-                client, license_id=license_id, message=message,
+                client, ctx=ctx, license_id=license_id, message=message,
                 permission_keys=permission_keys, language=language,
             )
         note_trigger = next((t for t in NOTE_TRIGGERS if t in message.lower()), None)
@@ -7512,7 +7729,7 @@ async def handle_chat_message(
             # requests, and the contains-match here used to swallow the
             # second into the first.
             return await _handle_reminder_list(
-                client, ctx=ctx, license_id=license_id,
+                client, ctx=ctx, license_id=license_id, message=message,
                 permission_keys=permission_keys, language=language,
             )
         # Moving comes before both: "เลื่อนนัด"/"เปลี่ยนเวลา" contain a
@@ -7668,13 +7885,13 @@ async def handle_chat_message(
         for_customer = _parse_after_trigger(message, DEAL_FOR_CUSTOMER_TRIGGERS)
         if for_customer:
             return await _handle_deal_list(
-                client, license_id=license_id, permission_keys=permission_keys,
+                client, ctx=ctx, license_id=license_id, permission_keys=permission_keys,
                 language=language, for_customer=for_customer,
             )
 
         if _matches_phrase(message, DEAL_OPEN_PHRASES):
             return await _handle_deal_list(
-                client, license_id=license_id, permission_keys=permission_keys,
+                client, ctx=ctx, license_id=license_id, permission_keys=permission_keys,
                 language=language, open_only=True,
             )
         if any(t in message.lower() for t in DEAL_CLOSE_DATE_TRIGGERS):
@@ -7707,7 +7924,7 @@ async def handle_chat_message(
 
         if _matches_phrase(message, DEAL_LIST_PHRASES):
             return await _handle_deal_list(
-                client, license_id=license_id, permission_keys=permission_keys,
+                client, ctx=ctx, license_id=license_id, permission_keys=permission_keys,
                 language=language,
             )
         if _matches_phrase(message, PRODUCT_LIST_PHRASES):
