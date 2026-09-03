@@ -1,4 +1,4 @@
-# Session Handoff — 2 Sep 2026
+# Session Handoff — 3 Sep 2026
 
 Written because the conversations doing Phases 3-13 repeatedly hit their
 context limits. This is what the next AI session needs to pick up
@@ -76,28 +76,116 @@ clone.
 
 ## Where things stand
 
-`origin/main` HEAD is **`bfe7aee`**, **deployed** (2 Sep ~11:00): data
-and application verified via `/health` returning the full SHA and
-`schema_state: up-to-date`; presentation's image applied in the same
-terraform run (it exposes `/api/ready`, not `/health` — the one
-"mismatch" finding check-client has always carried). Migration head is
-**`0020_crm_essentials`**.
+`origin/main` HEAD is **`c7c4a8a`** (3 Sep, docs only: CLAUDE.md now
+opens with the operating reality). The last **code** commit, `1ccd301`
+(every list knows whose it is), is **deployed** — verified 3 Sep by
+reading `/health` on both services, not by reading this file:
 
-**The previous version of this section was stale in exactly the way the
-warning at the top of this file describes.** It said `e286648` was HEAD
-with `simulation-round2-v1-3155.patch` pending — that patch was in fact
-applied and pushed as `67f5a04`, and the dev-script toolbox followed as
-`c0c24b1`. What did NOT happen is the image build: **nothing after
-`e286648` has been deployed to Cloud Run.** Proof from live use, not from
-git: at 22:54 on 1 Sep the Sales OA still parsed `2026-09-06` as
-26 ก.ย. 2506, a bug `67f5a04` fixes.
+| tier | `git_commit` | notes |
+|---|---|---|
+| application | `1ccd301…` | `platform_version dev-20260903-1ccd301` |
+| data | `1ccd301…` | `schema_state: up-to-date`, head `0020_crm_essentials` |
+| presentation | — | `/api/ready` → `ready` (it exposes no `/health`; the one "mismatch" finding check-client has always carried) |
+
+So runtime and repo differ only by documentation. Migration head is
+**`0020_crm_essentials`** until the patch below is deployed.
+
+**This section has now been stale twice in two days**, each time in the
+way the warning at the top of this file describes. On 2 Sep it said
+`e286648` was HEAD with `simulation-round2` pending — that patch was in
+fact `67f5a04`, and nothing after `e286648` had been built (proof: at
+22:54 on 1 Sep the Sales OA still parsed `2026-09-06` as 26 ก.ย. 2506).
+On 3 Sep it said `bfe7aee` was deployed with `lists-follow-the-record-v2`
+pending — that patch was in fact `1ccd301`, pushed AND deployed, and the
+"pending" paragraph was left standing after the deploy script ran. The
+fix each time was the same: `git log` for what is pushed, `/health` for
+what is running; this file only records what those two said.
 
 **One patch is prepared and NOT deployed**:
-`lists-follow-the-record-v2-*.patch`, on top of the deployed `d257f92`
-(records-editable). Supersedes v1, which was never deployed — v2 is
-cumulative and includes everything v1 had. 910 tests pass (656
-unit/boundary + 254 integration). Application image only — chat + tests
-+ docs; the presentation tier is untouched. No migration.
+`homes-and-phase14a-v1-*.patch` on `1ccd301` — the owner asked for one
+patch. It is two independent pieces of work in one diff:
+
+1. Technician + customer homes, per-OA themes, rich menus (see "Three
+   OAs" below). Application + presentation.
+2. **Phase 14-A**, data tier: migration `0021_approvals`, three models,
+   `phase14.py` repository, nine internal routes, 12 integration tests
+   including HTTP and multi-tenant.
+
+**Has a migration.** The deploy script orders it: build the `database`
+image → update + execute the migrate job (wait) → only then build and
+deploy data/application/presentation. The new data image's
+`EXPECTED_MIGRATION_HEAD` is `0021_approvals` and it will refuse to
+serve against an older schema, which is the guard working.
+668 tests pass (656 unit/boundary + 266 integration, 12 of them Phase 14).
+
+### Phase 14-A — approvals in the Data Tier (owner decisions, 3 Sep)
+
+Decisions encoded, not configured: the default flow is ONE step, the CS
+who owns the ticket (falls back to the `admin` role when a ticket has no
+owner, so a report never waits on nobody); **"ปิดงาน" is the last
+approver passing** — the report becomes `approved` and the survey row is
+created in that same transaction (the check-out lesson: two facts that
+must agree get written together); a reject stops the flow and marks the
+report `rejected`; a resubmit starts fresh (old steps are cleared, or the
+UNIQUE(entity, step_order) would rightly refuse). Workflows are lazy per
+license — a migration that seeds business rules for every tenant is a
+rule nobody can later find the origin of — and `replace_workflow`
+retires the old one with `is_active=false` so "who changed the flow" is
+answered by the rows. Audit uses the existing `status`/`reject` verbs;
+no new verb (Phase 3). The spec's `satisfaction_surveys.license_id →
+services.id` is a typo; it keys on `licenses.id` like everything else.
+
+Next: **14-B** (Application: one `services/approval.py` that chat and
+dashboard both call; hook at both check-out paths; chat commands
+รายการรออนุมัติ / อนุมัติ SR-… / ไม่อนุมัติ …; policy-by-prompt under
+`approval.manage`; Customer OA survey answer) then **14-C** (queue +
+config pages, survey card). Plan: `docs/PHASE14_PLAN.md`.
+
+### Three OAs, three homes, three menus (owner request, 3 Sep)
+
+The technician and customer OAs shared the sales dashboard's furniture.
+A screen built for staff and then fenced off always leaks staff
+furniture, so both got homes built from their own verbs up:
+
+27. **`/liff/technician` — the technician's home (blue).** My jobs, open
+    jobs, claim, check-in, and **check-out that IS the service report**
+    — one action, because the Data Tier writes the report and the status
+    change in one transaction and a screen that let you close without
+    reporting would unmake that one tap at a time. Needed
+    `POST /tickets/{id}/check-out` in the Application tier, which never
+    existed (chat reached the Data Tier directly) — that closes the
+    check-out parity gap.
+28. **`/liff/customer` — the customer's home (orange).** แจ้งซ่อม (asks
+    for the fault and an optional S/N, never the customer's own name and
+    phone — the session proves those better than typing), สถานะการซ่อม,
+    ลงทะเบียนรับประกัน. Needed `POST /warranties` + `GET /warranties/mine`
+    (scoped to the caller by construction). The fault form is
+    `ticket.create` from the dashboard — off the parity backlog.
+29. **One theme variable set, three values.** `[data-theme]` on a
+    wrapper flips `--accent`; components never know which OA they are
+    on. Sale green `#178a50`, Tech blue `#1f6fd6`, CS orange `#e8731a`,
+    all AA against white at button sizes.
+30. **Rich menus as one design system** (`scripts/richmenu/`). Same 3×2
+    grid, type scale and drawn geometric icons across all three; the OA
+    color on the header and ONE primary tile per menu (where the thumb
+    should start), the other five near-white with a 6px accent baseline.
+    Thai labels auto-shrink to fit rather than wrap — a two-line button
+    reads as two buttons. `richmenu-apply.sh` creates/uploads/sets the
+    default per OA and **turns any LIFF-uri button whose id is not yet
+    configured into a message action**, so the menus work today with no
+    dead buttons and upgrade to deep links by re-running.
+31. **Seam bug caught before shipping.** The first customer home guessed
+    `purchase_date`/`expires_on`; the Data Tier's names are
+    `warranty_start`/`warranty_end`. check-fields flagged it, and a
+    `WarrantyOut` schema now exists so the contract is checkable rather
+    than hand-verified (MemberOut once shipped without an id the same
+    way). Also found: check-parity's context window was a consuming
+    regex group and swallowed the second fetch in a Promise.all —
+    `/warranties/mine` had vanished from the scan. Lookahead now.
+
+Rich menu rollout is a separate manual step (channel tokens + LIFF
+URLs), documented at the top of `scripts/richmenu/richmenu-apply.sh`;
+the three PNGs and area JSONs are generated by `generate.py`.
 
 ### The 21:48 screenshots — every list learns whose it is
 
