@@ -135,8 +135,26 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
           body: JSON.stringify({ member_id: memberId }),
         },
       );
-      if (!response.ok) throw new Error(String(response.status));
-      say(`${ticket.ticket_number} — ${t.dashboard.tickets.claimed}`, "ok");
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as { detail?: unknown } | null;
+        const detail = typeof body?.detail === "string" ? body.detail : JSON.stringify(body?.detail ?? "");
+        say(
+          detail.includes("team lead accepts")
+            ? t.dashboard.technician.leadFirst
+            : t.dashboard.tickets.claimFailed,
+          "error",
+        );
+        return;
+      }
+      const row = (await response.json()) as Ticket;
+      say(
+        `${ticket.ticket_number} — ${
+          row.assigned_target_type === "technician_team"
+            ? t.dashboard.technician.acceptedForTeam
+            : t.dashboard.tickets.claimed
+        }`,
+        "ok",
+      );
       await load();
     } catch {
       say(t.dashboard.tickets.claimFailed, "error");
@@ -280,6 +298,22 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
       x.status !== "completed" &&
       x.status !== "cancelled",
   );
+  // Given to a team I am on, not yet accepted by its lead (12.4).
+  const offeredToTeam = tickets.filter(
+    (x) =>
+      x.assigned_target_type === "technician_team" &&
+      x.accept_status !== "accepted" &&
+      x.status !== "completed" &&
+      x.status !== "cancelled",
+  );
+  // Accepted for the team, waiting for one of us to take it.
+  const teamOpen = tickets.filter(
+    (x) =>
+      x.assigned_target_type === "technician_team" &&
+      x.accept_status === "accepted" &&
+      x.status !== "completed" &&
+      x.status !== "cancelled",
+  );
   // Open = nobody has taken it. It used to exclude only MY accepted
   // jobs, so a colleague's job stayed in this list for everyone — and
   // the one I had just taken looked like it was still open (owner, 3
@@ -290,7 +324,8 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
       x.status !== "completed" &&
       x.status !== "cancelled" &&
       x.accept_status !== "accepted" &&
-      x.assigned_to_ref !== memberId,
+      x.assigned_to_ref !== memberId &&
+      x.assigned_target_type !== "technician_team",
   );
   const canWork = permissions.has("ticket.update");
   const reportStatus = (code: string) =>
@@ -457,6 +492,78 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
             </ul>
           )}
         </section>
+
+        {offeredToTeam.length > 0 && (
+          <section className="section callout" data-tone="ok">
+            <div className="section-head">
+              <h2>
+                {t.dashboard.technician.offeredToTeam} ({offeredToTeam.length})
+              </h2>
+            </div>
+            <ul className="list">
+              {offeredToTeam.map((ticket) => (
+                <li key={ticket.id} className="card">
+                  <TicketRow ticket={ticket} statusLabel={statusLabel(ticket.status)} />
+                  {canWork && (
+                    <div className="card-actions">
+                      <button
+                        type="button"
+                        className="btn"
+                        data-variant="primary"
+                        disabled={busyId !== ""}
+                        onClick={() => void claim(ticket)}
+                      >
+                        {busyId === ticket.id ? t.dashboard.related.saving : t.dashboard.technician.acceptForTeam}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn"
+                        data-variant="quiet"
+                        disabled={busyId !== ""}
+                        onClick={() => {
+                          setDeclineFor(ticket);
+                          setDeclineReason("");
+                        }}
+                      >
+                        {t.dashboard.technician.decline}
+                      </button>
+                    </div>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        {teamOpen.length > 0 && (
+          <section className="section">
+            <div className="section-head">
+              <h2>
+                {t.dashboard.technician.teamOpen} ({teamOpen.length})
+              </h2>
+            </div>
+            <ul className="list">
+              {teamOpen.map((ticket) => (
+                <li key={ticket.id} className="card">
+                  <TicketRow ticket={ticket} statusLabel={statusLabel(ticket.status)} />
+                  {canWork && (
+                    <div className="card-actions">
+                      <button
+                        type="button"
+                        className="btn"
+                        data-variant="primary"
+                        disabled={busyId !== ""}
+                        onClick={() => void claim(ticket)}
+                      >
+                        {busyId === ticket.id ? t.dashboard.related.saving : t.dashboard.tickets.claim}
+                      </button>
+                    </div>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
 
         {offered.length > 0 && (
           <section className="section callout" data-tone="ok">

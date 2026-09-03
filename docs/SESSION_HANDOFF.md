@@ -268,6 +268,24 @@ deploy data/application/presentation. The new data image's
 serve against an older schema, which is the guard working.
 668 tests pass (656 unit/boundary + 266 integration, 12 of them Phase 14).
 
+### Plan B2 (3 Sep, late) — the team flow as 12.4 states it, without a migration
+
+"หัวหน้าทีมกดรับ = ทีมรับ → เปิด public ในทีม → สมาชิกกดรับ". Modelled on the
+columns that exist: a team job accepted by the lead keeps
+`assigned_target_type=technician_team` / `assigned_to_ref=<team>` and
+becomes `accept_status=accepted` (status `assigned`); a member's claim
+on such a job then narrows it to them. A team with no lead lets any
+member accept for it (a two-person shop must not be stuck). The lead may
+decline for the team (`reject`). `ServiceTicketRepository.claim/reject`
++ `_team_membership/_team_has_lead`; `GET technician-teams/{id}/members`
+now returns `is_lead` (`TeamMemberDetailOut`) so the teams page's lead
+badge is real. Chat: a lead's "รับงาน" replies "รับให้ทีมแล้ว" and pushes
+the team ("ใครไปพิมพ์ รับงาน T-…"); "งานของทีม" lists accepted-for-team
+jobs; a non-lead is told "หัวหน้าทีมต้องกดรับให้ทีมก่อน". Technician home:
+"มอบหมายให้ทีม รอหัวหน้ารับ" (accept for team / decline) and "งานของทีม
+รอคนรับ" (take). Integration: `test_phase12_team_flow.py`; the older
+one-step team claim tests became two-step.
+
 ### The guides (3 Sep, late) — one source for "วิธีใช้", the app page, and the handout
 
 Owner: keep the how-to current with every change; guidance that is

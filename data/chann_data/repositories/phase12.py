@@ -317,21 +317,31 @@ class ServiceTicketRepository:
             raise TicketNotFound("ticket not found in this tenant")
         if row.status in ("completed", "cancelled"):
             raise TicketConflict(f"a {row.status} ticket cannot be claimed")
-        if row.accept_status == "accepted":
+        if row.accept_status == "accepted" and row.assigned_target_type != "technician_team":
             raise TicketConflict("this ticket has already been accepted")
 
-        if row.visibility == "private":
-            allowed = row.assigned_to_ref == member_id
-            if not allowed and row.assigned_target_type == "technician_team":
-                allowed = self._s.execute(
-                    select(TechnicianTeamMember.id).where(
-                        TechnicianTeamMember.license_id == scope.license_id,
-                        TechnicianTeamMember.team_id == row.assigned_to_ref,
-                        TechnicianTeamMember.member_id == member_id,
-                    )
-                ).first() is not None
-            if not allowed:
-                raise TicketConflict("this ticket is not open to you")
+        if row.assigned_target_type == "technician_team" and row.assigned_to_ref:
+            # 12.4, the team flow: the lead accepts on the team's behalf
+            # (the ticket stays the team's, marked accepted), which opens
+            # it inside the team; then a member takes it for themselves.
+            # A team with no lead lets any member accept for it, so a
+            # two-person shop is not stuck. Someone outside the team may
+            # take it only if it is public.
+            membership = self._team_membership(scope, row.assigned_to_ref, member_id)
+            if membership is None:
+                if row.visibility == "private":
+                    raise TicketConflict("this ticket is not open to you")
+            elif row.accept_status != "accepted":
+                leads = self._team_has_lead(scope, row.assigned_to_ref)
+                if leads and not membership.is_lead:
+                    raise TicketConflict("the team lead accepts a team job first")
+                row.accept_status = "accepted"
+                row.status = "assigned"
+                self._s.flush()
+                return row
+            # Team-accepted (or public): the member takes it below.
+        elif row.visibility == "private" and row.assigned_to_ref != member_id:
+            raise TicketConflict("this ticket is not open to you")
 
         row.assigned_target_type = "technician"
         row.assigned_to_ref = member_id
@@ -343,6 +353,24 @@ class ServiceTicketRepository:
         row.status = "assigned"
         self._s.flush()
         return row
+
+    def _team_membership(self, scope: TenantScope, team_id, member_id) -> TechnicianTeamMember | None:
+        return self._s.execute(
+            select(TechnicianTeamMember).where(
+                TechnicianTeamMember.license_id == scope.license_id,
+                TechnicianTeamMember.team_id == team_id,
+                TechnicianTeamMember.member_id == member_id,
+            )
+        ).scalars().first()
+
+    def _team_has_lead(self, scope: TenantScope, team_id) -> bool:
+        return self._s.execute(
+            select(TechnicianTeamMember.id).where(
+                TechnicianTeamMember.license_id == scope.license_id,
+                TechnicianTeamMember.team_id == team_id,
+                TechnicianTeamMember.is_lead.is_(True),
+            )
+        ).first() is not None
 
     def reject(
         self, scope: TenantScope, ticket_id: uuid.UUID, *, member_id: uuid.UUID,
@@ -358,7 +386,15 @@ class ServiceTicketRepository:
         if row is None:
             raise TicketNotFound("ticket not found in this tenant")
         if row.assigned_to_ref != member_id:
-            raise TicketConflict("this ticket was not assigned to you")
+            # A team lead may decline for the team (12.4: "ไม่รับ → แจ้ง
+            # กลับผู้มอบหมาย" applies to the team the job was given to).
+            is_lead_of_team = (
+                row.assigned_target_type == "technician_team"
+                and (m := self._team_membership(scope, row.assigned_to_ref, member_id)) is not None
+                and (m.is_lead or not self._team_has_lead(scope, row.assigned_to_ref))
+            )
+            if not is_lead_of_team:
+                raise TicketConflict("this ticket was not assigned to you")
         row.accept_status = "rejected"
         # Back to open so it shows up in the dispatcher's queue again.
         row.status = "open"

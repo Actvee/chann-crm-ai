@@ -163,6 +163,7 @@ from ..schemas import (
     ProductIn,
     ProductOut,
     TeamIn,
+    TeamMemberDetailOut,
     TeamMemberIn,
     TeamMemberOut,
     TeamOut,
@@ -3531,7 +3532,7 @@ def set_service_report_status(
 
 @router.get(
     "/licenses/{license_id}/technician-teams/{team_id}/members",
-    response_model=list[MemberOut],
+    response_model=list[TeamMemberDetailOut],
 )
 def list_technician_team_members(
     license_id: uuid.UUID, team_id: uuid.UUID, session: Session = Depends(get_session),
@@ -3542,10 +3543,16 @@ def list_technician_team_members(
     member may take it, so telling only the lead would make the others'
     ability to claim it useless.
     """
-    rows = AssignmentRuleRepository(session).team_members_by_id(
+    rows = AssignmentRuleRepository(session).team_members_with_lead(
         TenantScope(license_id=license_id), team_id=team_id,
     )
-    return rows
+    return [
+        TeamMemberDetailOut(
+            id=member.id, chann_uid=member.chann_uid, role=member.role,
+            status=member.status, is_lead=is_lead,
+        )
+        for member, is_lead in rows
+    ]
 
 
 # --------------------------------------------------------- Phase 14 approvals

@@ -115,6 +115,26 @@ class AssignmentRuleRepository:
             for member, _link in rows
         ]
 
+    def team_members_with_lead(
+        self, scope: TenantScope, *, team_id: uuid.UUID,
+    ) -> list[tuple[LicenseMember, bool]]:
+        """(member, is_lead) for a team — the lead flag is what the
+        technician home and the teams page show, and what 12.4's
+        lead-first acceptance is decided on."""
+        rows = self._s.execute(
+            select(LicenseMember, TechnicianTeamMember.is_lead)
+            .join(
+                TechnicianTeamMember,
+                TechnicianTeamMember.member_id == LicenseMember.id,
+            )
+            .where(
+                TechnicianTeamMember.license_id == scope.license_id,
+                TechnicianTeamMember.team_id == team_id,
+                LicenseMember.status == "active",
+            )
+        ).all()
+        return [(member, bool(is_lead)) for member, is_lead in rows]
+
     def team_members_by_id(
         self, scope: TenantScope, *, team_id: uuid.UUID,
     ) -> list[LicenseMember]:

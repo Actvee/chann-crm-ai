@@ -332,11 +332,15 @@ class TestClaimAndReject:
                 )
 
     def test_a_team_member_may_claim_a_ticket_given_to_their_team(self, tenant):
+        """12.4 in two steps: the team accepts (any member, since this
+        team has no lead), then a member takes it for themselves."""
         ticket_id = self._assigned(tenant, visibility="private", to_team=True)
         with tenant["session"]() as session:
-            row = ServiceTicketRepository(session).claim(
-                tenant["scope"], ticket_id, member_id=tenant["members"][0],
-            )
+            repo = ServiceTicketRepository(session)
+            accepted = repo.claim(tenant["scope"], ticket_id, member_id=tenant["members"][0])
+            assert accepted.assigned_target_type == "technician_team"
+            assert accepted.accept_status == "accepted"
+            row = repo.claim(tenant["scope"], ticket_id, member_id=tenant["members"][0])
             session.commit()
             # Claiming narrows a team assignment down to one person.
             assert row.assigned_target_type == "technician"

@@ -4158,14 +4158,14 @@ TICKET_OPEN_EMPTY = {
 async def _handle_ticket_list(
     client: DataClient, *, ctx: ResolvedContext, license_id,
     permission_keys: list[str], language: str, mine: bool = False,
-    open_only: bool = False,
+    open_only: bool = False, team_only: bool = False,
 ) -> ChatReply:
     if "ticket.read" not in set(permission_keys):
         return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
 
     license_id = str(license_id)
     try:
-        if mine or open_only:
+        if mine or open_only or team_only:
             member = await client.get_member(license_id, ctx.chann_uid)
             if member is None:
                 return ChatReply(text=_t(TICKET_EMPTY, language))
@@ -4175,6 +4175,14 @@ async def _handle_ticket_list(
             tickets = await client.list_tickets(
                 license_id, visible_to=str(member["id"]),
             )
+            if team_only:
+                # Accepted by the lead for a team I am on, not yet taken.
+                tickets = [
+                    t for t in tickets
+                    if str(t.get("assigned_target_type") or "") == "technician_team"
+                    and str(t.get("accept_status") or "") == "accepted"
+                    and str(t.get("status") or "") not in ("completed", "cancelled")
+                ]
             if open_only:
                 me = str(member["id"])
                 # Open = nobody has taken it yet. It used to exclude only
@@ -4192,7 +4200,7 @@ async def _handle_ticket_list(
         return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
 
     if not tickets:
-        return ChatReply(text=_t(TICKET_OPEN_EMPTY if open_only else TICKET_EMPTY, language))
+        return ChatReply(text=_t(TICKET_TEAM_EMPTY if team_only else TICKET_OPEN_EMPTY if open_only else TICKET_EMPTY, language))
 
     shown = tickets[:LIST_LIMIT]
     lines = [
@@ -4203,7 +4211,7 @@ async def _handle_ticket_list(
     return ChatReply(
         text="\n".join(lines) + _truncation_note(len(shown), len(tickets), language, "index"),
         list_card=_list_card(
-            title="งานที่เปิดรับ" if open_only else ("งานของฉัน" if mine else "งานซ่อม"),
+            title="งานของทีม" if team_only else "งานที่เปิดรับ" if open_only else ("งานของฉัน" if mine else "งานซ่อม"),
             section="index", language=language, oa=ctx.oa,
             shown=len(shown), total=len(tickets),
             rows=[
@@ -4590,6 +4598,8 @@ async def _handle_ticket_claim(
             license_id, str(ticket["id"]), str(member["id"]), actor_id=ctx.chann_uid,
         )
     except DataTierError as exc:
+        if "team lead accepts" in str(exc.detail or ""):
+            return ChatReply(text=_t(TICKET_TEAM_LEAD_FIRST, language).format(code=code))
         return _field_service_failure(
             exc, code=code, language=language, template=TICKET_CLAIM_FAILED,
         )
@@ -4597,6 +4607,15 @@ async def _handle_ticket_claim(
         log.exception("ticket claim failed")
         return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
 
+    if str(claimed.get("assigned_target_type") or "") == "technician_team":
+        # 12.4: the lead accepted for the team. It is now open inside the
+        # team; whoever goes types "รับงาน" again to take it.
+        await _notify_team_open(client, license_id, claimed, language)
+        return ChatReply(
+            text=_t(TICKET_TEAM_ACCEPTED, language).format(code=code),
+            entity_type="service_ticket", entity_id=str(claimed.get("id") or ""),
+            quick_replies=[(f"รับงาน {code}"[:20], f"รับงาน {code}"), ("งานของทีม", "งานของทีม")],
+        )
     return ChatReply(
         text=_t(TICKET_CLAIMED, language).format(
             code=code,
@@ -4609,6 +4628,46 @@ async def _handle_ticket_claim(
         entity_type="service_ticket", entity_id=str(claimed.get("id") or ""),
         quick_replies=[(f"เช็คอิน {code}"[:20], f"เช็คอิน {code}")],
     )
+
+
+TICKET_TEAM_ACCEPTED = {
+    "th": "รับงาน {code} ให้ทีมแล้ว ตอนนี้เปิดให้คนในทีมรับต่อ — คนที่จะไปพิมพ์ \"รับงาน {code}\"",
+    "en": "{code} accepted for the team — it is open inside the team; whoever goes types \"claim {code}\"",
+}
+TICKET_TEAM_LEAD_FIRST = {
+    "th": "งาน {code} มอบหมายให้ทีม หัวหน้าทีมต้องกดรับให้ทีมก่อน แล้วสมาชิกจึงรับต่อได้",
+    "en": "{code} was given to the team — the team lead accepts it first, then a member takes it",
+}
+TICKET_TEAM_PHRASES = ("งานของทีม", "งานทีม", "งานในทีม", "team jobs")
+TICKET_TEAM_EMPTY = {"th": "ตอนนี้ไม่มีงานของทีมที่รอคนรับครับ", "en": "No team jobs waiting right now."}
+
+
+async def _notify_team_open(client: DataClient, license_id: str, ticket: dict, language: str) -> None:
+    """Every member of the team hears the lead accepted, so whoever is
+    free can take it."""
+    team_id = str(ticket.get("assigned_to_ref") or "")
+    if not team_id:
+        return
+    try:
+        members = await client.list_team_members(license_id, team_id)
+    except Exception:
+        log.exception("could not list the team to announce an accepted job")
+        return
+    code = str(ticket.get("ticket_number") or "")
+    text = f"หัวหน้าทีมรับงาน {code} ให้ทีมแล้ว ใครไปพิมพ์ \"รับงาน {code}\"\n{ticket.get('service_address') or ''}".strip()
+    for member in members:
+        uid = str(member.get("chann_uid") or "")
+        if not uid:
+            continue
+        try:
+            line_uid = await client.line_target_of(uid)
+            await send_notification(
+                client, license_id=license_id, target_chann_uid=uid, target_line_user_id=line_uid,
+                type="sla_warning", message=text, entity_type="service_ticket",
+                entity_id=str(ticket.get("id") or ""), language=language, oa="technician",
+            )
+        except Exception:
+            log.exception("could not tell %s about the team job", uid)
 
 
 TICKET_CLAIMED_NEXT = {
@@ -9610,6 +9669,11 @@ async def handle_chat_message(
             return await _handle_ticket_list(
                 client, ctx=ctx, license_id=license_id,
                 permission_keys=permission_keys, language=language, open_only=True,
+            )
+        if _matches_phrase(message, TICKET_TEAM_PHRASES):
+            return await _handle_ticket_list(
+                client, ctx=ctx, license_id=license_id,
+                permission_keys=permission_keys, language=language, team_only=True,
             )
         if _matches_phrase(message, TICKET_LIST_PHRASES):
             return await _handle_ticket_list(

@@ -454,6 +454,11 @@ class TeamMemberIn(BaseModel):
     is_lead: bool = False
 
 
+class TeamMemberDetailOut(MemberOut):
+    """A member as seen from a team: the row plus whether they lead it."""
+    is_lead: bool = False
+
+
 class TeamMemberOut(BaseModel):
     id: uuid.UUID
     team_id: uuid.UUID

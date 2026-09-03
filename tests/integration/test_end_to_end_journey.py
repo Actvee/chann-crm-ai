@@ -159,11 +159,12 @@ class TestTheWholeServiceJourney:
             assert row.status == "assigned"
             assert row.accept_status == "pending"
 
-        # 5. A technician on that team takes it.
+        # 5. The team accepts it (this team has no lead, so any member
+        #    may — 12.4), then the technician takes it for themselves.
         with shop["session"]() as session:
-            row = ServiceTicketRepository(session).claim(
-                scope, ticket_id, member_id=shop["technician_id"],
-            )
+            repo = ServiceTicketRepository(session)
+            repo.claim(scope, ticket_id, member_id=shop["technician_id"])
+            row = repo.claim(scope, ticket_id, member_id=shop["technician_id"])
             session.commit()
             assert row.assigned_to_ref == shop["technician_id"]
             # Taken, not yet arrived: check-in (next step) opens the visit.
