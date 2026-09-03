@@ -74,8 +74,11 @@ apply_one() {
     --data-binary "@$png" >/dev/null
 
   info "[$oa] ตั้งเป็น default ของทุกคน"
+  # LINE answers 411 to a bodiless POST: curl sends no Content-Length
+  # without a body, so hand it an empty one (Content-Length: 0).
+  # Seen on the first live run, 3 Sep, after create + upload had passed.
   curl -fsS -X POST "https://api.line.me/v2/bot/user/all/richmenu/$rid" \
-    -H "Authorization: Bearer $token" >/dev/null
+    -H "Authorization: Bearer $token" -H "Content-Length: 0" >/dev/null
 
   info "[$oa] เสร็จ — $rid"
 }
