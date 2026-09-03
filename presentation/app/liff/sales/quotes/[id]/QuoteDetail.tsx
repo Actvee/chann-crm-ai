@@ -7,6 +7,7 @@ import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { AppShell, Badge } from "../../_components";
 import { FieldRow } from "../../../_field-row";
+import { shortDate } from "../../../_list-controls";
 import { ProductLineForm } from "../../../_product-line-form";
 import { RecordHead, RelatedHeading } from "../../_record";
 import { RelatedActivity } from "../../_related";
@@ -117,6 +118,7 @@ export default function QuoteDetail({
   async function openDocument() {
     if (!detail?.quote.generated_document_id) return;
     say(t.dashboard.working);
+    setBusy(true);
     try {
       // Ask for a signed link and hand it straight to the browser. The
       // previous version fetched the PDF as a blob and rendered a second
@@ -135,6 +137,8 @@ export default function QuoteDetail({
       say("");
     } catch (error) {
       say(error instanceof Error ? error.message : t.common.error, "error");
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -147,9 +151,15 @@ export default function QuoteDetail({
         `/api/phase2/licenses/${license}/quotes/${quoteId}/products`,
         { headers: proxyHeaders(currentToken, license) },
       );
-      if (response.ok) setLines((await response.json()) as Product[]);
+      if (!response.ok) {
+        // A failed fetch must not render as "no line items" on a quote
+        // that has them — the empty state and the error are different facts.
+        say(`${t.dashboard.loadFailed} (${response.status})`, "error");
+        return;
+      }
+      setLines((await response.json()) as Product[]);
     },
-    [licenseId, quoteId, token],
+    [licenseId, quoteId, say, t, token],
   );
 
   async function setQuoteStatus(status: string) {
@@ -409,8 +419,9 @@ export default function QuoteDetail({
                     className="btn"
                     data-variant="primary"
                     onClick={() => void openDocument()}
+                    disabled={busy}
                   >
-                    {t.dashboard.quotes.view}
+                    {busy ? t.dashboard.working : t.dashboard.quotes.view}
                   </button>
                 ) : null}
               </>
@@ -456,7 +467,7 @@ export default function QuoteDetail({
                         }
                       />
                     )
-                  : String(detail.quote.valid_until ?? "—")}
+                  : shortDate(detail.quote.valid_until) || "—"}
               </FieldRow>
               <FieldRow label={t.dashboard.quotes.discount}>
                 {editingTerms

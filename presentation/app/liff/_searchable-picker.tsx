@@ -79,7 +79,7 @@ export function SearchablePicker({
     <div className="picker">
       <input
         id={id}
-        aria-label={id ? undefined : placeholder}
+        aria-label={id ? undefined : placeholder || t.dashboard.search}
         type="search"
         value={query}
         placeholder={placeholder}

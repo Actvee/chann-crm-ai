@@ -116,10 +116,14 @@ export default function DealDetail({
         `/api/phase2/licenses/${licenseId}/customers`,
         { headers },
       );
-      if (customersResponse.ok) {
-        const customers = (await customersResponse.json()) as Customer[];
-        setCustomer(customers.find((c) => c.id === found.contact_id) ?? null);
+      if (!customersResponse.ok) {
+        // A blank subtitle with no explanation is worse than a status
+        // line saying the name could not be loaded.
+        say(`${t.dashboard.loadFailed} (${customersResponse.status})`, "error");
+        return;
       }
+      const customers = (await customersResponse.json()) as Customer[];
+      setCustomer(customers.find((c) => c.id === found.contact_id) ?? null);
     }
     say("");
   }, [dealId, licenseId, say, t, token]);

@@ -6,6 +6,7 @@ import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { AppShell } from "../sales/_components";
 import { FieldRow } from "../_field-row";
+import { shortDate } from "../_list-controls";
 import { Ticket, TicketRow } from "../_tickets";
 import { initLiffSession, proxyHeaders } from "../_shared";
 
@@ -216,9 +217,11 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
             </h2>
           </div>
           {tickets.length === 0 ? (
-            <div className="empty">{t.dashboard.customer.noRepairs}</div>
+            <div className="empty">
+              <p>{t.dashboard.customer.noRepairs}</p>
+            </div>
           ) : (
-            <ul className="cards">
+            <ul className="list">
               {tickets.map((ticket) => (
                 <li key={ticket.id} className="card">
                   <TicketRow
@@ -279,7 +282,7 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
             </div>
           </dl>
           {warranties.length > 0 && (
-            <ul className="cards" style={{ marginTop: 12 }}>
+            <ul className="list" style={{ marginTop: 12 }}>
               {warranties.map((row) => (
                 <li key={row.id} className="card">
                   <div className="card-title">
@@ -288,7 +291,7 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
                   <div className="card-meta">
                     S/N {row.serial_number}
                     {row.warranty_end
-                      ? ` · ${t.dashboard.customer.expires} ${row.warranty_end}`
+                      ? ` · ${t.dashboard.customer.expires} ${shortDate(row.warranty_end)}`
                       : ""}
                   </div>
                 </li>

@@ -1,11 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { AppShell } from "../../sales/_components";
-import { Ticket, TicketRow, formatWhen } from "../../_tickets";
+import { Ticket, TicketRow } from "../../_tickets";
 import { fetchPermissions, initLiffSession, proxyHeaders } from "../../_shared";
 
 /**

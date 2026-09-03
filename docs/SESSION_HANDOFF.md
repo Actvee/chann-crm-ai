@@ -119,9 +119,45 @@ tap targets, the customer home reports a failed load instead of
 showing "no repairs", the report textarea autofocuses and says why
 submit is disabled, and the rich-menu generator's EN sub-labels went
 from ~8px to ~13px rendered with the primary tile on the deep shade.
-Still open, the owner's call because it is a visible change: the sales
-pages never set `data-theme="sales"`, so the sales dashboard is still
-marigold, not the green rule 5 specifies.
+Deployed as `37c7183`; rich menus applied to all three OAs on 3 Sep
+(the set-default POST needed `Content-Length: 0`, `ca7c78e`).
+
+**`ui-audit-v1` (3 Sep, after `ca7c78e`)** — the owner then asked for
+rule 5 everywhere and a full UI/UX pass with the skill. What it found
+and fixed, presentation only:
+- `liff/sales|technician|customer/layout.tsx` set `data-theme` per
+  route segment, so all 13 sales pages (including the menu and the roles
+  page, which never render AppShell) are green; `:root` now holds the
+  green set so nothing is marigold any more.
+- **Technician check-out on the LIFF home never worked**: it posted
+  `report_data.work_summary` while the Data Tier gate requires
+  `found_issue` + `work_done` (`phase13.py` REPORT_REQUIRED). The form now
+  asks the three real fields and shows the gate's `missing` list on 409.
+  The "open jobs" filter also compared against a status (`closed`) that
+  does not exist.
+- `className="cards"` was never defined in CSS (four lists in the two
+  homes rendered as bulleted text); now `.list`.
+- Every literal hex in `globals.css` outside the token blocks became a
+  token (`--ok-ink/--ok-line/--danger-ink/--danger-line/--chip-bg/
+  --stage-*-soft/-ink/--surface-sunken`); the `›` row chevron uses
+  `--accent-deep` (the orange accent on white was 2.9:1).
+- Ten places rendered a failed fetch as an empty list (quote lines,
+  customer deals, deal/quote create pickers, dispatch-check, notes and
+  appointments reload, template versions): each now says it failed.
+- Busy/disabled on every async button that lacked one (quote view,
+  template versions, role save/delete with a confirm).
+- `RoleManagement.tsx`: 15 hardcoded Thai/English strings moved to
+  `t.role.*`/`t.licenseSetting.*`, permission keys shown as catalogue
+  labels in the viewer's locale, `#ddd` → `var(--line)`, card/btn classes.
+- Raw ISO dates formatted (appointment cards, warranty expiry, quote
+  valid-until); template version status translated; ServiceReports
+  back-link for technicians no longer points at the sales menu.
+
+Still open from the audit (chat side, next patch): three customer
+rich-menu tiles (`สถานะการซ่อม`, `ติดต่อร้าน`, `วิธีใช้งาน`) have no chat
+handler and fall through to the fault-report catch-all, opening a junk
+ticket; English/enum error text reaches technicians; Flex bubbles are
+off-palette on every OA; two-digit years parse as 1983.
 
 **This section has now been stale twice in two days**, each time in the
 way the warning at the top of this file describes. On 2 Sep it said

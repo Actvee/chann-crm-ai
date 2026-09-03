@@ -27,34 +27,48 @@
   --line: #e5e0d8;
   --line-strong: #cfc8bc;
 
-  /* Marigold. Used only for the primary action on a screen — one accent,
-     one job, so "the yellow thing" always means "the main thing to do". */
-  --accent: #e0a422;
-  --accent-ink: #3d2c05;
-  --accent-soft: #fdf4de;
+  /* The accent is the OA's identity colour (owner rule 5). The root holds
+     the Sales green so that a page outside any themed segment — the index,
+     the admin shell — is still on-brand rather than on a fourth colour;
+     the [data-theme] blocks below repeat or replace these per OA. */
+  --accent: #178a50;
+  --accent-ink: #06341c;
+  --accent-soft: #e7f6ee;
+  --accent-deep: #0d5c34;
 
-  /* The primary button's own three tokens. Marigold is light enough that
-     dark ink on it reads (6.1:1). The per-OA accents below are mid-tones
-     where neither dark ink nor white clears AA for 14.5px text (blue
-     2.9:1, green 3.2:1), so each theme points these at a deeper shade
-     with white text rather than asking one rule to suit four colours.
-     The border hex lives here and nowhere else. */
-  --btn-primary-bg: var(--accent);
-  --btn-primary-ink: var(--accent-ink);
-  --btn-primary-line: #c8901a;
+  /* The primary button's own three tokens. The accents are mid-tones where
+     neither dark ink nor white clears AA for 14.5px text (blue 2.9:1,
+     green 3.2:1), so the button sits on --accent-deep with white text
+     (green 8.1:1, blue 8.7:1, orange 5.5:1). */
+  --btn-primary-bg: var(--accent-deep);
+  --btn-primary-ink: #ffffff;
+  --btn-primary-line: var(--accent-deep);
 
   /* Stage colours double as the row rail. Ordered so the pipeline reads
-     left to right the way it actually progresses. */
+     left to right the way it actually progresses. Each has a soft tint and
+     an ink for the badge that names it, so no rule below needs its own hex. */
   --stage-new: #7c89a3;
+  --stage-new-soft: #edeff4;
+  --stage-new-ink: #4d5872;
   --stage-proposed: #3f5ea8;
+  --stage-proposed-soft: #e8edfa;
+  --stage-proposed-ink: #2f4c8f;
   --stage-won: #2e8b62;
   --stage-lost: #b4646c;
+  --stage-lost-soft: #fbeced;
   --stage-neutral: #a9a396;
 
   --danger: #b4342c;
   --danger-soft: #fdeceb;
+  --danger-ink: #8f3b43;
+  --danger-line: #f0c4c1;
   --ok: #2e8b62;
   --ok-soft: #e8f5ee;
+  --ok-ink: #1f5f43;
+  --ok-line: #bfe0cd;
+
+  --chip-bg: #eef0f4;
+  --surface-sunken: rgba(0, 0, 0, 0.04);
 
   --radius: 10px;
   --radius-sm: 6px;
@@ -199,13 +213,13 @@ body {
 
 .status[data-tone="ok"] {
   background: var(--ok-soft);
-  border-color: #bfe0cd;
-  color: #1f5f43;
+  border-color: var(--ok-line);
+  color: var(--ok-ink);
 }
 
 .status[data-tone="error"] {
   background: var(--danger-soft);
-  border-color: #f0c4c1;
+  border-color: var(--danger-line);
   color: var(--danger);
 }
 
@@ -303,7 +317,7 @@ body {
   font-size: 12.5px;
   font-weight: 500;
   line-height: 1.5;
-  background: #eef0f4;
+  background: var(--chip-bg);
   color: var(--ink-soft);
   white-space: nowrap;
 }
@@ -311,24 +325,24 @@ body {
 .badge[data-stage="new"],
 .badge[data-stage="lead"],
 .badge[data-stage="draft"] {
-  background: #edeff4;
-  color: #4d5872;
+  background: var(--stage-new-soft);
+  color: var(--stage-new-ink);
 }
 .badge[data-stage="proposed"],
 .badge[data-stage="sent"] {
-  background: #e8edfa;
-  color: #2f4c8f;
+  background: var(--stage-proposed-soft);
+  color: var(--stage-proposed-ink);
 }
 .badge[data-stage="won"],
 .badge[data-stage="accepted"],
 .badge[data-stage="contact"] {
   background: var(--ok-soft);
-  color: #1f5f43;
+  color: var(--ok-ink);
 }
 .badge[data-stage="lost"],
 .badge[data-stage="rejected"] {
-  background: #fbeced;
-  color: #8f3b43;
+  background: var(--stage-lost-soft);
+  color: var(--danger-ink);
 }
 
 /* -------------------------------------------------------------- buttons */
@@ -547,14 +561,14 @@ fieldset.group legend {
 
 .callout[data-tone="ok"] {
   background: var(--ok-soft);
-  border-color: #bfe0cd;
-  color: #1f5f43;
+  border-color: var(--ok-line);
+  color: var(--ok-ink);
 }
 
 .callout[data-tone="warn"] {
   background: var(--danger-soft);
-  border-color: #f0c4c1;
-  color: #8f3b43;
+  border-color: var(--danger-line);
+  color: var(--danger-ink);
 }
 
 .callout .dot {
@@ -837,8 +851,10 @@ fieldset.group legend {
   flex: none;
 }
 
+/* Deep, not the accent: this is a 22px glyph, so it is text for contrast
+   purposes, and the orange accent on white is 2.9:1. */
 .card:active .row-link::after {
-  color: var(--accent);
+  color: var(--accent-deep);
 }
 
 /* ------------------------------------------------------------- totals */
@@ -1004,7 +1020,7 @@ fieldset.group legend {
 
 .picker-options button:hover,
 .picker-options button:focus-visible {
-  background: var(--surface-sunken, rgba(0, 0, 0, 0.04));
+  background: var(--surface-sunken);
 }
 
 .picker-empty {
@@ -1055,7 +1071,7 @@ fieldset.group legend {
 }
 
 .section-nav button[data-active] {
-  background: var(--accent-soft, rgba(212, 162, 78, 0.15));
+  background: var(--accent-soft);
   color: var(--ink);
   font-weight: 600;
 }

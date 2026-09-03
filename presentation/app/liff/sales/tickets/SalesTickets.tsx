@@ -70,6 +70,10 @@ export default function SalesTickets({ liffId }: { liffId: string }) {
           if (check.ok) {
             const body = (await check.json()) as { missing?: string[] };
             if (body.missing?.length) found[row.id] = body.missing;
+          } else {
+            // A failed check must not read as "ready to dispatch": the
+            // dispatcher would act on an answer nobody gave.
+            found[row.id] = [t.dashboard.tickets.dispatchCheckFailed];
           }
         }),
       );

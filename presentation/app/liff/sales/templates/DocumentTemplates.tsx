@@ -141,15 +141,28 @@ export default function DocumentTemplates({ liffId }: { liffId: string }) {
   }
 
   async function loadVersions(template: Template) {
-    const response = await fetch(
-      `/api/phase2/licenses/${licenseId}/document-templates/${template.id}/versions`,
-      { headers: proxyHeaders(token, licenseId) },
-    );
-    if (!response.ok) return;
-    setVersions({
-      ...versions,
-      [template.id]: (await response.json()) as TemplateVersion[],
-    });
+    setBusy(true);
+    try {
+      const response = await fetch(
+        `/api/phase2/licenses/${licenseId}/document-templates/${template.id}/versions`,
+        { headers: proxyHeaders(token, licenseId) },
+      );
+      if (!response.ok) {
+        // Silence here made the button look dead; a failure is a fact
+        // worth a sentence.
+        say(
+          t.dashboard.templates.versionsFailed.replace("{status}", String(response.status)),
+          "error",
+        );
+        return;
+      }
+      setVersions({
+        ...versions,
+        [template.id]: (await response.json()) as TemplateVersion[],
+      });
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function publish(template: Template, version: TemplateVersion) {
@@ -312,13 +325,17 @@ export default function DocumentTemplates({ liffId }: { liffId: string }) {
                   className="btn"
                   data-variant="quiet"
                   onClick={() => void loadVersions(template)}
+                  disabled={busy}
                 >
                   {t.dashboard.templates.versions}
                 </button>
               </div>
               {versions[template.id]?.map((version) => (
                 <div key={version.id} className="card-meta">
-                  v{version.version} · {version.status}
+                  v{version.version} ·{" "}
+                  {(t.dashboard.templates.versionStatus as Record<string, string>)[
+                    version.status
+                  ] ?? "—"}
                   {canManage && version.status !== "published" && (
                     <button
                       type="button"

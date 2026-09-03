@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { FieldRow } from "../_field-row";
-import { fullDateTime } from "../_list-controls";
+import { fullDateTime, shortDate } from "../_list-controls";
 import { proxyHeaders } from "./_lib";
 import { RelatedHeading } from "./_record";
 
@@ -85,7 +85,10 @@ export function RelatedActivity({
         `?entity_type=${entityType}&entity_id=${entityId}`,
       { headers: proxyHeaders(token, licenseId) },
     );
-    if (response.ok) setNotes((await response.json()) as Note[]);
+    // Throw, so a caller's catch marks the action failed: silently
+    // keeping the old list made a saved note look like it never landed.
+    if (!response.ok) throw new Error(String(response.status));
+    setNotes((await response.json()) as Note[]);
   }
 
   async function saveNote() {
@@ -143,7 +146,7 @@ export function RelatedActivity({
         `?entity_type=${entityType}&entity_id=${entityId}`,
       { headers },
     );
-    if (!response.ok) return;
+    if (!response.ok) throw new Error(String(response.status));
     const rows = (await response.json()) as FollowUp[];
     setFollowUps(sortFollowUps(rows));
   }
@@ -342,7 +345,7 @@ export function RelatedActivity({
               data-stage={row.status === "pending" ? "proposed" : "won"}
             >
               <div className="card-title">
-                {row.due_date}
+                {shortDate(row.due_date) || row.due_date}
                 {row.due_time ? ` ${String(row.due_time).slice(0, 5)}` : ""}
                 {row.status && row.status !== "pending" && (
                   <span className="badge" data-stage="won" style={{ marginLeft: 8 }}>

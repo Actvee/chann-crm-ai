@@ -8,7 +8,7 @@ import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { InlineCreateForm } from "../../_inline-create";
 import {
-  ListControls, byNewest, byOldest, shortDate, useListControls,
+  ListControls, byNewest, byOldest, useListControls,
 } from "../../_list-controls";
 
 import { Membership, fetchPermissions, initLiffSession, openExternal, proxyHeaders } from "../_lib";
@@ -81,7 +81,11 @@ export default function QuoteList({ liffId }: { liffId: string }) {
           `/api/phase2/licenses/${license}/deals`,
           { headers: proxyHeaders(session.token, license) },
         );
-        if (response.ok) {
+        if (!response.ok) {
+          // Without the deals the create-quote form would silently not
+          // appear, which reads as "you cannot create quotes". Say why.
+          say(`${t.dashboard.loadFailed} (${response.status})`, "error");
+        } else {
           const rows = (await response.json()) as {
             id: string; deal_id?: string; stage?: string; customer_name?: string;
           }[];
@@ -117,6 +121,9 @@ export default function QuoteList({ liffId }: { liffId: string }) {
     const id = documentId ?? quote.generated_document_id;
     if (!id) return;
     say(t.dashboard.working);
+    // The button reads busyId, so set it here — the old code only set it
+    // in issue(), leaving the view button double-tappable.
+    setBusyId(quote.id);
     try {
       // A signed https link, opened by the browser. Fetching the PDF as a
       // blob and linking to blob: cannot work here: LINE refuses those
@@ -134,6 +141,8 @@ export default function QuoteList({ liffId }: { liffId: string }) {
       say("");
     } catch (error) {
       say(error instanceof Error ? error.message : t.common.error, "error");
+    } finally {
+      setBusyId("");
     }
   }
 

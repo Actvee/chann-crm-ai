@@ -103,7 +103,7 @@ export function NotificationBell({ idToken, licenseId }: Props) {
                   key={n.id}
                   style={{
                     padding: "8px 0",
-                    borderBottom: "1px solid #ddd",
+                    borderBottom: "1px solid var(--line)",
                     fontWeight: n.read_at ? "normal" : "bold",
                   }}
                 >

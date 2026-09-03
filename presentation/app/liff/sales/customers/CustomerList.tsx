@@ -8,7 +8,7 @@ import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { InlineCreateForm } from "../../_inline-create";
 import {
-  ListControls, byNewest, byOldest, shortDate, useListControls,
+  ListControls, byNewest, byOldest, useListControls,
 } from "../../_list-controls";
 
 import { Membership, fetchPermissions, initLiffSession, proxyHeaders } from "../_lib";

@@ -81,10 +81,11 @@ export default function ServiceReports({
       const ticketsResponse = await fetch(
         `/api/phase2/licenses/${license}/tickets`, { headers },
       );
-      if (ticketsResponse.ok) {
-        const all = (await ticketsResponse.json()) as Ticket[];
-        setTickets(Object.fromEntries(all.map((row) => [row.id, row])));
+      if (!ticketsResponse.ok) {
+        throw new Error(`${t.dashboard.loadFailed} (${ticketsResponse.status})`);
       }
+      const all = (await ticketsResponse.json()) as Ticket[];
+      setTickets(Object.fromEntries(all.map((row) => [row.id, row])));
       say("");
     },
     [audience, licenseId, say, t, token],
@@ -134,10 +135,13 @@ export default function ServiceReports({
   // technician approving their own visit would make the step meaningless.
   const canApprove = audience === "sales" && permissions.has("ticket.update");
 
+  // The back link must be explicit per audience: an undefined `back` falls
+  // through to AppShell's default (the sales menu) and would send a
+  // technician to the wrong OA's home.
   return (
     <AppShell
       title={t.dashboard.reports.title}
-      back={audience === "sales" ? "/liff/sales" : undefined}
+      back={audience === "sales" ? "/liff/sales" : "/liff/technician"}
       liffId={liffId}
       onReady={() => void initialize()}
       onSdkError={() => say(t.liff.sdkLoadFailed, "error")}
@@ -179,7 +183,7 @@ export default function ServiceReports({
                   >
                     {(t.dashboard.reports.status as Record<string, string>)[
                       report.status
-                    ] ?? report.status}
+                    ] ?? "—"}
                   </span>
                 </div>
 

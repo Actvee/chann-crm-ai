@@ -101,7 +101,11 @@ export default function DealList({ liffId }: { liffId: string }) {
           `/api/phase2/licenses/${license}/customers`,
           { headers: proxyHeaders(session.token, license) },
         );
-        if (response.ok) {
+        if (!response.ok) {
+          // Without customers the create-deal form silently does not
+          // appear, which reads as "you cannot create deals". Say why.
+          say(`${t.dashboard.loadFailed} (${response.status})`, "error");
+        } else {
           const rows = (await response.json()) as {
             id: string; first_name?: string; last_name?: string;
             customer_id?: string; stage?: string;

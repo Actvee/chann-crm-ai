@@ -37,7 +37,20 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
   const [busyId, setBusyId] = useState("");
   const [reportFor, setReportFor] = useState<Ticket | null>(null);
-  const [reportNotes, setReportNotes] = useState("");
+  // The three things a service report says (Data Tier REPORT_REQUIRED:
+  // found_issue + work_done are the gate; parts are optional). The first
+  // version of this form posted one "work_summary" box, which the gate
+  // refused every single time — the report's shape is the API's, not ours.
+  const [reportFound, setReportFound] = useState("");
+  const [reportDone, setReportDone] = useState("");
+  const [reportParts, setReportParts] = useState("");
+  const reportComplete = reportFound.trim() !== "" && reportDone.trim() !== "";
+
+  function resetReport() {
+    setReportFound("");
+    setReportDone("");
+    setReportParts("");
+  }
 
   const say = useCallback((message: string, kind?: "ok" | "error") => {
     setStatus(message);
@@ -147,17 +160,39 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
           },
           body: JSON.stringify({
             member_id: memberId,
-            report_data: { work_summary: reportNotes },
+            report_data: {
+              found_issue: reportFound.trim(),
+              work_done: reportDone.trim(),
+              ...(reportParts.trim() ? { parts_changed: reportParts.trim() } : {}),
+            },
           }),
         },
       );
-      if (!response.ok) throw new Error(String(response.status));
+      if (!response.ok) {
+        // The gate names what is missing (Thai labels from the Data
+        // Tier); saying so beats a generic failure the technician
+        // cannot act on.
+        const body = (await response.json().catch(() => null)) as
+          | { detail?: { missing?: string[] } | string }
+          | null;
+        const missing =
+          body && typeof body.detail === "object" && body.detail?.missing?.length
+            ? body.detail.missing
+            : null;
+        say(
+          missing
+            ? t.dashboard.technician.checkoutBlocked.replace("{missing}", missing.join(", "))
+            : t.dashboard.technician.actionFailed,
+          "error",
+        );
+        return;
+      }
       say(
         `${reportFor.ticket_number} — ${t.dashboard.technician.checkedOut}`,
         "ok",
       );
       setReportFor(null);
-      setReportNotes("");
+      resetReport();
       await load();
     } catch {
       say(t.dashboard.technician.actionFailed, "error");
@@ -169,9 +204,13 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
   const mine = tickets.filter(
     (x) => x.assigned_to_ref === memberId && x.accept_status === "accepted",
   );
+  // Ticket statuses are open/assigned/in_progress/completed/cancelled;
+  // "closed" was never one, so the old filter kept finished jobs in the
+  // open list forever.
   const open = tickets.filter(
     (x) =>
-      x.status !== "closed" &&
+      x.status !== "completed" &&
+      x.status !== "cancelled" &&
       !(x.assigned_to_ref === memberId && x.accept_status === "accepted"),
   );
   const canWork = permissions.has("ticket.update");
@@ -197,9 +236,11 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
             </a>
           </div>
           {mine.length === 0 ? (
-            <div className="empty">{t.dashboard.technician.noJobs}</div>
+            <div className="empty">
+              <p>{t.dashboard.technician.noJobs}</p>
+            </div>
           ) : (
-            <ul className="cards">
+            <ul className="list">
               {mine.map((ticket) => (
                 <li key={ticket.id} className="card">
                   <TicketRow
@@ -229,7 +270,7 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
                           disabled={busyId !== ""}
                           onClick={() => {
                             setReportFor(ticket);
-                            setReportNotes("");
+                            resetReport();
                           }}
                         >
                           {t.dashboard.technician.checkOut}
@@ -239,27 +280,46 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
                   )}
                   {reportFor?.id === ticket.id && (
                     <dl className="fields">
-                      <FieldRow label={t.dashboard.technician.workSummary}>
+                      <FieldRow label={t.dashboard.reports.foundIssue}>
+                        {(id) => (
+                          // The form appears because they just tapped
+                          // "ปิดงาน"; putting the caret in the first box
+                          // is the next thing they would do anyway.
+                          <textarea
+                            id={id}
+                            rows={2}
+                            autoFocus
+                            value={reportFound}
+                            onChange={(e) => setReportFound(e.target.value)}
+                          />
+                        )}
+                      </FieldRow>
+                      <FieldRow label={t.dashboard.reports.workDone}>
                         {(id) => (
                           <>
-                            {/* The form appears because they just tapped
-                                "ปิดงาน"; putting the caret in the box is
-                                the next thing they would do anyway. */}
                             <textarea
                               id={id}
-                              rows={3}
-                              autoFocus
-                              value={reportNotes}
-                              onChange={(e) => setReportNotes(e.target.value)}
+                              rows={2}
+                              value={reportDone}
+                              onChange={(e) => setReportDone(e.target.value)}
                               aria-describedby={`${id}-hint`}
                             />
                             {/* Says why the submit button is not yet
                                 live, rather than leaving a dead button
                                 to be explained by trial. */}
                             <span id={`${id}-hint`} className="hint">
-                              {t.dashboard.technician.workSummaryHint}
+                              {t.dashboard.technician.reportHint}
                             </span>
                           </>
+                        )}
+                      </FieldRow>
+                      <FieldRow label={t.dashboard.technician.partsOptional}>
+                        {(id) => (
+                          <input
+                            id={id}
+                            value={reportParts}
+                            onChange={(e) => setReportParts(e.target.value)}
+                          />
                         )}
                       </FieldRow>
                       <div className="actions">
@@ -276,7 +336,7 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
                           type="button"
                           className="btn"
                           data-variant="primary"
-                          disabled={busyId !== "" || !reportNotes.trim()}
+                          disabled={busyId !== "" || !reportComplete}
                           onClick={() => void checkOut()}
                         >
                           {busyId === ticket.id
@@ -299,9 +359,11 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
             </h2>
           </div>
           {open.length === 0 ? (
-            <div className="empty">{t.dashboard.technician.noOpenJobs}</div>
+            <div className="empty">
+              <p>{t.dashboard.technician.noOpenJobs}</p>
+            </div>
           ) : (
-            <ul className="cards">
+            <ul className="list">
               {open.map((ticket) => (
                 <li key={ticket.id} className="card">
                   <TicketRow

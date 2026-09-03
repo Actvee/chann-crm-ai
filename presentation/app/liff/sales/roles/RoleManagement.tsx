@@ -32,7 +32,7 @@ function getLiff(): LiffApi | undefined {
 
 export default function RoleManagement({ liffId }: { liffId: string }) {
   const [token, setToken] = useState("");
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
   const [memberships, setMemberships] = useState<Membership[]>([]);
   const [licenseId, setLicenseId] = useState("");
   const [roles, setRoles] = useState<Role[]>([]);
@@ -45,7 +45,14 @@ export default function RoleManagement({ liffId }: { liffId: string }) {
   const [editingRoleName, setEditingRoleName] = useState("");
   const [settingKey, setSettingKey] = useState("");
   const [settingValue, setSettingValue] = useState("");
-  const [status, setStatus] = useState("กำลังเริ่ม LIFF…");
+  const [status, setStatus] = useState(t.liff.starting);
+  const [busy, setBusy] = useState(false);
+
+  // A permission key is for the API; a person reads the catalogue label.
+  const permissionLabel = (key: string) => {
+    const entry = catalog.find((row) => row.key === key);
+    return entry?.label?.[locale] ?? entry?.label?.th ?? key;
+  };
 
   const headers = useCallback(
     () => ({
@@ -62,7 +69,9 @@ export default function RoleManagement({ liffId }: { liffId: string }) {
     const response = await fetch(`/api/phase2/licenses/${licenseId}/roles`, {
       headers: headers(),
     });
-    if (!response.ok) throw new Error(`โหลด Permission Matrix ไม่สำเร็จ (${response.status})`);
+    if (!response.ok) {
+      throw new Error(t.role.loadFailed.replace("{status}", String(response.status)));
+    }
     setRoles((await response.json()) as Role[]);
 
     // Loaded alongside the roles: the catalogue is platform-wide and does
@@ -79,19 +88,19 @@ export default function RoleManagement({ liffId }: { liffId: string }) {
       // visible. A hardcoded fallback list would be worse: it would drift
       // from what the server actually enforces.
     }
-  }, [headers, licenseId, token]);
+  }, [headers, licenseId, t, token]);
 
   useEffect(() => {
     if (!token || !licenseId) return;
     void loadRoles().catch((error: unknown) =>
-      setStatus(error instanceof Error ? error.message : "โหลด role ไม่สำเร็จ"),
+      setStatus(error instanceof Error ? error.message : t.dashboard.loadFailed),
     );
-  }, [licenseId, loadRoles, token]);
+  }, [licenseId, loadRoles, t, token]);
 
   const initialize = useCallback(async () => {
     const liff = getLiff();
     if (!liffId || !liff) {
-      setStatus("NEXT_PUBLIC_LIFF_SALES_ID is REQUIRED_NOT_CONFIGURED");
+      setStatus(t.liff.notConfigured);
       return;
     }
     try {
@@ -101,20 +110,20 @@ export default function RoleManagement({ liffId }: { liffId: string }) {
         return;
       }
       const idToken = liff.getIDToken();
-      if (!idToken) throw new Error("LIFF did not return an ID token");
+      if (!idToken) throw new Error(t.liff.initFailed);
       const response = await fetch("/api/liff/sales/me", {
         headers: { "X-Liff-ID-Token": idToken },
       });
-      if (!response.ok) throw new Error(`authentication failed (${response.status})`);
+      if (!response.ok) throw new Error(`${t.liff.initFailed} (${response.status})`);
       const profile = (await response.json()) as { memberships: Membership[] };
       setToken(idToken);
       setMemberships(profile.memberships);
       setLicenseId(profile.memberships[0]?.license_id ?? "");
-      setStatus(profile.memberships.length ? "พร้อมจัดการสิทธิ์" : "ยังไม่พบบริษัทที่ผูกไว้");
+      setStatus(profile.memberships.length ? t.role.ready : t.liff.noCompany);
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "LIFF initialization failed");
+      setStatus(error instanceof Error ? error.message : t.liff.initFailed);
     }
-  }, [liffId]);
+  }, [liffId, t]);
 
   async function saveRole(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -122,43 +131,59 @@ export default function RoleManagement({ liffId }: { liffId: string }) {
     const target = editingRoleName
       ? `/api/phase2/licenses/${licenseId}/roles/${encodeURIComponent(editingRoleName)}`
       : `/api/phase2/licenses/${licenseId}/roles`;
-    const response = await fetch(target, {
-      method: editingRoleName ? "PATCH" : "POST",
-      headers: headers(),
-      body: JSON.stringify({ role_name: roleName, permission_keys: permissionKeys }),
-    });
-    if (!response.ok) {
-      setStatus(`${editingRoleName ? "แก้" : "สร้าง"} role ไม่สำเร็จ (${response.status})`);
-      return;
+    setBusy(true);
+    try {
+      const response = await fetch(target, {
+        method: editingRoleName ? "PATCH" : "POST",
+        headers: headers(),
+        body: JSON.stringify({ role_name: roleName, permission_keys: permissionKeys }),
+      });
+      if (!response.ok) {
+        setStatus(t.role.saveFailed.replace("{status}", String(response.status)));
+        return;
+      }
+      setRoleName("");
+      setSelected(new Set());
+      setEditingRoleName("");
+      setStatus(t.role.saved);
+      await loadRoles();
+    } finally {
+      setBusy(false);
     }
-    setRoleName("");
-    setSelected(new Set());
-    setEditingRoleName("");
-    setStatus(`${editingRoleName ? "แก้" : "สร้าง"} role สำเร็จ`);
-    await loadRoles();
   }
 
   function editRole(role: Role) {
     setEditingRoleName(role.role_name);
     setRoleName(role.role_name);
     setSelected(new Set(role.permission_keys));
-    setStatus(`กำลังแก้ role ${role.role_name}`);
+    setStatus(t.role.editing.replace("{name}", role.role_name));
   }
 
   function cancelEdit() {
     setEditingRoleName("");
     setRoleName("");
     setSelected(new Set());
-    setStatus("ยกเลิกการแก้ role แล้ว");
+    setStatus(t.role.editCancelled);
   }
 
   async function deleteRole(role: Role) {
-    const response = await fetch(
-      `/api/phase2/licenses/${licenseId}/roles/${encodeURIComponent(role.role_name)}`,
-      { method: "DELETE", headers: headers() },
-    );
-    setStatus(response.ok ? "ลบ role สำเร็จ" : `ลบ role ไม่สำเร็จ (${response.status})`);
-    if (response.ok) await loadRoles();
+    // Destructive and one tap away: ask, and lock the buttons while it runs.
+    if (!window.confirm(t.role.confirmDelete.replace("{name}", role.role_name))) return;
+    setBusy(true);
+    try {
+      const response = await fetch(
+        `/api/phase2/licenses/${licenseId}/roles/${encodeURIComponent(role.role_name)}`,
+        { method: "DELETE", headers: headers() },
+      );
+      setStatus(
+        response.ok
+          ? t.role.deleted
+          : t.role.deleteFailed.replace("{status}", String(response.status)),
+      );
+      if (response.ok) await loadRoles();
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function saveSetting(event: FormEvent<HTMLFormElement>) {
@@ -169,15 +194,24 @@ export default function RoleManagement({ liffId }: { liffId: string }) {
     } catch {
       // Plain text is a valid JSONB value and stays a string.
     }
-    const response = await fetch(
-      `/api/phase2/licenses/${licenseId}/settings/${encodeURIComponent(settingKey)}`,
-      {
-        method: "PUT",
-        headers: headers(),
-        body: JSON.stringify({ setting_value: parsed }),
-      },
-    );
-    setStatus(response.ok ? "บันทึก setting สำเร็จ" : `บันทึกไม่สำเร็จ (${response.status})`);
+    setBusy(true);
+    try {
+      const response = await fetch(
+        `/api/phase2/licenses/${licenseId}/settings/${encodeURIComponent(settingKey)}`,
+        {
+          method: "PUT",
+          headers: headers(),
+          body: JSON.stringify({ setting_value: parsed }),
+        },
+      );
+      setStatus(
+        response.ok
+          ? t.licenseSetting.saved
+          : t.licenseSetting.saveFailed.replace("{status}", String(response.status)),
+      );
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -186,7 +220,7 @@ export default function RoleManagement({ liffId }: { liffId: string }) {
         src="https://static.line-scdn.net/liff/edge/versions/2.29.2/sdk.js"
         strategy="afterInteractive"
         onReady={() => void initialize()}
-        onError={() => setStatus("LIFF SDK load failed")}
+        onError={() => setStatus(t.liff.sdkLoadFailed)}
       />
       <h1>{t.role.title}</h1>
       <LanguageSwitcher />
@@ -196,8 +230,8 @@ export default function RoleManagement({ liffId }: { liffId: string }) {
       <p aria-live="polite">{status}</p>
 
       {memberships.length > 1 && (
-        <label>
-          บริษัท
+        <label className="field">
+          <span>{t.dashboard.company}</span>
           <select value={licenseId} onChange={(event) => setLicenseId(event.target.value)}>
             {memberships.map((membership) => (
               <option key={membership.license_id} value={membership.license_id}>
@@ -211,13 +245,38 @@ export default function RoleManagement({ liffId }: { liffId: string }) {
       <section>
         <h2>{t.role.permissionMatrix}</h2>
         {roles.map((role) => (
-          <article key={role.role_name} style={{ border: "1px solid #ddd", padding: 12, margin: "8px 0" }}>
-            <strong>{role.role_name}</strong>{role.is_owner ? " — protected owner" : ""}
-            <p>{role.permission_keys.join(", ") || "ไม่มี permission"}</p>
+          <article key={role.role_name} className="card" style={{ margin: "8px 0" }}>
+            <div className="card-title">
+              {role.role_name}
+              {role.is_owner && (
+                <span className="badge" data-stage="won">
+                  {t.role.protectedOwner}
+                </span>
+              )}
+            </div>
+            <p className="card-meta">
+              {role.permission_keys.map(permissionLabel).join(", ") || t.role.noPermissions}
+            </p>
             {!role.is_owner && (
-              <div style={{ display: "flex", gap: 8 }}>
-                <button type="button" onClick={() => editRole(role)}>แก้ role</button>
-                <button type="button" onClick={() => void deleteRole(role)}>ลบ role</button>
+              <div className="card-actions">
+                <button
+                  type="button"
+                  className="btn"
+                  data-variant="quiet"
+                  onClick={() => editRole(role)}
+                  disabled={busy}
+                >
+                  {t.role.editRole}
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  data-variant="quiet"
+                  onClick={() => void deleteRole(role)}
+                  disabled={busy}
+                >
+                  {t.role.deleteRole}
+                </button>
               </div>
             )}
           </article>
@@ -225,9 +284,13 @@ export default function RoleManagement({ liffId }: { liffId: string }) {
       </section>
 
       <form onSubmit={saveRole} style={{ display: "grid", gap: 8, marginTop: 24 }}>
-        <h2>{editingRoleName ? `แก้ Custom Role: ${editingRoleName}` : t.role.createCustomRole}</h2>
-        <label>
-          {t.role.roleName}
+        <h2>
+          {editingRoleName
+            ? t.role.editingTitle.replace("{name}", editingRoleName)
+            : t.role.createCustomRole}
+        </h2>
+        <label className="field">
+          <span>{t.role.roleName}</span>
           <input value={roleName} onChange={(event) => setRoleName(event.target.value)} required />
         </label>
         <fieldset style={{ border: "1px solid var(--line)", borderRadius: 8, padding: 12 }}>
@@ -283,7 +346,7 @@ export default function RoleManagement({ liffId }: { liffId: string }) {
                       }}
                     />
                     <span>
-                      {entry.label?.th ?? entry.key}
+                      {entry.label?.[locale] ?? entry.label?.th ?? entry.key}
                       {/* The key itself, quietly. Someone reading the API
                           docs or a support thread needs to connect the two. */}
                       <span
@@ -302,25 +365,37 @@ export default function RoleManagement({ liffId }: { liffId: string }) {
             {t.role.selectedCount.replace("{count}", String(selected.size))}
           </p>
         </fieldset>
-        <div style={{ display: "flex", gap: 8 }}>
-          <button type="submit" disabled={!licenseId}>
-            {editingRoleName ? "บันทึกการแก้ไข" : "สร้าง role"}
+        <div className="actions">
+          <button type="submit" className="btn" data-variant="primary" disabled={!licenseId || busy}>
+            {busy
+              ? t.dashboard.saving
+              : editingRoleName
+                ? t.role.saveEdit
+                : t.role.createButton}
           </button>
-          {editingRoleName && <button type="button" onClick={cancelEdit}>ยกเลิก</button>}
+          {editingRoleName && (
+            <button type="button" className="btn" data-variant="quiet" onClick={cancelEdit} disabled={busy}>
+              {t.common.cancel}
+            </button>
+          )}
         </div>
       </form>
 
       <form onSubmit={saveSetting} style={{ display: "grid", gap: 8, marginTop: 32 }}>
         <h2>{t.licenseSetting.title}</h2>
-        <label>
-          {t.licenseSetting.settingKey}
+        <label className="field">
+          <span>{t.licenseSetting.settingKey}</span>
           <input value={settingKey} onChange={(event) => setSettingKey(event.target.value)} required />
         </label>
-        <label>
-          {t.licenseSetting.settingValue}
+        <label className="field">
+          <span>{t.licenseSetting.settingValue}</span>
           <textarea value={settingValue} onChange={(event) => setSettingValue(event.target.value)} required />
         </label>
-        <button type="submit" disabled={!licenseId}>{t.licenseSetting.saveButton}</button>
+        <div className="actions">
+          <button type="submit" className="btn" data-variant="primary" disabled={!licenseId || busy}>
+            {busy ? t.dashboard.saving : t.licenseSetting.saveButton}
+          </button>
+        </div>
       </form>
     </main>
   );

@@ -46,7 +46,6 @@ export default function CustomerDetail({
   customerId: string;
 }) {
   const { t } = useLanguage();
-  const c = t.dashboard.companyProfile;
   const stageLabel = (stage: string) =>
     stage === "contact" ? t.customer.title : t.customer.lead;
   const dealStageLabel = (stage: string) =>
@@ -83,10 +82,14 @@ export default function CustomerDetail({
     }
     const customers = (await customersResponse.json()) as Customer[];
     setCustomer(customers.find((row) => row.id === customerId) ?? null);
-    if (dealsResponse.ok) {
-      const all = (await dealsResponse.json()) as Deal[];
-      setDeals(all.filter((d) => d.contact_id === customerId));
+    if (!dealsResponse.ok) {
+      // "No deals for this customer" and "could not load deals" are
+      // different facts; showing the first when the second is true
+      // misleads whoever is deciding what to do next.
+      throw new Error(`${t.dashboard.loadFailed} (${dealsResponse.status})`);
     }
+    const all = (await dealsResponse.json()) as Deal[];
+    setDeals(all.filter((d) => d.contact_id === customerId));
     say("");
   }, [customerId, licenseId, say, t, token]);
 
