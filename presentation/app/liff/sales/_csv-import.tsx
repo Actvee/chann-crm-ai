@@ -1,10 +1,10 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
-import { proxyHeaders } from "./_lib";
+import { openExternal, proxyHeaders } from "./_lib";
 
 type Kind = "products" | "warranties";
 
@@ -16,14 +16,53 @@ type ImportResult = {
   rows: { row: number; key: string; status: "saved" | "error"; message: string }[];
 };
 
+/** A small CSV reader for the sample preview — quoted fields, commas. */
+function parseCsv(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = "";
+  let quoted = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (quoted) {
+      if (ch === '"' && text[i + 1] === '"') {
+        cell += '"';
+        i += 1;
+      } else if (ch === '"') {
+        quoted = false;
+      } else {
+        cell += ch;
+      }
+    } else if (ch === '"') {
+      quoted = true;
+    } else if (ch === ",") {
+      row.push(cell);
+      cell = "";
+    } else if (ch === "\n") {
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = "";
+    } else if (ch !== "\r") {
+      cell += ch;
+    }
+  }
+  if (cell || row.length) {
+    row.push(cell);
+    rows.push(row);
+  }
+  return rows.filter((r) => r.some((c) => c.trim()));
+}
+
 /**
  * Bulk import from a spreadsheet export (owner, 4 Sep) — the same form
  * for the catalogue and the register of sold units.
  *
- * The sample file is a real download (a static file, no session
- * needed) so the shop can open it in Excel, fill the rows, and bring it
- * back. Every row is applied on its own; the result names each refused
- * row with the reason, next to the button that caused it.
+ * The sample is shown right here as a table (the LINE in-app browser
+ * often does nothing on a download link), can be copied to paste into a
+ * spreadsheet, or opened in the phone's browser. Every row is applied on
+ * its own; the result names each refused row with the reason, next to
+ * the button that caused it.
  */
 export function CsvImport({
   kind,
@@ -43,6 +82,32 @@ export function CsvImport({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState<ImportResult | null>(null);
+  const [sample, setSample] = useState<string>("");
+  const [copied, setCopied] = useState(false);
+  const samplePath = `/samples/${kind}.csv`;
+
+  useEffect(() => {
+    let alive = true;
+    fetch(samplePath)
+      .then((r) => (r.ok ? r.text() : ""))
+      .then((text) => {
+        if (alive) setSample(text);
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [samplePath]);
+
+  async function copySample() {
+    try {
+      await navigator.clipboard.writeText(sample);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 3000);
+    } catch {
+      setCopied(false);
+    }
+  }
 
   async function run() {
     if (!file) return;
@@ -92,17 +157,55 @@ export function CsvImport({
   }
 
   const fieldId = `csv-${kind}`;
+  const sampleRows = sample ? parseCsv(sample) : [];
   return (
     <section className="section">
       <div className="section-head">
         <h2>{kind === "products" ? copy.titleProducts : copy.titleWarranties}</h2>
-        <a className="btn" data-variant="quiet" href={`/samples/${kind}.csv`} download>
-          {copy.sample}
-        </a>
       </div>
       <p className="card-meta" style={{ padding: "10px 16px 0" }}>
         {kind === "products" ? copy.hintProducts : copy.hintWarranties}
       </p>
+
+      {sampleRows.length > 0 && (
+        <div style={{ padding: "10px 16px 0" }}>
+          <p className="card-meta" style={{ margin: "0 0 6px", fontWeight: 600 }}>{copy.sampleTitle}</p>
+          <div className="tablewrap" style={{ overflowX: "auto" }}>
+            <table className="table sample-table">
+              <thead>
+                <tr>
+                  {sampleRows[0].map((h, i) => (
+                    <th key={i}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {sampleRows.slice(1).map((r, ri) => (
+                  <tr key={ri}>
+                    {r.map((c, ci) => (
+                      <td key={ci}>{c || "—"}</td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="actions" style={{ marginTop: 8 }}>
+            <button type="button" className="btn" onClick={() => void copySample()}>
+              {copied ? copy.copied : copy.copySample}
+            </button>
+            <button
+              type="button"
+              className="btn"
+              data-variant="quiet"
+              onClick={() => openExternal(`${window.location.origin}${samplePath}`)}
+            >
+              {copy.openSample}
+            </button>
+          </div>
+        </div>
+      )}
+
       <dl className="fields">
         <div className="field">
           <label htmlFor={fieldId}>{copy.file}</label>

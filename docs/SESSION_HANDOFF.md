@@ -1,3 +1,18 @@
+### Plan C5 (4 Sep) — files inside the LINE webview (`liff-files-v1`)
+
+- The LINE in-app browser blocks blob downloads and ignores `download`
+  links (owner: "กดดาวน์โหลดแล้วไม่มีอะไรเกิดขึ้น"). The guide is now a public
+  file — `GET /api/v1/guides/{oa}/file?format=html|md` (no token; it is the
+  manual), proxied at `/api/guide/{oa}` — and the guide page opens it with
+  `openExternal` (liff.openWindow external) so the phone's own browser
+  shows, saves or shares it.
+- `CsvImport` shows the sample as a table in the page, with "คัดลอกตัวอย่าง"
+  (clipboard) and "เปิดไฟล์ตัวอย่างในเบราว์เซอร์" (external), instead of a
+  download link.
+- "ตัวอักษรเคลื่อน" on the guide page: the sticky top bar's
+  `backdrop-filter: blur()` makes WebKit re-rasterise the text beneath it
+  on every scroll frame in the LINE webview; the bar is now opaque.
+
 ### Plan C4 (4 Sep) — the shop's 15 minutes, parking and the invitation back; timers per company; check-in with GPS (`chat-sla-v1`)
 
 - `DEFAULT_SLA_MINUTES` 15. The sweep still tells the agents, then parks the

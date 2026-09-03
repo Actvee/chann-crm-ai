@@ -156,8 +156,10 @@ body {
   align-items: center;
   gap: 10px;
   padding: 12px 16px;
-  background: rgba(250, 247, 242, 0.94);
-  backdrop-filter: blur(8px);
+  /* Opaque, no backdrop-filter: on WebKit inside LINE a blurred sticky bar
+     re-rasterises the text under it on every scroll frame, which reads as
+     letters shimmering (owner, 4 Sep: "ตัวอักษรเคลื่อน"). */
+  background: var(--bg);
   border-bottom: 1px solid var(--line);
 }
 
@@ -1585,4 +1587,10 @@ fieldset.group legend {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.sample-table th,
+.sample-table td {
+  white-space: nowrap;
+  font-size: 13px;
 }

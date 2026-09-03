@@ -222,6 +222,29 @@ async def liff_guide(
     }
 
 
+@router.get("/guides/{audience}/file")
+async def guide_file(audience: str, format: str = "html"):
+    """The handout as a plain file, no session needed: it is the user
+    manual, nothing in it is tenant data, and the LINE in-app browser can
+    only show or save it when it is a plain URL the phone's own browser
+    can open (owner, 4 Sep: "กดดาวน์โหลดแล้วไม่มีอะไรเกิดขึ้น")."""
+    from fastapi.responses import Response
+
+    from .services.guides import guide_as_html, guide_as_markdown
+
+    if audience not in OA_TO_ROLE:
+        raise HTTPException(status_code=404, detail="unknown LIFF audience")
+    if format == "md":
+        return Response(
+            content=guide_as_markdown(audience), media_type="text/markdown; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="guide-{audience}.md"'},
+        )
+    return Response(
+        content=guide_as_html(audience), media_type="text/html; charset=utf-8",
+        headers={"Content-Disposition": f'inline; filename="guide-{audience}.html"'},
+    )
+
+
 @router.get("/liff/{audience}/signature")
 async def liff_signature(
     audience: str,
