@@ -76,13 +76,13 @@ clone.
 
 ## Where things stand
 
-**The commit carrying this text** is the customer-onboarding patch
-(`customer-onboarding-v1`, application + presentation, no migration),
-deployed by `~/customer-onboarding-deploy.sh`. It supersedes **`34e464c`**
-(Phase 14-C) as the last code commit **only once `/health` on both
-services echoes its SHA** — the script's STAGE 9 checks that; if you are
-reading this and `/health` still says `34e464c`, the deploy did not
-finish. What it changes is under "Customer OA onboarding" below.
+**The commit carrying this text** is the technician-flow patch
+(`tech-flow-v1`, all three tiers, no migration), deployed by
+`~/tech-flow-deploy.sh`. Before it, on 3 Sep: `cdd2c1a` customer
+onboarding, `4b53f60` shops-chosen/units-claimed. Each is "deployed" only
+when `/health` on both services echoes its SHA — the scripts' STAGE 9
+checks that, and this file is not evidence. The plan for everything the
+three OAs still need is `docs/PLAN_3OA.md`; read it before starting work.
 
 | tier | `git_commit` | notes |
 |---|---|---|
@@ -265,6 +265,52 @@ deploy data/application/presentation. The new data image's
 `EXPECTED_MIGRATION_HEAD` is `0021_approvals` and it will refuse to
 serve against an older schema, which is the guard working.
 668 tests pass (656 unit/boundary + 266 integration, 12 of them Phase 14).
+
+### The third walk (3 Sep evening) — the technician's day, as the spec has it
+
+`tech-flow-v1`. What the owner hit, and what was underneath:
+
+1. **"งานที่ว่าง" / "งานที่เปิด" → "ไม่มีสิทธิ์".** Not in `TICKET_OPEN_PHRASES`,
+   so the AI guessed a sales intent and the permission gate refused it.
+   Nine everyday phrasings added.
+2. **A job just taken still listed as open.** Both chat's `open_only` and
+   the home's `open` filter excluded only MY accepted jobs, so anyone
+   else's accepted job stayed "open" — and the one I took looked open to
+   my colleagues. Open now means `accept_status != accepted`. The home
+   also gained an "มอบหมายให้คุณ รอตอบรับ" section for private jobs
+   dispatched to me, with accept / decline.
+3. **"ปิดงาน" offered straight after "รับงาน".** `ServiceTicketRepository.claim`
+   set `status = in_progress` — claiming was arriving. Now claim →
+   `assigned`; check-in → `in_progress` (13.4); `FieldServiceRepository.
+   check_out` refuses anything not in progress ("check in first"); chat's
+   check-out says "ยังไม่ได้เช็คอิน" with an "เช็คอิน T-…" button instead of
+   asking the three questions and failing at the end; the claim reply
+   names the next step. Integration tests that checked out straight
+   after claiming now go through `in_progress_ticket`. **Lesson:** the
+   fake's `claim_ticket` returned no status, so nothing above the Data
+   Tier could see the shortcut; the fake now mirrors status transitions.
+4. **Rejection did not exist above the Data Tier.** 12.4's "ไม่รับ → แจ้ง
+   กลับผู้มอบหมาย ไม่ auto-reassign": `reject_ticket` client method,
+   `POST tickets/{id}/reject`, chat "ปฏิเสธงาน T-… เหตุผล" (checked BEFORE
+   the claim trigger — "ไม่รับงาน" contains "รับงาน"), home button with a
+   reason, `notify_ticket_rejected` → the shop hears it with the reason.
+5. **Teams could not be formed.** Phase 7's teams and leads existed only
+   in the Data Tier. Now: `POST/DELETE technician-teams`, members
+   add/remove/lead, `GET technicians` (with names) in the Application;
+   chat "สร้างทีมช่าง แอร์", "เพิ่ม สมศักดิ์ เข้าทีม แอร์ เป็นหัวหน้า", "ตั้ง …
+   เป็นหัวหน้าทีม …", "เอา … ออกจากทีม …", "ทีมช่าง"; `/liff/sales/teams`
+   with a menu tile. Still simplified vs 12.4: any team member may take a
+   team job (the lead-first hand-off is in `docs/PLAN_3OA.md`).
+6. **Customer OA: "อยากแจ้งซ่อมพัดลม อีกอัน" saved as the address.** The
+   address step now recognises a new report (`_starts_new_report`, the
+   trigger stripped, a placeholder like "อันใหม่" asks for symptoms) and
+   refuses a fault-shaped sentence with nothing address-like in it.
+7. **Phase 16.3 display preferences, pulled in at the owner's request.**
+   The table and Data routes existed; nothing read them. The webhook now
+   resolves each person's language (`_language_of`) for every reply on
+   every OA; chat "เปลี่ยนภาษาเป็นอังกฤษ" / "switch to English"; the
+   profile card has a language row (`/liff/{audience}/display-preferences`).
+   Date format and timezone are stored but have no setting surface yet.
 
 ### The second walk (3 Sep afternoon) — shops, claims, and the Sales questions
 

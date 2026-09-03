@@ -336,7 +336,11 @@ class ServiceTicketRepository:
         row.assigned_target_type = "technician"
         row.assigned_to_ref = member_id
         row.accept_status = "accepted"
-        row.status = "in_progress"
+        # Taking a job is not arriving at it. This used to jump straight
+        # to in_progress, so the technician home offered "ปิดงาน" the
+        # moment a job was claimed and check-in never happened (owner, 3
+        # Sep). 13.4: check-in is what makes a ticket in_progress.
+        row.status = "assigned"
         self._s.flush()
         return row
 

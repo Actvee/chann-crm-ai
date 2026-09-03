@@ -114,6 +114,20 @@ def assigned_ticket(tenant):
         return row.id
 
 
+@pytest.fixture
+def in_progress_ticket(tenant, assigned_ticket):
+    """The same job after the technician arrived — check-out closes a
+    visit that check-in opened (13.4), so every check-out test starts
+    here rather than on a merely assigned ticket."""
+    with tenant["session"]() as session:
+        FieldServiceRepository(session).check_in(
+            tenant["scope"], assigned_ticket, member_id=tenant["members"][0],
+            gps_lat=13.7563309, gps_lng=100.5017651,
+        )
+        session.commit()
+    return assigned_ticket
+
+
 class TestCheckIn:
     def test_checking_in_records_gps_and_moves_the_ticket(self, tenant, assigned_ticket):
         with tenant["session"]() as session:
@@ -158,46 +172,59 @@ class TestCheckIn:
                 )
 
 
+class TestCheckOutFromTheSofa:
+    def test_a_job_not_checked_in_to_cannot_be_checked_out_of(self, tenant, assigned_ticket):
+        """Claimed and never arrived at: the visit has not started, so it
+        cannot end. This is what let the technician home offer "ปิดงาน"
+        straight after "รับงาน" (owner, 3 Sep)."""
+        with tenant["session"]() as session:
+            with pytest.raises(ReportConflict):
+                FieldServiceRepository(session).check_out(
+                    tenant["scope"], assigned_ticket, member_id=tenant["members"][0],
+                    report_data={"found_issue": "ก", "work_done": "ข"},
+                )
+
+
 class TestCheckOutGate:
     """Master Spec 13.6 test_check_in_out."""
 
-    def test_checking_out_with_no_report_is_refused(self, tenant, assigned_ticket):
+    def test_checking_out_with_no_report_is_refused(self, tenant, in_progress_ticket):
         with tenant["session"]() as session:
             with pytest.raises(CheckoutBlocked) as caught:
                 FieldServiceRepository(session).check_out(
-                    tenant["scope"], assigned_ticket,
+                    tenant["scope"], in_progress_ticket,
                     member_id=tenant["members"][0], report_data={},
                 )
             assert "ปัญหาที่พบ" in caught.value.missing
             assert "สิ่งที่แก้ไข" in caught.value.missing
 
     def test_a_partly_filled_report_names_only_what_is_missing(
-        self, tenant, assigned_ticket,
+        self, tenant, in_progress_ticket,
     ):
         """The technician is standing in a customer's house while they read
         this — "cannot check out" alone makes them guess."""
         with tenant["session"]() as session:
             with pytest.raises(CheckoutBlocked) as caught:
                 FieldServiceRepository(session).check_out(
-                    tenant["scope"], assigned_ticket,
+                    tenant["scope"], in_progress_ticket,
                     member_id=tenant["members"][0],
                     report_data={"found_issue": "คอมรั่ว"},
                 )
             assert caught.value.missing == ["สิ่งที่แก้ไข"]
 
-    def test_whitespace_does_not_count_as_filled_in(self, tenant, assigned_ticket):
+    def test_whitespace_does_not_count_as_filled_in(self, tenant, in_progress_ticket):
         with tenant["session"]() as session:
             with pytest.raises(CheckoutBlocked):
                 FieldServiceRepository(session).check_out(
-                    tenant["scope"], assigned_ticket,
+                    tenant["scope"], in_progress_ticket,
                     member_id=tenant["members"][0],
                     report_data={"found_issue": "   ", "work_done": "\\n"},
                 )
 
-    def test_a_complete_report_closes_the_visit(self, tenant, assigned_ticket):
+    def test_a_complete_report_closes_the_visit(self, tenant, in_progress_ticket):
         with tenant["session"]() as session:
             report = FieldServiceRepository(session).check_out(
-                tenant["scope"], assigned_ticket,
+                tenant["scope"], in_progress_ticket,
                 member_id=tenant["members"][0], report_data=GOOD_REPORT,
                 gps_lat=13.7563309, gps_lng=100.5017651,
             )
@@ -209,7 +236,7 @@ class TestCheckOutGate:
             assert report.status == "submitted"
 
         with tenant["session"]() as session:
-            ticket = ServiceTicketRepository(session).get(tenant["scope"], assigned_ticket)
+            ticket = ServiceTicketRepository(session).get(tenant["scope"], in_progress_ticket)
             assert ticket.status == "completed"
 
     def test_the_gate_can_be_checked_without_attempting_a_checkout(self, tenant):
@@ -218,27 +245,27 @@ class TestCheckOutGate:
             assert repo.report_blockers(GOOD_REPORT) == []
             assert repo.report_blockers({"found_issue": "x"}) == ["สิ่งที่แก้ไข"]
 
-    def test_only_the_assignee_may_check_out(self, tenant, assigned_ticket):
+    def test_only_the_assignee_may_check_out(self, tenant, in_progress_ticket):
         with tenant["session"]() as session:
             with pytest.raises(ReportConflict):
                 FieldServiceRepository(session).check_out(
-                    tenant["scope"], assigned_ticket,
+                    tenant["scope"], in_progress_ticket,
                     member_id=tenant["members"][1], report_data=GOOD_REPORT,
                 )
 
-    def test_a_ticket_cannot_be_checked_out_of_twice(self, tenant, assigned_ticket):
+    def test_a_ticket_cannot_be_checked_out_of_twice(self, tenant, in_progress_ticket):
         """A second report would make "the report for this job" ambiguous at
         exactly the moment it is being approved."""
         with tenant["session"]() as session:
             FieldServiceRepository(session).check_out(
-                tenant["scope"], assigned_ticket,
+                tenant["scope"], in_progress_ticket,
                 member_id=tenant["members"][0], report_data=GOOD_REPORT,
             )
             session.commit()
         with tenant["session"]() as session:
             with pytest.raises(ReportConflict):
                 FieldServiceRepository(session).check_out(
-                    tenant["scope"], assigned_ticket,
+                    tenant["scope"], in_progress_ticket,
                     member_id=tenant["members"][0], report_data=GOOD_REPORT,
                 )
 
@@ -246,23 +273,23 @@ class TestCheckOutGate:
 class TestPhotos:
     """Master Spec 13.6 test_photo_upload."""
 
-    def test_a_photo_is_tied_to_its_ticket_with_gps(self, tenant, assigned_ticket):
+    def test_a_photo_is_tied_to_its_ticket_with_gps(self, tenant, in_progress_ticket):
         with tenant["session"]() as session:
             row = FieldServiceRepository(session).add_photo(
-                tenant["scope"], ticket_id=assigned_ticket,
+                tenant["scope"], ticket_id=in_progress_ticket,
                 photo_url="gs://bucket/evidence/1.jpg",
                 photo_type="evidence", gps_lat=13.75, gps_lng=100.5,
                 uploaded_by=tenant["members"][0],
             )
             session.commit()
-            assert row.ticket_id == assigned_ticket
+            assert row.ticket_id == in_progress_ticket
             assert row.gps_lat == Decimal("13.75")
 
-    def test_an_unknown_photo_type_is_refused(self, tenant, assigned_ticket):
+    def test_an_unknown_photo_type_is_refused(self, tenant, in_progress_ticket):
         with tenant["session"]() as session:
             with pytest.raises(ReportConflict):
                 FieldServiceRepository(session).add_photo(
-                    tenant["scope"], ticket_id=assigned_ticket,
+                    tenant["scope"], ticket_id=in_progress_ticket,
                     photo_url="gs://bucket/x.jpg", photo_type="selfie",
                 )
 
@@ -287,17 +314,18 @@ class TestPhotos:
     def test_checkin_and_checkout_photos_are_distinguishable(
         self, tenant, assigned_ticket,
     ):
+        in_progress_ticket = assigned_ticket  # this test performs the check-in itself
         """One pair of GPS columns on the ticket could record only one of
         them — which is the one that matters when a customer disputes
         whether anyone turned up."""
         with tenant["session"]() as session:
             repo = FieldServiceRepository(session)
             repo.check_in(
-                tenant["scope"], assigned_ticket,
+                tenant["scope"], in_progress_ticket,
                 member_id=tenant["members"][0], gps_lat=13.1, gps_lng=100.1,
             )
             repo.check_out(
-                tenant["scope"], assigned_ticket,
+                tenant["scope"], in_progress_ticket,
                 member_id=tenant["members"][0], report_data=GOOD_REPORT,
                 gps_lat=13.2, gps_lng=100.2,
             )
@@ -306,26 +334,26 @@ class TestPhotos:
         with tenant["session"]() as session:
             repo = FieldServiceRepository(session)
             check_in = repo.list_photos(
-                tenant["scope"], assigned_ticket, photo_type="checkin",
+                tenant["scope"], in_progress_ticket, photo_type="checkin",
             )
             check_out = repo.list_photos(
-                tenant["scope"], assigned_ticket, photo_type="checkout",
+                tenant["scope"], in_progress_ticket, photo_type="checkout",
             )
             assert check_in[0].gps_lat == Decimal("13.1")
             assert check_out[0].gps_lat == Decimal("13.2")
 
 
 class TestReportLifecycle:
-    def _report(self, tenant, assigned_ticket):
+    def _report(self, tenant, in_progress_ticket):
         with tenant["session"]() as session:
             report = FieldServiceRepository(session).check_out(
-                tenant["scope"], assigned_ticket,
+                tenant["scope"], in_progress_ticket,
                 member_id=tenant["members"][0], report_data=GOOD_REPORT,
             )
             session.commit()
             return report.id
 
-    def test_a_pdf_can_be_attached_after_the_fact(self, tenant, assigned_ticket):
+    def test_a_pdf_can_be_attached_after_the_fact(self, tenant, in_progress_ticket):
         """Rendering can fail while the report itself is perfectly valid —
         losing the technician's work over a renderer outage would be
         absurd, so the report exists first and the PDF is linked once it
@@ -333,7 +361,7 @@ class TestReportLifecycle:
         from chann_data.models import GeneratedDocument
         from chann_data.repositories.phase10 import DocumentTemplateRepository
 
-        report_id = self._report(tenant, assigned_ticket)
+        report_id = self._report(tenant, in_progress_ticket)
 
         # Built through the real repositories rather than by hand: the
         # tables have NOT NULL columns this test has no business knowing
@@ -369,10 +397,10 @@ class TestReportLifecycle:
             assert row.pdf_path == "gs://bucket/sr/1.pdf"
             assert row.generated_document_id == document.id
 
-    def test_an_approved_report_cannot_be_un_approved(self, tenant, assigned_ticket):
+    def test_an_approved_report_cannot_be_un_approved(self, tenant, in_progress_ticket):
         """It has been acted on — invoiced, closed, reported to the
         customer. Reversing it rewrites a decision other things depend on."""
-        report_id = self._report(tenant, assigned_ticket)
+        report_id = self._report(tenant, in_progress_ticket)
         with tenant["session"]() as session:
             FieldServiceRepository(session).set_report_status(
                 tenant["scope"], report_id, status="approved",
@@ -384,8 +412,8 @@ class TestReportLifecycle:
                     tenant["scope"], report_id, status="rejected",
                 )
 
-    def test_an_unknown_status_is_refused(self, tenant, assigned_ticket):
-        report_id = self._report(tenant, assigned_ticket)
+    def test_an_unknown_status_is_refused(self, tenant, in_progress_ticket):
+        report_id = self._report(tenant, in_progress_ticket)
         with tenant["session"]() as session:
             with pytest.raises(ReportConflict):
                 FieldServiceRepository(session).set_report_status(
@@ -401,12 +429,12 @@ class TestMultiTenantIsolation:
     """
 
     def test_a_report_is_invisible_to_another_tenant(
-        self, tenant, assigned_ticket, migrated_db,
+        self, tenant, in_progress_ticket, migrated_db,
     ):
         other = _make_tenant(migrated_db, uuid.uuid4().hex[:6])
         with tenant["session"]() as session:
             report = FieldServiceRepository(session).check_out(
-                tenant["scope"], assigned_ticket,
+                tenant["scope"], in_progress_ticket,
                 member_id=tenant["members"][0], report_data=GOOD_REPORT,
             )
             session.commit()
@@ -418,29 +446,29 @@ class TestMultiTenantIsolation:
             assert repo.list_reports(other["scope"]) == []
 
     def test_photos_are_invisible_to_another_tenant(
-        self, tenant, assigned_ticket, migrated_db,
+        self, tenant, in_progress_ticket, migrated_db,
     ):
         other = _make_tenant(migrated_db, uuid.uuid4().hex[:6])
         with tenant["session"]() as session:
             FieldServiceRepository(session).add_photo(
-                tenant["scope"], ticket_id=assigned_ticket,
+                tenant["scope"], ticket_id=in_progress_ticket,
                 photo_url="gs://bucket/private.jpg", gps_lat=13.0, gps_lng=100.0,
             )
             session.commit()
 
         with other["session"]() as session:
             assert FieldServiceRepository(session).list_photos(
-                other["scope"], assigned_ticket,
+                other["scope"], in_progress_ticket,
             ) == []
 
-    def test_report_numbering_is_per_tenant(self, tenant, assigned_ticket, migrated_db):
+    def test_report_numbering_is_per_tenant(self, tenant, in_progress_ticket, migrated_db):
         """A new tenant's first report must be SR-YYYY-0001, not whatever
         the platform-wide count happens to be — same reasoning as customer,
         deal, quote and ticket codes."""
         other = _make_tenant(migrated_db, uuid.uuid4().hex[:6])
         with tenant["session"]() as session:
             first = FieldServiceRepository(session).check_out(
-                tenant["scope"], assigned_ticket,
+                tenant["scope"], in_progress_ticket,
                 member_id=tenant["members"][0], report_data=GOOD_REPORT,
             )
             session.commit()
@@ -458,6 +486,12 @@ class TestMultiTenantIsolation:
             session.commit()
             ticket_id = ticket.id
 
+        with other["session"]() as session:
+            FieldServiceRepository(session).check_in(
+                other["scope"], ticket_id, member_id=other["members"][0],
+                gps_lat=13.0, gps_lng=100.0,
+            )
+            session.commit()
         with other["session"]() as session:
             second = FieldServiceRepository(session).check_out(
                 other["scope"], ticket_id,

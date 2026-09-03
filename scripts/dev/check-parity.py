@@ -28,6 +28,17 @@ from chann_app.services.chat import ACTION_PERMISSIONS  # noqa: E402
 # Deliberately one-sided, with the reason. Keeping these here rather than
 # silently skipping them means the next person sees the decision.
 ACCEPTED = {
+    ("member", "create"): (
+        "both — technician-teams/{id}/members is team membership, which chat does as "
+        "\"เพิ่ม <ชื่อ> เข้าทีม <ทีม>\" (registered as update/team)"
+    ),
+    ("team", "delete"): (
+        "both — SalesTeams.tsx sends DELETE technician-teams/{id}; the checker reads the "
+        "id segment as the entity, and chat's \"ลบทีมช่าง <ทีม>\" is the same call"
+    ),
+    ("member", "delete"): (
+        "both — \"เอา <ชื่อ> ออกจากทีม <ทีม>\" in chat is the same removal (update/team)"
+    ),
     ("warranty", "claim"): (
         "both — chat's ลงทะเบียนสินค้า on the customer OA calls the same "
         "warranties/claim the customer home posts to (owner rule, 3 Sep: the shop "

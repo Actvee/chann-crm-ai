@@ -50,6 +50,17 @@ def _is_reply(event: dict) -> str | None:
     return quoted or None
 
 
+async def _language_of(client: DataClient, chann_uid: str) -> str:
+    """"th" unless the person chose otherwise. A failed read is Thai, not
+    an error: the preference is a courtesy, the reply is the point."""
+    try:
+        prefs = await client.get_display_preferences(chann_uid)
+    except Exception:  # noqa: BLE001
+        return "th"
+    language = str((prefs or {}).get("language") or "th").lower()
+    return language if language in ("th", "en") else "th"
+
+
 @router.post("/{oa}")
 async def handle_webhook(
     oa: str,
@@ -89,14 +100,18 @@ async def handle_webhook(
                 continue
             ctx = await resolve_context(client, oa, line_user_id)
             user_text = (event.get("message") or {}).get("text") or ""
+            # Phase 16.3: the person's own language, on every OA. Stored
+            # against the identity, so a customer who chose English at
+            # one shop reads English at all of them.
+            language = await _language_of(client, ctx.chann_uid)
 
             if event_type == "follow":
                 try:
-                    text, quick = first_contact(oa, ctx, "th")
+                    text, quick = first_contact(oa, ctx, language)
                     chat = ChatReply(text=text, quick_replies=quick)
                 except Exception as exc:  # noqa: BLE001
                     log.exception("could not build a welcome for oa=%s: %s", oa, exc)
-                    chat = ChatReply(text=greet(ctx))
+                    chat = ChatReply(text=greet(ctx, language))
                 try:
                     await reply_messages(
                         oa, event.get("replyToken", ""),
@@ -128,7 +143,7 @@ async def handle_webhook(
                 storefront_reply = None
                 if oa == "customer" and user_text.strip():
                     storefront_reply = await maybe_handle_storefront(
-                        client, message=user_text, ctx=ctx, language="th",
+                        client, message=user_text, ctx=ctx, language=language,
                     )
 
                 if storefront_reply is not None:
@@ -139,7 +154,7 @@ async def handle_webhook(
                     # against and no tenant to act in, so a model call here would
                     # spend money to reach the same dead end.
                     registered = await handle_registration(
-                        client, message=user_text, ctx=ctx, audience=oa
+                        client, message=user_text, ctx=ctx, audience=oa, language=language,
                     )
                     # Text, or the report flow's own reply when linking
                     # also filed a fault the person typed earlier.
@@ -148,23 +163,24 @@ async def handle_webhook(
                         else ChatReply(text=str(registered))
                     )
                 elif not user_text.strip():
-                    chat = ChatReply(text=greet(ctx))
+                    chat = ChatReply(text=greet(ctx, language))
                 else:
                     quoted_id = _is_reply(event)
                     if quoted_id:
                         chat = await handle_reply(
-                            client, message_id=quoted_id, reply_text=user_text, ctx=ctx
+                            client, message_id=quoted_id, reply_text=user_text, ctx=ctx,
+                            language=language,
                         )
                     else:
                         chat = await handle_chat_message(
-                            client, message=user_text, ctx=ctx
+                            client, message=user_text, ctx=ctx, language=language,
                         )
             except Exception as exc:  # noqa: BLE001
                 log.exception(
                     "unhandled error building chat reply for oa=%s chann_uid=%s: %s",
                     oa, ctx.chann_uid, exc,
                 )
-                chat = ChatReply(text=unavailable_reply("th"))
+                chat = ChatReply(text=unavailable_reply(language))
 
             try:
                 quick_reply_items = (

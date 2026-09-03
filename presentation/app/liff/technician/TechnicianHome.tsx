@@ -49,6 +49,8 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
   const [busyId, setBusyId] = useState("");
   const [reportFor, setReportFor] = useState<Ticket | null>(null);
+  const [declineFor, setDeclineFor] = useState<Ticket | null>(null);
+  const [declineReason, setDeclineReason] = useState("");
   // The three things a service report says (Data Tier REPORT_REQUIRED:
   // found_issue + work_done are the gate; parts are optional). The first
   // version of this form posted one "work_summary" box, which the gate
@@ -167,6 +169,34 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
     }
   }
 
+  /** 12.4: say no; the job returns to CS, nobody is auto-assigned. */
+  async function decline() {
+    if (!declineFor) return;
+    setBusyId(declineFor.id);
+    try {
+      const response = await fetch(
+        `/api/phase2/licenses/${licenseId}/tickets/${declineFor.id}/reject`,
+        {
+          method: "POST",
+          headers: {
+            ...proxyHeaders(token, licenseId, "technician"),
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ member_id: memberId, reason: declineReason.trim() }),
+        },
+      );
+      if (!response.ok) throw new Error(String(response.status));
+      say(`${declineFor.ticket_number} — ${t.dashboard.technician.declined}`, "ok");
+      setDeclineFor(null);
+      setDeclineReason("");
+      await load();
+    } catch {
+      say(t.dashboard.technician.actionFailed, "error");
+    } finally {
+      setBusyId("");
+    }
+  }
+
   /** Check-out IS the service report — one call, one transaction. */
   async function checkOut() {
     if (!reportFor) return;
@@ -242,14 +272,25 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
   const mine = tickets.filter(
     (x) => x.assigned_to_ref === memberId && x.accept_status === "accepted",
   );
-  // Ticket statuses are open/assigned/in_progress/completed/cancelled;
-  // "closed" was never one, so the old filter kept finished jobs in the
-  // open list forever.
+  // Given to me by CS and not yet answered: accept (claim) or decline.
+  const offered = tickets.filter(
+    (x) =>
+      x.assigned_to_ref === memberId &&
+      x.accept_status !== "accepted" &&
+      x.status !== "completed" &&
+      x.status !== "cancelled",
+  );
+  // Open = nobody has taken it. It used to exclude only MY accepted
+  // jobs, so a colleague's job stayed in this list for everyone — and
+  // the one I had just taken looked like it was still open (owner, 3
+  // Sep). Ticket statuses are open/assigned/in_progress/completed/
+  // cancelled; "closed" was never one.
   const open = tickets.filter(
     (x) =>
       x.status !== "completed" &&
       x.status !== "cancelled" &&
-      !(x.assigned_to_ref === memberId && x.accept_status === "accepted"),
+      x.accept_status !== "accepted" &&
+      x.assigned_to_ref !== memberId,
   );
   const canWork = permissions.has("ticket.update");
   const reportStatus = (code: string) =>
@@ -303,7 +344,11 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
                 <li key={ticket.id} className="card">
                   <TicketRow
                     ticket={ticket}
-                    statusLabel={statusLabel(ticket.status)}
+                    statusLabel={
+                      ticket.status === "in_progress"
+                        ? statusLabel(ticket.status)
+                        : t.dashboard.technician.waitingCheckIn
+                    }
                   />
                   {canWork && (
                     <div className="card-actions">
@@ -409,6 +454,82 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
             </ul>
           )}
         </section>
+
+        {offered.length > 0 && (
+          <section className="section callout" data-tone="ok">
+            <div className="section-head">
+              <h2>
+                {t.dashboard.technician.offeredToYou} ({offered.length})
+              </h2>
+            </div>
+            <ul className="list">
+              {offered.map((ticket) => (
+                <li key={ticket.id} className="card">
+                  <TicketRow ticket={ticket} statusLabel={statusLabel(ticket.status)} />
+                  {canWork && (
+                    <div className="card-actions">
+                      <button
+                        type="button"
+                        className="btn"
+                        data-variant="primary"
+                        disabled={busyId !== ""}
+                        onClick={() => void claim(ticket)}
+                      >
+                        {busyId === ticket.id ? t.dashboard.related.saving : t.dashboard.tickets.claim}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn"
+                        data-variant="quiet"
+                        disabled={busyId !== ""}
+                        onClick={() => {
+                          setDeclineFor(ticket);
+                          setDeclineReason("");
+                        }}
+                      >
+                        {t.dashboard.technician.decline}
+                      </button>
+                    </div>
+                  )}
+                  {declineFor?.id === ticket.id && (
+                    <dl className="fields">
+                      <FieldRow label={t.dashboard.technician.declineReason}>
+                        {(id) => (
+                          <input
+                            id={id}
+                            autoFocus
+                            value={declineReason}
+                            onChange={(e) => setDeclineReason(e.target.value)}
+                          />
+                        )}
+                      </FieldRow>
+                      <div className="actions">
+                        <button
+                          type="button"
+                          className="btn"
+                          data-variant="quiet"
+                          disabled={busyId !== ""}
+                          onClick={() => setDeclineFor(null)}
+                        >
+                          {t.dashboard.related.cancelForm}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn"
+                          data-variant="danger"
+                          disabled={busyId !== ""}
+                          onClick={() => void decline()}
+                        >
+                          {t.dashboard.technician.decline}
+                        </button>
+                      </div>
+                    </dl>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
 
         <section className="section">
           <div className="section-head">

@@ -1317,6 +1317,36 @@ async def claim_ticket(
         raise _propagate(exc)
 
 
+@router.post("/licenses/{license_id}/tickets/{ticket_id}/reject")
+async def reject_ticket(
+    license_id: str,
+    ticket_id: str,
+    payload: dict,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """12.4: the technician a job was given to says no. It returns to the
+    dispatcher's queue and is never passed on automatically. The CS owner
+    is told by chat's handler; this route is the home screen's twin."""
+    _require_same_tenant(principal, license_id)
+    principal.require("ticket.update")
+    try:
+        row = await client.reject_ticket(
+            license_id, ticket_id, str(payload.get("member_id") or ""),
+            actor_id=principal.chann_uid,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+    try:
+        from .services.chat import notify_ticket_rejected
+        await notify_ticket_rejected(
+            client, license_id, row, reason=str(payload.get("reason") or ""),
+        )
+    except Exception:  # noqa: BLE001 — the rejection stands; the notice is best effort
+        log.exception("could not tell the dispatcher about a rejected ticket")
+    return row
+
+
 @router.post("/licenses/{license_id}/tickets/{ticket_id}/check-out")
 async def check_out_ticket(
     license_id: str,
@@ -1640,6 +1670,142 @@ async def list_technician_teams(
         return await client.list_technician_teams(license_id)
     except DataTierError as exc:
         raise _propagate(exc)
+
+
+# Technician teams (Phase 7 organisation, used by Phase 12 dispatch).
+# The Data Tier has had these since Phase 7; nothing above it called
+# them, so a shop could not form a team except by chat — and chat could
+# not either. Names come from the members' profiles, which is what a
+# person managing a team reads, not chann_uids.
+
+
+class TeamCreateIn(BaseModel):
+    team_name: str
+
+
+class TeamMemberAddIn(BaseModel):
+    member_id: str
+    is_lead: bool = False
+
+
+@router.post("/licenses/{license_id}/technician-teams", status_code=201)
+async def create_technician_team(
+    license_id: str,
+    payload: TeamCreateIn,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    _require_same_tenant(principal, license_id)
+    principal.require("team.manage")
+    try:
+        return await client.create_technician_team(license_id, payload.team_name.strip())
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.delete("/licenses/{license_id}/technician-teams/{team_id}", status_code=204)
+async def delete_technician_team(
+    license_id: str,
+    team_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    _require_same_tenant(principal, license_id)
+    principal.require("team.manage")
+    try:
+        await client.delete_technician_team(license_id, team_id)
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.get("/licenses/{license_id}/technician-teams/{team_id}/members")
+async def list_technician_team_members(
+    license_id: str,
+    team_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    _require_same_tenant(principal, license_id)
+    principal.require("ticket.read")
+    try:
+        members = await client.list_team_members(license_id, team_id)
+    except DataTierError as exc:
+        raise _propagate(exc)
+    return await _with_names(client, members)
+
+
+@router.get("/licenses/{license_id}/technicians")
+async def list_technicians(
+    license_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Every active member whose role is a technician role, with names —
+    the pool a team is built from and a job is dispatched to."""
+    _require_same_tenant(principal, license_id)
+    principal.require("ticket.read")
+    try:
+        members = await client.list_members(license_id)
+    except DataTierError as exc:
+        raise _propagate(exc)
+    technicians = [
+        m for m in members
+        if str(m.get("status") or "active") == "active"
+        and ("technician" in str(m.get("role") or "").lower() or "ช่าง" in str(m.get("role") or ""))
+    ]
+    return await _with_names(client, technicians)
+
+
+@router.post("/licenses/{license_id}/technician-teams/{team_id}/members", status_code=201)
+async def add_technician_team_member(
+    license_id: str,
+    team_id: str,
+    payload: TeamMemberAddIn,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    _require_same_tenant(principal, license_id)
+    principal.require("team.manage")
+    try:
+        return await client.add_team_member(
+            license_id, team_id, payload.member_id, is_lead=payload.is_lead,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.delete(
+    "/licenses/{license_id}/technician-teams/{team_id}/members/{member_id}", status_code=204,
+)
+async def remove_technician_team_member(
+    license_id: str,
+    team_id: str,
+    member_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    _require_same_tenant(principal, license_id)
+    principal.require("team.manage")
+    try:
+        await client.remove_team_member(license_id, team_id, member_id)
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+async def _with_names(client: DataClient, members: list[dict]) -> list[dict]:
+    out = []
+    for m in members:
+        chann_uid = str(m.get("chann_uid") or "")
+        try:
+            profile = await client.get_profile(chann_uid) or {}
+        except Exception:  # noqa: BLE001 — a missing profile is a nameless row, not a failure
+            profile = {}
+        name = " ".join(
+            p for p in (profile.get("first_name"), profile.get("last_name")) if p
+        )
+        out.append({**m, "id": str(m.get("id") or ""), "display_name": name or chann_uid,
+                    "phone": profile.get("phone")})
+    return out
 
 
 # --------------------------------------------------------- quote line items

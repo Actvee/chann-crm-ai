@@ -319,7 +319,8 @@ class TestClaimAndReject:
             )
             session.commit()
             assert row.accept_status == "accepted"
-            assert row.status == "in_progress"
+            # Claiming assigns; only check-in (13.4) makes it in_progress.
+            assert row.status == "assigned"
             assert row.assigned_to_ref == tenant["members"][1]
 
     def test_a_private_ticket_may_not_be_claimed_by_an_outsider(self, tenant):

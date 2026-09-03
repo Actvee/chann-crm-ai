@@ -12,9 +12,10 @@
 1. `docs/SESSION_HANDOFF.md` — สถานะจริงล่าสุด: อะไร deploy แล้ว (SHA), patch ที่
    ค้าง, บทเรียนทุกข้อพร้อมเหตุผล อ่านส่วนบนสุดก่อน แล้วค่อยไล่ลง
 2. `docs/AI_HANDOFF_START_PROMPT.md` — วิธีเริ่ม session ให้ต่อเนื่องจากคนก่อน
-3. `docs/PHASE14_PLAN.md` — งาน phase ที่กำลังทำ (14-A เสร็จ, 14-B/14-C รอ)
-4. `docs/CRM_COMPLETENESS.md` — ช่องว่างเทียบ CRM ตลาด และลำดับที่เสนอ
-5. `docs/CHANN_CRM_AI_MASTER_SPEC.md` — product source of truth (ยังใช่)
+3. `docs/PLAN_3OA.md` — แผนงานที่เหลือของ 3 OA เรียงใหม่จาก spec (3 ก.ย. เย็น) — งานถัดไปอยู่ที่นี่
+4. `docs/PHASE14_PLAN.md` — Phase 14 (A/B/C เสร็จ รอ runtime acceptance)
+5. `docs/CRM_COMPLETENESS.md` — ช่องว่างเทียบ CRM ตลาด และลำดับที่เสนอ
+6. `docs/CHANN_CRM_AI_MASTER_SPEC.md` — product source of truth (ยังใช่)
 
 ### สภาพแวดล้อมที่คุณอยู่
 - คุณรันใน **Google Cloud Shell ของ release owner** — `gcloud` login ด้วยตัวตนของเขา

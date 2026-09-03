@@ -39,6 +39,7 @@ export function ProfileCard({
   const [draft, setDraft] = useState<Profile>({});
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ text: string; tone: "ok" | "error" } | null>(null);
+  const [language, setLanguage] = useState<string>("th");
 
   const headers = useCallback(
     () => ({ "X-Liff-ID-Token": token, "Content-Type": "application/json" }),
@@ -56,6 +57,14 @@ export function ProfileCard({
         if (!response.ok) throw new Error(String(response.status));
         const row = (await response.json()) as Profile;
         if (!cancelled) setProfile(row);
+        // Phase 16.3: the language the system replies in, per person.
+        const prefs = await fetch(`/api/liff/${audience}/display-preferences`, {
+          headers: headers(),
+        });
+        if (prefs.ok && !cancelled) {
+          const p = (await prefs.json()) as { language?: string | null };
+          setLanguage(p.language === "en" ? "en" : "th");
+        }
       } catch {
         if (!cancelled) setNote({ text: copy.loadFailed, tone: "error" });
       }
@@ -91,6 +100,21 @@ export function ProfileCard({
   }
 
   const fullName = [profile?.first_name, profile?.last_name].filter(Boolean).join(" ");
+
+  async function chooseLanguage(next: string) {
+    setLanguage(next);
+    try {
+      const response = await fetch(`/api/liff/${audience}/display-preferences`, {
+        method: "PUT",
+        headers: headers(),
+        body: JSON.stringify({ language: next }),
+      });
+      if (!response.ok) throw new Error(String(response.status));
+      setNote({ text: copy.languageSaved, tone: "ok" });
+    } catch {
+      setNote({ text: copy.saveFailed, tone: "error" });
+    }
+  }
 
   return (
     <section className="section">
@@ -135,6 +159,14 @@ export function ProfileCard({
           </FieldRow>
           <FieldRow label={copy.address} empty={!profile.address}>
             {profile.address || copy.notSet}
+          </FieldRow>
+          <FieldRow label={copy.language}>
+            {(id) => (
+              <select id={id} value={language} onChange={(e) => void chooseLanguage(e.target.value)}>
+                <option value="th">{copy.languageTh}</option>
+                <option value="en">{copy.languageEn}</option>
+              </select>
+            )}
           </FieldRow>
         </dl>
       )}

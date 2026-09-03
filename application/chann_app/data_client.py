@@ -901,6 +901,57 @@ class DataClient:
         )
         return self._unwrap(resp)
 
+    async def delete_technician_team(self, license_id: str, team_id: str) -> None:
+        resp = await self._client.delete(
+            f"{self._base}/internal/v1/licenses/{license_id}/technician-teams/{team_id}",
+            headers=self._headers,
+        )
+        self._unwrap(resp)
+
+    async def add_team_member(
+        self, license_id: str, team_id: str, member_id: str, *, is_lead: bool = False,
+    ) -> dict:
+        """Idempotent on the Data Tier: re-adding updates is_lead."""
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/technician-teams/{team_id}/members",
+            headers=self._headers, json={"member_id": member_id, "is_lead": is_lead},
+        )
+        return self._unwrap(resp)
+
+    async def remove_team_member(self, license_id: str, team_id: str, member_id: str) -> None:
+        resp = await self._client.delete(
+            f"{self._base}/internal/v1/licenses/{license_id}/technician-teams/{team_id}/members/{member_id}",
+            headers=self._headers,
+        )
+        self._unwrap(resp)
+
+    async def reject_ticket(
+        self, license_id: str, ticket_id: str, member_id: str, actor_id: str | None = None,
+    ) -> dict:
+        """12.4: the assignee declines; the ticket goes back to the
+        dispatcher's queue, never auto-reassigned."""
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/tickets/{ticket_id}/reject",
+            headers=self._headers_for(actor_id), json={"member_id": member_id},
+        )
+        return self._unwrap(resp)
+
+    # ------------------------------------------ Phase 16 display preferences
+
+    async def get_display_preferences(self, chann_uid: str) -> dict:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/identities/{chann_uid}/display-preferences",
+            headers=self._headers,
+        )
+        return self._unwrap(resp)
+
+    async def set_display_preferences(self, chann_uid: str, fields: dict) -> dict:
+        resp = await self._client.put(
+            f"{self._base}/internal/v1/identities/{chann_uid}/display-preferences",
+            headers=self._headers, json=fields,
+        )
+        return self._unwrap(resp)
+
     # ------------------------------------------------------------ Phase 8
 
     async def get_profile(self, chann_uid: str) -> dict | None:

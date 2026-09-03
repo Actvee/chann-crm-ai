@@ -213,6 +213,10 @@ class FieldServiceRepository:
             raise ReportConflict("this ticket is already completed")
         if ticket.status == "cancelled":
             raise ReportConflict("a cancelled ticket cannot be checked out of")
+        if ticket.status != "in_progress":
+            # 13.4: check-out closes a visit that check-in opened. Without
+            # this a job could be "finished" from the sofa.
+            raise ReportConflict("check in first — this ticket is not in progress")
 
         blockers = self.report_blockers(report_data)
         if blockers:

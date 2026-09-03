@@ -28,6 +28,7 @@ const SECTIONS = [
     { href: "/liff/sales/reports", key: "reports" },
   { href: "/liff/sales/approvals", key: "approvals" },
   { href: "/liff/sales/warranties", key: "warranties" },
+  { href: "/liff/sales/teams", key: "teams" },
   { href: "/liff/sales/products", key: "products" },
   { href: "/liff/sales/templates", key: "templates" },
   { href: "/liff/sales/company", key: "company" },
@@ -94,6 +95,7 @@ export default function SalesMenu({ liffId }: { liffId: string }) {
     approvals: t.dashboard.approvals.title,
     templates: t.dashboard.templates.title,
     warranties: t.dashboard.warranties.title,
+    teams: t.dashboard.teams.title,
   };
 
   if (redirecting) {

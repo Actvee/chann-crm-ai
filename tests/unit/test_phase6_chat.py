@@ -533,7 +533,8 @@ class FakeDataClient:
         return list(getattr(self, "_members", []))
 
     async def list_team_members(self, license_id, team_id):
-        return list(getattr(self, "_team_members", []))
+        rows = list(getattr(self, "_team_members", []))
+        return [r for r in rows if r.get("team_id") in (None, team_id)]
 
     async def list_tickets(self, license_id, status=None, visible_to=None):
         self.recorded.append(("list_tickets", license_id, visible_to))
@@ -549,6 +550,11 @@ class FakeDataClient:
 
     async def check_in_ticket(self, license_id, ticket_id, *, member_id, gps_lat=None, gps_lng=None, photo_url=None, actor_id=None):
         self.recorded.append(("check_in_ticket", license_id, ticket_id, member_id))
+        # 13.4: arriving opens the visit — mirrored so the chat's
+        # check-out precondition sees what the real tier would.
+        for t in getattr(self, "_tickets", []):
+            if t.get("id") == ticket_id:
+                t["status"] = "in_progress"
         return {"id": ticket_id, "customer_name": "ก", "service_address": "99/1"}
 
     async def check_out_ticket(self, license_id, ticket_id, *, member_id, report_data, gps_lat=None, gps_lng=None, photo_url=None, actor_id=None):
@@ -565,9 +571,61 @@ class FakeDataClient:
 
     async def claim_ticket(self, license_id, ticket_id, member_id, actor_id=None):
         self.recorded.append(("claim_ticket", license_id, ticket_id, member_id))
+        # Taking a job assigns it; only check-in makes it in_progress.
+        for t in getattr(self, "_tickets", []):
+            if t.get("id") == ticket_id:
+                t.update({"status": "assigned", "accept_status": "accepted",
+                          "assigned_to_ref": member_id, "assigned_target_type": "technician"})
         return {"id": ticket_id, "ticket_number": "T-2026-0001",
                 "customer_name": "ก", "service_address": "99/1",
                 "scheduled_date": "2026-09-04", "scheduled_time": "14:00:00"}
+
+    async def reject_ticket(self, license_id, ticket_id, member_id, actor_id=None):
+        self.recorded.append(("reject_ticket", license_id, ticket_id, member_id))
+        for t in getattr(self, "_tickets", []):
+            if t.get("id") == ticket_id:
+                t.update({"status": "open", "accept_status": "rejected"})
+                return dict(t)
+        return {"id": ticket_id, "ticket_number": "T-2026-0001", "status": "open",
+                "accept_status": "rejected"}
+
+    async def create_technician_team(self, license_id, team_name):
+        self.recorded.append(("create_technician_team", license_id, team_name))
+        if not hasattr(self, "_teams"):
+            self._teams = []
+        row = {"id": f"team-{len(self._teams) + 1}", "team_name": team_name}
+        self._teams.append(row)
+        return row
+
+    async def delete_technician_team(self, license_id, team_id):
+        self.recorded.append(("delete_technician_team", license_id, team_id))
+        self._teams = [t for t in getattr(self, "_teams", []) if t["id"] != team_id]
+
+    async def add_team_member(self, license_id, team_id, member_id, *, is_lead=False):
+        self.recorded.append(("add_team_member", license_id, team_id, member_id, is_lead))
+        rows = getattr(self, "_team_members", [])
+        rows = [r for r in rows if not (r["team_id"] == team_id and r["member_id"] == member_id)]
+        member = next((m for m in getattr(self, "_members", []) if m["id"] == member_id), {})
+        rows.append({**member, "team_id": team_id, "member_id": member_id, "is_lead": is_lead})
+        self._team_members = rows
+        return {"id": f"tm-{len(rows)}", "team_id": team_id, "member_id": member_id, "is_lead": is_lead}
+
+    async def remove_team_member(self, license_id, team_id, member_id):
+        self.recorded.append(("remove_team_member", license_id, team_id, member_id))
+        self._team_members = [
+            r for r in getattr(self, "_team_members", [])
+            if not (r["team_id"] == team_id and r["member_id"] == member_id)
+        ]
+
+    async def get_display_preferences(self, chann_uid):
+        return dict(getattr(self, "_prefs", {}).get(chann_uid) or {"language": "th", "date_format": "dd/mm/yyyy", "timezone": "Asia/Bangkok"})
+
+    async def set_display_preferences(self, chann_uid, fields):
+        self.recorded.append(("set_display_preferences", chann_uid, fields))
+        if not hasattr(self, "_prefs"):
+            self._prefs = {}
+        self._prefs[chann_uid] = {**(self._prefs.get(chann_uid) or {}), **fields}
+        return self._prefs[chann_uid]
 
     async def list_technician_teams(self, license_id):
         return list(getattr(self, "_teams", [{"id": "team-1", "team_name": "AC Team"}]))
@@ -5852,6 +5910,9 @@ class TestButtonsTheSystemWritesDoNotNeedTheAI:
         triggers += list(module.SHOP_INFO_PHRASES)
         triggers += list(module.WARRANTY_BOOK_PHRASES)
         triggers += list(module.SWITCH_TENANT_PHRASES)
+        triggers += list(module.TEAM_LIST_PHRASES)
+        triggers += list(module.TICKET_REJECT_TRIGGERS)
+        triggers += list(module.LANGUAGE_TO_EN) + list(module.LANGUAGE_TO_TH)
 
         dead = []
         for text in sorted(sent):

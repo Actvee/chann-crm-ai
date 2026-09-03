@@ -132,6 +132,47 @@ async def liff_me(
     }
 
 
+# Phase 16.3 — how this person wants to be spoken to, on every OA.
+_PREF_FIELDS = ("language", "date_format", "timezone")
+_PREF_LANGUAGES = ("th", "en")
+
+
+@router.get("/liff/{audience}/display-preferences")
+async def liff_display_preferences(
+    audience: str,
+    claims: dict = Depends(require_liff),
+    client: DataClient = Depends(get_data_client),
+):
+    if audience not in OA_TO_ROLE:
+        raise HTTPException(status_code=404, detail="unknown LIFF audience")
+    identity = await client.resolve_identity(
+        claims["sub"], OA_TO_ROLE[audience], claims.get("name")
+    )
+    prefs = await client.get_display_preferences(identity["chann_uid"])
+    return {field: prefs.get(field) for field in _PREF_FIELDS}
+
+
+@router.put("/liff/{audience}/display-preferences")
+async def liff_set_display_preferences(
+    audience: str,
+    body: dict,
+    claims: dict = Depends(require_liff),
+    client: DataClient = Depends(get_data_client),
+):
+    if audience not in OA_TO_ROLE:
+        raise HTTPException(status_code=404, detail="unknown LIFF audience")
+    fields = {f: body[f] for f in _PREF_FIELDS if body.get(f)}
+    if "language" in fields and fields["language"] not in _PREF_LANGUAGES:
+        raise HTTPException(status_code=422, detail="language must be th or en")
+    if not fields:
+        raise HTTPException(status_code=422, detail="nothing to update")
+    identity = await client.resolve_identity(
+        claims["sub"], OA_TO_ROLE[audience], claims.get("name")
+    )
+    prefs = await client.set_display_preferences(identity["chann_uid"], fields)
+    return {field: prefs.get(field) for field in _PREF_FIELDS}
+
+
 @router.put("/liff/{audience}/active-shop")
 async def liff_set_active_shop(
     audience: str,

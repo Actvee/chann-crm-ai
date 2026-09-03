@@ -166,7 +166,8 @@ class TestTheWholeServiceJourney:
             )
             session.commit()
             assert row.assigned_to_ref == shop["technician_id"]
-            assert row.status == "in_progress"
+            # Taken, not yet arrived: check-in (next step) opens the visit.
+            assert row.status == "assigned"
 
         # 6. They arrive.
         with shop["session"]() as session:

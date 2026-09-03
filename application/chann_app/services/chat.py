@@ -69,6 +69,7 @@ ACTION_PERMISSIONS: dict[tuple[str, str], str] = {
     # reads "no permission covers that" and answers "not a feature" — for
     # things the technician OA does all day.
     ("claim", "ticket"): "ticket.update",
+    ("reject", "ticket"): "ticket.update",
     ("check_in", "service_report"): "service_report.create",
     ("check_out", "service_report"): "service_report.create",
     ("update", "line_item"): "deal.update",
@@ -116,6 +117,7 @@ ACTION_PERMISSIONS: dict[tuple[str, str], str] = {
     ("read", "team"): "team.manage",
     ("create", "team"): "team.manage",
     ("update", "team"): "team.manage",
+    ("delete", "team"): "team.manage",
     ("read", "sales_group"): "team.manage",
     ("create", "sales_group"): "team.manage",
     ("update", "sales_group"): "team.manage",
@@ -479,6 +481,188 @@ def _is_company_profile_view(message: str) -> bool:
     # Exact-ish match only: a longer sentence that merely contains the words
     # is more likely to be an edit command, which the parser above handles.
     return any(compact == p.replace(" ", "") for p in COMPANY_VIEW_PHRASES)
+
+
+# ------------------------------------------------ technician teams (Phase 7)
+#
+# A shop forms teams so CS can dispatch "ให้ทีม AC" (12.4) and a team
+# member can take the job. The Data Tier has had teams since Phase 7;
+# nothing above it let anyone create one (owner audit, 3 Sep).
+
+TEAM_LIST_PHRASES = (
+    "รายชื่อทีมช่าง", "ทีมช่าง", "ดูทีมช่าง", "technician teams", "teams",
+)
+TEAM_CREATE_TRIGGERS = ("สร้างทีมช่าง", "ตั้งทีมช่าง", "สร้างทีม ", "create technician team", "create team ")
+_TEAM_ADD_RE = re.compile(
+    r"^(?:เพิ่ม|ใส่|ให้)\s*(?P<who>.+?)\s*(?:เข้า|ใน|ไป)\s*ทีม\s*(?P<team>.+?)\s*(?P<lead>(?:เป็น)?หัวหน้า(?:ทีม)?)?\s*$"
+)
+_TEAM_LEAD_RE = re.compile(r"^(?:ตั้ง|ให้|แต่งตั้ง)\s*(?P<who>.+?)\s*เป็นหัวหน้าทีม\s*(?P<team>.+?)\s*$")
+_TEAM_REMOVE_RE = re.compile(r"^(?:เอา|ลบ|นำ|ถอด)\s*(?P<who>.+?)\s*ออกจากทีม\s*(?P<team>.+?)\s*$")
+_TEAM_DELETE_RE = re.compile(r"^(?:ลบทีมช่าง|ลบทีม|ยุบทีม)\s*(?P<team>.+?)\s*$")
+TEAM_TEXT = {
+    "list_head": {"th": "ทีมช่าง ({n} ทีม):", "en": "Technician teams ({n}):"},
+    "list_empty": {
+        "th": "ยังไม่มีทีมช่าง พิมพ์ \"สร้างทีมช่าง แอร์\" แล้ว \"เพิ่ม สมศักดิ์ เข้าทีม แอร์ เป็นหัวหน้า\"",
+        "en": "No teams yet — \"create technician team AC\" then \"add Somsak to team AC as lead\"",
+    },
+    "created": {"th": "สร้างทีม {team} แล้ว เพิ่มช่างด้วย \"เพิ่ม <ชื่อ> เข้าทีม {team}\"", "en": "Team {team} created — add people with \"add <name> to team {team}\""},
+    "added": {"th": "เพิ่ม {who} เข้าทีม {team}{lead} แล้ว", "en": "Added {who} to team {team}{lead}"},
+    "lead_set": {"th": "ตั้ง {who} เป็นหัวหน้าทีม {team} แล้ว", "en": "{who} is now lead of team {team}"},
+    "removed": {"th": "เอา {who} ออกจากทีม {team} แล้ว", "en": "Removed {who} from team {team}"},
+    "deleted": {"th": "ลบทีม {team} แล้ว", "en": "Team {team} deleted"},
+    "no_team": {"th": "ไม่พบทีม \"{team}\" พิมพ์ \"ทีมช่าง\" เพื่อดูรายชื่อทีม", "en": "No team \"{team}\" — type \"teams\" to list them"},
+    "no_tech": {"th": "ไม่พบช่างชื่อ \"{who}\" พิมพ์ \"รายชื่อช่าง\" เพื่อดูรายชื่อ", "en": "No technician named \"{who}\" — type \"technicians\""},
+    "many_tech": {"th": "มีช่างชื่อคล้ายกันหลายคน: {names} — พิมพ์ชื่อเต็ม", "en": "Several match: {names} — use the full name"},
+    "need_name": {"th": "ตั้งชื่อทีมด้วยครับ เช่น \"สร้างทีมช่าง แอร์\"", "en": "Name the team, e.g. \"create technician team AC\""},
+}
+
+
+async def _team_named(client: DataClient, license_id: str, fragment: str) -> dict | None:
+    fragment = (fragment or "").strip().lower()
+    if not fragment:
+        return None
+    teams = await client.list_technician_teams(license_id)
+    exact = [t for t in teams if str(t.get("team_name") or "").lower() == fragment]
+    if exact:
+        return exact[0]
+    loose = [t for t in teams if fragment in str(t.get("team_name") or "").lower()]
+    return loose[0] if len(loose) == 1 else None
+
+
+async def _technician_named(
+    client: DataClient, license_id: str, fragment: str,
+) -> tuple[dict | None, list[str]]:
+    """(the one technician whose name contains the fragment, or None, and
+    the candidate names when several do)."""
+    fragment = (fragment or "").strip().lower()
+    if not fragment:
+        return None, []
+    members = await client.list_members(license_id)
+    matches = []
+    for m in members:
+        if str(m.get("status") or "active") != "active":
+            continue
+        try:
+            profile = await client.get_profile(str(m.get("chann_uid") or "")) or {}
+        except Exception:
+            profile = {}
+        name = " ".join(p for p in (profile.get("first_name"), profile.get("last_name")) if p)
+        if name and (fragment in name.lower() or name.lower() in fragment):
+            matches.append(({**m, "name": name}, name))
+    if len(matches) == 1:
+        return matches[0][0], []
+    return None, [n for _m, n in matches]
+
+
+async def _maybe_handle_teams(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
+    permission_keys: list[str], language: str,
+) -> ChatReply | None:
+    text = (message or "").strip()
+    lowered = text.lower()
+    license_id = str(license_id)
+    held = set(permission_keys)
+
+    if _matches_phrase(text, TEAM_LIST_PHRASES):
+        if "ticket.read" not in held:
+            return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        try:
+            teams = await client.list_technician_teams(license_id)
+        except Exception:
+            log.exception("could not list teams")
+            return ChatReply(text=unavailable_reply(language))
+        if not teams:
+            return ChatReply(text=_t(TEAM_TEXT["list_empty"], language))
+        lines = []
+        for team in teams[:10]:
+            try:
+                members = await client.list_team_members(license_id, str(team["id"]))
+            except Exception:
+                members = []
+            names = []
+            for m in members:
+                try:
+                    profile = await client.get_profile(str(m.get("chann_uid") or "")) or {}
+                except Exception:
+                    profile = {}
+                name = " ".join(p for p in (profile.get("first_name"), profile.get("last_name")) if p) or str(m.get("chann_uid") or "")
+                names.append(name + (" (หัวหน้า)" if m.get("is_lead") else ""))
+            lines.append(f"· {team.get('team_name')}: " + (", ".join(names) if names else "ยังไม่มีสมาชิก"))
+        return ChatReply(
+            text=_t(TEAM_TEXT["list_head"], language).format(n=len(teams)) + "\n" + "\n".join(lines),
+            quick_replies=[("รายชื่อช่าง", "รายชื่อช่าง")],
+            quick_reply_url=_dashboard_button("teams", language),
+        )
+
+    create = next((t for t in TEAM_CREATE_TRIGGERS if lowered.startswith(t.strip()) and len(lowered) > len(t.strip())), None)
+    if create is not None or lowered in ("สร้างทีมช่าง", "ตั้งทีมช่าง"):
+        if "team.manage" not in held:
+            return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        name = text[len(create.strip()):].strip(" :") if create else ""
+        if not name:
+            return ChatReply(text=_t(TEAM_TEXT["need_name"], language))
+        try:
+            team = await client.create_technician_team(license_id, name)
+        except DataTierError as exc:
+            if exc.status_code == 409:
+                return ChatReply(text=f"มีทีม {name} อยู่แล้ว" if language != "en" else f"Team {name} already exists")
+            return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+        except Exception:
+            log.exception("could not create a team")
+            return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+        return ChatReply(
+            text=_t(TEAM_TEXT["created"], language).format(team=team.get("team_name") or name),
+            quick_replies=[("รายชื่อช่าง", "รายชื่อช่าง"), ("ทีมช่าง", "ทีมช่าง")],
+        )
+
+    for kind, regex in (("lead", _TEAM_LEAD_RE), ("remove", _TEAM_REMOVE_RE), ("add", _TEAM_ADD_RE)):
+        m = regex.match(text)
+        if not m:
+            continue
+        if "team.manage" not in held:
+            return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        who, team_name = m.group("who"), m.group("team")
+        if kind == "add" and m.group("lead"):
+            team_name = team_name.strip()
+        team = await _team_named(client, license_id, team_name)
+        if team is None:
+            return ChatReply(text=_t(TEAM_TEXT["no_team"], language).format(team=team_name.strip()))
+        tech, candidates = await _technician_named(client, license_id, who)
+        if tech is None:
+            if candidates:
+                return ChatReply(text=_t(TEAM_TEXT["many_tech"], language).format(names=", ".join(candidates)))
+            return ChatReply(text=_t(TEAM_TEXT["no_tech"], language).format(who=who.strip()))
+        try:
+            if kind == "remove":
+                await client.remove_team_member(license_id, str(team["id"]), str(tech["id"]))
+                key, lead = "removed", ""
+            else:
+                is_lead = kind == "lead" or bool(m.groupdict().get("lead"))
+                await client.add_team_member(license_id, str(team["id"]), str(tech["id"]), is_lead=is_lead)
+                key = "lead_set" if kind == "lead" else "added"
+                lead = (" เป็นหัวหน้า" if language != "en" else " as lead") if (kind == "add" and is_lead) else ""
+        except Exception:
+            log.exception("team change failed")
+            return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+        return ChatReply(
+            text=_t(TEAM_TEXT[key], language).format(who=tech["name"], team=team.get("team_name"), lead=lead),
+            quick_replies=[("ทีมช่าง", "ทีมช่าง")],
+        )
+
+    m = _TEAM_DELETE_RE.match(text)
+    if m:
+        if "team.manage" not in held:
+            return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        team = await _team_named(client, license_id, m.group("team"))
+        if team is None:
+            return ChatReply(text=_t(TEAM_TEXT["no_team"], language).format(team=m.group("team").strip()))
+        try:
+            await client.delete_technician_team(license_id, str(team["id"]))
+        except Exception:
+            log.exception("team delete failed")
+            return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+        return ChatReply(text=_t(TEAM_TEXT["deleted"], language).format(team=team.get("team_name")))
+    return None
 
 
 SHOP_INFO_PHRASES = (
@@ -2407,6 +2591,53 @@ CUSTOMER_PICK_JOB = {
 }
 
 
+_NEW_REPORT_PREFIXES = (
+    "แจ้งซ่อม", "อยากแจ้งซ่อม", "ขอแจ้งซ่อม", "แจ้งเสีย", "อยากแจ้งเสีย", "แจ้งปัญหา", "report a fault",
+)
+_REPORT_PLACEHOLDERS = (
+    "อันใหม่", "อีกอัน", "ใหม่", "อีกงาน", "อีกเครื่อง", "อีกตัว", "เพิ่ม", "อีก", "งานใหม่", "เครื่องใหม่",
+    "another", "new", "one more",
+)
+_ADDRESS_MARKERS = (
+    "ถ.", "ถนน", "ซ.", "ซอย", "หมู่", "ม.", "ต.", "ตำบล", "อ.", "อำเภอ", "จ.", "จังหวัด", "แขวง", "เขต",
+    "/", "บ้านเลขที่", "คอนโด", "หมู่บ้าน", "อาคาร", "ชั้น", "ตึก", "road", "soi", "district",
+)
+_FAULT_MARKERS = (
+    "ไม่เย็น", "ไม่ติด", "ไม่แรง", "ไม่ทำงาน", "ไม่หมุน", "ไม่ปั่น", "เสีย", "พัง", "รั่ว", "หยด", "เสียงดัง",
+    "ซ่อม", "ร้อน", "ดับ", "ช็อต", "มีกลิ่น", "not cooling", "broken", "leak",
+)
+
+
+def _starts_new_report(text: str) -> bool:
+    lowered = (text or "").strip().lower()
+    return any(lowered.startswith(p) for p in _NEW_REPORT_PREFIXES)
+
+
+def _strip_report_trigger(text: str) -> str:
+    lowered = (text or "").strip()
+    for prefix in sorted(_NEW_REPORT_PREFIXES, key=len, reverse=True):
+        if lowered.lower().startswith(prefix):
+            return lowered[len(prefix):].strip(" :,-—")
+    return lowered
+
+
+def _is_report_placeholder(text: str) -> bool:
+    compact = (text or "").strip().lower()
+    return compact in _REPORT_PLACEHOLDERS or all(
+        w in _REPORT_PLACEHOLDERS for w in compact.split()
+    )
+
+
+def _looks_like_address(text: str) -> bool:
+    lowered = (text or "").lower()
+    return any(ch.isdigit() for ch in lowered) or any(m in lowered for m in _ADDRESS_MARKERS)
+
+
+def _looks_like_fault(text: str) -> bool:
+    lowered = (text or "").lower()
+    return any(m in lowered for m in _FAULT_MARKERS)
+
+
 def _is_customer_command(text: str) -> bool:
     """A rich-menu tile or a known command, as opposed to free text."""
     return _matches_phrase(
@@ -2513,6 +2744,38 @@ async def _clear_customer_hold(client: DataClient, ctx: ResolvedContext) -> None
         await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
     except Exception:
         log.exception("could not clear a held customer message")
+
+
+# Phase 16.3 — the person's language, kept against the identity so it
+# follows them across every shop and every OA.
+LANGUAGE_TO_EN = (
+    "เปลี่ยนภาษาเป็นอังกฤษ", "เปลี่ยนเป็นภาษาอังกฤษ", "ใช้ภาษาอังกฤษ", "ภาษาอังกฤษ", "english please",
+    "switch to english", "use english", "english",
+)
+LANGUAGE_TO_TH = (
+    "เปลี่ยนภาษาเป็นไทย", "เปลี่ยนเป็นภาษาไทย", "ใช้ภาษาไทย", "ภาษาไทย", "switch to thai", "use thai", "thai",
+)
+LANGUAGE_SWITCHED = {
+    "th": "เปลี่ยนเป็นภาษาไทยแล้วครับ ข้อความจากระบบทุกช่องทางจะเป็นภาษาไทย",
+    "en": "Switched to English. Every message from the system, on every channel, will be in English.",
+}
+
+
+def _language_switch_requested(message: str) -> str | None:
+    if _matches_phrase(message, LANGUAGE_TO_EN):
+        return "en"
+    if _matches_phrase(message, LANGUAGE_TO_TH):
+        return "th"
+    return None
+
+
+async def _switch_language(client: DataClient, *, ctx: ResolvedContext, language: str) -> ChatReply:
+    try:
+        await client.set_display_preferences(ctx.chann_uid, {"language": language})
+    except Exception:
+        log.exception("could not store the language preference")
+        return ChatReply(text=unavailable_reply(language))
+    return ChatReply(text=_t(LANGUAGE_SWITCHED, language))
 
 
 def _looks_like_a_question(text: str) -> bool:
@@ -2727,6 +2990,18 @@ async def _handle_customer_report(
             message=f"ลงทะเบียนสินค้า {text}", language=language,
         )
 
+    # "แจ้งซ่อม อันใหม่" / "อยากแจ้งซ่อมพัดลม อีกอัน": a second report, not
+    # an answer to the open question (owner transcript, 3 Sep 18:34 — the
+    # sentence was saved as the address). The trigger word is stripped;
+    # a placeholder like "อันใหม่" leaves nothing, so the symptoms are
+    # asked for.
+    if _starts_new_report(text):
+        rest = _strip_report_trigger(text)
+        if not rest or _is_report_placeholder(rest):
+            return ChatReply(text=_t(REPORT_ASK_ISSUE, language))
+        pending = None
+        text = rest
+
     if pending and pending.get("entity") == "customer_ticket":
         ticket_id = (pending.get("fields") or {}).get("ticket_id")
         awaiting = pending.get("missing") or []
@@ -2743,6 +3018,9 @@ async def _handle_customer_report(
             # street (3 Sep sim). The prompt stays open; the tile is
             # answered as itself.
             and not _is_customer_command(text)
+            # A sentence about a fault with nothing address-like in it
+            # is a new fault, not where they live.
+            and not (_looks_like_fault(text) and not _looks_like_address(text))
         ):
             try:
                 await client.update_ticket(
@@ -3501,6 +3779,14 @@ async def _handle_check_out(
         if member is None or ticket is None:
             return ChatReply(text=_t(TICKET_PICK_ONE, language))
         code = str(ticket.get("ticket_number") or "")
+        if str(ticket.get("status") or "") != "in_progress":
+            # 13.4: check-out ends a visit that check-in began. Asking the
+            # three report questions of someone who never arrived, and
+            # failing at the end, taught nothing (owner, 3 Sep).
+            return ChatReply(
+                text=_t(CHECKOUT_NEEDS_CHECKIN, language).format(code=code),
+                quick_replies=[(f"เช็คอิน {code}"[:20], f"เช็คอิน {code}")],
+            )
 
         # Nothing written yet: ask, rather than refuse. The gate still
         # holds — the check-out simply does not happen until the answers
@@ -3576,7 +3862,10 @@ TICKET_MINE_PHRASES = ("งานของฉัน", "งานที่รั�
 # The technician rich-menu tile. Jobs nobody has taken yet, plus the ones
 # handed to this person that they have not accepted — the same set the
 # LIFF home calls "งานที่เปิดรับ".
-TICKET_OPEN_PHRASES = ("งานที่เปิดรับ", "งานเปิดรับ", "งานว่าง", "งานที่ยังไม่มีคนรับ", "open jobs")
+TICKET_OPEN_PHRASES = (
+    "งานที่เปิดรับ", "งานเปิดรับ", "งานว่าง", "งานที่ว่าง", "งานที่เปิด", "งานเปิด", "งานที่ยังไม่มีคนรับ",
+    "งานรอรับ", "มีงานไหม", "มีงานมั้ย", "งานใหม่", "open jobs", "available jobs",
+)
 TICKET_DETAIL_TRIGGERS = ("ข้อมูลงาน", "รายละเอียดงาน", "ticket")
 TICKET_ASSIGN_TRIGGERS = ("มอบหมาย", "จ่ายงาน", "assign ticket")
 TICKET_CLAIM_TRIGGERS = ("รับงาน", "claim")
@@ -3797,13 +4086,13 @@ async def _handle_ticket_list(
             )
             if open_only:
                 me = str(member["id"])
+                # Open = nobody has taken it yet. It used to exclude only
+                # MY accepted jobs, so a colleague's job stayed "open" to
+                # everyone else (owner, 3 Sep: a job in both lists).
                 tickets = [
                     t for t in tickets
                     if str(t.get("status") or "") not in ("completed", "cancelled")
-                    and not (
-                        str(t.get("assigned_to_ref") or "") == me
-                        and str(t.get("accept_status") or "") == "accepted"
-                    )
+                    and str(t.get("accept_status") or "") != "accepted"
                 ]
         else:
             tickets = await client.list_tickets(license_id)
@@ -4225,9 +4514,105 @@ async def _handle_ticket_claim(
             ) or "—",
             address=claimed.get("service_address") or "—",
             when=_ticket_when(claimed),
-        ),
+        ) + "\n" + _t(TICKET_CLAIMED_NEXT, language),
         entity_type="service_ticket", entity_id=str(claimed.get("id") or ""),
+        quick_replies=[(f"เช็คอิน {code}"[:20], f"เช็คอิน {code}")],
     )
+
+
+TICKET_CLAIMED_NEXT = {
+    "th": "ถึงหน้างานแล้วพิมพ์ \"เช็คอิน\" ก่อน แล้วค่อย \"ปิดงาน\" พร้อมรายงาน",
+    "en": "On site, type \"check in\" first; \"finish\" with the report comes after.",
+}
+CHECKOUT_NEEDS_CHECKIN = {
+    "th": "งาน {code} ยังไม่ได้เช็คอินครับ ถึงหน้างานแล้วพิมพ์ \"เช็คอิน {code}\" ก่อน แล้วค่อยปิดงาน",
+    "en": "{code} is not checked in yet. On site, type \"check in {code}\" first, then finish.",
+}
+TICKET_REJECT_TRIGGERS = ("ปฏิเสธงาน", "ไม่รับงาน", "รับงานไม่ได้", "ไม่สะดวกรับงาน", "decline job")
+TICKET_REJECTED = {
+    "th": "ปฏิเสธงาน {code} แล้ว งานกลับไปที่ CS เพื่อมอบหมายใหม่ (ไม่ส่งต่อให้ใครอัตโนมัติ)",
+    "en": "{code} declined. It is back with CS to reassign — nothing is passed on automatically.",
+}
+TICKET_REJECT_NEEDS_CODE = {
+    "th": "ปฏิเสธงานไหนครับ พิมพ์ \"ปฏิเสธงาน T-2026-0001 เหตุผล...\"",
+    "en": "Which job? Type \"decline job T-2026-0001 reason...\"",
+}
+
+
+async def _handle_ticket_reject(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
+    permission_keys: list[str], language: str,
+) -> ChatReply:
+    """12.4: the assignee says no. Back to the dispatcher, who is told,
+    and nobody else is given the job by the system."""
+    if "ticket.update" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    license_id = str(license_id)
+    match = TICKET_CODE_RE.search(message or "")
+    code = match.group(1).upper() if match else ""
+    reason = (message or "")
+    for trigger in TICKET_REJECT_TRIGGERS:
+        reason = reason.replace(trigger, "")
+    if code:
+        reason = reason.replace(code, "").replace(code.lower(), "")
+    reason = reason.strip(" :-—,\n")
+    try:
+        member = await client.get_member(license_id, ctx.chann_uid)
+        if member is None:
+            return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        tickets = await client.list_tickets(license_id, visible_to=str(member["id"]))
+        me = str(member["id"])
+        mine_pending = [
+            t for t in tickets
+            if str(t.get("assigned_to_ref") or "") == me
+            and str(t.get("status") or "") not in ("completed", "cancelled")
+        ]
+        if not code:
+            if len(mine_pending) == 1:
+                code = str(mine_pending[0].get("ticket_number") or "").upper()
+            elif len(mine_pending) > 1:
+                return ChatReply(
+                    text=_t(TICKET_REJECT_NEEDS_CODE, language),
+                    quick_replies=[
+                        (f"{t.get('ticket_number')}"[:20], f"ปฏิเสธงาน {t.get('ticket_number')}")
+                        for t in mine_pending[:4]
+                    ],
+                )
+            else:
+                return ChatReply(text=_t(TICKET_REJECT_NEEDS_CODE, language))
+        ticket = next(
+            (t for t in tickets if str(t.get("ticket_number", "")).upper() == code), None,
+        )
+        if ticket is None:
+            return ChatReply(text=_t(NOT_FOUND_BY_CODE, language).format(what="งาน", code=code))
+        row = await client.reject_ticket(
+            license_id, str(ticket["id"]), me, actor_id=ctx.chann_uid,
+        )
+    except DataTierError as exc:
+        return _field_service_failure(
+            exc, code=code, language=language, template=TICKET_CLAIM_FAILED,
+        )
+    except Exception:
+        log.exception("ticket reject failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    await notify_ticket_rejected(client, license_id, row, reason=reason, language=language)
+    return ChatReply(
+        text=_t(TICKET_REJECTED, language).format(code=code),
+        entity_type="service_ticket", entity_id=str(row.get("id") or ""),
+    )
+
+
+async def notify_ticket_rejected(
+    client: DataClient, license_id: str, row: dict, *, reason: str = "", language: str = "th",
+) -> None:
+    """The dispatcher hears it in LINE, with the reason — the whole point
+    of not auto-reassigning is that a person decides next."""
+    code = str(row.get("ticket_number") or "")
+    text = f"ช่างปฏิเสธงาน {code}" + (f": {reason}" if reason else "") + "\nงานกลับมารอมอบหมายใหม่"
+    try:
+        await _notify_ticket_change(client, str(license_id), str(row.get("id") or ""), text, language)
+    except Exception:
+        log.exception("could not announce a rejected ticket")
 
 
 # ------------------------------------------------------ Phase 14-B approvals
@@ -4962,6 +5347,7 @@ DASHBOARD_PATHS = {
     "quotes": "quotes",
     "company": "company",
     "warranties": "warranties",
+    "teams": "teams",
     "index": "",
 }
 
@@ -7812,6 +8198,7 @@ TECHNICIAN_HELP = {
         "2. ถึงหน้างาน — พิมพ์ \"เช็คอิน\" (ถ้ามีงานเดียวระบบรู้เอง)\n"
         "3. ซ่อมเสร็จ — พิมพ์ \"ปิดงาน\" แล้วตอบ 3 อย่าง: ปัญหาที่พบ / สิ่งที่แก้ไข / อะไหล่ (ถ้ามี)\n"
         "4. รอ CS ตรวจ — ผ่านหรือตีกลับจะแจ้งมาที่แชทนี้ ตีกลับแก้แล้วส่งใหม่ได้\n\n"
+        "รับงานไม่ได้: พิมพ์ \"ปฏิเสธงาน T-000123 เหตุผล\" งานจะกลับไปที่ CS\n"
         "ดูอื่นๆ: \"งานของฉัน\" · \"งานวันนี้\" · \"รายงานของฉัน\"\n"
         "แก้ข้อมูลตัวเอง: \"แก้เบอร์เป็น 08x-xxx-xxxx\"\n"
         "เปิดหน้าจอเต็มได้จากเมนูด้านล่าง (เปิดหน้าจอช่าง)"
@@ -7837,6 +8224,9 @@ HELP_SECTIONS = (
     ("ร้านและทีม", (
         ("ticket.read", "ข้อมูลร้าน", "ชื่อ รหัสร้าน (ให้ลูกค้าใช้ผูกร้าน) และช่องทางติดต่อ"),
         ("ticket.read", "รายชื่อช่าง", "ช่างในร้านและเบอร์ติดต่อ"),
+        ("ticket.read", "ทีมช่าง", "ทีมและสมาชิก (หัวหน้าทีม)"),
+        ("team.manage", "สร้างทีมช่าง แอร์", "ตั้งทีมใหม่"),
+        ("team.manage", "เพิ่ม สมศักดิ์ เข้าทีม แอร์ เป็นหัวหน้า", "ใส่ช่างเข้าทีม / ตั้งหัวหน้า"),
         ("warranty.create", "ลงทะเบียนสินค้า SN12345678 แอร์ ให้ลูกค้า สมชาย", "บันทึกเครื่องที่ขาย ลูกค้าจะพิมพ์ S/N เพื่อผูกเอง"),
         ("warranty.read", "รายการประกัน", "เครื่องที่ลงทะเบียนไว้ทั้งหมด"),
     )),
@@ -9117,6 +9507,11 @@ async def handle_chat_message(
                 client, ctx=ctx, license_id=license_id, message=message,
                 permission_keys=permission_keys, language=language,
             )
+        if any(t in message.lower() for t in TICKET_REJECT_TRIGGERS):
+            return await _handle_ticket_reject(
+                client, ctx=ctx, license_id=license_id, message=message,
+                permission_keys=permission_keys, language=language,
+            )
         if any(t in message.lower() for t in TICKET_CLAIM_TRIGGERS):
             return await _handle_ticket_claim(
                 client, ctx=ctx, license_id=license_id, message=message,
@@ -9137,6 +9532,10 @@ async def handle_chat_message(
     # which is why this comes first and why it does not check permissions.
     # Their boundary is the shop they are linked to, which license_id
     # already is.
+    wanted = _language_switch_requested(message)
+    if wanted:
+        return await _switch_language(client, ctx=ctx, language=wanted)
+
     if ctx.oa == "customer":
         if _matches_phrase(message, HELP_TRIGGERS):
             return ChatReply(
@@ -9525,6 +9924,13 @@ async def handle_chat_message(
     # customer receives, so they must never pass through a model that could
     # "correct" a tax ID. Sales OA only, since this is a company-management
     # action with no meaning on the Customer or Technician channels.
+    if ctx.oa == "sales":
+        team_reply = await _maybe_handle_teams(
+            client, ctx=ctx, license_id=license_id, message=message,
+            permission_keys=permission_keys, language=language,
+        )
+        if team_reply is not None:
+            return team_reply
     if ctx.oa == "sales" and any(t in (message or "").lower() for t in SERIAL_REGISTER_TRIGGERS):
         return await _handle_warranty_register(
             client, ctx=ctx, license_id=license_id, message=message, language=language,
