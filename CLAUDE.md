@@ -1,6 +1,90 @@
-# Chann CRM AI — Bootstrap Instructions for Claude Code / Coding Agent
+# Chann CRM AI — Instructions for Claude Code / Coding Agent
 
-> ใช้ไฟล์นี้เป็น agent instruction ของ repo Chann CRM AI ใหม่
+> ใช้ไฟล์นี้เป็น agent instruction ของ repo Chann CRM AI
+
+## -1. อ่านสิ่งนี้ก่อน — สภาพจริง ณ 3 ก.ย. 2569 (ส่วนนี้ทับทุกอย่างด้านล่างเมื่อขัดกัน)
+
+ส่วนที่เหลือของไฟล์นี้เขียนตอน bootstrap และยังถูกต้องเป็นหลักการ แต่โปรเจกต์
+ผ่าน Phase 1–13 (+16, +14-A) มาแล้ว และมี**วิธีทำงานที่พิสูจน์แล้ว**จากการ deploy
+จริงหลายสิบรอบ ทำตามนี้ก่อน:
+
+### เอกสารที่ต้องอ่านเป็นอันดับแรก (ตามลำดับ)
+1. `docs/SESSION_HANDOFF.md` — สถานะจริงล่าสุด: อะไร deploy แล้ว (SHA), patch ที่
+   ค้าง, บทเรียนทุกข้อพร้อมเหตุผล อ่านส่วนบนสุดก่อน แล้วค่อยไล่ลง
+2. `docs/AI_HANDOFF_START_PROMPT.md` — วิธีเริ่ม session ให้ต่อเนื่องจากคนก่อน
+3. `docs/PHASE14_PLAN.md` — งาน phase ที่กำลังทำ (14-A เสร็จ, 14-B/14-C รอ)
+4. `docs/CRM_COMPLETENESS.md` — ช่องว่างเทียบ CRM ตลาด และลำดับที่เสนอ
+5. `docs/CHANN_CRM_AI_MASTER_SPEC.md` — product source of truth (ยังใช่)
+
+### สภาพแวดล้อมที่คุณอยู่
+- คุณรันใน **Google Cloud Shell ของ release owner** — `gcloud` login ด้วยตัวตนของเขา
+  ทุกอย่างที่คุณทำคือเขาทำ ดังนั้น: อ่านได้เสรี แต่**การเปลี่ยนสถานะ GCP ทำผ่าน
+  deploy script ที่มี gate เท่านั้น** ไม่พิมพ์ `gcloud run services update` /
+  `terraform apply` เอง (ยกเว้น fallback ที่ script พิมพ์ให้และเจ้าของสั่ง)
+- Repo อยู่ที่ `~/chann-crm-ai` · เจ้าของโหลด patch/script ไว้ที่ `$HOME`
+- `terraform.tfvars` (gitignored) ถือ digest ของ 3 tier + `git_commit` +
+  `platform_version` — ห้าม commit, ห้าม cat ทั้งไฟล์ลง log (มี secret)
+- **IPv6 บน Cloud Shell วูบเป็นพักๆ**: `dial tcp [2xxx::]:443: cannot assign
+  requested address` ไม่ใช่ DNS, `GODEBUG=netdns=go` ช่วยไม่ครบ — รันซ้ำผ่าน
+  แทบทุกครั้ง script มี retry 3 รอบอยู่แล้ว ถ้าล้มครบให้ใช้ fallback ที่ script
+  พิมพ์ (ต้องอัป `GIT_COMMIT` env ด้วยเสมอ ไม่งั้น `/health` โกหก commit)
+- ห้ามแตะ IAM / Service Account / Secret Manager โดยเด็ดขาด (เจ้าของยืนยันซ้ำ)
+
+### วิธีส่งงาน — patch + deploy script (ทำตามเป๊ะ)
+- ทุกการเปลี่ยนแปลงส่งเป็น `git diff origin/main` หลัง `git add -A` ชื่อ
+  `<topic>-v<N>-<จำนวนบรรทัด>.patch` — จำนวนบรรทัดในชื่อคือ guard กันหยิบผิดไฟล์
+- ก่อนสร้าง patch: `git fetch origin && git reset --hard origin/main` แล้วค่อยแก้
+  (patch จาก base ผิดเกิดมาแล้ว 3 ครั้ง)
+- **validate บน clone สดเสมอ**: `git clone /path/.git /tmp/fc && git checkout
+  <base> && git apply --3way --check` แล้วรันเทสต์บนนั้น
+- deploy script มาตรฐาน 9 stage (ดูตัวอย่างล่าสุดใน `docs/SESSION_HANDOFF.md` และ
+  script ที่เจ้าของเคยรัน): SYNC+linecount → APPLY+grep symbol เฉพาะของ patch →
+  TEST (unit+boundary+sims+**check-parity**+typecheck/build ถ้าแตะ UI) → COMMIT+PUSH
+  (`git add -A`, ตรวจ tree สะอาด) → BUILD image เฉพาะ tier ที่แตะ →
+  UPDATE tfvars (anchor-edit ด้วย regex ต่อบรรทัด) → PLAN (retry 3, die ถ้ามี
+  destroy) → APPLY เฉพาะเมื่อ `ALLOW_APPLY=YES` ซึ่ง**เจ้าของเป็นคนพิมพ์** →
+  RUNTIME CHECK `/health` ต้องตอบ SHA เต็ม, presentation ผ่าน `/api/ready`
+- script ต้อง**รันซ้ำได้**: ถ้า HEAD subject == COMMIT_SUBJECT ให้ข้าม apply/commit
+- **มี migration** = build `database` image → `gcloud run jobs update
+  chann-crm-ai-dev-migrate --image` → `execute --wait` **ก่อน** deploy data
+  (data image ตรวจ `EXPECTED_MIGRATION_HEAD` ตอน boot)
+- **ห้ามอ้างว่า deploy สำเร็จ**จนกว่า `/health` ตอบ `git_commit` ตรง SHA ที่ push
+
+### กติกาที่เจ้าของตั้ง (บังคับกับทุกฟีเจอร์)
+1. แชท = ผู้ช่วยที่เข้าใจความหมาย ไม่ใช่ command parser · เวลาไม่ระบุ = 09:00
+2. **Parity: ทำได้ในแชทต้องทำได้ใน UI และกลับกัน** — `scripts/dev/check-parity.py`
+   ต้องอ่าน "every capability is reachable from both surfaces" ก่อน deploy
+   ฟีเจอร์ใหม่ต้องมาทั้งสองฝั่งตั้งแต่ patch แรก (ลงทะเบียนใน `ACTION_PERMISSIONS`
+   แล้ว checker จะบังคับ UI ให้เอง)
+3. ระบุตัวตนได้ทุกทาง: รหัส / ชื่อในประโยค / บริบทที่เพิ่งดู / reply ข้อความเก่า
+   และ**ชื่อซ้ำต้องได้ปุ่มเลือกคน** (`_AmbiguousName` → `_name_choice`) ห้ามเดา ห้ามเงียบ
+4. ไม่มี key ดิบ (`due_time`) โผล่ให้คนเห็น · ไม่ถามสิ่งที่ระบบตอบเองได้
+5. ธีมสีต่อ OA: Sale เขียว `#178a50` · Tech น้ำเงิน `#1f6fd6` · CS ส้ม `#e8731a`
+   (`[data-theme]` ใน `presentation/app/globals.css`)
+
+### เครื่องมือตรวจที่ต้องรันก่อนบอกว่า "เสร็จ"
+```
+/tmp/dv/bin/python -m pytest tests/unit tests/boundary -q     # ~650
+TEST_DATABASE_URL=... pytest tests/integration -q             # ~266 ต้องมี Postgres
+python scripts/dev/simulate-day.py ; simulate-edge-cases.py   # ต้อง "0 FINDINGS"
+python scripts/dev/check-parity.py                            # ต้องสะอาด
+python scripts/dev/check-{routes,client,perms,triggers,i18n-usage,chat-format,auth,placeholders,fields,methods}.py
+cd presentation && npm run typecheck && npm run build         # ถ้าแตะ UI
+```
+เทียบผล check-* กับรอบก่อน: ควรต่างแค่ตัวเลข ถ้ามีบรรทัดใหม่ต้องอธิบายได้
+
+### บทเรียนที่จ่ายแพงแล้ว (อย่าจ่ายซ้ำ)
+- **tier-seam bug มองไม่เห็นจาก log ของ tier ที่กำลังดู** — MemberOut ไม่ส่ง `id`,
+  `Warranty.purchase_date` ที่ไม่มีจริง (ชื่อจริง `warranty_start/_end`):
+  เทียบ contract จริงด้วย `check-fields` และเทสต์ HTTP end-to-end เสมอ
+- helper ที่เป็น local ของ router อื่น (`_joined`) → `NameError` ตอนรันจริง
+  ทั้งที่เทสต์เขียว — ทุก branch ใหม่ต้องมีเทสต์ที่วิ่งผ่านมันจริง
+- อักษรไทยเป็น word character: `\b` ใน regex มองรหัสที่ติดกับ "ของ" ไม่เห็น
+- `audit_log.action` มี CHECK constraint — ใช้ verb ที่มี (`create update delete
+  assign transfer status reject claim check_in check_out ...`) ห้ามคิดใหม่
+- regex ที่ capture context แบบ consuming จะกลืน match ถัดไป — ใช้ lookahead
+
+---
 
 ## 0. Operating context — อ่านก่อนทุกอย่าง
 
@@ -289,6 +373,9 @@ Backup configured ไม่เท่ากับ recovery proven
   (member cache ไม่ถูก invalidate, และ role name ที่ hardcode)
 
 ## 15. เริ่มงานจริง
+
+> ส่วนนี้เป็นของยุค bootstrap — Phase 1–13 เสร็จแล้ว งานปัจจุบันอยู่ใน §-1 ด้านบน
+> และ `docs/PHASE14_PLAN.md` เก็บไว้เป็นประวัติ
 
 ก่อน Phase 1 ให้ทำ **Infrastructure + Source-of-Truth Readiness Report** สั้น ๆ:
 
