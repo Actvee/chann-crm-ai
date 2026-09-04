@@ -121,6 +121,7 @@ from ..repositories.phase6 import (
     Phase6NotFound,
 )
 from ..schemas import (
+    ArchiveInactiveLeadsIn,
     ReportQueryIn,
     ReportResultOut,
     TenantMemberOut,
@@ -1952,6 +1953,7 @@ def _phase9_http_error(exc: Exception) -> HTTPException:
                 "message": str(exc),
                 "existing_id": exc.existing_id,
                 "existing_code": exc.existing_code,
+                "field": getattr(exc, "field", "phone"),
             },
         )
     if isinstance(exc, Phase9Conflict):
@@ -1971,6 +1973,8 @@ def _deal_out(deal, products) -> DealOut:
         owner_member_id=deal.owner_member_id, notes=deal.notes,
         archived_at=deal.archived_at, created_at=deal.created_at,
         updated_at=deal.updated_at,
+        expected_close_date=deal.expected_close_date, amount=deal.amount,
+        currency=getattr(deal, "currency", None) or "THB",
         products=[
             DealProductOut(
                 id=p.id, deal_id=p.deal_id, product_id=p.product_id,
@@ -2116,6 +2120,7 @@ def create_deal(
             scope, contact_id=payload.contact_id, notes=payload.notes,
             owner_member_id=payload.owner_member_id,
             products=[p.model_dump() for p in payload.products],
+            amount=payload.amount, currency=payload.currency, expected_close_date=payload.expected_close_date,
         )
         AuditRepository(session).write(
             license_id=license_id, entity_type="deal", entity_id=row.id,
@@ -4618,3 +4623,30 @@ def run_report_query(
     except ReportSpecInvalid as exc:
         raise HTTPException(status_code=422, detail={"error": "report_spec_invalid", "message": str(exc)})
     return ReportResultOut(**result)
+
+
+
+# ------------------------------------------------ user review fixes (4 Sep 2026)
+
+@router.post("/licenses/{license_id}/customers/archive-inactive-leads", response_model=list[CustomerOut])
+def archive_inactive_leads(
+    license_id: uuid.UUID, payload: ArchiveInactiveLeadsIn,
+    session: Session = Depends(get_session), x_actor_id: str = Header(default=""),
+):
+    """The daily lead cleanup for one tenant (setting lead_auto_archive_days).
+    Soft delete only; one audit row per lead so the trail says why it left."""
+    scope = TenantScope(license_id=license_id)
+    try:
+        rows = CustomerRepository(session).archive_inactive_leads(scope, days=payload.days)
+        for row in rows:
+            AuditRepository(session).write(
+                license_id=license_id, entity_type="customer", entity_id=row.id,
+                actor_type="system", actor_id=x_actor_id or "lead_cleanup", action="update",
+                field_changes={**diff_fields({"archived": False}, {"archived": True}),
+                               "reason": f"inactive lead > {payload.days} days"},
+            )
+        session.commit()
+        return [CustomerOut.model_validate(r, from_attributes=True) for r in rows]
+    except Exception as exc:
+        session.rollback()
+        raise _phase9_http_error(exc)

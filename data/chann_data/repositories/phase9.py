@@ -4,7 +4,7 @@ storefront cross-tenant search + auto-lead (Master Spec 9.4-9.6).
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 
 from sqlalchemy import func, select
@@ -63,10 +63,11 @@ class Phase9Duplicate(Phase9Conflict):
     person to go and search for it themselves.
     """
 
-    def __init__(self, message: str, *, existing_id: str, existing_code: str):
+    def __init__(self, message: str, *, existing_id: str, existing_code: str, field: str = "phone"):
         super().__init__(message)
         self.existing_id = existing_id
         self.existing_code = existing_code
+        self.field = field  # which identifier matched: phone or email
 
 
 def _normalise_phone(phone: str | None) -> str:
@@ -148,20 +149,28 @@ class CustomerRepository:
         # record with a different name is how a customer's details get
         # overwritten by someone else's.
         normalised = _normalise_phone(phone)
-        if normalised:
+        normalised_email = _normalise_email(email)
+        if normalised or normalised_email:
             existing = self._s.execute(
                 select(Customer).where(
                     Customer.license_id == scope.license_id,
-                    Customer.phone.is_not(None),
                     Customer.archived_at.is_(None),
                 )
             ).scalars().all()
             for row in existing:
-                if _normalise_phone(row.phone) == normalised:
+                if normalised and _normalise_phone(row.phone) == normalised:
                     raise Phase9Duplicate(
                         f"{row.customer_id} already has this phone number",
                         existing_id=str(row.id),
                         existing_code=row.customer_id,
+                        field="phone",
+                    )
+                if normalised_email and _normalise_email(row.email) == normalised_email:
+                    raise Phase9Duplicate(
+                        f"{row.customer_id} already has this email",
+                        existing_id=str(row.id),
+                        existing_code=row.customer_id,
+                        field="email",
                     )
         if customer_chann_uid:
             existing = self._s.execute(
@@ -237,6 +246,58 @@ class CustomerRepository:
             )
         ).scalars().first()
 
+    def archive_inactive_leads(
+        self, scope: TenantScope, *, days: int, now: datetime | None = None,
+    ) -> list[Customer]:
+        """Soft-delete leads nobody has touched for `days` days.
+
+        Last activity is the newest of: the record's own updated_at, its
+        deals, its tickets, its notes and its follow-ups. Only stage
+        "lead" — a contact (a confirmed customer) is never swept. Returns
+        the rows archived so the caller can audit each one.
+        """
+        from ..models import FollowUp, Note, ServiceTicket
+
+        moment = now or datetime.now(timezone.utc)
+        cutoff = moment - timedelta(days=max(1, int(days)))
+        deal_last = (
+            select(func.max(Deal.updated_at)).where(Deal.contact_id == Customer.id)
+            .correlate(Customer).scalar_subquery()
+        )
+        ticket_last = (
+            select(func.max(ServiceTicket.updated_at)).where(ServiceTicket.contact_id == Customer.id)
+            .correlate(Customer).scalar_subquery()
+        )
+        note_last = (
+            select(func.max(Note.created_at))
+            .where(Note.entity_type == "customer", Note.entity_id == Customer.id)
+            .correlate(Customer).scalar_subquery()
+        )
+        follow_last = (
+            select(func.max(FollowUp.updated_at))
+            .where(FollowUp.entity_type == "customer", FollowUp.entity_id == Customer.id)
+            .correlate(Customer).scalar_subquery()
+        )
+        last_activity = func.greatest(
+            Customer.updated_at,
+            func.coalesce(deal_last, Customer.updated_at),
+            func.coalesce(ticket_last, Customer.updated_at),
+            func.coalesce(note_last, Customer.updated_at),
+            func.coalesce(follow_last, Customer.updated_at),
+        )
+        rows = list(self._s.execute(
+            select(Customer).where(
+                Customer.license_id == scope.license_id,
+                Customer.stage == "lead",
+                Customer.archived_at.is_(None),
+                last_activity < cutoff,
+            ).with_for_update()
+        ).scalars())
+        for row in rows:
+            row.archived_at = moment
+        self._s.flush()
+        return rows
+
 
 class DealRepository:
     def __init__(self, session: Session):
@@ -247,6 +308,7 @@ class DealRepository:
         contact_id: uuid.UUID, notes: str | None = None,
         owner_member_id: uuid.UUID | None = None,
         products: list[dict] | None = None,
+        amount=None, currency: str | None = None, expected_close_date=None,
     ) -> Deal:
         contact = self._s.execute(
             select(Customer).where(
@@ -282,6 +344,7 @@ class DealRepository:
             id=uuid.uuid4(), license_id=scope.license_id,
             deal_id=self._unique_deal_id(scope), contact_id=contact_id,
             stage="new", owner_member_id=owner_member_id, notes=notes,
+            amount=amount, currency=(currency or "THB").upper()[:3], expected_close_date=expected_close_date,
         )
         self._s.add(row)
         self._s.flush()
@@ -452,7 +515,7 @@ class DealRepository:
         row = self.get(scope, deal_id)
         if row is None:
             raise Phase9NotFound("deal not found in this tenant")
-        allowed = {"notes", "owner_member_id", "expected_close_date"}
+        allowed = {"notes", "owner_member_id", "expected_close_date", "amount", "currency"}
         for key, value in fields.items():
             if key not in allowed:
                 continue
@@ -677,3 +740,9 @@ class StorefrontRepository:
             scope, customer_chann_uid=chann_uid, notes=f"สนใจสินค้า: {product_name}",
             stage="lead",
         )
+
+
+def _normalise_email(value: str | None) -> str:
+    """Lower-cased, trimmed; an empty or None value is "" so it never
+    matches another empty one."""
+    return (value or "").strip().lower()

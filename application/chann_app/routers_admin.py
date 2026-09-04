@@ -444,6 +444,12 @@ async def run_reminder_sweep(
         summary["chat"] = await live_chat.sweep(client)
     except Exception:  # noqa: BLE001
         logging.getLogger(__name__).exception("chat sweep inside the reminder sweep failed")
+    try:
+        from .services import lead_cleanup
+
+        summary["lead_cleanup"] = await lead_cleanup.sweep_inactive_leads(client)
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).exception("chat sweep inside the reminder sweep failed")
     return summary
 
 

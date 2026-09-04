@@ -912,6 +912,11 @@ class Deal(TimestampMixin, Base):
     # sitting in "proposed" for a day and one sitting there for five
     # months look identical.
     expected_close_date: Mapped[date | None] = mapped_column(Date)
+    # User review (4 Sep 2026): a deal's own value. The pipeline still
+    # sums line items where they exist; this is what the salesperson said
+    # the deal is worth before any line item exists.
+    amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 2))
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="THB", server_default="THB")
     # Free text on purpose. Every shop loses deals for its own reasons,
     # and a fixed list is either wrong for most of them or so generic
     # nobody learns anything from it.

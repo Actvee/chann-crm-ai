@@ -2340,3 +2340,10 @@ service and confirming `git_commit` matches what you just pushed. Never run
 - `usage_help()`/`HELP_SECTIONS` ยังอยู่ในโค้ดแต่ไม่ถูกเรียกจากแชทแล้ว (เก็บไว้ให้ render-guides/เทสต์เดิม); ถ้าจะลบให้ลบพร้อมเทสต์ที่อ้างถึง.
 - ทุก call site ของ `suggest_what_you_can_do` ได้ `quick_reply_url=_guide_button(ctx.oa, language)` แล้ว.
 
+
+## Plan E1 — user review fixes (4 Sep 2026)
+
+- Migration `0024_deal_amount` (deals.amount NUMERIC(18,2), deals.currency CHAR(3) default THB) → head guard `0024_deal_amount`; deploy ต้อง migration-first.
+- ข้อความปิด (ยืนยันลบ / ใช้รายชื่อเดิม / ใช่-ไม่ใช่) เก็บใน pending_intent entity `customer_duplicate`, `customer_merge_confirm`, `customer_archive_confirm`, `deal_context_confirm` และถูกจับก่อน parse_intent.
+- `DealOut` ส่ง `expected_close_date/amount/currency` แล้ว (ก่อนหน้านี้ dashboard อ่าน field ที่ไม่เคยถูกส่ง) และ `DealWriteIn` รับ 3 ช่องนี้.
+- ลบ Lead อัตโนมัติ: setting `lead_auto_archive_days` (0/ไม่มี = ปิด); Data route `POST customers/archive-inactive-leads` นับกิจกรรมล่าสุดจาก customer/deal/ticket/note/follow-up.

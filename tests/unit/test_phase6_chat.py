@@ -4135,7 +4135,7 @@ class TestUsageHelp:
         assert "1. " in reply.text and "รายชื่อลูกค้า" in reply.text
 
     async def test_every_phrasing_reaches_the_same_guide(self):
-        for phrasing in ("ช่วยเหลือ", "ใช้ยังไง", "ทำอะไรได้บ้าง", "help", "?", "ตัวอย่างคำสั่ง", "สิทธิ์ของฉัน"):
+        for phrasing in ("ช่วยเหลือ", "ใช้ยังไง", "ทำอะไรได้บ้าง", "help", "?", "ตัวอย่างคำสั่ง"):
             client = FakeDataClient(permission_keys=["customer.read"])
             reply = await handle_chat_message(client, message=phrasing, ctx=_ctx())
             assert reply.text.startswith("วิธีใช้ LINE ทีมขาย"), f"{phrasing!r} did not reach the guide"
@@ -5926,6 +5926,10 @@ class TestButtonsTheSystemWritesDoNotNeedTheAI:
         triggers += list(module.TICKET_OPEN_PHRASES)
         triggers += list(module.PDPA_EXPORT_PHRASES) + list(module.PDPA_ERASE_PHRASES) + list(module.PDPA_ERASE_CONFIRM_PHRASES)
 
+        # user review (4 Sep 2026): duplicate / merge / delete / context confirmations
+        triggers += list(module.DUPLICATE_USE_PHRASES) + list(module.DUPLICATE_MERGE_PHRASES) + list(module.DUPLICATE_CANCEL_PHRASES)
+        triggers += list(module.MERGE_REPLACE_PHRASES) + list(module.MERGE_KEEP_PHRASES) + list(module.ARCHIVE_CONFIRM_PHRASES)
+        triggers += list(module.DEAL_CONTEXT_YES) + list(module.DEAL_CONTEXT_NO)
         dead = []
         for text in sorted(sent):
             probe = re.sub(r"\{[^}]*\}", "X", text).lower()

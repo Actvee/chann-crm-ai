@@ -23,6 +23,8 @@ type Deal = {
   created_at?: string | null;
   updated_at?: string | null;
   expected_close_date?: string | null;
+  amount?: string | number | null;
+  currency?: string | null;
   lost_reason?: string | null;
   owner_member_id?: string | null;
   id: string;
@@ -400,6 +402,14 @@ export default function DealDetail({
                         ),
                       )
                     : "—",
+              },
+              {
+                name: "amount",
+                label: t.dashboard.deals.amount,
+                editable: true,
+                type: "number",
+                display: (value: unknown) =>
+                  value == null || value === "" ? "—" : `${money(value)} ${deal.currency ?? "THB"}`,
               },
               {
                 name: "expected_close_date",

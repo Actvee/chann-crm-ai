@@ -123,6 +123,29 @@ export default function CustomerList({ liffId }: { liffId: string }) {
     }
   }
 
+  /** User review (4 Sep 2026): delete a lead — the platform's soft delete,
+   *  confirmed first, behind customer.archive. */
+  async function archive(customer: Customer) {
+    if (!window.confirm(t.dashboard.customers.archiveConfirm.replace("{name}", fullName(customer)))) return;
+    setBusyId(customer.id);
+    try {
+      const response = await fetch(
+        `/api/phase2/licenses/${licenseId}/customers/${customer.id}/archive`,
+        { method: "POST", headers: proxyHeaders(token, licenseId) },
+      );
+      if (!response.ok) {
+        say(response.status === 403 ? t.dashboard.customers.archiveDenied : t.common.error, "error");
+        return;
+      }
+      setCustomers((rows) => rows.filter((row) => row.id !== customer.id));
+      say(`${fullName(customer)} — ${t.dashboard.customers.archived}`, "ok");
+    } catch {
+      say(t.common.error, "error");
+    } finally {
+      setBusyId("");
+    }
+  }
+
   async function promote(customer: Customer) {
     setBusyId(customer.id);
     say(t.dashboard.working);
@@ -259,6 +282,17 @@ export default function CustomerList({ liffId }: { liffId: string }) {
                   >
                     {busyId === customer.id ? t.dashboard.saving : t.dashboard.customers.promote}
                   </button>
+                  {permissions.has("customer.archive") && (
+                    <button
+                      type="button"
+                      className="btn"
+                      data-variant="danger"
+                      onClick={() => void archive(customer)}
+                      disabled={busyId === customer.id}
+                    >
+                      {t.dashboard.customers.archive}
+                    </button>
+                  )}
                 </div>
               )}
             </li>

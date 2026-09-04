@@ -6,6 +6,7 @@ import re
 import uuid
 
 import hashlib
+from datetime import date
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -675,6 +676,10 @@ async def set_deal_stage(
 
 class DealWriteIn(BaseModel):
     notes: str | None = None
+    # user review (4 Sep 2026): the dashboard edits these too
+    amount: Decimal | None = None
+    currency: str | None = None
+    expected_close_date: date | None = None
 
 
 @router.patch("/licenses/{license_id}/deals/{deal_id}")
@@ -758,6 +763,24 @@ async def promote_customer(
         return await client.promote_customer(
             license_id, customer_id, actor_id=principal.chann_uid,
         )
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.post("/licenses/{license_id}/customers/{customer_id}/archive")
+async def archive_customer(
+    license_id: str,
+    customer_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """User review (4 Sep 2026): delete a lead from the dashboard. The
+    platform's soft delete — archived rows leave every list and keep their
+    history — behind customer.archive, the same key chat checks."""
+    _require_same_tenant(principal, license_id)
+    principal.require("customer.archive")
+    try:
+        return await client.archive_customer(license_id, customer_id, actor_id=principal.chann_uid)
     except DataTierError as exc:
         raise _propagate(exc)
 
@@ -1775,6 +1798,9 @@ async def create_customer(
 class DealCreateIn(BaseModel):
     contact_id: str
     notes: str | None = None
+    amount: Decimal | None = None
+    currency: str | None = None
+    expected_close_date: date | None = None
 
 
 @router.post("/licenses/{license_id}/deals", status_code=201)

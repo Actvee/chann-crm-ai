@@ -54,6 +54,7 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
   // Owner, 4 Sep: the chat timers are the company's to set here and in chat.
   const [chatSla, setChatSla] = useState("");
   const [chatTimeout, setChatTimeout] = useState("");
+  const [leadCleanupDays, setLeadCleanupDays] = useState("0");
   const [policySaving, setPolicySaving] = useState(false);
 
   const say = useCallback((message: string, kind?: "ok" | "error") => {
@@ -126,18 +127,25 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
     const quiet = rows.find((r) => r.setting_key === "chat_timeout_minutes" || r.setting_key === "session_timeout");
     setChatSla(sla ? String(sla.setting_value) : "15");
     setChatTimeout(quiet ? String(quiet.setting_value) : "60");
+    const cleanup = rows.find((r) => r.setting_key === "lead_auto_archive_days");
+    setLeadCleanupDays(cleanup ? String(cleanup.setting_value) : "0");
   }
 
   async function saveChatPolicy() {
     const sla = Number(chatSla);
     const quiet = Number(chatTimeout);
+    const cleanup = Number(leadCleanupDays || 0);
     if (!Number.isInteger(sla) || sla < 1 || sla > 1440 || !Number.isInteger(quiet) || quiet < 1 || quiet > 1440) {
       say(c.chatPolicyInvalid, "error");
       return;
     }
+    if (!Number.isInteger(cleanup) || cleanup < 0 || cleanup > 3650) {
+      say(c.leadCleanupInvalid, "error");
+      return;
+    }
     setPolicySaving(true);
     try {
-      for (const [key, value] of [["chat_sla_minutes", sla], ["chat_timeout_minutes", quiet]] as const) {
+      for (const [key, value] of [["chat_sla_minutes", sla], ["chat_timeout_minutes", quiet], ["lead_auto_archive_days", cleanup]] as const) {
         const response = await fetch(`/api/phase2/licenses/${licenseId}/settings/${key}`, {
           method: "PUT",
           headers: proxyHeaders(token, licenseId),
@@ -369,6 +377,20 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
                 aria-describedby="chat-timeout-hint"
               />
               <span id="chat-timeout-hint" className="hint">{c.chatTimeoutHint}</span>
+            </div>
+            <div className="field">
+              <label htmlFor="lead-cleanup-days">{c.leadCleanup}</label>
+              <input
+                id="lead-cleanup-days"
+                type="number"
+                inputMode="numeric"
+                min={0}
+                max={3650}
+                value={leadCleanupDays}
+                onChange={(e) => setLeadCleanupDays(e.target.value)}
+                aria-describedby="lead-cleanup-hint"
+              />
+              <span id="lead-cleanup-hint" className="hint">{c.leadCleanupHint}</span>
             </div>
             <div className="actions">
               <button

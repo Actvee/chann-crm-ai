@@ -103,6 +103,16 @@ def parse_thai_date(text: str, today: date) -> date | None:
     # the NEXT such day: "มาดูสินค้าวันที่ 6" said on the 20th means next
     # month's 6th, not one that has already passed.
     bare_day = re.search(r"วันที่\s*(\d{1,2})(?!\s*[/\-.\d])", text or "")
+    # "วันที่ 15 ต.ค." names a month right after the day: that is the
+    # named-month case below, not a bare day (user review, 4 Sep 2026 —
+    # it used to land on the 15th of the current month).
+    if bare_day:
+        following = re.match(r"\s*([ก-๙.]+)", (text or "")[bare_day.end():])
+        if following and (
+            _THAI_MONTHS.get(following.group(1).strip().rstrip("."))
+            or _THAI_MONTHS.get(following.group(1).strip())
+        ):
+            bare_day = None
     if bare_day:
         day = int(bare_day.group(1))
         if 1 <= day <= 31:
@@ -140,8 +150,21 @@ def parse_thai_date(text: str, today: date) -> date | None:
     # "วันศุกร์" / "ศุกร์หน้า" — the NEXT such weekday. Never today, because
     # someone saying "on Friday" on a Friday means the one coming, not the
     # day that is already half over.
+    # An explicit date beats a weekday word: "วันอาทิตย์ 15 มีนาคม" is the
+    # 15th, and "ดีลของอาทิตย์ 30/09/2026" is the 30th — อาทิตย์ there is a
+    # person, which is also why a weekday word right after a name cue
+    # (ของ/คุณ/ให้/กับ/ชื่อ) is never read as a day (user review, 4 Sep 2026).
+    explicit = _explicit_date(cleaned, today)
+    if explicit is not None:
+        return explicit
     for name, index in _THAI_WEEKDAYS.items():
-        if name in cleaned:
+        position = cleaned.find(name)
+        if position == -1:
+            continue
+        before = cleaned[max(0, position - 6):position]
+        if any(before.endswith(cue) for cue in ("ของ", "คุณ", "ให้", "กับ", "ชื่อ", "ลูกค้า", "ดีล")):
+            continue
+        if True:
             ahead = (index - today.weekday()) % 7
             if ahead == 0:
                 ahead = 7
@@ -149,6 +172,11 @@ def parse_thai_date(text: str, today: date) -> date | None:
                 ahead += 7
             return today + timedelta(days=ahead)
 
+    return _explicit_date(cleaned, today)
+
+
+def _explicit_date(cleaned: str, today: date) -> date | None:
+    """A date written out: "15 มีนาคม", "15 มี.ค. 2569", "15/03/2569"."""
     # "15 มีนาคม" / "15 มี.ค. 2569"
     named = re.search(r"(\d{1,2})\s*([ก-๙.]+)\s*(\d{2,4})?", cleaned)
     if named:

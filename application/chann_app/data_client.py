@@ -661,6 +661,15 @@ class DataClient:
     # --------------------------------------------------------------- Phase 18
 
     # --------------------------------------------------------------- Phase 17
+
+    # ---------------------------------------------------- user review (4 Sep 2026)
+    async def archive_inactive_leads(self, license_id: str, days: int, actor_id: str | None = None) -> list[dict]:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/customers/archive-inactive-leads",
+            json={"days": int(days)}, headers=self._headers_for(actor_id),
+        )
+        return self._unwrap(resp)
+
     async def run_report_query(self, license_id: str, spec: dict, actor_id: str | None = None) -> dict:
         resp = await self._client.post(
             f"{self._base}/internal/v1/licenses/{license_id}/reports/query",

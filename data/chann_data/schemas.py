@@ -5,7 +5,7 @@ from datetime import date, datetime, time
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class IdentityOut(BaseModel):
@@ -779,6 +779,10 @@ class DealIn(BaseModel):
     notes: str | None = None
     owner_member_id: uuid.UUID | None = None
     products: list[DealProductIn] = []
+    # user review (4 Sep 2026): a deal's own value and timing
+    amount: Decimal | None = None
+    currency: str | None = None
+    expected_close_date: date | None = None
 
 
 class DealOut(BaseModel):
@@ -800,6 +804,9 @@ class DealStageIn(BaseModel):
     # Only meaningful with stage="lost". Optional there too: demanding a
     # reason gets a column full of "-", which looks answered.
     lost_reason: str | None = None
+    expected_close_date: date | None = None
+    amount: Decimal | None = None
+    currency: str = "THB"
 
 
 class StorefrontProductOut(BaseModel):
@@ -1135,3 +1142,8 @@ class ReportResultOut(BaseModel):
     rows: list[ReportRowOut]
     total: float | int | None
     generated_at: str
+
+
+# ------------------------------------------------ user review fixes (4 Sep 2026)
+class ArchiveInactiveLeadsIn(BaseModel):
+    days: int = Field(ge=1, le=3650)

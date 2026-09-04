@@ -586,6 +586,10 @@ export const en: Dictionary = {
       promote: "Confirm as customer",
       promoted: "is now a customer",
       promoteDenied: "You do not have permission to confirm customers",
+      archive: "Remove from list",
+      archiveConfirm: "Remove {name} from the list? The record is archived — gone from every list, history kept.",
+      archived: "removed from the list (archived)",
+      archiveDenied: "You cannot remove customers (needs the archive-customer permission)",
     },
     deals: {
       all: "All",
@@ -600,6 +604,7 @@ export const en: Dictionary = {
       alreadyOpen: "This customer already has {code} open",
       value: "Value",
       expectedClose: "Expected close",
+      amount: "Deal amount",
       askLostReason: "Why was it lost? (optional)",
       lostReason: "Reason lost",
       owner: "Owner",
@@ -686,6 +691,9 @@ export const en: Dictionary = {
       chatTimeoutHint: "No message from the customer for this long closes the chat and tells them · default 60",
       chatPolicySave: "Save chat policy",
       chatPolicyInvalid: "Give minutes between 1 and 1440",
+      leadCleanup: "Auto-archive inactive leads (days, 0 = off)",
+      leadCleanupHint: "Off by default. When set, each morning leads with no update, deal, job, note or follow-up for this many days are archived (never deleted).",
+      leadCleanupInvalid: "Give a number of days from 0 to 3650",
     },
   },
   quote: {

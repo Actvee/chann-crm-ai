@@ -7787,9 +7787,43 @@ async def _handle_bare_create_prompt(
     return None
 
 
+_DEAL_NAME_STOP_WORDS = (
+    "มูลค่า", "ราคา", "ยอด", "ปิด", "คาดว่า", "ภายใน", "วงเงิน", "งบ", "ดีล", "ประมาณ", "เบอร์", "โทร",
+    "สิ้น", "ปลาย", "ต้นเดือน", "กำหนด", "worth", "amount", "closing", "close", "about", "around",
+)
+
+
+def _deal_name_only(text: str | None) -> str | None:
+    """"อาทิตย์ มูลค่า 250,000 ปิดสิ้นเดือนนี้" -> "อาทิตย์": the name is the
+    leading words up to the first number, money or timing word."""
+    if not text:
+        return text
+    kept: list[str] = []
+    for token in text.strip().split():
+        lowered = token.lower()
+        if re.search(r"\d", token) or any(lowered.startswith(w) for w in _DEAL_NAME_STOP_WORDS):
+            break
+        kept.append(token)
+    return " ".join(kept).strip(" ,:") or None
+
+
+_DEAL_NAME_IN_MESSAGE_RE = re.compile(r"(?:ของ|ให้กับ|ให้|กับ|สำหรับ|for)\s*(?:คุณ)?\s*([^\s,]+(?:\s+[^\s,\d]+)?)")
+
+
+def _deal_name_from_message(message: str | None) -> str | None:
+    """"ดีลนี้ของอาทิตย์ มูลค่า …" names a person even without the
+    "สร้างดีลให้" prefix. User review (4 Sep 2026): a bare deal command
+    used to fall through to "the last customer mentioned" and put the deal
+    on the wrong person; the name in the sentence wins."""
+    match = _DEAL_NAME_IN_MESSAGE_RE.search(message or "")
+    if not match:
+        return None
+    return _deal_name_only(match.group(1))
+
+
 async def _handle_deal_create_direct(
     client: DataClient, *, ctx: ResolvedContext, license_id, name: str | None,
-    permission_keys: list[str], language: str, rest: str | None = None,
+    permission_keys: list[str], language: str, rest: str | None = None, message: str | None = None,
 ) -> ChatReply:
     """Create a deal, then optionally act on it in the same breath.
 
@@ -7827,8 +7861,19 @@ async def _handle_deal_create_direct(
         contact = {"id": last_ref["customer_id"], "first_name": last_ref["name"]}
         used_context = True
 
+    deal_fields, ambiguous = _deal_fields_from_message(message or "", None)
+    if ambiguous:
+        return await _ask_deal_ambiguity(
+            client, ctx=ctx, message=message or "", target_name=name, fields=deal_fields,
+            ambiguous=ambiguous, language=language,
+        )
+    # The bare "สร้างดีล" button (and "สร้างดีล พร้อมเพิ่มสินค้า …") after
+    # opening a customer means that customer — created as before. A name
+    # inside the sentence was already extracted by the caller; the
+    # "is it really them?" question lives on the AI path, where the model
+    # may have dropped the name (user review, 4 Sep 2026).
     reply = await _apply_deal_create(
-        client, contact=contact, fields={}, ctx=ctx,
+        client, contact=contact, fields=deal_fields, ctx=ctx,
         license_id=license_id, language=language, used_context=used_context,
     )
 
@@ -8633,6 +8678,153 @@ AI_REPORT_UNAVAILABLE = {
 }
 
 
+
+
+# ============================================================ user review, 4 Sep 2026
+# Issue 2 — a duplicate customer is a conversation, not a dead end.
+DUPLICATE_FOUND = {
+    "th": "มีลูกค้าคนนี้อยู่แล้ว: {name} ({code}) — {field} {value} ตรงกัน\nจะทำอย่างไรต่อ?\n1 ใช้รายชื่อเดิม · 2 อัปเดตข้อมูลเดิมด้วยข้อมูลใหม่ · 3 ยกเลิก",
+    "en": "This customer already exists: {name} ({code}) — same {field} {value}\nWhat next?\n1 use the existing record · 2 update it with the new details · 3 cancel",
+}
+DUPLICATE_FIELD_LABEL = {"phone": {"th": "เบอร์", "en": "phone"}, "email": {"th": "อีเมล", "en": "email"}}
+DUPLICATE_USE_PHRASES = ("ใช้รายชื่อเดิม", "ใช้ของเดิม", "ใช้อันเดิม", "use existing", "use the existing record", "1")
+DUPLICATE_MERGE_PHRASES = ("อัปเดตข้อมูลเดิม", "อัปเดตของเดิม", "รวมข้อมูล", "merge", "update existing", "update the existing record", "2")
+DUPLICATE_CANCEL_PHRASES = ("ยกเลิก", "cancel", "ไม่ต้อง", "3")
+DUPLICATE_USED = {
+    "th": "ใช้รายชื่อเดิม {name} ({code}) ต่อได้เลย ไม่ได้สร้างรายชื่อใหม่",
+    "en": "Using the existing record {name} ({code}). Nothing new was created.",
+}
+DUPLICATE_MERGED = {
+    "th": "อัปเดต {name} ({code}) แล้ว: {fields}",
+    "en": "Updated {name} ({code}): {fields}",
+}
+DUPLICATE_NOTHING_TO_MERGE = {
+    "th": "{name} ({code}) มีข้อมูลครบเหมือนที่ให้มาอยู่แล้ว ไม่มีอะไรต้องอัปเดต",
+    "en": "{name} ({code}) already has exactly these details — nothing to update.",
+}
+DUPLICATE_CONFLICTS = {
+    "th": "{name} ({code}) มีข้อมูลต่างจากที่ให้มา:\n{lines}\nจะแทนที่ด้วยข้อมูลใหม่ไหม? (ข้อมูลที่ว่างอยู่เติมให้แล้ว)",
+    "en": "{name} ({code}) has different details on file:\n{lines}\nReplace them with the new values? (Empty fields were filled in already.)",
+}
+MERGE_REPLACE_PHRASES = ("แทนที่ทั้งหมด", "แทนที่", "replace", "ใช้ข้อมูลใหม่", "yes")
+MERGE_KEEP_PHRASES = ("เก็บของเดิม", "เก็บเดิม", "keep", "ไม่แทนที่", "no")
+MERGE_REPLACED = {"th": "แทนที่ข้อมูลของ {name} แล้ว: {fields}", "en": "Replaced on {name}: {fields}"}
+MERGE_KEPT = {"th": "เก็บข้อมูลเดิมของ {name} ไว้ ไม่ได้เปลี่ยนอะไร", "en": "Kept {name}'s existing details unchanged."}
+DUPLICATE_CANCELLED = {"th": "ยกเลิกแล้ว ไม่ได้สร้างรายชื่อใหม่", "en": "Cancelled — no new record was created."}
+DUPLICATE_CHOICE_INVALID = {
+    "th": "ตอบ 1 ใช้รายชื่อเดิม · 2 อัปเดตข้อมูลเดิม · 3 ยกเลิก",
+    "en": "Reply 1 to use the existing record, 2 to update it, or 3 to cancel.",
+}
+CUSTOMER_FIELD_LABEL = {
+    "first_name": {"th": "ชื่อ", "en": "first name"}, "last_name": {"th": "นามสกุล", "en": "last name"},
+    "phone": {"th": "เบอร์", "en": "phone"}, "email": {"th": "อีเมล", "en": "email"},
+    "address": {"th": "ที่อยู่", "en": "address"}, "notes": {"th": "บันทึก", "en": "notes"},
+}
+DUPLICATE_TTL_S = 900
+
+# Issue 3 — a lead can be deleted: the platform's soft delete (archive),
+# behind customer.archive and a confirmation.
+LEAD_DELETE_TRIGGERS = (
+    "ลบ lead", "ลบ Lead", "ลบลีด", "ลบลูกค้า", "ลบรายชื่อ", "เก็บถาวรลูกค้า", "เก็บถาวร lead", "ลบออกจาก lead",
+    "delete lead", "archive lead", "remove lead", "delete customer", "archive customer",
+)
+LEAD_DELETE_NAME_STRIP = ("นี้", "รายนี้", "คนนี้", "ออกจาก lead", "ออกจากlead", "ออก", "ทิ้ง", "this lead", "this customer", "this")
+ARCHIVE_CONFIRM = {
+    "th": "ลบ {name} ({code}, สถานะ {stage}) ออกจากรายชื่อ? ข้อมูลจะถูกเก็บถาวร ไม่แสดงในรายชื่ออีก แต่ประวัติงาน/ดีลยังอยู่\nพิมพ์ \"ยืนยันลบ\" หรือ \"ยกเลิก\"",
+    "en": "Remove {name} ({code}, stage {stage}) from the list? The record is archived — gone from every list, history kept.\nReply \"confirm delete\" or \"cancel\".",
+}
+ARCHIVE_CONFIRM_PHRASES = ("ยืนยันลบ", "ยืนยัน", "confirm delete", "confirm", "yes")
+ARCHIVE_DONE = {"th": "ลบ {name} ({code}) ออกจากรายชื่อแล้ว (เก็บถาวร)", "en": "Removed {name} ({code}) from the list (archived)."}
+ARCHIVE_CANCELLED = {"th": "ยกเลิกแล้ว {name} ยังอยู่ในรายชื่อ", "en": "Cancelled — {name} stays on the list."}
+ARCHIVE_NEEDS_NAME = {
+    "th": "ลบใครครับ พิมพ์ \"ลบ Lead สมชาย\" หรือเปิดดูลูกค้าก่อนแล้วพิมพ์ \"ลบ Lead นี้\"",
+    "en": "Delete whom? Type \"delete lead Somchai\", or open a customer first and say \"delete this lead\".",
+}
+ARCHIVE_CHOICE_INVALID = {"th": "พิมพ์ \"ยืนยันลบ\" เพื่อลบ หรือ \"ยกเลิก\"", "en": "Reply \"confirm delete\" or \"cancel\"."}
+STAGE_LABEL = {"lead": {"th": "Lead", "en": "lead"}, "contact": {"th": "ลูกค้า", "en": "contact"}}
+
+# Issue 3b — inactive-lead cleanup, off by default, per tenant.
+LEAD_CLEANUP_SET_PHRASES = (
+    "ตั้งค่าลบ lead อัตโนมัติ", "ตั้งค่าลบลีดอัตโนมัติ", "ตั้งค่าเก็บถาวร lead", "ลบ lead ที่ไม่มีการเคลื่อนไหวเกิน",
+    "ลบลีดที่ไม่มีการเคลื่อนไหวเกิน", "auto archive leads after", "auto-archive leads after",
+)
+LEAD_CLEANUP_OFF_PHRASES = ("ปิดการลบ lead อัตโนมัติ", "ปิดลบ lead อัตโนมัติ", "ยกเลิกลบ lead อัตโนมัติ", "turn off lead cleanup")
+LEAD_CLEANUP_VIEW_PHRASES = ("การตั้งค่าลบ lead", "ดูการตั้งค่าลบ lead", "ตั้งค่าลบ lead", "lead cleanup setting")
+LEAD_CLEANUP_STATE = {
+    "th": "ลบ Lead ที่ไม่มีการเคลื่อนไหวอัตโนมัติ: {state}\nตั้งได้ด้วย \"ตั้งค่าลบ lead อัตโนมัติ 90 วัน\" หรือปิดด้วย \"ปิดการลบ lead อัตโนมัติ\" (นับจากการอัปเดตล่าสุดของลูกค้า ดีล งาน บันทึก หรือนัด; เก็บถาวร ไม่ลบทิ้ง)",
+    "en": "Automatic cleanup of inactive leads: {state}\nSet it with \"auto archive leads after 90 days\" or turn it off with \"turn off lead cleanup\" (counted from the last update on the customer, their deals, jobs, notes or follow-ups; archived, never deleted).",
+}
+LEAD_CLEANUP_ON = {"th": "เปิด — เกิน {days} วัน", "en": "on — after {days} days"}
+LEAD_CLEANUP_OFF = {"th": "ปิด (ค่าเริ่มต้น)", "en": "off (default)"}
+LEAD_CLEANUP_BAD_NUMBER = {"th": "ระบุจำนวนวัน 1–3650 เช่น \"ตั้งค่าลบ lead อัตโนมัติ 90 วัน\"", "en": "Give a number of days from 1 to 3650, e.g. \"auto archive leads after 90 days\"."}
+
+# Issue 4 — a deal for "the customer we were just talking about" is
+# confirmed, never assumed, when the message names nobody.
+DEAL_CONTEXT_CONFIRM = {
+    "th": "สร้างดีลให้ {name} (ลูกค้าที่เพิ่งคุยถึง) ใช่ไหม{details}",
+    "en": "Create the deal for {name} (the customer just mentioned)?{details}",
+}
+DEAL_CONTEXT_YES = ("ใช่", "ใช่ สร้างเลย", "yes", "ตกลง", "สร้างเลย")
+DEAL_CONTEXT_NO = ("ไม่ใช่", "ไม่ใช่ ระบุชื่อ", "no", "ไม่")
+DEAL_CONTEXT_CANCELLED = {"th": "ยังไม่ได้สร้างดีล พิมพ์ชื่อลูกค้าที่ต้องการ เช่น \"สร้างดีลให้ อาทิตย์\"", "en": "No deal created. Name the customer, e.g. \"create a deal for Arthit\"."}
+DEAL_CONTEXT_CHOICE_INVALID = {"th": "ตอบ \"ใช่\" เพื่อสร้าง หรือ \"ไม่ใช่\" แล้วระบุชื่อ", "en": "Reply \"yes\" to create it, or \"no\" and name the customer."}
+DEAL_AMOUNT_AMBIGUOUS = {
+    "th": "มูลค่าดีลคือเท่าไหร่ครับ เห็นตัวเลขหลายค่า: {values}",
+    "en": "Which is the deal amount? I see several: {values}",
+}
+DEAL_DATE_AMBIGUOUS = {
+    "th": "คาดว่าจะปิดดีลวันไหนครับ ระบุวันที่ เช่น 30/09 หรือ \"สิ้นเดือนนี้\"",
+    "en": "When is the deal expected to close? Give a date, e.g. 30/09 or \"end of this month\".",
+}
+DEAL_DETAILS_LINE = {"th": "\nมูลค่า {amount} · คาดว่าจะปิด {close}", "en": "\nAmount {amount} · expected close {close}"}
+DEAL_AMOUNT_ONLY_LINE = {"th": "\nมูลค่า {amount}", "en": "\nAmount {amount}"}
+DEAL_DATE_ONLY_LINE = {"th": "\nคาดว่าจะปิด {close}", "en": "\nExpected close {close}"}
+DEAL_CONTEXT_TTL_S = 600
+
+# Issue 1 — "what can I do with X?" answers from what this person holds.
+CAPABILITY_GROUP_ALIASES = {
+    "customer": ("lead", "ลีด", "ลูกค้า", "contact", "คอนแทค", "รายชื่อ", "customer"),
+    "deal": ("deal", "ดีล", "การขาย", "ยอดขาย"),
+    "quote": ("quote", "ใบเสนอราคา", "เสนอราคา"),
+    "ticket": ("ticket", "ใบงาน", "งานซ่อม", "งานช่าง", "job"),
+    "product": ("product", "สินค้า", "แคตตาล็อก", "catalogue", "catalog"),
+    "team": ("team", "ทีม", "ทีมช่าง"),
+    "warranty": ("warranty", "ประกัน", "รับประกัน"),
+    "service_report": ("service report", "รายงานบริการ", "รายงานการซ่อม", "รายงานช่าง"),
+    "note": ("note", "บันทึก", "โน้ต"),
+    "followup": ("follow", "ติดตาม", "นัด", "เตือน", "reminder"),
+    "role": ("role", "บทบาท", "สิทธิ์", "permission"),
+    "setting": ("setting", "ตั้งค่า", "การตั้งค่า"),
+    "chat_session": ("แชทลูกค้า", "chat session", "live chat"),
+    "approval": ("approval", "อนุมัติ"),
+}
+CAPABILITY_GROUP_PAGE = {
+    "customer": "customers", "deal": "deals", "quote": "quotes", "ticket": "tickets", "product": "products",
+    "team": "teams", "warranty": "warranties", "service_report": "reports", "role": "roles", "setting": "company",
+    "chat_session": "chats", "approval": "approvals",
+}
+CAPABILITY_ASK_MARKERS = ("ทำอะไร", "ทําอะไร", "ได้บ้าง", "ทำได้", "what can", "capabilit", "able to")
+PERMISSION_ASK_PHRASES = ("ฉันมีสิทธิ์ทำอะไร", "ฉันมีสิทธิ์อะไร", "สิทธิ์ของฉัน", "มีสิทธิ์ทำอะไรบ้าง", "my permissions", "what am i allowed")
+CAPABILITY_DETAIL_HEADER = {"th": "{group} — สิ่งที่คุณทำได้ตอนนี้:", "en": "{group} — what you can do now:"}
+CAPABILITY_DETAIL_NONE = {
+    "th": "{group} — บัญชีของคุณยังไม่มีสิทธิ์ในหมวดนี้ ขอได้จากเจ้าของร้านหรือแอดมิน (แดชบอร์ด > บทบาทและทีม)",
+    "en": "{group} — your account has no permission in this area yet. Ask the shop owner or an admin (dashboard > roles and team).",
+}
+CAPABILITY_HELD = {"th": "สิทธิ์ที่มี: {labels}", "en": "Permissions held: {labels}"}
+CAPABILITY_NOT_HELD = {"th": "ยังไม่มีสิทธิ์: {labels} (ขอจากเจ้าของร้าน)", "en": "Not yet allowed: {labels} (ask the owner)"}
+CAPABILITY_FOLLOW_UP = {
+    "th": "ถามต่อได้ เช่น \"ทำอะไรกับดีลได้บ้าง\" หรือพิมพ์ \"วิธีใช้\" เพื่อเปิดคู่มือทั้งหมด",
+    "en": "Ask on, e.g. \"what can I do with deals?\", or type \"help\" for the full guide",
+}
+CAPABILITY_OVERVIEW = {
+    "th": "หมวดที่คุณใช้ได้: {groups}\nถามรายละเอียดทีละหมวดได้ เช่น \"ทำอะไรกับ Lead ได้บ้าง\" หรือ \"ฉันมีสิทธิ์ทำอะไร\"",
+    "en": "Areas open to you: {groups}\nAsk about one, e.g. \"what can I do with leads?\" or \"what am I allowed to do?\"",
+}
+CAPABILITY_OPEN_PAGE = {"th": "เปิดหน้า{group}", "en": "Open {group}"}
+PERMISSION_SUMMARY_HEADER = {"th": "สิทธิ์ของคุณตามหมวด:", "en": "Your permissions by area:"}
+PERMISSION_SUMMARY_NONE = {"th": "บัญชีของคุณยังไม่มีสิทธิ์ใช้งานใด ๆ ติดต่อเจ้าของบริษัท", "en": "Your account holds no permissions yet — ask the company owner."}
+
+
 def _t(table: dict[str, str], language: str) -> str:
     """Thai-first fallback, matching Phase 5."""
     return table.get(language) or table["th"]
@@ -8727,6 +8919,8 @@ MISSING_FIELD_LABELS = {
     "email": {"th": "อีเมล", "en": "email"},
     "address": {"th": "ที่อยู่", "en": "address"},
     "target_name": {"th": "ชื่อลูกค้า", "en": "the customer's name"},
+    "amount": {"th": "มูลค่าดีล", "en": "the deal amount"},
+    "expected_close_date": {"th": "วันที่คาดว่าจะปิด", "en": "the expected closing date"},
     "product_id": {"th": "รหัสสินค้า", "en": "product code"},
     "product_name": {"th": "ชื่อสินค้า", "en": "product name"},
     "unit_price": {"th": "ราคา", "en": "price"},
@@ -8938,6 +9132,8 @@ HELP_SECTIONS = (
     ("ลูกค้า", (
         ("customer.read", "รายชื่อลูกค้า", "ดูลูกค้าทั้งหมด"),
         ("customer.read", "ค้นหาลูกค้า สมชาย", "ค้นหาด้วยชื่อหรือเบอร์"),
+        ("customer.archive", "ลบ Lead สมชาย", "เอาออกจากรายชื่อ (เก็บถาวร ประวัติยังอยู่) ระบบถามยืนยันก่อน"),
+        ("setting.manage", "ตั้งค่าลบ lead อัตโนมัติ 90 วัน", "เก็บถาวร Lead ที่ไม่มีการเคลื่อนไหวเกินกำหนดเอง (ปิดเป็นค่าเริ่มต้น)"),
         ("customer.read", "ข้อมูลลูกค้า C-2026-0001", "ดูรายละเอียด"),
         ("customer.create", "สร้างลูกค้า สมชาย ใจดี 0812345678", "เพิ่มลูกค้าใหม่"),
     )),
@@ -8946,6 +9142,7 @@ HELP_SECTIONS = (
         ("deal.read", "ดีลที่ยังไม่ปิด", "เฉพาะที่ยังไม่จบ"),
         ("deal.read", "ข้อมูลดีล D-2026-0001", "ดูรายละเอียดพร้อมยอดรวม"),
         ("deal.create", "สร้างดีลให้ สมชาย", "เปิดดีลใหม่"),
+        ("deal.create", "สร้างดีลให้ สมชาย มูลค่า 250,000 ปิดสิ้นเดือนนี้", "เปิดดีลพร้อมมูลค่าและวันคาดว่าจะปิด"),
         ("quote.create", "สร้างใบเสนอราคาจากดีล D-2026-0001", "ออกใบเสนอราคา"),
         ("quote.update", "ออกเอกสาร Q-2026-0001", "สร้าง PDF ส่งลูกค้า"),
     )),
@@ -9317,6 +9514,8 @@ async def _resolve_customer_disambiguation(
                 _filter_by_oa(permission_keys, ctx.oa), catalog, language,
                 requested_action=resume_action, requested_entity="customer",
             ))
+        if resume_action == "archive":
+            return await _ask_archive_confirmation(client, ctx=ctx, row=chosen, language=language)
         return await _apply_customer_action(
             client, chosen_row=chosen, action=resume_action or "", fields=resume_fields,
             ctx=ctx, license_id=license_id, language=language,
@@ -9339,7 +9538,7 @@ async def _resolve_customer_disambiguation(
 
 async def _handle_customer_intent(
     client: DataClient, *, intent: dict, ctx: ResolvedContext,
-    license_id, language: str,
+    license_id, language: str, permission_keys: list[str] | None = None,
 ) -> ChatReply:
     action = intent.get("action")
     fields = intent.get("fields") or {}
@@ -9375,7 +9574,15 @@ async def _handle_customer_intent(
         try:
             row = await client.create_customer(license_id, editable, actor_id=ctx.chann_uid)
         except Exception as exc:  # noqa: BLE001
+            structured = getattr(exc, "structured", None) or {}
+            if structured.get("error") == "duplicate":
+                # User review (4 Sep 2026): say which record, offer the moves.
+                return await _handle_customer_duplicate(
+                    client, ctx=ctx, license_id=license_id, language=language,
+                    duplicate=structured, new_fields=editable,
+                )
             if _is_conflict(exc):
+                log.warning("customer create refused (409) for %s: %s", ctx.chann_uid, exc)
                 return ChatReply(text=_t(CUSTOMER_NEEDS_SOMETHING, language), intent=intent)
             raise
         await _remember_customer(client, ctx, row)
@@ -9414,6 +9621,11 @@ async def _handle_customer_intent(
             quick_replies=quick,
         )
 
+    if action == "archive":
+        return await _handle_lead_archive_request(
+            client, ctx=ctx, license_id=license_id, name=(fields.get("target_name") or "").strip() or None,
+            permission_keys=list(permission_keys or []), language=language,
+        )
     if action in ("update", "promote"):
         target_name = fields.get("target_name")
         row, err = await _find_one_customer_by_name(
@@ -9526,39 +9738,40 @@ DEAL_CREATED_FROM_CONTEXT = {
 
 async def _handle_deal_intent(
     client: DataClient, *, intent: dict, ctx: ResolvedContext,
-    license_id, permission_keys: list[str], language: str,
+    license_id, permission_keys: list[str], language: str, message: str | None = None,
 ) -> ChatReply:
     action = intent.get("action")
     fields = intent.get("fields") or {}
     license_id = str(license_id)
-
     if action == "create":
-        target_name = fields.get("target_name")
-        if not (target_name or "").strip():
-            # No name at all — fall back to whoever was just discussed,
-            # rather than refusing outright. A wrong guess here would be
-            # worse than asking, so this only fires when a real reference
-            # exists (see cache.k_last_customer_ref) and says so explicitly
-            # in the reply rather than silently substituting.
+        target_name = (fields.get("target_name") or "").strip()
+        # User review (4 Sep 2026): amount and closing date are read from
+        # the message itself, with the model's values checked against it.
+        deal_fields, ambiguous = _deal_fields_from_message(message or "", fields)
+        if ambiguous:
+            return await _ask_deal_ambiguity(
+                client, ctx=ctx, message=message or "", target_name=target_name or None,
+                fields=deal_fields, ambiguous=ambiguous, language=language,
+            )
+        if not target_name:
             last_ref = await client.get_last_customer_ref(ctx.chann_uid, ctx.oa)
             if last_ref is None:
                 return ChatReply(text=_t(DEAL_NEEDS_TARGET_NAME, language), intent=intent)
             contact = {"id": last_ref["customer_id"], "first_name": last_ref["name"]}
-            return await _apply_deal_create(
-                client, contact=contact, fields=fields, ctx=ctx,
-                license_id=license_id, language=language, used_context=True,
-            )
+            # Confirmed, not assumed: the wrong person on a deal was the
+            # review's complaint, and it came from exactly this fallback.
+            return await _confirm_deal_for_context(client, ctx=ctx, contact=contact, fields=deal_fields, language=language)
         contact, err = await _find_one_customer_by_name(
             client, license_id, target_name, language,
-            ctx=ctx, resume_entity="deal", resume_action="create", resume_fields=fields,
+            ctx=ctx, resume_entity="deal", resume_action="create",
+            resume_fields={**fields, **{k: str(v) for k, v in deal_fields.items()}},
         )
         if err is not None:
             return err
         return await _apply_deal_create(
-            client, contact=contact, fields=fields, ctx=ctx,
+            client, contact=contact, fields=deal_fields, ctx=ctx,
             license_id=license_id, language=language,
         )
-
     return ChatReply(text=_pending_execution_reply(intent, language), intent=intent)
 
 
@@ -9570,12 +9783,15 @@ async def _apply_deal_create(
     so a resumed disambiguation (multiple customers shared a name, the
     user picked one from a numbered list) can reach it directly with the
     already-resolved contact, instead of repeating the name lookup."""
+    fields = _normalise_deal_fields(fields)
+    payload: dict = {"contact_id": contact["id"], "notes": fields.get("notes")}
+    if fields.get("amount") is not None:
+        payload["amount"] = str(fields["amount"])
+        payload["currency"] = fields.get("currency") or "THB"
+    if fields.get("expected_close_date"):
+        payload["expected_close_date"] = fields["expected_close_date"].isoformat()
     try:
-        row = await client.create_deal(
-            license_id,
-            {"contact_id": contact["id"], "notes": fields.get("notes")},
-            actor_id=ctx.chann_uid,
-        )
+        row = await client.create_deal(license_id, payload, actor_id=ctx.chann_uid)
     except DataTierError as exc:
         # A customer holds one open deal at a time. Saying which one, with
         # a button to open it, is the useful answer — a bare "conflict"
@@ -9610,9 +9826,35 @@ async def _apply_deal_create(
     return ChatReply(
         text=_t(template, language).format(
             deal_id=row["deal_id"], name=_display_name(contact),
-        ),
+        ) + _deal_details_line(fields, language),
         entity_type="deal", entity_id=row["id"],
     )
+
+
+def _normalise_deal_fields(fields: dict | None) -> dict:
+    """Fields may arrive as Decimals/dates (fresh) or as strings (resumed
+    from a pending intent). One shape out."""
+    from decimal import Decimal, InvalidOperation
+
+    from .deal_fields import parse_amount
+    from .thai_datetime import parse_thai_date
+
+    out = dict(fields or {})
+    amount = out.get("amount")
+    if amount not in (None, "") and not isinstance(amount, Decimal):
+        try:
+            out["amount"] = Decimal(str(amount))
+        except InvalidOperation:
+            parsed, _, _ = parse_amount(str(amount))
+            out["amount"] = parsed
+    if out.get("amount") is None:
+        out.pop("amount", None)
+    close = out.get("expected_close_date")
+    if isinstance(close, str) and close:
+        out["expected_close_date"] = parse_thai_date(close, local_today())
+    if not out.get("expected_close_date"):
+        out.pop("expected_close_date", None)
+    return out
 
 
 PRODUCT_SAVED = {
@@ -10175,6 +10417,20 @@ async def handle_chat_message(
                 client, ctx=ctx, license_id=license_id,
                 permission_keys=permission_keys, language=language,
             )
+        # User review (4 Sep 2026): delete a lead (soft delete, confirmed) and
+        # the inactive-lead cleanup setting — closed commands, no model call.
+        cleanup_reply = await _maybe_lead_cleanup_setting(
+            client, ctx=ctx, license_id=license_id, message=message,
+            permission_keys=permission_keys, language=language,
+        )
+        if cleanup_reply is not None:
+            return cleanup_reply
+        lead_target = _lead_delete_target(message)
+        if lead_target is not None:
+            return await _handle_lead_archive_request(
+                client, ctx=ctx, license_id=license_id, name=lead_target or None,
+                permission_keys=permission_keys, language=language,
+            )
         if ctx.oa == "sales" and _is_ai_report_request(message):
             return await _handle_ai_report(
                 client, ctx=ctx, license_id=license_id, message=message,
@@ -10362,12 +10618,23 @@ async def handle_chat_message(
                 language=language,
             )
 
+    # User review (4 Sep 2026): "ทำอะไรกับ Lead ได้บ้าง" / "ฉันมีสิทธิ์ทำอะไร"
+    # get the detailed, permission-derived answer; the plain "ทำอะไรได้บ้าง"
+    # still gets the guide below.
+    if ctx.oa in ("sales", "technician"):
+        capability_reply = await _maybe_capability_question(
+            client, ctx=ctx, message=message, permission_keys=permission_keys, language=language,
+        )
+        if capability_reply is not None:
+            return capability_reply
+
     # Help, before anything else and on every OA. Someone who types "ใช้ยังไง"
     # is telling you they are stuck; routing that through intent parsing to
     # maybe get a permission list back is not an answer.
     if (
         _matches_phrase(message, HELP_TRIGGERS) or _matches_phrase(message, HELP_EXAMPLES_PHRASES)
         or _matches_phrase(message, CAPABILITY_PHRASES) or (message or "").strip() == "?"
+        or _is_general_capability_question(message)
     ):
         # Filtered by OA as well as by permission: a technician whose LINE
         # account also holds sales keys was shown the customer list on the
@@ -10384,8 +10651,13 @@ async def handle_chat_message(
         # a list of permissions or commands. Someone with no permission at
         # all is told who to ask first, then still gets the guide.
         lead = "" if _filter_by_oa(permission_keys, ctx.oa) else _t(HELP_NOTHING, language) + "\n\n"
+        areas = ""
+        try:
+            areas = capability_overview_line(_filter_by_oa(permission_keys, ctx.oa), await client.permission_catalog(), language)
+        except Exception:  # noqa: BLE001
+            log.exception("could not read the permission catalogue for the areas line")
         return ChatReply(
-            text=lead + render_help_text("sales", language),
+            text=lead + render_help_text("sales", language) + ("\n\n" + areas if areas else ""),
             images=guide_images("sales"),
             quick_replies=[("งานวันนี้", "งานวันนี้"), ("รายชื่อลูกค้า", "รายชื่อลูกค้า")],
             quick_reply_url=_guide_button("sales", language),
@@ -10574,9 +10846,9 @@ async def handle_chat_message(
         create_for = _parse_after_trigger(message, DEAL_CREATE_TRIGGERS)
         if create_for:
             return await _handle_deal_create_direct(
-                client, ctx=ctx, license_id=license_id, name=create_for,
+                client, ctx=ctx, license_id=license_id, name=_deal_name_only(create_for),
                 permission_keys=permission_keys, language=language,
-                rest=_after_deal_conjunction(message),
+                rest=_after_deal_conjunction(message), message=message,
             )
         # "สร้างดีล" on its own, right after looking at a customer. Naming
         # them again immediately after being shown their record is the kind
@@ -10591,9 +10863,9 @@ async def handle_chat_message(
         ):
             if await client.get_last_customer_ref(ctx.chann_uid, ctx.oa):
                 return await _handle_deal_create_direct(
-                    client, ctx=ctx, license_id=license_id, name=None,
+                    client, ctx=ctx, license_id=license_id, name=_deal_name_from_message(message),
                     permission_keys=permission_keys, language=language,
-                    rest=_after_deal_conjunction(message) or _trailing_product(message),
+                    rest=_after_deal_conjunction(message) or _trailing_product(message), message=message,
                 )
             # Deliberately NO refusal here. Falling through lets the AI
             # pull a customer name out of a longer sentence, which it can
@@ -10619,7 +10891,7 @@ async def handle_chat_message(
                 client, ctx=ctx, license_id=license_id, permission_keys=permission_keys,
                 language=language, open_only=True,
             )
-        if any(t in message.lower() for t in DEAL_CLOSE_DATE_TRIGGERS):
+        if any(t in message.lower() for t in DEAL_CLOSE_DATE_TRIGGERS) and not _looks_like_deal_creation(message):
             return await _handle_deal_close_date(
                 client, ctx=ctx, license_id=license_id, message=message,
                 permission_keys=permission_keys, language=language,
@@ -10799,6 +11071,32 @@ async def handle_chat_message(
     # parseable in isolation, only as the answer to a question that was asked.
     pending_intent = await client.get_pending_intent(ctx.chann_uid, ctx.oa)
 
+    # User review (4 Sep 2026): the closed follow-ups this engine asks for —
+    # a duplicate customer's fate, a merge conflict, a delete confirmation,
+    # "is the deal for the customer just mentioned?" — are answered with a
+    # word or a number and never sent through the model.
+    if pending_intent is not None and pending_intent.get("entity") in (
+        "customer_duplicate", "customer_merge_confirm", "customer_archive_confirm", "deal_context_confirm",
+    ):
+        kind = pending_intent.get("entity")
+        if kind == "customer_duplicate":
+            return await _resolve_customer_duplicate(
+                client, ctx=ctx, license_id=str(license_id), message=message, pending=pending_intent, language=language,
+            )
+        if kind == "customer_merge_confirm":
+            return await _resolve_customer_merge_confirm(
+                client, ctx=ctx, license_id=str(license_id), message=message, pending=pending_intent, language=language,
+            )
+        if kind == "customer_archive_confirm":
+            return await _resolve_archive_confirm(
+                client, ctx=ctx, license_id=license_id, message=message, pending=pending_intent,
+                permission_keys=permission_keys, language=language,
+            )
+        return await _resolve_deal_context_confirm(
+            client, ctx=ctx, license_id=license_id, message=message, pending=pending_intent,
+            permission_keys=permission_keys, language=language,
+        )
+
     # A bare number answering "which one did you mean?" is a closed,
     # deterministic pattern — same reasoning as deal-stage-command and
     # technician-invite above: matched directly, never sent through the AI
@@ -10923,11 +11221,12 @@ async def handle_chat_message(
     if intent.get("entity") == "customer":
         return await _handle_customer_intent(
             client, intent=intent, ctx=ctx, license_id=license_id, language=language,
+            permission_keys=permission_keys,
         )
     if intent.get("entity") == "deal":
         return await _handle_deal_intent(
             client, intent=intent, ctx=ctx, license_id=license_id,
-            permission_keys=permission_keys, language=language,
+            permission_keys=permission_keys, language=language, message=message,
         )
     if intent.get("entity") == "product":
         return await _handle_product_intent(
@@ -11111,3 +11410,535 @@ async def _handle_ai_report(
     if files_line:
         text = f"{text}\n\n{files_line}"
     return ChatReply(text=text, intent={"action": "report", "entity": out["spec"]["entity"]})
+
+
+
+# ============================================================ user review, 4 Sep 2026
+
+def _matches_any(text: str, phrases: tuple[str, ...]) -> bool:
+    lowered = (text or "").strip().lower()
+    return any(lowered == p.lower() for p in phrases)
+
+
+def _customer_code(row: dict) -> str:
+    return str(row.get("customer_id") or row.get("code") or "")
+
+
+async def _handle_customer_duplicate(
+    client: DataClient, *, ctx: ResolvedContext, license_id: str, language: str,
+    duplicate: dict, new_fields: dict,
+) -> ChatReply:
+    """Issue 2: the Data tier said a record with this phone/email already
+    exists. Say which one, and offer the three sensible moves — never
+    "please enter it again", which was the loop reviewers hit."""
+    existing_id = str(duplicate.get("existing_id") or "")
+    code = str(duplicate.get("existing_code") or "")
+    field = str(duplicate.get("field") or "phone")
+    existing = None
+    try:
+        existing = await client.get_customer(license_id, existing_id) if existing_id else None
+    except Exception:  # noqa: BLE001
+        log.exception("could not read the duplicate customer %s", existing_id)
+    if existing is None:
+        try:
+            existing = next(
+                (r for r in await client.list_customers(license_id) if str(r.get("id")) == existing_id), None,
+            )
+        except Exception:  # noqa: BLE001
+            existing = None
+    existing = existing or {"id": existing_id, "customer_id": code}
+    name = _display_name(existing) or code
+    await client.set_pending_intent(
+        ctx.chann_uid, ctx.oa, action="resolve", entity="customer_duplicate",
+        fields={"existing": existing, "new_fields": new_fields, "field": field},
+        missing=[], ttl_seconds=DUPLICATE_TTL_S,
+    )
+    value = new_fields.get(field) or existing.get(field) or ""
+    return ChatReply(
+        text=_t(DUPLICATE_FOUND, language).format(
+            name=name, code=code or _customer_code(existing),
+            field=_t(DUPLICATE_FIELD_LABEL.get(field, DUPLICATE_FIELD_LABEL["phone"]), language), value=value,
+        ),
+        entity_type="customer", entity_id=existing_id or None,
+        quick_replies=[
+            ("ใช้รายชื่อเดิม", "ใช้รายชื่อเดิม"), ("อัปเดตข้อมูลเดิม", "อัปเดตข้อมูลเดิม"), ("ยกเลิก", "ยกเลิก"),
+        ],
+    )
+
+
+def _merge_plan(existing: dict, new_fields: dict) -> tuple[dict, dict]:
+    """(fill, conflicts): fill = new values for fields the record lacks;
+    conflicts = {field: (old, new)} where both exist and differ."""
+    fill: dict = {}
+    conflicts: dict = {}
+    for key in ("first_name", "last_name", "phone", "email", "address", "notes"):
+        new = new_fields.get(key)
+        if new in (None, ""):
+            continue
+        old = existing.get(key)
+        if old in (None, ""):
+            fill[key] = new
+        elif str(old).strip().lower() != str(new).strip().lower():
+            conflicts[key] = (old, new)
+    return fill, conflicts
+
+
+def _field_lines(items: dict, language: str) -> str:
+    lines = []
+    for key, pair in items.items():
+        label = _t(CUSTOMER_FIELD_LABEL.get(key, {"th": key, "en": key}), language)
+        lines.append("• " + label + ": " + str(pair[0]) + " → " + str(pair[1]))
+    return "\n".join(lines)
+
+
+async def _resolve_customer_duplicate(
+    client: DataClient, *, ctx: ResolvedContext, license_id: str, message: str,
+    pending: dict, language: str,
+) -> ChatReply:
+    fields = pending.get("fields") or {}
+    existing = fields.get("existing") or {}
+    new_fields = fields.get("new_fields") or {}
+    name = _display_name(existing) or _customer_code(existing)
+    code = _customer_code(existing)
+    if _matches_any(message, DUPLICATE_CANCEL_PHRASES):
+        await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
+        return ChatReply(text=_t(DUPLICATE_CANCELLED, language))
+    if _matches_any(message, DUPLICATE_USE_PHRASES):
+        await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
+        await _remember_customer(client, ctx, existing)
+        return ChatReply(
+            text=_t(DUPLICATE_USED, language).format(name=name, code=code),
+            entity_type="customer", entity_id=existing.get("id"),
+            quick_replies=[("สร้างดีล", f"สร้างดีลให้ {name}"), ("ดูข้อมูล", f"ข้อมูลลูกค้า {name}")],
+        )
+    if _matches_any(message, DUPLICATE_MERGE_PHRASES):
+        fill, conflicts = _merge_plan(existing, new_fields)
+        updated = existing
+        if fill:
+            updated = await client.update_customer(license_id, existing["id"], fill, actor_id=ctx.chann_uid)
+        await _remember_customer(client, ctx, updated)
+        if conflicts:
+            await client.set_pending_intent(
+                ctx.chann_uid, ctx.oa, action="resolve", entity="customer_merge_confirm",
+                fields={"existing": updated, "conflicts": {k: list(v) for k, v in conflicts.items()}},
+                missing=[], ttl_seconds=DUPLICATE_TTL_S,
+            )
+            return ChatReply(
+                text=_t(DUPLICATE_CONFLICTS, language).format(name=name, code=code, lines=_field_lines(conflicts, language)),
+                entity_type="customer", entity_id=existing.get("id"),
+                quick_replies=[("แทนที่ทั้งหมด", "แทนที่ทั้งหมด"), ("เก็บของเดิม", "เก็บของเดิม")],
+            )
+        await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
+        if not fill:
+            return ChatReply(text=_t(DUPLICATE_NOTHING_TO_MERGE, language).format(name=name, code=code),
+                             entity_type="customer", entity_id=existing.get("id"))
+        labels = ", ".join(_t(CUSTOMER_FIELD_LABEL.get(k, {"th": k, "en": k}), language) for k in fill)
+        return ChatReply(
+            text=_t(DUPLICATE_MERGED, language).format(name=name, code=code, fields=labels),
+            entity_type="customer", entity_id=existing.get("id"),
+        )
+    return ChatReply(
+        text=_t(DUPLICATE_CHOICE_INVALID, language),
+        quick_replies=[("ใช้รายชื่อเดิม", "ใช้รายชื่อเดิม"), ("อัปเดตข้อมูลเดิม", "อัปเดตข้อมูลเดิม"), ("ยกเลิก", "ยกเลิก")],
+    )
+
+
+async def _resolve_customer_merge_confirm(
+    client: DataClient, *, ctx: ResolvedContext, license_id: str, message: str,
+    pending: dict, language: str,
+) -> ChatReply:
+    fields = pending.get("fields") or {}
+    existing = fields.get("existing") or {}
+    conflicts = fields.get("conflicts") or {}
+    name = _display_name(existing) or _customer_code(existing)
+    if _matches_any(message, MERGE_KEEP_PHRASES) or _matches_any(message, DUPLICATE_CANCEL_PHRASES):
+        await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
+        return ChatReply(text=_t(MERGE_KEPT, language).format(name=name))
+    if _matches_any(message, MERGE_REPLACE_PHRASES):
+        replace = {k: v[1] for k, v in conflicts.items()}
+        updated = await client.update_customer(license_id, existing["id"], replace, actor_id=ctx.chann_uid)
+        await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
+        await _remember_customer(client, ctx, updated)
+        labels = ", ".join(_t(CUSTOMER_FIELD_LABEL.get(k, {"th": k, "en": k}), language) for k in replace)
+        return ChatReply(text=_t(MERGE_REPLACED, language).format(name=name, fields=labels),
+                         entity_type="customer", entity_id=existing.get("id"))
+    return ChatReply(
+        text=_t(DUPLICATE_CONFLICTS, language).format(
+            name=name, code=_customer_code(existing), lines=_field_lines({k: tuple(v) for k, v in conflicts.items()}, language),
+        ),
+        quick_replies=[("แทนที่ทั้งหมด", "แทนที่ทั้งหมด"), ("เก็บของเดิม", "เก็บของเดิม")],
+    )
+
+
+# ---------------------------------------------------------------- Issue 3
+
+def _lead_delete_target(message: str) -> str | None:
+    """The name after "ลบ Lead …", or "" when the message points at the
+    customer in context ("ลบ Lead นี้"), or None when it is not a delete."""
+    lowered = (message or "").strip().lower()
+    trigger = next((t for t in LEAD_DELETE_TRIGGERS if lowered.startswith(t)), None)
+    if trigger is None:
+        return None
+    text = (message or "").strip()[len(trigger):].strip()
+    changed = True
+    while changed and text:
+        changed = False
+        # longest first, and start over after every strip so "รายนี้ออกจาก
+        # lead สมชาย" loses "รายนี้" then "ออกจาก lead" — never a bare "ออก"
+        for word in sorted(LEAD_DELETE_NAME_STRIP, key=len, reverse=True):
+            if text.lower().startswith(word):
+                text = text[len(word):].strip()
+                changed = True
+                break
+            if text.lower().endswith(word):
+                text = text[: -len(word)].strip()
+                changed = True
+                break
+    return text.strip(" :,")
+
+
+async def _handle_lead_archive_request(
+    client: DataClient, *, ctx: ResolvedContext, license_id, name: str | None,
+    permission_keys: list[str], language: str,
+) -> ChatReply:
+    """Issue 3: "ลบ Lead สมชาย" / "ลบ Lead นี้". Archive is the platform's
+    soft delete; it needs customer.archive and an explicit confirmation."""
+    if "customer.archive" not in set(permission_keys) or not _oa_allows(ctx.oa, "customer.archive"):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language), quick_reply_url=_guide_button(ctx.oa, language))
+    license_id = str(license_id)
+    if name:
+        row, problem = await _find_one_customer_by_name(
+            client, license_id, name, language,
+            ctx=ctx, resume_entity="customer", resume_action="archive", resume_fields={},
+        )
+        if problem is not None:
+            return problem
+    else:
+        last_ref = await client.get_last_customer_ref(ctx.chann_uid, ctx.oa)
+        if last_ref is None:
+            return ChatReply(text=_t(ARCHIVE_NEEDS_NAME, language))
+        row = next(
+            (r for r in await client.list_customers(license_id) if str(r.get("id")) == str(last_ref["customer_id"])),
+            {"id": last_ref["customer_id"], "first_name": last_ref["name"]},
+        )
+    return await _ask_archive_confirmation(client, ctx=ctx, row=row, language=language)
+
+
+async def _ask_archive_confirmation(client: DataClient, *, ctx: ResolvedContext, row: dict, language: str) -> ChatReply:
+    await client.set_pending_intent(
+        ctx.chann_uid, ctx.oa, action="resolve", entity="customer_archive_confirm",
+        fields={"customer": row}, missing=[], ttl_seconds=DUPLICATE_TTL_S,
+    )
+    stage = str(row.get("stage") or "lead")
+    return ChatReply(
+        text=_t(ARCHIVE_CONFIRM, language).format(
+            name=_display_name(row), code=_customer_code(row), stage=_t(STAGE_LABEL.get(stage, {"th": stage, "en": stage}), language),
+        ),
+        entity_type="customer", entity_id=row.get("id"),
+        quick_replies=[("ยืนยันลบ", "ยืนยันลบ"), ("ยกเลิก", "ยกเลิก")],
+    )
+
+
+async def _resolve_archive_confirm(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str, pending: dict,
+    permission_keys: list[str], language: str,
+) -> ChatReply:
+    row = (pending.get("fields") or {}).get("customer") or {}
+    name = _display_name(row)
+    if _matches_any(message, DUPLICATE_CANCEL_PHRASES):
+        await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
+        return ChatReply(text=_t(ARCHIVE_CANCELLED, language).format(name=name))
+    if not _matches_any(message, ARCHIVE_CONFIRM_PHRASES):
+        return ChatReply(text=_t(ARCHIVE_CHOICE_INVALID, language),
+                         quick_replies=[("ยืนยันลบ", "ยืนยันลบ"), ("ยกเลิก", "ยกเลิก")],
+                     )
+    # Re-checked at execution: the confirmation may arrive after a role change.
+    if "customer.archive" not in set(permission_keys):
+        await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
+    try:
+        await client.archive_customer(str(license_id), row["id"], actor_id=ctx.chann_uid)
+    except Exception as exc:  # noqa: BLE001
+        if _is_not_found(exc):
+            return ChatReply(text=_t(CUSTOMER_NOT_FOUND, language).format(name=name))
+        log.exception("could not archive customer %s", row.get("id"))
+        raise
+    return ChatReply(text=_t(ARCHIVE_DONE, language).format(name=name, code=_customer_code(row)),
+                     entity_type="customer", entity_id=row.get("id"))
+
+
+async def _maybe_lead_cleanup_setting(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
+    permission_keys: list[str], language: str,
+) -> ChatReply | None:
+    from . import lead_cleanup
+
+    text = (message or "").strip()
+    lowered = text.lower()
+    set_match = next((p for p in LEAD_CLEANUP_SET_PHRASES if lowered.startswith(p)), None)
+    off = _matches_any(text, LEAD_CLEANUP_OFF_PHRASES)
+    view = _matches_any(text, LEAD_CLEANUP_VIEW_PHRASES)
+    if not (set_match or off or view):
+        return None
+    if "setting.manage" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    if set_match:
+        digits = re.search(r"(\d{1,4})", text[len(set_match):])
+        days = int(digits.group(1)) if digits else 0
+        if not 1 <= days <= lead_cleanup.MAX_DAYS:
+            return ChatReply(text=_t(LEAD_CLEANUP_BAD_NUMBER, language))
+        await client.put_license_setting(str(license_id), lead_cleanup.SETTING_KEY, days, actor_id=ctx.chann_uid)
+    elif off:
+        await client.put_license_setting(str(license_id), lead_cleanup.SETTING_KEY, 0, actor_id=ctx.chann_uid)
+    days = await lead_cleanup.lead_auto_archive_days(client, str(license_id))
+    state = _t(LEAD_CLEANUP_ON, language).format(days=days) if days else _t(LEAD_CLEANUP_OFF, language)
+    return ChatReply(text=_t(LEAD_CLEANUP_STATE, language).format(state=state))
+
+
+# ---------------------------------------------------------------- Issue 4
+
+def _deal_details_line(fields: dict, language: str) -> str:
+    from .deal_fields import format_amount
+    from .thai_datetime import format_thai_date
+
+    amount = fields.get("amount")
+    close = fields.get("expected_close_date")
+    if amount is not None and close:
+        return _t(DEAL_DETAILS_LINE, language).format(
+            amount=format_amount(amount, fields.get("currency") or "THB"), close=format_thai_date(close),
+        )
+    if amount is not None:
+        return _t(DEAL_AMOUNT_ONLY_LINE, language).format(amount=format_amount(amount, fields.get("currency") or "THB"))
+    if close:
+        return _t(DEAL_DATE_ONLY_LINE, language).format(close=format_thai_date(close))
+    return ""
+
+
+def _deal_fields_from_message(message: str, ai_fields: dict | None) -> tuple[dict, list[str]]:
+    """Amount / currency / expected close date, read from the message with
+    the model's suggestions checked against it. Returns (fields, ambiguous)."""
+    from .deal_fields import extract_deal_fields
+
+    out = extract_deal_fields(message or "", ai_fields or {}, local_today())
+    fields: dict = {}
+    if out["amount"] is not None:
+        fields["amount"] = out["amount"]
+        fields["currency"] = out["currency"]
+    if out["expected_close_date"]:
+        fields["expected_close_date"] = out["expected_close_date"]
+    if ai_fields and ai_fields.get("notes"):
+        fields["notes"] = ai_fields["notes"]
+    return fields, list(out["ambiguous"])
+
+
+async def _ask_deal_ambiguity(
+    client: DataClient, *, ctx: ResolvedContext, message: str, target_name: str | None,
+    fields: dict, ambiguous: list[str], language: str,
+) -> ChatReply:
+    """Only the unclear field is asked; everything else read so far is kept
+    in the pending intent, so the answer completes the same deal."""
+    from .deal_fields import parse_amount
+
+    held = {k: (str(v) if not isinstance(v, str) else v) for k, v in fields.items()}
+    if target_name:
+        held["target_name"] = target_name
+    await client.set_pending_intent(
+        ctx.chann_uid, ctx.oa, action="create", entity="deal", fields=held,
+        missing=ambiguous, ttl_seconds=PENDING_INTENT_TTL_S,
+    )
+    if "amount" in ambiguous:
+        _, _, candidates = parse_amount(message)
+        values = ", ".join(f"{c:,.0f}" for c in candidates)
+        return ChatReply(text=_t(DEAL_AMOUNT_AMBIGUOUS, language).format(values=values))
+    return ChatReply(text=_t(DEAL_DATE_AMBIGUOUS, language))
+
+
+async def _resolve_deal_context_confirm(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str, pending: dict,
+    permission_keys: list[str], language: str,
+) -> ChatReply:
+    fields = pending.get("fields") or {}
+    contact = fields.get("contact") or {}
+    deal_fields = dict(fields.get("deal_fields") or {})
+    if _matches_any(message, DEAL_CONTEXT_NO) or _matches_any(message, DUPLICATE_CANCEL_PHRASES):
+        await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
+        return ChatReply(text=_t(DEAL_CONTEXT_CANCELLED, language))
+    if not _matches_any(message, DEAL_CONTEXT_YES):
+        return ChatReply(text=_t(DEAL_CONTEXT_CHOICE_INVALID, language),
+                         quick_replies=[("ใช่ สร้างเลย", "ใช่"), ("ไม่ใช่ ระบุชื่อ", "ไม่ใช่")],
+                     )
+    await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
+    if "deal.create" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    return await _apply_deal_create(
+        client, contact=contact, fields=deal_fields, ctx=ctx,
+        license_id=str(license_id), language=language, used_context=True,
+    )
+
+
+async def _confirm_deal_for_context(
+    client: DataClient, *, ctx: ResolvedContext, contact: dict, fields: dict, language: str,
+) -> ChatReply:
+    serialisable = {k: (str(v) if not isinstance(v, (str, int, float)) else v) for k, v in fields.items()}
+    await client.set_pending_intent(
+        ctx.chann_uid, ctx.oa, action="resolve", entity="deal_context_confirm",
+        fields={"contact": contact, "deal_fields": serialisable}, missing=[], ttl_seconds=DEAL_CONTEXT_TTL_S,
+    )
+    return ChatReply(
+        text=_t(DEAL_CONTEXT_CONFIRM, language).format(name=_display_name(contact), details=_deal_details_line(fields, language)),
+        quick_replies=[("ใช่ สร้างเลย", "ใช่"), ("ไม่ใช่ ระบุชื่อ", "ไม่ใช่")],
+    )
+
+
+def _looks_like_deal_creation(message: str) -> bool:
+    """A sentence that names a person or opens a deal is a creation, not a
+    close-date/value command on an existing deal — unless it carries a
+    D- code, which is unambiguous. User review (4 Sep 2026): "ดีลนี้ของ
+    อาทิตย์ มูลค่า … คาดว่าจะปิด …" was swallowed by the close-date command."""
+    text = message or ""
+    if re.search(r"\bD-\d{4}-\d{4}\b", text, re.IGNORECASE):
+        return False
+    lowered = text.lower()
+    if any(t in lowered for t in DEAL_CREATE_TRIGGERS) or any(t in lowered for t in DEAL_CREATE_BARE_TRIGGERS):
+        return True
+    if "เปิดดีล" in lowered:
+        return True
+    return _deal_name_from_message(text) is not None and ("มูลค่า" in lowered or "ราคา" in lowered or "ดีล" in lowered)
+
+
+# ---------------------------------------------------------------- Issue 1
+
+def _capability_group_asked(message: str) -> str | None:
+    """Which area a "what can I do with …" question is about, if any."""
+    lowered = (message or "").strip().lower()
+    if not any(m in lowered for m in CAPABILITY_ASK_MARKERS):
+        return None
+    hits: list[tuple[int, str]] = []
+    for group, aliases in CAPABILITY_GROUP_ALIASES.items():
+        for alias in aliases:
+            position = lowered.find(alias)
+            if position != -1:
+                hits.append((position, group))
+    if not hits:
+        return None
+    hits.sort()
+    return hits[0][1]
+
+
+def _is_general_capability_question(message: str) -> bool:
+    lowered = (message or "").strip().lower()
+    return (
+        ("ทำอะไร" in lowered or "ทําอะไร" in lowered or "what can" in lowered or "what does" in lowered)
+        and ("ได้บ้าง" in lowered or "ได้ไหม" in lowered or "do" in lowered)
+    ) or lowered in ("ระบบทำอะไรได้บ้าง", "คุณสามารถทำอะไรได้บ้าง", "ทำอะไรได้บ้าง")
+
+
+def _group_keys(group: str, catalog: list[dict]) -> list[dict]:
+    return [e for e in catalog if (e.get("group") or (str(e.get("key") or "").split(".", 1)[0])) == group
+            and not str(e.get("key") or "").startswith("platform.admin.")]
+
+
+def _label_of(entry: dict, language: str) -> str:
+    return (entry.get("label") or {}).get(language) or (entry.get("label") or {}).get("th") or str(entry.get("key"))
+
+
+def capability_detail(group: str, permission_keys, catalog: list[dict], language: str, oa: str = "sales") -> ChatReply:
+    """Issue 1: one area in depth — the commands this person can actually
+    run there (HELP_SECTIONS filtered by permission), the permissions held
+    and not held (from the catalogue, never hardcoded), and the dashboard
+    page when one exists."""
+    held = set(permission_keys)
+    group_label = _group_label(group, language)
+    commands = []
+    seen = set()
+    for _title, entries in HELP_SECTIONS:
+        for key, cmd, what in entries:
+            key_group = key.split(".", 1)[0]
+            if key_group != group or key not in held or cmd in seen:
+                continue
+            seen.add(cmd)
+            commands.append(f"• {cmd}\n   → {what}")
+    entries = _group_keys(group, catalog)
+    held_labels = [_label_of(e, language) for e in entries if e.get("key") in held]
+    missing_labels = [_label_of(e, language) for e in entries if e.get("key") not in held]
+    url = dashboard_link(CAPABILITY_GROUP_PAGE.get(group, ""), oa) if group in CAPABILITY_GROUP_PAGE else None
+    if not held_labels and not commands:
+        return ChatReply(
+            text=_t(CAPABILITY_DETAIL_NONE, language).format(group=group_label) + "\n" + _t(CAPABILITY_FOLLOW_UP, language),
+            quick_reply_url=_guide_button(oa, language),
+        )
+    lines = [_t(CAPABILITY_DETAIL_HEADER, language).format(group=group_label)]
+    lines.extend(commands[:12])
+    if held_labels:
+        lines.append(_t(CAPABILITY_HELD, language).format(labels=", ".join(held_labels)))
+    if missing_labels:
+        lines.append(_t(CAPABILITY_NOT_HELD, language).format(labels=", ".join(missing_labels)))
+    lines.append(_t(CAPABILITY_FOLLOW_UP, language))
+    return ChatReply(
+        text="\n".join(lines),
+        quick_reply_url=(_t(CAPABILITY_OPEN_PAGE, language).format(group=group_label), url) if url else _guide_button(oa, language),
+    )
+
+
+def capability_overview_line(permission_keys, catalog: list[dict], language: str) -> str:
+    """One line naming the areas this person holds anything in, for the end
+    of the guide — so "what can the system do" is answered with the guide
+    AND an invitation to drill into one area."""
+    held = set(permission_keys)
+    groups: list[str] = []
+    for entry in catalog:
+        key = str(entry.get("key") or "")
+        if key not in held or key.startswith("platform.admin."):
+            continue
+        group = entry.get("group") or key.split(".", 1)[0]
+        if group not in groups:
+            groups.append(group)
+    if not groups:
+        return ""
+    return _t(CAPABILITY_OVERVIEW, language).format(groups=" · ".join(_group_label(g, language) for g in groups))
+
+
+def permission_summary(permission_keys, catalog: list[dict], language: str) -> str:
+    """Issue 1: "ฉันมีสิทธิ์ทำอะไร" — grouped, from the catalogue, only what
+    is held. Short labels per area, not a flat 49-item list."""
+    held = set(permission_keys)
+    groups: dict[str, list[str]] = {}
+    for entry in catalog:
+        key = str(entry.get("key") or "")
+        if key not in held or key.startswith("platform.admin."):
+            continue
+        group = entry.get("group") or key.split(".", 1)[0]
+        groups.setdefault(group, []).append(_label_of(entry, language))
+    if not groups:
+        return _t(PERMISSION_SUMMARY_NONE, language)
+    lines = [_t(PERMISSION_SUMMARY_HEADER, language)]
+    for group, labels in groups.items():
+        lines.append(f"• {_group_label(group, language)}: {', '.join(labels)}")
+    lines.append(_t(CAPABILITY_FOLLOW_UP, language))
+    return "\n".join(lines)
+
+
+async def _maybe_capability_question(
+    client: DataClient, *, ctx: ResolvedContext, message: str, permission_keys: list[str], language: str,
+) -> ChatReply | None:
+    """Issue 1: detailed capability questions, answered from permissions
+    and the registered commands. The plain "ทำอะไรได้บ้าง" keeps going to
+    the guide (help hook) — with the areas line appended there."""
+    keys = _filter_by_oa(permission_keys, ctx.oa)
+    if _matches_phrase(message, PERMISSION_ASK_PHRASES) or _matches_phrase(message, CAPABILITY_PHRASES):
+        try:
+            catalog = await client.permission_catalog()
+        except Exception:  # noqa: BLE001
+            log.exception("could not read the permission catalogue")
+            catalog = []
+        return ChatReply(text=permission_summary(keys, catalog, language), quick_reply_url=_guide_button(ctx.oa, language))
+    group = _capability_group_asked(message)
+    if group is None:
+        return None
+    try:
+        catalog = await client.permission_catalog()
+    except Exception:  # noqa: BLE001
+        log.exception("could not read the permission catalogue")
+        catalog = []
+    return capability_detail(group, keys, catalog, language, ctx.oa)
