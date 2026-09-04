@@ -2296,3 +2296,8 @@ ad-hoc `pytest` against ambient packages has produced false failures. Never
 claim a phase is deployed without hitting `/health` on the real Cloud Run
 service and confirming `git_commit` matches what you just pushed. Never run
 `terraform apply` unattended.
+
+## C7b — plan gate allows Cloud Scheduler jobs (4 Sep 2026)
+
+- `scripts/dev-infra-plan.sh` blocked `google_cloud_scheduler_job` as "outside DEV boundary" so C7's plan never passed; the allowlist now includes it (tests/boundary already did).
+- Cloud Shell มี IPv6 ปิดในระบบ terraform จึงล้มแบบสุ่มเมื่อ plan; `~/stage-d1/chain.sh` ส่ง terraform/gcloud ผ่าน proxy IPv4 ในเครื่อง (`~/stage-d1/v4proxy.py`, พอร์ต 3128) เมื่อมันรันอยู่.

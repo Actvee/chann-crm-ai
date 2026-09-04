@@ -111,6 +111,11 @@ allowed_managed_types = {
     "google_sql_user",
     "google_cloud_run_v2_service",
     "google_storage_bucket",
+    # 4 Sep 2026 (C7): the platform's clock — three Cloud Scheduler jobs that
+    # call the Application tier's sweeps. No IAM, no service accounts, no
+    # secrets: the job carries a shared header from a variable already in
+    # tfvars. tests/boundary keeps the same allowlist.
+    "google_cloud_scheduler_job",
 }
 required_addresses = {
     "google_sql_database.application",
