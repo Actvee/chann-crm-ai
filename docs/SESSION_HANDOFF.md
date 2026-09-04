@@ -2351,7 +2351,7 @@ service and confirming `git_commit` matches what you just pushed. Never run
 
 ## Plan F1 — user review batch 2 (4 Sep 2026)
 
-- รูปคู่มืออยู่ใน image ของ Application (`chann_app/static/help`); แก้รูปให้รัน `python3 ~/stage-f1/render_guide_images.py <out>` แล้ว copy ทับ (สคริปต์วาดจากข้อความในคู่มือ ไม่ต้องใช้ AI สร้างภาพ).
+- รูปคู่มืออยู่ใน image ของ Application (`chann_app/static/help`); แก้รูปให้แก้ scene ใน `scripts/dev/render-guide-images.py` แล้วรัน `python scripts/dev/render-guide-images.py` (ฟอนต์ Sarabun อยู่ใน `scripts/dev/guide-fonts/`; `--check` ตรวจว่า slot/scene/ไฟล์ตรงกัน; เทสต์ `tests/unit/test_guide_image_renderer.py` กันหลุด). สคริปต์วาดจากข้อความในคู่มือ ไม่ต้องใช้ AI สร้างภาพ.
 - กฎเบอร์โทรอยู่ที่ `application/chann_app/services/phone.py` และ validator ใน `data/chann_data/schemas.py::CustomerIn`; ถ้าจะผ่อนกฎ (เช่นเบอร์ต่างประเทศยาวกว่า 15 หลัก) แก้ทั้งสองที่.
 - `_bulk_customer_entries` แยกบรรทัดด้วย newline หรือ ";" ต้องมี ≥2 รายการจึงเข้าเส้นทาง bulk; ข้อความบรรทัดเดียวยังไปทาง AI เดิม.
 - (F1 follow-up) `presentation/Dockerfile` ต้อง `COPY --from=build /srv/public ./public` — standalone build ของ Next ไม่รวม public/ ทำให้ `/samples/*.csv` เป็น 404 บน Cloud Run มาตั้งแต่ Phase 12; มี boundary test กันถอยแล้ว

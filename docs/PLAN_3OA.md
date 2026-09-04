@@ -196,5 +196,5 @@ spec (ทีม, ภาษา, ค้นสินค้า, คุยกับ�
 - **มูลค่าดีล:** รายการดีลโชว์ `amount` (ถ้ามี ใช้แทนผลรวมรายการสินค้า); รายงาน AI นับ `sum/avg amount` ของ deals ได้ (whitelist ทั้ง 2 ชั้น + prompt hint "ยอดขายรวม").
 - **เบอร์โทรต้องเป็นตัวเลข:** กฎเดียว `services/phone.py` ใช้ในแชท (สร้าง/แก้ไข ถามเบอร์ใหม่พร้อมเหตุผล), CSV import, `CustomerWriteIn` (app) และ `CustomerIn` (data) → 422; ฟอร์มบนหน้าจอเช็คก่อนส่ง.
 - **เพิ่มลูกค้าหลายราย:** แชท "เพิ่มลูกค้าหลายคน" + หนึ่งคนต่อบรรทัด (สร้าง/ข้ามซ้ำพร้อมรหัสเดิม/ไม่สำเร็จพร้อมเหตุผล) และ `POST customers/import` + ปุ่ม "นำเข้า CSV" บนหน้ารายชื่อลูกค้า (ไฟล์ตัวอย่าง `samples/customers.csv`).
-- **รูปประกอบคู่มือ:** 21 รูป (แชท/แดชบอร์ดจำลองตามสีแต่ละ OA) สร้างด้วย `~/stage-f1/render_guide_images.py` → `chann_app/static/help/*.png` เสิร์ฟที่ `GET /api/v1/guide/images/{slot}.png`; แชทส่งเป็น URL เต็มผ่าน `PUBLIC_BASE_URL`, หน้าคู่มือ proxy ผ่าน `/api/guide-image/[slot]`.
+- **รูปประกอบคู่มือ:** 21 รูป (แชท/แดชบอร์ดจำลองตามสีแต่ละ OA) สร้างด้วย `scripts/dev/render-guide-images.py` (ฟอนต์ใน `scripts/dev/guide-fonts/`) → `chann_app/static/help/*.png` เสิร์ฟที่ `GET /api/v1/guide/images/{slot}.png`; แชทส่งเป็น URL เต็มผ่าน `PUBLIC_BASE_URL`, หน้าคู่มือ proxy ผ่าน `/api/guide-image/[slot]`.
 - **เก็บกวาด:** ลบ `usage_help()`/`HELP_INTRO`/`HELP_OUTRO` (ไม่มีผู้เรียกตั้งแต่ D4).
