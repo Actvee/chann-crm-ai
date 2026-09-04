@@ -14,5 +14,8 @@ FROM node:22-alpine
 WORKDIR /srv
 ENV NODE_ENV=production PORT=3000
 COPY --from=build /srv/.next/standalone ./
+# Next's standalone output does not include public/ — without this line every
+# file under presentation/public (the CSV samples) is a 404 in production.
+COPY --from=build /srv/public ./public
 COPY --from=build /srv/.next/static ./.next/static
 CMD ["node", "server.js"]

@@ -172,6 +172,15 @@ class TestContainerBuildContract:
         config = (ROOT / "presentation/next.config.js").read_text(encoding="utf-8")
         assert "images: { unoptimized: true }" in config
 
+    def test_presentation_image_ships_the_public_folder(self):
+        """Next's standalone output leaves public/ behind; the CSV samples
+        (products, warranties, customers) live there and were 404 in
+        production until the Dockerfile copied it (4 Sep 2026)."""
+        dockerfile = (ROOT / "presentation/Dockerfile").read_text(encoding="utf-8")
+        assert "COPY --from=build /srv/public ./public" in dockerfile
+        for name in ("products", "warranties", "customers"):
+            assert (ROOT / "presentation/public/samples" / f"{name}.csv").exists(), name
+
 
 class TestInfrastructureSafetyBoundary:
     def test_reference_only_infrastructure_stays_as_data_sources(self):
