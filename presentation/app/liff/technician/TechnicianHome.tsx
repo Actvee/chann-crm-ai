@@ -4,6 +4,8 @@ import { useCallback, useState } from "react";
 
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
+import { SuspendedNotice } from "../_suspended";
+
 import { AppShell } from "../sales/_components";
 import { FieldRow } from "../_field-row";
 import { ProfileCard } from "../_profile-card";
@@ -423,6 +425,7 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
     <div data-theme="technician">
       <AppShell
         title={t.dashboard.technician.home}
+        notice={<SuspendedNotice memberships={shops} />}
         back={null}
         liffId={liffId}
         onReady={onReady}

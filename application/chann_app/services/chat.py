@@ -8825,6 +8825,36 @@ PERMISSION_SUMMARY_HEADER = {"th": "สิทธิ์ของคุณตา�
 PERMISSION_SUMMARY_NONE = {"th": "บัญชีของคุณยังไม่มีสิทธิ์ใช้งานใด ๆ ติดต่อเจ้าของบริษัท", "en": "Your account holds no permissions yet — ask the company owner."}
 
 
+
+
+# ============================================================ user review, batch 2 (4 Sep 2026)
+# A phone number is digits. The reason is named so the person can fix it.
+PHONE_INVALID = {
+    "letters": {
+        "th": "เบอร์โทร \"{value}\" มีตัวอักษรอยู่ บันทึกไม่ได้ครับ พิมพ์เป็นตัวเลข เช่น 0812345678",
+        "en": "The phone number \"{value}\" contains letters and cannot be saved. Use digits, e.g. 0812345678.",
+    },
+    "length": {
+        "th": "เบอร์โทร \"{value}\" ต้องมี 9–15 หลัก เช่น 0812345678",
+        "en": "The phone number \"{value}\" must have 9–15 digits, e.g. 0812345678.",
+    },
+}
+# Several customers in one message: one per line (or ";"), each "ชื่อ นามสกุล เบอร์ [อีเมล]".
+BULK_CUSTOMER_TRIGGERS = ("เพิ่มลูกค้าหลายคน", "เพิ่มลูกค้าหลายราย", "เพิ่มลูกค้า", "สร้างลูกค้า", "add customers", "add customer")
+BULK_CUSTOMER_SUMMARY = {
+    "th": "เพิ่มลูกค้าแล้ว {saved} ราย{skipped_line}{failed_line}",
+    "en": "Added {saved} customer(s){skipped_line}{failed_line}",
+}
+BULK_SKIPPED_LINE = {"th": "\nข้ามเพราะมีอยู่แล้ว {n} ราย: {items}", "en": "\nSkipped as existing ({n}): {items}"}
+BULK_FAILED_LINE = {"th": "\nไม่สำเร็จ {n} ราย: {items}", "en": "\nFailed ({n}): {items}"}
+BULK_NEEDS_PHONE = {"th": "ไม่มีเบอร์โทร", "en": "no phone"}
+BULK_BAD_PHONE = {"th": "เบอร์มีตัวอักษรหรือหลักไม่ครบ", "en": "phone has letters or wrong length"}
+BULK_HINT = {
+    "th": "เพิ่มหลายคนได้ในข้อความเดียว: หนึ่งคนต่อบรรทัด \"ชื่อ นามสกุล เบอร์ อีเมล(ถ้ามี)\" หรือใช้ปุ่ม \"นำเข้า CSV\" บนหน้ารายชื่อลูกค้า",
+    "en": "Add several at once: one per line \"first last phone email(optional)\", or use \"Import CSV\" on the customers page.",
+}
+
+
 def _t(table: dict[str, str], language: str) -> str:
     """Thai-first fallback, matching Phase 5."""
     return table.get(language) or table["th"]
@@ -9010,7 +9040,7 @@ HELP_TRIGGERS = (
     "ช่วยเหลือ", "วิธีใช้", "วิธีใช้งาน", "ใช้ยังไง", "ทำอะไรได้บ้าง", "เมนู", "คู่มือ",
     "help", "how to use", "menu", "guide", "?",
 )
-# The permission-filtered example list (usage_help) — the guide's steps
+# The guide's steps
 # answer "how does this work"; this answers "what exactly can I type".
 HELP_EXAMPLES_PHRASES = ("ตัวอย่างคำสั่ง", "คำสั่งทั้งหมด", "ดูคำสั่ง", "examples", "commands")
 # "What am I allowed to do" — the grouped permission list, without a model
@@ -9087,8 +9117,8 @@ async def _handle_customer_profile_view(
     )
 
 # The technician's "วิธีใช้": a day's order of operations, not a catalogue.
-# usage_help() below is shaped around a salesperson's day and lists
-# customers, quotes and diaries a technician never touches — the owner
+# The sales help sections below list customers, quotes and diaries a
+# technician never touches — the owner
 # asked for a guide per OA that "อ่านแล้วเข้าใจว่าทำอะไรได้" (3 Sep).
 TECHNICIAN_HELP = {
     "th": (
@@ -9180,52 +9210,14 @@ HELP_SECTIONS = (
     )),
 )
 
-HELP_INTRO = {
-    "th": "พิมพ์คุยได้เลยเหมือนคุยกับผู้ช่วย ตัวอย่างคำสั่งที่ใช้บ่อย:",
-    "en": "Just type naturally. Some things you can say:",
-}
-HELP_OUTRO = {
-    "th": "\nเคล็ดลับ: เปิดดูลูกค้าหรือดีลก่อน แล้วพิมพ์บันทึกหรือนัดต่อได้เลยโดยไม่ต้องใส่รหัสซ้ำ",
-    "en": "\nTip: open a customer or deal first, then add a note or reminder without repeating the code.",
-}
 HELP_NOTHING = {
     "th": "ยังไม่มีสิทธิ์ใช้งานคำสั่งใด ๆ — ติดต่อเจ้าของบริษัทเพื่อขอสิทธิ์",
     "en": "You do not have permission to use any commands yet — ask the company owner.",
 }
 
 
-def usage_help(permission_keys, language: str = "th") -> str:
-    """Example commands this person can actually run.
-
-    Deliberately separate from suggest_what_you_can_do, which lists the
-    PERMISSIONS someone holds. Knowing you hold "followup.create" does not
-    tell you to type "เตือน D-2026-0001 พรุ่งนี้" — and this product's whole
-    interface is what you type, so the examples are the help.
-
-    Filtered by permission for the same reason suggest_what_you_can_do is:
-    showing someone a command that will refuse them is worse than not
-    mentioning it.
-    """
-    held = set(permission_keys)
-    lines: list[str] = []
-
-    for title, entries in HELP_SECTIONS:
-        usable = [(cmd, what) for key, cmd, what in entries if key in held]
-        if not usable:
-            continue
-        lines.append(f"\n【{title}】")
-        # De-duplicated on the command text: two permissions can legitimately
-        # surface the same example, and printing it twice looks like a bug.
-        seen = set()
-        for cmd, what in usable:
-            if cmd in seen:
-                continue
-            seen.add(cmd)
-            lines.append(f"· {cmd}\n   → {what}")
-
-    if not lines:
-        return _t(HELP_NOTHING, language)
-    return _t(HELP_INTRO, language) + "\n" + "\n".join(lines) + "\n" + _t(HELP_OUTRO, language)
+# usage_help() (the permission-filtered example list) was retired on 4 Sep 2026:
+# help answers with the guide, and capability_detail reads HELP_SECTIONS directly.
 
 
 def suggest_what_you_can_do(
@@ -9563,6 +9555,18 @@ async def _handle_customer_intent(
         # understood as completing THIS request rather than parsed as a
         # new, meaningless message. Without this, the hard check would
         # silently break the exact continuity Phase 6 was built to provide.
+        from .phone import phone_problem
+
+        problem = phone_problem(editable.get("phone"))
+        if problem:
+            # Ask for the phone again with the reason, keeping everything else typed.
+            editable.pop("phone", None)
+            await client.set_pending_intent(
+                ctx.chann_uid, ctx.oa,
+                action="create", entity="customer", fields=editable,
+                missing=["phone"], ttl_seconds=PENDING_INTENT_TTL_S,
+            )
+            return _phone_reply(problem, str(fields.get("phone")), language)
         still_missing = [f for f in ("last_name", "phone") if not editable.get(f)]
         if still_missing:
             await client.set_pending_intent(
@@ -9675,6 +9679,11 @@ async def _apply_customer_action(
     }
     if not editable:
         return ChatReply(text=_t(CUSTOMER_NEEDS_SOMETHING, language))
+    from .phone import phone_problem
+
+    problem = phone_problem(editable.get("phone"))
+    if problem:
+        return _phone_reply(problem, str(editable.get("phone")), language)
     try:
         updated = await client.update_customer(
             license_id, row["id"], editable, actor_id=ctx.chann_uid,
@@ -10419,6 +10428,14 @@ async def handle_chat_message(
             )
         # User review (4 Sep 2026): delete a lead (soft delete, confirmed) and
         # the inactive-lead cleanup setting — closed commands, no model call.
+        # User review (4 Sep 2026): several customers in one message go in
+        # one at a time, before the single-customer prompt sees the text.
+        bulk_entries = _bulk_customer_entries(message)
+        if bulk_entries:
+            return await _handle_bulk_customer_add(
+                client, ctx=ctx, license_id=license_id, entries=bulk_entries,
+                permission_keys=permission_keys, language=language,
+            )
         cleanup_reply = await _maybe_lead_cleanup_setting(
             client, ctx=ctx, license_id=license_id, message=message,
             permission_keys=permission_keys, language=language,
@@ -11942,3 +11959,95 @@ async def _maybe_capability_question(
         log.exception("could not read the permission catalogue")
         catalog = []
     return capability_detail(group, keys, catalog, language, ctx.oa)
+
+
+
+# ============================================================ user review, batch 2 (4 Sep 2026)
+
+def _phone_reply(problem: str, value: str, language: str) -> ChatReply:
+    return ChatReply(text=_t(PHONE_INVALID[problem], language).format(value=value))
+
+
+_BULK_PHONE_RE = re.compile(r"\+?\d[\d\-\s().]{7,}\d")
+_BULK_EMAIL_RE = re.compile(r"[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+")
+
+
+def _bulk_customer_entries(message: str) -> list[dict] | None:
+    """Two or more customers in one message, or None. Each entry is the
+    words of a line: an email token, a phone-looking token, the rest is the
+    name (first word = first name, remainder = last name)."""
+    text = (message or "").strip()
+    lowered = text.lower()
+    trigger = next((t for t in BULK_CUSTOMER_TRIGGERS if lowered.startswith(t)), None)
+    if trigger is None:
+        return None
+    body = text[len(trigger):].strip(" :：\n")
+    parts = [p.strip() for p in re.split(r"[\n;]+", body) if p.strip()]
+    if len(parts) < 2:
+        return None
+    entries = []
+    for part in parts:
+        tokens = part.replace(",", " ").split()
+        email = next((tok for tok in tokens if _BULK_EMAIL_RE.fullmatch(tok)), None)
+        phone_match = _BULK_PHONE_RE.search(part)
+        phone_tokens = set(phone_match.group(0).split()) if phone_match else set()
+        name_tokens = [tok for tok in tokens if tok != email and tok not in phone_tokens and not re.fullmatch(r"[\d\-+().]+", tok)]
+        entries.append({
+            "first_name": name_tokens[0] if name_tokens else None,
+            "last_name": " ".join(name_tokens[1:]) or None,
+            "phone": phone_match.group(0).strip() if phone_match else None,
+            "email": email, "raw": part,
+        })
+    return entries
+
+
+async def _handle_bulk_customer_add(
+    client: DataClient, *, ctx: ResolvedContext, license_id, entries: list[dict],
+    permission_keys: list[str], language: str,
+) -> ChatReply:
+    """User review (4 Sep 2026): several leads in one message. Each row is
+    its own outcome — created, skipped as a duplicate (with the existing
+    code), or refused with the reason — never a half-done batch."""
+    from .phone import phone_problem
+
+    if "customer.create" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    license_id = str(license_id)
+    saved: list[str] = []
+    skipped: list[str] = []
+    failed: list[str] = []
+    last_row = None
+    for entry in entries:
+        label = " ".join(p for p in (entry.get("first_name"), entry.get("last_name")) if p) or entry["raw"][:30]
+        if not entry.get("first_name"):
+            failed.append(f"{entry['raw'][:30]} ({'ไม่มีชื่อ' if language != 'en' else 'no name'})")
+            continue
+        if not entry.get("phone"):
+            failed.append(f"{label} ({_t(BULK_NEEDS_PHONE, language)})")
+            continue
+        problem = phone_problem(entry["phone"])
+        if problem:
+            failed.append(f"{label} ({_t(BULK_BAD_PHONE, language)})")
+            continue
+        payload = {k: v for k, v in entry.items() if k in ("first_name", "last_name", "phone", "email") and v}
+        try:
+            row = await client.create_customer(license_id, payload, actor_id=ctx.chann_uid)
+            saved.append(f"{label} ({row.get('customer_id', '')})")
+            last_row = row
+        except Exception as exc:  # noqa: BLE001
+            structured = getattr(exc, "structured", None) or {}
+            if structured.get("error") == "duplicate":
+                skipped.append(f"{label} → {structured.get('existing_code', '')}")
+                continue
+            log.warning("bulk customer add failed for %s: %s", label, exc)
+            failed.append(label)
+    if last_row is not None:
+        await _remember_customer(client, ctx, last_row)
+    text = _t(BULK_CUSTOMER_SUMMARY, language).format(
+        saved=len(saved),
+        skipped_line=_t(BULK_SKIPPED_LINE, language).format(n=len(skipped), items=", ".join(skipped)) if skipped else "",
+        failed_line=_t(BULK_FAILED_LINE, language).format(n=len(failed), items=", ".join(failed)) if failed else "",
+    )
+    if saved:
+        text += "\n" + ", ".join(saved)
+    return ChatReply(text=text, quick_replies=[("รายชื่อลูกค้า", "รายชื่อลูกค้า")])

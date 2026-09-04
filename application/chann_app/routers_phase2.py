@@ -10,7 +10,7 @@ from datetime import date
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .config import settings
 from .data_client import DataClient, DataTierError
@@ -728,6 +728,18 @@ class CustomerWriteIn(BaseModel):
     address: str | None = None
     notes: str | None = None
 
+    @field_validator("phone")
+    @classmethod
+    def _phone_is_a_number(cls, value: str | None) -> str | None:
+        from .services.phone import phone_problem
+
+        problem = phone_problem(value)
+        if problem == "letters":
+            raise ValueError("phone must contain digits only (spaces, dashes, + allowed)")
+        if problem == "length":
+            raise ValueError("phone must have 9-15 digits")
+        return (value or "").strip() or None
+
 
 @router.patch("/licenses/{license_id}/customers/{customer_id}")
 async def update_customer(
@@ -1003,6 +1015,27 @@ def _csv_rejected(exc: csv_import.CsvRejected) -> HTTPException:
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         detail={"error": "csv_rejected", "message": str(exc)},
     )
+
+
+@router.post("/licenses/{license_id}/customers/import")
+async def import_customers(
+    license_id: str,
+    payload: CsvBody,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Leads from a spreadsheet (user review, 4 Sep 2026): one verdict per
+    row, duplicates named, bad phone numbers refused."""
+    _require_same_tenant(principal, license_id)
+    principal.require("customer.create")
+    try:
+        return await csv_import.import_customers(
+            client, license_id=license_id, text=payload.csv, actor_id=principal.chann_uid,
+        )
+    except csv_import.CsvRejected as exc:
+        raise _csv_rejected(exc)
+    except DataTierError as exc:
+        raise _propagate(exc)
 
 
 @router.post("/licenses/{license_id}/products/import")

@@ -9,7 +9,9 @@ import { LanguageSwitcher } from "@/lib/i18n/LanguageSwitcher";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import PipelineSummary from "./PipelineSummary";
-import { LIFF_SDK_SRC, completeLiffRedirect } from "./_lib";
+import { LIFF_SDK_SRC, completeLiffRedirect, initLiffSession } from "./_lib";
+import { SuspendedNotice } from "../_suspended";
+import type { Membership } from "../_shared";
 
 /**
  * The Sales dashboard index — the page every other one links back to.
@@ -129,6 +131,7 @@ export default function SalesMenu({ liffId }: { liffId: string }) {
         </div>
       </header>
       <div className="page">
+        <SalesSuspended liffId={liffId} />
         <p style={{ color: "var(--ink-soft)", fontSize: 14.5, margin: "0 0 16px" }}>
           {t.dashboard.menuIntro}
         </p>
@@ -156,4 +159,23 @@ export default function SalesMenu({ liffId }: { liffId: string }) {
       </div>
     </div>
   );
+}
+
+
+/** The menu itself needs no session; the suspended notice does. It asks
+ *  once and stays silent for an active shop. */
+function SalesSuspended({ liffId }: { liffId: string }) {
+  const [memberships, setMemberships] = useState<Membership[]>([]);
+  useEffect(() => {
+    let alive = true;
+    initLiffSession(liffId)
+      .then((session) => {
+        if (alive) setMemberships(session.memberships);
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [liffId]);
+  return <SuspendedNotice memberships={memberships} />;
 }

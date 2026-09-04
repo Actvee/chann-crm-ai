@@ -5,7 +5,7 @@ from datetime import date, datetime, time
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class IdentityOut(BaseModel):
@@ -735,6 +735,27 @@ class CustomerIn(BaseModel):
     notes: str | None = None
     customer_chann_uid: str | None = None
     owner_member_id: uuid.UUID | None = None
+
+    # User review (4 Sep 2026): a phone number is digits (with the usual
+    # separators). Letters were reaching the table.
+    @field_validator("phone")
+    @classmethod
+    def _phone_is_a_number(cls, value: str | None) -> str | None:
+        return _validated_phone(value)
+
+
+def _validated_phone(value: str | None) -> str | None:
+    text = (value or "").strip()
+    if not text:
+        return None
+    import re as _re
+
+    if not _re.match(r"^\+?[\d\s\-().]+$", text):
+        raise ValueError("phone must contain digits only (spaces, dashes, + allowed)")
+    digits = _re.sub(r"\D", "", text)
+    if not 9 <= len(digits) <= 15:
+        raise ValueError("phone must have 9-15 digits")
+    return text
 
 
 class CustomerOut(BaseModel):

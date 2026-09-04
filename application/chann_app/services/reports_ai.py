@@ -41,7 +41,7 @@ ALLOWED_ENTITIES: dict[str, dict] = {
     "warranties": {"fields": ("status", "product_id", "warranty_end", "created_at"),
                    "enums": {"status": ("active", "expired", "void")}, "date_fields": ("created_at", "warranty_end")},
 }
-NUMERIC_FIELDS = {"quotes": ("discount_amount",)}
+NUMERIC_FIELDS = {"deals": ("amount",), "quotes": ("discount_amount",)}
 ALLOWED_METRICS = ("count", "sum", "avg", "min", "max")
 ALLOWED_GROUP_BY = ("owner_member_id", "stage", "status", "product_id", "assigned_to")
 ALLOWED_DATE_RANGES = ("today", "yesterday", "last_7_days", "last_30_days", "this_month", "last_month", "last_3_months", "this_year", "last_year")
@@ -157,7 +157,7 @@ def build_system_prompt() -> str:
         f"group_by: one of {list(ALLOWED_GROUP_BY)} that exists on the entity, or null\n"
         f"date_range: one of {list(ALLOWED_DATE_RANGES)} or null\n"
         "date_field: which date field the range applies to (default created_at)\n\n"
-        "Thai hints: ดีล/ยอดขาย = deals; ปิดสำเร็จ/ชนะ = stage won; แพ้ = lost; ลูกค้า = customers; "
+        "Thai hints: ดีล/ยอดขาย = deals; ยอดขายรวม/มูลค่ารวม = metric sum of field amount on deals; ปิดสำเร็จ/ชนะ = stage won; แพ้ = lost; ลูกค้า = customers; "
         "งาน/ใบงาน/ticket = tickets; งานค้าง = status open or assigned or in_progress (pick 'open' if they say ค้าง and no other clue, "
         "or omit the status filter and group by status); ช่าง = assigned_to; ใบเสนอราคา = quotes; รับประกัน = warranties; "
         "เดือนนี้ = this_month; 3 เดือน = last_3_months; ปีนี้ = this_year; แยกตาม = group_by.\n\n"

@@ -17,6 +17,8 @@ export type Membership = {
    *  member, such as claiming a ticket. Absent for customer shop
    *  relationships, which have no members row. */
   member_id?: string | null;
+  /** "suspended" = read-only shop (Phase 18); absent or "active" otherwise. */
+  license_status?: string | null;
 };
 
 type LiffApi = {

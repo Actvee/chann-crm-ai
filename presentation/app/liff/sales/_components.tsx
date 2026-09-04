@@ -27,6 +27,7 @@ export function AppShell({
   onSdkError,
   status,
   statusTone,
+  notice,
   nav = true,
   guideHref,
   wide = false,
@@ -48,6 +49,8 @@ export function AppShell({
   onSdkError: () => void;
   status?: string;
   statusTone?: "ok" | "error";
+  /** A page-wide notice above the content (a suspended shop). */
+  notice?: ReactNode;
   children: ReactNode;
 }) {
   const { t } = useLanguage();
@@ -157,7 +160,8 @@ export function AppShell({
             // watching the same node for updates.
             <p className="status" aria-live="polite" />
           )}
-          {children}
+          {notice}
+        {children}
         </div>
       </div>
       {/* liffId is threaded through for pages that need it in a data

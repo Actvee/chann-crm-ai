@@ -87,7 +87,11 @@ export default function GuidePage({ liffId, audience }: { liffId: string; audien
                     <span className="guide-no">{index + 1}</span> {step.title}
                   </h2>
                   {step.image_url ? (
-                    <img className="guide-image" src={step.image_url} alt={step.title} />
+                    <img
+                      className="guide-image"
+                      src={step.image_url.startsWith("/") ? `/api/guide-image/${step.image_slot}` : step.image_url}
+                      alt={step.title}
+                    />
                   ) : null}
                   <p>{step.body}</p>
                   {step.example && (

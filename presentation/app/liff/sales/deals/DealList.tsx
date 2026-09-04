@@ -21,9 +21,13 @@ type Deal = {
   products?: { qty?: number; quoted_unit_price?: string | number }[];
   created_at?: string | null;
   expected_close_date?: string | null;
+  amount?: string | number | null;
+  currency?: string | null;
 };
 
+/** The deal's own amount when the salesperson gave one; otherwise the line items. */
 function dealValue(deal: Deal): number {
+  if (deal.amount != null && deal.amount !== "" && Number(deal.amount) > 0) return Number(deal.amount);
   return (deal.products ?? []).reduce(
     (sum, p) => sum + Number(p.qty ?? 0) * Number(p.quoted_unit_price ?? 0), 0,
   );
@@ -314,7 +318,7 @@ export default function DealList({ liffId }: { liffId: string }) {
                     )
                   : t.dashboard.deals.noLineItems}
                 {dealValue(deal) > 0
-                  ? ` · ${dealValue(deal).toLocaleString("th-TH", { maximumFractionDigits: 0 })}`
+                  ? ` · ${t.dashboard.deals.amount} ${dealValue(deal).toLocaleString("th-TH", { maximumFractionDigits: 0 })} ${deal.currency ?? "THB"}`
                   : ""}
                 {deal.notes ? ` · ${deal.notes}` : ""}
               </div>

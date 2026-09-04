@@ -56,13 +56,13 @@ _EN: Repairs: review reports — "pending approvals" · "approve SR-2026-0001" o
 
 ## 6. ลูกค้า ดีล ใบเสนอราคา
 
-"รายชื่อลูกค้า" · "สร้างลูกค้า สมชาย ใจดี 0812345678" · "สร้างดีลให้ สมชาย" · "ออกเอกสาร Q-2026-0001" · "งานวันนี้" ดูสิ่งที่ต้องทำ · "เตือน D-… พรุ่งนี้" · "สร้างดีลให้ อาทิตย์ มูลค่า 250,000 ปิดสิ้นเดือนนี้" ใส่มูลค่าและวันคาดว่าจะปิดในประโยคเดียว · "ลบ Lead สมชาย" ระบบถามยืนยันก่อน (เก็บถาวร ไม่ลบทิ้ง) · เพิ่มลูกค้าซ้ำเบอร์/อีเมลเดิม ระบบบอกว่าเป็นใครและให้เลือก ใช้เดิม / อัปเดต / ยกเลิก · "ทำอะไรกับ Lead ได้บ้าง" ดูสิ่งที่ทำได้ทีละหมวด
+"รายชื่อลูกค้า" · "สร้างลูกค้า สมชาย ใจดี 0812345678" · "สร้างดีลให้ สมชาย" · "ออกเอกสาร Q-2026-0001" · "งานวันนี้" ดูสิ่งที่ต้องทำ · "เตือน D-… พรุ่งนี้" · "สร้างดีลให้ อาทิตย์ มูลค่า 250,000 ปิดสิ้นเดือนนี้" ใส่มูลค่าและวันคาดว่าจะปิดในประโยคเดียว · "ลบ Lead สมชาย" ระบบถามยืนยันก่อน (เก็บถาวร ไม่ลบทิ้ง) · เพิ่มลูกค้าซ้ำเบอร์/อีเมลเดิม ระบบบอกว่าเป็นใครและให้เลือก ใช้เดิม / อัปเดต / ยกเลิก · "ทำอะไรกับ Lead ได้บ้าง" ดูสิ่งที่ทำได้ทีละหมวด · เพิ่มหลายคนในข้อความเดียว: "เพิ่มลูกค้าหลายคน" แล้วขึ้นบรรทัดใหม่ทีละคน "ชื่อ นามสกุล เบอร์ อีเมล" หรือปุ่ม "นำเข้า CSV" บนหน้ารายชื่อลูกค้า (มีไฟล์ตัวอย่าง) · เบอร์โทรต้องเป็นตัวเลข ระบบไม่บันทึกเบอร์ที่มีตัวอักษรและบอกเหตุผล
 
 พิมพ์: `งานวันนี้`
 
 [IMAGE: sales-crm — แดชบอร์ดขายธีมเขียว: tile ลูกค้า / ดีล / ใบเสนอราคา / งานซ่อม / รอการอนุมัติ / ทีมช่าง]
 
-_EN: Customers, deals, quotes — "customers" · "create customer …" · "create deal for Somchai" · "issue quote Q-…" · "today" · "remind D-… tomorrow" · "create deal for Arthit worth 250,000, closing end of month" · "delete lead Somchai" (asks first) · a duplicate phone/email is named, with use / update / cancel · "what can I do with leads?" for that area in detail_
+_EN: Customers, deals, quotes — "customers" · "create customer …" · "create deal for Somchai" · "issue quote Q-…" · "today" · "remind D-… tomorrow" · "create deal for Arthit worth 250,000, closing end of month" · "delete lead Somchai" (asks first) · a duplicate phone/email is named, with use / update / cancel · "what can I do with leads?" for that area in detail · several at once: "add customers" then one per line "first last phone email", or "Import CSV" on the customers page · a phone number must be digits; letters are refused with the reason_
 
 ## 7. ถามรายงานด้วย AI
 

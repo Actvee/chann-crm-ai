@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import hmac
 import logging
+import re
 import uuid
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel
@@ -218,7 +220,7 @@ async def liff_guide(
                 "body": step["body"][language],
                 "example": step.get("example"),
                 "image_slot": step["image"],
-                "image_url": help_image_url(step["image"]) or None,
+                "image_url": help_image_url(step["image"], absolute=False) or None,
             }
             for step in guide["steps"]
         ],
@@ -744,3 +746,22 @@ async def platform_break_glass(
     except Exception:  # noqa: BLE001
         log.exception("break-glass: could not notify the new owner %s", target)
     return member
+
+
+# ------------------------------------------------------- guide pictures (4 Sep 2026)
+_HELP_IMAGE_DIR = Path(__file__).resolve().parent / "static" / "help"
+_HELP_SLOT = re.compile(r"^[a-z0-9-]{1,40}$")
+
+
+@router.get("/guide/images/{slot}.png")
+async def guide_image(slot: str):
+    """The illustrated-guide pictures, public like the guide itself (LINE
+    fetches them when chat sends the guide). Slot names only — no paths."""
+    from fastapi.responses import FileResponse
+
+    if not _HELP_SLOT.match(slot):
+        raise HTTPException(status_code=404, detail="unknown image")
+    path = _HELP_IMAGE_DIR / f"{slot}.png"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="unknown image")
+    return FileResponse(path, media_type="image/png", headers={"Cache-Control": "public, max-age=3600"})

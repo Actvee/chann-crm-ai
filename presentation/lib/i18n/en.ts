@@ -356,6 +356,10 @@ export const en: Dictionary = {
       saving: "Saving...",
       actionFailed: "That did not go through — try again.",
     },
+    suspended: {
+      title: "{shop} is suspended",
+      body: "Existing records stay readable, but nothing new can be done in chat or here. Contact Chann CRM AI to reopen.",
+    },
     aiReports: {
       title: "AI reports",
       intro: "Ask in plain words — won deals in the last 3 months, open jobs by technician — and get the numbers as a table with CSV/PDF files.",
@@ -446,6 +450,8 @@ export const en: Dictionary = {
     csvImport: {
       titleProducts: "Import products from a CSV file",
       titleWarranties: "Import the unit register from a CSV file",
+      titleCustomers: "Import customers (leads) from a CSV file",
+      hintCustomers: "Columns: first_name, last_name, phone (digits only), email, address, notes — a duplicate phone/email is skipped and the existing code shown",
       hintProducts: "Columns: product_id, product_name, unit_price, category, sku, description — Thai headers work too; an existing code updates that product",
       hintWarranties: "Columns: serial_number, product_id, product_name, warranty_start (purchase date), warranty_months — a serial already on file is skipped and named",
       sampleTitle: "Sample file (columns and example values)",
@@ -590,6 +596,7 @@ export const en: Dictionary = {
       archiveConfirm: "Remove {name} from the list? The record is archived — gone from every list, history kept.",
       archived: "removed from the list (archived)",
       archiveDenied: "You cannot remove customers (needs the archive-customer permission)",
+      phoneLetters: "The phone number must be digits (spaces, dashes or + allowed), no letters",
     },
     deals: {
       all: "All",

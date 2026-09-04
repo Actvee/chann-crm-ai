@@ -77,6 +77,7 @@ ENTITIES: dict[str, dict] = {
 # Numeric columns a sum/avg/min/max may target. Small on purpose: every
 # entry here is a number the whole tenant may see through a report.
 NUMERIC_FIELDS: dict[str, dict] = {
+    "deals": {"amount": Deal.amount},
     "quotes": {"discount_amount": Quote.discount_amount},
 }
 METRICS = ("count", "sum", "avg", "min", "max")

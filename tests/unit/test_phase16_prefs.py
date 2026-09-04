@@ -50,7 +50,9 @@ class TestDateFormat:
         east = local_today()
         set_display_prefs({"timezone": "Pacific/Pago_Pago"})
         west = local_today()
-        assert (east - west).days in (0, 1)
+        # UTC+14 and UTC-11 are 25 hours apart: for one hour a day (10:00–11:00 UTC)
+        # their calendars differ by two days, not one.
+        assert (east - west).days in (0, 1, 2)
         set_display_prefs({"timezone": "Not/AZone"})
         assert local_today() is not None
 

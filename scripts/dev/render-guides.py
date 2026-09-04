@@ -66,9 +66,10 @@ def permissions_markdown() -> str:
 def images_template() -> str:
     import json
 
-    slots = {step["image"]: "" for guide in GUIDES.values() for step in guide["steps"]}
-    slots["permissions-overview"] = ""
-    return json.dumps({"_comment": "URL รูปต่อ slot (https เท่านั้น) ว่าง = ไม่ส่ง/ไม่โชว์", "images": slots},
+    slots = {step["image"]: f"/api/v1/guide/images/{step['image']}.png" for guide in GUIDES.values() for step in guide["steps"]}
+    slots["permissions-overview"] = "/api/v1/guide/images/permissions-overview.png"
+    return json.dumps({"_comment": "รูปต่อ slot: path ใน Application (/api/v1/guide/images/<slot>.png, ไฟล์ใน chann_app/static/help) "
+                       "หรือ URL https เต็ม — แก้ทั้งสองไฟล์ให้เหมือนกัน", "images": slots},
                       ensure_ascii=False, indent=2) + "\n"
 
 

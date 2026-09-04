@@ -20,13 +20,25 @@ from pathlib import Path
 _IMAGES_FILE = Path(__file__).resolve().parent.parent / "help_images.json"
 
 
-def help_image_url(slot: str) -> str:
-    """The owner-supplied image for a guide slot, or "" when there is none."""
+def help_image_url(slot: str, *, absolute: bool = True) -> str:
+    """The picture for a guide slot: a full https URL as given, or a path
+    under this service (chann_app/static/help) made absolute with
+    PUBLIC_BASE_URL. Chat needs an absolute URL (LINE fetches it) — with no
+    base configured it gets "" and sends no picture; the guide page asks for
+    absolute=False and proxies the path itself."""
     try:
         data = json.loads(_IMAGES_FILE.read_text(encoding="utf-8"))
     except Exception:
         return ""
-    return str((data.get("images") or {}).get(slot) or "").strip()
+    value = str((data.get("images") or {}).get(slot) or "").strip()
+    if not value or value.startswith("http"):
+        return value
+    if not absolute:
+        return value
+    from ..config import settings
+
+    base = (settings.public_base_url or "").rstrip("/")
+    return f"{base}{value}" if base else ""
 
 
 # Each step: key, title (th/en), body (th/en) — what it does and what to
@@ -260,10 +272,10 @@ GUIDES: dict[str, dict] = {
             {
                 "key": "crm", "title": {"th": "ลูกค้า ดีล ใบเสนอราคา", "en": "Customers, deals, quotes"},
                 "body": {
-                    "th": "\"รายชื่อลูกค้า\" · \"สร้างลูกค้า สมชาย ใจดี 0812345678\" · \"สร้างดีลให้ สมชาย\" · \"ออกเอกสาร Q-2026-0001\" · \"งานวันนี้\" ดูสิ่งที่ต้องทำ · \"เตือน D-… พรุ่งนี้\" · \"สร้างดีลให้ อาทิตย์ มูลค่า 250,000 ปิดสิ้นเดือนนี้\" ใส่มูลค่าและวันคาดว่าจะปิดในประโยคเดียว · \"ลบ Lead สมชาย\" ระบบถามยืนยันก่อน (เก็บถาวร ไม่ลบทิ้ง) · เพิ่มลูกค้าซ้ำเบอร์/อีเมลเดิม ระบบบอกว่าเป็นใครและให้เลือก ใช้เดิม / อัปเดต / ยกเลิก · \"ทำอะไรกับ Lead ได้บ้าง\" ดูสิ่งที่ทำได้ทีละหมวด",
-                    "en": "\"customers\" · \"create customer …\" · \"create deal for Somchai\" · \"issue quote Q-…\" · \"today\" · \"remind D-… tomorrow\" · \"create deal for Arthit worth 250,000, closing end of month\" · \"delete lead Somchai\" (asks first) · a duplicate phone/email is named, with use / update / cancel · \"what can I do with leads?\" for that area in detail",
+                    "th": "\"รายชื่อลูกค้า\" · \"สร้างลูกค้า สมชาย ใจดี 0812345678\" · \"สร้างดีลให้ สมชาย\" · \"ออกเอกสาร Q-2026-0001\" · \"งานวันนี้\" ดูสิ่งที่ต้องทำ · \"เตือน D-… พรุ่งนี้\" · \"สร้างดีลให้ อาทิตย์ มูลค่า 250,000 ปิดสิ้นเดือนนี้\" ใส่มูลค่าและวันคาดว่าจะปิดในประโยคเดียว · \"ลบ Lead สมชาย\" ระบบถามยืนยันก่อน (เก็บถาวร ไม่ลบทิ้ง) · เพิ่มลูกค้าซ้ำเบอร์/อีเมลเดิม ระบบบอกว่าเป็นใครและให้เลือก ใช้เดิม / อัปเดต / ยกเลิก · \"ทำอะไรกับ Lead ได้บ้าง\" ดูสิ่งที่ทำได้ทีละหมวด · เพิ่มหลายคนในข้อความเดียว: \"เพิ่มลูกค้าหลายคน\" แล้วขึ้นบรรทัดใหม่ทีละคน \"ชื่อ นามสกุล เบอร์ อีเมล\" หรือปุ่ม \"นำเข้า CSV\" บนหน้ารายชื่อลูกค้า (มีไฟล์ตัวอย่าง) · เบอร์โทรต้องเป็นตัวเลข ระบบไม่บันทึกเบอร์ที่มีตัวอักษรและบอกเหตุผล",
+                    "en": "\"customers\" · \"create customer …\" · \"create deal for Somchai\" · \"issue quote Q-…\" · \"today\" · \"remind D-… tomorrow\" · \"create deal for Arthit worth 250,000, closing end of month\" · \"delete lead Somchai\" (asks first) · a duplicate phone/email is named, with use / update / cancel · \"what can I do with leads?\" for that area in detail · several at once: \"add customers\" then one per line \"first last phone email\", or \"Import CSV\" on the customers page · a phone number must be digits; letters are refused with the reason",
                 },
-                "commands": ["รายชื่อลูกค้า", "สร้างดีลให้", "ออกเอกสาร", "งานวันนี้", "ลบ Lead", "ทำอะไรกับ Lead ได้บ้าง"],
+                "commands": ["รายชื่อลูกค้า", "สร้างดีลให้", "ออกเอกสาร", "งานวันนี้", "ลบ Lead", "ทำอะไรกับ Lead ได้บ้าง", "เพิ่มลูกค้าหลายคน"],
                 "example": "งานวันนี้",
                 "image": "sales-crm",
                 "image_prompt": "แดชบอร์ดขายธีมเขียว: tile ลูกค้า / ดีล / ใบเสนอราคา / งานซ่อม / รอการอนุมัติ / ทีมช่าง",

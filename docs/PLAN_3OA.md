@@ -188,3 +188,13 @@ spec (ทีม, ภาษา, ค้นสินค้า, คุยกับ�
 | 2 ลูกค้าซ้ำ | 409 duplicate ถูกจับเป็น "กรุณาระบุ…" วนซ้ำ; Data tier เช็คแค่เบอร์ | Data: เช็คอีเมล (normalise) + `field` ใน error; chat: `customer_duplicate` pending → ใช้เดิม / อัปเดต (เติมช่องว่าง, ข้อมูลขัดกันถามก่อนแทนที่) / ยกเลิก |
 | 3 ลบ Lead | ไม่มีทางลบจากแชท/หน้าจอ | ใช้ soft delete เดิม (`archived_at`, สิทธิ์ `customer.archive`): แชท "ลบ Lead สมชาย"/"ลบ Lead นี้" + ยืนยัน; ปุ่มบนหน้ารายชื่อ; route `POST customers/{id}/archive`; ลบอัตโนมัติ `lead_auto_archive_days` (ปิดเป็นค่าเริ่มต้น) ตั้งได้ในแชท/หน้าข้อมูลบริษัท รัน sweep เช้าใน platform reminders |
 | 4 สร้างดีลผิดคน/ตัวเลข | ไม่มีชื่อจาก AI → ใช้ "ลูกค้าล่าสุด" เงียบ ๆ; Deal ไม่มี amount; วันที่ "อาทิตย์" ถูกอ่านเป็นวันอาทิตย์ | `services/deal_fields.py` อ่านมูลค่า/วันปิดจากข้อความ (ตรวจค่า AI); Deal.amount/currency (migration 0024); fallback ลูกค้าล่าสุดต้องยืนยัน; `parse_thai_date` ไม่อ่านชื่อคนเป็นวัน และ "วันที่ 15 ต.ค." ถูกต้อง; ถามเฉพาะช่องที่กำกวม |
+
+
+## F1 — User review batch 2 (4 Sep 2026)
+
+- **ป้ายร้านถูกระงับบน LIFF:** `SuspendedNotice` บนหน้าแรกทั้ง 3 OA (`AppShell notice` + `SalesSuspended`) จาก `license_status` ใน `/liff/{aud}/me`.
+- **มูลค่าดีล:** รายการดีลโชว์ `amount` (ถ้ามี ใช้แทนผลรวมรายการสินค้า); รายงาน AI นับ `sum/avg amount` ของ deals ได้ (whitelist ทั้ง 2 ชั้น + prompt hint "ยอดขายรวม").
+- **เบอร์โทรต้องเป็นตัวเลข:** กฎเดียว `services/phone.py` ใช้ในแชท (สร้าง/แก้ไข ถามเบอร์ใหม่พร้อมเหตุผล), CSV import, `CustomerWriteIn` (app) และ `CustomerIn` (data) → 422; ฟอร์มบนหน้าจอเช็คก่อนส่ง.
+- **เพิ่มลูกค้าหลายราย:** แชท "เพิ่มลูกค้าหลายคน" + หนึ่งคนต่อบรรทัด (สร้าง/ข้ามซ้ำพร้อมรหัสเดิม/ไม่สำเร็จพร้อมเหตุผล) และ `POST customers/import` + ปุ่ม "นำเข้า CSV" บนหน้ารายชื่อลูกค้า (ไฟล์ตัวอย่าง `samples/customers.csv`).
+- **รูปประกอบคู่มือ:** 21 รูป (แชท/แดชบอร์ดจำลองตามสีแต่ละ OA) สร้างด้วย `~/stage-f1/render_guide_images.py` → `chann_app/static/help/*.png` เสิร์ฟที่ `GET /api/v1/guide/images/{slot}.png`; แชทส่งเป็น URL เต็มผ่าน `PUBLIC_BASE_URL`, หน้าคู่มือ proxy ผ่าน `/api/guide-image/[slot]`.
+- **เก็บกวาด:** ลบ `usage_help()`/`HELP_INTRO`/`HELP_OUTRO` (ไม่มีผู้เรียกตั้งแต่ D4).

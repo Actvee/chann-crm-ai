@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
+import { CsvImport } from "../_csv-import";
 import { AppShell, Badge, CompanyPicker, Count, Empty } from "../_components";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
@@ -91,6 +92,10 @@ export default function CustomerList({ liffId }: { liffId: string }) {
   }, [liffId, say]);
 
   async function createCustomer(values: Record<string, string>) {
+    if (values.phone && !/^\+?[\d\s\-().]+$/.test(values.phone)) {
+      say(t.dashboard.customers.phoneLetters, "error");
+      return;
+    }
     setBusy(true);
     try {
       const response = await fetch(
@@ -228,6 +233,10 @@ export default function CustomerList({ liffId }: { liffId: string }) {
       />
 
       <Count shown={visible.length} total={customers.length} />
+
+      {permissions.has("customer.create") && (
+        <CsvImport kind="customers" token={token} licenseId={licenseId} onDone={() => void load()} />
+      )}
 
       {permissions.has("customer.create") && (
         <InlineCreateForm

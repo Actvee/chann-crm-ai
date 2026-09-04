@@ -4,6 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
+import { SuspendedNotice } from "../_suspended";
+
 import { AppShell } from "../sales/_components";
 import { FieldRow } from "../_field-row";
 import { shortDate } from "../_list-controls";
@@ -399,6 +401,7 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
     <div data-theme="customer">
       <AppShell
         title={t.dashboard.customer.home}
+        notice={<SuspendedNotice memberships={shops} />}
         back={null}
         liffId={liffId}
         onReady={onReady}

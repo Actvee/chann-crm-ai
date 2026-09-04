@@ -358,6 +358,10 @@ export const th = {
       saving: "กำลังบันทึก...",
       actionFailed: "ทำรายการไม่สำเร็จ ลองใหม่อีกครั้ง",
     },
+    suspended: {
+      title: "ร้าน {shop} ถูกระงับการใช้งานชั่วคราว",
+      body: "ดูข้อมูลเดิมได้ แต่ทำรายการใหม่ไม่ได้ทั้งในแชทและหน้าจอ ติดต่อ Chann CRM AI เพื่อเปิดใช้งานอีกครั้ง",
+    },
     aiReports: {
       title: "รายงาน AI",
       intro: "พิมพ์สิ่งที่อยากรู้เป็นภาษาคน เช่น ยอดดีลปิดสำเร็จ 3 เดือนล่าสุด ระบบจะสรุปเป็นตัวเลขและตาราง พร้อมไฟล์ CSV/PDF",
@@ -448,6 +452,8 @@ export const th = {
     csvImport: {
       titleProducts: "นำเข้ารายการสินค้าจากไฟล์ CSV",
       titleWarranties: "นำเข้าทะเบียนสินค้าจากไฟล์ CSV",
+      titleCustomers: "นำเข้ารายชื่อลูกค้า (Lead) จากไฟล์ CSV",
+      hintCustomers: "คอลัมน์: first_name (ชื่อ), last_name (นามสกุล), phone (เบอร์ ตัวเลขเท่านั้น), email, address, notes — เบอร์/อีเมลซ้ำจะข้ามและบอกรหัสเดิม",
       hintProducts: "คอลัมน์: product_id (รหัส), product_name (ชื่อ), unit_price (ราคา), category, sku, description — หัวคอลัมน์ภาษาไทยก็ได้ รหัสซ้ำ = แก้ไขรายการเดิม",
       hintWarranties: "คอลัมน์: serial_number (S/N), product_id, product_name, warranty_start (วันที่ซื้อ), warranty_months — S/N ที่มีอยู่แล้วจะถูกข้ามพร้อมบอกแถว",
       sampleTitle: "ตัวอย่างไฟล์ (คอลัมน์และค่าตัวอย่าง)",
@@ -592,6 +598,7 @@ export const th = {
       archiveConfirm: "ลบ {name} ออกจากรายชื่อ? ข้อมูลถูกเก็บถาวร ไม่แสดงอีก แต่ประวัติงาน/ดีลยังอยู่",
       archived: "ลบออกจากรายชื่อแล้ว (เก็บถาวร)",
       archiveDenied: "คุณไม่มีสิทธิ์ลบลูกค้า (ต้องมีสิทธิ์เก็บถาวรลูกค้า)",
+      phoneLetters: "เบอร์โทรต้องเป็นตัวเลข (เว้นวรรค ขีด หรือ + ได้) ไม่มีตัวอักษร",
     },
     deals: {
       all: "ทั้งหมด",

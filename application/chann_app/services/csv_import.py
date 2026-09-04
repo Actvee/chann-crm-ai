@@ -151,3 +151,51 @@ async def import_warranties(client: DataClient, *, license_id: str, text: str, a
         except (ValueError, KeyError) as exc:
             results.append({"row": item["_row"], "key": serial, "status": "error", "message": str(exc)[:200]})
     return {"kind": "warranties", "total": len(rows), "saved": saved, "failed": len(rows) - saved, "rows": results}
+
+
+# ------------------------------------------------ customers (user review, 4 Sep 2026)
+CUSTOMER_COLUMNS = {
+    "first_name": ("first_name", "ชื่อ", "firstname", "name"),
+    "last_name": ("last_name", "นามสกุล", "lastname", "surname"),
+    "phone": ("phone", "เบอร์", "เบอร์โทร", "โทร", "tel", "mobile"),
+    "email": ("email", "อีเมล", "e-mail"),
+    "address": ("address", "ที่อยู่"),
+    "notes": ("notes", "note", "บันทึก", "หมายเหตุ"),
+}
+
+
+async def import_customers(client: DataClient, *, license_id: str, text: str, actor_id: str) -> dict:
+    """Leads from a spreadsheet: one verdict per row. A duplicate phone or
+    email is refused naming the existing record; a phone with letters is
+    refused with the reason; the rest are created."""
+    from .phone import phone_problem
+
+    rows = _rows(text, CUSTOMER_COLUMNS, ("first_name", "phone"))
+    results = []
+    saved = 0
+    for item in rows:
+        key = item.get("phone") or ""
+        try:
+            if not item.get("first_name"):
+                raise ValueError("first_name is required")
+            if not item.get("phone"):
+                raise ValueError("phone is required")
+            problem = phone_problem(item["phone"])
+            if problem == "letters":
+                raise ValueError("phone must contain digits only")
+            if problem == "length":
+                raise ValueError("phone must have 9-15 digits")
+            payload = {k: item[k] for k in ("first_name", "last_name", "phone", "email", "address", "notes") if item.get(k)}
+            row = await client.create_customer(license_id, payload, actor_id=actor_id)
+            saved += 1
+            results.append({"row": item["_row"], "key": row.get("customer_id") or key, "status": "saved", "message": ""})
+        except DataTierError as exc:
+            structured = getattr(exc, "structured", None) or {}
+            if structured.get("error") == "duplicate":
+                results.append({"row": item["_row"], "key": key, "status": "error",
+                                "message": f"already exists: {structured.get('existing_code', '')} ({structured.get('field', 'phone')})"})
+            else:
+                results.append({"row": item["_row"], "key": key, "status": "error", "message": str(exc.detail)[:200]})
+        except (ValueError, KeyError) as exc:
+            results.append({"row": item["_row"], "key": key, "status": "error", "message": str(exc)[:200]})
+    return {"kind": "customers", "total": len(rows), "saved": saved, "failed": len(rows) - saved, "rows": results}

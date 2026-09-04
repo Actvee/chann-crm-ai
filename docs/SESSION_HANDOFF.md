@@ -2347,3 +2347,10 @@ service and confirming `git_commit` matches what you just pushed. Never run
 - ข้อความปิด (ยืนยันลบ / ใช้รายชื่อเดิม / ใช่-ไม่ใช่) เก็บใน pending_intent entity `customer_duplicate`, `customer_merge_confirm`, `customer_archive_confirm`, `deal_context_confirm` และถูกจับก่อน parse_intent.
 - `DealOut` ส่ง `expected_close_date/amount/currency` แล้ว (ก่อนหน้านี้ dashboard อ่าน field ที่ไม่เคยถูกส่ง) และ `DealWriteIn` รับ 3 ช่องนี้.
 - ลบ Lead อัตโนมัติ: setting `lead_auto_archive_days` (0/ไม่มี = ปิด); Data route `POST customers/archive-inactive-leads` นับกิจกรรมล่าสุดจาก customer/deal/ticket/note/follow-up.
+
+
+## Plan F1 — user review batch 2 (4 Sep 2026)
+
+- รูปคู่มืออยู่ใน image ของ Application (`chann_app/static/help`); แก้รูปให้รัน `python3 ~/stage-f1/render_guide_images.py <out>` แล้ว copy ทับ (สคริปต์วาดจากข้อความในคู่มือ ไม่ต้องใช้ AI สร้างภาพ).
+- กฎเบอร์โทรอยู่ที่ `application/chann_app/services/phone.py` และ validator ใน `data/chann_data/schemas.py::CustomerIn`; ถ้าจะผ่อนกฎ (เช่นเบอร์ต่างประเทศยาวกว่า 15 หลัก) แก้ทั้งสองที่.
+- `_bulk_customer_entries` แยกบรรทัดด้วย newline หรือ ";" ต้องมี ≥2 รายการจึงเข้าเส้นทาง bulk; ข้อความบรรทัดเดียวยังไปทาง AI เดิม.

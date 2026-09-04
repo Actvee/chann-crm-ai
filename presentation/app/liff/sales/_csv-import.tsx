@@ -6,7 +6,7 @@ import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { openExternal, proxyHeaders } from "./_lib";
 
-type Kind = "products" | "warranties";
+type Kind = "products" | "warranties" | "customers";
 
 type ImportResult = {
   kind: Kind;
@@ -121,7 +121,9 @@ export function CsvImport({
       const url =
         kind === "products"
           ? `/api/phase2/licenses/${licenseId}/products/import`
-          : `/api/phase2/licenses/${licenseId}/warranties/import`;
+          : kind === "customers"
+            ? `/api/phase2/licenses/${licenseId}/customers/import`
+            : `/api/phase2/licenses/${licenseId}/warranties/import`;
       const response = await fetch(url, {
         method: "POST",
         headers: { ...proxyHeaders(token, licenseId), "Content-Type": "application/json" },
@@ -161,10 +163,10 @@ export function CsvImport({
   return (
     <section className="section">
       <div className="section-head">
-        <h2>{kind === "products" ? copy.titleProducts : copy.titleWarranties}</h2>
+        <h2>{kind === "products" ? copy.titleProducts : kind === "customers" ? copy.titleCustomers : copy.titleWarranties}</h2>
       </div>
       <p className="card-meta" style={{ padding: "10px 16px 0" }}>
-        {kind === "products" ? copy.hintProducts : copy.hintWarranties}
+        {kind === "products" ? copy.hintProducts : kind === "customers" ? copy.hintCustomers : copy.hintWarranties}
       </p>
 
       {sampleRows.length > 0 && (
