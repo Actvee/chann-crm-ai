@@ -28,6 +28,11 @@ from chann_app.services.chat import ACTION_PERMISSIONS  # noqa: E402
 # Deliberately one-sided, with the reason. Keeping these here rather than
 # silently skipping them means the next person sees the decision.
 ACCEPTED = {
+    ("report", "create"): (
+        "both — POST reports/ai builds an ad-hoc AI report from the dashboard (Phase 17); "
+        "chat does the same from any sentence starting with รายงาน/สรุป/ดูยอด, phrase-routed "
+        "in _handle_ai_report rather than an intent action"
+    ),
     ("member", "create"): (
         "both — technician-teams/{id}/members is team membership, which chat does as "
         "\"เพิ่ม <ชื่อ> เข้าทีม <ทีม>\" (registered as update/team)"

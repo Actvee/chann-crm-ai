@@ -131,25 +131,43 @@ async def _push_customer(
         return False
 
 
-async def catch_up(client: DataClient, *, license_id: str, session_id: str) -> str:
-    """What the shop said while the conversation was parked or closed —
-    the lines the customer has not seen. Marked read once fetched."""
+async def catch_up(
+    client: DataClient, *, license_id: str, session_id: str, language: str = "th",
+) -> str:
+    """Where the customer left off (owner, 4 Sep): their own last line,
+    then everything the shop said after it up to the latest — so the
+    answer reads in the context of the question, not on its own. Empty
+    when the shop has said nothing new. The shop's lines are marked read
+    once shown."""
     try:
         rows = await client.list_chat_messages(str(license_id), str(session_id))
     except Exception:
         log.exception("could not read the catch-up lines")
         return ""
-    unseen = [
-        str(r.get("content") or "") for r in rows
-        if str(r.get("sender_type")) == "agent" and not r.get("is_read")
-    ]
-    if not unseen:
+    first_unseen = next(
+        (i for i, r in enumerate(rows) if str(r.get("sender_type")) == "agent" and not r.get("is_read")),
+        None,
+    )
+    if first_unseen is None:
         return ""
+    you = "คุณ" if language != "en" else "You"
+    shop = "ร้าน" if language != "en" else "Shop"
+    lines: list[str] = []
+    last_customer = next(
+        (r for r in reversed(rows[:first_unseen]) if str(r.get("sender_type")) == "customer"), None,
+    )
+    if last_customer is not None:
+        lines.append(f"{you}: {str(last_customer.get('content') or '')[:300]}")
+    shop_lines = [
+        f"💬 {shop}: {str(r.get('content') or '')[:300]}"
+        for r in rows[first_unseen:] if str(r.get("sender_type")) == "agent"
+    ]
+    lines.extend(shop_lines[-6:])
     try:
         await client.mark_chat_read(str(license_id), str(session_id), reader="customer")
     except Exception:
         log.exception("could not mark the catch-up lines read")
-    return "\n".join(f"💬 {line}" for line in unseen[-5:])
+    return "\n".join(lines)
 
 
 async def start_session(
@@ -168,7 +186,7 @@ async def start_session(
         sla_minutes=sla, timeout_minutes=timeout, actor_id=chann_uid,
     )
     created = bool(session.pop("_created", False))
-    unseen = await catch_up(client, license_id=license_id, session_id=str(session["id"]))
+    unseen = await catch_up(client, license_id=license_id, session_id=str(session["id"]), language=language)
     if first_message and first_message.strip():
         try:
             await client.add_chat_message(

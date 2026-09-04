@@ -53,6 +53,9 @@ class DocumentStore(Protocol):
     async def get(self, *, path: str) -> bytes:
         ...
 
+    async def delete(self, *, path: str) -> None:
+        ...
+
 
 class NullDocumentStore:
     name = "null"
@@ -68,6 +71,11 @@ class NullDocumentStore:
         )
 
     async def get(self, *, path: str) -> bytes:
+        raise DocumentStoreNotConfigured(
+            "document storage is not configured — GCS_BUCKET_NAME is unset"
+        )
+
+    async def delete(self, *, path: str) -> None:
         raise DocumentStoreNotConfigured(
             "document storage is not configured — GCS_BUCKET_NAME is unset"
         )

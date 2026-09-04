@@ -15,6 +15,7 @@ from .config import settings
 log = logging.getLogger(__name__)
 from .data_client import DataClient, DataTierError
 from .services.identity import OA_TO_ROLE, apply_active_tenant
+from .services import pdpa as pdpa_service
 
 router = APIRouter(prefix="/api/v1", tags=["auth"])
 
@@ -129,6 +130,8 @@ async def liff_me(
         "chann_uid": identity["chann_uid"],
         "memberships": chosen + alternatives,
         "active_license_id": chosen[0]["license_id"] if len(chosen) == 1 else None,
+        # Phase 18 — the dashboards show a read-only notice for a suspended shop.
+        "license_status": (chosen[0].get("license_status") or "active") if len(chosen) == 1 else None,
     }
 
 
@@ -498,3 +501,240 @@ async def run_quote_expiry_sweep(
             summary["failed"].append(license_id)
 
     return summary
+
+
+# ==================================================================== Phase 16.5
+# PDPA from the LIFF pages (the person's own rights) and the platform
+# admin (requests made on their behalf, or rejected).
+
+def _pdpa_language(claims: dict) -> str:
+    return "en" if str(claims.get("language") or "").startswith("en") else "th"
+
+
+@router.get("/liff/{audience}/consent")
+async def liff_consent(
+    audience: str,
+    claims: dict = Depends(require_liff),
+    client: DataClient = Depends(get_data_client),
+):
+    if audience not in OA_TO_ROLE:
+        raise HTTPException(status_code=404, detail="unknown LIFF audience")
+    identity = await client.resolve_identity(claims["sub"], OA_TO_ROLE[audience], claims.get("name"))
+    row = await client.get_consent(identity["chann_uid"])
+    return {**row, "current_version": pdpa_service.CONSENT_VERSION, "text": pdpa_service.CONSENT_TEXT}
+
+
+@router.put("/liff/{audience}/consent")
+async def liff_consent_accept(
+    audience: str,
+    claims: dict = Depends(require_liff),
+    client: DataClient = Depends(get_data_client),
+):
+    if audience not in OA_TO_ROLE:
+        raise HTTPException(status_code=404, detail="unknown LIFF audience")
+    identity = await client.resolve_identity(claims["sub"], OA_TO_ROLE[audience], claims.get("name"))
+    row = await client.put_consent(identity["chann_uid"], pdpa_service.CONSENT_VERSION)
+    return {**row, "current_version": pdpa_service.CONSENT_VERSION}
+
+
+@router.post("/liff/{audience}/pdpa/{action}")
+async def liff_pdpa_action(
+    audience: str,
+    action: str,
+    body: dict | None = None,
+    claims: dict = Depends(require_liff),
+    client: DataClient = Depends(get_data_client),
+):
+    """export → a page of everything (signed link, 24 h); erase →
+    anonymised everywhere. Erasure needs {"confirm": true}."""
+    if audience not in OA_TO_ROLE:
+        raise HTTPException(status_code=404, detail="unknown LIFF audience")
+    if action not in ("export", "erase"):
+        raise HTTPException(status_code=404, detail="unknown PDPA action")
+    identity = await client.resolve_identity(claims["sub"], OA_TO_ROLE[audience], claims.get("name"))
+    language = str((body or {}).get("language") or _pdpa_language(claims))
+    try:
+        if action == "export":
+            out = await pdpa_service.export_my_data(
+                client, chann_uid=identity["chann_uid"], via="liff", language=language,
+            )
+            return {"text": out["text"], "url": out["url"], "request_id": out["request_id"]}
+        if not (body or {}).get("confirm"):
+            raise HTTPException(status_code=422, detail="erasure needs confirm=true")
+        out = await pdpa_service.erase_me(
+            client, chann_uid=identity["chann_uid"], via="liff", language=language,
+        )
+        return {"text": out["text"], "request_id": out["request_id"], "result": out["result"]}
+    except DataTierError as exc:
+        log.warning("pdpa %s failed for %s: %s", action, identity["chann_uid"], exc)
+        raise HTTPException(status_code=502, detail="pdpa request failed") from exc
+
+
+@router.get("/platform/pdpa/requests")
+async def platform_pdpa_requests(
+    status_filter: str | None = None,
+    admin: dict = Depends(require_admin),
+    client: DataClient = Depends(get_data_client),
+):
+    return await client.list_pdpa_requests(status=status_filter)
+
+
+@router.post("/platform/pdpa/requests")
+async def platform_pdpa_create(
+    body: dict,
+    admin: dict = Depends(require_admin),
+    client: DataClient = Depends(get_data_client),
+):
+    chann_uid = str(body.get("chann_uid") or "").strip()
+    request_type = str(body.get("request_type") or "").strip()
+    if not chann_uid or request_type not in ("erasure", "export", "consent_withdraw"):
+        raise HTTPException(status_code=422, detail="chann_uid and a valid request_type are required")
+    return await client.create_pdpa_request(chann_uid=chann_uid, request_type=request_type, requested_via="platform_admin")
+
+
+@router.post("/platform/pdpa/requests/{request_id}/process")
+async def platform_pdpa_process(
+    request_id: str,
+    admin: dict = Depends(require_admin),
+    client: DataClient = Depends(get_data_client),
+):
+    result = await client.process_pdpa_request(request_id, processed_by=_admin_uuid(admin))
+    if result.get("request_type") == "erasure":
+        paths = result.get("storage_paths") or []
+        deleted = 0
+        if paths:
+            try:
+                store = pdpa_service.get_document_store()
+                for path in paths:
+                    try:
+                        await store.delete(path=path)
+                        deleted += 1
+                    except Exception:  # noqa: BLE001
+                        log.exception("could not delete %s during erasure", path)
+            except pdpa_service.DocumentStoreNotConfigured:
+                pass
+        result = {**{k: v for k, v in result.items() if k != "storage_paths"}, "storage_deleted": deleted}
+    return result
+
+
+@router.post("/platform/pdpa/requests/{request_id}/reject")
+async def platform_pdpa_reject(
+    request_id: str,
+    body: dict,
+    admin: dict = Depends(require_admin),
+    client: DataClient = Depends(get_data_client),
+):
+    reason = str(body.get("reason") or "").strip()
+    if not reason:
+        raise HTTPException(status_code=422, detail="reason is required")
+    return await client.reject_pdpa_request(request_id, reason=reason, processed_by=_admin_uuid(admin))
+
+
+def _admin_uuid(admin: dict) -> str | None:
+    value = str(admin.get("sub") or admin.get("id") or "")
+    try:
+        return str(uuid.UUID(value))
+    except ValueError:
+        return None
+
+
+# ======================================================================== Phase 18
+# The platform's own operator: every tenant, one tenant, suspend/reopen,
+# the cross-tenant audit trail, and break-glass by body (18.3).
+
+TENANT_STATUSES = ("trial", "active", "suspended")
+
+
+@router.get("/platform/tenants")
+async def platform_tenants(
+    q: str | None = None,
+    status_filter: str | None = None,
+    admin: dict = Depends(require_admin),
+    client: DataClient = Depends(get_data_client),
+):
+    if status_filter and status_filter not in TENANT_STATUSES:
+        raise HTTPException(status_code=422, detail="unknown status")
+    return await client.platform_tenants(q=q, status=status_filter)
+
+
+@router.get("/platform/tenants/{license_id}")
+async def platform_tenant(
+    license_id: str,
+    admin: dict = Depends(require_admin),
+    client: DataClient = Depends(get_data_client),
+):
+    row = await client.platform_tenant(license_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="tenant not found")
+    return row
+
+
+@router.patch("/platform/tenants/{license_id}")
+async def platform_tenant_status(
+    license_id: str,
+    body: dict,
+    admin: dict = Depends(require_admin),
+    client: DataClient = Depends(get_data_client),
+):
+    """Suspend (read-only for the tenant, chat and dashboards refuse) or
+    reopen. The Data tier writes the audit row with actor_type
+    platform_admin and the admin's id."""
+    new_status = str(body.get("status") or "").strip()
+    if new_status not in TENANT_STATUSES:
+        raise HTTPException(status_code=422, detail="status must be one of trial, active, suspended")
+    try:
+        return await client.set_license_status(license_id, new_status, actor_id=str(admin.get("sub") or ""))
+    except DataTierError as exc:
+        raise HTTPException(status_code=502, detail="tenant status update failed") from exc
+
+
+@router.get("/platform/audit")
+async def platform_audit(
+    cross_tenant: bool | None = None,
+    license_id: str | None = None,
+    actor_type: str | None = None,
+    action: str | None = None,
+    limit: int = 100,
+    admin: dict = Depends(require_admin),
+    client: DataClient = Depends(get_data_client),
+):
+    return await client.platform_audit(
+        cross_tenant=cross_tenant, license_id=license_id, actor_type=actor_type, action=action,
+        limit=max(1, min(limit, 500)),
+    )
+
+
+@router.post("/platform/break-glass/transfer-owner")
+async def platform_break_glass(
+    body: dict,
+    admin: dict = Depends(require_admin),
+    client: DataClient = Depends(get_data_client),
+):
+    """18.4: force a new Owner for a tenant. Needs the break_glass
+    permission on the admin's token; the Data tier records the
+    cross-tenant audit row; the new owner is told on LINE."""
+    if "platform.admin.break_glass" not in admin.get("permissions", []):
+        raise HTTPException(status_code=403, detail="permission required: platform.admin.break_glass")
+    license_id = str(body.get("license_id") or "").strip()
+    target = str(body.get("target_chann_uid") or "").strip()
+    if not license_id or not target:
+        raise HTTPException(status_code=422, detail="license_id and target_chann_uid are required")
+    try:
+        member = await client.force_transfer_owner(license_id, target, actor_id=str(admin.get("sub") or ""))
+    except DataTierError as exc:
+        raise HTTPException(status_code=exc.status if getattr(exc, "status", None) in (404, 409) else 502,
+                            detail="break-glass transfer failed") from exc
+    try:
+        from .services.notify import send_notification
+
+        line_target = await client.line_target_of(target)
+        await send_notification(
+            client, license_id=license_id, target_chann_uid=target, target_line_user_id=line_target,
+            type="ownership_transferred",
+            message="ผู้ดูแลระบบโอนสิทธิ์เจ้าของร้านให้คุณแล้ว (กรณีฉุกเฉิน) ตอนนี้คุณเป็นเจ้าของร้านนี้",
+            message_en="The platform operator transferred shop ownership to you (emergency procedure). You are now this shop's owner.",
+            entity_type="license", entity_id=license_id, oa="sales",
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("break-glass: could not notify the new owner %s", target)
+    return member

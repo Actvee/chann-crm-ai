@@ -64,7 +64,17 @@ _EN: Repairs: review reports — "pending approvals" · "approve SR-2026-0001" o
 
 _EN: Customers, deals, quotes — "customers" · "create customer …" · "create deal for Somchai" · "issue quote Q-…" · "today" · "remind D-… tomorrow"_
 
-## 7. ติดขัด
+## 7. ถามรายงานด้วย AI
+
+พิมพ์สิ่งที่อยากรู้เป็นภาษาคนในแชท เช่น "ยอดดีลปิดสำเร็จ 3 เดือนล่าสุด" หรือ "สรุปงานค้างแยกตามช่าง" ระบบสรุปเป็นตัวเลขทันที · บนหน้าจอ เมนู "รายงาน AI" มีตารางพร้อมกราฟแท่งและปุ่มดาวน์โหลด CSV/PDF · ต้องมีสิทธิ์ "ดูรายงาน" (Sale มีตั้งแต่ต้น CS ต้องให้เจ้าของเปิด) · AI ไม่แตะฐานข้อมูลเอง มันแค่แปลคำถามเป็นรายการที่ระบบอนุญาต แล้วนับจากข้อมูลของร้านคุณเท่านั้น
+
+พิมพ์: `สรุปงานค้างแยกตามช่าง`
+
+[IMAGE: sales-ai-report — แชท LINE ข้อความ 'สรุปงานค้างแยกตามช่าง' ตอบกลับเป็นรายการชื่อช่างกับตัวเลข และหน้าจอตารางมีกราฟแท่งสีเขียว]
+
+_EN: Ask for a report — Type what you want to know in the chat — "won deals in the last 3 months", "open tickets by technician" — and get the numbers at once. The dashboard's "AI reports" page adds a table with bars and CSV/PDF downloads. Needs the "View reports" permission (Sales has it; the owner grants it to CS)._
+
+## 8. ติดขัด
 
 "วิธีใช้" ดูตัวอย่างที่คุณมีสิทธิ์ · "ทำอะไรได้บ้าง" ดูสิทธิ์ทั้งหมด · สิทธิ์ขอได้จากเจ้าของร้าน (แดชบอร์ด > บทบาทและทีม) · "เปลี่ยนภาษาเป็นอังกฤษ"
 

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
+import { openExternal } from "./_shared";
 import { FieldRow } from "./_field-row";
 
 type Profile = {
@@ -43,11 +44,95 @@ export function ProfileCard({
   const [dateFormat, setDateFormat] = useState<string>("");
   const [timezone, setTimezone] = useState<string>("Asia/Bangkok");
   const [signature, setSignature] = useState<string | null>(null);
+  // Phase 16.5 — consent state and the two rights.
+  const [consent, setConsent] = useState<{ accepted: boolean; version: string | null } | null>(null);
+  const [pdpaBusy, setPdpaBusy] = useState<"" | "consent" | "export" | "erase">("");
+  const [pdpaNote, setPdpaNote] = useState<{ text: string; tone: "ok" | "error" } | null>(null);
 
   const headers = useCallback(
     () => ({ "X-Liff-ID-Token": token, "Content-Type": "application/json" }),
     [token],
   );
+
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await fetch(`/api/liff/${audience}/consent`, { headers: headers() });
+        if (!response.ok) return;
+        const data = (await response.json()) as { consent_accepted_at?: string | null; consent_version?: string | null };
+        if (!cancelled) setConsent({ accepted: Boolean(data.consent_accepted_at), version: data.consent_version ?? null });
+      } catch {
+        /* the card still works without the consent row */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token, audience, headers]);
+
+  async function acceptConsent() {
+    setPdpaBusy("consent");
+    setPdpaNote(null);
+    try {
+      const response = await fetch(`/api/liff/${audience}/consent`, { method: "PUT", headers: headers() });
+      if (!response.ok) throw new Error(String(response.status));
+      const data = (await response.json()) as { consent_version?: string | null };
+      setConsent({ accepted: true, version: data.consent_version ?? null });
+      setPdpaNote({ text: copy.pdpaAccepted, tone: "ok" });
+    } catch {
+      setPdpaNote({ text: copy.pdpaFailed, tone: "error" });
+    } finally {
+      setPdpaBusy("");
+    }
+  }
+
+  async function exportData() {
+    setPdpaBusy("export");
+    setPdpaNote(null);
+    try {
+      const response = await fetch(`/api/liff/${audience}/pdpa/export`, {
+        method: "POST",
+        headers: headers(),
+        body: JSON.stringify({ language }),
+      });
+      if (!response.ok) throw new Error(String(response.status));
+      const data = (await response.json()) as { url?: string | null; text?: string };
+      if (data.url) {
+        openExternal(data.url);
+        setPdpaNote({ text: copy.pdpaExportReady, tone: "ok" });
+      } else {
+        setPdpaNote({ text: data.text || copy.pdpaExportReady, tone: "ok" });
+      }
+    } catch {
+      setPdpaNote({ text: copy.pdpaFailed, tone: "error" });
+    } finally {
+      setPdpaBusy("");
+    }
+  }
+
+  async function eraseData() {
+    if (!window.confirm(copy.pdpaEraseConfirm)) return;
+    setPdpaBusy("erase");
+    setPdpaNote(null);
+    try {
+      const response = await fetch(`/api/liff/${audience}/pdpa/erase`, {
+        method: "POST",
+        headers: headers(),
+        body: JSON.stringify({ confirm: true, language }),
+      });
+      if (!response.ok) throw new Error(String(response.status));
+      setConsent({ accepted: false, version: null });
+      setProfile({});
+      setSignature(null);
+      setPdpaNote({ text: copy.pdpaErased, tone: "ok" });
+    } catch {
+      setPdpaNote({ text: copy.pdpaFailed, tone: "error" });
+    } finally {
+      setPdpaBusy("");
+    }
+  }
 
   useEffect(() => {
     if (!token) return;
@@ -192,6 +277,37 @@ export function ProfileCard({
               <a href={`/liff/${audience}/signature`}>{copy.signatureEdit}</a>
             </span>
           </FieldRow>
+          <FieldRow label={copy.pdpaConsent} empty={consent ? !consent.accepted : false}>
+            {consent === null ? (
+              <span>…</span>
+            ) : consent.accepted ? (
+              <span>{copy.pdpaAcceptedShort}{consent.version ? ` (${consent.version})` : ""}</span>
+            ) : (
+              <span>
+                {copy.pdpaNotAccepted}
+                {" · "}
+                <button type="button" className="linklike" disabled={pdpaBusy !== ""} onClick={() => void acceptConsent()}>
+                  {pdpaBusy === "consent" ? copy.saving : copy.pdpaAccept}
+                </button>
+              </span>
+            )}
+          </FieldRow>
+          <FieldRow label={copy.pdpaRights}>
+            <span className="pdpa-actions">
+              <button type="button" className="linklike" disabled={pdpaBusy !== ""} onClick={() => void exportData()}>
+                {pdpaBusy === "export" ? copy.saving : copy.pdpaExport}
+              </button>
+              {" · "}
+              <button type="button" className="linklike danger" disabled={pdpaBusy !== ""} onClick={() => void eraseData()}>
+                {pdpaBusy === "erase" ? copy.saving : copy.pdpaErase}
+              </button>
+            </span>
+          </FieldRow>
+          {pdpaNote && (
+            <p className={`status ${pdpaNote.tone}`} role="status">
+              {pdpaNote.text}
+            </p>
+          )}
           <FieldRow label={copy.language}>
             {(id) => (
               <select id={id} value={language} onChange={(e) => void chooseLanguage(e.target.value)}>

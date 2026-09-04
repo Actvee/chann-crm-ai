@@ -657,6 +657,54 @@ class DataClient:
         )
         return self._unwrap(resp)
 
+
+    # --------------------------------------------------------------- Phase 18
+
+    # --------------------------------------------------------------- Phase 17
+    async def run_report_query(self, license_id: str, spec: dict, actor_id: str | None = None) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/reports/query",
+            json=spec, headers=self._headers_for(actor_id),
+        )
+        return self._unwrap(resp)
+
+    async def platform_tenants(self, *, q: str | None = None, status: str | None = None) -> list[dict]:
+        params = {k: v for k, v in (("q", q), ("status", status)) if v}
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/platform/tenants", params=params or None, headers=self._headers,
+        )
+        return self._unwrap(resp)
+
+    async def platform_tenant(self, license_id: str) -> dict | None:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/platform/tenants/{license_id}", headers=self._headers,
+        )
+        if resp.status_code == 404:
+            return None
+        return self._unwrap(resp)
+
+    async def set_license_status(self, license_id: str, status: str, actor_id: str | None = None) -> dict:
+        resp = await self._client.patch(
+            f"{self._base}/internal/v1/licenses/{license_id}/status",
+            json={"status": status}, headers=self._headers_for(actor_id),
+        )
+        return self._unwrap(resp)
+
+    async def platform_audit(
+        self, *, cross_tenant: bool | None = None, license_id: str | None = None,
+        actor_type: str | None = None, action: str | None = None, limit: int = 100,
+    ) -> list[dict]:
+        params: dict = {"limit": limit}
+        if cross_tenant is not None:
+            params["cross_tenant"] = "true" if cross_tenant else "false"
+        for key, value in (("license_id", license_id), ("actor_type", actor_type), ("action", action)):
+            if value:
+                params[key] = value
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/platform/audit", params=params, headers=self._headers,
+        )
+        return self._unwrap(resp)
+
     async def list_follow_ups(
         self, license_id: str, status: str | None = None,
     ) -> list[dict]:
@@ -995,6 +1043,50 @@ class DataClient:
         )
         if resp.status_code == 404:
             return None
+        return self._unwrap(resp)
+
+
+    # ----------------------------------------------------------- Phase 16.5
+    async def get_consent(self, chann_uid: str) -> dict:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/identities/{chann_uid}/consent", headers=self._headers,
+        )
+        return self._unwrap(resp)
+
+    async def put_consent(self, chann_uid: str, version: str) -> dict:
+        resp = await self._client.put(
+            f"{self._base}/internal/v1/identities/{chann_uid}/consent",
+            json={"version": version}, headers=self._headers,
+        )
+        return self._unwrap(resp)
+
+    async def create_pdpa_request(self, *, chann_uid: str, request_type: str, requested_via: str) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/platform/pdpa/requests",
+            json={"chann_uid": chann_uid, "request_type": request_type, "requested_via": requested_via},
+            headers=self._headers,
+        )
+        return self._unwrap(resp)
+
+    async def process_pdpa_request(self, request_id: str, processed_by: str | None = None) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/platform/pdpa/requests/{request_id}/process",
+            json={"processed_by": processed_by}, headers=self._headers,
+        )
+        return self._unwrap(resp)
+
+    async def reject_pdpa_request(self, request_id: str, *, reason: str, processed_by: str | None = None) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/platform/pdpa/requests/{request_id}/reject",
+            json={"reason": reason, "processed_by": processed_by}, headers=self._headers,
+        )
+        return self._unwrap(resp)
+
+    async def list_pdpa_requests(self, *, status: str | None = None, chann_uid: str | None = None) -> list[dict]:
+        params = {k: v for k, v in (("status", status), ("chann_uid", chann_uid)) if v}
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/platform/pdpa/requests", params=params, headers=self._headers,
+        )
         return self._unwrap(resp)
 
     async def update_profile(

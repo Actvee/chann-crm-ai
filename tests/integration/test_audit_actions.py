@@ -30,9 +30,13 @@ from chann_data.audit_actions import AUDIT_ACTIONS  # noqa: E402
 
 def _constraint_actions() -> set[str]:
     """The verbs the newest migration actually permits."""
-    text = (
-        ROOT / "database/alembic/versions/0017_audit_actions.py"
-    ).read_text(encoding="utf-8")
+    # The newest migration that (re)defines the list wins — 0017 set it,
+    # 0023 (PDPA) widened it; each one carries the full ALLOWED tuple.
+    candidates = sorted(
+        p for p in (ROOT / "database/alembic/versions").glob("*.py")
+        if "ALLOWED = (" in p.read_text(encoding="utf-8")
+    )
+    text = candidates[-1].read_text(encoding="utf-8")
     block = text[text.index("ALLOWED = ("):text.index(")", text.index("ALLOWED = ("))]
     return set(re.findall(r'"([a-z_]+)"', block))
 

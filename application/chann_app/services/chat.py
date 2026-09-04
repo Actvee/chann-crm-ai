@@ -33,6 +33,7 @@ from .identity import ResolvedContext, TenantResolution
 from .registration import COMPANY_CODE_RE
 from . import storefront as storefront_service
 from . import live_chat
+from . import pdpa as pdpa_service
 
 # Which permission key an (action, entity) pair requires. This is the real
 # gate — the prompt tells the model what the user holds, but a model that
@@ -2743,8 +2744,8 @@ CHAT_ENDED = {
     "en": "Conversation ended, thank you. Type \"talk to the shop\" any time.",
 }
 CHAT_CATCH_UP = {
-    "th": "ข้อความจาก {shop} ระหว่างที่ปิดไป:",
-    "en": "From {shop} while the chat was paused:",
+    "th": "ล่าสุดที่คุยกับ {shop} ไว้:",
+    "en": "Where you left off with {shop}:",
 }
 # Owner, 4 Sep: the timers are the company's to set — here and on the
 # dashboard (Company profile > chat policy). setting.manage.
@@ -6926,7 +6927,8 @@ async def _handle_ai_understood_intent(
         text=suggest_what_you_can_do(
             _filter_by_oa(permission_keys, ctx.oa), catalog, language,
             requested_action=action, requested_entity=entity,
-        )
+        ),
+        quick_reply_url=_guide_button(ctx.oa, language),
     )
 
 
@@ -8519,12 +8521,19 @@ ASK_MISSING = {
 SUGGEST_HEADER = {
     "th": (
         "ยังไม่แน่ใจว่าต้องการอะไรครับ ลองพิมพ์ให้ชัดขึ้น เช่น \"ดูลูกค้า สมชาย\" \"งานวันนี้\" "
-        "\"รายชื่อช่าง\" \"ข้อมูลร้าน\" หรือพิมพ์ \"วิธีใช้\" เพื่อดูขั้นตอนทั้งหมด\n\n📋 สิ่งที่คุณทำได้ตอนนี้"
+        "\"รายชื่อช่าง\" \"ข้อมูลร้าน\" หรือพิมพ์ \"วิธีใช้\" เพื่อเปิดคู่มือ"
     ),
     "en": (
         "Not sure what you need — try something more specific, e.g. \"show customer Somchai\", "
-        "\"today\", \"technicians\", \"shop info\", or type \"help\" for every example.\n\nWhat you can do now:"
+        "\"today\", \"technicians\", \"shop info\" — or type \"help\" for the guide"
     ),
+}
+# Owner (4 Sep 2026): a reply that lists "things you can do" is not an answer
+# anyone can act on — the guide is. Every refusal and every "what can I do"
+# points at the guide instead.
+GUIDE_POINTER = {
+    "th": "ดูวิธีใช้ทั้งหมด: พิมพ์ \"วิธีใช้\" หรือกดปุ่มเปิดคู่มือ",
+    "en": "See how everything works: type \"help\" or open the guide",
 }
 
 # Two different reasons land here, and users need to hear the right one:
@@ -8533,21 +8542,21 @@ SUGGEST_NO_PERMISSION_LEAD = {
     "th": (
         "⛔ คุณยังไม่มีสิทธิ์ทำสิ่งนี้\n"
         "ขอสิทธิ์ได้จากเจ้าของร้านหรือแอดมิน (แดชบอร์ด > บทบาทและทีม)\n"
-        "พิมพ์ \"ทำอะไรได้บ้าง\" เพื่อดูสิ่งที่ทำได้ตอนนี้"
+        "พิมพ์ \"วิธีใช้\" เพื่อเปิดคู่มือการใช้งาน"
     ),
     "en": (
         "⛔ You do not have permission for that\n"
         "Ask the shop owner or an admin (dashboard > roles and team)\n"
-        "Type \"what can I do\" to see what you can do now"
+        "Type \"help\" to open the guide"
     ),
 }
 SUGGEST_NO_PERMISSION_NAMED = {
-    "th": "⛔ คุณยังไม่มีสิทธิ์ทำสิ่งนี้ — ต้องมีสิทธิ์ «{needed}»\nขอได้จากเจ้าของร้านหรือแอดมิน (แดชบอร์ด > บทบาทและทีม)\n\n📋 สิ่งที่คุณทำได้ตอนนี้",
-    "en": "⛔ Not allowed — this needs «{needed}»\nAsk the owner or an admin (dashboard > roles and team)\n\n📋 What you can do now",
+    "th": "⛔ คุณยังไม่มีสิทธิ์ทำสิ่งนี้ — ต้องมีสิทธิ์ «{needed}»\nขอได้จากเจ้าของร้านหรือแอดมิน (แดชบอร์ด > บทบาทและทีม)",
+    "en": "⛔ Not allowed — this needs «{needed}»\nAsk the owner or an admin (dashboard > roles and team)",
 }
 SUGGEST_UNKNOWN_FEATURE_LEAD = {
-    "th": "ระบบยังไม่มีฟังก์ชันนี้ครับ\n\n📋 สิ่งที่คุณทำได้ตอนนี้",
-    "en": "That is not a feature yet.\n\n📋 What you can do now",
+    "th": "ระบบยังไม่มีฟังก์ชันนี้ครับ",
+    "en": "That is not a feature yet.",
 }
 
 # Thai/English group headers, keyed to the catalogue's "group" field
@@ -8588,8 +8597,39 @@ SUGGEST_NOTHING = {
 }
 
 NOT_UNDERSTOOD = {
-    "th": "ขออภัย ไม่เข้าใจคำสั่ง ลองพิมพ์ว่า \"ทำอะไรได้บ้าง\"",
-    "en": 'Sorry, I did not understand. Try typing "what can I do"',
+    "th": "ขออภัย ไม่เข้าใจคำสั่ง ลองพิมพ์ให้ชัดขึ้น หรือพิมพ์ \"วิธีใช้\" เพื่อเปิดคู่มือ",
+    "en": 'Sorry, I did not understand. Try again more specifically, or type "help" for the guide',
+}
+
+
+# Phase 16.5 — a person's rights over their own data, on every OA.
+PDPA_EXPORT_PHRASES = (
+    "ขอข้อมูลของฉัน", "ขอสำเนาข้อมูล", "ขอสำเนาข้อมูลของฉัน", "ขอข้อมูลส่วนตัว", "ดาวน์โหลดข้อมูลของฉัน",
+    "my data", "export my data", "copy of my data", "download my data",
+)
+PDPA_ERASE_PHRASES = (
+    "ขอลบข้อมูล", "ลบข้อมูลของฉัน", "ขอลบข้อมูลของฉัน", "ลบข้อมูลส่วนตัว", "ขอให้ลืมฉัน",
+    "delete my data", "erase my data", "forget me",
+)
+PDPA_ERASE_CONFIRM_PHRASES = ("ยืนยันลบข้อมูล", "confirm delete my data", "confirm erase my data")
+
+TENANT_SUSPENDED = {
+    "th": "ร้าน {company} ถูกระงับการใช้งานชั่วคราวโดยผู้ดูแลระบบ ยังดูข้อมูลเดิมได้จากหน้าจอ แต่ทำรายการใหม่ไม่ได้ ติดต่อ Chann CRM AI เพื่อเปิดใช้งานอีกครั้ง",
+    "en": "{company} is suspended by the platform operator. Existing records stay readable on the dashboard, but nothing new can be done. Contact Chann CRM AI to reopen.",
+}
+
+
+
+# Phase 17 — ad-hoc reports in plain language. A message that starts with
+# one of these (and is not one of the fixed report commands above) goes to
+# the AI report engine; the model returns a whitelisted spec, never SQL.
+AI_REPORT_TRIGGERS = (
+    "รายงาน", "ขอรายงาน", "สรุป", "ขอสรุป", "ดูยอด", "นับ", "มีกี่", "จำนวน", "สถิติ",
+    "report ", "how many ", "summary of ", "summarize ", "count ",
+)
+AI_REPORT_UNAVAILABLE = {
+    "th": "ตอนนี้สร้างรายงานด้วย AI ไม่ได้ครับ ลองใหม่อีกครั้ง หรือเปิด \"รายงาน AI\" บนหน้าจอ",
+    "en": "AI reports are not available right now — try again, or open \"AI reports\" on the dashboard.",
 }
 
 
@@ -8999,109 +9039,25 @@ def suggest_what_you_can_do(
     requested_action: str | None = None,
     requested_entity: str | None = None,
 ) -> str:
-    """Spec 6.6/6.9 — list ONLY what this member actually holds.
+    """What to say when a request cannot be carried out.
 
-    Built from the member's own permission set intersected with the catalogue,
-    never from their role name: two tenants can both have a role called
-    "sales" with entirely different permissions, so suggesting by role would
-    offer people things they cannot do.
-
-    requested_action/requested_entity are optional context from the intent
-    that led here. They change two things: which lead-in sentence is used
-    (not knowing a feature exists is a different message from being denied
-    it), and which group is shown first — a flat 49-item alphabetical list is
-    not an answer to "can I see the financial report", and a group the person
-    never asked about does not belong ahead of the one they did.
+    Until 4 Sep 2026 this listed the member's permissions, grouped and
+    capped. The owner's verdict: "คุณสามารถทำสิ่งเหล่านี้ได้…" is not an
+    answer anyone can act on — the guide is. So this now says only WHY
+    (no such feature / not allowed, and who grants it / not understood)
+    and points at the guide. The permission set still decides one thing:
+    a member with nothing at all is told to ask, not sent to a guide of
+    things they cannot do. `catalog` is used only to name the missing
+    permission in the member's language.
     """
     held = set(permission_keys)
     if not held:
         return _t(SUGGEST_NOTHING, language)
 
-    # Group first, in catalogue order, so the fallback (no request context)
-    # still reads as organised rather than alphabetical-by-key.
-    groups: dict[str, list[str]] = {}
-    for entry in catalog:
-        key = entry.get("key")
-        if key not in held:
-            continue
-        if str(key).startswith("platform.admin."):
-            continue
-        label = (entry.get("label") or {}).get(language) or (
-            entry.get("label") or {}
-        ).get("th")
-        group = entry.get("group") or "general"
-        groups.setdefault(group, []).append(label or str(key))
-
-    if not groups:
-        return _t(SUGGEST_NOTHING, language)
-
-    # Was the request understood as a real feature, and does this person hold
-    # it? required_permission returning None means the system does not have
-    # that capability at all — a different situation from holding the wrong
-    # permission, and the two must not be worded the same way.
     needed = required_permission(requested_action or "", requested_entity)
-    feature_is_known = needed is not None
-
-    priority_group = None
-    if needed:
-        priority_group = needed.split(".", 1)[0] if "." in needed else "general"
-    elif requested_entity:
-        # Even for an unmapped entity, if its name happens to match a real
-        # group (the model said "product" for something we do track), lead
-        # with that rather than an arbitrary catalogue-order group.
-        candidate = str(requested_entity).strip().lower()
-        if candidate in groups:
-            priority_group = candidate
-
-    # An unmapped entity with nothing to key off of (the model invented a
-    # word like "financial_report" that matches no real group) has no honest
-    # way to pick which groups are relevant. Showing two arbitrary groups —
-    # e.g. "approvals" and "billing" for a question about reports — repeats
-    # the exact confusion this rewrite exists to fix. Keep it short instead
-    # and point at the full list on request rather than guessing.
-    if requested_entity and not feature_is_known and priority_group is None:
-        return (
-            _t(SUGGEST_UNKNOWN_FEATURE_LEAD, language)
-            + ("\n" if language == "en" else "\n")
-            + ('Type "what can I do" to see the full list.' if language == "en"
-               else 'พิมพ์ "ทำอะไรได้บ้าง" เพื่อดูรายการทั้งหมด')
-        )
-
-    ordered_groups = list(groups.keys())
-    if priority_group in groups:
-        ordered_groups.remove(priority_group)
-        ordered_groups.insert(0, priority_group)
-
-    lines: list[str] = []
-    other_groups_shown = 0
-    for group in ordered_groups:
-        is_priority = group == priority_group
-        if not is_priority:
-            if other_groups_shown >= SUGGEST_OTHER_GROUPS:
-                continue
-            other_groups_shown += 1
-        items = groups[group]
-        cap = SUGGEST_GROUP_LIMIT if is_priority else SUGGEST_LIMIT
-        shown_items = items[:cap]
-        lines.append("")
-        lines.append(f"{_group_label(group, language)}:")
-        lines.extend(f"  • {label}" for label in shown_items)
-        if len(items) > len(shown_items):
-            more = len(items) - len(shown_items)
-            lines.append(f"  … +{more}" if language == "en" else f"  … และอีก {more} รายการ")
-
-    remaining_groups = len(ordered_groups) - (1 if priority_group in groups else 0) - other_groups_shown
-    if remaining_groups > 0:
-        lines.append(
-            f"… +{remaining_groups} more categories" if language == "en"
-            else f"… และอีก {remaining_groups} หมวดหมู่"
-        )
-
-    if requested_entity and not feature_is_known:
+    if requested_entity and needed is None:
         lead = _t(SUGGEST_UNKNOWN_FEATURE_LEAD, language)
-    elif requested_entity:
-        # Name the permission in the catalogue's own words, so the person
-        # can ask for exactly it.
+    elif requested_entity and needed is not None:
         needed_label = next(
             (
                 ((e.get("label") or {}).get(language) or (e.get("label") or {}).get("th"))
@@ -9111,9 +9067,9 @@ def suggest_what_you_can_do(
         ) or needed
         lead = _t(SUGGEST_NO_PERMISSION_NAMED, language).format(needed=needed_label)
     else:
-        lead = _t(SUGGEST_HEADER, language)
-
-    return lead + "\n" + "\n".join(lines)
+        # The plain fallback already says how to open the guide.
+        return _t(SUGGEST_HEADER, language)
+    return lead + "\n\n" + _t(GUIDE_POINTER, language)
 
 
 # Phase 8 — the fields a profile edit is allowed to touch through chat.
@@ -10042,6 +9998,48 @@ async def handle_chat_message(
     license_id = ctx.license_id
     member = ctx.memberships[0]
 
+    # Phase 16.5 — PDPA rights come before help and before any intent: a
+    # person asking for their data, or to be forgotten, is not asking for
+    # a permission list. Every OA, every role.
+    if _matches_phrase(message, PDPA_EXPORT_PHRASES):
+        try:
+            out = await pdpa_service.export_my_data(
+                client, chann_uid=ctx.chann_uid, via="chat", language=language,
+            )
+        except (DataTierError, Exception):  # noqa: BLE001
+            log.exception("pdpa export failed for %s", ctx.chann_uid)
+            return ChatReply(text=_t(pdpa_service.FAILED, language))
+        return ChatReply(text=out["text"])
+    if _matches_phrase(message, PDPA_ERASE_PHRASES):
+        await client.set_pending_intent(
+            ctx.chann_uid, ctx.oa, action="erase", entity="pdpa_erase", fields={}, missing=[], ttl_seconds=600,
+        )
+        return ChatReply(
+            text=_t(pdpa_service.ERASE_CONFIRM, language),
+            quick_replies=[("ยืนยันลบข้อมูล", "ยืนยันลบข้อมูล")],
+        )
+    if _matches_phrase(message, PDPA_ERASE_CONFIRM_PHRASES):
+        pending = await client.get_pending_intent(ctx.chann_uid, ctx.oa)
+        if not pending or pending.get("entity") != "pdpa_erase":
+            return ChatReply(text=_t(pdpa_service.ERASE_NOTHING, language))
+        await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
+        try:
+            out = await pdpa_service.erase_me(
+                client, chann_uid=ctx.chann_uid, via="chat", language=language,
+            )
+        except (DataTierError, Exception):  # noqa: BLE001
+            log.exception("pdpa erasure failed for %s", ctx.chann_uid)
+            return ChatReply(text=_t(pdpa_service.FAILED, language))
+        return ChatReply(text=out["text"])
+
+    # Phase 18 — a suspended tenant is read-only: nothing new through chat.
+    # A person's own PDPA rights (above) still work; those are against the
+    # platform, not the shop.
+    if str(member.get("license_status") or "active") == "suspended":
+        return ChatReply(
+            text=_t(TENANT_SUSPENDED, language).format(company=member.get("company_name") or ""),
+        )
+
     if ctx.oa == "customer":
         # A customer is linked through customer_license_links and holds no
         # license_members row BY DESIGN (Phase 6.5: linking must never
@@ -10176,6 +10174,11 @@ async def handle_chat_message(
             return await _handle_report_list(
                 client, ctx=ctx, license_id=license_id,
                 permission_keys=permission_keys, language=language,
+            )
+        if ctx.oa == "sales" and _is_ai_report_request(message):
+            return await _handle_ai_report(
+                client, ctx=ctx, license_id=license_id, message=message,
+                permission_keys=permission_keys, language=language, ai_client=ai_client,
             )
         if _matches_phrase(message, TICKET_MINE_PHRASES):
             return await _handle_ticket_list(
@@ -10376,27 +10379,13 @@ async def handle_chat_message(
                 quick_replies=[("งานของฉัน", "งานของฉัน"), ("งานที่เปิดรับ", "งานที่เปิดรับ")],
                 quick_reply_url=_guide_button("technician", language),
             )
-        if _matches_phrase(message, HELP_EXAMPLES_PHRASES):
-            return ChatReply(
-                text=usage_help(_filter_by_oa(permission_keys, ctx.oa), language),
-                quick_replies=[("รายชื่อลูกค้า", "รายชื่อลูกค้า"), ("งานวันนี้", "งานวันนี้")],
-            )
-        if _matches_phrase(message, CAPABILITY_PHRASES):
-            try:
-                catalog = await client.permission_catalog()
-            except Exception:
-                log.exception("could not read the permission catalogue")
-                catalog = []
-            return ChatReply(
-                text=suggest_what_you_can_do(_filter_by_oa(permission_keys, ctx.oa), catalog, language),
-                quick_replies=[("วิธีใช้", "วิธีใช้"), ("ตัวอย่างคำสั่ง", "ตัวอย่างคำสั่ง")],
-            )
-        # The staff guide, then the examples this person may actually
-        # run (usage_help is permission-filtered; with none it says who
-        # to ask).
+        # Owner (4 Sep 2026): "ทำอะไรได้บ้าง", "ตัวอย่างคำสั่ง" and "สิทธิ์ของฉัน"
+        # all get the guide — the step-by-step one people can follow — never
+        # a list of permissions or commands. Someone with no permission at
+        # all is told who to ask first, then still gets the guide.
+        lead = "" if _filter_by_oa(permission_keys, ctx.oa) else _t(HELP_NOTHING, language) + "\n\n"
         return ChatReply(
-            text=render_help_text("sales", language) + "\n\n"
-            + usage_help(_filter_by_oa(permission_keys, ctx.oa), language),
+            text=lead + render_help_text("sales", language),
             images=guide_images("sales"),
             quick_replies=[("งานวันนี้", "งานวันนี้"), ("รายชื่อลูกค้า", "รายชื่อลูกค้า")],
             quick_reply_url=_guide_button("sales", language),
@@ -10881,6 +10870,7 @@ async def handle_chat_message(
                 _filter_by_oa(permission_keys, ctx.oa), catalog, language,
             ),
             intent=intent,
+            quick_reply_url=_guide_button(ctx.oa, language),
         )
 
     # Profile edits (Phase 8) bypass the generic gate entirely: self-edit is
@@ -10925,6 +10915,7 @@ async def handle_chat_message(
                 requested_action=req_action, requested_entity=req_entity,
             ),
             intent=intent,
+            quick_reply_url=_guide_button(ctx.oa, language),
         )
 
     # Domain execution. Phase 9 adds real customer/deal CRUD; everything
@@ -11074,3 +11065,49 @@ async def handle_reply(
     reply.entity_type = mapping["entity_type"]
     reply.entity_id = str(mapping["entity_id"])
     return reply
+
+
+def _is_ai_report_request(message: str) -> bool:
+    text = (message or "").strip().lower()
+    if not text or len(text) < 4:
+        return False
+    if _matches_phrase(message, REPORT_LIST_PHRASES) or any(t in text for t in REPORT_PDF_TRIGGERS):
+        return False
+    # The fixed sales summary ("ยอดขาย", "สรุปยอด" …) stays deterministic.
+    if _matches_phrase(message, SALES_SUMMARY_PHRASES):
+        return False
+    return any(text.startswith(t) for t in AI_REPORT_TRIGGERS)
+
+
+async def _handle_ai_report(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
+    permission_keys: list[str], language: str, ai_client=None,
+) -> ChatReply:
+    from . import reports_ai
+
+    if "view_reports" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    company = ""
+    try:
+        company = str((ctx.memberships[0] if ctx.memberships else {}).get("company_name") or "")
+    except Exception:  # noqa: BLE001
+        company = ""
+    try:
+        out = await reports_ai.handle_report_request(
+            client, license_id=str(license_id), message=message, language=language,
+            actor_id=ctx.chann_uid, ai_client=ai_client, company_name=company,
+        )
+    except reports_ai.ReportSpecInvalid as exc:
+        return ChatReply(text=_t(reports_ai.INVALID, language).format(reason=str(exc)))
+    except (AINotConfigured, AIUnavailable):
+        return ChatReply(text=_t(AI_REPORT_UNAVAILABLE, language))
+    except DataTierError:
+        log.exception("ai report failed for %s", ctx.chann_uid)
+        return ChatReply(text=_t(AI_REPORT_UNAVAILABLE, language))
+    if out.get("clarify"):
+        return ChatReply(text=out["clarify"])
+    text = out["text"]
+    files_line = reports_ai.files_line(out.get("files") or {}, language)
+    if files_line:
+        text = f"{text}\n\n{files_line}"
+    return ChatReply(text=text, intent={"action": "report", "entity": out["spec"]["entity"]})

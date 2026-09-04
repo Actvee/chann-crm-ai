@@ -18,6 +18,7 @@ import re
 
 from ..data_client import DataClient
 from .identity import ResolvedContext, TenantResolution
+from . import pdpa as pdpa_service
 
 log = logging.getLogger(__name__)
 
@@ -303,6 +304,31 @@ def first_contact(oa: str, ctx: ResolvedContext, language: str = "th") -> tuple[
 
 
 async def handle_registration(
+    client: DataClient,
+    *,
+    message: str,
+    ctx: ResolvedContext,
+    audience: str = "sales",
+    language: str = "th",
+):
+    """Phase 16.5: nobody registers — links a shop, joins one, creates one —
+    before consenting once. The gate asks, holds what they typed, and
+    on "ยอมรับ" continues with it; on refusal nothing is stored."""
+    gate_reply, carried = await pdpa_service.consent_gate(
+        client, chann_uid=ctx.chann_uid, oa=audience, message=message, language=language,
+    )
+    if gate_reply is not None and carried is None:
+        return gate_reply
+    reply = await _handle_registration(client, message=carried if gate_reply else message, ctx=ctx, audience=audience, language=language)
+    if gate_reply is None:
+        return reply
+    if isinstance(reply, str):
+        return f"{gate_reply}\n\n{reply}" if reply else gate_reply
+    reply.text = f"{gate_reply}\n\n{reply.text}" if reply.text else gate_reply
+    return reply
+
+
+async def _handle_registration(
     client: DataClient,
     *,
     message: str,

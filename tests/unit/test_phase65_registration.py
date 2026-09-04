@@ -40,6 +40,19 @@ class FakeRegClient:
     async def clear_pending_intent(self, chann_uid, oa):
         self.pending = None
 
+    # Phase 16.5 — consent given long ago unless a test says otherwise.
+    consented = True
+
+    async def get_consent(self, chann_uid):
+        return {"chann_uid": chann_uid, "consent_accepted_at": "2026-09-01T00:00:00+00:00" if self.consented else None,
+                "consent_version": "2026-09-04" if self.consented else None, "anonymized_at": None}
+
+    async def put_consent(self, chann_uid, version):
+        self.calls.append("put_consent")
+        self.consented = True
+        return {"chann_uid": chann_uid, "consent_accepted_at": "2026-09-04T00:00:00+00:00",
+                "consent_version": version, "anonymized_at": None}
+
 
     def __init__(self, *, created=None, member=None, link=None, shops=None, raises=None):
         self._created = created or {

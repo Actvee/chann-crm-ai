@@ -57,6 +57,11 @@ class ChannIdentity(TimestampMixin, Base):
     primary_role: Mapped[str] = mapped_column(String(32), nullable=False)  # customer|sales|technician
     display_name: Mapped[str | None] = mapped_column(String(255))
     signature_url: Mapped[str | None] = mapped_column(String(512))  # placed early — Phase 13
+    # Phase 16.5 — consent given at registration, and the mark that this
+    # person asked to be forgotten (rows stay, words are gone).
+    consent_accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    consent_version: Mapped[str | None] = mapped_column(String(32))
+    anonymized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # --- Phase 8 ---
     first_name: Mapped[str | None] = mapped_column(String(255))
@@ -1233,3 +1238,31 @@ class ChatMessage(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False,
     )
+
+
+# --------------------------------------------------------------- Phase 16.5
+class DataSubjectRequest(TimestampMixin, Base):
+    """Phase 16.5 (Master Spec 16.5.3) — a person's request over their own
+    data: erasure (anonymise everywhere), export (a copy of everything),
+    consent withdrawal. Global like the identity it belongs to; each
+    tenant touched by processing it gets its own cross-tenant audit row."""
+
+    __tablename__ = "data_subject_requests"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    chann_uid: Mapped[str] = mapped_column(
+        String(32), ForeignKey("chann_identities.chann_uid", ondelete="RESTRICT"),
+        nullable=False, index=True,
+    )
+    request_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending", index=True)
+    requested_via: Mapped[str] = mapped_column(String(32), nullable=False)
+    requested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    processed_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("platform_admins.id", ondelete="SET NULL"),
+    )
+    rejection_reason: Mapped[str | None] = mapped_column(String(512))
+    result_json: Mapped[dict | None] = mapped_column(JSONB)

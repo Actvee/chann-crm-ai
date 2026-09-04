@@ -1594,3 +1594,10 @@ fieldset.group legend {
   white-space: nowrap;
   font-size: 13px;
 }
+
+/* Phase 17 — AI report viewer: a bar per row, drawn to the page's accent. */
+.report-table .bar-col { width: 40%; }
+.report-bar { display: block; height: 10px; border-radius: 5px; background: var(--accent); }
+.report-total td { font-weight: 600; border-top: 2px solid var(--line-strong); }
+.report-big { font-size: 44px; font-weight: 600; margin: 12px 0; font-variant-numeric: tabular-nums; }
+.report-card .card-actions { margin-top: 12px; }

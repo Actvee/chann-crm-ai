@@ -118,6 +118,17 @@ GUIDES: dict[str, dict] = {
                 "image": "customer-after",
                 "image_prompt": "ข้อความจากร้าน 'งาน T-… เสร็จแล้ว ช่วยให้คะแนน' พร้อมปุ่ม 1 ไม่ดี / 2 พอใช้ / 3 ดีเยี่ยม สีส้ม",
             },
+            {
+                "key": "pdpa", "title": {"th": "ข้อมูลส่วนตัว (PDPA)", "en": "Your personal data (PDPA)"},
+                "body": {
+                    "th": "ครั้งแรกระบบจะขอความยินยอมก่อนผูกร้าน (ตอบ \"ยอมรับ\") · ขอสำเนาข้อมูลทั้งหมดได้ด้วย \"ขอข้อมูลของฉัน\" จะได้ลิงก์หน้าสรุปใช้ได้ 24 ชั่วโมง · ขอลบด้วย \"ขอลบข้อมูล\" แล้วยืนยัน ชื่อ เบอร์ ที่อยู่ แชท และรูปจะถูกลบจากทุกร้าน (ประวัติงานยังอยู่แต่ไม่มีชื่อคุณ) · บนหน้าจอลูกค้า ส่วน \"โปรไฟล์\" มีปุ่มเดียวกัน",
+                    "en": "The first time, consent is asked before linking a shop (answer \"accept\"). \"my data\" gives a 24-hour link to a page with everything; \"delete my data\" plus a confirmation erases your name, phone, address, chat lines and pictures from every shop (job history stays, without your name). The profile section on the home screen has the same buttons.",
+                },
+                "commands": ["ขอข้อมูลของฉัน", "ขอลบข้อมูล", "ยืนยันลบข้อมูล"],
+                "example": "ขอข้อมูลของฉัน",
+                "image": "customer-pdpa",
+                "image_prompt": "แชท LINE ข้อความ 'ขอข้อมูลของฉัน' ตอบกลับเป็นลิงก์หน้าสรุปข้อมูล และปุ่ม 'ยืนยันลบข้อมูล' สีส้ม ไอคอนโล่ PDPA",
+            },
         ],
     },
     "technician": {
@@ -256,6 +267,17 @@ GUIDES: dict[str, dict] = {
                 "example": "งานวันนี้",
                 "image": "sales-crm",
                 "image_prompt": "แดชบอร์ดขายธีมเขียว: tile ลูกค้า / ดีล / ใบเสนอราคา / งานซ่อม / รอการอนุมัติ / ทีมช่าง",
+            },
+            {
+                "key": "ai-reports", "title": {"th": "ถามรายงานด้วย AI", "en": "Ask for a report"},
+                "body": {
+                    "th": "พิมพ์สิ่งที่อยากรู้เป็นภาษาคนในแชท เช่น \"ยอดดีลปิดสำเร็จ 3 เดือนล่าสุด\" หรือ \"สรุปงานค้างแยกตามช่าง\" ระบบสรุปเป็นตัวเลขทันที · บนหน้าจอ เมนู \"รายงาน AI\" มีตารางพร้อมกราฟแท่งและปุ่มดาวน์โหลด CSV/PDF · ต้องมีสิทธิ์ \"ดูรายงาน\" (Sale มีตั้งแต่ต้น CS ต้องให้เจ้าของเปิด) · AI ไม่แตะฐานข้อมูลเอง มันแค่แปลคำถามเป็นรายการที่ระบบอนุญาต แล้วนับจากข้อมูลของร้านคุณเท่านั้น",
+                    "en": "Type what you want to know in the chat — \"won deals in the last 3 months\", \"open tickets by technician\" — and get the numbers at once. The dashboard's \"AI reports\" page adds a table with bars and CSV/PDF downloads. Needs the \"View reports\" permission (Sales has it; the owner grants it to CS).",
+                },
+                "commands": ["รายงานยอดขายเดือนนี้", "สรุปงานค้างแยกตามช่าง", "ดูยอดดีลปิดสำเร็จ 3 เดือนล่าสุด"],
+                "example": "สรุปงานค้างแยกตามช่าง",
+                "image": "sales-ai-report",
+                "image_prompt": "แชท LINE ข้อความ 'สรุปงานค้างแยกตามช่าง' ตอบกลับเป็นรายการชื่อช่างกับตัวเลข และหน้าจอตารางมีกราฟแท่งสีเขียว",
             },
             {
                 "key": "help", "title": {"th": "ติดขัด", "en": "Stuck"},

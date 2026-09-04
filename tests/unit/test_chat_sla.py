@@ -111,13 +111,20 @@ class TestTheShopAnswersLater:
         client = ParkFake(role="customer", permission_keys=[])
         session, _, _ = await live_chat.start_session(client, license_id=LICENSE_ID, chann_uid="CHN-S-000001")
         await client.close_chat_session(LICENSE_ID, session["id"], status="unanswered")
-        client._chat_messages.append({
-            "id": "cm-late", "session_id": session["id"], "sender_type": "agent",
-            "content": "ราคา 15,900 บาทครับ", "sender_chann_uid": "CHN-CS", "is_read": False,
-            "created_at": "2026-09-04T10:00:00+07:00",
-        })
+        client._chat_messages.extend([
+            {"id": "cm-q", "session_id": session["id"], "sender_type": "customer",
+             "content": "ราคาแอร์ 12000 BTU เท่าไหร่", "sender_chann_uid": "CHN-S-000001", "is_read": True,
+             "created_at": "2026-09-04T09:00:00+07:00"},
+            {"id": "cm-late", "session_id": session["id"], "sender_type": "agent",
+             "content": "ราคา 15,900 บาทครับ", "sender_chann_uid": "CHN-CS", "is_read": False,
+             "created_at": "2026-09-04T10:00:00+07:00"},
+            {"id": "cm-late2", "session_id": session["id"], "sender_type": "agent",
+             "content": "รวมติดตั้งแล้วครับ", "sender_chann_uid": "CHN-CS", "is_read": False,
+             "created_at": "2026-09-04T10:01:00+07:00"},
+        ])
         reply = await handle_chat_message(client, message="คุยกับร้าน", ctx=_ctx(primary_role="customer", oa="customer"))
-        assert "15,900" in reply.text
+        # The customer's own last line first, then the shop's answers after it.
+        assert reply.text.index("คุณ: ราคาแอร์") < reply.text.index("15,900") < reply.text.index("รวมติดตั้ง")
         assert ("mark_chat_read", session["id"], "customer") in client.recorded
         assert client._chat_sessions[0]["status"] in ("open", "assigned")
 

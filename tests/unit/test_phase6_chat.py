@@ -306,6 +306,28 @@ class FakeDataClient:
         self._pending = None
         self.recorded.append(("clear_pending_intent", chann_uid, oa))
 
+    # Phase 16.5 — everyone in the old tests has consented long ago; the
+    # PDPA tests subclass to say otherwise.
+    async def get_consent(self, chann_uid):
+        return {"chann_uid": chann_uid, "consent_accepted_at": "2026-09-01T00:00:00+00:00",
+                "consent_version": "2026-09-04", "anonymized_at": None}
+
+    async def put_consent(self, chann_uid, version):
+        self.recorded.append(("put_consent", chann_uid, version))
+        return {"chann_uid": chann_uid, "consent_accepted_at": "2026-09-04T00:00:00+00:00",
+                "consent_version": version, "anonymized_at": None}
+
+    async def create_pdpa_request(self, *, chann_uid, request_type, requested_via):
+        self.recorded.append(("create_pdpa_request", chann_uid, request_type, requested_via))
+        return {"id": "r-" + request_type, "chann_uid": chann_uid, "request_type": request_type, "status": "pending"}
+
+    async def process_pdpa_request(self, request_id, processed_by=None):
+        self.recorded.append(("process_pdpa_request", request_id))
+        if request_id == "r-erasure":
+            return {"request_type": "erasure", "tenants": 0, "customers": 0, "tickets": 0, "photos": 0,
+                    "chat_messages": 0, "storage_paths": [], "request_id": request_id}
+        return {"request_type": "export", "bundle": {"request_id": request_id, "identity": {}, "companies": []}}
+
     async def set_last_customer_ref(self, chann_uid, oa, *, customer_id, name, ttl_seconds=600):
         self._last_customer_ref = {"customer_id": customer_id, "name": name}
         self.recorded.append(("set_last_customer_ref", chann_uid, oa, customer_id, name))
@@ -1098,115 +1120,50 @@ class TestReplyToEntity:
 
 
 class TestSuggestWhatYouCanDo:
-    """6.9 test_suggest_what_you_can_do"""
+    """6.9, as the owner reshaped it on 4 Sep 2026: a refusal says why and
+    points at the guide. It never lists permissions — "คุณสามารถทำสิ่ง
+    เหล่านี้ได้…" was judged unreadable and is gone."""
 
-    def test_sales_sees_only_sales_permissions(self):
-        text = suggest_what_you_can_do(
-            ["customer.read", "customer.create", "deal.create"], _catalog(), "th"
-        )
-        assert describe("customer.create") in text
-        # never offer something they cannot do
-        assert describe("ticket.assign") not in text
-        assert describe("billing.manage") not in text
+    def test_never_lists_permissions(self):
+        text = suggest_what_you_can_do(sorted(PERMISSION_KEYS), _catalog(), "th")
+        for key in ("customer.create", "ticket.assign", "billing.manage", "approval.approve"):
+            assert describe(key) not in text
+        assert "📋" not in text and "•" not in text
+        assert "วิธีใช้" in text
 
-    def test_cs_sees_only_cs_permissions(self):
-        text = suggest_what_you_can_do(
-            ["ticket.read", "ticket.assign", "chat_session.reply"], _catalog(), "th"
-        )
-        assert describe("ticket.assign") in text
-        assert describe("deal.create") not in text
-
-    def test_no_permissions_says_so_rather_than_an_empty_list(self):
+    def test_no_permissions_says_so_rather_than_a_guide(self):
         text = suggest_what_you_can_do([], _catalog(), "th")
         assert "ยังไม่มีสิทธิ์" in text
 
-    def test_platform_admin_keys_are_never_suggested(self):
-        text = suggest_what_you_can_do(
-            ["customer.read", "platform.admin.break_glass"], _catalog(), "th"
-        )
-        assert describe("platform.admin.break_glass") not in text
-
-    def test_long_permission_sets_are_grouped_and_capped(self):
-        """Regression for the live failure on 25 Aug 2026: a flat 49-item
-        alphabetical list ("อนุมัติ", "ไม่อนุมัติ", ... billing) with no
-        relation to what was asked. Groups now cap the number of categories
-        shown up front rather than truncating one long flat list."""
-        text = suggest_what_you_can_do(sorted(PERMISSION_KEYS), _catalog(), "th")
-        assert "และอีก" in text and "หมวดหมู่" in text
-        # no more than (no priority group + the "other groups" allowance)
-        # category headers appear
-        assert text.count(":\n") <= 1 + 2  # SUGGEST_OTHER_GROUPS = 2
-
-    def test_suggest_is_localised(self):
-        text = suggest_what_you_can_do(["customer.read"], _catalog(), "en")
-        assert "View customers" in text
-        assert "Customers" in text  # group header, also localised
-
-    def test_unknown_entity_gets_a_short_honest_reply_not_random_groups(self):
-        """The exact live failure: asked about a report, the model returned
-        an entity ("financial_report") the system has never heard of, and
-        the reply dumped unrelated categories (approvals, assignment rules)
-        with no connection to reports at all."""
+    def test_unknown_entity_gets_a_short_honest_reply(self):
         text = suggest_what_you_can_do(
             sorted(PERMISSION_KEYS), _catalog(), "th",
             requested_action="read", requested_entity="financial_report",
         )
-        assert "ระบบยังไม่มีฟังก์ชันนี้" in text
-        assert "ทำอะไรได้บ้าง" in text
-        # must NOT dump unrelated categories
-        assert "อนุมัติ" not in text
-        assert "กฎการมอบหมายงาน" not in text
+        assert "ระบบยังไม่มีฟังก์ชันนี้" in text and "วิธีใช้" in text
+        assert "อนุมัติ" not in text and "กฎการมอบหมายงาน" not in text
 
-    def test_known_feature_denied_leads_with_no_permission_message(self):
+    def test_known_feature_denied_names_the_permission_and_who_grants_it(self):
         text = suggest_what_you_can_do(
             ["customer.read"], _catalog(), "th",
             requested_action="create", requested_entity="product",
         )
-        assert "คุณยังไม่มีสิทธิ์ทำสิ่งนี้" in text
+        assert "คุณยังไม่มีสิทธิ์ทำสิ่งนี้" in text and "เจ้าของร้าน" in text
+        assert "ระบบยังไม่มีฟังก์ชันนี้" not in text
+        assert describe("customer.read") not in text
+
+    def test_plain_fallback_asks_for_something_more_specific(self):
+        text = suggest_what_you_can_do(["customer.read", "deal.create"], _catalog(), "th")
+        assert "ลองพิมพ์ให้ชัดขึ้น" in text and "วิธีใช้" in text
         assert "ระบบยังไม่มีฟังก์ชันนี้" not in text
 
-    def test_requested_group_is_shown_first(self):
-        """A member who can do lots of things, asked about tickets, should
-        see tickets first — not wherever "ticket" happens to sort."""
-        text = suggest_what_you_can_do(
-            ["customer.read", "deal.create", "ticket.read", "ticket.assign"],
-            _catalog(), "th",
-            requested_action="read", requested_entity="ticket",
-        )
-        # group headers are the short, un-indented lines ending in ":" —
-        # the lead sentence also ends in ":" but is a full sentence, not one
-        headers = [
-            l for l in text.splitlines()
-            if l.endswith(":") and not l.startswith(" ") and len(l) < 20
-        ]
-        assert headers, "no group headers found"
-        assert headers[0] == "ใบงาน:"
-        assert text.index("ใบงาน:") < text.index("ลูกค้า:")
-
-    def test_plain_query_with_no_entity_is_unaffected(self):
-        """A bare "what can I do" must never trip the unknown-feature path —
-        that path requires an actual requested_entity."""
-        text = suggest_what_you_can_do(
-            ["customer.read", "deal.create"], _catalog(), "th"
-        )
-        assert "ระบบยังไม่มีฟังก์ชันนี้" not in text
-        assert describe("customer.read") in text
-
-    def test_unknown_entity_reply_is_localised(self):
+    def test_replies_are_localised(self):
         text = suggest_what_you_can_do(
             sorted(PERMISSION_KEYS), _catalog(), "en",
             requested_action="read", requested_entity="financial_report",
         )
-        assert "not a feature yet" in text
-
-    async def test_no_permission_intent_routes_to_suggest(self):
-        ai = httpx.AsyncClient(transport=_ai(json.dumps(
-                {"action": "suggest", "suggestions": []})))
-        reply = await handle_chat_message(
-            FakeDataClient(permission_keys=["customer.read"]),
-            message="ลบลูกค้าทั้งหมด", ctx=_ctx(), ai_client=ai,
-        )
-        assert describe("customer.read") in reply.text
+        assert "not a feature yet" in text and "help" in text
+        assert "What you can do now" not in text
 
 
 class TestGreeting:
@@ -1322,7 +1279,10 @@ class TestPermissionGateIsEnforcedInCode:
             message="เปิดใบงานให้หน่อย", ctx=_ctx(), ai_client=ai,
         )
         assert "เข้าใจแล้ว" not in reply.text
-        assert describe("customer.read") in reply.text
+        # Owner (4 Sep 2026): a refusal names the missing permission and
+        # points at the guide — it no longer lists what the person holds.
+        assert "คุณยังไม่มีสิทธิ์" in reply.text and "วิธีใช้" in reply.text
+        assert describe("customer.read") not in reply.text
 
     async def test_known_entity_with_permission_proceeds(self):
         ai = httpx.AsyncClient(transport=_ai(json.dumps(
@@ -1633,9 +1593,10 @@ class TestOAChannelScoping:
         held = ["approval.approve", "billing.manage", "deal.create"]
         assert _filter_by_oa(held, "sales") == held
 
-    async def test_owner_via_technician_channel_gets_the_narrow_list(self):
+    async def test_owner_via_technician_channel_gets_the_technician_guide(self):
         """End-to-end, the exact reported scenario: an account holding every
-        permission key asks "what can I do" on the Technician OA."""
+        permission key asks "what can I do" on the Technician OA — and gets
+        the technician guide, not a list of everything they hold."""
         ai = httpx.AsyncClient(transport=_ai(json.dumps(
             {"action": "suggest", "suggestions": []})))
         client = FakeDataClient(permission_keys=list(PERMISSION_KEYS))
@@ -1643,9 +1604,9 @@ class TestOAChannelScoping:
             client, message="ทำอะไรได้บ้าง",
             ctx=_ctx(primary_role="technician"), ai_client=ai,
         )
-        assert describe("approval.approve") not in reply.text
         assert describe("billing.manage") not in reply.text
         assert describe("role.manage") not in reply.text
+        assert "เช็คอิน" in reply.text
 
     async def test_a_sales_only_action_via_technician_oa_is_refused(self):
         """Holding the tenant permission is not enough if the channel does
@@ -4162,39 +4123,28 @@ class TestAIRoutedNotes:
 
 class TestUsageHelp:
     """"How do I use this?" has to be answerable in the product itself.
-
-    This is a chat-first tool: the interface IS what you type, so a person
-    who does not know the phrasings cannot use it at all. The existing
-    suggest_what_you_can_do lists PERMISSIONS, which is a different thing —
-    knowing you hold "followup.create" does not tell you to type
-    "เตือน D-2026-0001 พรุ่งนี้".
+    Owner (4 Sep 2026): the answer is the user guide — the numbered steps
+    with example phrasings — for every way of asking. Not a permission
+    list, not a command list.
     """
 
-    async def test_asking_for_help_returns_example_commands(self):
+    async def test_asking_for_help_returns_the_guide(self):
         client = FakeDataClient(permission_keys=["customer.read", "followup.create"])
         reply = await handle_chat_message(client, message="วิธีใช้", ctx=_ctx())
-        assert "รายชื่อลูกค้า" in reply.text
-        assert "เตือน" in reply.text
+        assert reply.text.startswith("วิธีใช้ LINE ทีมขาย")
+        assert "1. " in reply.text and "รายชื่อลูกค้า" in reply.text
 
-    async def test_several_phrasings_all_reach_help(self):
-        for phrasing in ("ช่วยเหลือ", "ใช้ยังไง", "ทำอะไรได้บ้าง", "help", "?"):
+    async def test_every_phrasing_reaches_the_same_guide(self):
+        for phrasing in ("ช่วยเหลือ", "ใช้ยังไง", "ทำอะไรได้บ้าง", "help", "?", "ตัวอย่างคำสั่ง", "สิทธิ์ของฉัน"):
             client = FakeDataClient(permission_keys=["customer.read"])
             reply = await handle_chat_message(client, message=phrasing, ctx=_ctx())
-            assert "รายชื่อลูกค้า" in reply.text, f"{phrasing!r} did not reach help"
+            assert reply.text.startswith("วิธีใช้ LINE ทีมขาย"), f"{phrasing!r} did not reach the guide"
+            assert "📋" not in reply.text and "สิ่งที่คุณทำได้" not in reply.text
 
-    async def test_help_only_shows_commands_the_person_can_actually_run(self):
-        """Offering someone a command that will refuse them is worse than not
-        mentioning it."""
-        client = FakeDataClient(permission_keys=["customer.read"])
-        reply = await handle_chat_message(client, message="วิธีใช้", ctx=_ctx())
-        assert "รายชื่อลูกค้า" in reply.text
-        assert "สร้างใบเสนอราคา" not in reply.text
-        assert "ตั้งเลขผู้เสียภาษี" not in reply.text
-
-    async def test_someone_with_no_permissions_is_told_who_to_ask(self):
+    async def test_someone_with_no_permissions_is_told_who_to_ask_and_still_gets_the_guide(self):
         client = FakeDataClient(permission_keys=[])
         reply = await handle_chat_message(client, message="วิธีใช้", ctx=_ctx())
-        assert "เจ้าของบริษัท" in reply.text
+        assert "เจ้าของบริษัท" in reply.text and "วิธีใช้ LINE ทีมขาย" in reply.text
 
     async def test_help_reaches_the_ai_parser_for_nobody(self):
         """A person typing "ใช้ยังไง" is stuck; spending a model call to
@@ -5956,6 +5906,7 @@ class TestButtonsTheSystemWritesDoNotNeedTheAI:
         # Exact-match phrase lists for the rich-menu tiles (3 Sep audit).
         triggers += list(module.TICKET_MINE_PHRASES)
         triggers += list(module.TICKET_OPEN_PHRASES)
+        triggers += list(module.PDPA_EXPORT_PHRASES) + list(module.PDPA_ERASE_PHRASES) + list(module.PDPA_ERASE_CONFIRM_PHRASES)
         triggers += list(module.CUSTOMER_STATUS_PHRASES)
         triggers += list(module.CUSTOMER_CONTACT_PHRASES)
         triggers += list(module.CUSTOMER_WARRANTY_MINE_PHRASES)
@@ -5973,6 +5924,7 @@ class TestButtonsTheSystemWritesDoNotNeedTheAI:
         triggers += list(module.PRODUCT_LIST_PHRASES) + list(module.CUSTOMER_ORDERS_PHRASES)
         triggers += list(module.CUSTOMER_CHAT_PHRASES) + list(module.CUSTOMER_CHAT_END_PHRASES)
         triggers += list(module.TICKET_OPEN_PHRASES)
+        triggers += list(module.PDPA_EXPORT_PHRASES) + list(module.PDPA_ERASE_PHRASES) + list(module.PDPA_ERASE_CONFIRM_PHRASES)
 
         dead = []
         for text in sorted(sent):

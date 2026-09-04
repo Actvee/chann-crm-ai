@@ -1,0 +1,178 @@
+/* Platform Admin — the operator's console. Deliberately not one of the
+   three OA palettes (rule 5 is about the LINE surfaces); this is the
+   platform's own dark, data-first look. No backdrop-filter anywhere:
+   WebKit shimmer on Thai glyphs was the owner's complaint on the guides. */
+.pa {
+  --pa-bg: #0f172a;
+  --pa-bg-raised: #131c31;
+  --pa-card: #1b2336;
+  --pa-muted: #272f42;
+  --pa-line: #334155;
+  --pa-line-strong: #475569;
+  --pa-ink: #f8fafc;
+  --pa-ink-soft: #b3bccd;
+  --pa-ink-faint: #8b95a9;
+  --pa-accent: #22c55e;
+  --pa-accent-soft: #163a2a;
+  --pa-accent-ink: #0f172a;
+  --pa-warn: #fbbf24;
+  --pa-warn-soft: #3b2f12;
+  --pa-danger: #f87171;
+  --pa-danger-soft: #3f1d1d;
+  --pa-info: #60a5fa;
+  --pa-info-soft: #172a4a;
+  --pa-radius: 10px;
+  --pa-font: "Fira Sans", "IBM Plex Sans Thai", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --pa-mono: "Fira Code", "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  min-height: 100vh;
+  background: var(--pa-bg);
+  color: var(--pa-ink);
+  font-family: var(--pa-font);
+  font-size: 15px;
+  line-height: 1.55;
+  display: grid;
+  grid-template-columns: 232px minmax(0, 1fr);
+}
+.pa *, .pa *::before, .pa *::after { box-sizing: border-box; }
+.pa a { color: inherit; }
+.pa :focus-visible { outline: 2px solid var(--pa-accent); outline-offset: 2px; border-radius: 4px; }
+
+/* ---- side rail -------------------------------------------------------- */
+.pa-rail {
+  background: var(--pa-bg-raised);
+  border-right: 1px solid var(--pa-line);
+  padding: 20px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+}
+.pa-brand { display: flex; align-items: center; gap: 10px; text-decoration: none; padding: 4px 6px; }
+.pa-brand-mark {
+  width: 34px; height: 34px; border-radius: 9px;
+  background: linear-gradient(135deg, var(--pa-accent), #0ea5a3);
+  display: grid; place-items: center; color: var(--pa-accent-ink); font-weight: 700; font-family: var(--pa-mono);
+}
+.pa-brand-name { font-weight: 600; letter-spacing: 0.01em; }
+.pa-brand-sub { display: block; font-size: 12px; color: var(--pa-ink-faint); font-weight: 400; }
+.pa-nav { display: flex; flex-direction: column; gap: 4px; }
+.pa-nav a {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px; border-radius: 8px; text-decoration: none;
+  color: var(--pa-ink-soft); min-height: 44px;
+  transition: background 160ms ease, color 160ms ease;
+}
+.pa-nav a:hover { background: var(--pa-muted); color: var(--pa-ink); }
+.pa-nav a[aria-current="page"] { background: var(--pa-accent-soft); color: var(--pa-ink); }
+.pa-nav svg { width: 18px; height: 18px; flex: none; }
+.pa-rail-foot { margin-top: auto; display: flex; flex-direction: column; gap: 8px; font-size: 13px; color: var(--pa-ink-faint); }
+.pa-rail-foot strong { color: var(--pa-ink-soft); font-weight: 500; }
+
+/* ---- main ------------------------------------------------------------- */
+.pa-main { padding: 28px 32px 56px; min-width: 0; }
+.pa-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px 24px; margin-bottom: 20px; }
+.pa-head h1 { font-size: 24px; font-weight: 600; margin: 0; letter-spacing: -0.01em; text-wrap: balance; }
+.pa-head p { margin: 4px 0 0; color: var(--pa-ink-soft); max-width: 62ch; }
+.pa-crumb { font-size: 13px; color: var(--pa-ink-faint); margin-bottom: 6px; }
+.pa-crumb a { text-decoration: none; }
+.pa-crumb a:hover { text-decoration: underline; }
+
+.pa-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 20px; }
+.pa-metric { background: var(--pa-card); border: 1px solid var(--pa-line); border-radius: var(--pa-radius); padding: 14px 16px; }
+.pa-metric-label { font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--pa-ink-faint); }
+.pa-metric-value { font-family: var(--pa-mono); font-size: 26px; font-weight: 500; font-variant-numeric: tabular-nums; margin-top: 2px; }
+.pa-metric-value small { font-size: 13px; color: var(--pa-ink-faint); font-family: var(--pa-font); margin-left: 6px; }
+
+.pa-card { background: var(--pa-card); border: 1px solid var(--pa-line); border-radius: var(--pa-radius); padding: 18px 20px; }
+.pa-card + .pa-card { margin-top: 16px; }
+.pa-card h2 { font-size: 16px; font-weight: 600; margin: 0 0 12px; }
+.pa-grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+.pa-grid-2 .pa-card + .pa-card { margin-top: 0; }
+
+/* ---- filters / forms ------------------------------------------------- */
+.pa-filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin-bottom: 14px; }
+.pa-field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--pa-ink-soft); }
+.pa-field input, .pa-field select, .pa-field textarea {
+  min-height: 42px; padding: 8px 12px; border-radius: 8px;
+  border: 1px solid var(--pa-line-strong); background: var(--pa-bg); color: var(--pa-ink);
+  font: inherit; font-size: 15px; min-width: 180px;
+}
+.pa-field textarea { min-height: 72px; resize: vertical; }
+.pa-field input::placeholder { color: var(--pa-ink-faint); }
+.pa-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  min-height: 42px; padding: 8px 16px; border-radius: 8px; cursor: pointer;
+  border: 1px solid var(--pa-line-strong); background: var(--pa-muted); color: var(--pa-ink);
+  font: inherit; font-weight: 500; text-decoration: none;
+  transition: background 160ms ease, border-color 160ms ease, transform 120ms ease;
+}
+.pa-btn:hover { background: var(--pa-line); }
+.pa-btn:active { transform: translateY(1px); }
+.pa-btn:disabled { opacity: 0.55; cursor: default; transform: none; }
+.pa-btn-primary { background: var(--pa-accent); border-color: var(--pa-accent); color: var(--pa-accent-ink); }
+.pa-btn-primary:hover { background: #34d074; }
+.pa-btn-danger { background: var(--pa-danger-soft); border-color: #7f2e2e; color: #fecaca; }
+.pa-btn-danger:hover { background: #532424; }
+.pa-btn-sm { min-height: 36px; padding: 4px 12px; font-size: 14px; }
+
+/* ---- tables ------------------------------------------------------------ */
+.pa-table-wrap { overflow-x: auto; border: 1px solid var(--pa-line); border-radius: var(--pa-radius); background: var(--pa-card); }
+.pa-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.pa-table th, .pa-table td { padding: 10px 14px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--pa-line); }
+.pa-table th { font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--pa-ink-faint); font-weight: 500; white-space: nowrap; background: var(--pa-bg-raised); }
+.pa-table tbody tr:last-child td { border-bottom: 0; }
+.pa-table tbody tr:hover td { background: var(--pa-muted); }
+.pa-table .num { text-align: right; font-family: var(--pa-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pa-table .mono { font-family: var(--pa-mono); font-size: 13px; }
+.pa-table a.row-link { text-decoration: none; font-weight: 500; }
+.pa-table a.row-link:hover { text-decoration: underline; }
+.pa-muted { color: var(--pa-ink-faint); }
+.pa-empty { padding: 28px; text-align: center; color: var(--pa-ink-faint); }
+
+/* ---- status chips ------------------------------------------------------ */
+.pa-chip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 999px;
+  font-size: 12px; font-weight: 500; letter-spacing: 0.02em; white-space: nowrap; border: 1px solid transparent;
+}
+.pa-chip::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.pa-chip-active { background: var(--pa-accent-soft); color: #86efac; border-color: #1f5a3a; }
+.pa-chip-trial { background: var(--pa-info-soft); color: #93c5fd; border-color: #24467a; }
+.pa-chip-suspended { background: var(--pa-danger-soft); color: #fca5a5; border-color: #7f2e2e; }
+.pa-chip-pending { background: var(--pa-warn-soft); color: #fcd34d; border-color: #6b4f0e; }
+.pa-chip-completed { background: var(--pa-accent-soft); color: #86efac; border-color: #1f5a3a; }
+.pa-chip-rejected, .pa-chip-processing { background: var(--pa-muted); color: var(--pa-ink-soft); border-color: var(--pa-line-strong); }
+.pa-chip-yes { background: var(--pa-warn-soft); color: #fcd34d; border-color: #6b4f0e; }
+
+/* ---- key/value ---------------------------------------------------------- */
+.pa-kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 18px; margin: 0; font-size: 14px; }
+.pa-kv dt { color: var(--pa-ink-faint); }
+.pa-kv dd { margin: 0; overflow-wrap: anywhere; }
+
+/* ---- notes -------------------------------------------------------------- */
+.pa-note { border-radius: 8px; padding: 10px 14px; font-size: 14px; margin-top: 12px; border: 1px solid transparent; }
+.pa-note-ok { background: var(--pa-accent-soft); color: #bbf7d0; border-color: #1f5a3a; }
+.pa-note-error { background: var(--pa-danger-soft); color: #fecaca; border-color: #7f2e2e; }
+.pa-note-warn { background: var(--pa-warn-soft); color: #fde68a; border-color: #6b4f0e; }
+.pa-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+
+/* ---- login -------------------------------------------------------------- */
+.pa-login { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+.pa-login-card { width: min(400px, 100%); }
+.pa-login-card h1 { margin: 14px 0 4px; font-size: 22px; }
+.pa-login-card p { margin: 0 0 18px; color: var(--pa-ink-soft); }
+.pa-login-card form { display: flex; flex-direction: column; gap: 12px; }
+.pa-login-card .pa-field input { min-width: 0; width: 100%; }
+
+@media (max-width: 860px) {
+  .pa { grid-template-columns: 1fr; }
+  .pa-rail { position: static; height: auto; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 12px; border-right: 0; border-bottom: 1px solid var(--pa-line); padding: 12px 16px; }
+  .pa-nav { flex-direction: row; flex-wrap: wrap; }
+  .pa-rail-foot { margin-top: 0; margin-left: auto; }
+  .pa-main { padding: 20px 16px 48px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pa * { transition: none !important; }
+}

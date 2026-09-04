@@ -95,6 +95,9 @@ spec (ทีม, ภาษา, ค้นสินค้า, คุยกับ�
    D-01…D-16 สำหรับ C1–C5 · handoff "Immediate next actions" เขียนใหม่ตามสภาพจริง
 7. ~~(C7) Cloud Scheduler~~ — **ทำแล้ว** (`scheduler-v1`, infra): 3 job เตือน 08:00 / หมดอายุใบเสนอราคา 00:30 / sweep แชททุก 5 นาที (`scheduler.tf`)
 
+8. ~~(C8) สรุปตอนเปิดแชทกลับมา~~ — **ทำแล้ว** (`catch-up-v1`): "ล่าสุดที่คุยกับร้านไว้:" = ข้อความล่าสุดของลูกค้า
+   → ตามด้วยข้อความฝั่งร้านหลังจากนั้นจนถึงล่าสุด (ไม่ใช่เฉพาะฝั่งร้าน)
+
 ## D. งานค้างที่เหลือ (4 ก.ย. ดึก)
 
 - เจ้าของเดินเคสทดสอบ (รวม Phase 14.7) · ใส่รูปคู่มือลง `help_images.json` ทั้งสองไฟล์
@@ -122,3 +125,57 @@ spec (ทีม, ภาษา, ค้นสินค้า, คุยกับ�
 ทุกข้อส่งเป็น patch + deploy script ตาม CLAUDE.md §-1, มีเทสต์ทั้งสองฝั่ง (แชท/UI)
 ตั้งแต่ patch แรก, check-parity สะอาด, และ**ปิดได้เมื่อเดินกับ OA จริงแล้ว** — ไม่ใช่
 เมื่อ deploy ขึ้น
+
+
+## D1 — Phase 16.5 PDPA (4 Sep 2026)
+
+**ขอบเขต (Master Spec 16.5):** ความยินยอมครั้งแรกก่อนลงทะเบียนทุก OA · "ขอข้อมูลของฉัน" = หน้าสรุปทุกร้าน (ลิงก์ 24 ชม. ผ่าน document store; ถ้าไม่มี bucket สรุปในแชท) · "ขอลบข้อมูล" → ยืนยัน → anonymise ทุก tenant (ลูกค้า/ใบงาน/รูป/แชท/identity ลายเซ็น) + ลบไฟล์ GCS · ทุก tenant ที่แตะได้ audit row `pdpa_erasure`/`pdpa_export` cross_tenant=true · Platform admin: `GET/POST /platform/pdpa/requests`, `/process`, `/reject`.
+
+| ชั้น | สิ่งที่เพิ่ม |
+|---|---|
+| Data | migration `0023_pdpa` (identity consent_*/anonymized_at, ตาราง `data_subject_requests`, audit actions ใหม่) · `repositories/phase165.py` · routes `/identities/{uid}/consent`, `/platform/pdpa/requests…` (ล้าง cache identity) |
+| Application | `services/pdpa.py` (consent gate + export HTML + erase) · gate ใน `handle_registration` (พัก message ที่พิมพ์ไว้, ยอมรับแล้วทำต่อ) · chat phrases ทุก OA ก่อน help hook · LIFF `/liff/{aud}/consent`, `/pdpa/{export|erase}` · `DocumentStore.delete` |
+| Presentation | proxy `/api/liff/[audience]/consent`, `/pdpa/[action]` · ProfileCard แถว "ความยินยอม" + "ข้อมูลของฉัน" (เปิดสำเนาแบบ external, ยืนยันก่อนลบ) |
+| Guides | ขั้น "ข้อมูลส่วนตัว (PDPA)" ใน customer + slot `customer-pdpa` |
+| Tests | `tests/unit/test_pdpa.py` (gate/export/erase/chat) · `tests/integration/test_pdpa_data.py` (16.5.6 ทั้ง 6 ข้อ) |
+
+**ค้าง (Phase 18):** หน้า admin สำหรับคิวคำขอ PDPA อยู่ใน Platform Admin Dashboard.
+
+
+## D2 — Phase 18 Platform Admin Dashboard (4 Sep 2026)
+
+**ขอบเขต (Master Spec 18):** เว็บแยก `/admin` (ไม่ใช่ LIFF) login ด้วย username/password · รายชื่อ tenant ทั้งหมด ค้นหา/กรอง พร้อมขนาดการใช้งาน (สมาชิก ลูกค้า งาน/ค้าง ดีล ใช้งานล่าสุด) · หน้าร้าน: สมาชิก ระงับ/เปิดใช้งาน break-glass โอนสิทธิ์เจ้าของ (ยืนยัน + audit cross_tenant + แจ้งเจ้าของใหม่ทาง LINE) · Audit ข้ามร้าน กรองตามร้าน/ผู้กระทำ/การกระทำ · คิวคำขอ PDPA (Phase 16.5) ดำเนินการ/ปฏิเสธ/สร้างแทน.
+
+| ชั้น | สิ่งที่เพิ่ม |
+|---|---|
+| Data | `repositories/phase18.py` (tenants + counts + owner, tenant detail) · `AuditRepository.list_platform` · routes `GET /platform/tenants`, `/platform/tenants/{id}`, `/platform/audit` · `MembershipOut.license_status` |
+| Application | `routers_admin`: `GET/PATCH /platform/tenants…`, `GET /platform/audit`, `POST /platform/break-glass/transfer-owner` (require_admin + break_glass permission) · แชท: ร้านที่ถูกระงับตอบ "ระงับ" แทนทำรายการ (สิทธิ์ PDPA ยังใช้ได้) · `/liff/{aud}/me` ส่ง `license_status` |
+| Presentation | `app/admin/*` (layout + rail nav, tenants, tenant detail + actions, audit, pdpa, login) · `admin.css` (dark operations palette, Fira Sans/Code, ไม่ใช้ backdrop-filter) · proxies `/api/admin/{logout,tenants/[id]/status,break-glass,pdpa/[id]/[action]}` |
+| Tests | `tests/unit/test_platform_admin.py` (18.5 ทุกข้อ + suspended chat) · `tests/integration/test_platform_admin_data.py` |
+
+**ค้าง:** หน้าจอ LIFF ยังไม่โชว์ป้าย "ร้านถูกระงับ" (มี `license_status` ใน `/me` แล้ว) · usage/billing เชิงเงิน (Phase 20).
+
+
+## D3 — Phase 17 Ad-hoc AI Report Engine (4 Sep 2026)
+
+**ขอบเขต (Master Spec 17):** Sale/CS ถามรายงานเป็นภาษาคนในแชท Sale OA หรือหน้า "รายงาน AI" · AI (reasoning model) แปลงเป็น query spec JSON เท่านั้น · โค้ดตรวจกับ whitelist (entity/field/metric/group_by/date_range) ทั้งฝั่ง Application และ Data · Data tier สร้าง SQLAlchemy statement เดียว parameterized + filter license_id เสมอ · ผลลัพธ์ 3 แบบ: ข้อความสรุป, ตาราง+กราฟแท่ง (หน้าจอ/หน้าเว็บ), ไฟล์ CSV (+PDF เมื่อ renderer พร้อม) ผ่าน document store ลิงก์ 7 วัน · สิทธิ์ `view_reports` (member/sales มี, cs ไม่มี default).
+
+| ชั้น | สิ่งที่เพิ่ม |
+|---|---|
+| Data | `repositories/phase17.py` (whitelist, `validate_spec`, `ReportQueryRepository.build_statement/run`, Bangkok date windows) · `POST /licenses/{id}/reports/query` |
+| Application | `services/reports_ai.py` (prompt จาก whitelist เดียวกัน, `generate_query_spec`, `validate_query_spec`, text/CSV/HTML, `publish_files`) · chat: `AI_REPORT_TRIGGERS` + `_handle_ai_report` (หลังคำสั่งรายงานเดิม, Sale OA) · `POST /licenses/{id}/reports/ai` และ `/reports/ai/run` (require view_reports) |
+| Presentation | `/liff/sales/reports/ai` (AiReports: ช่องถาม, ตัวอย่าง, ตาราง+แท่ง, ปุ่มไฟล์ผ่าน openExternal) · เมนู "รายงาน AI" · CSS `.report-*` |
+| Guides | ขั้น "ถามรายงานด้วย AI" ใน sales + slot `sales-ai-report` |
+| Tests | `tests/unit/test_ai_reports.py` (17.5 ครบ: spec, injection, whitelist, output, permission) · `tests/integration/test_ai_reports_data.py` |
+
+**ค้าง:** ตัวเลขเชิงเงิน (sum ยอดขาย) ยังไม่มีเพราะ Deal/Quote ไม่มี amount ใน schema — ขยาย `NUMERIC_FIELDS` เมื่อมี · Excel แท้ (.xlsx) ใช้ CSV แทน (Excel เปิดได้) · PDF ต้อง SmartBrowz พร้อม.
+
+## D4 — "ทำอะไรได้บ้าง" ตอบด้วยคู่มือ (4 Sep 2026)
+
+**คำสั่งเจ้าของ:** คำตอบแบบ "คุณสามารถทำสิ่งเหล่านี้ได้…" (รายการสิทธิ์/คำสั่ง) อ่านแล้วไม่เข้าใจ ให้ยกเลิกทั้งหมด และตอบด้วยคู่มือการใช้งานแทน.
+
+- แชททุกแบบที่ถามว่าใช้ยังไง/ทำอะไรได้บ้าง/ตัวอย่างคำสั่ง/สิทธิ์ของฉัน → `render_help_text` (คู่มือขั้นตอน + รูป + ปุ่มเปิดคู่มือ) ไม่ต่อท้ายรายการคำสั่งอีก; คนไม่มีสิทธิ์เลยได้บรรทัด "ติดต่อเจ้าของบริษัท" นำหน้าคู่มือ.
+- `suggest_what_you_can_do` (ใช้ตอนปฏิเสธ/ไม่เข้าใจ) เหลือแค่เหตุผล (ไม่มีฟังก์ชันนี้ / ยังไม่มีสิทธิ์ «…» ขอจากเจ้าของร้าน / ยังไม่แน่ใจ ลองพิมพ์ให้ชัด) + `GUIDE_POINTER` + ปุ่มเปิดคู่มือ; ไม่มีรายการสิทธิ์อีก.
+- ข้อความที่เคยชี้ไป "พิมพ์ ทำอะไรได้บ้าง เพื่อดูสิ่งที่ทำได้" เปลี่ยนเป็น "พิมพ์ วิธีใช้ เพื่อเปิดคู่มือ".
+- เทสต์ 6.9 และ TestUsageHelp เขียนใหม่ตามพฤติกรรมนี้.
+

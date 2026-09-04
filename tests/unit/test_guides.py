@@ -103,14 +103,14 @@ class TestPermissionReplies:
     def test_the_no_permission_lead_says_who_to_ask(self):
         text = chat.SUGGEST_NO_PERMISSION_LEAD["th"]
         assert "เจ้าของร้าน" in text or "แอดมิน" in text
-        assert "ทำอะไรได้บ้าง" in text
+        assert "วิธีใช้" in text
 
-    def test_the_catalogue_reply_is_grouped_and_headed(self):
+    def test_the_refusal_points_at_the_guide_instead_of_listing_permissions(self):
         catalog = [
             {"key": "customer.read", "group": "customer", "label": {"th": "ดูลูกค้า"}},
             {"key": "customer.create", "group": "customer", "label": {"th": "สร้างลูกค้า"}},
             {"key": "ticket.read", "group": "ticket", "label": {"th": "ดูงานซ่อม"}},
         ]
         text = chat.suggest_what_you_can_do(["customer.read", "customer.create", "ticket.read"], catalog, "th")
-        assert "ลูกค้า:" in text and f"{chat._group_label('ticket', 'th')}:" in text
-        assert "• ดูลูกค้า" in text and "📋" in text
+        assert "• ดูลูกค้า" not in text and "สร้างลูกค้า" not in text and "📋" not in text
+        assert "วิธีใช้" in text

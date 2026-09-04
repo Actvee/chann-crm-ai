@@ -73,6 +73,9 @@ from ..repositories.phase15 import (
     ChatSessionNotFound,
     ChatSessionRepository,
 )
+from ..repositories.phase165 import PdpaConflict, PdpaNotFound, PdpaRepository
+from ..repositories.phase18 import PlatformNotFound, PlatformRepository
+from ..repositories.phase17 import ReportQueryRepository, ReportSpecInvalid
 from ..repositories.phase16 import (
     DisplayPreferenceRepository,
     WarrantyConflict,
@@ -118,6 +121,16 @@ from ..repositories.phase6 import (
     Phase6NotFound,
 )
 from ..schemas import (
+    ReportQueryIn,
+    ReportResultOut,
+    TenantMemberOut,
+    TenantSummaryOut,
+    ConsentIn,
+    ConsentOut,
+    DataSubjectProcessIn,
+    DataSubjectRejectIn,
+    DataSubjectRequestIn,
+    DataSubjectRequestOut,
     ChatMessageIn,
     ChatMessageOut,
     ChatSessionAssignIn,
@@ -372,6 +385,7 @@ def list_memberships(
                 chann_uid=chann_uid,
                 role="customer",
                 status="active",
+                license_status=shop.status,
             )
             for shop in shops
         ]
@@ -386,6 +400,7 @@ def list_memberships(
             chann_uid=m.chann_uid,
             role=m.role,
             status=m.status,
+            license_status=m.license.status,
         )
         for m in members
     ]
@@ -4434,3 +4449,172 @@ def sweep_chat_sessions(session: Session = Depends(get_session)):
     except Exception as exc:
         session.rollback()
         raise _chat_http_error(exc)
+
+
+
+# ==================================================================== Phase 16.5
+# PDPA — consent on the identity, requests, and the two cross-tenant walks.
+
+def _pdpa_http_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, PdpaNotFound):
+        return HTTPException(status_code=404, detail={"error": "pdpa_not_found"})
+    if isinstance(exc, PdpaConflict):
+        return HTTPException(status_code=409, detail={"error": "pdpa_conflict", "message": str(exc)})
+    if isinstance(exc, HTTPException):
+        return exc
+    logging.getLogger(__name__).exception("pdpa operation failed")
+    return HTTPException(status_code=500, detail={"error": "pdpa_failed"})
+
+
+@router.get("/identities/{chann_uid}/consent", response_model=ConsentOut)
+def get_consent(chann_uid: str, session: Session = Depends(get_session)):
+    try:
+        return ConsentOut(**PdpaRepository(session).consent_of(chann_uid))
+    except Exception as exc:
+        raise _pdpa_http_error(exc)
+
+
+@router.put("/identities/{chann_uid}/consent", response_model=ConsentOut)
+def put_consent(chann_uid: str, payload: ConsentIn, session: Session = Depends(get_session)):
+    try:
+        repo = PdpaRepository(session)
+        row = repo.record_consent(chann_uid, version=payload.version)
+        session.commit()
+        cache.invalidate(k_identity(row.line_user_id))
+        return ConsentOut(**repo.consent_of(chann_uid))
+    except Exception as exc:
+        session.rollback()
+        raise _pdpa_http_error(exc)
+
+
+@router.post("/platform/pdpa/requests", response_model=DataSubjectRequestOut, status_code=201)
+def create_pdpa_request(payload: DataSubjectRequestIn, session: Session = Depends(get_session)):
+    try:
+        row = PdpaRepository(session).create_request(
+            chann_uid=payload.chann_uid, request_type=payload.request_type, requested_via=payload.requested_via,
+        )
+        session.commit()
+        session.refresh(row)
+        return DataSubjectRequestOut.model_validate(row, from_attributes=True)
+    except Exception as exc:
+        session.rollback()
+        raise _pdpa_http_error(exc)
+
+
+@router.get("/platform/pdpa/requests", response_model=list[DataSubjectRequestOut])
+def list_pdpa_requests(
+    status: str | None = None, chann_uid: str | None = None, limit: int = 200,
+    session: Session = Depends(get_session),
+):
+    rows = PdpaRepository(session).list_requests(status=status, chann_uid=chann_uid, limit=limit)
+    return [DataSubjectRequestOut.model_validate(r, from_attributes=True) for r in rows]
+
+
+@router.get("/platform/pdpa/requests/{request_id}", response_model=DataSubjectRequestOut)
+def get_pdpa_request(request_id: uuid.UUID, session: Session = Depends(get_session)):
+    try:
+        return DataSubjectRequestOut.model_validate(PdpaRepository(session).get_request(request_id), from_attributes=True)
+    except Exception as exc:
+        raise _pdpa_http_error(exc)
+
+
+@router.post("/platform/pdpa/requests/{request_id}/process")
+def process_pdpa_request(
+    request_id: uuid.UUID, payload: DataSubjectProcessIn, session: Session = Depends(get_session),
+):
+    """Run the request: erasure anonymises across tenants and returns the
+    storage paths to delete; export returns the bundle. Both audit every
+    tenant touched with cross_tenant=true."""
+    try:
+        repo = PdpaRepository(session)
+        request = repo.get_request(request_id)
+        if request.request_type == "erasure":
+            identity = repo.identity(request.chann_uid)
+            line_user_id = identity.line_user_id
+            result = repo.erase(request_id, processed_by=payload.processed_by)
+            session.commit()
+            cache.invalidate(k_identity(line_user_id))
+            return {"request_type": "erasure", **result}
+        if request.request_type == "export":
+            bundle = repo.export(request_id, processed_by=payload.processed_by)
+            session.commit()
+            return {"request_type": "export", "bundle": bundle}
+        raise PdpaConflict("consent withdrawal is recorded, not processed")
+    except Exception as exc:
+        session.rollback()
+        raise _pdpa_http_error(exc)
+
+
+@router.post("/platform/pdpa/requests/{request_id}/reject", response_model=DataSubjectRequestOut)
+def reject_pdpa_request(
+    request_id: uuid.UUID, payload: DataSubjectRejectIn, session: Session = Depends(get_session),
+):
+    try:
+        row = PdpaRepository(session).reject(request_id, reason=payload.reason, processed_by=payload.processed_by)
+        session.commit()
+        session.refresh(row)
+        return DataSubjectRequestOut.model_validate(row, from_attributes=True)
+    except Exception as exc:
+        session.rollback()
+        raise _pdpa_http_error(exc)
+
+
+
+# ======================================================================= Phase 18
+# Platform admin reads: every tenant with its size, one tenant in detail,
+# and the audit trail across tenants. Writes reuse PATCH /licenses/{id}/status
+# and the break-glass route above.
+
+@router.get("/platform/tenants", response_model=list[TenantSummaryOut])
+def platform_tenants(
+    q: str | None = None, status: str | None = None, limit: int = 200,
+    session: Session = Depends(get_session),
+):
+    return [TenantSummaryOut(**row) for row in PlatformRepository(session).tenants(q=q, status=status, limit=limit)]
+
+
+@router.get("/platform/tenants/{license_id}")
+def platform_tenant(license_id: uuid.UUID, session: Session = Depends(get_session)):
+    """The summary plus the legal details and every member (with the
+    person's display name, which only the platform may see side by side
+    with the tenant — it never leaves the admin dashboard)."""
+    try:
+        data = PlatformRepository(session).tenant(license_id)
+    except PlatformNotFound:
+        raise HTTPException(status_code=404, detail={"error": "tenant_not_found"})
+    members = data.pop("members")
+    payload = TenantSummaryOut(**{k: v for k, v in data.items() if k in TenantSummaryOut.model_fields}).model_dump()
+    payload.update({
+        "legal_name": data.get("legal_name"), "company_phone": data.get("company_phone"),
+        "company_email": data.get("company_email"),
+        "members_detail": [TenantMemberOut(**m).model_dump() for m in members],
+    })
+    return payload
+
+
+@router.get("/platform/audit", response_model=list[AuditLogOut])
+def platform_audit(
+    cross_tenant: bool | None = None, license_id: uuid.UUID | None = None,
+    actor_type: str | None = None, action: str | None = None, limit: int = 100,
+    session: Session = Depends(get_session),
+):
+    rows = AuditRepository(session).list_platform(
+        cross_tenant=cross_tenant, license_id=license_id, actor_type=actor_type, action=action, limit=limit,
+    )
+    return [AuditLogOut.model_validate(r, from_attributes=True) for r in rows]
+
+
+
+# ======================================================================= Phase 17
+# Ad-hoc reports: the Application tier sends a whitelisted spec, never SQL.
+
+@router.post("/licenses/{license_id}/reports/query", response_model=ReportResultOut)
+def run_report_query(
+    license_id: uuid.UUID, payload: ReportQueryIn, session: Session = Depends(get_session),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        result = ReportQueryRepository(session).run(scope, payload.model_dump())
+    except ReportSpecInvalid as exc:
+        raise HTTPException(status_code=422, detail={"error": "report_spec_invalid", "message": str(exc)})
+    return ReportResultOut(**result)

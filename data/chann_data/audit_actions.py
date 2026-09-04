@@ -31,5 +31,8 @@ AUDIT_ACTIONS = frozenset(
         # Phase 13
         "check_in",
         "check_out",
+        # Phase 16.5 — widened by migration 0023_pdpa
+        "pdpa_erasure",
+        "pdpa_export",
     }
 )

@@ -28,6 +28,10 @@ class MembershipOut(BaseModel):
     chann_uid: str
     role: str
     status: str
+    # Phase 18 — a suspended tenant is read-only; the Application tier
+    # refuses new work and says so, instead of treating the person as
+    # unregistered.
+    license_status: str = "active"
     # The license_members row id. Anything that acts AS this member needs
     # it — claiming a ticket, owning a follow-up — and a client holding
     # only chann_uid would have to look it up on every action.
@@ -1034,3 +1038,100 @@ class ChatSessionOut(BaseModel):
 class ChatSweepOut(BaseModel):
     escalated: list[ChatSessionOut]
     timed_out: list[ChatSessionOut]
+
+
+# ---------------------------------------------------------------- Phase 16.5
+class ConsentIn(BaseModel):
+    version: str
+
+
+class ConsentOut(BaseModel):
+    chann_uid: str
+    consent_accepted_at: datetime | None
+    consent_version: str | None
+    anonymized_at: datetime | None
+
+
+class DataSubjectRequestIn(BaseModel):
+    chann_uid: str
+    request_type: Literal["erasure", "export", "consent_withdraw"]
+    requested_via: Literal["chat", "liff", "platform_admin"]
+
+
+class DataSubjectRequestOut(BaseModel):
+    id: uuid.UUID
+    chann_uid: str
+    request_type: str
+    status: str
+    requested_via: str
+    requested_at: datetime
+    completed_at: datetime | None
+    processed_by: uuid.UUID | None
+    rejection_reason: str | None
+    result_json: dict | None
+
+
+class DataSubjectRejectIn(BaseModel):
+    reason: str
+    processed_by: uuid.UUID | None = None
+
+
+class DataSubjectProcessIn(BaseModel):
+    processed_by: uuid.UUID | None = None
+
+
+# ------------------------------------------------------------------ Phase 18
+class TenantSummaryOut(BaseModel):
+    id: uuid.UUID
+    license_code: str
+    company_name: str
+    company_code: str | None
+    status: str
+    trial_expires_at: datetime | None
+    created_at: datetime | None
+    owner_chann_uid: str | None
+    owner_name: str | None
+    members: int
+    customers: int
+    tickets: int
+    open_tickets: int
+    deals: int
+    last_activity_at: datetime | None
+
+
+class TenantMemberOut(BaseModel):
+    chann_uid: str
+    role: str
+    status: str
+    display_name: str | None
+    joined_at: datetime | None
+
+
+# ------------------------------------------------------------------ Phase 17
+class ReportQueryIn(BaseModel):
+    entity: str
+    metric: str = "count"
+    field: str | None = None
+    filter: dict[str, str] = {}
+    group_by: str | None = None
+    date_range: str | None = None
+    date_field: str | None = None
+
+
+class ReportRowOut(BaseModel):
+    key: str
+    label: str
+    value: float | int
+
+
+class ReportResultOut(BaseModel):
+    entity: str
+    metric: str
+    field: str | None
+    filter: dict[str, str]
+    group_by: str | None
+    date_range: str | None
+    date_field: str
+    rows: list[ReportRowOut]
+    total: float | int | None
+    generated_at: str

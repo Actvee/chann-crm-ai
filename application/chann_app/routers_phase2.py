@@ -2883,3 +2883,78 @@ async def close_chat_session(
         )
     except DataTierError as exc:
         raise _propagate(exc)
+
+
+
+# ======================================================================== Phase 17
+# Ad-hoc AI reports from the dashboard. Same permission as the chat path
+# (view_reports), same whitelist, same Data tier door.
+
+class AiReportAskBody(BaseModel):
+    message: str
+    language: str | None = None
+
+
+class AiReportRunBody(BaseModel):
+    spec: dict
+    language: str | None = None
+
+
+@router.post("/licenses/{license_id}/reports/ai")
+async def ai_report_ask(
+    license_id: str,
+    body: AiReportAskBody,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Plain language in, a spec + result + files out (or a clarifying
+    question). The model only ever produces the spec."""
+    from .services import reports_ai
+    from .services.ai.client import AINotConfigured, AIUnavailable
+
+    _require_same_tenant(principal, license_id)
+    principal.require("view_reports")
+    language = body.language or "th"
+    if not body.message.strip():
+        raise HTTPException(status_code=422, detail="message is required")
+    try:
+        out = await reports_ai.handle_report_request(
+            client, license_id=license_id, message=body.message, language=language,
+            actor_id=principal.chann_uid, company_name=_company_name_of(principal),
+        )
+    except reports_ai.ReportSpecInvalid as exc:
+        return {"error": "spec_invalid", "message": reports_ai.INVALID[language if language in reports_ai.INVALID else "th"].format(reason=str(exc))}
+    except (AINotConfigured, AIUnavailable):
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="AI is not available right now")
+    except DataTierError as exc:
+        raise _propagate(exc)
+    return out
+
+
+@router.post("/licenses/{license_id}/reports/ai/run")
+async def ai_report_run(
+    license_id: str,
+    body: AiReportRunBody,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Run an edited spec straight from the dashboard — still whitelisted."""
+    from .services import reports_ai
+
+    _require_same_tenant(principal, license_id)
+    principal.require("view_reports")
+    language = body.language or "th"
+    try:
+        spec = reports_ai.validate_query_spec(body.spec)
+        result = await client.run_report_query(license_id, spec, actor_id=principal.chann_uid)
+    except reports_ai.ReportSpecInvalid as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except DataTierError as exc:
+        raise _propagate(exc)
+    text = reports_ai.report_text(spec, result, language)
+    files = await reports_ai.publish_files(spec, result, language, license_id=license_id, company_name=_company_name_of(principal))
+    return {"spec": spec, "result": result, "text": text, "files": files}
+
+
+def _company_name_of(principal: TenantPrincipal) -> str:
+    return str(getattr(principal, "company_name", "") or "")

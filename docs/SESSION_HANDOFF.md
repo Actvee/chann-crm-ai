@@ -1,3 +1,11 @@
+### Plan C8 (4 Sep) — where you left off (`catch-up-v1`)
+
+- `live_chat.catch_up` now renders the customer's last line before the
+  shop's first unseen answer, then every shop line from there to the
+  latest (last 6), with a "คุณ:"/"ร้าน:" prefix; the chat header reads
+  "ล่าสุดที่คุยกับ {shop} ไว้:". Owner: the shop's answer on its own read
+  out of context.
+
 ### Plan C7 (4 Sep) — Cloud Scheduler (`scheduler-v1`, infrastructure)
 
 - `infrastructure/terraform/scheduler.tf`: three `google_cloud_scheduler_job`
@@ -2301,3 +2309,34 @@ service and confirming `git_commit` matches what you just pushed. Never run
 
 - `scripts/dev-infra-plan.sh` blocked `google_cloud_scheduler_job` as "outside DEV boundary" so C7's plan never passed; the allowlist now includes it (tests/boundary already did).
 - Cloud Shell มี IPv6 ปิดในระบบ terraform จึงล้มแบบสุ่มเมื่อ plan; `~/stage-d1/chain.sh` ส่ง terraform/gcloud ผ่าน proxy IPv4 ในเครื่อง (`~/stage-d1/v4proxy.py`, พอร์ต 3128) เมื่อมันรันอยู่.
+
+## Plan D1 — Phase 16.5 PDPA (4 Sep 2026)
+
+- Migration `0023_pdpa` → `EXPECTED_MIGRATION_HEAD = "0023_pdpa"`; deploy script ต้องรัน migration ก่อน (แบบ live-chat).
+- Consent gate อยู่ใน `services/registration.py::handle_registration` (wrapper) — ทุกคนที่ยังไม่มี tenant ถูกถามครั้งเดียว; FakeDataClient ใน unit tests ถือว่ายินยอมแล้ว.
+- ประโยค PDPA (`PDPA_EXPORT_PHRASES` ฯลฯ) อยู่ก่อน help hook ใน `services/chat.py`; ใช้ได้ทุก OA.
+- Export เก็บที่ `pdpa/<chann_uid>/<uuid>.html` ใน bucket เดิม (signed URL 24 ชม.); erasure ลบ object ที่ Data tier ส่งกลับ (`storage_paths`).
+- ยังไม่มี UI ฝั่ง platform admin (Phase 18); ใช้ `POST /platform/pdpa/requests` ผ่าน token admin ได้แล้ว.
+
+
+## Plan D2 — Phase 18 Platform Admin Dashboard (4 Sep 2026)
+
+- เว็บ `/admin` ใช้ cookie `chann_admin_session` (httpOnly) → server components เรียก Application ด้วย bearer ผ่าน `app/admin/_server.ts`; ปุ่มฝั่ง client ยิง `/api/admin/*` ซึ่งอ่าน cookie แล้ว forward (`lib/admin-proxy.ts`).
+- ไม่มี migration; ใช้ตารางเดิม (18.2). `PATCH /platform/tenants/{id}` → Data `PATCH /licenses/{id}/status` (audit actor platform_admin).
+- ระงับร้าน = read-only: `MembershipOut.license_status` → แชทตอบ `TENANT_SUSPENDED`; ยังต้องเพิ่มป้ายบน LIFF dashboards.
+- Break-glass ต้องมี `platform.admin.break_glass` ใน token (issue_token ให้ทุก admin ตอนนี้); แจ้งเจ้าของใหม่ด้วย notification type `ownership_transferred`.
+- ยังไม่มี platform admin คนที่สอง/สิทธิ์แยก (ทุก admin ทำได้ทุกอย่าง) — ถ้าต้องแยกให้เพิ่ม permissions ต่อ admin ใน Phase 18.5.
+
+
+## Plan D3 — Phase 17 AI Report Engine (4 Sep 2026)
+
+- Whitelist มี 2 สำเนาที่ต้องตรงกัน: `application/chann_app/services/reports_ai.py::ALLOWED_ENTITIES` (สร้าง prompt) และ `data/chann_data/repositories/phase17.py::ENTITIES` (สร้าง statement). เพิ่ม field ต้องแก้ทั้งคู่.
+- AI ใช้ `complete(thinking=True)`; ตอบ `{"clarify": …}` เมื่อคำถามกำกวม → แชทส่งคำถามกลับ.
+- ไฟล์รายงานอยู่ `reports/<license_id>/<uuid>.{csv,html,pdf}` ใน bucket เดิม (signed 7 วัน); ไม่มี bucket = ตอบข้อความอย่างเดียว.
+- แชท: ข้อความที่ขึ้นต้นด้วย `AI_REPORT_TRIGGERS` บน Sale OA และไม่ใช่ "รายงานของฉัน"/"ออกรายงาน …" → AI report. CS ที่ไม่มี `view_reports` ได้ข้อความสิทธิ์.
+
+## Plan D4 — help = guide, never a capability list (4 Sep 2026)
+
+- `usage_help()`/`HELP_SECTIONS` ยังอยู่ในโค้ดแต่ไม่ถูกเรียกจากแชทแล้ว (เก็บไว้ให้ render-guides/เทสต์เดิม); ถ้าจะลบให้ลบพร้อมเทสต์ที่อ้างถึง.
+- ทุก call site ของ `suggest_what_you_can_do` ได้ `quick_reply_url=_guide_button(ctx.oa, language)` แล้ว.
+

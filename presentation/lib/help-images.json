@@ -8,6 +8,7 @@
     "customer-report": "",
     "customer-status": "",
     "customer-after": "",
+    "customer-pdpa": "",
     "tech-join": "",
     "tech-take": "",
     "tech-checkin": "",
@@ -19,6 +20,7 @@
     "sales-chats": "",
     "sales-approve": "",
     "sales-crm": "",
+    "sales-ai-report": "",
     "sales-help": "",
     "permissions-overview": ""
   }

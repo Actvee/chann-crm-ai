@@ -94,6 +94,31 @@ class AuditRepository:
         stmt = stmt.order_by(AuditLog.created_at.desc()).limit(limit)
         return list(self._s.execute(stmt).scalars())
 
+    def list_platform(
+        self,
+        *,
+        cross_tenant: bool | None = None,
+        license_id: uuid.UUID | None = None,
+        actor_type: str | None = None,
+        action: str | None = None,
+        limit: int = 100,
+    ) -> list[AuditLog]:
+        """Phase 18 — the platform admin's view across every tenant. The
+        default is the cross-tenant trail (what the platform itself did);
+        a tenant filter narrows to one shop, an actor filter to who acted."""
+        limit = max(1, min(limit, 500))
+        stmt = select(AuditLog)
+        if cross_tenant is not None:
+            stmt = stmt.where(AuditLog.cross_tenant.is_(cross_tenant))
+        if license_id is not None:
+            stmt = stmt.where(AuditLog.license_id == license_id)
+        if actor_type is not None:
+            stmt = stmt.where(AuditLog.actor_type == actor_type)
+        if action is not None:
+            stmt = stmt.where(AuditLog.action == action)
+        stmt = stmt.order_by(AuditLog.created_at.desc()).limit(limit)
+        return list(self._s.execute(stmt).scalars())
+
 
 def diff_fields(before: dict, after: dict, *, ignore: set[str] = frozenset({"updated_at"})) -> dict:
     """Build the {field: {old, new}} shape Master Spec 3.3 requires.

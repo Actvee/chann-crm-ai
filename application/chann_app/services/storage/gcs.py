@@ -157,3 +157,27 @@ class GcsDocumentStore:
             raise DocumentStoreError(f"no stored document at {path}") from exc
         except Exception as exc:  # noqa: BLE001
             raise DocumentStoreError(f"failed to read {path}: {exc}") from exc
+
+    def _blocking_delete(self, *, object_name: str) -> None:
+        bucket = _get_client().bucket(settings.gcs_bucket_name)
+        bucket.blob(object_name).delete()
+
+    async def delete(self, *, path: str) -> None:
+        """Remove an object for good (Phase 16.5 erasure). A path outside
+        this deployment's bucket is refused like signed_url does; an
+        object already gone is not an error — the goal is absence."""
+        if not settings.gcs_bucket_name:
+            raise DocumentStoreNotConfigured(
+                "document storage is not configured — GCS_BUCKET_NAME is unset"
+            )
+        prefix = f"gs://{settings.gcs_bucket_name}/"
+        if not path.startswith(prefix):
+            raise DocumentStoreError(
+                f"stored path {path!r} does not belong to bucket {settings.gcs_bucket_name}"
+            )
+        try:
+            await asyncio.to_thread(self._blocking_delete, object_name=path[len(prefix):])
+        except Exception as exc:  # noqa: BLE001
+            if "404" in str(exc) or "Not Found" in str(exc):
+                return
+            raise DocumentStoreError(f"failed to delete {path}: {exc}") from exc

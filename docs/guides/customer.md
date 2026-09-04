@@ -73,3 +73,13 @@ _EN: Status, reschedule, cancel — "my jobs" / "repair status" · reschedule: "
 [IMAGE: customer-after — ข้อความจากร้าน 'งาน T-… เสร็จแล้ว ช่วยให้คะแนน' พร้อมปุ่ม 1 ไม่ดี / 2 พอใช้ / 3 ดีเยี่ยม สีส้ม]
 
 _EN: After the repair — When the shop approves the work you get 1–3 rating buttons. Everything is on the home screen (menu → Open the dashboard)._
+
+## 8. ข้อมูลส่วนตัว (PDPA)
+
+ครั้งแรกระบบจะขอความยินยอมก่อนผูกร้าน (ตอบ "ยอมรับ") · ขอสำเนาข้อมูลทั้งหมดได้ด้วย "ขอข้อมูลของฉัน" จะได้ลิงก์หน้าสรุปใช้ได้ 24 ชั่วโมง · ขอลบด้วย "ขอลบข้อมูล" แล้วยืนยัน ชื่อ เบอร์ ที่อยู่ แชท และรูปจะถูกลบจากทุกร้าน (ประวัติงานยังอยู่แต่ไม่มีชื่อคุณ) · บนหน้าจอลูกค้า ส่วน "โปรไฟล์" มีปุ่มเดียวกัน
+
+พิมพ์: `ขอข้อมูลของฉัน`
+
+[IMAGE: customer-pdpa — แชท LINE ข้อความ 'ขอข้อมูลของฉัน' ตอบกลับเป็นลิงก์หน้าสรุปข้อมูล และปุ่ม 'ยืนยันลบข้อมูล' สีส้ม ไอคอนโล่ PDPA]
+
+_EN: Your personal data (PDPA) — The first time, consent is asked before linking a shop (answer "accept"). "my data" gives a 24-hour link to a page with everything; "delete my data" plus a confirmation erases your name, phone, address, chat lines and pictures from every shop (job history stays, without your name). The profile section on the home screen has the same buttons._
