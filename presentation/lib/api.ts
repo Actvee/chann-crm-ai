@@ -7,7 +7,12 @@
 const BASE = process.env.APPLICATION_BASE_URL ?? "http://localhost:8080";
 
 export class ApplicationError extends Error {
-  constructor(public readonly status: number) {
+  /** The Application Tier's own error body (its `detail`), when it sent
+   *  one. The proxy relays it so a page can say WHY — "duplicate phone,
+   *  it is C-2026-0012", "missing: address, appointment" — instead of a
+   *  status code. Every page that branched on the detail was dead code
+   *  until 6 Sep 2026 because this seam swallowed the body. */
+  constructor(public readonly status: number, public readonly body: unknown = undefined) {
     super(`application tier returned ${status}`);
   }
 }
@@ -32,7 +37,18 @@ export async function callApplicationResponse<T>(
     cache: "no-store",
   });
   if (!res.ok) {
-    throw new ApplicationError(res.status);
+    let body: unknown = undefined;
+    try {
+      const text = await res.text();
+      try {
+        body = text ? JSON.parse(text) : undefined;
+      } catch {
+        body = text ? { detail: text.slice(0, 500) } : undefined;
+      }
+    } catch {
+      body = undefined;
+    }
+    throw new ApplicationError(res.status, body);
   }
   if (res.status === 204) {
     return { data: undefined as T, status: res.status };

@@ -39,9 +39,15 @@ function dealValue(deal: Deal): number {
 const NEXT_STAGES: Record<string, string[]> = {
   new: ["proposed", "lost"],
   proposed: ["won", "lost"],
+  // won/lost → new is the reopen (9.6); offered only with deal.reopen.
   won: [],
   lost: [],
 };
+const REOPEN_STAGES = ["won", "lost"];
+function nextStages(stage: string, canReopen: boolean): string[] {
+  const base = NEXT_STAGES[stage] ?? [];
+  return canReopen && REOPEN_STAGES.includes(stage) ? [...base, "new"] : base;
+}
 
 export default function DealList({ liffId }: { liffId: string }) {
   const { t } = useLanguage();
@@ -180,7 +186,7 @@ export default function DealList({ liffId }: { liffId: string }) {
         {
           method: "POST",
           headers: proxyHeaders(token, licenseId),
-          body: JSON.stringify({ stage, allow_reopen: false, lost_reason: lostReason }),
+          body: JSON.stringify({ stage, allow_reopen: permissions.has("deal.reopen"), lost_reason: lostReason }),
         },
       );
       if (!response.ok) {
@@ -329,9 +335,9 @@ export default function DealList({ liffId }: { liffId: string }) {
                 {shortDate(deal.created_at)}
               </div>
               </Link>
-              {NEXT_STAGES[deal.stage]?.length ? (
+              {nextStages(deal.stage, permissions.has("deal.reopen")).length ? (
                 <div className="card-actions">
-                  {NEXT_STAGES[deal.stage].map((stage) => (
+                  {nextStages(deal.stage, permissions.has("deal.reopen")).map((stage) => (
                     <button
                       key={stage}
                       type="button"

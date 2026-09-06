@@ -17,5 +17,6 @@ export {
   liffDiagnostics,
   openExternal,
   proxyHeaders,
+  whenLiffReady,
 } from "../_shared";
 export type { Audience, Membership } from "../_shared";

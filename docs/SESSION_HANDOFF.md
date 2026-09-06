@@ -2356,6 +2356,17 @@ service and confirming `git_commit` matches what you just pushed. Never run
   ข้อความสุภาพ/คำลงท้ายไม่ทำให้คำสั่งหลุด (`_normalise`) · Customer OA: ข้อความที่ไม่ใช่อาการเสีย/ขอช่าง ไม่เปิดงานซ่อมอีกต่อไป
   (ตอบ "ยังไม่แน่ใจ" + ปุ่ม "คุยกับร้าน" ที่พาข้อความไปด้วย) · ลูกค้าได้ LINE เมื่อมอบหมาย/ช่างรับ/ช่างถึง/ร้านเลื่อน-ยกเลิก ·
   ยกเลิกงานต้องยืนยัน · ช่างได้แจ้งยกเลิกทาง Technician OA · แจ้งงานใหม่ถึงทุกคนที่มี `ticket.assign` ทันทีที่แจ้ง (รวมจากหน้า home)
+- **ความถูกต้องของข้อมูล (6 ก.ย., migration `0025_integrity`)**: เลขรันทุกชนิดจองใต้ advisory lock ต่อร้าน · รับงาน/ปฏิเสธ/
+  อนุมัติ lock แถว · ปฏิเสธงานได้เฉพาะงานที่ยังไม่เริ่ม และล้างผู้รับ · รายงานที่ CS ตีกลับ → งานกลับเป็น กำลังทำ ให้ช่างปิดงานส่งใหม่ ·
+  ขั้นที่ถูกตีกลับบล็อกขั้นถัดไป · ห้ามเปลี่ยน role เป็น Owner นอก transfer · claim/เช็คอิน/เช็คเอาต์ ใช้ member ของผู้เรียก ไม่รับจาก body ·
+  ลูกค้าอ่านได้เฉพาะรายงานของตัวเอง, ไม่เห็นรายชื่อช่าง/ทีม · แบบประเมินตอบได้เฉพาะลูกค้าเจ้าของงาน · เบอร์/อีเมลซ้ำตรวจตอนแก้ไขด้วย ·
+  ลูกค้าที่ archive กลับมาผูกร้านได้ (ปลด archive) · pipeline ใช้ `amount` เมื่อยังไม่มีรายการสินค้า · รายงาน AI ไม่นับที่ archive ·
+  `owner_member_id` ถูกเซ็ตทุกที่ที่สร้าง + route `PATCH …/{customers|deals}/{id}/owner` (`reassign_records`) · Platform Admin ล็อก 15 นาที
+  หลังผิด 5 ครั้ง · LINE webhook ไม่ประมวลผล event ซ้ำ (`line_webhook_events`) · SLA แชทไม่เริ่มใหม่ตอน reopen · sweep ใช้ SKIP LOCKED ·
+  409 ไม่พก SQL อีกต่อไป · engine มอบหมายนับโหลดจากงานช่างเมื่อ scope เป็น ticket
+- **หน้าจอ (6 ก.ย.)**: proxy `/api/phase2` ส่ง body ของ error จาก Application ต่อให้หน้า (เบอร์ซ้ำบอกรหัส, dispatch gate บอกว่าขาดอะไร,
+  เช็คอินบอกเหตุผล) · การ์ด pipeline และป้ายร้านถูกระงับรอ LIFF SDK ก่อน init (`whenLiffReady`) · ดีล won/lost เปิดใหม่ได้จากหน้าจอเมื่อมี
+  `deal.reopen` และ "เหตุผลแพ้" บันทึกจริง (app+data รับ `lost_reason`) · ลบทีม/เอาช่างออก/ลูกค้าจบแชท ถามยืนยันก่อน
 - รูปคู่มืออยู่ใน image ของ Application (`chann_app/static/help`); แก้รูปให้แก้ scene ใน `scripts/dev/render-guide-images.py` แล้วรัน `python scripts/dev/render-guide-images.py` (ฟอนต์ Sarabun อยู่ใน `scripts/dev/guide-fonts/`; `--check` ตรวจว่า slot/scene/ไฟล์ตรงกัน; เทสต์ `tests/unit/test_guide_image_renderer.py` กันหลุด). สคริปต์วาดจากข้อความในคู่มือ ไม่ต้องใช้ AI สร้างภาพ.
 - กฎเบอร์โทรอยู่ที่ `application/chann_app/services/phone.py` และ validator ใน `data/chann_data/schemas.py::CustomerIn`; ถ้าจะผ่อนกฎ (เช่นเบอร์ต่างประเทศยาวกว่า 15 หลัก) แก้ทั้งสองที่.
 - `_bulk_customer_entries` แยกบรรทัดด้วย newline หรือ ";" ต้องมี ≥2 รายการจึงเข้าเส้นทาง bulk; ข้อความบรรทัดเดียวยังไปทาง AI เดิม.

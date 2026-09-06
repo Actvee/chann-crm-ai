@@ -9,7 +9,7 @@ import { LanguageSwitcher } from "@/lib/i18n/LanguageSwitcher";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import PipelineSummary from "./PipelineSummary";
-import { LIFF_SDK_SRC, completeLiffRedirect, initLiffSession } from "./_lib";
+import { LIFF_SDK_SRC, completeLiffRedirect, initLiffSession, whenLiffReady } from "./_lib";
 import { SuspendedNotice } from "../_suspended";
 import type { Membership } from "../_shared";
 
@@ -168,8 +168,9 @@ function SalesSuspended({ liffId }: { liffId: string }) {
   const [memberships, setMemberships] = useState<Membership[]>([]);
   useEffect(() => {
     let alive = true;
-    initLiffSession(liffId)
-      .then((session) => {
+    whenLiffReady()
+      .then(() => initLiffSession(liffId))
+      .then((session: { memberships: Membership[] }) => {
         if (alive) setMemberships(session.memberships);
       })
       .catch(() => undefined);

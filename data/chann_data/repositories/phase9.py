@@ -10,7 +10,8 @@ from decimal import Decimal, InvalidOperation
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..models import Customer, Deal, DealProduct, License, Product
+from ..models import Customer, Deal, DealProduct, License, LicenseMember, Product
+from .locks import serialise
 from .tenant_scope import TenantScope
 
 # 9.6's transition table. A value of None as the destination set means "no
@@ -104,6 +105,7 @@ class CustomerRepository:
         """
         year = datetime.now(timezone.utc).year
         prefix = f"C-{year}-"
+        serialise(self._s, f"{scope.license_id}:customer")
         for _ in range(50):
             existing = self._s.execute(
                 select(Customer.customer_id).where(
@@ -148,30 +150,11 @@ class CustomerRepository:
         # caller asked to CREATE, and quietly handing back a different
         # record with a different name is how a customer's details get
         # overwritten by someone else's.
-        normalised = _normalise_phone(phone)
-        normalised_email = _normalise_email(email)
-        if normalised or normalised_email:
-            existing = self._s.execute(
-                select(Customer).where(
-                    Customer.license_id == scope.license_id,
-                    Customer.archived_at.is_(None),
-                )
-            ).scalars().all()
-            for row in existing:
-                if normalised and _normalise_phone(row.phone) == normalised:
-                    raise Phase9Duplicate(
-                        f"{row.customer_id} already has this phone number",
-                        existing_id=str(row.id),
-                        existing_code=row.customer_id,
-                        field="phone",
-                    )
-                if normalised_email and _normalise_email(row.email) == normalised_email:
-                    raise Phase9Duplicate(
-                        f"{row.customer_id} already has this email",
-                        existing_id=str(row.id),
-                        existing_code=row.customer_id,
-                        field="email",
-                    )
+        # Serialised per tenant: two creates for the same number in the
+        # same instant both passed the scan and both succeeded (review, 6
+        # Sep 2026). The lock also covers the number allocation below.
+        serialise(self._s, f"{scope.license_id}:customer")
+        self._refuse_duplicates(scope, phone=phone, email=email)
         if customer_chann_uid:
             existing = self._s.execute(
                 select(Customer).where(
@@ -179,6 +162,23 @@ class CustomerRepository:
                     Customer.customer_chann_uid == customer_chann_uid,
                 )
             ).scalars().first()
+            if existing is not None and existing.archived_at is not None:
+                # The same person back after their lead was archived (by
+                # hand or by the inactivity sweep): the record returns to
+                # the list with whatever is newly known — it used to be
+                # a permanent "already a customer" wall (review, 6 Sep).
+                existing.archived_at = None
+                existing.stage = stage
+                for key, value in (
+                    ("first_name", first_name), ("last_name", last_name), ("phone", phone),
+                    ("email", email), ("address", address), ("notes", notes),
+                ):
+                    if value:
+                        setattr(existing, key, value)
+                if owner_member_id is not None:
+                    existing.owner_member_id = owner_member_id
+                self._s.flush()
+                return existing
             if existing is not None:
                 raise Phase9Conflict("this identity is already a customer of this tenant")
         row = Customer(
@@ -193,12 +193,69 @@ class CustomerRepository:
         self._s.flush()
         return row
 
+    def _refuse_duplicates(
+        self, scope: TenantScope, *, phone: str | None, email: str | None,
+        except_id: uuid.UUID | None = None,
+    ) -> None:
+        """One phone number, one customer; one email, one customer —
+        checked on create AND on update, which used to skip it."""
+        normalised = _normalise_phone(phone)
+        normalised_email = _normalise_email(email)
+        if not (normalised or normalised_email):
+            return
+        existing = self._s.execute(
+            select(Customer).where(
+                Customer.license_id == scope.license_id,
+                Customer.archived_at.is_(None),
+            )
+        ).scalars().all()
+        for row in existing:
+            if except_id is not None and row.id == except_id:
+                continue
+            if normalised and _normalise_phone(row.phone) == normalised:
+                raise Phase9Duplicate(
+                    f"{row.customer_id} already has this phone number",
+                    existing_id=str(row.id),
+                    existing_code=row.customer_id,
+                    field="phone",
+                )
+            if normalised_email and _normalise_email(row.email) == normalised_email:
+                raise Phase9Duplicate(
+                    f"{row.customer_id} already has this email",
+                    existing_id=str(row.id),
+                    existing_code=row.customer_id,
+                    field="email",
+                )
+
     def get(self, scope: TenantScope, customer_id: uuid.UUID) -> Customer | None:
         return self._s.execute(
             select(Customer).where(
                 Customer.id == customer_id, Customer.license_id == scope.license_id,
             )
         ).scalars().first()
+
+    def set_owner(self, scope: TenantScope, customer_id: uuid.UUID, member_id: uuid.UUID | None) -> Customer:
+        """reassign_records: hand the record to a colleague in this tenant."""
+        row = self.get(scope, customer_id)
+        if row is None:
+            raise Phase9NotFound("customer not found")
+        self._require_member(scope, member_id)
+        row.owner_member_id = member_id
+        self._s.flush()
+        return row
+
+    def _require_member(self, scope: TenantScope, member_id: uuid.UUID | None) -> None:
+        if member_id is None:
+            return
+        found = self._s.execute(
+            select(LicenseMember.id).where(
+                LicenseMember.id == member_id,
+                LicenseMember.license_id == scope.license_id,
+                LicenseMember.status == "active",
+            )
+        ).first()
+        if found is None:
+            raise Phase9NotFound("member not found in this tenant")
 
     def list_for_license(self, scope: TenantScope, *, stage: str | None = None) -> list[Customer]:
         query = select(Customer).where(
@@ -212,6 +269,12 @@ class CustomerRepository:
         row = self.get(scope, customer_id)
         if row is None:
             raise Phase9NotFound("customer not found")
+        if "phone" in fields or "email" in fields:
+            serialise(self._s, f"{scope.license_id}:customer")
+            self._refuse_duplicates(
+                scope, phone=fields.get("phone", row.phone), email=fields.get("email", row.email),
+                except_id=row.id,
+            )
         for key in ("first_name", "last_name", "phone", "email", "address", "notes"):
             if key in fields:
                 setattr(row, key, fields[key])
@@ -357,6 +420,24 @@ class DealRepository:
             )
         return row
 
+    def set_owner(self, scope: TenantScope, deal_id: uuid.UUID, member_id: uuid.UUID | None) -> Deal:
+        row = self.get(scope, deal_id)
+        if row is None:
+            raise Phase9NotFound("deal not found")
+        if member_id is not None:
+            found = self._s.execute(
+                select(LicenseMember.id).where(
+                    LicenseMember.id == member_id,
+                    LicenseMember.license_id == scope.license_id,
+                    LicenseMember.status == "active",
+                )
+            ).first()
+            if found is None:
+                raise Phase9NotFound("member not found in this tenant")
+        row.owner_member_id = member_id
+        self._s.flush()
+        return row
+
     def _unique_deal_id(self, scope: TenantScope) -> str:
         """Per-tenant, matching quote_id and customer_id (see Deal's
         docstring in models.py for why this departs from the spec).
@@ -369,6 +450,7 @@ class DealRepository:
         a race; the loop just avoids surfacing the error.
         """
         year = datetime.now(timezone.utc).year
+        serialise(self._s, f"{scope.license_id}:deal")
         for _ in range(50):
             existing = self._s.execute(
                 select(Deal.deal_id).where(
@@ -515,7 +597,7 @@ class DealRepository:
         row = self.get(scope, deal_id)
         if row is None:
             raise Phase9NotFound("deal not found in this tenant")
-        allowed = {"notes", "owner_member_id", "expected_close_date", "amount", "currency"}
+        allowed = {"notes", "owner_member_id", "expected_close_date", "amount", "currency", "lost_reason"}
         for key, value in fields.items():
             if key not in allowed:
                 continue
@@ -548,8 +630,11 @@ class DealRepository:
         rows = self._s.execute(
             select(
                 Deal.id, Deal.stage, Deal.expected_close_date,
+                # Line items when there are any; otherwise the amount the
+                # salesperson stated (0024) — a 250,000 deal with no lines
+                # yet counted as 0 on the pipeline card (review, 6 Sep).
                 func.coalesce(
-                    func.sum(DealProduct.quoted_unit_price * DealProduct.qty), 0,
+                    func.sum(DealProduct.quoted_unit_price * DealProduct.qty), Deal.amount, 0,
                 ).label("value"),
             )
             .outerjoin(DealProduct, DealProduct.deal_id == Deal.id)
@@ -557,7 +642,7 @@ class DealRepository:
                 Deal.license_id == scope.license_id,
                 Deal.archived_at.is_(None),
             )
-            .group_by(Deal.id, Deal.stage, Deal.expected_close_date)
+            .group_by(Deal.id, Deal.stage, Deal.expected_close_date, Deal.amount)
         ).all()
 
         by_stage: dict[str, dict] = {

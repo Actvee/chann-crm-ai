@@ -193,6 +193,7 @@ export const th = {
       chatSend: "ส่ง",
       chatEnd: "จบการสนทนา",
       chatEnded: "จบการสนทนาแล้ว",
+      confirmEndChat: "จบการสนทนากับร้านใช่ไหม กลับมาคุยต่อได้ทุกเมื่อ",
       chatYou: "คุณ",
       chatShop: "ร้าน",
       chatWaiting: "ส่งแล้ว รอร้านตอบ",
@@ -309,6 +310,8 @@ export const th = {
       pickTechnician: "เลือกช่าง",
       noTechnicians: "ยังไม่มีช่างในร้าน ให้ช่าง add LINE ช่างแล้วพิมพ์รหัสเชิญ",
       deleteTeam: "ลบทีม",
+      confirmDeleteTeam: "ลบทีมนี้ใช่ไหม งานที่มอบหมายให้ทีมจะยังอยู่ แต่สมาชิกจะไม่เห็นในชื่อทีมนี้อีก",
+      confirmRemove: "เอาช่างคนนี้ออกจากทีมใช่ไหม",
       actionFailed: "ทำรายการไม่สำเร็จ ลองใหม่อีกครั้ง",
     },
     approvals: {

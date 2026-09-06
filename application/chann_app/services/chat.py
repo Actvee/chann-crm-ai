@@ -3388,7 +3388,7 @@ async def handle_incoming_image(
             content_type=content_type, photo_type=photo_type, uploaded_by_member_id=member_id,
         )
         try:
-            count = len(await client.list_ticket_photos(license_id, str(ticket["id"])))
+            count = len([p for p in await client.list_ticket_photos(license_id, str(ticket["id"])) if p.get("photo_url")])
         except Exception:
             count = 1
     except PhotoRefused as exc:
@@ -7131,6 +7131,7 @@ async def _handle_staff_ticket_create(
             license_id,
             {
                 "issue_description": issue,
+                "owner_member_id": await _member_id_of(client, license_id, ctx),
                 "customer_id": str(customer.get("id") or ""),
                 "customer_name": _display_name(customer),
                 "customer_phone": customer.get("phone"),
@@ -7988,7 +7989,8 @@ async def _handle_quote_create_direct(
                 text=_t(QUOTE_DEAL_NOT_FOUND, language).format(deal_id=deal_code)
             )
         row = await client.create_quote(
-            license_id, {"deal_id": deal["id"]}, actor_id=ctx.chann_uid,
+            license_id, {"deal_id": deal["id"], "owner_member_id": await _member_id_of(client, license_id, ctx)},
+            actor_id=ctx.chann_uid,
         )
     except DataTierError as exc:
         duplicate = exc.structured or {}
@@ -9656,6 +9658,16 @@ CUSTOMER_PROFILE_TEXT = {
 _NOT_SET = {"th": "ยังไม่ระบุ", "en": "not set"}
 
 
+async def _member_id_of(client: DataClient, license_id, ctx: ResolvedContext) -> str | None:
+    """The caller's member id for owner_member_id on records they create
+    (principle 6) — nothing set it until 6 Sep 2026."""
+    try:
+        member = await client.get_member(str(license_id), ctx.chann_uid)
+    except Exception:  # noqa: BLE001
+        return None
+    return str((member or {}).get("id") or "") or None
+
+
 async def _handle_staff_profile_view(
     client: DataClient, *, ctx: ResolvedContext, license_id, language: str,
 ) -> ChatReply:
@@ -10178,6 +10190,9 @@ async def _handle_customer_intent(
             )
             return ChatReply(text=ask_for_missing(still_missing, language), intent=intent)
         try:
+            owner = await _member_id_of(client, license_id, ctx)
+            if owner:
+                editable = {**editable, "owner_member_id": owner}
             row = await client.create_customer(license_id, editable, actor_id=ctx.chann_uid)
         except Exception as exc:  # noqa: BLE001
             structured = getattr(exc, "structured", None) or {}
@@ -10402,6 +10417,9 @@ async def _apply_deal_create(
     if fields.get("expected_close_date"):
         payload["expected_close_date"] = fields["expected_close_date"].isoformat()
     try:
+        owner = await _member_id_of(client, license_id, ctx)
+        if owner:
+            payload = {**payload, "owner_member_id": owner}
         row = await client.create_deal(license_id, payload, actor_id=ctx.chann_uid)
     except DataTierError as exc:
         # A customer holds one open deal at a time. Saying which one, with
@@ -10568,7 +10586,8 @@ async def _handle_quote_intent(
 
     try:
         row = await client.create_quote(
-            license_id, {"deal_id": match["id"]}, actor_id=ctx.chann_uid,
+            license_id, {"deal_id": match["id"], "owner_member_id": await _member_id_of(client, license_id, ctx)},
+            actor_id=ctx.chann_uid,
         )
     except Exception as exc:  # noqa: BLE001
         if _is_not_found(exc):
@@ -12670,6 +12689,7 @@ async def _handle_bulk_customer_add(
     skipped: list[str] = []
     failed: list[str] = []
     last_row = None
+    owner_id = await _member_id_of(client, license_id, ctx)
     for entry in entries:
         label = " ".join(p for p in (entry.get("first_name"), entry.get("last_name")) if p) or entry["raw"][:30]
         if not entry.get("first_name"):
@@ -12684,6 +12704,8 @@ async def _handle_bulk_customer_add(
             continue
         payload = {k: v for k, v in entry.items() if k in ("first_name", "last_name", "phone", "email") and v}
         try:
+            if owner_id:
+                payload = {**payload, "owner_member_id": owner_id}
             row = await client.create_customer(license_id, payload, actor_id=ctx.chann_uid)
             saved.append(f"{label} ({row.get('customer_id', '')})")
             last_row = row

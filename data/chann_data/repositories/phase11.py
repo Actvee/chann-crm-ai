@@ -208,6 +208,7 @@ class AssignmentRuleRepository:
 
     def current_loads(
         self, scope: TenantScope, member_ids: list[str], *, on_day: date,
+        entity_type: str = "deal",
     ) -> dict[str, int]:
         """How much each member has already been given today.
 
@@ -221,6 +222,32 @@ class AssignmentRuleRepository:
         ids = [uuid.UUID(m) for m in member_ids]
         start = datetime.combine(on_day, time.min, tzinfo=timezone.utc)
         end = start + timedelta(days=1)
+        if entity_type == "ticket":
+            # Technicians own no deals, so their load was always 0 and the
+            # per-day cap never bit (review, 6 Sep 2026): count the jobs
+            # given to them for that day.
+            from ..models import ServiceTicket
+            from sqlalchemy import and_, or_
+
+            rows = self._s.execute(
+                select(ServiceTicket.assigned_to_ref, func.count(ServiceTicket.id))
+                .where(
+                    ServiceTicket.license_id == scope.license_id,
+                    ServiceTicket.assigned_target_type == "technician",
+                    ServiceTicket.assigned_to_ref.in_(ids),
+                    ServiceTicket.status.in_(("assigned", "in_progress")),
+                    or_(
+                        ServiceTicket.scheduled_date == on_day,
+                        and_(
+                            ServiceTicket.scheduled_date.is_(None),
+                            ServiceTicket.updated_at >= start, ServiceTicket.updated_at < end,
+                        ),
+                    ),
+                )
+                .group_by(ServiceTicket.assigned_to_ref)
+            ).all()
+            loads = {str(member_id): count for member_id, count in rows}
+            return {m: loads.get(m, 0) for m in member_ids}
         rows = self._s.execute(
             select(Deal.owner_member_id, func.count(Deal.id))
             .where(

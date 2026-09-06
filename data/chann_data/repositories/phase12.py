@@ -19,6 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..models import LicenseMember, ServiceTicket, TechnicianTeam, TechnicianTeamMember
+from .locks import serialise
 from .tenant_scope import TenantScope
 
 TICKET_STATUSES = frozenset(
@@ -75,6 +76,7 @@ class ServiceTicketRepository:
         """
         year = datetime.now(timezone.utc).year
         prefix = f"T-{year}-"
+        serialise(self._s, f"{scope.license_id}:ticket")
         existing = self._s.execute(
             select(ServiceTicket.ticket_number).where(
                 ServiceTicket.license_id == scope.license_id,
@@ -153,6 +155,17 @@ class ServiceTicketRepository:
                 ServiceTicket.id == ticket_id,
                 ServiceTicket.license_id == scope.license_id,
             )
+        ).scalars().first()
+
+    def _get_locked(self, scope: TenantScope, ticket_id: uuid.UUID) -> ServiceTicket | None:
+        """The row, locked until commit — claim/reject are read-check-write
+        and two technicians tapping "รับงาน" at once both used to win
+        (review, 6 Sep 2026)."""
+        return self._s.execute(
+            select(ServiceTicket).where(
+                ServiceTicket.id == ticket_id,
+                ServiceTicket.license_id == scope.license_id,
+            ).with_for_update()
         ).scalars().first()
 
     def get_by_number(self, scope: TenantScope, number: str) -> ServiceTicket | None:
@@ -312,7 +325,7 @@ class ServiceTicketRepository:
         transferring it: two technicians turning up is worse than one
         being told they were too late.
         """
-        row = self.get(scope, ticket_id)
+        row = self._get_locked(scope, ticket_id)
         if row is None:
             raise TicketNotFound("ticket not found in this tenant")
         if row.status in ("completed", "cancelled"):
@@ -382,9 +395,14 @@ class ServiceTicketRepository:
         technician would hide the fact that the first one said no, which is
         usually information the dispatcher needs.
         """
-        row = self.get(scope, ticket_id)
+        row = self._get_locked(scope, ticket_id)
         if row is None:
             raise TicketNotFound("ticket not found in this tenant")
+        if row.status in ("completed", "cancelled", "in_progress"):
+            # A finished job, or one the technician is standing in the
+            # middle of, cannot be handed back with a word (review, 6 Sep
+            # 2026: "ปฏิเสธงาน" after check-out reopened a closed ticket).
+            raise TicketConflict(f"a {row.status} ticket cannot be declined")
         if row.assigned_to_ref != member_id:
             # A team lead may decline for the team (12.4: "ไม่รับ → แจ้ง
             # กลับผู้มอบหมาย" applies to the team the job was given to).
@@ -396,8 +414,13 @@ class ServiceTicketRepository:
             if not is_lead_of_team:
                 raise TicketConflict("this ticket was not assigned to you")
         row.accept_status = "rejected"
-        # Back to open so it shows up in the dispatcher's queue again.
+        # Back to open so it shows up in the dispatcher's queue again — and
+        # no longer theirs: with the assignee left in place the decliner
+        # could still check in, and their home screen kept offering the
+        # job they had just turned down. The audit row says who declined.
         row.status = "open"
+        row.assigned_to_ref = None
+        row.assigned_target_type = None
         self._s.flush()
         return row
 

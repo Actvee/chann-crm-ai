@@ -60,6 +60,11 @@ class PlatformAdminAuthIn(BaseModel):
     password: str
 
 
+class WebhookEventIn(BaseModel):
+    event_id: str
+    oa: str
+
+
 class PlatformAdminAuthOut(BaseModel):
     admin_id: uuid.UUID
     username: str

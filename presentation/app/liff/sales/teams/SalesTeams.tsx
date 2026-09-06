@@ -129,6 +129,7 @@ export default function SalesTeams({ liffId }: { liffId: string }) {
   }
 
   const deleteTeam = (teamId: string) =>
+    window.confirm(copy.confirmDeleteTeam) &&
     send(() =>
       fetch(`/api/phase2/licenses/${licenseId}/technician-teams/${teamId}`, {
         method: "DELETE",
@@ -146,6 +147,7 @@ export default function SalesTeams({ liffId }: { liffId: string }) {
     );
 
   const removeMember = (teamId: string, memberId: string) =>
+    window.confirm(copy.confirmRemove) &&
     send(() =>
       fetch(`/api/phase2/licenses/${licenseId}/technician-teams/${teamId}/members/${memberId}`, {
         method: "DELETE",

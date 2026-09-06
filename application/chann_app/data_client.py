@@ -237,6 +237,35 @@ class DataClient:
         )
         return self._unwrap(resp)
 
+    async def record_webhook_event(self, event_id: str, oa: str) -> bool:
+        """True the first time this LINE event id is seen; False on a
+        redelivery. Errors count as "new" — dropping a real message is
+        worse than a rare duplicate."""
+        try:
+            resp = await self._client.post(
+                f"{self._base}/internal/v1/webhook-events",
+                headers=self._headers, json={"event_id": event_id, "oa": oa},
+            )
+        except Exception:  # noqa: BLE001
+            return True
+        if resp.status_code == 409:
+            return False
+        return True
+
+    async def set_customer_owner(self, license_id: str, customer_id: str, owner_member_id: str | None, actor_id: str | None = None) -> dict:
+        resp = await self._client.patch(
+            f"{self._base}/internal/v1/licenses/{license_id}/customers/{customer_id}/owner",
+            headers=self._headers_for(actor_id), json={"owner_member_id": owner_member_id},
+        )
+        return self._unwrap(resp)
+
+    async def set_deal_owner(self, license_id: str, deal_id: str, owner_member_id: str | None, actor_id: str | None = None) -> dict:
+        resp = await self._client.patch(
+            f"{self._base}/internal/v1/licenses/{license_id}/deals/{deal_id}/owner",
+            headers=self._headers_for(actor_id), json={"owner_member_id": owner_member_id},
+        )
+        return self._unwrap(resp)
+
     async def authenticate_platform_admin(self, username: str, password: str) -> dict | None:
         resp = await self._client.post(
             f"{self._base}/internal/v1/platform-admins/authenticate",

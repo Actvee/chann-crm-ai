@@ -193,6 +193,10 @@ class ReportQueryRepository:
         if group_col is not None:
             stmt = select(group_col.label("key"), measure.label("value")).group_by(group_col).order_by(measure.desc())
         stmt = stmt.select_from(model).where(model.license_id == scope.license_id)
+        if hasattr(model, "archived_at"):
+            # Archived leads and deals are not in any list; they were still
+            # counted in "ลูกค้าใหม่เดือนนี้" (review, 6 Sep 2026).
+            stmt = stmt.where(model.archived_at.is_(None))
         for key, value in spec["filter"].items():
             stmt = stmt.where(table["fields"][key] == value)
         if spec["date_range"]:

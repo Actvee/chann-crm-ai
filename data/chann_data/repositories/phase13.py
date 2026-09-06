@@ -19,6 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..models import ServiceReport, ServiceTicket, TicketPhoto
+from .locks import serialise
 from .tenant_scope import TenantScope
 
 PHOTO_TYPES = frozenset({"checkin", "checkout", "evidence"})
@@ -173,6 +174,7 @@ class FieldServiceRepository:
     def _next_report_id(self, scope: TenantScope) -> str:
         year = datetime.now(timezone.utc).year
         prefix = f"SR-{year}-"
+        serialise(self._s, f"{scope.license_id}:report")
         existing = self._s.execute(
             select(ServiceReport.report_id).where(
                 ServiceReport.license_id == scope.license_id,

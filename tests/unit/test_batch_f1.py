@@ -79,7 +79,8 @@ class TestBulkCustomerAdd:
         reply = await handle_chat_message(client, message=message, ctx=_ctx())
         created = [r for r in client.recorded if r[0] == "create_customer" and r[2].get("first_name") in ("สมชาย", "สมหญิง")]
         assert len(created) == 2
-        assert created[0][2] == {"first_name": "สมชาย", "last_name": "ใจดี", "phone": "0812345678", "email": "somchai@example.com"}
+        assert {k: v for k, v in created[0][2].items() if k != "owner_member_id"} == {"first_name": "สมชาย", "last_name": "ใจดี", "phone": "0812345678", "email": "somchai@example.com"}
+        assert created[0][2]["owner_member_id"] == "member-1"
         assert "เพิ่มลูกค้าแล้ว 2 ราย" in reply.text
         assert "ข้ามเพราะมีอยู่แล้ว 1 ราย" in reply.text and "C-2026-0001" in reply.text
         assert "ไม่สำเร็จ 2 ราย" in reply.text

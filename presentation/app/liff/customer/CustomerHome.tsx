@@ -210,6 +210,7 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
 
   async function endChat() {
     if (!chatSession) return;
+    if (!window.confirm(t.dashboard.customer.confirmEndChat)) return;
     setBusy(true);
     try {
       const response = await fetch(

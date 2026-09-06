@@ -78,6 +78,10 @@ async def photo_links(client: DataClient, *, license_id: str, ticket_id: str) ->
     out = []
     for row in rows:
         path = str(row.get("photo_url") or "")
+        if not path:
+            # A GPS-only check-in row: coordinates, no picture. Not a
+            # blank entry on the report page, not a signing attempt.
+            continue
         url = ""
         try:
             url = path if path.startswith("http") else await store.signed_url(

@@ -80,7 +80,12 @@ class ChatSessionRepository:
             previous.status = "open" if previous.assigned_to is None else "assigned"
             previous.closed_at = None
             previous.escalated_at = None
-            previous.sla_deadline = _now() + timedelta(minutes=max(1, sla_minutes))
+            # No clock until the customer says something: the shop's
+            # answer is what invited them back, and restarting the SLA on
+            # the reopen made a satisfied, silent customer trigger a
+            # fresh warning every time (review, 6 Sep 2026). add_message
+            # starts it with the customer's next line.
+            previous.sla_deadline = None
             previous.timeout_at = _now() + timedelta(minutes=max(1, timeout_minutes))
             if product_id:
                 previous.product_id = product_id
@@ -255,13 +260,15 @@ class ChatSessionRepository:
         """Live conversations the shop has left past the deadline and not
         yet been told about. The caller marks them escalated."""
         now = now or _now()
+        # skip_locked: the sweep runs from every webhook, the dashboard
+        # poll and the scheduler; overlapping runs both pushed the warning.
         return list(self._s.execute(
             select(ChatSession).where(
                 ChatSession.status.in_(LIVE_STATUSES),
                 ChatSession.sla_deadline.is_not(None),
                 ChatSession.sla_deadline < now,
                 ChatSession.escalated_at.is_(None),
-            ).order_by(ChatSession.sla_deadline.asc())
+            ).order_by(ChatSession.sla_deadline.asc()).with_for_update(skip_locked=True)
         ).scalars())
 
     def mark_escalated(self, row: ChatSession, *, now: datetime | None = None) -> None:
@@ -277,7 +284,7 @@ class ChatSessionRepository:
                 ChatSession.status.in_(LIVE_STATUSES),
                 ChatSession.timeout_at.is_not(None),
                 ChatSession.timeout_at < now,
-            )
+            ).with_for_update(skip_locked=True)
         ).scalars())
         for row in rows:
             row.status = "timeout"

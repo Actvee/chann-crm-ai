@@ -110,6 +110,13 @@ async def handle_webhook(
             line_user_id = event.get("source", {}).get("userId")
             if not line_user_id:
                 continue
+            # A redelivery (LINE retries when the reply took too long) must
+            # not file a second ticket or note: the event id is recorded
+            # once and the repeat dropped (review, 6 Sep 2026).
+            event_id = str(event.get("webhookEventId") or "")
+            if event_id and not await client.record_webhook_event(event_id, oa):
+                log.info("dropping redelivered LINE event %s on %s", event_id, oa)
+                continue
             ctx = await resolve_context(client, oa, line_user_id)
             user_text = (event.get("message") or {}).get("text") or ""
             # Phase 16.3: the person's own language, on every OA. Stored

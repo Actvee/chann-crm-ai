@@ -191,6 +191,7 @@ export const en: Dictionary = {
       chatSend: "Send",
       chatEnd: "End conversation",
       chatEnded: "Conversation ended",
+      confirmEndChat: "End the conversation with the shop? You can come back to it any time.",
       chatYou: "You",
       chatShop: "Shop",
       chatWaiting: "Sent, waiting for the shop",
@@ -307,6 +308,8 @@ export const en: Dictionary = {
       pickTechnician: "Pick a technician",
       noTechnicians: "No technicians yet — they add the technician LINE and type an invite code",
       deleteTeam: "Delete team",
+      confirmDeleteTeam: "Delete this team? Jobs given to it stay, but members will no longer see them under this team.",
+      confirmRemove: "Remove this technician from the team?",
       actionFailed: "That did not go through — try again",
     },
     approvals: {

@@ -680,6 +680,9 @@ class DealWriteIn(BaseModel):
     amount: Decimal | None = None
     currency: str | None = None
     expected_close_date: date | None = None
+    # review (6 Sep 2026): the detail page offered this field and the
+    # edit was dropped on the floor with "saved"
+    lost_reason: str | None = None
 
 
 @router.patch("/licenses/{license_id}/deals/{deal_id}")
@@ -1511,6 +1514,30 @@ async def list_tickets(
         raise _propagate(exc)
 
 
+async def _member_of(client: DataClient, license_id: str, principal: TenantPrincipal) -> str:
+    """The caller's own member id. Every ticket action used to take
+    `member_id` from the request body, so anyone with ticket.update could
+    claim, check in and file a service report as a colleague (review, 6
+    Sep 2026)."""
+    if principal.is_customer:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="staff only")
+    try:
+        member = await client.get_member(license_id, principal.chann_uid)
+    except DataTierError as exc:
+        raise _propagate(exc)
+    member_id = str((member or {}).get("id") or "")
+    if not member_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="not a member of this shop")
+    return member_id
+
+
+def _staff_only(principal: TenantPrincipal) -> None:
+    """Routes that list the shop's people or dispatch state are not for a
+    linked customer, whose ticket.read is scoped to their own jobs."""
+    if principal.is_customer:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="staff only")
+
+
 @router.get("/licenses/{license_id}/tickets/{ticket_id}/dispatch-check")
 async def ticket_dispatch_check(
     license_id: str,
@@ -1520,6 +1547,7 @@ async def ticket_dispatch_check(
 ):
     _require_same_tenant(principal, license_id)
     principal.require("ticket.read")
+    _staff_only(principal)
     try:
         return await client.ticket_dispatch_check(license_id, ticket_id)
     except DataTierError as exc:
@@ -1536,9 +1564,10 @@ async def claim_ticket(
 ):
     _require_same_tenant(principal, license_id)
     principal.require("ticket.update")
+    member_id = await _member_of(client, license_id, principal)
     try:
         return await client.claim_ticket(
-            license_id, ticket_id, str(payload.get("member_id") or ""),
+            license_id, ticket_id, member_id,
             actor_id=principal.chann_uid,
         )
     except DataTierError as exc:
@@ -1637,9 +1666,10 @@ async def reject_ticket(
     is told by chat's handler; this route is the home screen's twin."""
     _require_same_tenant(principal, license_id)
     principal.require("ticket.update")
+    member_id = await _member_of(client, license_id, principal)
     try:
         row = await client.reject_ticket(
-            license_id, ticket_id, str(payload.get("member_id") or ""),
+            license_id, ticket_id, member_id,
             actor_id=principal.chann_uid,
         )
     except DataTierError as exc:
@@ -1671,16 +1701,17 @@ async def check_out_ticket(
     """
     _require_same_tenant(principal, license_id)
     principal.require("ticket.update")
+    member_id = await _member_of(client, license_id, principal)
     try:
         report = await client.check_out_ticket(
             license_id, ticket_id,
-            member_id=str(payload.get("member_id") or ""),
+            member_id=member_id,
             # Check-out IS the service report: the Data Tier writes the
             # report row in the same transaction as the status change, so
             # the two can never disagree about whether a visit happened.
             report_data=payload.get("report_data") or {},
             gps_lat=payload.get("gps_lat"), gps_lng=payload.get("gps_lng"),
-            photo_url=payload.get("photo_url"),
+            photo_url=None,  # photos arrive through the upload route, never as a caller-named path
             actor_id=principal.chann_uid,
         )
         # Phase 14-B: the same hook chat calls — open the approval steps
@@ -1705,12 +1736,13 @@ async def check_in_ticket(
 ):
     _require_same_tenant(principal, license_id)
     principal.require("ticket.update")
+    member_id = await _member_of(client, license_id, principal)
     try:
         return await client.check_in_ticket(
             license_id, ticket_id,
-            member_id=str(payload.get("member_id") or ""),
+            member_id=member_id,
             gps_lat=payload.get("gps_lat"), gps_lng=payload.get("gps_lng"),
-            photo_url=payload.get("photo_url"),
+            photo_url=None,  # photos arrive through the upload route, never as a caller-named path
             actor_id=principal.chann_uid,
         )
     except DataTierError as exc:
@@ -1727,7 +1759,16 @@ async def list_service_reports(
     _require_same_tenant(principal, license_id)
     principal.require("ticket.read")
     try:
-        return await client.list_service_reports(license_id, status=status)
+        rows = await client.list_service_reports(license_id, status=status)
+        if principal.is_customer:
+            # Their own jobs' reports only — a linked customer could read
+            # every report in the shop (review, 6 Sep 2026).
+            mine = {
+                str(t.get("id")) for t in await client.list_tickets(license_id)
+                if str(t.get("customer_chann_uid") or "") == principal.chann_uid
+            }
+            rows = [r for r in rows if str(r.get("ticket_id") or "") in mine]
+        return rows
     except DataTierError as exc:
         raise _propagate(exc)
 
@@ -1819,11 +1860,50 @@ async def create_customer(
     enough to tell two customers apart."""
     _require_same_tenant(principal, license_id)
     principal.require("customer.create")
+    body = payload.model_dump(exclude_none=True)
+    body["owner_member_id"] = await _member_of(client, license_id, principal)
     try:
         return await client.create_customer(
-            license_id, payload.model_dump(exclude_none=True),
+            license_id, body,
             actor_id=principal.chann_uid,
         )
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+class OwnerIn(BaseModel):
+    owner_member_id: str | None = None
+
+
+@router.patch("/licenses/{license_id}/customers/{customer_id}/owner")
+async def set_customer_owner(
+    license_id: str,
+    customer_id: str,
+    payload: OwnerIn,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """reassign_records: hand a customer to a colleague."""
+    _require_same_tenant(principal, license_id)
+    principal.require("reassign_records")
+    try:
+        return await client.set_customer_owner(license_id, customer_id, payload.owner_member_id, actor_id=principal.chann_uid)
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.patch("/licenses/{license_id}/deals/{deal_id}/owner")
+async def set_deal_owner(
+    license_id: str,
+    deal_id: str,
+    payload: OwnerIn,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    _require_same_tenant(principal, license_id)
+    principal.require("reassign_records")
+    try:
+        return await client.set_deal_owner(license_id, deal_id, payload.owner_member_id, actor_id=principal.chann_uid)
     except DataTierError as exc:
         raise _propagate(exc)
 
@@ -1845,9 +1925,11 @@ async def create_deal(
 ):
     _require_same_tenant(principal, license_id)
     principal.require("deal.create")
+    body = payload.model_dump(exclude_none=True)
+    body["owner_member_id"] = await _member_of(client, license_id, principal)
     try:
         return await client.create_deal(
-            license_id, payload.model_dump(exclude_none=True),
+            license_id, body,
             actor_id=principal.chann_uid,
         )
     except DataTierError as exc:
@@ -1900,9 +1982,11 @@ async def create_quote(
 ):
     _require_same_tenant(principal, license_id)
     principal.require("quote.create")
+    body = payload.model_dump()
+    body["owner_member_id"] = await _member_of(client, license_id, principal)
     try:
         return await client.create_quote(
-            license_id, payload.model_dump(), actor_id=principal.chann_uid,
+            license_id, body, actor_id=principal.chann_uid,
         )
     except DataTierError as exc:
         raise _propagate(exc)
@@ -1936,6 +2020,10 @@ async def create_ticket(
         # Filed from the customer app: the ticket is theirs, whatever the
         # body says — that is what makes it show on their own list.
         body["customer_chann_uid"] = principal.chann_uid
+    else:
+        # Logged by staff: the CS who took the call owns it (principle 6),
+        # which is what the "ticket_owner" approval step keys on.
+        body["owner_member_id"] = await _member_of(client, license_id, principal)
     try:
         row = await client.create_ticket(
             license_id, body,
@@ -2079,6 +2167,7 @@ async def list_technician_teams(
     client: DataClient = Depends(get_data_client),
 ):
     _require_same_tenant(principal, license_id)
+    _staff_only(principal)
     principal.require("ticket.read")
     try:
         return await client.list_technician_teams(license_id)
@@ -2141,6 +2230,7 @@ async def list_technician_team_members(
 ):
     _require_same_tenant(principal, license_id)
     principal.require("ticket.read")
+    _staff_only(principal)
     try:
         members = await client.list_team_members(license_id, team_id)
     except DataTierError as exc:
@@ -2158,6 +2248,7 @@ async def list_technicians(
     the pool a team is built from and a job is dispatched to."""
     _require_same_tenant(principal, license_id)
     principal.require("ticket.read")
+    _staff_only(principal)
     try:
         members = await client.list_members(license_id)
     except DataTierError as exc:

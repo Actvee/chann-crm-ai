@@ -29,6 +29,8 @@ from decimal import Decimal, InvalidOperation
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from .locks import serialise
+
 from ..models import (
     Deal,
     DealProduct,
@@ -346,6 +348,7 @@ class QuoteRepository:
         DealRepository._unique_deal_id and phase65.py's invite/license
         codes."""
         year = datetime.now(timezone.utc).year
+        serialise(self._s, f"{license_id}:quote")
         for _ in range(50):
             existing = self._s.execute(
                 select(Quote.quote_id).where(

@@ -1834,7 +1834,8 @@ class TestPhase9CustomerChat:
         )
         assert any(r[0] == "create_customer" for r in client.recorded)
         call = next(r for r in client.recorded if r[0] == "create_customer")
-        assert call[2] == {"first_name": "สมหญิง", "last_name": "ใจดี", "phone": "0812345678"}
+        assert {k: v for k, v in call[2].items() if k != "owner_member_id"} == {"first_name": "สมหญิง", "last_name": "ใจดี", "phone": "0812345678"}
+        assert call[2]["owner_member_id"] == "member-1"  # principle 6: the creator owns the record
         assert "สมหญิง" in third_reply.text
 
     async def test_update_customer_by_name(self):

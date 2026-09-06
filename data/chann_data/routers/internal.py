@@ -240,6 +240,7 @@ from ..schemas import (
     OwnershipTransferOut,
     OwnershipTransferRequestIn,
     PlatformAdminAuthIn,
+    WebhookEventIn,
     PlatformAdminAuthOut,
     PlatformAdminSessionIn,
     PlatformAdminSessionOut,
@@ -253,11 +254,28 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/internal/v1", dependencies=[Depends(require_internal_secret)])
 
 
+@router.post("/webhook-events", status_code=201)
+def record_webhook_event(payload: WebhookEventIn, session: Session = Depends(get_session)):
+    """201 the first time an event id is seen, 409 after — the application
+    drops LINE's redeliveries on the 409."""
+    from ..models import LineWebhookEvent
+
+    try:
+        session.add(LineWebhookEvent(event_id=payload.event_id[:64], oa=payload.oa[:16]))
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"error": "duplicate_event"})
+    return {"event_id": payload.event_id, "new": True}
+
+
 @router.post("/platform-admins/authenticate", response_model=PlatformAdminAuthOut)
 def authenticate_platform_admin(
     payload: PlatformAdminAuthIn, session: Session = Depends(get_session)
 ):
     admin = PlatformAdminRepository(session).authenticate(payload.username, payload.password)
+    # Committed either way: a refused attempt must count.
+    session.commit()
     if admin is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid credentials")
     return PlatformAdminAuthOut(admin_id=admin.id, username=admin.username)
@@ -534,10 +552,25 @@ def _role_out(session: Session, scope: TenantScope, role) -> RoleOut:
     )
 
 
+def _integrity_conflict(exc: IntegrityError) -> HTTPException:
+    """A unique/foreign-key clash as a 409 naming the constraint — never
+    str(exc), which carried the SQL and every bound value (phone numbers,
+    names) to the browser (review, 6 Sep 2026)."""
+    diag = getattr(getattr(exc, "orig", None), "diag", None)
+    constraint = str(getattr(diag, "constraint_name", "") or "") or "unique"
+    log.warning("integrity conflict on %s", constraint)
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={"error": "conflict", "constraint": constraint},
+    )
+
+
 def _phase2_http_error(exc: Exception) -> HTTPException:
     if isinstance(exc, Phase2NotFound):
         return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
-    if isinstance(exc, (Phase2Conflict, IntegrityError)):
+    if isinstance(exc, IntegrityError):
+        return _integrity_conflict(exc)
+    if isinstance(exc, Phase2Conflict):
         return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
     if isinstance(exc, ValueError):
         return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
@@ -1958,6 +1991,8 @@ def _phase9_http_error(exc: Exception) -> HTTPException:
         )
     if isinstance(exc, Phase9Conflict):
         return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    if isinstance(exc, IntegrityError):
+        return _integrity_conflict(exc)
     if isinstance(exc, HTTPException):
         return exc
     log.exception("unhandled data-tier error: %s", exc)
@@ -2037,6 +2072,33 @@ def list_customers(
     else:
         rows = repo.list_for_license(scope, stage=stage)
     return [CustomerOut.model_validate(r, from_attributes=True) for r in rows]
+
+
+@router.patch("/licenses/{license_id}/customers/{customer_id}/owner", response_model=CustomerOut)
+def set_customer_owner(
+    license_id: uuid.UUID, customer_id: uuid.UUID, payload: dict,
+    session: Session = Depends(get_session), x_actor_id: str = Header(default=""),
+):
+    """reassign_records (spec §4): the record's owner_member_id, which
+    nothing set or moved until 6 Sep 2026."""
+    scope = TenantScope(license_id=license_id)
+    raw = payload.get("owner_member_id")
+    try:
+        member_id = uuid.UUID(str(raw)) if raw else None
+        repo = CustomerRepository(session)
+        before = repo.get(scope, customer_id)
+        was = str(before.owner_member_id) if before is not None and before.owner_member_id else None
+        row = repo.set_owner(scope, customer_id, member_id)
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="customer", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="update",
+            field_changes=diff_fields({"owner_member_id": was}, {"owner_member_id": str(member_id) if member_id else None}),
+        )
+        session.commit()
+        return CustomerOut.model_validate(row, from_attributes=True)
+    except Exception as exc:
+        session.rollback()
+        raise _phase9_http_error(exc)
 
 
 @router.patch("/licenses/{license_id}/customers/{customer_id}", response_model=CustomerOut)
@@ -2293,6 +2355,8 @@ def _phase10_http_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
     if isinstance(exc, Phase10Conflict):
         return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    if isinstance(exc, IntegrityError):
+        return _integrity_conflict(exc)
     if isinstance(exc, HTTPException):
         return exc
     log.exception("unhandled data-tier error: %s", exc)
@@ -2731,6 +2795,32 @@ def link_quote_document(
         raise _phase2_http_error(exc)
 
 
+@router.patch("/licenses/{license_id}/deals/{deal_id}/owner", response_model=DealOut)
+def set_deal_owner(
+    license_id: uuid.UUID, deal_id: uuid.UUID, payload: dict,
+    session: Session = Depends(get_session), x_actor_id: str = Header(default=""),
+):
+    scope = TenantScope(license_id=license_id)
+    raw = payload.get("owner_member_id")
+    try:
+        member_id = uuid.UUID(str(raw)) if raw else None
+        repo = DealRepository(session)
+        before = repo.get(scope, deal_id)
+        was = str(before.owner_member_id) if before is not None and before.owner_member_id else None
+        row = repo.set_owner(scope, deal_id, member_id)
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="deal", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="update",
+            field_changes=diff_fields({"owner_member_id": was}, {"owner_member_id": str(member_id) if member_id else None}),
+        )
+        session.commit()
+        session.refresh(row)
+        return row
+    except Exception as exc:
+        session.rollback()
+        raise _phase9_http_error(exc)
+
+
 @router.patch("/licenses/{license_id}/deals/{deal_id}", response_model=DealOut)
 def update_deal(
     license_id: uuid.UUID,
@@ -2751,7 +2841,7 @@ def update_deal(
         existing = repo.get(scope, deal_id)
         if existing is None:
             raise HTTPException(status_code=404, detail="deal not found")
-        tracked = ("notes", "owner_member_id")
+        tracked = ("notes", "owner_member_id", "amount", "currency", "expected_close_date", "lost_reason")
         before = {f: getattr(existing, f) for f in tracked}
         row = repo.update(scope, deal_id, payload)
         after = {f: getattr(row, f) for f in tracked}
@@ -3067,6 +3157,7 @@ def execute_assignment(
 
         loads = repo.current_loads(
             scope, [c["id"] for c in candidates], on_day=date.today(),
+            entity_type=str(payload.entity_type or "deal"),
         )
         outcome = assignment_engine.choose(
             rule, candidates, loads,
@@ -3818,6 +3909,7 @@ def answer_survey(
     try:
         row = ApprovalRepository(session).submit_survey(
             scope, survey_id, score=int(payload.get("score")), comment=payload.get("comment"),
+            actor_chann_uid=x_actor_id or None,
         )
         AuditRepository(session).write(
             license_id=license_id, entity_type="satisfaction_survey", entity_id=row.id,

@@ -29,6 +29,8 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..models import CustomRole, LicenseMember
+
 from ..models import (
     ApprovalStep, ApprovalWorkflow, SatisfactionSurvey, ServiceReport, ServiceTicket,
 )
@@ -170,7 +172,7 @@ class ApprovalRepository:
                 if ticket.owner_member_id is not None:
                     approver_ref = str(ticket.owner_member_id)
                 else:
-                    approver_type, approver_ref = "role", "admin"
+                    approver_type, approver_ref = "role", self._fallback_role(scope)
             step = ApprovalStep(
                 license_id=scope.license_id, entity_type="service_report",
                 entity_id=report.id, workflow_id=workflow.id,
@@ -181,6 +183,26 @@ class ApprovalRepository:
             created.append(step)
         self._s.flush()
         return created
+
+    def _fallback_role(self, scope: TenantScope) -> str:
+        """The role that approves when a ticket has no owner: "admin" when
+        somebody holds it, otherwise the tenant's owner role — an owner-
+        only shop used to get a step nobody could act on (review, 6 Sep)."""
+        has_admin = self._s.execute(
+            select(LicenseMember.id).where(
+                LicenseMember.license_id == scope.license_id,
+                LicenseMember.role == "admin",
+                LicenseMember.status == "active",
+            )
+        ).first()
+        if has_admin is not None:
+            return "admin"
+        owner_role = self._s.execute(
+            select(CustomRole.role_name).where(
+                CustomRole.license_id == scope.license_id, CustomRole.is_owner.is_(True),
+            )
+        ).scalar_one_or_none()
+        return owner_role or "admin"
 
     def pending_for(
         self, scope: TenantScope, *, member_id: uuid.UUID | None, role_names: list[str],
@@ -228,24 +250,32 @@ class ApprovalRepository:
         'rejected' on a reject. The survey is returned only when it was
         created here, so the caller can send it in the same breath.
         """
-        step = self._s.get(ApprovalStep, step_id)
+        # Locked: two approvers acting on the same last step at once both
+        # passed the "pending" check and the second died on the survey's
+        # unique constraint after the first had committed (review, 6 Sep).
+        step = self._s.execute(
+            select(ApprovalStep).where(ApprovalStep.id == step_id).with_for_update()
+        ).scalars().first()
         if step is None:
             raise ApprovalNotFound("approval step not found")
         scope.assert_owns(step.license_id)
         if step.status != "pending":
             raise ApprovalConflict("step already acted on")
 
-        earlier_pending = self._s.execute(
+        # An earlier step that is still open OR was rejected blocks this
+        # one: a report CS sent back must not be approved by the admin on
+        # the next step (review, 6 Sep 2026).
+        earlier_blocking = self._s.execute(
             select(ApprovalStep).where(
                 ApprovalStep.license_id == scope.license_id,
                 ApprovalStep.entity_type == step.entity_type,
                 ApprovalStep.entity_id == step.entity_id,
                 ApprovalStep.step_order < step.step_order,
-                ApprovalStep.status == "pending",
+                ApprovalStep.status.in_(("pending", "rejected")),
             )
         ).first()
-        if earlier_pending is not None:
-            raise ApprovalConflict("an earlier step is still pending")
+        if earlier_blocking is not None:
+            raise ApprovalConflict("an earlier step is still pending or was rejected")
 
         allowed = (
             (step.approver_type == "user" and member_id is not None
@@ -265,10 +295,20 @@ class ApprovalRepository:
             raise ApprovalNotFound("service report for step not found")
         scope.assert_owns(report.license_id)
 
+        if report.status == "rejected":
+            raise ApprovalConflict("this report was sent back; wait for the technician to resubmit")
+
         survey: SatisfactionSurvey | None = None
         if not approve:
             report.status = "rejected"
             report_status = "rejected"
+            # The technician can fix it and check out again only if the
+            # ticket is back in progress: check-out refuses a completed
+            # ticket (13.4), and until 6 Sep 2026 a rejected report was a
+            # dead end the reply text promised a way out of.
+            ticket = self._s.get(ServiceTicket, report.ticket_id)
+            if ticket is not None and ticket.status == "completed":
+                ticket.status = "in_progress"
         else:
             remaining = self._s.execute(
                 select(ApprovalStep).where(
@@ -329,11 +369,19 @@ class ApprovalRepository:
 
     def submit_survey(
         self, scope: TenantScope, survey_id: uuid.UUID, *, score: int, comment: str | None,
+        actor_chann_uid: str | None = None,
     ) -> SatisfactionSurvey:
         row = self._s.get(SatisfactionSurvey, survey_id)
         if row is None:
             raise ApprovalNotFound("survey not found")
         scope.assert_owns(row.license_id)
+        if actor_chann_uid:
+            # The customer the ticket belongs to — not the CS who approved
+            # it, not another customer of the shop (review, 6 Sep 2026).
+            ticket = self._s.get(ServiceTicket, row.ticket_id)
+            owner = str((ticket.customer_chann_uid if ticket is not None else "") or "")
+            if owner and owner != actor_chann_uid:
+                raise ApprovalNotFound("survey not found")
         if row.submitted_at is not None:
             raise ApprovalConflict("survey already answered")
         if str(score) not in row.scale_config_json:

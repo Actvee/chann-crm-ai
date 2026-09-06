@@ -18,6 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..models import (
+    LicenseMember,
     Product,
     SalesGroup,
     SalesGroupMember,
@@ -383,6 +384,18 @@ class TechnicianTeamRepository:
         ).scalars().first()
         if team is None:
             raise MasterDataNotFound("team not found")
+        # The member must be one of ours: a UUID from another tenant used
+        # to go straight into the link row, and from there into the
+        # assignment engine's candidate list (review, 6 Sep 2026).
+        member = self._s.execute(
+            select(LicenseMember.id).where(
+                LicenseMember.id == member_id,
+                LicenseMember.license_id == scope.license_id,
+                LicenseMember.status == "active",
+            )
+        ).first()
+        if member is None:
+            raise MasterDataNotFound("member not found in this tenant")
 
         existing = self._s.execute(
             select(TechnicianTeamMember).where(

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
-import { initLiffSession, proxyHeaders } from "./_lib";
+import { initLiffSession, whenLiffReady, proxyHeaders } from "./_lib";
 
 type Pipeline = {
   by_stage: Record<string, { count: number; value: string }>;
@@ -36,6 +36,7 @@ export default function PipelineSummary({ liffId }: { liffId: string }) {
 
   const load = useCallback(async () => {
     try {
+      await whenLiffReady();
       const session = await initLiffSession(liffId);
       const license = session.memberships[0]?.license_id ?? "";
       if (!session.token || !license) return;

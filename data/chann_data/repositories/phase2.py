@@ -214,7 +214,13 @@ class MemberRoleRepository:
         if member is None:
             raise Phase2NotFound("member not found")
         current_role = RoleRepository(self._s).get(scope, member.role)
-        if current_role is not None and current_role.is_owner and not role.is_owner:
+        currently_owner = current_role is not None and current_role.is_owner
+        if currently_owner and not role.is_owner:
+            raise Phase2Conflict("owner changes require the transfer flow")
+        if role.is_owner and not currently_owner:
+            # Nobody becomes Owner through a role edit: member.manage could
+            # promote itself and there would be two owners (review, 6 Sep
+            # 2026). Ownership moves through the two-step transfer only.
             raise Phase2Conflict("owner changes require the transfer flow")
         member.role = role.role_name
         return member

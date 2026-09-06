@@ -204,15 +204,35 @@ class PlatformAdminRepository:
         self._s = session
         self._hasher = PasswordHasher()
 
+    MAX_FAILED = 5
+    LOCK_MINUTES = 15
+
     def authenticate(self, username: str, password: str) -> PlatformAdmin | None:
+        """None on a wrong password AND while locked out: five failures in
+        a row lock the account for fifteen minutes. The caller commits, so
+        the counter survives a refused login."""
+        from datetime import datetime, timedelta, timezone
+
         admin = self._s.execute(
-            select(PlatformAdmin).where(PlatformAdmin.username == username)
+            select(PlatformAdmin).where(PlatformAdmin.username == username).with_for_update()
         ).scalar_one_or_none()
         if admin is None:
             return None
-        try:
-            if not self._hasher.verify(admin.password_hash, password):
-                return None
-        except Exception:
+        now = datetime.now(timezone.utc)
+        if admin.locked_until is not None and admin.locked_until > now:
             return None
+        try:
+            ok = self._hasher.verify(admin.password_hash, password)
+        except Exception:
+            ok = False
+        if not ok:
+            admin.failed_attempts = int(admin.failed_attempts or 0) + 1
+            if admin.failed_attempts >= self.MAX_FAILED:
+                admin.locked_until = now + timedelta(minutes=self.LOCK_MINUTES)
+                admin.failed_attempts = 0
+            self._s.flush()
+            return None
+        admin.failed_attempts = 0
+        admin.locked_until = None
+        self._s.flush()
         return admin

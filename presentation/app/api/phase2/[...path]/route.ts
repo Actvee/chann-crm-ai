@@ -56,8 +56,17 @@ async function proxy(request: Request, context: Context) {
       ? new NextResponse(null, { status: result.status })
       : NextResponse.json(result.data, { status: result.status });
   } catch (error) {
-    const status = error instanceof ApplicationError ? error.status : 503;
-    return NextResponse.json({ detail: "Phase 2 request failed" }, { status });
+    if (error instanceof ApplicationError) {
+      // The upstream body, as sent: pages read `detail` (a string, or an
+      // object such as {error: "duplicate", existing_code} or
+      // {error: "dispatch_blocked", missing: [...]}).
+      const body =
+        error.body && typeof error.body === "object"
+          ? (error.body as Record<string, unknown>)
+          : { detail: typeof error.body === "string" ? error.body : "request failed" };
+      return NextResponse.json(body, { status: error.status });
+    }
+    return NextResponse.json({ detail: "application tier unreachable" }, { status: 503 });
   }
 }
 

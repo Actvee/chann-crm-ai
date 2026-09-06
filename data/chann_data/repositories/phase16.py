@@ -23,6 +23,8 @@ from datetime import date, datetime, timedelta, timezone
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from .locks import serialise
+
 from ..models import Customer, License, Product, Warranty
 from .tenant_scope import TenantScope
 
@@ -51,6 +53,7 @@ class WarrantyRepository:
     def _next_warranty_number(self, scope: TenantScope) -> str:
         year = datetime.now(timezone.utc).year
         prefix = f"W-{year}-"
+        serialise(self._s, f"{scope.license_id}:warranty")
         existing = self._s.execute(
             select(Warranty.warranty_number).where(
                 Warranty.license_id == scope.license_id,

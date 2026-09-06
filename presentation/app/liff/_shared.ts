@@ -168,6 +168,28 @@ export function liffDiagnostics(): string {
 }
 
 /** Returns the ID token and memberships, or throws with a message worth showing. */
+/** Resolves once the LIFF SDK script has defined window.liff (or after
+ *  `ms`, so a widget that cannot init still fails visibly rather than
+ *  waiting forever). Widgets that mount before the <Script> has run used
+ *  to call initLiffSession, throw REQUIRED_NOT_CONFIGURED, swallow it and
+ *  never render (review, 6 Sep 2026: the suspended-shop notice and the
+ *  pipeline card were missing on a cold open from the rich menu). */
+export function whenLiffReady(ms = 20_000): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof window === "undefined" || getLiff()) {
+      resolve();
+      return;
+    }
+    const started = Date.now();
+    const poll = setInterval(() => {
+      if (getLiff() || Date.now() - started > ms) {
+        clearInterval(poll);
+        resolve();
+      }
+    }, 200);
+  });
+}
+
 export async function initLiffSession(
   liffId: string,
   audience: Audience = "sales",

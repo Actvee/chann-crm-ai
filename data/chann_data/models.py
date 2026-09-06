@@ -84,6 +84,24 @@ class PlatformAdmin(TimestampMixin, Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
     username: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)  # argon2
+    # Lockout (review, 6 Sep 2026): the most sensitive credential had no
+    # failed-attempt counter at all.
+    failed_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class LineWebhookEvent(Base):
+    """One row per LINE webhook event id, so a redelivered event (LINE
+    retries when a reply takes too long) does not file a second ticket
+    or a second note (review, 6 Sep 2026)."""
+
+    __tablename__ = "line_webhook_events"
+
+    event_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    oa: Mapped[str] = mapped_column(String(16), nullable=False)
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(),
+    )
 
 
 class License(TimestampMixin, Base):
