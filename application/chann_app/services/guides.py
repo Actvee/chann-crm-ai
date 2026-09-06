@@ -344,6 +344,113 @@ def guide_images(oa: str) -> list[str]:
     return urls
 
 
+# ---------------------------------------------------------------- layered help
+#
+# Owner (6 Sep 2026): the 30-line guide is not read in a chat bubble. Help
+# now comes in layers — a short menu of numbered topics with a button per
+# topic, then one topic at a time with its picture. The full text is still
+# one message away ("วิธีใช้ทั้งหมด") and the illustrated page one tap away.
+
+HELP_SHORT_INTRO = {
+    "customer": {"th": "พิมพ์คุยได้เลย ไม่ต้องจำคำสั่ง", "en": "Just type — no commands to remember."},
+    "sales": {"th": "ทุกอย่างที่ทำบนแดชบอร์ด พิมพ์ในแชทได้เหมือนกัน", "en": "Everything on the dashboard can be typed here too."},
+    "technician": {"th": "วันทำงานของช่างมี 4 ขั้น ระบบบอกขั้นถัดไปให้ทุกครั้ง", "en": "A technician's day has 4 steps; the system always says what comes next."},
+}
+HELP_MENU_PROMPT = {
+    "th": "แตะหัวข้อด้านล่าง หรือพิมพ์ตัวเลข",
+    "en": "tap a topic below, or type its number",
+}
+HELP_MENU_FOOT = {
+    "th": "พิมพ์ \"วิธีใช้ทั้งหมด\" เพื่อดูทุกขั้นในข้อความเดียว",
+    "en": "Type \"help all\" for every step in one message.",
+}
+HELP_STEP_NEXT = {"th": "ขั้นถัดไป: พิมพ์ {n} หรือแตะปุ่ม", "en": "Next: type {n} or tap the button"}
+HELP_STEP_LAST = {"th": "ครบทุกขั้นแล้ว พิมพ์ \"วิธีใช้\" เพื่อกลับไปหัวข้อ", "en": "That was the last step. Type \"help\" for the topics."}
+
+
+def _lang(language: str) -> str:
+    return "en" if language == "en" else "th"
+
+
+def help_step_count(oa: str) -> int:
+    return len((GUIDES.get(oa) or GUIDES["customer"])["steps"])
+
+
+def help_step_short_title(oa: str, n: int, language: str = "th") -> str:
+    """A title that fits a quick-reply label: up to the first " (" or " /",
+    then at most 18 characters."""
+    step = (GUIDES.get(oa) or GUIDES["customer"])["steps"][n - 1]
+    title = step["title"][_lang(language)]
+    for cut in (" (", " /", " →", ":"):
+        if cut in title:
+            title = title.split(cut, 1)[0]
+    return title.strip()[:18]
+
+
+def render_help_menu(oa: str, language: str = "th") -> str:
+    """The first layer: title, one line of intro, the numbered topics."""
+    guide = GUIDES.get(oa) or GUIDES["customer"]
+    lang = _lang(language)
+    lines = [guide["title"][lang], HELP_SHORT_INTRO.get(oa, HELP_SHORT_INTRO["customer"])[lang] + " · " + HELP_MENU_PROMPT[lang], ""]
+    for n, step in enumerate(guide["steps"], 1):
+        lines.append(f"{n}. {step['title'][lang]}")
+    lines.append("")
+    lines.append(HELP_MENU_FOOT[lang])
+    return "\n".join(lines)
+
+
+def render_help_step(oa: str, n: int, language: str = "th") -> tuple[str, str] | None:
+    """One topic: what it does as short bullets, what to type, the picture
+    (absolute URL, "" when none). None when n is out of range."""
+    guide = GUIDES.get(oa) or GUIDES["customer"]
+    lang = _lang(language)
+    if n < 1 or n > len(guide["steps"]):
+        return None
+    step = guide["steps"][n - 1]
+    lines = [f"{n}. {step['title'][lang]}"]
+    for part in step["body"][lang].split(" · "):
+        part = part.strip()
+        if part:
+            lines.append(f"• {part}")
+    example = step.get("example")
+    if example:
+        lines.append(f"▸ {'พิมพ์' if lang == 'th' else 'type'}: \"{example}\"")
+    lines.append("")
+    if n < len(guide["steps"]):
+        lines.append(HELP_STEP_NEXT[lang].format(n=n + 1))
+    else:
+        lines.append(HELP_STEP_LAST[lang])
+    return "\n".join(lines), help_image_url(step["image"])
+
+
+def help_menu_quick_replies(oa: str, language: str = "th") -> list[tuple[str, str]]:
+    """One button per topic (label ≤ 20 chars, the LINE limit), then the
+    full text. The illustrated-guide link is added by the caller."""
+    buttons = [
+        (f"{n} {help_step_short_title(oa, n, language)}"[:20], f"วิธีใช้ {n}")
+        for n in range(1, help_step_count(oa) + 1)
+    ]
+    buttons.append(("ดูทั้งหมด" if _lang(language) == "th" else "All steps", "วิธีใช้ทั้งหมด"))
+    return buttons[:12]
+
+
+def help_step_by_text(oa: str, text: str, language: str = "th") -> int | None:
+    """"วิธีใช้ ผูกกับร้าน" → 1: the topic named by (part of) its title."""
+    guide = GUIDES.get(oa) or GUIDES["customer"]
+    wanted = (text or "").strip().lower()
+    for prefix in ("วิธีใช้", "help", "guide", "คู่มือ"):
+        if wanted.startswith(prefix):
+            wanted = wanted[len(prefix):].strip(" :")
+    if len(wanted) < 3:
+        return None
+    for n, step in enumerate(guide["steps"], 1):
+        for lang in ("th", "en"):
+            title = step["title"][lang].lower()
+            if wanted == title or wanted in title or title.split(" (")[0].split(" /")[0] in wanted:
+                return n
+    return None
+
+
 def guide_as_markdown(oa: str) -> str:
     """The owner's handout with image slots, for docs/guides/."""
     guide = GUIDES[oa]

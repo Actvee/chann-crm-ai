@@ -59,7 +59,7 @@ async def main():
     await say(t,"technician","รายงานของฉัน")
     await say(t,"technician","งานที่เปิดรับ")                    # rich-menu tile (3 Sep audit)
     await say(t,"technician","วิธีใช้งาน")                       # rich-menu tile → help, not AI
-    await say(t,"technician","งานพรุ่งนี้", expect_ok=False)
+    await say(t,"technician","งานพรุ่งนี้")  # 6 Sep: a way of saying "my jobs"
     await say(t,"technician","ลูกค้าไม่อยู่บ้าน", ai_client=ai({"action":"update","entity":"ticket","fields":{"status":"customer_absent"},"missing":[]}), expect_ok=False)
 
     print("\n=== EDGE CASES: customer ===")

@@ -24,7 +24,11 @@ from .ai.client import AIUnavailable, AINotConfigured
 # Reused rather than reimplemented on purpose: what a salesperson reads
 # in chat must never disagree with what the customer receives on the PDF.
 from .documents.snapshot import build_line_items
-from .guides import guide_images, render_help_text
+from .guides import (
+    guide_images, help_menu_quick_replies, help_step_by_text, help_step_count,
+    render_help_menu, render_help_step, render_help_text,
+)
+from . import notify as _notify_mod
 from .thai_datetime import DATE_FORMATS, local_today
 from .photos import PhotoRefused, store_ticket_photo
 from ..line.client import get_message_content
@@ -382,6 +386,40 @@ COMPANY_SAVE_FAILED = {
     "th": "ขออภัย ไม่สามารถบันทึกข้อมูลบริษัทได้ในขณะนี้ กรุณาลองใหม่อีกครั้ง",
     "en": "Sorry, the company details could not be saved right now. Please try again.",
 }
+
+
+_LOOKUP_HEAD_RE = re.compile(
+    r"^(?:ขอ)?(?:ลูกค้าชื่อ|ลูกค้าที่ชื่อ|ข้อมูลของ|เบอร์โทรลูกค้า|เบอร์ลูกค้า|เบอร์ของ|เบอร์โทรของ|เบอร์|โทรของ|ค้นหา|ค้น|search)\s*(.+)$",
+    re.I,
+)
+_LOOKUP_TAIL_RE = re.compile(r"^(.+?)\s*(?:เบอร์อะไร|เบอร์โทรอะไร|โทรเท่าไหร่|เบอร์เท่าไหร่|เบอร์ไร)$", re.I)
+
+
+def _customer_lookup_term(message: str) -> str | None:
+    """The name (or number) in a lookup phrased without "ค้นหาลูกค้า"."""
+    text = (message or "").strip()
+    if not text or re.search(r"[CDQT]-\d{4}-\d{4}", text, re.I) or len(text) > 40:
+        return None
+    for rx in (_LOOKUP_HEAD_RE, _LOOKUP_TAIL_RE):
+        m = rx.match(text)
+        if m and m.group(1).strip():
+            term = re.sub(r"^(?:ลูกค้า|ของ)\s*", "", m.group(1).strip(" :?")).strip()
+            if term and not any(w in term.lower() for w in ("ทั้งหมด", "ใครบ้าง", "กี่คน")):
+                return term
+    return None
+
+
+def _asks_about_current_job(message: str) -> bool:
+    """A technician ASKING about the job in hand without naming it —
+    "ลูกค้าเบอร์อะไร", "งานนี้ที่อยู่ไหน". Not "แก้เบอร์เป็น …", which is an
+    edit of their own profile."""
+    compact = _normalise(message)
+    if not compact or len(compact) > 30 or TICKET_CODE_RE.search(message or ""):
+        return False
+    if compact.startswith(("แก้", "เปลี่ยน", "อัปเดต", "ตั้ง", "update", "change", "set")):
+        return False
+    asks = _looks_like_a_question(message) or compact.endswith(("อะไร", "ไหน", "ไหร่", "ไร"))
+    return asks and any(w in compact for w in ("ที่อยู่", "เบอร์", "โทร", "กี่โมง", "นัด", "งานนี้", "ลูกค้าชื่อ", "ไปที่ไหน"))
 
 
 def _strip_leading_connector(value: str) -> str:
@@ -2507,7 +2545,7 @@ async def _handle_customer_chat_start(
         sla, _ = await live_chat.chat_settings(client, str(license_id))
     except Exception:
         log.exception("could not open a chat session")
-        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+        return ChatReply(text=_t(CHAT_OPEN_FAILED, language))
     opened = _t(CHAT_STARTED if created else CHAT_RESUMED, language).format(shop=shop, sla=sla)
     if unseen:
         opened = _t(CHAT_CATCH_UP, language).format(shop=shop) + "\n" + unseen + "\n\n" + opened
@@ -2531,7 +2569,7 @@ async def _handle_customer_chat_end(
         )
     except Exception:
         log.exception("could not close a chat session")
-        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+        return ChatReply(text=_t(CHAT_OPEN_FAILED, language))
     return ChatReply(text=_t(CHAT_ENDED, language), quick_replies=[("แจ้งซ่อม", "แจ้งซ่อม"), ("งานของฉัน", "งานของฉัน")])
 
 
@@ -2722,11 +2760,17 @@ ORDER_STAGE_LABELS = {
 # A prefix, so "คุยกับร้าน ราคาแอร์เท่าไหร่" opens it with that first line.
 CUSTOMER_CHAT_PHRASES = (
     "คุยกับร้าน", "แชทกับร้าน", "คุยกับเจ้าหน้าที่", "คุยกับพนักงาน",
-    "talk to the shop", "chat with the shop", "live chat",
+    "ขอคุยกับร้าน", "ขอคุยกับพนักงาน", "ขอคุยกับเจ้าหน้าที่", "ขอคุยกับทางร้าน", "คุยกับทางร้าน",
+    "คุยกับคน", "คุยกับแอดมิน", "ขอคุยกับแอดมิน", "ติดต่อพนักงาน", "ติดต่อเจ้าหน้าที่",
+    "talk to the shop", "chat with the shop", "live chat", "talk to a person", "talk to staff",
 )
 CUSTOMER_CHAT_END_PHRASES = (
     "จบการสนทนา", "จบแชท", "ปิดแชท", "ปิดการสนทนา", "end chat", "close chat",
 )
+CHAT_OPEN_FAILED = {
+    "th": "ขออภัย เปิดการสนทนากับร้านไม่ได้ในขณะนี้ กรุณาลองใหม่อีกครั้ง",
+    "en": "Sorry — the conversation with the shop could not be opened right now. Please try again.",
+}
 CHAT_STARTED = {
     "th": "เปิดการสนทนากับ {shop} แล้ว พิมพ์ข้อความได้เลย ทางร้านจะตอบกลับในแชทนี้ (ปกติภายใน {sla} นาที)\nพิมพ์ \"จบการสนทนา\" เมื่อเสร็จ",
     "en": "You are now talking to {shop}. Just type — they answer here (usually within {sla} minutes).\nType \"end chat\" when done.",
@@ -2802,7 +2846,103 @@ _ADDRESS_MARKERS = (
 _FAULT_MARKERS = (
     "ไม่เย็น", "ไม่ติด", "ไม่แรง", "ไม่ทำงาน", "ไม่หมุน", "ไม่ปั่น", "เสีย", "พัง", "รั่ว", "หยด", "เสียงดัง",
     "ซ่อม", "ร้อน", "ดับ", "ช็อต", "มีกลิ่น", "not cooling", "broken", "leak",
+    # 6 Sep 2026: "ประตูเลื่อนไม่ได้", "น้ำไม่ไหล", "เครื่องค้าง" are faults too.
+    "ไม่ได้", "ไม่ออก", "เข้าไม่ได้", "ค้าง", "แตก", "หลุด", "ชำรุด", "ผิดปกติ", "มีปัญหา", "กระตุก", "ไม่ไหล",
+    "อุดตัน", "ตัน", "ไม่ดูด", "ไม่ร้อน", "ไม่อุ่น", "ไม่เปิด", "เปิดไม่ติด", "ไม่ดัง", "ไม่มีภาพ", "ไม่มีเสียง",
+    "not working", "doesn't work", "does not work", "stuck", "noise",
 )
+
+# A request for a visit that names no fault: "ล้างแอร์", "ขอนัดช่าง",
+# "อยากให้ช่างมาดู". A job all the same.
+_SERVICE_MARKERS = (
+    "ช่าง", "ซ่อม", "ล้าง", "ติดตั้ง", "เช็ค", "ตรวจ", "บำรุง", "นัด", "มาดู", "ย้าย", "ถอด", "เปลี่ยน",
+    "service", "install", "clean", "repair", "fix", "maintenance", "technician",
+)
+
+
+def _looks_like_service_request(text: str) -> bool:
+    lowered = (text or "").lower()
+    return any(m in lowered for m in _SERVICE_MARKERS)
+
+
+# A question about the job, as opposed to a question about anything else.
+_JOB_QUESTION_WORDS = (
+    "ช่าง", "งาน", "สถานะ", "ซ่อม", "เสร็จ", "นัด", "เมื่อไหร่", "เมื่อไร", "กี่โมง", "ถึงไหน", "มาหรือยัง",
+    "technician", "job", "status", "when",
+)
+_WARRANTY_WORDS = ("ประกัน", "warranty")
+
+
+def _asks_about_job(text: str) -> bool:
+    lowered = (text or "").lower()
+    return any(w in lowered for w in _JOB_QUESTION_WORDS)
+
+
+def _asks_about_warranty(text: str) -> bool:
+    lowered = (text or "").lower()
+    return any(w in lowered for w in _WARRANTY_WORDS)
+
+
+def _is_reschedule_request(text: str) -> bool:
+    """"เลื่อนนัด…", "ขอเลื่อน…", "เปลี่ยนวัน…" — a request that STARTS with
+    moving, or names the appointment. "ประตูเลื่อนไม่ได้" is a fault."""
+    compact = _normalise(text)
+    return compact.startswith(("เลื่อน", "ขอเลื่อน", "เปลี่ยนวัน", "เปลี่ยนเวลา", "reschedule", "move")) or any(
+        w in compact for w in ("เลื่อนนัด", "ขอเลื่อน", "เปลี่ยนวันนัด")
+    )
+
+
+CUSTOMER_NOT_SURE = {
+    "th": (
+        "ยังไม่แน่ใจว่าต้องการอะไรครับ\n"
+        "• แจ้งซ่อม: พิมพ์อาการ เช่น \"แอร์ไม่เย็น\"\n"
+        "• ถามร้าน: แตะ \"คุยกับร้าน\" ด้านล่าง ข้อความนี้จะส่งถึงร้าน\n"
+        "• ดูงานที่แจ้งไว้: \"งานของฉัน\""
+    ),
+    "en": (
+        "Not sure what you need.\n"
+        "• Report a fault: describe it, e.g. \"air con not cooling\"\n"
+        "• Ask the shop: tap \"talk to the shop\" below and this message goes to them\n"
+        "• Your jobs: \"my jobs\""
+    ),
+}
+
+
+_PRODUCT_WORDS = ("ราคา", "รุ่น", "ซื้อ", "สินค้า", "โปรโมชั่น", "โปร", "price", "model", "buy", "product")
+CUSTOMER_PRODUCT_HINT = {
+    "th": "สินค้าและราคาดูได้เลยครับ พิมพ์ \"ค้นหา\" ตามด้วยชื่อสินค้า เช่น \"ค้นหา แอร์\" หรือแตะ \"สินค้าทั้งหมด\" · ถามร้านตรงๆ ก็ได้ที่ \"คุยกับร้าน\"",
+    "en": "Products and prices: type \"search\" and a product, e.g. \"search air con\", or tap \"all products\" — or ask the shop directly.",
+}
+CUSTOMER_ADDRESS_NO_JOB = {
+    "th": "ตอนนี้ไม่มีงานที่รอที่อยู่ครับ ถ้าต้องการแก้ที่อยู่ของคุณ แตะปุ่มด้านล่างได้เลย",
+    "en": "No job is waiting for an address right now. To change your own address, tap below.",
+}
+
+
+def _customer_fallback(text: str, language: str) -> ChatReply:
+    """Not a fault, not a command, not a job question: say so and offer
+    the three things it could have been — never open a repair job for
+    "ราคาแอร์เท่าไหร่" (which is what happened before 6 Sep 2026)."""
+    clean = (text or "").strip()
+    carried = f"คุยกับร้าน {clean}"[:300]
+    lowered = clean.lower()
+    if any(w in lowered for w in _PRODUCT_WORDS):
+        return ChatReply(
+            text=_t(CUSTOMER_PRODUCT_HINT, language),
+            quick_replies=[("สินค้าทั้งหมด", "สินค้าทั้งหมด"), ("คุยกับร้าน", carried)],
+        )
+    if _looks_like_address(clean) and len(clean) >= 8 and not _looks_like_a_question(clean):
+        return ChatReply(
+            text=_t(CUSTOMER_ADDRESS_NO_JOB, language),
+            quick_replies=[("แก้ที่อยู่ของฉัน", f"แก้ที่อยู่เป็น {clean}"[:300]), ("แจ้งซ่อม", "แจ้งซ่อม")],
+        )
+    return ChatReply(
+        text=_t(CUSTOMER_NOT_SURE, language),
+        quick_replies=[
+            ("คุยกับร้าน", carried), ("แจ้งซ่อม", "แจ้งซ่อม"),
+            ("งานของฉัน", "งานของฉัน"), ("วิธีใช้", "วิธีใช้"),
+        ],
+    )
 
 
 def _starts_new_report(text: str) -> bool:
@@ -2843,7 +2983,7 @@ def _is_customer_command(text: str) -> bool:
         + CUSTOMER_CONTACT_PHRASES + CUSTOMER_WARRANTY_MINE_PHRASES + CUSTOMER_ORDERS_PHRASES
         + CUSTOMER_CHAT_PHRASES + CUSTOMER_CHAT_END_PHRASES
         + CUSTOMER_REPORT_BARE + HELP_TRIGGERS + CUSTOMER_CANCEL_PHRASES,
-    ) or any(t in (text or "").lower() for t in CUSTOMER_RESCHEDULE_TRIGGERS)
+    ) or _is_reschedule_request(text) or _is_help_request(text, "customer") or _is_small_talk(text)
 CUSTOMER_QUESTION_FORWARDED = {
     "th": "ผมตอบคำถามนี้เองไม่ได้ครับ แต่ทางร้านจะเห็นข้อความนี้และติดต่อกลับ\nถ้าต้องการแจ้งซ่อม พิมพ์อาการมาได้เลย",
     "en": "I can't answer that myself, but the shop will see this and get back to you.",
@@ -2863,7 +3003,7 @@ CUSTOMER_GREETING = {
 }
 
 _QUESTION_MARKERS = (
-    "ไหม", "มั้ย", "กี่โมง", "เมื่อไหร่", "เมื่อไร", "เท่าไหร่", "เท่าไร", "ยังไง",
+    "ไหม", "มั้ย", "กี่โมง", "เมื่อไหร่", "เมื่อไร", "เท่าไหร่", "เท่าไร", "ยังไง", "ถึงไหน",
     "อย่างไร", "ทำไม", "ที่ไหน", "ใคร", "หรือเปล่า", "หรือยัง", "รึเปล่า", "รึยัง", "?",
 )
 
@@ -2897,6 +3037,7 @@ def _is_bare_serial(text: str) -> bool:
         " " not in token
         and "/" not in token
         and not re.search(r"[\u0e00-\u0e7f]", token)
+        and any(ch.isdigit() for ch in token)  # "hello" is a greeting, not S/N HELLO
         and SERIAL_RE.fullmatch(token) is not None
     )
 
@@ -3139,6 +3280,10 @@ LOCATION_NO_JOB = {
     "th": "ได้รับตำแหน่งแล้ว แต่ยังไม่มีงานที่รับไว้ให้เช็คอินครับ พิมพ์ \"งานที่เปิดรับ\" เพื่อรับงานก่อน",
     "en": "Location received, but there is no job of yours to check in to. \"open jobs\" to take one first.",
 }
+LOCATION_PICK_ONE = {
+    "th": "มีงานที่รับไว้หลายงาน เลือกงานที่จะเช็คอินครับ (เช็คอินจากปุ่มจะไม่บันทึกพิกัด)",
+    "en": "You hold several jobs — pick the one to check in to (a button check-in records no coordinates).",
+}
 LOCATION_NOTED = {
     "th": "ได้รับตำแหน่งแล้วครับ ตอนนี้ระบบใช้ตำแหน่งสำหรับการเช็คอินของช่างเท่านั้น",
     "en": "Location received. Right now locations are used for technician check-ins only.",
@@ -3159,6 +3304,20 @@ async def handle_incoming_location(
         member, ticket, _inferred = await _ticket_for_action(
             client, license_id, ctx, "", prefer_status=("assigned",),
         )
+        if member is not None and ticket is None:
+            assigned = [
+                t for t in await client.list_tickets(license_id, visible_to=str(member["id"]))
+                if str(t.get("assigned_to_ref") or "") == str(member["id"])
+                and str(t.get("status") or "") == "assigned"
+            ]
+            if len(assigned) > 1:
+                return ChatReply(
+                    text=_t(LOCATION_PICK_ONE, language),
+                    quick_replies=[
+                        (f"เช็คอิน {t.get('ticket_number')}"[:20], f"เช็คอิน {t.get('ticket_number')}")
+                        for t in assigned[:4]
+                    ],
+                )
         if member is None or ticket is None:
             return ChatReply(text=_t(LOCATION_NO_JOB, language), quick_replies=[("งานที่เปิดรับ", "งานที่เปิดรับ")])
         code = str(ticket.get("ticket_number") or "")
@@ -3181,7 +3340,7 @@ async def handle_incoming_location(
     done += "\n" + ("(บันทึกตำแหน่งที่เช็คอินไว้แล้ว)" if language != "en" else "(check-in location recorded)")
     return ChatReply(
         text=done, entity_type="service_ticket", entity_id=str(result.get("id") or ""),
-        quick_replies=[("ปิดงาน", f"ปิดงาน {code}\nพบ: \nแก้: ")],
+        quick_replies=[("ปิดงาน", f"ปิดงาน {code}")],
     )
 
 
@@ -3252,8 +3411,10 @@ def _looks_like_a_question(text: str) -> bool:
     is also about a fault — but a question about a fault is still not a
     request to open a second job.
     """
-    lowered = (text or "").strip().lower()
-    return any(marker in lowered for marker in _QUESTION_MARKERS)
+    lowered = re.sub(r"(?:ครับ|ค่ะ|คะ|[?!. ])+$", "", (text or "").strip().lower())
+    return any(marker in lowered for marker in _QUESTION_MARKERS) or lowered.endswith(
+        ("ยัง", "ไหม", "มั้ย", "ป่าว", "เปล่า", "หรือไม่")
+    )
 
 
 def _is_only_a_greeting(text: str) -> bool:
@@ -3277,7 +3438,13 @@ def _is_only_a_greeting(text: str) -> bool:
                 rest = rest.replace(particle, "")
             if len(rest.strip()) < 3:
                 return True
+            # "สวัสดีครับ ขอสอบถามหน่อย": the second half is itself a greeting.
+            if _normalise(rest) in _GREETING_TAILS:
+                return True
     return False
+
+
+_GREETING_TAILS = frozenset({"ขอสอบถาม", "สอบถาม", "ขอถาม", "ถาม", "รบกวน", "รบกวนสอบถาม", "มีเรื่องสอบถาม"})
 
 
 CUSTOMER_REPORT_HINTS = (
@@ -3308,6 +3475,18 @@ REPORT_NONE = {
 
 CUSTOMER_TICKET_TTL_S = 3600
 CHECKOUT_DRAFT_TTL_S = 3600
+REPORT_DRAFT_CANCEL_WORDS = frozenset({"ยกเลิก", "ยกเลิกรายงาน", "ยกเลิกปิดงาน", "ไม่ปิดงาน", "เลิก", "cancel", "ยกเลิกก่อน"})
+REPORT_DRAFT_CANCELLED = {
+    "th": "ยกเลิกการปิดงาน {code} แล้ว งานยังเปิดอยู่ พิมพ์ \"ปิดงาน\" เมื่อพร้อม",
+    "en": "Closing {code} was cancelled; the job stays open. Type \"check out\" when ready.",
+}
+
+
+async def _drop_pending_quietly(client: DataClient, ctx: ResolvedContext) -> None:
+    try:
+        await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
+    except Exception:
+        log.exception("could not drop a pending intent")
 
 # Asked in this order, one at a time. Same two fields the Data tier's gate
 # requires — kept in step by test, not by hope.
@@ -3487,6 +3666,11 @@ async def _handle_customer_report(
             # A sentence about a fault with nothing address-like in it
             # is a new fault, not where they live.
             and not (_looks_like_fault(text) and not _looks_like_address(text))
+            # "ใช้งานยังไง" and "ขอบคุณครับ" are not streets either (6 Sep sim:
+            # both were saved as the address of an open job).
+            and not _is_help_request(text, "customer")
+            and not _is_small_talk(text)
+            and len(text) >= 5
         ):
             try:
                 await client.update_ticket(
@@ -3549,8 +3733,6 @@ async def _handle_customer_report(
                 log.exception("could not save a customer's appointment")
                 return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
 
-            # The shop finds out now, not when someone happens to look.
-            await _notify_new_ticket(client, license_id, str(ticket_id), language)
             return ChatReply(
                 text=_t(REPORT_SCHEDULED, language).format(
                     date=format_thai_date(due_date),
@@ -3568,7 +3750,7 @@ async def _handle_customer_report(
             client, ctx=ctx, license_id=license_id, message=text,
             language=language, cancel=True,
         )
-    if any(w in text.lower() for w in CUSTOMER_RESCHEDULE_TRIGGERS):
+    if _is_reschedule_request(text):
         return await _handle_customer_amend(
             client, ctx=ctx, license_id=license_id, message=text,
             language=language, cancel=False,
@@ -3656,6 +3838,14 @@ async def _handle_customer_report(
     # that was not a command became a ticket. Someone asking about their
     # job gets their job; someone asking something the bot cannot answer
     # gets told the shop will, rather than a new ticket they never wanted.
+    if _looks_like_a_question(text) and _asks_about_warranty(text):
+        # "เครื่องผมยังมีประกันไหม", "หมดประกันเมื่อไหร่" → their registered products.
+        return await _handle_warranty_mine(
+            client, ctx=ctx, license_id=license_id, language=language,
+        )
+    if _looks_like_a_question(text) and not _asks_about_job(text) and not _looks_like_fault(text):
+        # Anything else the bot cannot answer is offered to the shop, honestly.
+        return _customer_fallback(text, language)
     if _looks_like_a_question(text):
         try:
             tickets = await client.list_tickets(license_id)
@@ -3688,10 +3878,12 @@ async def _handle_customer_report(
                 ),
                 quick_replies=[("ดูสถานะงาน", "งานของฉัน")],
             )
-        return ChatReply(
-            text=_t(CUSTOMER_QUESTION_FORWARDED, language),
-            quick_replies=[("แจ้งซ่อม", "แจ้งซ่อม"), ("วิธีใช้", "วิธีใช้")],
-        )
+        return _customer_fallback(text, language)
+
+    # Only a fault or a request for a visit opens a job. Everything else
+    # typed here used to become a ticket called, say, "ใช้งานยังไง".
+    if not (serial_hint or skip_serial or _looks_like_fault(text) or _looks_like_service_request(text)):
+        return _customer_fallback(text, language)
 
     # Owner rule (3 Sep): a fault is reported against a registered
     # product, so the shop knows which machine. The serial comes from the
@@ -3768,6 +3960,11 @@ async def _handle_customer_report(
         log.exception("customer fault report failed")
         return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
 
+    # The shop finds out NOW. It used to hear only once the customer had
+    # answered the address and appointment questions — a report abandoned
+    # after the first line sat unseen for good (review, 6 Sep 2026).
+    await _notify_new_ticket(client, license_id, str(ticket["id"]), language)
+
     return ChatReply(
         text=_t(REPORT_TAKEN, language).format(
             code=ticket.get("ticket_number"), issue=text[:80],
@@ -3780,9 +3977,9 @@ AMEND_PAST_DATE = {
     "th": "วันที่ {date} ผ่านมาแล้วครับ นัดได้ตั้งแต่วันนี้เป็นต้นไป ลองพิมพ์ใหม่ เช่น \"เลื่อนนัด พรุ่งนี้ 10 โมง\"",
     "en": "{date} is in the past. Pick today or later, e.g. \"reschedule tomorrow 10am\".",
 }
-CUSTOMER_CANCEL_PHRASES = ("ยกเลิก", "ไม่เอาแล้ว", "cancel")
+CUSTOMER_CANCEL_PHRASES = ("ยกเลิก", "ไม่เอาแล้ว", "ไม่ซ่อมแล้ว", "ยกเลิกการซ่อม", "cancel")
 CUSTOMER_CANCEL_TRIGGERS = ("ยกเลิกงาน", "ยกเลิกนัด", "cancel job")
-CUSTOMER_RESCHEDULE_TRIGGERS = ("เลื่อนนัด", "เปลี่ยนวัน", "เลื่อน", "reschedule")
+CUSTOMER_RESCHEDULE_TRIGGERS = ("เลื่อนนัด", "ขอเลื่อน", "เปลี่ยนวัน", "เปลี่ยนเวลา", "reschedule")
 
 AMEND_NO_OPEN_JOB = {
     "th": "ไม่มีงานที่นัดไว้อยู่ครับ",
@@ -3791,6 +3988,10 @@ AMEND_NO_OPEN_JOB = {
 AMEND_PICK_ONE = {
     "th": "มีงานอยู่หลายรายการ ระบุเลขงานด้วยครับ เช่น \"เลื่อนนัด T-2026-0001 วันศุกร์\"",
     "en": "You have several jobs — include the number.",
+}
+AMEND_CANCEL_CONFIRM = {
+    "th": "ยกเลิกงาน {code} (นัด {when}) ใช่ไหมครับ",
+    "en": "Cancel job {code} (scheduled {when})?",
 }
 AMEND_CANCELLED = {
     "th": "ยกเลิกงาน {code} แล้วครับ ทางร้านจะรับทราบ",
@@ -3866,6 +4067,15 @@ async def _handle_customer_amend(
     ticket_id = str(ticket.get("id") or "")
 
     if cancel:
+        if "ยืนยัน" not in (message or "") and "confirm" not in (message or "").lower():
+            # Asked once. "ยกเลิก" typed in passing while a technician is
+            # already driving over is too costly to act on unconfirmed.
+            return ChatReply(
+                text=_t(AMEND_CANCEL_CONFIRM, language).format(code=code, when=_ticket_when(ticket) or "-"),
+                quick_replies=[
+                    ("ยืนยันยกเลิก", f"ยืนยันยกเลิกงาน {code}"), ("ไม่ยกเลิก", "งานของฉัน"),
+                ],
+            )
         try:
             await client.set_ticket_status(
                 license_id, ticket_id, "cancelled", actor_id=ctx.chann_uid,
@@ -3918,7 +4128,7 @@ async def _handle_customer_amend(
 
 async def _notify_ticket_change(
     client: DataClient, license_id: str, ticket_id: str, text: str, language: str,
-    text_en: str | None = None,
+    text_en: str | None = None, customer_text: str | None = None, customer_text_en: str | None = None,
 ) -> None:
     """Tell the shop, and the assigned technician, that a job changed.
 
@@ -3939,9 +4149,11 @@ async def _notify_ticket_change(
         and str(m.get("status") or "active") == "active"
     }
     assignee_ref = str((ticket or {}).get("assigned_to_ref") or "")
+    assignee_uids: set[str] = set()
     for member in members:
         if str(member.get("id")) == assignee_ref and member.get("chann_uid"):
-            targets.add(str(member["chann_uid"]))
+            assignee_uids.add(str(member["chann_uid"]))
+    targets |= assignee_uids
 
     for chann_uid in targets:
         if not chann_uid:
@@ -3958,10 +4170,61 @@ async def _notify_ticket_change(
                 message_en=text_en,
                 entity_type="service_ticket",
                 entity_id=ticket_id,
-                oa="sales",
+                # The technician works in the technician OA and may never
+                # have added the sales one; a cancellation pushed there
+                # failed silently (review, 6 Sep 2026).
+                oa="technician" if chann_uid in assignee_uids else "sales",
             )
         except Exception:
             log.exception("could not notify %s about a ticket change", chann_uid)
+    if customer_text and ticket:
+        await _notify_customer(client, ticket, customer_text, customer_text_en)
+
+
+async def _notify_customer(client: DataClient, ticket: dict, text: str, text_en: str | None = None) -> None:
+    """A line to the customer on the customer OA, in their language.
+
+    Until 6 Sep 2026 a customer heard nothing between filing a fault and
+    the satisfaction survey — not the assignment, not the technician's
+    acceptance, not a cancellation by the shop. Best-effort, never raises.
+    """
+    uid = str((ticket or {}).get("customer_chann_uid") or "")
+    if not uid:
+        return
+    try:
+        line_uid = await client.line_target_of(uid)
+        if not line_uid:
+            return
+        language = "th"
+        try:
+            prefs = await client.get_display_preferences(uid) or {}
+            language = str(prefs.get("language") or "th")
+        except Exception:  # noqa: BLE001
+            pass
+        await _notify_mod.push_text("customer", line_uid, text_en if (language == "en" and text_en) else text)
+    except Exception:  # noqa: BLE001
+        log.warning("could not tell the customer about ticket %s", (ticket or {}).get("ticket_number"))
+
+
+async def _dispatchers(client: DataClient, license_id: str, members: list[dict]) -> list[dict]:
+    """The people who dispatch: anyone holding ticket.assign — by
+    permission, not by role name (spec §4). Owners and admins remain the
+    fallback when the permission lookup is unavailable."""
+    out = []
+    for m in members:
+        if str(m.get("status") or "active") != "active" or not m.get("chann_uid"):
+            continue
+        try:
+            context = await client.authorization_context(license_id, str(m["chann_uid"]))
+        except Exception:  # noqa: BLE001
+            context = None
+        if context is None:
+            if str(m.get("role") or "").lower() in ("owner", "admin"):
+                out.append(m)
+            continue
+        if "ticket.assign" in set(context.get("permission_keys") or []):
+            out.append(m)
+    return out
 
 
 async def _notify_new_ticket(
@@ -3985,23 +4248,23 @@ async def _notify_new_ticket(
         log.exception("could not notify anyone about ticket %s", ticket_id)
         return
 
-    # Owners and admins: the people whose job it is to dispatch. Notifying
-    # every member would put a customer's address in front of technicians
-    # who have not been given the job.
-    targets = [
-        m for m in members
-        if str(m.get("role") or "").lower() in ("owner", "admin")
-        and str(m.get("status") or "active") == "active"
-    ]
+    # The people whose job it is to dispatch — CS included, which the old
+    # owner/admin role test left out (review, 6 Sep 2026). Notifying every
+    # member would put a customer's address in front of technicians who
+    # have not been given the job.
+    targets = await _dispatchers(client, license_id, members)
+    when = _ticket_when(ticket)
     text = (
         f"แจ้งซ่อมใหม่ {ticket.get('ticket_number')}\n"
         f"{ticket.get('customer_name') or '—'}\n"
-        f"{ticket.get('issue_description') or ''}"
+        f"{ticket.get('issue_description') or ''}\n"
+        f"ที่อยู่: {ticket.get('service_address') or 'รอลูกค้าแจ้ง'} · นัด: {when or 'รอลูกค้าแจ้ง'}"
     )
     text_en = (
         f"New repair request {ticket.get('ticket_number')}\n"
         f"{ticket.get('customer_name') or '—'}\n"
-        f"{ticket.get('issue_description') or ''}"
+        f"{ticket.get('issue_description') or ''}\n"
+        f"Address: {ticket.get('service_address') or 'pending'} · Appointment: {when or 'pending'}"
     )
     for member in targets:
         chann_uid = str(member.get("chann_uid") or "")
@@ -4028,10 +4291,13 @@ async def _notify_new_ticket(
 # ------------------------------------------------ Phase 13 field service
 
 CHECKIN_TRIGGERS = (
-    "เช็คอิน", "เช็กอิน", "ถึงหน้างาน", "ถึงแล้ว", "มาถึงแล้ว", "เริ่มงาน",
-    "check in", "checkin",
+    "เช็คอิน", "เช็กอิน", "ถึงหน้างาน", "ถึงแล้ว", "มาถึงแล้ว", "เริ่มงาน", "ถึงบ้านลูกค้า", "อยู่หน้างาน",
+    "เริ่มทำงาน", "ถึงที่หมาย", "check in", "checkin", "arrived",
 )
-CHECKOUT_TRIGGERS = ("เช็คเอาท์", "เช็กเอาต์", "ปิดงาน", "check out", "checkout")
+CHECKOUT_TRIGGERS = (
+    "เช็คเอาท์", "เช็กเอาต์", "ปิดงาน", "เสร็จแล้ว", "งานเสร็จ", "ทำเสร็จ", "ซ่อมเสร็จ", "ส่งรายงาน", "จบงาน",
+    "check out", "checkout", "done", "finished",
+)
 
 CHECKIN_DONE = {
     "th": "เช็คอิน {code} แล้ว\n{customer}\n{address}",
@@ -4124,13 +4390,18 @@ async def _ticket_for_action(
             False,
         )
 
-    mine = [
-        t for t in tickets
-        if str(t.get("assigned_to_ref") or "") == str(member["id"])
-        and str(t.get("status") or "") in (prefer_status or ("assigned", "in_progress"))
-    ]
-    if len(mine) == 1:
-        return member, mine[0], True
+    # Statuses are tried in the order given: for a check-out, the one job
+    # in progress wins even when another is assigned for the afternoon
+    # (review, 6 Sep 2026: a technician with two jobs could not close
+    # the one they were on, and a photo sent from site was discarded).
+    # Two candidates in the same status is genuinely ambiguous — stop.
+    mine_all = [t for t in tickets if str(t.get("assigned_to_ref") or "") == str(member["id"])]
+    for wanted in (prefer_status or ("assigned", "in_progress")):
+        mine = [t for t in mine_all if str(t.get("status") or "") == wanted]
+        if len(mine) == 1:
+            return member, mine[0], True
+        if len(mine) > 1:
+            return member, None, False
     return member, None, False
 
 
@@ -4164,6 +4435,9 @@ async def _handle_check_in(
         log.exception("check-in failed")
         return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
 
+    await _notify_customer(
+        client, {**ticket, **result}, f"ช่างถึงหน้างานแล้ว งาน {code}", f"The technician has arrived — job {code}",
+    )
     return ChatReply(
         text=_t(CHECKIN_DONE, language).format(
             code=code,
@@ -4173,7 +4447,7 @@ async def _handle_check_in(
             address=result.get("service_address") or "—",
         ),
         entity_type="service_ticket", entity_id=str(result.get("id") or ""),
-        quick_replies=[("ปิดงาน", f"ปิดงาน {code}\nพบ: \nแก้: ")],
+        quick_replies=[("ปิดงาน", f"ปิดงาน {code}")],
     )
 
 
@@ -4198,6 +4472,15 @@ async def _handle_check_out(
     if pending and pending.get("entity") == "service_report":
         fields = dict((pending.get("fields") or {}))
         awaiting = list(pending.get("missing") or [])
+        if _normalise(message) in REPORT_DRAFT_CANCEL_WORDS:
+            # "ยกเลิก" mid-report: the job stays open, the draft is dropped.
+            # Without this every message for an hour was read as the
+            # next answer (review, 6 Sep 2026).
+            try:
+                await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
+            except Exception:
+                log.exception("could not drop a report draft")
+            return ChatReply(text=_t(REPORT_DRAFT_CANCELLED, language).format(code=str(fields.get("code") or "")))
         if awaiting:
             answer = (message or "").strip()
             if awaiting[0] == "parts_changed" and answer.lower() in _NONE_ANSWERS:
@@ -4232,11 +4515,16 @@ async def _handle_check_out(
             )
             await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
         except DataTierError as exc:
+            # The draft is dropped with the failure: a job cancelled under
+            # the technician's feet must not turn every later message into
+            # the same refusal.
+            await _drop_pending_quietly(client, ctx)
             return _field_service_failure(
                 exc, code=code, language=language, template=CHECKIN_FAILED,
             )
         except Exception:
             log.exception("check-out failed")
+            await _drop_pending_quietly(client, ctx)
             return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
         await _after_report_submitted(client, license_id, result, language)
         return ChatReply(
@@ -4333,7 +4621,17 @@ TICKET_LIST_PHRASES = (
     "รายการงาน", "รายการงานซ่อม", "งานซ่อม", "รายการซ่อม", "งานทั้งหมด",
     "งานค้าง", "tickets",
 )
-TICKET_MINE_PHRASES = ("งานของฉัน", "งานที่รับ", "my tickets")
+TICKET_MINE_PHRASES = (
+    "งานของฉัน", "งานที่รับ", "งานของผม", "งานผม", "งานฉัน", "งานผมวันนี้", "งานฉันวันนี้", "ตารางงาน",
+    "ตารางงานวันนี้", "ตารางงานของฉัน", "ตารางของฉัน", "งานที่ต้องไป", "งานที่ต้องทำ", "คิวงาน", "คิวของฉัน",
+    "วันนี้มีงานไหม", "มีงานอะไรบ้าง", "งานมีอะไรบ้าง", "งานพรุ่งนี้", "my tickets", "my jobs", "my schedule", "schedule",
+)
+# One word on its own — kept out of the tuple so the trigger checker, which
+# cannot see that _matches_phrase is exact, does not flag every longer
+# phrase containing it.
+BARE_JOB_WORDS = frozenset({"งาน", "jobs", "job"})
+BARE_ACCEPT_WORDS = frozenset({"รับ", "รับงาน", "ตกลงรับ", "รับครับ", "รับค่ะ", "ok รับ", "accept", "ผมรับ", "ฉันรับ", "รับเอง"})
+BARE_DECLINE_WORDS = frozenset({"ไม่รับ", "ไม่ว่าง", "ไปไม่ได้", "ไม่สะดวก", "ไม่ไหว", "decline", "ไม่ว่างไปไม่ได้"})
 # The technician rich-menu tile. Jobs nobody has taken yet, plus the ones
 # handed to this person that they have not accepted — the same set the
 # LIFF home calls "งานที่เปิดรับ".
@@ -4361,6 +4659,22 @@ TICKET_PICK_ONE = {
     "en": "Not sure which job — include the number, e.g. \"check out T-2026-0001\".",
 }
 
+TICKET_CLAIM_PICK = {
+    "th": "มีหลายงานให้รับ เลือกงานครับ",
+    "en": "Several jobs can be taken — pick one.",
+}
+TICKET_NOTHING_TO_CLAIM = {
+    "th": "ตอนนี้ไม่มีงานให้รับครับ",
+    "en": "There is no job to take right now.",
+}
+SINGLE_SHOP = {
+    "th": "บัญชีนี้อยู่ร้าน {company} ร้านเดียวครับ ถ้าจะเข้าร่วมร้านอื่น พิมพ์รหัสเชิญของร้านนั้นได้เลย",
+    "en": "This account belongs to {company} only. To join another shop, type that shop's invite code.",
+}
+STAFF_PROFILE_TEXT = {
+    "th": "ข้อมูลของคุณครับ\n\nชื่อ: {name}\nเบอร์: {phone}\nอีเมล: {email}\nร้าน: {shop} ({role})\n\nแก้ได้เลย เช่น \"แก้เบอร์เป็น 08x-xxx-xxxx\"",
+    "en": "Your details\n\nName: {name}\nPhone: {phone}\nEmail: {email}\nShop: {shop} ({role})\n\nChange any of it, e.g. \"change my phone to 08x-xxx-xxxx\"",
+}
 TICKET_NEEDS_CODE = {
     "th": "ระบุเลขงานด้วย เช่น \"มอบหมาย T-2026-0001 ให้ทีม AC\"",
     "en": "Include the ticket number, e.g. \"assign T-2026-0001 to AC Team\".",
@@ -4648,6 +4962,16 @@ async def _handle_ticket_list(
             tickets = await client.list_tickets(
                 license_id, visible_to=str(member["id"]),
             )
+            if mine and not (team_only or open_only):
+                # Mine = assigned to me and not finished. The title said
+                # "งานของฉัน" over every visible job in the tenant
+                # (review, 6 Sep 2026).
+                me = str(member["id"])
+                tickets = [
+                    t for t in tickets
+                    if str(t.get("assigned_to_ref") or "") == me
+                    and str(t.get("status") or "") not in ("completed", "cancelled")
+                ]
             if team_only:
                 # Accepted by the lead for a team I am on, not yet taken.
                 tickets = [
@@ -5017,6 +5341,12 @@ async def _notify_assigned_ticket(
             )
         except Exception:
             log.exception("could not notify %s about an assignment", chann_uid)
+    when = _ticket_when(ticket)
+    await _notify_customer(
+        client, ticket,
+        f"งาน {ticket.get('ticket_number')} ของคุณมอบหมายให้ช่างแล้ว" + (f" นัด {when}" if when else ""),
+        f"Your job {ticket.get('ticket_number')} has been assigned to a technician" + (f" — {when}" if when else ""),
+    )
 
 
 async def _handle_ticket_claim(
@@ -5051,17 +5381,20 @@ async def _handle_ticket_claim(
             if len(claimable) > 1:
                 # The candidates are known: buttons, not a typed example.
                 return ChatReply(
-                    text=_t(TICKET_NEEDS_CODE, language),
+                    text=_t(TICKET_CLAIM_PICK, language),
                     quick_replies=[
                         (
-                            f"{t.get('ticket_number')} {str(t.get('customer_name') or '')[:12]}".strip(),
+                            f"{t.get('ticket_number')} {str(t.get('customer_name') or '')[:12]}".strip()[:20],
                             f"รับงาน {t.get('ticket_number')}",
                         )
                         for t in claimable[:4]
                     ],
                 )
             if len(claimable) != 1:
-                return ChatReply(text=_t(TICKET_NEEDS_CODE, language))
+                return ChatReply(
+                    text=_t(TICKET_NOTHING_TO_CLAIM, language),
+                    quick_replies=[("งานที่เปิดรับ", "งานที่เปิดรับ"), ("งานของฉัน", "งานของฉัน")],
+                )
             code = str(claimable[0].get("ticket_number", "")).upper()
 
         ticket = next(
@@ -5096,6 +5429,11 @@ async def _handle_ticket_claim(
             entity_type="service_ticket", entity_id=str(claimed.get("id") or ""),
             quick_replies=[(f"รับงาน {code}"[:20], f"รับงาน {code}"), ("งานของทีม", "งานของทีม")],
         )
+    await _notify_customer(
+        client, {**ticket, **claimed},
+        f"ช่างรับงาน {code} ของคุณแล้ว" + (f" นัด {_ticket_when(claimed)}" if _ticket_when(claimed) else ""),
+        f"A technician has accepted your job {code}" + (f" — {_ticket_when(claimed)}" if _ticket_when(claimed) else ""),
+    )
     return ChatReply(
         text=_t(TICKET_CLAIMED, language).format(
             code=code,
@@ -5118,7 +5456,7 @@ TICKET_TEAM_LEAD_FIRST = {
     "th": "งาน {code} มอบหมายให้ทีม หัวหน้าทีมต้องกดรับให้ทีมก่อน แล้วสมาชิกจึงรับต่อได้",
     "en": "{code} was given to the team — the team lead accepts it first, then a member takes it",
 }
-TICKET_TEAM_PHRASES = ("งานของทีม", "งานทีม", "งานในทีม", "team jobs")
+TICKET_TEAM_PHRASES = ("งานของทีม", "งานทีม", "งานในทีม", "ทีมมีงานไหม", "ทีมมีงานอะไรบ้าง", "งานทีมมีไหม", "team jobs")
 TICKET_TEAM_EMPTY = {"th": "ตอนนี้ไม่มีงานของทีมที่รอคนรับครับ", "en": "No team jobs waiting right now."}
 
 
@@ -6021,8 +6359,14 @@ def dashboard_link(section: str, oa: str = "sales") -> str | None:
         return f"https://liff.line.me/{liff_id}"
     return f"https://liff.line.me/{liff_id}/{path}" if path else f"https://liff.line.me/{liff_id}"
 
-CUSTOMER_LIST_PHRASES = ("รายชื่อลูกค้า", "รายการลูกค้า", "ดูลูกค้า", "ลูกค้าทั้งหมด", "customer list")
-DEAL_LIST_PHRASES = ("รายการดีล", "รายชื่อดีล", "ดูดีล", "ดีลทั้งหมด", "deal list")
+CUSTOMER_LIST_PHRASES = (
+    "รายชื่อลูกค้า", "รายการลูกค้า", "ดูลูกค้า", "ลูกค้าทั้งหมด", "รายชื่อลูกค้าทั้งหมด", "ลูกค้ามีใครบ้าง",
+    "ลูกค้ามีอะไรบ้าง", "ลูกค้าทั้งหมดมีกี่คน", "มีลูกค้ากี่คน", "ดูรายชื่อลูกค้า", "customer list", "list customers",
+)
+BARE_CUSTOMER_WORDS = frozenset({"ลูกค้า", "customers"})
+DEAL_LIST_PHRASES = ("รายการดีล", "รายชื่อดีล", "ดูดีล", "ดีลทั้งหมด", "ดีลมีอะไรบ้าง", "deal list", "deals")
+BARE_DEAL_WORDS = frozenset({"ดีล", "deal"})
+BARE_PRODUCT_WORDS = frozenset({"สินค้า", "products"})
 # Trailing-name forms: "ดูดีลของจุใจ", "ดีลของ C-2026-0005". Matched
 # separately from the bare phrases because _matches_phrase compares the
 # whole message, so anything after the trigger stops it matching at all.
@@ -6162,9 +6506,135 @@ def _field_service_failure(exc, *, code: str, language: str, template: dict) -> 
     return ChatReply(text=_t(template, language).format(detail=_t(COMPANY_SAVE_FAILED, language)))
 
 
+# Politeness is not meaning. "รายชื่อลูกค้าครับ", "ดูรายชื่อลูกค้าหน่อย" and
+# "ขอรายชื่อลูกค้า" are the same request as "รายชื่อลูกค้า"; before 6 Sep 2026
+# only the bare form matched and the other three went to the model.
+_POLITE_TAIL = (
+    "นะครับ", "นะคะ", "หน่อยครับ", "หน่อยค่ะ", "ครับผม", "ครับ", "ค่ะ", "คะ", "ค้าบ", "คับ", "ครัช",
+    "งับ", "จ้า", "จ้ะ", "จ๊ะ", "นะ", "น่ะ", "หน่อย", "ด้วย", "ที", "สิ", "ซิ", "เลย", "please", "pls",
+)
+_POLITE_HEAD = ("ขอดู", "ช่วยดู", "อยากดู", "ขอ", "ช่วย", "อยากจะ", "อยาก", "รบกวน", "please", "ขอถาม")
+
+
+def _compact(message: str) -> str:
+    """Lower-case, no spaces, no punctuation — the particles kept."""
+    return re.sub(r"[\s!?.,~ๆ。]+", "", (message or "").strip().lower())
+
+
+def _normalise(message: str) -> str:
+    """Lower-case, no spaces, no trailing punctuation or polite particles."""
+    compact = _compact(message)
+    changed = True
+    while changed and compact:
+        changed = False
+        for tail in _POLITE_TAIL:
+            if compact.endswith(tail) and len(compact) > len(tail) + 1:
+                compact = compact[: -len(tail)]
+                changed = True
+    return compact
+
+
+def _polite_forms(message: str) -> set[str]:
+    # Both the raw and the particle-stripped form: "สถานะ" ends in "นะ".
+    forms = {_compact(message), _normalise(message)}
+    for base in list(forms):
+        for head in _POLITE_HEAD:
+            if base.startswith(head) and len(base) > len(head) + 1:
+                forms.add(base[len(head):])
+    return forms
+
+
 def _matches_phrase(message: str, phrases: tuple[str, ...]) -> bool:
-    compact = (message or "").strip().lower().replace(" ", "")
-    return bool(compact) and any(compact == p.replace(" ", "") for p in phrases)
+    forms = _polite_forms(message)
+    forms.discard("")
+    return bool(forms) and any(f == p.replace(" ", "").lower() for f in forms for p in phrases)
+
+
+def _command_like(message: str, triggers: tuple[str, ...]) -> bool:
+    """A command word at the START of a short message, or anywhere when a
+    ticket code is named. "ลูกค้าบอกว่าถึงแล้วค่อยโทร" is a sentence about
+    a customer, not a check-in — the old substring match took it as one."""
+    compact = _normalise(message)
+    if not compact or compact.startswith(("วิธีใช้", "help", "guide", "คู่มือ")):
+        return False
+    words = [t.replace(" ", "").lower() for t in triggers]
+    if TICKET_CODE_RE.search(message or ""):
+        return any(w in compact for w in words)
+    return any(compact.startswith(w) for w in words) or (
+        len(compact) <= 16 and any(w in compact for w in words)
+    )
+
+
+# Acknowledgements and thanks. Sending "ขอบคุณครับ" to the intent model and
+# answering "ยังไม่แน่ใจว่าต้องการอะไร" is the conversational equivalent of
+# not hearing someone say thank you.
+SMALL_TALK_PHRASES = (
+    "ขอบคุณ", "ขอบคุณมาก", "ขอบใจ", "thanks", "thank you", "thx", "โอเค", "ok", "okay", "โอเคเลย",
+    "ครับ", "ค่ะ", "คะ", "ครับผม", "รับทราบ", "ทราบแล้ว", "ได้", "ได้เลย", "เยี่ยม", "ดีมาก", "เข้าใจแล้ว",
+    "noted", "good", "great", "nice", "จบ", "พอแล้ว",
+)
+SMALL_TALK_REPLY = {
+    "th": "ยินดีครับ 🙂 มีอะไรพิมพ์มาได้เลย",
+    "en": "You're welcome. Just type whenever you need something.",
+}
+_EMOJI_ONLY = ("👍", "🙏", "👌", "❤️", "😊", "🙂", "😀", "✅")
+
+
+def _is_small_talk(message: str) -> bool:
+    raw = (message or "").strip()
+    if not raw:
+        return False
+    if (len(raw) >= 3 and all(ch in "5๕" for ch in raw)) or raw in _EMOJI_ONLY:
+        return True  # "555" laughs; "5" answers a survey
+    compact = _normalise(message)
+    return compact in {p.replace(" ", "") for p in SMALL_TALK_PHRASES}
+
+
+# "How do I use this", in the many ways people say it. Exact phrases still
+# match through HELP_TRIGGERS; these are the words inside a short message
+# that mean the same thing. Short keys (≤3 chars) must start the message.
+HELP_CONTAINS = (
+    "ใช้ยังไง", "ใช้งานยังไง", "ใช้ไง", "ใช้อย่างไร", "ใช้งานอย่างไร", "วิธีใช้", "คู่มือ", "สอนใช้", "สอนหน่อย",
+    "ทำยังไง", "ทํายังไง", "ทำไง", "เริ่มยังไง", "เริ่มต้นยังไง", "เริ่มใช้", "ช่วยด้วย", "ช่วยหน่อย", "ช่วยเหลือ",
+    "แนะนำการใช้", "แนะนำหน่อย", "คำแนะนำ", "ไม่เข้าใจ", "งง", "ใช้ไม่เป็น", "ใช้งานไม่เป็น", "มีอะไรบ้าง",
+    "มีฟังก์ชัน", "มีเมนู", "ทำอะไรได้", "ทําอะไรได้", "ช่วยอะไรได้", "มีคำสั่ง", "คำสั่งทั้งหมด", "พิมพ์อะไร",
+    "พิมพ์ยังไง", "how to", "how do i", "what can you", "help", "guide", "tutorial", "menu",
+)
+# The generic ones above ("มีอะไรบ้าง", "ทำอะไรได้") are about the system only
+# when no record type is named: "ดีลมีอะไรบ้าง" is a list request.
+_HELP_GENERIC = ("มีอะไรบ้าง", "ทำอะไรได้", "ทําอะไรได้", "ช่วยอะไรได้", "มีฟังก์ชัน", "มีเมนู")
+_ENTITY_WORDS = ("ลูกค้า", "ดีล", "งาน", "สินค้า", "ใบเสนอ", "นัด", "ทีม", "ช่าง", "ประกัน", "รายงาน", "บันทึก", "เตือน")
+
+
+def _is_help_request(message: str, oa: str = "") -> bool:
+    if (
+        _matches_phrase(message, HELP_TRIGGERS) or _matches_phrase(message, HELP_EXAMPLES_PHRASES)
+        or (message or "").strip() in ("?", "??", "???") or _is_general_capability_question(message)
+    ):
+        return True
+    compact = _normalise(message)
+    if not compact or len(compact) > 40:
+        return False
+    if re.search(r"[CDQT]-\d{4}-\d{4}", message or "", re.I):
+        return False
+    if oa == "customer" and _looks_like_fault(message):
+        return False
+    if compact in HELP_EXACT_SHORT or _compact(message) in HELP_EXACT_SHORT:
+        return True
+    names_entity = any(w in compact for w in _ENTITY_WORDS)
+    for key in HELP_CONTAINS:
+        k = _normalise(key)
+        if key in _HELP_GENERIC and names_entity:
+            continue
+        if len(k) <= 3:
+            if compact.startswith(k) or compact == k:
+                return True
+        elif k in compact:
+            return True
+    return False
+
+
+HELP_EXACT_SHORT = frozenset({"ช่วย", "สอน", "แนะนำ", "help", "งง", "เมนู", "menu", "?", "สอนที", "ช่วยที"})
 
 
 def _parse_after_trigger(message: str, triggers: tuple[str, ...]) -> str | None:
@@ -7080,7 +7550,10 @@ async def _handle_quote_discount(
         return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
 
     license_id = str(license_id)
-    amount = re.search(r"([\d,]+(?:\.\d{1,2})?)\s*(%|เปอร์เซ็นต์|บาท)?", message or "")
+    # The code is stripped first: "ส่วนลด Q-2026-0001 500 บาท" used to read
+    # 2026 as the discount (review, 6 Sep 2026).
+    scrubbed = re.sub(r"\b[CDQT]-\d{4}-\d{4}\b", " ", message or "", flags=re.I)
+    amount = re.search(r"([\d,]+(?:\.\d{1,2})?)\s*(%|เปอร์เซ็นต์|บาท)?", scrubbed)
     if not amount:
         return ChatReply(text=_t(QUOTE_DISCOUNT_NEEDS, language))
     number = amount.group(1).replace(",", "")
@@ -8804,7 +9277,10 @@ CAPABILITY_GROUP_PAGE = {
     "chat_session": "chats", "approval": "approvals",
 }
 CAPABILITY_ASK_MARKERS = ("ทำอะไร", "ทําอะไร", "ได้บ้าง", "ทำได้", "what can", "capabilit", "able to")
-PERMISSION_ASK_PHRASES = ("ฉันมีสิทธิ์ทำอะไร", "ฉันมีสิทธิ์อะไร", "สิทธิ์ของฉัน", "มีสิทธิ์ทำอะไรบ้าง", "my permissions", "what am i allowed")
+PERMISSION_ASK_PHRASES = (
+    "ฉันมีสิทธิ์ทำอะไร", "ฉันมีสิทธิ์อะไร", "สิทธิ์ของฉัน", "มีสิทธิ์ทำอะไรบ้าง", "ผมมีสิทธิ์อะไรบ้าง", "ผมมีสิทธิ์อะไร",
+    "มีสิทธิ์อะไรบ้าง", "เรามีสิทธิ์อะไรบ้าง", "ผมมีสิทธิ์ทำอะไร", "my permissions", "what am i allowed",
+)
 CAPABILITY_DETAIL_HEADER = {"th": "{group} — สิ่งที่คุณทำได้ตอนนี้:", "en": "{group} — what you can do now:"}
 CAPABILITY_DETAIL_NONE = {
     "th": "{group} — บัญชีของคุณยังไม่มีสิทธิ์ในหมวดนี้ ขอได้จากเจ้าของร้านหรือแอดมิน (แดชบอร์ด > บทบาทและทีม)",
@@ -9048,6 +9524,111 @@ HELP_EXAMPLES_PHRASES = ("ตัวอย่างคำสั่ง", "คำ�
 CAPABILITY_PHRASES = ("สิทธิ์ของฉัน", "ฉันมีสิทธิ์อะไรบ้าง", "ดูสิทธิ์", "my permissions", "what am i allowed to do")
 
 
+HELP_MENU_TTL_S = 900
+HELP_ALL_PHRASES = ("วิธีใช้ทั้งหมด", "ดูทั้งหมด", "help all", "full guide", "คู่มือทั้งหมด", "ทุกขั้น")
+_HELP_STEP_RE = re.compile(r"^\s*(?:วิธีใช้|help|guide|คู่มือ)\s*(?:ข้อ|ขั้น|step)?\s*(\d{1,2})\s*$", re.I)
+
+
+def _is_help_step_request(message: str) -> bool:
+    return bool(_HELP_STEP_RE.match(message or "")) or _matches_phrase(message, HELP_ALL_PHRASES)
+
+
+def _help_oa(ctx: ResolvedContext) -> str:
+    return ctx.oa if ctx.oa in ("sales", "technician", "customer") else "customer"
+
+
+async def _remember_help_menu(client: DataClient, ctx: ResolvedContext) -> None:
+    try:
+        await client.set_pending_intent(
+            ctx.chann_uid, ctx.oa, action="help", entity="help_menu", fields={}, missing=[],
+            ttl_seconds=HELP_MENU_TTL_S,
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("could not remember the help menu")
+
+
+async def _help_step_reply(
+    client: DataClient, *, ctx: ResolvedContext, n: int, language: str,
+) -> ChatReply | None:
+    oa = _help_oa(ctx)
+    rendered = render_help_step(oa, n, language)
+    if rendered is None:
+        return None
+    text, image = rendered
+    await _remember_help_menu(client, ctx)
+    buttons: list[tuple[str, str]] = []
+    if n < help_step_count(oa):
+        buttons.append((("ถัดไป" if language != "en" else "Next") + f" {n + 1}", f"วิธีใช้ {n + 1}"))
+    buttons.append(("หัวข้อทั้งหมด" if language != "en" else "Topics", "วิธีใช้"))
+    return ChatReply(
+        text=text, images=[image] if image else [], quick_replies=buttons,
+        quick_reply_url=_guide_button(oa, language),
+    )
+
+
+async def _help_step_from_pending(
+    client: DataClient, *, ctx: ResolvedContext, message: str, language: str,
+) -> ChatReply | None:
+    """A bare digit while the help menu is open: that topic. None
+    otherwise, so a "1" answering some other question is left alone."""
+    try:
+        pending = await client.get_pending_intent(ctx.chann_uid, ctx.oa)
+    except Exception:  # noqa: BLE001
+        return None
+    if not pending or pending.get("entity") != "help_menu":
+        return None
+    try:
+        n = int((message or "").strip())
+    except ValueError:
+        return None
+    reply = await _help_step_reply(client, ctx=ctx, n=n, language=language)
+    if reply is None:
+        return await _help_reply(client, ctx=ctx, permission_keys=[], language=language, message="วิธีใช้")
+    return reply
+
+
+async def _help_reply(
+    client: DataClient, *, ctx: ResolvedContext, permission_keys: list[str], language: str, message: str,
+) -> ChatReply:
+    """Owner (6 Sep 2026): help in layers. The menu names the topics with a
+    button each; a topic comes with its picture; "วิธีใช้ทั้งหมด" is the
+    old single message. Every layer carries the illustrated-guide link."""
+    oa = _help_oa(ctx)
+    m = _HELP_STEP_RE.match(message or "")
+    if m:
+        reply = await _help_step_reply(client, ctx=ctx, n=int(m.group(1)), language=language)
+        if reply is not None:
+            return reply
+    else:
+        n = help_step_by_text(oa, message, language)
+        if n is not None and not _matches_phrase(message, HELP_TRIGGERS):
+            reply = await _help_step_reply(client, ctx=ctx, n=n, language=language)
+            if reply is not None:
+                return reply
+    lead = ""
+    areas = ""
+    if oa == "sales":
+        # Someone with no permission at all is told who to ask first.
+        lead = "" if _filter_by_oa(permission_keys, oa) else _t(HELP_NOTHING, language) + "\n\n"
+        try:
+            areas = capability_overview_line(_filter_by_oa(permission_keys, oa), await client.permission_catalog(), language)
+        except Exception:  # noqa: BLE001
+            log.exception("could not read the permission catalogue for the areas line")
+    if _matches_phrase(message, HELP_ALL_PHRASES):
+        return ChatReply(
+            text=lead + render_help_text(oa, language) + ("\n\n" + areas if areas else ""),
+            quick_replies=help_menu_quick_replies(oa, language),
+            quick_reply_url=_guide_button(oa, language),
+        )
+    await _remember_help_menu(client, ctx)
+    areas = areas.split("\n", 1)[0] if areas else ""
+    return ChatReply(
+        text=lead + render_help_menu(oa, language) + ("\n" + areas if areas else ""),
+        quick_replies=help_menu_quick_replies(oa, language),
+        quick_reply_url=_guide_button(oa, language),
+    )
+
+
 def _guide_button(oa: str, language: str) -> tuple[str, str] | None:
     url = dashboard_link("guide", oa)
     return (("คู่มือพร้อมรูป" if language != "en" else "Illustrated guide"), url) if url else None
@@ -9073,6 +9654,27 @@ CUSTOMER_PROFILE_TEXT = {
     ),
 }
 _NOT_SET = {"th": "ยังไม่ระบุ", "en": "not set"}
+
+
+async def _handle_staff_profile_view(
+    client: DataClient, *, ctx: ResolvedContext, license_id, language: str,
+) -> ChatReply:
+    try:
+        profile = await client.get_profile(ctx.chann_uid) or {}
+    except Exception:
+        log.exception("could not read a member's profile")
+        profile = {}
+    member = next(
+        (m for m in ctx.memberships if str(m.get("license_id")) == str(license_id)), {},
+    )
+    blank = _t(_NOT_SET, language)
+    name = " ".join(p for p in (profile.get("first_name"), profile.get("last_name")) if p) or ctx.display_name or blank
+    return ChatReply(
+        text=_t(STAFF_PROFILE_TEXT, language).format(
+            name=name, phone=profile.get("phone") or blank, email=profile.get("email") or blank,
+            shop=member.get("company_name") or blank, role=member.get("role") or "-",
+        ),
+    )
 
 
 async def _handle_customer_profile_view(
@@ -10245,6 +10847,11 @@ async def handle_chat_message(
         other = _membership_named(message, ctx.alternatives, explicit_only=True)
         if other is not None:
             return await _switch_tenant(client, ctx=ctx, membership=other, language=language)
+    elif _matches_phrase(message, SWITCH_TENANT_PHRASES):
+        # One shop only: say so instead of sending the words to the model.
+        return ChatReply(
+            text=_t(SINGLE_SHOP, language).format(company=ctx.memberships[0].get("company_name") or "-"),
+        )
 
     license_id = ctx.license_id
     member = ctx.memberships[0]
@@ -10408,6 +11015,18 @@ async def handle_chat_message(
                 client, ctx=ctx, license_id=license_id, message=message,
                 language=language,
             )
+        if TICKET_CODE_RE.fullmatch((message or "").strip()):
+            # The code on its own: the job, in full.
+            return await _handle_ticket_detail(
+                client, ctx=ctx, license_id=license_id, message=message,
+                permission_keys=permission_keys, language=language,
+            )
+        if _looks_like_a_question(message) and _asks_about_warranty(message) and _oa_allows(ctx.oa, "warranty.read"):
+            # "SN12345678 ประกันหมดยัง" / "เครื่องนี้ยังมีประกันไหม"
+            return await _handle_serial_enquiry(
+                client, ctx=ctx, license_id=license_id, message=message,
+                language=language,
+            )
         if any(t in message.lower() for t in TICKET_DETAIL_TRIGGERS) and (
             TICKET_CODE_RE.search(message or "")
             or _matches_phrase(message, TICKET_DETAIL_TRIGGERS)
@@ -10453,7 +11072,7 @@ async def handle_chat_message(
                 client, ctx=ctx, license_id=license_id, message=message,
                 permission_keys=permission_keys, language=language, ai_client=ai_client,
             )
-        if _matches_phrase(message, TICKET_MINE_PHRASES):
+        if _matches_phrase(message, TICKET_MINE_PHRASES) or _normalise(message) in BARE_JOB_WORDS:
             return await _handle_ticket_list(
                 client, ctx=ctx, license_id=license_id,
                 permission_keys=permission_keys, language=language, mine=True,
@@ -10489,14 +11108,33 @@ async def handle_chat_message(
 
         # Check-in/out before claim: "ปิดงาน" and "รับงาน" are different
         # actions on the same ticket, and the shorter claim trigger must
-        # not swallow a close.
-        if any(t in message.lower() for t in CHECKOUT_TRIGGERS):
+        # not swallow a close. Command-like only: a sentence that merely
+        # contains "ถึงแล้ว" is not a check-in.
+        if _command_like(message, CHECKOUT_TRIGGERS):
             return await _handle_check_out(
                 client, ctx=ctx, license_id=license_id, message=message,
                 permission_keys=permission_keys, language=language,
             )
-        if any(t in message.lower() for t in CHECKIN_TRIGGERS):
+        if _command_like(message, CHECKIN_TRIGGERS):
             return await _handle_check_in(
+                client, ctx=ctx, license_id=license_id, message=message,
+                permission_keys=permission_keys, language=language,
+            )
+        # "รับ" / "ไม่รับ" on their own — the answer to an offer.
+        bare_word = _normalise(message)
+        if bare_word in BARE_DECLINE_WORDS:
+            return await _handle_ticket_reject(
+                client, ctx=ctx, license_id=license_id, message=message,
+                permission_keys=permission_keys, language=language,
+            )
+        if bare_word in BARE_ACCEPT_WORDS:
+            return await _handle_ticket_claim(
+                client, ctx=ctx, license_id=license_id, message=message,
+                permission_keys=permission_keys, language=language,
+            )
+        if ctx.oa == "technician" and _asks_about_current_job(message):
+            # "ลูกค้าเบอร์อะไร", "งานนี้ที่อยู่ไหน": the job they are on.
+            return await _handle_ticket_detail(
                 client, ctx=ctx, license_id=license_id, message=message,
                 permission_keys=permission_keys, language=language,
             )
@@ -10548,15 +11186,14 @@ async def handle_chat_message(
             return policy_reply
 
     if ctx.oa == "customer":
-        if _matches_phrase(message, HELP_TRIGGERS):
+        if _is_help_request(message, "customer") or _is_help_step_request(message):
+            return await _help_reply(
+                client, ctx=ctx, permission_keys=permission_keys, language=language, message=message,
+            )
+        if _is_small_talk(message):
             return ChatReply(
-                text=render_help_text("customer", language),
-                images=guide_images("customer"),
-                quick_replies=[
-                    ("แจ้งซ่อม", "แจ้งซ่อม"), ("งานของฉัน", "งานของฉัน"),
-                    ("ประกันของฉัน", "ประกันของฉัน"),
-                ],
-                quick_reply_url=_guide_button("customer", language),
+                text=_t(SMALL_TALK_REPLY, language),
+                quick_replies=[("แจ้งซ่อม", "แจ้งซ่อม"), ("งานของฉัน", "งานของฉัน")],
             )
         if _matches_phrase(message, CUSTOMER_PROFILE_PHRASES):
             return await _handle_customer_profile_view(
@@ -10570,6 +11207,10 @@ async def handle_chat_message(
         )
         if survey_reply is not None:
             return survey_reply
+        if (message or "").strip().isdigit():
+            step_reply = await _help_step_from_pending(client, ctx=ctx, message=message, language=language)
+            if step_reply is not None:
+                return step_reply
         # The rich-menu tiles that are not a fault report. Each is an
         # exact phrase, tested before the catch-all that would otherwise
         # turn the tile's label into a repair job.
@@ -10603,7 +11244,7 @@ async def handle_chat_message(
         # (Phase 8 — self-edit is always permitted). Catching everything as
         # a fault report turned "แก้เบอร์เป็น 08..." into a repair job,
         # which a test caught immediately.
-        if any(t in message.lower() for t in SERIAL_REGISTER_TRIGGERS):
+        if any(t in message.lower() for t in SERIAL_REGISTER_TRIGGERS) or _normalise(message) in ("ลงทะเบียน", "register"):
             return await _handle_warranty_register(
                 client, ctx=ctx, license_id=license_id, message=message,
                 language=language,
@@ -10645,39 +11286,25 @@ async def handle_chat_message(
         if capability_reply is not None:
             return capability_reply
 
+    if ctx.oa in ("sales", "technician") and _matches_phrase(message, CUSTOMER_PROFILE_PHRASES):
+        return await _handle_staff_profile_view(client, ctx=ctx, license_id=license_id, language=language)
+
+    # A bare number right after the help menu picks a topic.
+    if (message or "").strip().isdigit():
+        step_reply = await _help_step_from_pending(client, ctx=ctx, message=message, language=language)
+        if step_reply is not None:
+            return step_reply
+
     # Help, before anything else and on every OA. Someone who types "ใช้ยังไง"
     # is telling you they are stuck; routing that through intent parsing to
-    # maybe get a permission list back is not an answer.
+    # maybe get a permission list back is not an answer. Owner (6 Sep 2026):
+    # in layers — a short menu of topics first, one topic at a time after.
     if (
-        _matches_phrase(message, HELP_TRIGGERS) or _matches_phrase(message, HELP_EXAMPLES_PHRASES)
-        or _matches_phrase(message, CAPABILITY_PHRASES) or (message or "").strip() == "?"
-        or _is_general_capability_question(message)
+        _is_help_request(message, ctx.oa) or _is_help_step_request(message)
+        or _matches_phrase(message, CAPABILITY_PHRASES)
     ):
-        # Filtered by OA as well as by permission: a technician whose LINE
-        # account also holds sales keys was shown the customer list on the
-        # Technician OA, where that command is refused.
-        if ctx.oa == "technician":
-            return ChatReply(
-                text=render_help_text("technician", language),
-                images=guide_images("technician"),
-                quick_replies=[("งานของฉัน", "งานของฉัน"), ("งานที่เปิดรับ", "งานที่เปิดรับ")],
-                quick_reply_url=_guide_button("technician", language),
-            )
-        # Owner (4 Sep 2026): "ทำอะไรได้บ้าง", "ตัวอย่างคำสั่ง" and "สิทธิ์ของฉัน"
-        # all get the guide — the step-by-step one people can follow — never
-        # a list of permissions or commands. Someone with no permission at
-        # all is told who to ask first, then still gets the guide.
-        lead = "" if _filter_by_oa(permission_keys, ctx.oa) else _t(HELP_NOTHING, language) + "\n\n"
-        areas = ""
-        try:
-            areas = capability_overview_line(_filter_by_oa(permission_keys, ctx.oa), await client.permission_catalog(), language)
-        except Exception:  # noqa: BLE001
-            log.exception("could not read the permission catalogue for the areas line")
-        return ChatReply(
-            text=lead + render_help_text("sales", language) + ("\n\n" + areas if areas else ""),
-            images=guide_images("sales"),
-            quick_replies=[("งานวันนี้", "งานวันนี้"), ("รายชื่อลูกค้า", "รายชื่อลูกค้า")],
-            quick_reply_url=_guide_button("sales", language),
+        return await _help_reply(
+            client, ctx=ctx, permission_keys=permission_keys, language=language, message=message,
         )
 
     # Notes and reminders (6.3/6.7). Before the AI path for the same reason
@@ -10783,7 +11410,7 @@ async def handle_chat_message(
     # themselves, never a slot-filling answer, and a person asking to see
     # their customer list should get it even mid-conversation.
     if ctx.oa == "sales":
-        if _matches_phrase(message, CUSTOMER_LIST_PHRASES):
+        if _matches_phrase(message, CUSTOMER_LIST_PHRASES) or _normalise(message) in BARE_CUSTOMER_WORDS:
             return await _handle_customer_list(
                 client, license_id=license_id, permission_keys=permission_keys,
                 language=language,
@@ -10936,12 +11563,12 @@ async def handle_chat_message(
                     language=language, kind=query_kind,
                 )
 
-        if _matches_phrase(message, DEAL_LIST_PHRASES):
+        if _matches_phrase(message, DEAL_LIST_PHRASES) or _normalise(message) in BARE_DEAL_WORDS:
             return await _handle_deal_list(
                 client, ctx=ctx, license_id=license_id, permission_keys=permission_keys,
                 language=language,
             )
-        if _matches_phrase(message, PRODUCT_LIST_PHRASES):
+        if _matches_phrase(message, PRODUCT_LIST_PHRASES) or _normalise(message) in BARE_PRODUCT_WORDS:
             return await _handle_product_list(
                 client, license_id=license_id, permission_keys=permission_keys,
                 language=language,
@@ -10953,7 +11580,11 @@ async def handle_chat_message(
             )
 
         search_term = _parse_after_trigger(message, CUSTOMER_SEARCH_TRIGGERS)
+        if search_term is None:
+            # "ลูกค้าชื่อสมชาย", "เบอร์สมชาย", "สมชาย เบอร์อะไร", "ค้นหา สมชาย"
+            search_term = _customer_lookup_term(message)
         if search_term is not None:
+            search_term = re.sub(r"^(?:ที่ชื่อ|ชื่อว่า|ชื่อ|ที่)\s*", "", search_term).strip()
             if not search_term:
                 return ChatReply(text=_t(SEARCH_NEEDS_TERM, language))
             return await _handle_customer_list(
@@ -11129,6 +11760,14 @@ async def handle_chat_message(
             pending=pending_intent, permission_keys=permission_keys, language=language,
         )
 
+    if pending_intent is not None and pending_intent.get("entity") == "help_menu":
+        # A topic was offered and something else was typed: the menu is
+        # done, the message is whatever it is.
+        await _drop_pending_quietly(client, ctx)
+        pending_intent = None
+    if pending_intent is None and _is_small_talk(message):
+        return ChatReply(text=_t(SMALL_TALK_REPLY, language))
+
     try:
         intent = await parse_intent(
             message=message,
@@ -11172,6 +11811,10 @@ async def handle_chat_message(
     if pending_intent is not None:
         await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
 
+    if intent.get("action") == "suggest" and ctx.oa == "customer":
+        # A customer holds no permission keys; "you have no permissions,
+        # ask your admin" is the wrong sentence for them.
+        return _customer_fallback(message, language)
     if intent.get("action") == "suggest":
         net = await _appointment_net(
             client, ctx=ctx, license_id=license_id, message=message,
@@ -11223,6 +11866,8 @@ async def handle_chat_message(
             )
             if net is not None:
                 return net
+        if ctx.oa == "customer":
+            return _customer_fallback(message, language)
         catalog = await client.permission_catalog()
         return ChatReply(
             text=suggest_what_you_can_do(
@@ -11389,8 +12034,11 @@ def _is_ai_report_request(message: str) -> bool:
         return False
     if _matches_phrase(message, REPORT_LIST_PHRASES) or any(t in text for t in REPORT_PDF_TRIGGERS):
         return False
-    # The fixed sales summary ("ยอดขาย", "สรุปยอด" …) stays deterministic.
-    if _matches_phrase(message, SALES_SUMMARY_PHRASES):
+    # The fixed sales summary ("ยอดขาย", "สรุปยอด", "สรุปยอดขาย" …) stays deterministic.
+    if _matches_phrase(message, SALES_SUMMARY_PHRASES) or (
+        len(text) <= 14 and any(p in text for p in SALES_SUMMARY_PHRASES)
+        and not text.startswith(("รายงาน", "report"))
+    ):
         return False
     return any(text.startswith(t) for t in AI_REPORT_TRIGGERS)
 
@@ -11886,7 +12534,7 @@ def capability_detail(group: str, permission_keys, catalog: list[dict], language
             quick_reply_url=_guide_button(oa, language),
         )
     lines = [_t(CAPABILITY_DETAIL_HEADER, language).format(group=group_label)]
-    lines.extend(commands[:12])
+    lines.extend(commands[:6])
     if held_labels:
         lines.append(_t(CAPABILITY_HELD, language).format(labels=", ".join(held_labels)))
     if missing_labels:
@@ -11930,8 +12578,13 @@ def permission_summary(permission_keys, catalog: list[dict], language: str) -> s
     if not groups:
         return _t(PERMISSION_SUMMARY_NONE, language)
     lines = [_t(PERMISSION_SUMMARY_HEADER, language)]
-    for group, labels in groups.items():
+    shown = list(groups.items())[:8]
+    for group, labels in shown:
         lines.append(f"• {_group_label(group, language)}: {', '.join(labels)}")
+    rest = list(groups)[8:]
+    if rest:
+        lines.append(("…และอีก {n} หมวด: " if language != "en" else "…and {n} more: ").format(n=len(rest))
+                     + " · ".join(_group_label(g, language) for g in rest))
     lines.append(_t(CAPABILITY_FOLLOW_UP, language))
     return "\n".join(lines)
 

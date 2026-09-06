@@ -326,6 +326,12 @@ async def send_survey(
     if not line_uid:
         log.info("survey %s recorded but the customer has no LINE target", survey.get("id"))
         return False
+    # The CUSTOMER's language, not the approver's (principle 7; review, 6 Sep 2026).
+    try:
+        prefs = await client.get_display_preferences(uid) or {}
+        language = str(prefs.get("language") or language or "th")
+    except Exception:  # noqa: BLE001
+        pass
 
     scale = survey.get("scale_config_json") or DEFAULT_SCALE
     items = [

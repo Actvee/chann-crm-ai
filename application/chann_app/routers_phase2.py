@@ -1937,12 +1937,20 @@ async def create_ticket(
         # body says — that is what makes it show on their own list.
         body["customer_chann_uid"] = principal.chann_uid
     try:
-        return await client.create_ticket(
+        row = await client.create_ticket(
             license_id, body,
             actor_id=principal.chann_uid,
         )
     except DataTierError as exc:
         raise _propagate(exc)
+    # The dispatchers hear about it — the home-screen report used to reach
+    # nobody (review, 6 Sep 2026). Best-effort.
+    try:
+        from .services.chat import _notify_new_ticket
+        await _notify_new_ticket(client, license_id, str(row.get("id") or ""), "th")
+    except Exception:  # noqa: BLE001
+        log.exception("could not announce a new ticket")
+    return row
 
 
 @router.post("/licenses/{license_id}/tickets/{ticket_id}/assign")
@@ -2004,9 +2012,26 @@ async def update_ticket_from_dashboard(
     if not fields:
         raise HTTPException(status_code=422, detail="nothing to update")
     try:
-        return await client.update_ticket(license_id, ticket_id, fields, actor_id=principal.chann_uid)
+        row = await client.update_ticket(license_id, ticket_id, fields, actor_id=principal.chann_uid)
     except DataTierError as exc:
         raise _propagate(exc)
+    if any(k in fields for k in ("scheduled_date", "scheduled_time", "service_address")):
+        # A moved appointment or address reaches the technician and the
+        # customer, as the customer's own reschedule already did.
+        try:
+            from .services.chat import _notify_ticket_change, _ticket_when
+            code = str(row.get("ticket_number") or "")
+            when = _ticket_when(row)
+            await _notify_ticket_change(
+                client, license_id, ticket_id,
+                f"งาน {code} เปลี่ยนนัด/ที่อยู่: {when or '-'} · {row.get('service_address') or '-'}", "th",
+                text_en=f"Job {code} changed: {when or '-'} · {row.get('service_address') or '-'}",
+                customer_text=f"ร้านปรับนัดงาน {code} ของคุณเป็น {when or '-'}",
+                customer_text_en=f"The shop moved your job {code} to {when or '-'}",
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("could not announce a dashboard ticket edit")
+    return row
 
 
 @router.patch("/licenses/{license_id}/tickets/{ticket_id}/status")
@@ -2023,8 +2048,11 @@ async def set_ticket_status_from_dashboard(
     _require_same_tenant(principal, license_id)
     principal.require("ticket.update")
     new_status = str((payload or {}).get("status") or "")
-    if new_status not in ("cancelled", "completed", "open"):
-        raise HTTPException(status_code=422, detail="status must be cancelled, completed or open")
+    # Cancel only. "completed" from here skipped check-in, the report and
+    # approval — the whole Phase 13 gate (review, 6 Sep 2026); "open"
+    # reopened a job under a technician's feet.
+    if new_status != "cancelled":
+        raise HTTPException(status_code=422, detail="status must be cancelled")
     try:
         row = await client.set_ticket_status(license_id, ticket_id, new_status, actor_id=principal.chann_uid)
     except DataTierError as exc:
@@ -2036,6 +2064,8 @@ async def set_ticket_status_from_dashboard(
                 client, license_id, ticket_id,
                 f"งาน {row.get('ticket_number') or ''} ถูกยกเลิกโดยร้าน", "th",
                 text_en=f"Job {row.get('ticket_number') or ''} was cancelled by the shop",
+                customer_text=f"ร้านยกเลิกงาน {row.get('ticket_number') or ''} ของคุณ หากมีข้อสงสัยกด \"คุยกับร้าน\"",
+                customer_text_en=f"The shop cancelled your job {row.get('ticket_number') or ''}. Tap \"talk to the shop\" with any question.",
             )
         except Exception:  # noqa: BLE001
             log.exception("could not announce a dashboard cancellation")

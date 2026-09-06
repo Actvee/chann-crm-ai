@@ -2351,6 +2351,11 @@ service and confirming `git_commit` matches what you just pushed. Never run
 
 ## Plan F1 — user review batch 2 (4 Sep 2026)
 
+- **แชทเข้าใจหลายสำนวน (6 ก.ย.)**: `scripts/dev/simulate-phrasings.py` ยิงข้อความ ~440 แบบผ่าน handler จริงทั้ง 3 OA
+  (validate.sh รันให้) · "วิธีใช้" เป็นชั้น: เมนูหัวข้อ + ปุ่ม → หัวข้อละข้อความพร้อมรูป → "วิธีใช้ทั้งหมด" คือข้อความเดียวแบบเดิม ·
+  ข้อความสุภาพ/คำลงท้ายไม่ทำให้คำสั่งหลุด (`_normalise`) · Customer OA: ข้อความที่ไม่ใช่อาการเสีย/ขอช่าง ไม่เปิดงานซ่อมอีกต่อไป
+  (ตอบ "ยังไม่แน่ใจ" + ปุ่ม "คุยกับร้าน" ที่พาข้อความไปด้วย) · ลูกค้าได้ LINE เมื่อมอบหมาย/ช่างรับ/ช่างถึง/ร้านเลื่อน-ยกเลิก ·
+  ยกเลิกงานต้องยืนยัน · ช่างได้แจ้งยกเลิกทาง Technician OA · แจ้งงานใหม่ถึงทุกคนที่มี `ticket.assign` ทันทีที่แจ้ง (รวมจากหน้า home)
 - รูปคู่มืออยู่ใน image ของ Application (`chann_app/static/help`); แก้รูปให้แก้ scene ใน `scripts/dev/render-guide-images.py` แล้วรัน `python scripts/dev/render-guide-images.py` (ฟอนต์ Sarabun อยู่ใน `scripts/dev/guide-fonts/`; `--check` ตรวจว่า slot/scene/ไฟล์ตรงกัน; เทสต์ `tests/unit/test_guide_image_renderer.py` กันหลุด). สคริปต์วาดจากข้อความในคู่มือ ไม่ต้องใช้ AI สร้างภาพ.
 - กฎเบอร์โทรอยู่ที่ `application/chann_app/services/phone.py` และ validator ใน `data/chann_data/schemas.py::CustomerIn`; ถ้าจะผ่อนกฎ (เช่นเบอร์ต่างประเทศยาวกว่า 15 หลัก) แก้ทั้งสองที่.
 - `_bulk_customer_entries` แยกบรรทัดด้วย newline หรือ ";" ต้องมี ≥2 รายการจึงเข้าเส้นทาง bulk; ข้อความบรรทัดเดียวยังไปทาง AI เดิม.

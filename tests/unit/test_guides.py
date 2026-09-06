@@ -93,7 +93,11 @@ class TestHelpInChat:
         reply = await handle_chat_message(
             client, message="วิธีใช้", ctx=_ctx(primary_role="technician", oa="technician"),
         )
-        assert "เช็คอิน" in reply.text and "ปฏิเสธงาน" in reply.text and "ออกรายงาน" in reply.text
+        assert "เช็คอิน" in reply.text and "รับงาน" in reply.text  # the topics
+        full = await handle_chat_message(
+            client, message="วิธีใช้ทั้งหมด", ctx=_ctx(primary_role="technician", oa="technician"),
+        )
+        assert "ปฏิเสธงาน" in full.text and "ออกรายงาน" in full.text
 
     def test_no_image_means_no_image_message(self):
         assert guide_images("customer") == [] or all(u.startswith("https://") for u in guide_images("customer"))

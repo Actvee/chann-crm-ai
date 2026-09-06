@@ -4132,7 +4132,12 @@ class TestUsageHelp:
         client = FakeDataClient(permission_keys=["customer.read", "followup.create"])
         reply = await handle_chat_message(client, message="วิธีใช้", ctx=_ctx())
         assert reply.text.startswith("วิธีใช้ LINE ทีมขาย")
-        assert "1. " in reply.text and "รายชื่อลูกค้า" in reply.text
+        # Layered (6 Sep 2026): the menu names the topics with a button each;
+        # the customer topic is one tap away and carries the commands.
+        assert "1. " in reply.text and reply.text.count("\n") <= 14
+        assert any(send == "วิธีใช้ 6" for _label, send in reply.quick_replies)
+        step = await handle_chat_message(client, message="วิธีใช้ 6", ctx=_ctx())
+        assert "รายชื่อลูกค้า" in step.text and "▸ พิมพ์" in step.text
 
     async def test_every_phrasing_reaches_the_same_guide(self):
         for phrasing in ("ช่วยเหลือ", "ใช้ยังไง", "ทำอะไรได้บ้าง", "help", "?", "ตัวอย่างคำสั่ง"):
@@ -4773,6 +4778,11 @@ class TestCustomerCanChangeTheirMind:
         reply = await handle_chat_message(
             client, message="ยกเลิกงาน", ctx=_ctx(oa="customer"),
         )
+        # Asked to confirm first (review, 6 Sep 2026): a technician may
+        # already be on the way. The confirmation button carries the code.
+        assert "T-2026-0001" in reply.text and not [r for r in client.recorded if r[0] == "set_ticket_status"]
+        confirm = next(send for _label, send in reply.quick_replies if send.startswith("ยืนยัน"))
+        reply = await handle_chat_message(client, message=confirm, ctx=_ctx(oa="customer"))
         calls = [r for r in client.recorded if r[0] == "set_ticket_status"]
         assert calls and calls[0][3] == "cancelled"
         assert "T-2026-0001" in reply.text
@@ -5946,6 +5956,8 @@ class TestButtonsTheSystemWritesDoNotNeedTheAI:
             "งานของฉัน", "งานวันนี้", "รายการดีล", "รายชื่อลูกค้า",
             "ดีลที่ยังไม่ปิด", "ยืนยันกฎ", "ข้อมูลบริษัท",
             "รายการใบเสนอราคา", "แจ้งซ่อม", "en",
+            # a profile edit — parsed by the model (entity=profile), not a trigger
+            "แก้ที่อยู่เป็น {clean}",
         }
         remaining = [t for t in dead if t not in handled_by_literal]
         assert not remaining, f"buttons that lead nowhere: {remaining}"

@@ -41,7 +41,7 @@ def harness(monkeypatch):
     async def fake_assigned(c, license_id, ticket, label, language):
         notices.append(("assigned", ticket.get("ticket_number"), label))
 
-    async def fake_change(c, license_id, ticket_id, text, language, text_en=None):
+    async def fake_change(c, license_id, ticket_id, text, language, text_en=None, **_customer):
         notices.append(("change", ticket_id, text))
 
     import chann_app.services.chat as chat_module

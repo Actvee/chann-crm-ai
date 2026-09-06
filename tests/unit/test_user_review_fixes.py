@@ -112,8 +112,10 @@ class TestCapabilities:
         reply = await handle_chat_message(client, message="ระบบทำอะไรได้บ้าง", ctx=_ctx())
         assert reply.text.startswith("วิธีใช้ LINE ทีมขาย")
         assert "หมวดที่คุณใช้ได้" in reply.text and "ลูกค้า" in reply.text and "ดีล" in reply.text
-        assert "ทำอะไรกับ Lead ได้บ้าง" in reply.text  # invites the follow-up
         assert not [r for r in client.recorded if r[0] == "parse_intent"]
+        # The full guide (one message) still invites the per-area follow-up.
+        full = await handle_chat_message(client, message="วิธีใช้ทั้งหมด", ctx=_ctx())
+        assert "ทำอะไรกับ Lead ได้บ้าง" in full.text
 
     async def test_lead_follow_up_lists_commands_and_permissions_for_that_area(self):
         client = ReviewFake()
