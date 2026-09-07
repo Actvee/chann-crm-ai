@@ -5,6 +5,7 @@ import { ApplicationError } from "@/lib/api";
 
 import { adminCall, fmtDate, type AuditRow, type TenantDetail } from "../../_server";
 import { TenantActions } from "./TenantActions";
+import { TenantEdit } from "./TenantEdit";
 
 const copy = ADMIN.tenant;
 
@@ -43,18 +44,7 @@ export default async function AdminTenant({ params }: { params: Promise<{ id: st
       </div>
 
       <div className="pa-grid-2">
-        <section className="pa-card">
-          <h2>{copy.info}</h2>
-          <dl className="pa-kv">
-            <dt>{copy.owner}</dt><dd>{tenant.owner_name ?? "—"} <span className="pa-muted mono">{tenant.owner_chann_uid ?? ""}</span></dd>
-            <dt>{copy.legalName}</dt><dd>{tenant.legal_name ?? "—"}</dd>
-            <dt>{copy.phone}</dt><dd>{tenant.company_phone ?? "—"}</dd>
-            <dt>{copy.email}</dt><dd>{tenant.company_email ?? "—"}</dd>
-            <dt>{copy.trialUntil}</dt><dd>{fmtDate(tenant.trial_expires_at)}</dd>
-            <dt>{copy.created}</dt><dd>{fmtDate(tenant.created_at)}</dd>
-            <dt>{copy.lastActivity}</dt><dd>{fmtDate(tenant.last_activity_at)}</dd>
-          </dl>
-        </section>
+        <TenantEdit tenant={tenant} />
         <TenantActions
           licenseId={tenant.id}
           status={tenant.status}

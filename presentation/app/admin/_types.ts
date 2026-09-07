@@ -35,8 +35,32 @@ export type TenantDetail = TenantSummary & {
   legal_name: string | null;
   company_phone: string | null;
   company_email: string | null;
+  company_address: string | null;
+  tax_id: string | null;
   members_detail: TenantMember[];
 };
+
+/** The fields an operator may edit on a tenant (18.1) — mirrors the
+ *  Application tier's PATCH /platform/tenants/{id}. */
+export type TenantEditFields = {
+  company_name: string;
+  legal_name: string;
+  company_phone: string;
+  company_email: string;
+  company_address: string;
+  tax_id: string;
+  /** YYYY-MM-DD in Bangkok, or "" for no deadline. */
+  trial_expires_at: string;
+  status: "trial" | "active" | "suspended" | string;
+};
+
+/** An ISO instant → the Bangkok calendar day for a <input type="date">. */
+export function bangkokDay(value: string | null | undefined): string {
+  if (!value) return "";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString("sv-SE", { timeZone: "Asia/Bangkok" });
+}
 
 export type AuditRow = {
   id: string;

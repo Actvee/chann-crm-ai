@@ -5,6 +5,7 @@ import hmac
 import logging
 import re
 import uuid
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -782,23 +783,71 @@ async def platform_tenant(
     return row
 
 
+TENANT_TEXT_FIELDS = ("company_name", "legal_name", "company_phone", "company_email", "company_address", "tax_id")
+_BANGKOK = timezone(timedelta(hours=7))
+
+
+def _trial_deadline(value) -> tuple[bool, "datetime | None"]:
+    """(clear?, deadline). A bare date means the end of that Bangkok day —
+    "ทดลองใช้ถึง 30 ก.ย." is the whole of the 30th, not its first second.
+    Empty/None clears the deadline."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return True, None
+    text = str(value).strip()
+    try:
+        if len(text) == 10:
+            day = date.fromisoformat(text)
+            return False, datetime(day.year, day.month, day.day, 23, 59, 59, tzinfo=_BANGKOK)
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        return False, parsed if parsed.tzinfo else parsed.replace(tzinfo=_BANGKOK)
+    except ValueError:
+        raise HTTPException(status_code=422, detail={"error": "invalid_trial_expires_at",
+                                                      "message": "use YYYY-MM-DD or an ISO date-time"})
+
+
 @router.patch("/platform/tenants/{license_id}")
-async def platform_tenant_status(
+async def platform_tenant_update(
     license_id: str,
     body: dict,
     admin: dict = Depends(require_admin),
     client: DataClient = Depends(get_data_client),
 ):
-    """Suspend (read-only for the tenant, chat and dashboards refuse) or
-    reopen. The Data tier writes the audit row with actor_type
-    platform_admin and the admin's id."""
-    new_status = str(body.get("status") or "").strip()
-    if new_status not in TENANT_STATUSES:
-        raise HTTPException(status_code=422, detail="status must be one of trial, active, suspended")
+    """Suspend / reopen (18.1) and, since 7 Sep 2026, edit the tenant:
+    trial deadline and the shop's own details. A status-only body keeps
+    the original status route; anything more goes through one audited
+    PATCH on the Data tier."""
+    new_status = body.get("status")
+    if new_status is not None:
+        new_status = str(new_status).strip()
+        if new_status not in TENANT_STATUSES:
+            raise HTTPException(status_code=422, detail="status must be one of trial, active, suspended")
+    changes: dict = {}
+    for key in TENANT_TEXT_FIELDS:
+        if key in body:
+            value = body.get(key)
+            changes[key] = None if value is None else str(value).strip()
+    if "company_name" in changes and not changes["company_name"]:
+        raise HTTPException(status_code=422, detail={"error": "company_name_required"})
+    if "company_email" in changes and changes["company_email"] and "@" not in changes["company_email"]:
+        raise HTTPException(status_code=422, detail={"error": "invalid_company_email"})
+    if "trial_expires_at" in body:
+        clear, deadline = _trial_deadline(body.get("trial_expires_at"))
+        if clear:
+            changes["clear_trial_expires_at"] = True
+        else:
+            changes["trial_expires_at"] = deadline.isoformat()
+    actor = str(admin.get("sub") or "")
     try:
-        return await client.set_license_status(license_id, new_status, actor_id=str(admin.get("sub") or ""))
+        if not changes:
+            if not new_status:
+                raise HTTPException(status_code=422, detail={"error": "nothing_to_update"})
+            return await client.set_license_status(license_id, new_status, actor_id=actor)
+        if new_status:
+            changes["status"] = new_status
+        return await client.update_tenant(license_id, changes, actor_id=actor)
     except DataTierError as exc:
-        raise HTTPException(status_code=502, detail="tenant status update failed") from exc
+        code = exc.status_code if 400 <= exc.status_code < 500 else 502
+        raise HTTPException(status_code=code, detail={"error": "tenant_update_failed", "reason": exc.detail}) from exc
 
 
 @router.get("/platform/audit")

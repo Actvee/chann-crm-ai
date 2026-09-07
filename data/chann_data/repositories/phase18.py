@@ -14,6 +14,8 @@ from datetime import datetime
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from .phase65 import LICENSE_STATUSES
+
 from ..models import (
     ChannIdentity, Customer, CustomRole, Deal, License, LicenseMember, ServiceTicket,
 )
@@ -113,5 +115,40 @@ class PlatformRepository:
         return {
             **self._summary(row),
             "legal_name": row.legal_name, "company_phone": row.company_phone,
-            "company_email": row.company_email, "members": members,
+            "company_email": row.company_email, "company_address": row.company_address,
+            # "members_detail", not "members": the summary already carries the
+            # member COUNT under "members", and this list used to overwrite
+            # it — the route then popped the list and TenantSummaryOut failed
+            # validation, so the admin console's tenant page was a 500 for
+            # every tenant (owner, 7 Sep 2026: "กดเข้าไปข้อมูลแต่ละบริษัทไม่ได้").
+            "tax_id": row.tax_id, "members_detail": members,
         }
+
+    # ------------------------------------------------------------ writes
+
+    EDITABLE = (
+        "status", "trial_expires_at", "company_name", "legal_name",
+        "company_phone", "company_email", "company_address", "tax_id",
+    )
+
+    def update(self, license_id: uuid.UUID, changes: dict) -> tuple[dict, License]:
+        """Apply an operator's edits and hand back what the fields were, so
+        the caller can write the audit diff. Only EDITABLE columns move; a
+        status outside the known set is a conflict, not a silent write.
+        The admin console had no way to change a trial's deadline or fix a
+        shop's details (owner, 7 Sep 2026)."""
+        row = self._s.get(License, license_id)
+        if row is None:
+            raise PlatformNotFound("license not found")
+        unknown = set(changes) - set(self.EDITABLE)
+        if unknown:
+            raise ValueError(f"not editable: {sorted(unknown)}")
+        if "status" in changes and changes["status"] not in LICENSE_STATUSES:
+            raise ValueError(f"unknown license status '{changes['status']}'")
+        if "company_name" in changes and not str(changes["company_name"] or "").strip():
+            raise ValueError("company_name is required")
+        before = {k: getattr(row, k) for k in changes}
+        for key, value in changes.items():
+            setattr(row, key, value.strip() if isinstance(value, str) else value)
+        self._s.flush()
+        return before, row

@@ -1,3 +1,25 @@
+### Admin console: the tenant page works and edits (7 Sep) — `admin-tenant-v1`
+
+- Root cause of "กดเข้าไปข้อมูลแต่ละบริษัทไม่ได้": `PlatformRepository.tenant()`
+  put the member LIST under the key `members`, overwriting the member COUNT
+  from the summary; the route popped it and `TenantSummaryOut` failed
+  validation — the Data tier answered 500 for every tenant detail. The list
+  is now `members_detail` (regression test in
+  `tests/integration/test_tenant_edit.py`).
+- New: `PATCH /internal/v1/platform/tenants/{id}` (`TenantUpdateIn`:
+  status, trial_expires_at / clear_trial_expires_at, company_name,
+  legal_name, company_phone, company_email, company_address, tax_id) —
+  audited as a cross-tenant `platform_admin` row with the field diff;
+  `DataClient.update_tenant`; the Application `PATCH /platform/tenants/{id}`
+  accepts the same fields (a bare `YYYY-MM-DD` trial day means the end of
+  that Bangkok day; empty clears it; a status-only body still uses the
+  status route). The tenant page has an in-place edit form (TenantEdit.tsx)
+  for the details, the trial deadline and trial ↔ active; suspend/reopen
+  stays with the actions card.
+- Also 7 Sep: rich menu v3 published to all three OAs (12 menus, aliases
+  chann-<oa>-<page>[-en]); Cloud Run job `chann-crm-ai-src-check2` deleted.
+- No migration.
+
 ### Review round 2, part B (7 Sep) — the chat reads the many ways people type (`review2-b-v1`)
 
 - One normalisation pass at the top of `handle_chat_message`: Thai digits,

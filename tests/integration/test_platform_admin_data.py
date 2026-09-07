@@ -66,8 +66,9 @@ class TestTenantList:
         engine, ids, uids, _ = world
         with Session(engine) as s:
             detail = PlatformRepository(s).tenant(ids[0])
-            names = {m["chann_uid"]: m["display_name"] for m in detail["members"]}
+            names = {m["chann_uid"]: m["display_name"] for m in detail["members_detail"]}
             assert names == {uids["a"]: "เจ้าของ A", uids["staff"]: "พนักงาน"}
+            assert detail["members"] == 2  # the count survives beside the list
             with pytest.raises(PlatformNotFound):
                 PlatformRepository(s).tenant(uuid.uuid4())
 

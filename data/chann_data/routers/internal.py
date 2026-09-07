@@ -125,6 +125,7 @@ from ..schemas import (
     ReportQueryIn,
     ReportResultOut,
     TenantMemberOut,
+    TenantUpdateIn,
     TenantSummaryOut,
     ConsentIn,
     ConsentOut,
@@ -4738,14 +4739,53 @@ def platform_tenant(license_id: uuid.UUID, session: Session = Depends(get_sessio
         data = PlatformRepository(session).tenant(license_id)
     except PlatformNotFound:
         raise HTTPException(status_code=404, detail={"error": "tenant_not_found"})
-    members = data.pop("members")
+    members = data.pop("members_detail")
     payload = TenantSummaryOut(**{k: v for k, v in data.items() if k in TenantSummaryOut.model_fields}).model_dump()
     payload.update({
         "legal_name": data.get("legal_name"), "company_phone": data.get("company_phone"),
-        "company_email": data.get("company_email"),
+        "company_email": data.get("company_email"), "company_address": data.get("company_address"),
+        "tax_id": data.get("tax_id"),
         "members_detail": [TenantMemberOut(**m).model_dump() for m in members],
     })
     return payload
+
+
+def _auditable(value):
+    return value.isoformat() if isinstance(value, datetime) else value
+
+
+@router.patch("/platform/tenants/{license_id}")
+def platform_tenant_update(
+    license_id: uuid.UUID,
+    payload: TenantUpdateIn,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    """The operator edits a tenant: status, trial deadline, shop details.
+    Audited as a cross-tenant platform_admin row with the field diff, then
+    the same payload the GET returns so the page can redraw at once."""
+    changes = payload.model_dump(exclude_unset=True, exclude={"clear_trial_expires_at"})
+    if payload.clear_trial_expires_at:
+        changes["trial_expires_at"] = None
+    if not changes:
+        raise HTTPException(status_code=422, detail={"error": "nothing_to_update"})
+    try:
+        before, row = PlatformRepository(session).update(license_id, changes)
+    except PlatformNotFound:
+        raise HTTPException(status_code=404, detail={"error": "tenant_not_found"})
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail={"error": "invalid_tenant_update", "message": str(exc)})
+    after = {k: getattr(row, k) for k in changes}
+    AuditRepository(session).write(
+        license_id=license_id, entity_type="license", entity_id=license_id,
+        actor_type="platform_admin", actor_id=x_actor_id or None, action="update",
+        field_changes=diff_fields(
+            {k: _auditable(v) for k, v in before.items()}, {k: _auditable(v) for k, v in after.items()},
+        ),
+        cross_tenant=True,
+    )
+    session.commit()
+    return platform_tenant(license_id, session)
 
 
 @router.get("/platform/audit", response_model=list[AuditLogOut])

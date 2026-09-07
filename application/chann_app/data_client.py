@@ -735,6 +735,15 @@ class DataClient:
             return None
         return self._unwrap(resp)
 
+    async def update_tenant(self, license_id: str, changes: dict, actor_id: str | None = None) -> dict:
+        """Operator edits (status, trial deadline, shop details) — one PATCH,
+        audited by the Data tier under the admin's id."""
+        resp = await self._client.patch(
+            f"{self._base}/internal/v1/platform/tenants/{license_id}",
+            json=changes, headers=self._headers_for(actor_id),
+        )
+        return self._unwrap(resp)
+
     async def set_license_status(self, license_id: str, status: str, actor_id: str | None = None) -> dict:
         resp = await self._client.patch(
             f"{self._base}/internal/v1/licenses/{license_id}/status",

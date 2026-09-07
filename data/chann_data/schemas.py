@@ -410,6 +410,22 @@ class LicenseStatusIn(BaseModel):
     status: Literal["trial", "active", "suspended"]
 
 
+class TenantUpdateIn(BaseModel):
+    """A platform operator edits one tenant (18.1): its status, the trial
+    deadline and the shop's own details. Every field is optional and only
+    what is sent changes; `clear_trial_expires_at` removes the deadline,
+    because "not sent" and "set to nothing" must stay distinguishable."""
+    status: Literal["trial", "active", "suspended"] | None = None
+    trial_expires_at: datetime | None = None
+    clear_trial_expires_at: bool = False
+    company_name: str | None = None
+    legal_name: str | None = None
+    company_phone: str | None = None
+    company_email: str | None = None
+    company_address: str | None = None
+    tax_id: str | None = None
+
+
 # ---------------------------------------------------------------- Phase 7
 
 

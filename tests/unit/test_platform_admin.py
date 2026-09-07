@@ -75,6 +75,12 @@ class _FakeClient:
         self.status = status
         return {**TENANT, "status": status}
 
+    async def update_tenant(self, license_id, changes, actor_id=None):
+        self.calls.append(("update_tenant", license_id, changes, actor_id))
+        if "status" in changes:
+            self.status = changes["status"]
+        return {**TENANT, **{k: v for k, v in changes.items() if k in TENANT}, "status": self.status}
+
     async def platform_audit(self, **kw):
         self.calls.append(("platform_audit", kw))
         return [{"id": str(uuid.uuid4()), "license_id": TENANT["id"], "entity_type": "license", "entity_id": TENANT["id"],
@@ -312,3 +318,46 @@ class TestLockoutAndReasons:
         assert res.status_code == expected, res.text
         assert res.json()["detail"]["reason"] == {"error": "inactive_member"}
         assert not sent
+
+
+class TestTenantEdit:
+    """7 Sep 2026: the console could only suspend/reopen — a trial's
+    deadline and the shop's own details were read-only."""
+
+    def test_status_only_keeps_the_original_route(self, world):
+        client, fake, _ = world
+        res = client.patch(f"{API}/platform/tenants/{TENANT['id']}", json={"status": "trial"}, headers=_login(client))
+        assert res.status_code == 200
+        assert ("set_license_status", TENANT["id"], "trial", ADMIN_ID) in fake.calls
+        assert not [c for c in fake.calls if c[0] == "update_tenant"]
+
+    def test_details_and_trial_day_go_through_one_audited_patch(self, world):
+        client, fake, _ = world
+        res = client.patch(
+            f"{API}/platform/tenants/{TENANT['id']}",
+            json={"company_name": " ร้านเย็นสบาย 2 ", "company_phone": "021234567", "trial_expires_at": "2026-09-30", "status": "active"},
+            headers=_login(client),
+        )
+        assert res.status_code == 200, res.text
+        call = [c for c in fake.calls if c[0] == "update_tenant"][0]
+        assert call[1] == TENANT["id"] and call[3] == ADMIN_ID
+        changes = call[2]
+        assert changes["company_name"] == "ร้านเย็นสบาย 2" and changes["company_phone"] == "021234567"
+        assert changes["status"] == "active"
+        # A bare day is the END of that Bangkok day, not its first second.
+        assert changes["trial_expires_at"] == "2026-09-30T23:59:59+07:00"
+
+    def test_an_empty_trial_day_clears_the_deadline(self, world):
+        client, fake, _ = world
+        res = client.patch(f"{API}/platform/tenants/{TENANT['id']}", json={"trial_expires_at": ""}, headers=_login(client))
+        assert res.status_code == 200
+        changes = [c for c in fake.calls if c[0] == "update_tenant"][0][2]
+        assert changes == {"clear_trial_expires_at": True}
+
+    def test_refusals_are_explained(self, world):
+        client, _, _ = world
+        headers = _login(client)
+        assert client.patch(f"{API}/platform/tenants/{TENANT['id']}", json={"company_name": "  "}, headers=headers).status_code == 422
+        assert client.patch(f"{API}/platform/tenants/{TENANT['id']}", json={"trial_expires_at": "30/09/2026"}, headers=headers).status_code == 422
+        assert client.patch(f"{API}/platform/tenants/{TENANT['id']}", json={"company_email": "not-an-email"}, headers=headers).status_code == 422
+        assert client.patch(f"{API}/platform/tenants/{TENANT['id']}", json={}, headers=headers).status_code == 422
