@@ -56,8 +56,12 @@ class DispatchBlocked(Exception):
     dispatch" makes the person guess which of five things is missing.
     """
 
-    def __init__(self, missing: list[str]):
+    def __init__(self, missing: list[str], fields: list[str] | None = None):
         self.missing = missing
+        # The column names behind the labels, so a UI can translate them
+        # (review C11, 6 Sep 2026): the labels are Thai, the EN screen
+        # showed them raw.
+        self.fields = list(fields or [])
         super().__init__(", ".join(missing))
 
 
@@ -261,6 +265,13 @@ class ServiceTicketRepository:
             if not getattr(ticket, field, None)
         ]
 
+    def dispatch_missing_fields(self, ticket: ServiceTicket) -> list[str]:
+        """The same gaps as dispatch_blockers, as column names."""
+        return [
+            field for field, _label in DISPATCH_REQUIRED
+            if not getattr(ticket, field, None)
+        ]
+
     def assign(
         self, scope: TenantScope, ticket_id: uuid.UUID, *,
         target_type: str, target_ref: uuid.UUID,
@@ -277,7 +288,7 @@ class ServiceTicketRepository:
 
         blockers = self.dispatch_blockers(row)
         if blockers:
-            raise DispatchBlocked(blockers)
+            raise DispatchBlocked(blockers, self.dispatch_missing_fields(row))
 
         # The target must belong to this tenant. Without this check a
         # ticket could be dispatched to a technician in another company,

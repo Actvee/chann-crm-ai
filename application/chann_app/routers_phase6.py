@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel
 
 from .data_client import DataClient
@@ -28,6 +28,7 @@ async def get_data_client():
 
 
 async def get_tenant_principal(
+    request: Request,
     x_liff_id_token: str = Header(default=""),
     x_liff_audience: str = Header(default="sales"),
     x_license_id: str = Header(default=""),
@@ -38,6 +39,8 @@ async def get_tenant_principal(
         x_liff_id_token=x_liff_id_token,
         x_liff_audience=x_liff_audience,
         x_license_id=x_license_id,
+        # A suspended shop is read-only (C4): refused here, for every route.
+        method=request.method,
     )
 
 

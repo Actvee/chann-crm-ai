@@ -58,8 +58,9 @@ class Settings(BaseSettings):
     # support exactly this — an external app outside Catalyst, authenticated
     # via a Self Client's OAuth credentials — no need to guess at a raw
     # REST endpoint, which Catalyst does not publicly document for
-    # SmartBrowz specifically).
-    pdf_renderer: str = "null"                  # null | smartbrowz | local_chromium
+    # SmartBrowz specifically). The renderer is SmartBrowz, chosen in code
+    # (get_renderer("smartbrowz")); a PDF_RENDERER setting used to exist
+    # here that nothing read (review E12, 6 Sep 2026).
     catalyst_api_domain: str = "https://api.catalyst.zoho.com"
     catalyst_project_id: str = ""
     catalyst_environment: str = "Development"

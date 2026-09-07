@@ -147,6 +147,11 @@ class OwnershipTransferOut(BaseModel):
     to_member_id: uuid.UUID
     status: str
     accepted_at: datetime | None = None
+    created_at: datetime | None = None
+    # E6 (6 Sep 2026): the two people, so the sales app can show "โอนให้
+    # <ชื่อ>" and the nominated owner can see it is theirs to accept.
+    from_chann_uid: str | None = None
+    to_chann_uid: str | None = None
 
 
 class BreakGlassTransferIn(BaseModel):
@@ -300,6 +305,15 @@ class LicenseOut(BaseModel):
     status: str
     trial_expires_at: datetime | None
     created_by_chann_uid: str | None
+
+
+class TrialExpiringOut(BaseModel):
+    """A trial ending on the asked-for day, and who to tell (17.5.4)."""
+    id: uuid.UUID
+    license_code: str
+    company_name: str
+    trial_expires_at: datetime | None
+    owner_chann_uid: str | None
 
 
 class CompanyProfileOut(BaseModel):
@@ -763,6 +777,13 @@ def _validated_phone(value: str | None) -> str | None:
     return text
 
 
+class CustomerIdentityLinkIn(BaseModel):
+    """Attach a LINE identity to the customer row that already has this
+    phone number (review E8)."""
+    phone: str
+    customer_chann_uid: str
+
+
 class CustomerOut(BaseModel):
     id: uuid.UUID
     license_id: uuid.UUID
@@ -822,6 +843,12 @@ class DealOut(BaseModel):
     archived_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    # Review C1 (6 Sep 2026): _deal_out passed these since 4 Sep and pydantic
+    # dropped them silently, so the dashboard showed "—" after every save.
+    expected_close_date: date | None = None
+    amount: Decimal | None = None
+    currency: str | None = None
+    lost_reason: str | None = None
     products: list[DealProductOut] = []
 
 
@@ -898,6 +925,12 @@ class QuoteOut(BaseModel):
     owner_member_id: uuid.UUID | None
     created_at: datetime
     updated_at: datetime
+    # Review C2 (6 Sep 2026): stored since migration 0020, set through
+    # /terms, and never sent back — the screen total ignored the discount
+    # the PDF applied.
+    valid_until: date | None = None
+    discount_percent: Decimal | None = None
+    discount_amount: Decimal | None = None
     # Included so rendering a document is one fetch. The renderer reads
     # the QUOTE's lines, and a second round trip to get them would be a
     # chance for the two to disagree.
@@ -984,17 +1017,6 @@ class GeneratedDocumentOut(BaseModel):
     renderer: str
     generated_by: uuid.UUID | None
     generated_at: datetime
-
-
-class SmartBrowzTokenIn(BaseModel):
-    access_token: str
-    api_domain: str | None = None
-    ttl_seconds: int = 3300  # slightly under Zoho's real 3600s expiry
-
-
-class SmartBrowzTokenOut(BaseModel):
-    access_token: str
-    api_domain: str | None
 
 
 class WarrantyOut(BaseModel):

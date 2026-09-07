@@ -80,6 +80,12 @@ def build_service_report_snapshot(
             "name": str((technician or {}).get("name") or "")
             or _name_of(technician, str((technician or {}).get("chann_uid") or "")),
             "phone": str((technician or {}).get("phone") or ""),
+            # 13.5: the person who checked out signs the paper too. The
+            # caller resolves the check-out member's identity signature the
+            # same way it resolves an approver's (a renderer-fetchable link
+            # or a data: URI) — the box used to be hard-coded blank while
+            # the technician OA let them draw one (review D1, 6 Sep 2026).
+            "signature_url": str((technician or {}).get("signature_url") or ""),
         },
         # 13.1: evidence from the visit — fetchable links the renderer
         # resolves during the render (signed by the caller).

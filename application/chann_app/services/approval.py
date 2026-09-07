@@ -75,9 +75,13 @@ def approvers_for(step: dict, members: list[dict]) -> list[dict]:
     ref = str(step.get("approver_ref") or "")
     if step.get("approver_type") == "user":
         return [m for m in members if str(m.get("id")) == ref]
+    # An owner holds every permission, so the default "admin" step is theirs
+    # too: a shop with an owner and no admin-role member had nobody to tell
+    # (review, 6 Sep 2026).
     return [
         m for m in members
-        if str(m.get("role") or "") == ref and str(m.get("status") or "active") == "active"
+        if (str(m.get("role") or "") == ref or (ref == "admin" and str(m.get("role") or "") == "owner"))
+        and str(m.get("status") or "active") == "active"
     ]
 
 
@@ -254,7 +258,7 @@ async def _notify_submitter_of_document(
         link = f"\nPDF (7 วัน): {url}" if url else ""
         await send_notification(
             client, license_id=license_id, target_chann_uid=uid,
-            target_line_user_id=line_uid, type="approval_pending",
+            target_line_user_id=line_uid, type="approval_approved",
             message=_t(REPORT_APPROVED_TO_SUBMITTER, "th").format(
                 report=report.get("report_id") or "", link=link,
             ),
@@ -269,8 +273,7 @@ async def _notify_submitter_of_document(
 
 
 async def _report_by_id(client: DataClient, license_id: str, report_id: str) -> dict:
-    rows = await client.list_service_reports(license_id)
-    return next((r for r in rows if str(r.get("id")) == report_id), {"id": report_id})
+    return await client.get_service_report(license_id, report_id) or {"id": report_id}
 
 
 async def _notify_submitter(

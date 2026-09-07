@@ -9,7 +9,7 @@ import { usePathname, useRouter } from "next/navigation";
 
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
-import { LIFF_SDK_SRC, Membership } from "./_lib";
+import { LIFF_SDK_SRC } from "./_lib";
 
 /**
  * The shell every Sales dashboard page sits in.
@@ -168,33 +168,6 @@ export function AppShell({
           attribute for debugging; unused visually. */}
       <span hidden data-liff-id={liffId} />
     </>
-  );
-}
-
-export function CompanyPicker({
-  memberships,
-  licenseId,
-  onChange,
-}: {
-  memberships: Membership[];
-  licenseId: string;
-  onChange: (id: string) => void;
-}) {
-  const { t } = useLanguage();
-  // One company is the normal case and a select with a single option is
-  // noise, so it only appears when there is a real choice to make.
-  if (memberships.length <= 1) return null;
-  return (
-    <label className="field">
-      <span>{t.dashboard.company}</span>
-      <select value={licenseId} onChange={(event) => onChange(event.target.value)}>
-        {memberships.map((membership) => (
-          <option key={membership.license_id} value={membership.license_id}>
-            {membership.company_name} ({membership.license_code})
-          </option>
-        ))}
-      </select>
-    </label>
   );
 }
 

@@ -115,20 +115,26 @@ export function byOldest<T extends { created_at?: string | null }>(a: T, b: T) {
   return (a.created_at ?? "").localeCompare(b.created_at ?? "");
 }
 
-/** A created timestamp as a short local date, for a list row. */
-export function shortDate(value: string | null | undefined): string {
+/** BCP-47 tag for a UI locale ("th" | "en"). Thai stays the default. */
+export function localeTag(locale?: string): string {
+  return locale === "en" ? "en-US" : "th-TH";
+}
+
+/** A created timestamp as a short local date, for a list row. The
+ *  locale is optional so existing callers keep Thai (review C11). */
+export function shortDate(value: string | null | undefined, locale?: string): string {
   if (!value) return "";
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleDateString("th-TH", { day: "numeric", month: "short", year: "2-digit" });
+  return d.toLocaleDateString(localeTag(locale), { day: "numeric", month: "short", year: "2-digit" });
 }
 
 /** A created timestamp with time, for a record header. */
-export function fullDateTime(value: string | null | undefined): string {
+export function fullDateTime(value: string | null | undefined, locale?: string): string {
   if (!value) return "—";
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleString("th-TH", {
+  return d.toLocaleString(localeTag(locale), {
     day: "numeric", month: "short", year: "numeric",
     hour: "2-digit", minute: "2-digit",
   });

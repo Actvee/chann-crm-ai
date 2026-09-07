@@ -168,14 +168,20 @@ class TestReportOutput:
                 self.keys.append(key)
                 return StoredDocument(path=f"gs://b/{key}", sha256=sha256_hex(content), size=len(content))
 
-            async def signed_url(self, *, path, expires_seconds):
-                return f"https://signed/{path}?ttl={expires_seconds}"
+        from chann_app.auth.document_link import decode_asset_token
+        from chann_app.config import settings
 
+        monkeypatch.setattr(settings, "jwt_secret", "test-jwt-secret")
+        monkeypatch.setattr(settings, "public_base_url", "https://app.example")
         store = _Store()
         monkeypatch.setattr(reports_ai, "get_document_store", lambda *a, **k: store)
         spec = reports_ai.validate_query_spec({"entity": "deals"})
         files = await reports_ai.publish_files(spec, {**spec, "rows": [], "total": 1}, "th", license_id="L1")
-        assert files["csv"].endswith(".csv?ttl=604800") and files["html"].endswith(".html?ttl=604800")
+        # E2: asset links served by this tier, not GCS signed URLs.
+        assert files["csv"].startswith("https://app.example/api/v1/assets/")
+        path, content_type, name = decode_asset_token(files["csv"].rsplit("/", 1)[-1])
+        assert path.endswith(".csv") and content_type.startswith("text/csv") and name == "report.csv"
+        assert decode_asset_token(files["html"].rsplit("/", 1)[-1])[0].endswith(".html")
         assert files["pdf"] is None  # renderer not configured in tests
         assert all(k.startswith("reports/L1/") for k in store.keys)
 

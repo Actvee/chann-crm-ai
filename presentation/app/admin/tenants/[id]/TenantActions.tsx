@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 
 import { ADMIN } from "@/lib/admin-copy";
 
+import { adminCall } from "../../_client";
 import type { TenantMember } from "../../_types";
 
 type Note = { text: string; tone: "ok" | "error" } | null;
@@ -35,16 +36,14 @@ export function TenantActions({
     setBusy("status");
     setNote(null);
     try {
-      const res = await fetch(`/api/admin/tenants/${licenseId}/status`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: next }),
-      });
-      if (!res.ok) throw new Error(String(res.status));
+      const res = await adminCall(`/api/admin/tenants/${licenseId}/status`, { status: next });
+      if (!res.ok) {
+        if (res.status === 401) return;
+        setNote({ text: res.reason ? `${copy.failed} · ${copy.reason(res.reason)}` : copy.failed, tone: "error" });
+        return;
+      }
       setNote({ text: next === "suspended" ? copy.suspended : copy.reopened, tone: "ok" });
       router.refresh();
-    } catch {
-      setNote({ text: copy.failed, tone: "error" });
     } finally {
       setBusy("");
     }
@@ -58,17 +57,20 @@ export function TenantActions({
     setBusy("transfer");
     setNote(null);
     try {
-      const res = await fetch("/api/admin/break-glass", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ license_id: licenseId, target_chann_uid: target }),
-      });
-      if (!res.ok) throw new Error(String(res.status));
+      const res = await adminCall("/api/admin/break-glass", { license_id: licenseId, target_chann_uid: target });
+      if (!res.ok) {
+        if (res.status === 401) return;
+        // The Application tier's reason (a 404 "member not found", a 409
+        // "not active") used to arrive as a bare 502 (review D11).
+        setNote({
+          text: res.reason ? `${copy.transferFailed} · ${copy.reason(res.reason)}` : copy.transferFailed,
+          tone: "error",
+        });
+        return;
+      }
       setNote({ text: copy.transferred(name), tone: "ok" });
       setTarget("");
       router.refresh();
-    } catch {
-      setNote({ text: copy.transferFailed, tone: "error" });
     } finally {
       setBusy("");
     }

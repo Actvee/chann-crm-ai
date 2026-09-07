@@ -195,11 +195,22 @@ async def export_my_data(client: DataClient, *, chann_uid: str, via: str, langua
     url = None
     try:
         store = get_document_store()
+        # Named by the request id (not a random hex): erasure hands back
+        # `pdpa/{uid}/{request_id}.html` for every export this person was
+        # given, and the Data tier cannot list a bucket to find them.
         stored = await store.put(
-            key=f"pdpa/{chann_uid}/{uuid.uuid4().hex}.html",
+            key=f"pdpa/{chann_uid}/{request['id']}.html",
             content=_render_export_html(bundle).encode("utf-8"), content_type="text/html; charset=utf-8",
         )
-        url = await store.signed_url(path=stored.path, expires_seconds=EXPORT_LINK_SECONDS)
+        # An asset link served by this tier (review E2) — a signed URL
+        # never worked in this deployment, so the customer was always
+        # told the file store was not ready.
+        from .assets import asset_link
+
+        url = asset_link(
+            stored.path, content_type="text/html; charset=utf-8",
+            ttl_seconds=EXPORT_LINK_SECONDS, filename="my-data.html",
+        )
     except DocumentStoreNotConfigured:
         url = None
     except Exception:

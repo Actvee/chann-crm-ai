@@ -216,6 +216,16 @@ class DataClient:
         )
         return self._unwrap(resp)
 
+    async def list_ownership_transfers(
+        self, license_id: str, status: str | None = "pending",
+    ) -> list[dict]:
+        """Pending transfers by default; status="all" for the history (E6)."""
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/ownership-transfers",
+            headers=self._headers, params={"status": status or "all"},
+        )
+        return self._unwrap(resp)
+
     async def accept_ownership_transfer(
         self, license_id: str, transfer_id: str, accepting_chann_uid: str,
         actor_id: str | None = None,
@@ -434,13 +444,15 @@ class DataClient:
 
     async def list_warranties(
         self, license_id: str, serial_number: str | None = None,
-        customer_chann_uid: str | None = None,
+        customer_chann_uid: str | None = None, limit: int | None = None,
     ) -> list[dict]:
-        params = {}
+        params: dict = {}
         if serial_number:
             params["serial_number"] = serial_number
         if customer_chann_uid:
             params["customer_chann_uid"] = customer_chann_uid
+        if limit:
+            params["limit"] = limit
         resp = await self._client.get(
             f"{self._base}/internal/v1/licenses/{license_id}/warranties",
             headers=self._headers, params=params or None,
@@ -507,13 +519,15 @@ class DataClient:
 
     async def list_tickets(
         self, license_id: str, status: str | None = None,
-        visible_to: str | None = None,
+        visible_to: str | None = None, limit: int | None = None,
     ) -> list[dict]:
         params: dict = {}
         if status:
             params["status"] = status
         if visible_to:
             params["visible_to"] = visible_to
+        if limit:
+            params["limit"] = limit
         resp = await self._client.get(
             f"{self._base}/internal/v1/licenses/{license_id}/tickets",
             headers=self._headers, params=params or None,
@@ -972,6 +986,44 @@ class DataClient:
         )
         return self._unwrap(resp)
 
+    # Sales-group membership (E7, 6 Sep 2026): the Data tier has had these
+    # since Phase 7 with no caller, so a group could be named and never
+    # filled.
+    async def delete_sales_group(self, license_id: str, group_id: str) -> None:
+        resp = await self._client.delete(
+            f"{self._base}/internal/v1/licenses/{license_id}/sales-groups/{group_id}",
+            headers=self._headers,
+        )
+        if resp.status_code not in (200, 204):
+            self._unwrap(resp)
+
+    async def list_sales_group_members(self, license_id: str, group_id: str) -> list[dict]:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/sales-groups/{group_id}/members",
+            headers=self._headers,
+        )
+        return self._unwrap(resp)
+
+    async def add_sales_group_member(
+        self, license_id: str, group_id: str, member_id: str,
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/sales-groups/{group_id}/members",
+            headers=self._headers, json={"member_id": member_id},
+        )
+        return self._unwrap(resp)
+
+    async def remove_sales_group_member(
+        self, license_id: str, group_id: str, member_id: str,
+    ) -> None:
+        resp = await self._client.delete(
+            f"{self._base}/internal/v1/licenses/{license_id}/sales-groups/{group_id}"
+            f"/members/{member_id}",
+            headers=self._headers,
+        )
+        if resp.status_code not in (200, 204):
+            self._unwrap(resp)
+
     async def create_technician_team(self, license_id: str, team_name: str) -> dict:
         resp = await self._client.post(
             f"{self._base}/internal/v1/licenses/{license_id}/technician-teams",
@@ -1251,30 +1303,40 @@ class DataClient:
             return None
         return self._unwrap(resp)
 
-    async def set_smartbrowz_token(
-        self, access_token: str, *, api_domain: str | None = None, ttl_seconds: int = 3300,
-    ) -> None:
-        resp = await self._client.put(
-            f"{self._base}/internal/v1/chat/smartbrowz-token",
-            headers=self._headers,
-            json={"access_token": access_token, "api_domain": api_domain,
-                  "ttl_seconds": ttl_seconds},
-        )
-        self._unwrap(resp)
-
-    async def get_smartbrowz_token(self) -> dict | None:
+    async def get_service_report(self, license_id: str, report_id: str) -> dict | None:
+        """One report by its row id — the route existed with no caller
+        while the app listed every report and filtered (review, 6 Sep)."""
         resp = await self._client.get(
-            f"{self._base}/internal/v1/chat/smartbrowz-token", headers=self._headers,
+            f"{self._base}/internal/v1/licenses/{license_id}/service-reports/{report_id}",
+            headers=self._headers,
         )
         if resp.status_code == 404:
             return None
         return self._unwrap(resp)
 
-    async def clear_smartbrowz_token(self) -> None:
-        resp = await self._client.delete(
-            f"{self._base}/internal/v1/chat/smartbrowz-token", headers=self._headers,
+    async def get_pdpa_request(self, request_id: str) -> dict | None:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/platform/pdpa/requests/{request_id}", headers=self._headers,
         )
-        self._unwrap(resp)
+        if resp.status_code == 404:
+            return None
+        return self._unwrap(resp)
+
+    async def list_audit_log(
+        self, license_id: str, *, entity_type: str | None = None,
+        actor_type: str | None = None, limit: int = 100,
+    ) -> list[dict]:
+        """The shop's own audit trail (Master Spec 3.4/3.5)."""
+        params: dict = {"limit": int(limit)}
+        if entity_type:
+            params["entity_type"] = entity_type
+        if actor_type:
+            params["actor_type"] = actor_type
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/audit-log",
+            headers=self._headers, params=params,
+        )
+        return self._unwrap(resp)
 
     # ------------------------------------------------------------ Phase 9 CRM
 
@@ -1309,6 +1371,22 @@ class DataClient:
             f"{self._base}/internal/v1/licenses/{license_id}/customers",
             headers=self._headers, params=params,
         )
+        return self._unwrap(resp)
+
+    async def link_customer_identity(
+        self, license_id: str, *, phone: str, customer_chann_uid: str,
+        actor_id: str | None = None,
+    ) -> dict | None:
+        """Attach a LINE identity to the customer row that already has this
+        phone (review E8). None when no row has the number; a 409 (another
+        identity holds it) is raised as DataTierError for the caller."""
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/customers/link-identity",
+            headers=self._headers_for(actor_id),
+            json={"phone": phone, "customer_chann_uid": customer_chann_uid},
+        )
+        if resp.status_code == 404:
+            return None
         return self._unwrap(resp)
 
     async def update_customer(
@@ -1700,6 +1778,29 @@ class DataClient:
             headers=self._headers,
         )
         return self._unwrap(resp)
+
+    async def expire_overdue_warranties(self, license_id: str) -> dict:
+        """Active cover past its end date becomes expired (review E5)."""
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/warranties/expire-overdue",
+            headers=self._headers,
+        )
+        return self._unwrap(resp)
+
+    async def expire_due_trials(self) -> list[dict]:
+        """Trials past their date are suspended; the licenses that were."""
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/platform/trials/expire", headers=self._headers,
+        )
+        return self._unwrap(resp) or []
+
+    async def trials_expiring(self, on_day) -> list[dict]:
+        """Trials ending on this Bangkok calendar day, with the owner to tell."""
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/platform/trials/expiring",
+            headers=self._headers, params={"on_day": str(on_day)},
+        )
+        return self._unwrap(resp) or []
 
     async def expire_overdue_quotes(self, license_id: str) -> dict:
         resp = await self._client.post(

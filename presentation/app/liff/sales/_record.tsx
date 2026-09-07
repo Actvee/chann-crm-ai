@@ -200,7 +200,7 @@ export function RecordHead({
   badge?: ReactNode;
   actions?: ReactNode;
 }) {
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
   return (
     <div className="record-head" data-stage={stage}>
       <h1 className="record-title">
@@ -210,10 +210,10 @@ export function RecordHead({
       {subtitle && <p className="record-sub">{subtitle}</p>}
       {(createdAt || updatedAt) && (
         <p className="record-sub" style={{ fontSize: 12, color: "var(--ink-faint)" }}>
-          {createdAt && `${t.dashboard.list.createdAt} ${fullDateTime(createdAt)}`}
+          {createdAt && `${t.dashboard.list.createdAt} ${fullDateTime(createdAt, locale)}`}
           {createdAt && updatedAt && updatedAt !== createdAt && " · "}
           {updatedAt && updatedAt !== createdAt &&
-            `${t.dashboard.list.updatedAt} ${fullDateTime(updatedAt)}`}
+            `${t.dashboard.list.updatedAt} ${fullDateTime(updatedAt, locale)}`}
         </p>
       )}
       {actions && <div className="actions">{actions}</div>}

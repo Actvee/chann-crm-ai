@@ -11,6 +11,7 @@ so writing the row is all the dashboard side needs.
 from __future__ import annotations
 
 import logging
+import uuid
 
 from ..data_client import DataClient
 from ..line.client import LineReplyError, push_text
@@ -22,14 +23,38 @@ log = logging.getLogger(__name__)
 TYPE_TO_OA = {
     "chat_session_new": "sales",
     "approval_pending": "sales",
-    # Phase 14-B: a rejected report goes back to the technician who filed it.
+    # Phase 14-B: the outcome goes back to the technician who filed it —
+    # under its own type, so the dashboard can tell "please approve" from
+    # "it was approved" (review E14, 6 Sep 2026).
+    "approval_approved": "technician",
     "approval_rejected": "technician",
+    # Phase 17.5.4: the tenant owner hears about the trial deadline.
+    "trial_expiring": "sales",
+    "trial_expired": "sales",
     "transfer_request": "sales",
     "sla_warning": "technician",
     "followup_due": "sales",
     "warranty_expiring": "sales",
 }
 DEFAULT_OA = "sales"
+
+
+def _entity_uuid(entity_id: str | None, *, type: str, entity_type: str | None) -> str | None:
+    """`notifications.entity_id` is a UUID column. A caller that passes a
+    business code (a CHN- uid, a ticket number) used to get a 422 from the
+    Data Tier and the notification was silently lost — the shop was never
+    told a customer had linked (review E1, 6 Sep 2026). The row matters
+    more than the link: write it without the reference and say so."""
+    if entity_id is None or entity_id == "":
+        return None
+    try:
+        return str(uuid.UUID(str(entity_id)))
+    except (ValueError, AttributeError, TypeError):
+        log.warning(
+            "notification %s carries a non-UUID entity_id %r (%s); stored without it",
+            type, entity_id, entity_type,
+        )
+        return None
 
 
 async def send_notification(
@@ -65,7 +90,7 @@ async def send_notification(
         message=message,
         message_en=message_en,
         entity_type=entity_type,
-        entity_id=entity_id,
+        entity_id=_entity_uuid(entity_id, type=type, entity_type=entity_type),
         delivery_line=delivery_line,
         delivery_dashboard=delivery_dashboard,
     )

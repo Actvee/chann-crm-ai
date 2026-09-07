@@ -199,6 +199,17 @@ class IdentityRepository:
         return f"CHN-{prefix}-{number:06d}"
 
 
+class PlatformAdminLocked(Exception):
+    """The account is locked out (five wrong passwords). Carries WHEN it
+    opens again, so the login page can say "locked until 14:35" instead
+    of "wrong password" — which had the operator retrying against a lock
+    they could not see (review, 6 Sep 2026)."""
+
+    def __init__(self, locked_until):
+        super().__init__(f"account locked until {locked_until.isoformat()}")
+        self.locked_until = locked_until
+
+
 class PlatformAdminRepository:
     def __init__(self, session: Session):
         self._s = session
@@ -208,9 +219,10 @@ class PlatformAdminRepository:
     LOCK_MINUTES = 15
 
     def authenticate(self, username: str, password: str) -> PlatformAdmin | None:
-        """None on a wrong password AND while locked out: five failures in
-        a row lock the account for fifteen minutes. The caller commits, so
-        the counter survives a refused login."""
+        """None on a wrong password; PlatformAdminLocked while locked out —
+        five failures in a row lock the account for fifteen minutes, and
+        the failure that trips the lock reports it too. The caller commits,
+        so the counter survives a refused login."""
         from datetime import datetime, timedelta, timezone
 
         admin = self._s.execute(
@@ -220,7 +232,7 @@ class PlatformAdminRepository:
             return None
         now = datetime.now(timezone.utc)
         if admin.locked_until is not None and admin.locked_until > now:
-            return None
+            raise PlatformAdminLocked(admin.locked_until)
         try:
             ok = self._hasher.verify(admin.password_hash, password)
         except Exception:
@@ -230,6 +242,8 @@ class PlatformAdminRepository:
             if admin.failed_attempts >= self.MAX_FAILED:
                 admin.locked_until = now + timedelta(minutes=self.LOCK_MINUTES)
                 admin.failed_attempts = 0
+                self._s.flush()
+                raise PlatformAdminLocked(admin.locked_until)
             self._s.flush()
             return None
         admin.failed_attempts = 0

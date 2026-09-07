@@ -487,6 +487,10 @@ class FakeDataClient:
                 return q
         return {"id": quote_id, **fields}
 
+    async def get_service_report(self, license_id, report_id):
+        rows = await self.list_service_reports(license_id)
+        return next((r for r in rows if str(r.get("id")) == str(report_id)), None)
+
     async def list_service_reports(self, license_id, status=None):
         return list(getattr(self, "_reports", []))
 
@@ -559,7 +563,7 @@ class FakeDataClient:
         rows = list(getattr(self, "_team_members", []))
         return [r for r in rows if r.get("team_id") in (None, team_id)]
 
-    async def list_tickets(self, license_id, status=None, visible_to=None):
+    async def list_tickets(self, license_id, status=None, visible_to=None, limit=None):
         self.recorded.append(("list_tickets", license_id, visible_to))
         return list(getattr(self, "_tickets", []))
 

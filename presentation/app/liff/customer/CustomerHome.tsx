@@ -12,7 +12,7 @@ import { shortDate } from "../_list-controls";
 import { ProfileCard } from "../_profile-card";
 import { ShopSwitcher } from "../_shop-switcher";
 import { Ticket, TicketRow } from "../_tickets";
-import { Membership, initLiffSession, proxyHeaders } from "../_shared";
+import { Membership, completeLiffRedirect, initLiffSession, proxyHeaders } from "../_shared";
 
 type Warranty = {
   id: string;
@@ -65,7 +65,7 @@ type Order = {
  * proves better than typing would.
  */
 export default function CustomerHome({ liffId }: { liffId: string }) {
-  const { t } = useLanguage();
+  const { t, bindSession } = useLanguage();
   const statusLabel = (status: string) =>
     (t.dashboard.tickets.status as Record<string, string>)[status] ?? status;
 
@@ -73,6 +73,10 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
   const [licenseId, setLicenseId] = useState("");
   const [shopName, setShopName] = useState("");
   const [shops, setShops] = useState<Membership[]>([]);
+  // Signed in, but not a customer of any shop yet (review D5, 6 Sep
+  // 2026): the storefront and their own details still work; the
+  // per-shop sections say how to link one instead of failing with 401.
+  const [unlinked, setUnlinked] = useState(false);
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [warranties, setWarranties] = useState<Warranty[]>([]);
   // Phase 14-C: the survey card, the home-screen twin of the quick reply
@@ -255,14 +259,25 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
 
   const onReady = useCallback(async () => {
     try {
-      const session = await initLiffSession(liffId, "customer");
-      if (!session.token) return;
-      const license = session.memberships[0]?.license_id ?? "";
-      if (!license) {
-        say(t.liff.noCompany, "error");
+      // A rich-menu deep link (liff.state=/reports) is followed once the
+      // LIFF code is consumed — the same dance the sales menu does.
+      const next = await completeLiffRedirect(liffId, "customer");
+      if (next) {
+        window.location.replace(next);
         return;
       }
+      const session = await initLiffSession(liffId, "customer");
+      if (!session.token) return;
+      // The token first: the profile card and the storefront need only
+      // the person, not a shop — returning before this left both dead.
       setToken(session.token);
+      bindSession({ token: session.token, audience: "customer" });
+      const license = session.memberships[0]?.license_id ?? "";
+      if (!license) {
+        setUnlinked(true);
+        say("", undefined);
+        return;
+      }
       setLicenseId(license);
       setShopName(session.memberships[0]?.company_name ?? "");
       setShops(session.memberships);
@@ -272,7 +287,7 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
     } catch (error) {
       say(error instanceof Error ? error.message : t.dashboard.openFailed, "error");
     }
-  }, [liffId, load, say, t]);
+  }, [bindSession, liffId, load, loadChat, say, t]);
 
   async function reportFault() {
     if (!issue.trim()) return;
@@ -402,7 +417,7 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
     <div data-theme="customer">
       <AppShell
         title={t.dashboard.customer.home}
-        notice={<SuspendedNotice memberships={shops} />}
+        notice={<SuspendedNotice memberships={shops} current={licenseId} />}
         back={null}
         liffId={liffId}
         onReady={onReady}
@@ -410,6 +425,15 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
         status={status}
         statusTone={tone}
       >
+        {unlinked && (
+          <section className="section callout" data-tone="warn" role="status">
+            <div className="section-head">
+              <h2>{t.dashboard.customer.notLinkedTitle}</h2>
+            </div>
+            <p className="card-meta">{t.dashboard.customer.notLinkedHint}</p>
+          </section>
+        )}
+
         {shops.length > 1 && (
           <ShopSwitcher
             token={token}
@@ -458,62 +482,64 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
           </section>
         )}
 
-        <section className="section">
-          <div className="section-head">
-            <h2>{t.dashboard.customer.chatTitle}</h2>
-            {chatSession && (
-              <span className="card-meta">
-                {chatSession.status === "assigned"
-                  ? t.dashboard.customer.chatStatusAssigned
-                  : t.dashboard.customer.chatStatusOpen}
-              </span>
-            )}
-          </div>
-          <p className="card-meta">{t.dashboard.customer.chatHint}</p>
-          {chatLines.length > 0 && (
-            <ul className="list chat-thread">
-              {chatLines.map((line) => (
-                <li key={line.id} className="card chat-line" data-sender={line.sender_type}>
-                  <div className="card-meta">
-                    {line.sender_type === "customer"
-                      ? t.dashboard.customer.chatYou
-                      : t.dashboard.customer.chatShop}
-                  </div>
-                  <div>{line.content}</div>
-                </li>
-              ))}
-            </ul>
-          )}
-          <dl className="fields">
-            <FieldRow label={t.dashboard.customer.chatTitle}>
-              {(id) => (
-                <textarea
-                  id={id}
-                  rows={2}
-                  value={chatDraft}
-                  placeholder={t.dashboard.customer.chatPlaceholder}
-                  onChange={(e) => setChatDraft(e.target.value)}
-                />
-              )}
-            </FieldRow>
-            <div className="actions">
-              <button
-                type="button"
-                className="btn"
-                data-variant="primary"
-                disabled={busy || (!chatSession && !chatDraft.trim()) || (!!chatSession && !chatDraft.trim())}
-                onClick={() => void sendChat()}
-              >
-                {chatSession ? t.dashboard.customer.chatSend : t.dashboard.customer.chatStart}
-              </button>
+        {!unlinked && (
+          <section className="section">
+            <div className="section-head">
+              <h2>{t.dashboard.customer.chatTitle}</h2>
               {chatSession && (
-                <button type="button" className="btn" disabled={busy} onClick={() => void endChat()}>
-                  {t.dashboard.customer.chatEnd}
-                </button>
+                <span className="card-meta">
+                  {chatSession.status === "assigned"
+                    ? t.dashboard.customer.chatStatusAssigned
+                    : t.dashboard.customer.chatStatusOpen}
+                </span>
               )}
             </div>
-          </dl>
-        </section>
+            <p className="card-meta">{t.dashboard.customer.chatHint}</p>
+            {chatLines.length > 0 && (
+              <ul className="list chat-thread">
+                {chatLines.map((line) => (
+                  <li key={line.id} className="card chat-line" data-sender={line.sender_type}>
+                    <div className="card-meta">
+                      {line.sender_type === "customer"
+                        ? t.dashboard.customer.chatYou
+                        : t.dashboard.customer.chatShop}
+                    </div>
+                    <div>{line.content}</div>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <dl className="fields">
+              <FieldRow label={t.dashboard.customer.chatTitle}>
+                {(id) => (
+                  <textarea
+                    id={id}
+                    rows={2}
+                    value={chatDraft}
+                    placeholder={t.dashboard.customer.chatPlaceholder}
+                    onChange={(e) => setChatDraft(e.target.value)}
+                  />
+                )}
+              </FieldRow>
+              <div className="actions">
+                <button
+                  type="button"
+                  className="btn"
+                  data-variant="primary"
+                  disabled={busy || (!chatSession && !chatDraft.trim()) || (!!chatSession && !chatDraft.trim())}
+                  onClick={() => void sendChat()}
+                >
+                  {chatSession ? t.dashboard.customer.chatSend : t.dashboard.customer.chatStart}
+                </button>
+                {chatSession && (
+                  <button type="button" className="btn" disabled={busy} onClick={() => void endChat()}>
+                    {t.dashboard.customer.chatEnd}
+                  </button>
+                )}
+              </div>
+            </dl>
+          </section>
+        )}
 
         <section className="section">
           <div className="section-head">
@@ -587,45 +613,108 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
           )}
         </section>
 
-        <section className="section">
-          <div className="section-head">
-            <h2>{t.dashboard.customer.reportFault}</h2>
-          </div>
-          {warranties.length === 0 ? (
-            // Owner rule (3 Sep): register the product first, so the
-            // shop knows which machine the fault is about. Same gate the
-            // chat applies; the form appears once one product exists.
-            <div className="empty">
-              <p>{t.dashboard.customer.registerFirst}</p>
+        {!unlinked && (
+          <>
+          <section className="section">
+            <div className="section-head">
+              <h2>{t.dashboard.customer.reportFault}</h2>
             </div>
-          ) : (
-            <dl className="fields">
-              <FieldRow label={t.dashboard.customer.whatIsWrong}>
-                {(id) => (
-                  <textarea
-                    id={id}
-                    rows={3}
-                    value={issue}
-                    onChange={(e) => setIssue(e.target.value)}
-                    placeholder={t.dashboard.customer.faultPlaceholder}
-                  />
-                )}
-              </FieldRow>
-              <FieldRow label={t.dashboard.customer.whichProduct}>
-                {(id) => (
-                  <select
-                    id={id}
-                    value={issueSerial}
-                    onChange={(e) => setIssueSerial(e.target.value)}
+            {warranties.length === 0 ? (
+              // Owner rule (3 Sep): register the product first, so the
+              // shop knows which machine the fault is about. Same gate the
+              // chat applies; the form appears once one product exists.
+              <div className="empty">
+                <p>{t.dashboard.customer.registerFirst}</p>
+              </div>
+            ) : (
+              <dl className="fields">
+                <FieldRow label={t.dashboard.customer.whatIsWrong}>
+                  {(id) => (
+                    <textarea
+                      id={id}
+                      rows={3}
+                      value={issue}
+                      onChange={(e) => setIssue(e.target.value)}
+                      placeholder={t.dashboard.customer.faultPlaceholder}
+                    />
+                  )}
+                </FieldRow>
+                <FieldRow label={t.dashboard.customer.whichProduct}>
+                  {(id) => (
+                    <select
+                      id={id}
+                      value={issueSerial}
+                      onChange={(e) => setIssueSerial(e.target.value)}
+                    >
+                      {warranties.map((row) => (
+                        <option key={row.id} value={row.serial_number ?? ""}>
+                          {row.product_name ? `${row.product_name} · ` : ""}
+                          S/N {row.serial_number}
+                        </option>
+                      ))}
+                      <option value="">{t.dashboard.customer.noSerialOption}</option>
+                    </select>
+                  )}
+                </FieldRow>
+                <div className="actions">
+                  <button
+                    type="button"
+                    className="btn"
+                    data-variant="primary"
+                    disabled={busy || !issue.trim()}
+                    onClick={() => void reportFault()}
                   >
-                    {warranties.map((row) => (
-                      <option key={row.id} value={row.serial_number ?? ""}>
-                        {row.product_name ? `${row.product_name} · ` : ""}
-                        S/N {row.serial_number}
-                      </option>
-                    ))}
-                    <option value="">{t.dashboard.customer.noSerialOption}</option>
-                  </select>
+                    {busy ? t.dashboard.related.saving : t.dashboard.customer.submitFault}
+                  </button>
+                </div>
+              </dl>
+            )}
+          </section>
+
+          <section className="section">
+            <div className="section-head">
+              <h2>
+                {t.dashboard.customer.repairStatus} ({tickets.length})
+              </h2>
+              {/* Review D4 (6 Sep 2026): "ดูสถานะการซ่อม" used to end at a
+                  badge; what the technician found, the photos and the PDF
+                  live one tap away. */}
+              <a className="btn" data-variant="quiet" href="/liff/customer/reports">
+                {t.dashboard.customer.viewReports}
+              </a>
+            </div>
+            {tickets.length === 0 ? (
+              <div className="empty">
+                <p>{t.dashboard.customer.noRepairs}</p>
+              </div>
+            ) : (
+              <ul className="list">
+                {tickets.map((ticket) => (
+                  <li key={ticket.id} className="card">
+                    <TicketRow
+                      ticket={ticket}
+                      statusLabel={statusLabel(ticket.status)}
+                    />
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          <section className="section">
+            <div className="section-head">
+              <h2>{t.dashboard.customer.registerProduct}</h2>
+            </div>
+            <p className="card-meta">{t.dashboard.customer.claimHint}</p>
+            <dl className="fields">
+              <FieldRow label={t.dashboard.customer.serialNumber}>
+                {(id) => (
+                  <input
+                    id={id}
+                    value={serial}
+                    autoCapitalize="characters"
+                    onChange={(e) => setSerial(e.target.value)}
+                  />
                 )}
               </FieldRow>
               <div className="actions">
@@ -633,131 +722,78 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
                   type="button"
                   className="btn"
                   data-variant="primary"
-                  disabled={busy || !issue.trim()}
-                  onClick={() => void reportFault()}
+                  disabled={busy || !serial.trim()}
+                  onClick={() => void registerWarranty()}
                 >
-                  {busy ? t.dashboard.related.saving : t.dashboard.customer.submitFault}
+                  {busy
+                    ? t.dashboard.related.saving
+                    : t.dashboard.customer.registerWarranty}
                 </button>
               </div>
             </dl>
-          )}
-        </section>
+          </section>
 
-        <section className="section">
-          <div className="section-head">
-            <h2>
-              {t.dashboard.customer.repairStatus} ({tickets.length})
-            </h2>
-          </div>
-          {tickets.length === 0 ? (
-            <div className="empty">
-              <p>{t.dashboard.customer.noRepairs}</p>
+          <section className="section">
+            <div className="section-head">
+              <h2>
+                {t.dashboard.customer.products} ({warranties.length})
+              </h2>
             </div>
-          ) : (
-            <ul className="list">
-              {tickets.map((ticket) => (
-                <li key={ticket.id} className="card">
-                  <TicketRow
-                    ticket={ticket}
-                    statusLabel={statusLabel(ticket.status)}
-                  />
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
+            {warranties.length === 0 ? (
+              <div className="empty">
+                <p>{t.dashboard.customer.noProducts}</p>
+              </div>
+            ) : (
+              <ul className="list">
+                {warranties.map((row) => (
+                  <li key={row.id} className="card">
+                    <div className="card-title">
+                      {row.product_name || row.serial_number}
+                    </div>
+                    <div className="card-meta">
+                      S/N {row.serial_number}
+                      {row.warranty_end
+                        ? ` · ${t.dashboard.customer.expires} ${shortDate(row.warranty_end)}`
+                        : ""}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
 
-        <section className="section">
-          <div className="section-head">
-            <h2>{t.dashboard.customer.registerProduct}</h2>
-          </div>
-          <p className="card-meta">{t.dashboard.customer.claimHint}</p>
-          <dl className="fields">
-            <FieldRow label={t.dashboard.customer.serialNumber}>
-              {(id) => (
-                <input
-                  id={id}
-                  value={serial}
-                  autoCapitalize="characters"
-                  onChange={(e) => setSerial(e.target.value)}
-                />
-              )}
-            </FieldRow>
-            <div className="actions">
-              <button
-                type="button"
-                className="btn"
-                data-variant="primary"
-                disabled={busy || !serial.trim()}
-                onClick={() => void registerWarranty()}
-              >
-                {busy
-                  ? t.dashboard.related.saving
-                  : t.dashboard.customer.registerWarranty}
-              </button>
+          <section className="section">
+            <div className="section-head">
+              <h2>
+                {t.dashboard.customer.orders} ({orders.length})
+              </h2>
             </div>
-          </dl>
-        </section>
-
-        <section className="section">
-          <div className="section-head">
-            <h2>
-              {t.dashboard.customer.products} ({warranties.length})
-            </h2>
-          </div>
-          {warranties.length === 0 ? (
-            <div className="empty">
-              <p>{t.dashboard.customer.noProducts}</p>
-            </div>
-          ) : (
-            <ul className="list">
-              {warranties.map((row) => (
-                <li key={row.id} className="card">
-                  <div className="card-title">
-                    {row.product_name || row.serial_number}
-                  </div>
-                  <div className="card-meta">
-                    S/N {row.serial_number}
-                    {row.warranty_end
-                      ? ` · ${t.dashboard.customer.expires} ${shortDate(row.warranty_end)}`
-                      : ""}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-
-        <section className="section">
-          <div className="section-head">
-            <h2>
-              {t.dashboard.customer.orders} ({orders.length})
-            </h2>
-          </div>
-          {orders.length === 0 ? (
-            <div className="empty">
-              <p>{t.dashboard.customer.noOrders}</p>
-            </div>
-          ) : (
-            <ul className="list">
-              {orders.map((order) => (
-                <li key={order.id} className="card">
-                  <div className="card-title">
-                    {order.deal_id} ·{" "}
-                    {(t.dashboard.customer.orderStage as Record<string, string>)[order.stage] ??
-                      order.stage}
-                  </div>
-                  <div className="card-meta">
-                    {(order.products ?? [])
-                      .map((p) => `${p.product_name}${(p.qty ?? 1) > 1 ? ` ×${p.qty}` : ""}`)
-                      .join(", ")}
-                    {order.created_at ? ` · ${shortDate(order.created_at)}` : ""}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
+            {orders.length === 0 ? (
+              <div className="empty">
+                <p>{t.dashboard.customer.noOrders}</p>
+              </div>
+            ) : (
+              <ul className="list">
+                {orders.map((order) => (
+                  <li key={order.id} className="card">
+                    <div className="card-title">
+                      {order.deal_id} ·{" "}
+                      {(t.dashboard.customer.orderStage as Record<string, string>)[order.stage] ??
+                        order.stage}
+                    </div>
+                    <div className="card-meta">
+                      {(order.products ?? [])
+                        .map((p) => `${p.product_name}${(p.qty ?? 1) > 1 ? ` ×${p.qty}` : ""}`)
+                        .join(", ")}
+                      {order.created_at ? ` · ${shortDate(order.created_at)}` : ""}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+          </>
+        )}
 
         {token && (
           <ProfileCard token={token} audience="customer" shopName={shopName} />

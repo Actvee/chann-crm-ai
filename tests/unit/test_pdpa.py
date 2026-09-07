@@ -67,9 +67,6 @@ class _Store:
         self.puts.append(key)
         return StoredDocument(path=f"gs://b/{key}", sha256=sha256_hex(content), size=len(content))
 
-    async def signed_url(self, *, path, expires_seconds):
-        return f"https://signed/{path}?ttl={expires_seconds}"
-
     async def delete(self, *, path):
         self.deleted.append(path)
 
@@ -136,12 +133,26 @@ class TestConsentAtRegistration:
 
 class TestExport:
     async def test_a_copy_becomes_a_page_with_a_day_long_link(self, monkeypatch):
+        import time
+
+        from chann_app.auth.document_link import decode_asset_token
+        from chann_app.config import settings
+
+        monkeypatch.setattr(settings, "jwt_secret", "test-jwt-secret")
+        monkeypatch.setattr(settings, "public_base_url", "https://app.example")
         store = _Store()
         monkeypatch.setattr(pdpa, "get_document_store", lambda *a, **k: store)
         client = PdpaFake()
         out = await pdpa.export_my_data(client, chann_uid="CHN-S-000001", via="chat", language="th")
-        assert out["url"].startswith("https://signed/gs://b/pdpa/CHN-S-000001/")
-        assert "ttl=86400" in out["url"] and "1 ร้าน" in out["text"]
+        # E2: an asset link this tier serves (a signed URL never worked here).
+        assert out["url"].startswith("https://app.example/api/v1/assets/")
+        path, content_type, name = decode_asset_token(out["url"].rsplit("/", 1)[-1])
+        assert path.startswith("gs://b/pdpa/CHN-S-000001/") and content_type.startswith("text/html")
+        import jwt as _jwt
+
+        claims = _jwt.decode(out["url"].rsplit("/", 1)[-1], "test-jwt-secret", algorithms=["HS256"])
+        assert 86400 - 5 <= claims["exp"] - claims["iat"] <= 86400
+        assert "1 ร้าน" in out["text"]
         assert ("create_pdpa_request", "CHN-S-000001", "export", "chat") in client.recorded
         html = pdpa._render_export_html(out["bundle"])
         assert "ร้านเย็นสบาย" in html and "T-2026-0001" in html and "0812345678" in html

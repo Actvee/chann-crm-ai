@@ -32,3 +32,6 @@ smartbrowz_verification.json
 .DS_Store
 
 phase1-source-verification-*.txt
+
+# generated rich-menu pictures — python3 scripts/richmenu/generate.py redraws them
+scripts/richmenu/out/

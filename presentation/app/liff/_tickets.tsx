@@ -30,6 +30,8 @@ export type Ticket = {
   scheduled_time?: string | null;
   assigned_target_type?: string | null;
   assigned_to_ref?: string | null;
+  /** TicketOut.created_at — the queue merges per-status fetches on it. */
+  created_at?: string | null;
 };
 
 /** Status to the stage rail's vocabulary, so the colour means the same

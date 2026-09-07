@@ -75,6 +75,7 @@ ACCEPTED = {
     ("followup", "cancel"): "the dashboard cancels via PATCH status — same operation, different verb",
     ("line_item", "read"): "chat shows a quote's lines inside the quote detail, not as its own command",
     ("role", "delete"): "dashboard only — deleting a role is an admin screen job, with the members list in view",
+    ("sales_group", "delete"): "dashboard only — same as role.delete: an admin screen job with the members in view (E7, 6 Sep 2026)",
     ("setting", "create"): "the settings screen upserts; chat updates the same keys",
     # Phase 14: a customer answers the survey from the quick reply chat
     # pushes and from the home-screen card; there is no staff permission

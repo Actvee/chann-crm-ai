@@ -85,7 +85,9 @@ class TestDispatchFromTheQueue:
         )
         assert response.status_code == 200, response.text
         updates = [r for r in client.recorded if r[0] == "update_ticket"]
-        assert updates and updates[-1][3] == {"customer_phone": "0812345678"}
+        # status is not the gate's; an empty address CLEARS it (review C16,
+        # 6 Sep 2026) rather than being dropped, so a wrong value can be removed.
+        assert updates and updates[-1][3] == {"customer_phone": "0812345678", "service_address": None}
 
     def test_editing_nothing_is_a_422_not_a_silent_ok(self, harness):
         http, _, _ = harness

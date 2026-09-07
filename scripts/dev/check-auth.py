@@ -4,6 +4,15 @@ is readable by any member of any role."""
 import ast
 from pathlib import Path
 
+# Routes guarded by something other than a permission key, with the reason
+# (mirrors TestEveryTenantRouteIsGuarded.EXEMPT in tests/boundary).
+EXEMPT = {
+    "/licenses/{license_id}/me/permissions": "returns the caller's own keys",
+    "/licenses/{license_id}/ownership-transfers": "checks principal.is_owner (request) / filters to the parties (list)",
+    "/licenses/{license_id}/ownership-transfers/{transfer_id}/accept": "the data tier verifies the caller is the recipient",
+    "/platform/licenses/{license_id}/break-glass/transfer-owner": "platform admin route with its own check",
+}
+
 source = Path("application/chann_app/routers_phase2.py").read_text(encoding="utf-8")
 tree = ast.parse(source)
 
@@ -20,12 +29,16 @@ for node in ast.walk(tree):
         and getattr(d.func.value, "id", "") == "router"
         and d.args and isinstance(d.args[0], ast.Constant)
     ]
-    if not paths:
+    if not paths or paths[0] in EXEMPT:
         continue
     body = ast.dump(node)
     scoped = "{license_id}" in paths[0]
     has_tenant = "_require_same_tenant" in body
-    has_require = "'attr': 'require'" in body or "attr='require'" in body
+    # require_any: one of several keys (review C9, 6 Sep 2026).
+    has_require = any(
+        marker in body
+        for marker in ("'attr': 'require'", "attr='require'", "'attr': 'require_any'", "attr='require_any'")
+    )
 
     if scoped and not has_tenant:
         problems.append(f"{paths[0]}  ({node.name}) — no tenant check")

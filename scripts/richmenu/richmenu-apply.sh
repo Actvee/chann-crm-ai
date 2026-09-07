@@ -10,8 +10,11 @@
 #   bash scripts/richmenu/richmenu-apply.sh            # ทั้ง 3 OA
 #   bash scripts/richmenu/richmenu-apply.sh technician # OA เดียว
 #
-# แต่ละ OA มี 2 เมนู: หน้าหลัก (default) และ เพิ่มเติม — แท็บบนหัวเมนูสลับกันด้วย
-# rich menu alias (chann-<oa>-main / chann-<oa>-more) ตามที่ generate.py ใส่ไว้ใน json
+# แต่ละ OA มี 4 เมนู: หน้าหลัก (default) และ เพิ่มเติม × ภาษาไทย/อังกฤษ (Phase 20) —
+# แท็บบนหัวเมนูสลับกันด้วย rich menu alias (chann-<oa>-main / chann-<oa>-more และ
+# chann-<oa>-main-en / chann-<oa>-more-en) ตามที่ generate.py ใส่ไว้ใน json
+# ค่าเริ่มต้นของทุกคนคือหน้าหลักภาษาไทย; แอปพลิเคชันย้ายคนที่เลือกภาษาอังกฤษไปคู่ -en
+# เอง (application/chann_app/services/richmenu.py) — เปลี่ยนภาษาในแชทแล้วเมนูเปลี่ยนตาม
 #
 # ปุ่มที่เป็น uri แต่ LIFF ยังไม่ตั้งค่า จะถูกแปลงเป็น message action
 # อัตโนมัติ (ส่งข้อความชื่อเมนูแทน) — เมนูใช้ได้ทันทีวันนี้ และอัปเกรด
@@ -29,6 +32,7 @@ info(){ printf '  %s\n' "$*"; }
 command -v jq >/dev/null || die "ต้องมี jq (sudo apt-get install -y jq)"
 [ -f out/richmenu-sales.png ] || die "ยังไม่มีรูป — รัน python3 generate.py ก่อน"
 [ -f out/richmenu-sales-more.png ] || die "ยังไม่มีรูปหน้า 2 — รัน python3 generate.py (เวอร์ชัน 2 หน้า) ก่อน"
+[ -f out/richmenu-sales-more-en.png ] || die "ยังไม่มีรูปภาษาอังกฤษ — รัน python3 generate.py (เวอร์ชัน 2 ภาษา) ก่อน"
 
 # แทนค่า {LIFF_*} ใน uri (รวม path ต่อท้าย); ตัวไหนไม่มีค่า → message action ชื่อเมนูแทน
 _resolve_body() {
@@ -54,7 +58,7 @@ apply_one() {
   [ -n "$token" ] || { info "ข้าม $oa — ไม่ได้ตั้ง \$$token_var"; return 0; }
 
   info "[$oa] ลบ alias เดิม (ถ้ามี)"
-  for alias in "chann-${oa}-main" "chann-${oa}-more"; do
+  for alias in "chann-${oa}-main" "chann-${oa}-more" "chann-${oa}-main-en" "chann-${oa}-more-en"; do
     curl -s -o /dev/null -X DELETE -H "Authorization: Bearer $token" \
       "https://api.line.me/v2/bot/richmenu/alias/$alias" || true
   done
@@ -70,8 +74,13 @@ apply_one() {
     done
 
   local main_rid=""
-  for page in main more; do
-    local suffix=""; [ "$page" = "more" ] && suffix="-more"
+  for page in main more main-en more-en; do
+    local suffix=""
+    case "$page" in
+      more) suffix="-more" ;;
+      main-en) suffix="-en" ;;
+      more-en) suffix="-more-en" ;;
+    esac
     local json="out/richmenu-${oa}${suffix}.json" png="out/richmenu-${oa}${suffix}.png"
     [ -f "$json" ] || die "[$oa] ไม่มี $json — รัน python3 generate.py"
     local alias; alias=$(jq -r '._alias // empty' "$json")
@@ -98,7 +107,7 @@ apply_one() {
     [ "$page" = "main" ] && main_rid="$rid"
   done
 
-  info "[$oa] ตั้งหน้าหลักเป็น default ของทุกคน"
+  info "[$oa] ตั้งหน้าหลัก (ไทย) เป็น default ของทุกคน — คนที่เลือกอังกฤษถูกย้ายโดยแอป"
   # LINE answers 411 to a bodiless POST: curl sends no Content-Length
   # without a body, so hand it an empty one (Content-Length: 0).
   curl -fsS -X POST "https://api.line.me/v2/bot/user/all/richmenu/$main_rid" \

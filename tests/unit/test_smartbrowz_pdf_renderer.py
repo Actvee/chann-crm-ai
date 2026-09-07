@@ -5,7 +5,7 @@ These tests call the REAL Zoho OAuth endpoint (accounts.zoho.com) with
 intentionally-fake credentials, rather than mocking the zcatalyst-sdk's
 internal HTTP client — that client uses `requests`, not this project's
 own httpx-based DataClient, so a clean mock-transport injection (the
-pattern test_smartbrowz_auth.py and test_data_client.py use) isn't
+pattern test_data_client.py uses) isn't
 available here without patching library internals. A real network round
 trip with fake credentials is fast (Zoho rejects immediately) and proves
 the actual error-handling paths this module depends on, consistent with

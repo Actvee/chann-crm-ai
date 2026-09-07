@@ -24,7 +24,16 @@ export async function adminForward(
     });
     return NextResponse.json(result ?? { ok: true });
   } catch (error) {
-    const status = error instanceof ApplicationError ? error.status : 503;
-    return NextResponse.json({ detail: "admin request failed" }, { status });
+    if (error instanceof ApplicationError) {
+      // The Application tier's own body, so the console can say WHY —
+      // "member is not active", "locked until …" — instead of "failed"
+      // (review D11/D13, 6 Sep 2026).
+      const body =
+        error.body && typeof error.body === "object"
+          ? (error.body as Record<string, unknown>)
+          : { detail: typeof error.body === "string" ? error.body : "admin request failed" };
+      return NextResponse.json(body, { status: error.status });
+    }
+    return NextResponse.json({ detail: "application tier unreachable" }, { status: 503 });
   }
 }

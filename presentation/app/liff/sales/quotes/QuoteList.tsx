@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
-import { AppShell, Badge, CompanyPicker, Count, Empty } from "../_components";
+import { Badge, Count, Empty } from "../_components";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { InlineCreateForm } from "../../_inline-create";
@@ -11,7 +11,11 @@ import {
   ListControls, byNewest, byOldest, useListControls,
 } from "../../_list-controls";
 
-import { Membership, fetchPermissions, initLiffSession, openExternal, proxyHeaders } from "../_lib";
+import { useFailureText } from "../_format";
+import { openExternal, proxyHeaders } from "../_lib";
+import { useSalesSession } from "../_session";
+import { SalesShell } from "../_shell";
+import { useSalesText } from "../_strings";
 
 type Quote = {
   created_at?: string | null;
@@ -23,23 +27,23 @@ type Quote = {
 
 export default function QuoteList({ liffId }: { liffId: string }) {
   const { t } = useLanguage();
+  const s = useSalesText();
+  const failureText = useFailureText();
   const statusLabel = (status: string) =>
     (t.quote.status as Record<string, string>)[status] ?? status;
-  const [token, setToken] = useState("");
-  const [memberships, setMemberships] = useState<Membership[]>([]);
-  const [licenseId, setLicenseId] = useState("");
   const [quotes, setQuotes] = useState<Quote[]>([]);
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
   const [busyId, setBusyId] = useState("");
   const [busy, setBusy] = useState(false);
-  const [permissions, setPermissions] = useState<Set<string>>(new Set());
-  const [openDeals, setOpenDeals] = useState<{ id: string; label: string }[]>([]);
+  const [openDeals, setOpenDeals] = useState<{ id: string; label: string; keywords: string }[]>([]);
 
   const say = useCallback((message: string, kind?: "ok" | "error") => {
     setStatus(message);
     setTone(kind);
   }, []);
+  const session = useSalesSession(liffId, say);
+  const { token, licenseId, permissions } = session;
 
   const load = useCallback(async () => {
     if (!token || !licenseId) return;
@@ -55,67 +59,62 @@ export default function QuoteList({ liffId }: { liffId: string }) {
     }
     setQuotes((await response.json()) as Quote[]);
     say("");
-  }, [licenseId, say, token]);
+  }, [licenseId, say, t, token]);
+
+  const loadDeals = useCallback(async () => {
+    if (!token || !licenseId || !permissions.has("quote.create")) return;
+    const headers = proxyHeaders(token, licenseId);
+    // A quote is created FROM a deal, and only an open one: quoting a
+    // closed deal is not a thing. The deal row carries only contact_id,
+    // so the customers are loaded alongside and the picker shows a name
+    // (review C12) — nobody remembers a deal by its code.
+    const [dealsResponse, customersResponse] = await Promise.all([
+      fetch(`/api/phase2/licenses/${licenseId}/deals`, { headers }),
+      fetch(`/api/phase2/licenses/${licenseId}/customers`, { headers }),
+    ]);
+    if (!dealsResponse.ok) {
+      // Without the deals the create-quote form would silently not
+      // appear, which reads as "you cannot create quotes". Say why.
+      say(`${t.dashboard.loadFailed} (${dealsResponse.status})`, "error");
+      return;
+    }
+    const names = new Map<string, string>();
+    if (customersResponse.ok) {
+      const customers = (await customersResponse.json()) as {
+        id: string; first_name?: string | null; last_name?: string | null; customer_id?: string;
+        phone?: string | null;
+      }[];
+      for (const c of customers) {
+        names.set(
+          c.id,
+          [c.first_name, c.last_name].filter(Boolean).join(" ") || (c.customer_id ?? ""),
+        );
+      }
+    }
+    const rows = (await dealsResponse.json()) as {
+      id: string; deal_id?: string; stage?: string; contact_id?: string;
+    }[];
+    setOpenDeals(
+      rows
+        .filter((row) => row.stage === "new" || row.stage === "proposed")
+        .map((row) => {
+          const name = names.get(row.contact_id ?? "") ?? "";
+          return {
+            id: row.id,
+            label: `${row.deal_id ?? row.id}${name ? ` · ${name}` : ""}`,
+            keywords: name,
+          };
+        }),
+    );
+  }, [licenseId, permissions, say, t, token]);
 
   useEffect(() => {
-    if (!token || !licenseId) return;
+    if (!session.ready) return;
     void load().catch((error: unknown) =>
       say(error instanceof Error ? error.message : t.dashboard.loadFailed, "error"),
     );
-  }, [licenseId, load, say, token]);
-
-
-  const initialize = useCallback(async () => {
-    try {
-      const session = await initLiffSession(liffId);
-      if (!session.token) return;
-      setToken(session.token);
-      setMemberships(session.memberships);
-      setLicenseId(session.memberships[0]?.license_id ?? "");
-      const license = session.memberships[0]?.license_id ?? "";
-      if (license) {
-        setPermissions(await fetchPermissions(session.token, license));
-        // A quote is created FROM a deal, and only an open one:
-        // quoting a closed deal is not a thing.
-        const response = await fetch(
-          `/api/phase2/licenses/${license}/deals`,
-          { headers: proxyHeaders(session.token, license) },
-        );
-        if (!response.ok) {
-          // Without the deals the create-quote form would silently not
-          // appear, which reads as "you cannot create quotes". Say why.
-          say(`${t.dashboard.loadFailed} (${response.status})`, "error");
-        } else {
-          const rows = (await response.json()) as {
-            id: string; deal_id?: string; stage?: string; customer_name?: string;
-          }[];
-          setOpenDeals(
-            rows
-              .filter((row) => row.stage === "new" || row.stage === "proposed")
-              .map((row) => ({
-                id: row.id,
-                label: `${row.deal_id ?? row.id}${
-                  row.customer_name ? ` · ${row.customer_name}` : ""
-                }`,
-              })),
-          );
-        }
-      }
-      if (!session.memberships.length) say(t.liff.noCompany, "error");
-    } catch (error) {
-      say(error instanceof Error ? error.message : t.dashboard.openFailed, "error");
-    }
-  }, [liffId, say]);
-
-  async function detail(response: Response): Promise<string> {
-    try {
-      return ((await response.clone().json()) as { detail?: string }).detail ?? "";
-    } catch {
-      return "";
-    }
-  }
-
-
+    void loadDeals().catch(() => undefined);
+  }, [session.ready, load, loadDeals, say, t]);
 
   async function openDocument(quote: Quote, documentId?: string) {
     const id = documentId ?? quote.generated_document_id;
@@ -133,7 +132,7 @@ export default function QuoteList({ liffId }: { liffId: string }) {
         { headers: proxyHeaders(token, licenseId) },
       );
       if (!response.ok) {
-        say(`${t.common.error} (${response.status})`, "error");
+        say(await failureText(response), "error");
         return;
       }
       const { url } = (await response.json()) as { url: string };
@@ -155,16 +154,12 @@ export default function QuoteList({ liffId }: { liffId: string }) {
         body: JSON.stringify(values),
       });
       if (!response.ok) {
-        const detail = await response.json().catch(() => ({}));
-        // "No products" is the common refusal and is actionable, so it
-        // is passed through rather than flattened into a status code.
-        const message =
-          typeof detail.detail === "string" &&
-          detail.detail.toLowerCase().includes("no products")
-            ? t.dashboard.quotes.dealHasNoProducts
-            : `${t.common.error} (${response.status})`;
-        say(message, "error");
-        return;
+        // "No products" is the common refusal and is actionable; the API
+        // sends a reason code and the sentence is in the reader's
+        // language. Thrown so the picker keeps its choice (C3).
+        const why = await failureText(response);
+        say(why, "error");
+        throw new Error(why);
       }
       await load();
       say(t.dashboard.saved, "ok");
@@ -191,14 +186,8 @@ export default function QuoteList({ liffId }: { liffId: string }) {
         `/api/phase2/licenses/${licenseId}/quotes/${quote.id}/issue?allow_reissue=${already}`,
         { method: "POST", headers: proxyHeaders(token, licenseId) },
       );
-      const reason = await detail(response);
       if (!response.ok) {
-        say(
-          response.status === 409
-            ? `${t.dashboard.quotes.incomplete} ${reason}`
-            : `${t.common.error} (${response.status}) ${reason}`,
-          "error",
-        );
+        say(await failureText(response), "error");
         return;
       }
       const issued = (await response.json()) as {
@@ -237,18 +226,23 @@ export default function QuoteList({ liffId }: { liffId: string }) {
   ];
   const controls = useListControls(quotes, sorts, "newest");
   const visibleQuotes = controls.visible;
+  const can = (key: string) => !session.suspended && permissions.has(key);
+  // Issuing changes state, so it needs quote.update — the key the route
+  // checks (review C7); the list offered it to anyone who could read.
+  const canIssue = can("quote.update");
+  // Only a quote that is still an offer gets a document: an accepted,
+  // rejected or expired one is history (phase10's state machine).
+  const issuable = (quote: Quote) => quote.status === "draft" || quote.status === "sent";
 
   return (
-    <AppShell
+    <SalesShell
+      session={session}
       title={t.quote.title}
       liffId={liffId}
-      onReady={() => void initialize()}
       onSdkError={() => say(t.liff.sdkLoadFailed, "error")}
       status={status}
       statusTone={tone}
     >
-      <CompanyPicker memberships={memberships} licenseId={licenseId} onChange={setLicenseId} />
-
       <ListControls
         sorts={sorts}
         sortKey={controls.sortKey}
@@ -261,7 +255,7 @@ export default function QuoteList({ liffId }: { liffId: string }) {
 
       <Count shown={visibleQuotes.length} total={quotes.length} />
 
-      {permissions.has("quote.create") && openDeals.length > 0 && (
+      {can("quote.create") && openDeals.length > 0 && (
         <InlineCreateForm
           title={t.dashboard.quotes.add}
           busy={busy}
@@ -273,7 +267,7 @@ export default function QuoteList({ liffId }: { liffId: string }) {
               type: "select",
               searchHint: t.dashboard.deals.searchHint,
               options: openDeals.map((d) => ({
-                value: d.id, label: d.label, keywords: d.label,
+                value: d.id, label: d.label, keywords: d.keywords,
               })),
             },
           ]}
@@ -312,24 +306,27 @@ export default function QuoteList({ liffId }: { liffId: string }) {
                     {busyId === quote.id ? t.dashboard.working : t.dashboard.quotes.view}
                   </button>
                 )}
-                <button
-                  type="button"
-                  className="btn"
-                  data-variant={quote.generated_document_id ? undefined : "primary"}
-                  onClick={() => void issue(quote)}
-                  disabled={busyId === quote.id}
-                >
-                  {quote.generated_document_id
-                    ? t.dashboard.quotes.reissue
-                    : t.dashboard.quotes.issue}
-                </button>
+                {canIssue && issuable(quote) && (
+                  <button
+                    type="button"
+                    className="btn"
+                    data-variant={quote.generated_document_id ? undefined : "primary"}
+                    onClick={() => void issue(quote)}
+                    disabled={busyId === quote.id}
+                  >
+                    {quote.generated_document_id
+                      ? t.dashboard.quotes.reissue
+                      : t.dashboard.quotes.issue}
+                  </button>
+                )}
               </div>
             </li>
           ))}
         </ul>
       )}
 
+      {!canIssue && !session.suspended && <p className="footnote">{s.quotes.needsUpdate}</p>}
       <p className="footnote">{t.dashboard.quotes.note}</p>
-    </AppShell>
+    </SalesShell>
   );
 }

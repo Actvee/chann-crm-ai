@@ -7,7 +7,7 @@ import re
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel
 
 from .auth.liff import LiffTokenInvalid, verify_id_token
@@ -42,7 +42,20 @@ async def get_data_client():
 
 @router.post("/platform/login", response_model=TokenOut)
 async def platform_login(payload: LoginIn, client: DataClient = Depends(get_data_client)):
-    admin = await client.authenticate_platform_admin(payload.username, payload.password)
+    try:
+        admin = await client.authenticate_platform_admin(payload.username, payload.password)
+    except DataTierError as exc:
+        if exc.status_code == status.HTTP_423_LOCKED:
+            # Five wrong passwords: the Data tier says until when. Passed
+            # through so the login page can say so instead of "wrong
+            # password" (review D2, 6 Sep 2026).
+            raise HTTPException(
+                status_code=status.HTTP_423_LOCKED,
+                detail=exc.structured or {"error": "locked", "locked_until": None},
+            )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="admin login service unavailable",
+        )
     if admin is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid credentials")
     session_id = str(uuid.uuid4())
@@ -250,9 +263,53 @@ async def guide_file(audience: str, format: str = "html"):
     )
 
 
+@router.get("/assets/{token}")
+async def download_asset(token: str):
+    """Serve one stored object to whoever holds a valid asset link.
+
+    Not behind the LIFF guard, for the same reason as /documents/{token}:
+    the link is opened from a LINE chat, an <img src> on a dashboard
+    page, or by the PDF renderer at Zoho — none of which can attach an
+    ID token. The token names one object for a limited time; see
+    auth/document_link.py and services/assets.py (review E2).
+    """
+    from fastapi.responses import Response
+
+    from .auth.document_link import DocumentLinkInvalid, decode_asset_token
+    from .services.storage.base import (
+        DocumentStoreError, DocumentStoreNotConfigured, get_document_store,
+    )
+
+    try:
+        path, content_type, filename = decode_asset_token(token)
+    except DocumentLinkInvalid as exc:
+        # 404 rather than 401: a forged or expired token must not confirm
+        # that anything exists at the path it names.
+        raise HTTPException(status_code=404, detail=f"link is not valid: {exc}")
+    try:
+        content = await get_document_store().get(path=path)
+    except DocumentStoreNotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except DocumentStoreError as exc:
+        if "no stored document" in str(exc):
+            raise HTTPException(status_code=404, detail="asset not found")
+        raise HTTPException(status_code=502, detail=str(exc))
+    name = filename or path.rsplit("/", 1)[-1] or "asset"
+    return Response(
+        content=content, media_type=content_type,
+        headers={
+            "Content-Disposition": f'inline; filename="{name}"',
+            # The token already bounds the lifetime; a browser may keep
+            # the bytes for as long as the link itself is good.
+            "Cache-Control": "private, max-age=3600",
+        },
+    )
+
+
 @router.get("/liff/{audience}/signature")
 async def liff_signature(
     audience: str,
+    request: Request,
     claims: dict = Depends(require_liff),
     client: DataClient = Depends(get_data_client),
 ):
@@ -262,13 +319,16 @@ async def liff_signature(
     if audience not in OA_TO_ROLE:
         raise HTTPException(status_code=404, detail="unknown LIFF audience")
     identity = await client.resolve_identity(claims["sub"], OA_TO_ROLE[audience], claims.get("name"))
-    return {"url": await signature_link(client, chann_uid=identity["chann_uid"])}
+    return {"url": await signature_link(
+        client, chann_uid=identity["chann_uid"], base_url=str(request.base_url),
+    )}
 
 
 @router.post("/liff/{audience}/signature")
 async def liff_set_signature(
     audience: str,
     body: dict,
+    request: Request,
     claims: dict = Depends(require_liff),
     client: DataClient = Depends(get_data_client),
 ):
@@ -295,7 +355,9 @@ async def liff_set_signature(
         )
     except PhotoRefused as exc:
         raise HTTPException(status_code=422, detail=str(exc))
-    return {"url": await signature_link(client, chann_uid=identity["chann_uid"])}
+    return {"url": await signature_link(
+        client, chann_uid=identity["chann_uid"], base_url=str(request.base_url),
+    )}
 
 
 @router.put("/liff/{audience}/active-shop")
@@ -421,11 +483,17 @@ async def require_scheduler(x_sweep_secret: str = Header(default="")) -> None:
 
 @router.post("/platform/reminders/sweep")
 async def run_reminder_sweep(
-    days: int = 0,
+    days: int = 1,
     _: None = Depends(require_scheduler),
     client: DataClient = Depends(get_data_client),
 ):
-    """Push today's due follow-ups to their owners (Master Spec 6.7).
+    """Push due follow-ups to their owners (Master Spec 6.7).
+
+    days=1 by default: the spec says a follow-up is announced within one
+    day BEFORE its due date, so the morning digest carries today's and
+    tomorrow's work. days=0 (today only) was the old default and the
+    Scheduler job passed nothing, so nothing was ever announced ahead
+    (review E11, 6 Sep 2026).
 
     Called by Cloud Scheduler each morning, authenticated by a static
     shared secret rather than require_admin — see require_scheduler above.
@@ -483,7 +551,7 @@ async def run_quote_expiry_sweep(
     salesperson the offer stands when it does not — and the "expired"
     status has existed since Phase 10 with nothing able to set it.
     """
-    summary = {"tenants": 0, "expired": 0, "failed": []}
+    summary = {"tenants": 0, "expired": 0, "warranties_expired": 0, "failed": []}
     try:
         # exclude_status rather than status="active": a trial tenant is a
         # real tenant, and filtering on "active" silently skipped every
@@ -507,8 +575,32 @@ async def run_quote_expiry_sweep(
             # until someone notices, which is how the first sweep bug hid.
             log.exception("quote expiry failed for %s", license_id)
             summary["failed"].append(license_id)
+        # Same nightly tick, same reasoning: cover that ran out yesterday
+        # must not read "active" today (review E5). The read path already
+        # derives the status from the end date; this keeps the column true.
+        try:
+            result = await client.expire_overdue_warranties(license_id)
+            summary["warranties_expired"] += int(result.get("expired") or 0)
+        except Exception:
+            log.exception("warranty expiry failed for %s", license_id)
+            if license_id not in summary["failed"]:
+                summary["failed"].append(license_id)
 
     return summary
+
+
+@router.post("/platform/trials/expire")
+async def run_trial_sweep(
+    _: None = Depends(require_scheduler),
+    client: DataClient = Depends(get_data_client),
+):
+    """Master Spec 17.5.4: warn the owner 3 days and 1 day before a trial
+    ends, then suspend what is overdue. Same shared-secret auth as the
+    other sweeps; the Data Tier has been able to suspend since Phase 6.5
+    but nothing called it (review E3)."""
+    from .services.trials import sweep_trials
+
+    return await sweep_trials(client)
 
 
 # ==================================================================== Phase 16.5
@@ -598,6 +690,19 @@ async def platform_pdpa_create(
     if not chann_uid or request_type not in ("erasure", "export", "consent_withdraw"):
         raise HTTPException(status_code=422, detail="chann_uid and a valid request_type are required")
     return await client.create_pdpa_request(chann_uid=chann_uid, request_type=request_type, requested_via="platform_admin")
+
+
+@router.get("/platform/pdpa/requests/{request_id}")
+async def platform_pdpa_request(
+    request_id: str,
+    admin: dict = Depends(require_admin),
+    client: DataClient = Depends(get_data_client),
+):
+    """One request, for the admin's detail view."""
+    row = await client.get_pdpa_request(request_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="request not found")
+    return row
 
 
 @router.post("/platform/pdpa/requests/{request_id}/process")
@@ -730,8 +835,14 @@ async def platform_break_glass(
     try:
         member = await client.force_transfer_owner(license_id, target, actor_id=str(admin.get("sub") or ""))
     except DataTierError as exc:
-        raise HTTPException(status_code=exc.status if getattr(exc, "status", None) in (404, 409) else 502,
-                            detail="break-glass transfer failed") from exc
+        # `exc.status_code`, not `.status` — the old attribute never existed,
+        # so a 404/409 from the Data tier always surfaced as 502 with no
+        # reason (review D11, 6 Sep 2026). The reason rides along so the
+        # console can show it.
+        raise HTTPException(
+            status_code=exc.status_code if exc.status_code in (404, 409) else 502,
+            detail={"error": "break_glass_failed", "reason": exc.structured or exc.detail},
+        ) from exc
     try:
         from .services.notify import send_notification
 

@@ -17,18 +17,14 @@ PDF & Screenshot component specifically (see docs/SESSION_HANDOFF.md for
 the full story of how this was established, including a live token
 response confirming the granted OAuth scope).
 
-Deliberately does NOT use this project's own SmartBrowzTokenManager
-(smartbrowz_auth.py, a Data-tier-cached token manager built before this
-adapter existed) — the zcatalyst-sdk's own `RefreshTokenCredential`
-already refreshes and caches an access token internally per-process, and
-duplicating that against the Data-tier cache as well would just be two
-caches disagreeing with each other for no benefit at this project's
-scale (a handful of Cloud Run instances refreshing independently, at
-most once per ~55 minutes each, is nowhere near Zoho's documented rate
-limit of 10 access tokens per refresh_token per 10 minutes).
-SmartBrowzTokenManager is kept as-is, unused by this module, in case a
-future scale-up ever makes the shared-cache benefit worth the added
-complexity.
+Token handling is the zcatalyst-sdk's own `RefreshTokenCredential`,
+which refreshes and caches an access token per process. A project-side
+token manager with a Data-tier Redis cache (smartbrowz_auth.py and three
+/chat/smartbrowz-token routes) existed alongside it, unused; it was
+removed on 6 Sep 2026 (review E12) — a handful of Cloud Run instances
+refreshing independently, at most once per ~55 minutes each, is nowhere
+near Zoho's documented limit of 10 access tokens per refresh_token per
+10 minutes, so a shared cache bought nothing.
 """
 from __future__ import annotations
 

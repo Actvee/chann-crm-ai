@@ -33,14 +33,16 @@ class _FakeStore:
         self.puts.append((key, content_type))
         return StoredDocument(path=f"gs://b/{key}", sha256=sha256_hex(content), size=len(content))
 
-    async def signed_url(self, *, path, expires_seconds):
-        return f"https://signed/{path}"
 
 
 @pytest.fixture
 def store(monkeypatch):
+    from chann_app.config import settings
+
     fake = _FakeStore()
     monkeypatch.setattr(photos, "get_document_store", lambda *a, **k: fake)
+    monkeypatch.setattr(settings, "jwt_secret", "test-jwt-secret")
+    monkeypatch.setattr(settings, "public_base_url", "https://app.example")
     return fake
 
 
@@ -65,11 +67,36 @@ class TestStore:
             )
         assert not store.puts
 
-    async def test_links_are_signed(self, store):
+    async def test_links_are_asset_tokens_served_by_this_tier(self, store):
+        from chann_app.auth.document_link import decode_asset_token
+
         client = FakeDataClient()
-        client._photos = [{"id": "p1", "ticket_id": "t1", "photo_url": "documents/x.jpg", "photo_type": "evidence"}]
+        client._photos = [{"id": "p1", "ticket_id": "t1", "photo_url": "gs://b/documents/x.jpg", "photo_type": "evidence"}]
         rows = await photos.photo_links(client, license_id="lic-1", ticket_id="t1")
-        assert rows[0]["url"] == "https://signed/documents/x.jpg"
+        assert rows[0]["url"].startswith("https://app.example/api/v1/assets/")
+        path, content_type, _ = decode_asset_token(rows[0]["url"].rsplit("/", 1)[-1])
+        assert path == "gs://b/documents/x.jpg" and content_type == "image/jpeg"
+
+    async def test_a_request_base_wins_over_the_setting(self, store):
+        client = FakeDataClient()
+        client._photos = [{"id": "p1", "ticket_id": "t1", "photo_url": "gs://b/documents/x.jpg", "photo_type": "evidence"}]
+        rows = await photos.photo_links(client, license_id="lic-1", ticket_id="t1", base_url="https://req.example/")
+        assert rows[0]["url"].startswith("https://req.example/api/v1/assets/")
+
+    async def test_no_base_url_means_no_link_not_a_broken_one(self, store, monkeypatch):
+        from chann_app.config import settings
+
+        monkeypatch.setattr(settings, "public_base_url", "")
+        client = FakeDataClient()
+        client._photos = [{"id": "p1", "ticket_id": "t1", "photo_url": "gs://b/documents/x.jpg", "photo_type": "evidence"}]
+        rows = await photos.photo_links(client, license_id="lic-1", ticket_id="t1")
+        assert rows[0]["url"] == ""
+
+    async def test_a_signature_link_is_an_asset_token(self, store):
+        client = FakeDataClient()
+        client._signatures = {"CHN-S-000001": "gs://b/signatures/CHN-S-000001/x.png"}
+        url = await photos.signature_link(client, chann_uid="CHN-S-000001")
+        assert url and url.startswith("https://app.example/api/v1/assets/")
 
     async def test_a_signature_is_kept_against_the_identity(self, store):
         client = FakeDataClient()

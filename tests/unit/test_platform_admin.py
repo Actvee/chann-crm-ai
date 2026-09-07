@@ -267,3 +267,48 @@ class TestSuspendedTenantInChat:
         ctx.memberships[0]["license_status"] = "suspended"
         reply = await handle_chat_message(client, message="ขอข้อมูลของฉัน", ctx=ctx)
         assert "สำเนาข้อมูล" in reply.text
+
+
+class TestLockoutAndReasons:
+    """Review D2/D11 (6 Sep 2026): a locked account says until when, and a
+    failed break-glass says why with the Data tier's own status."""
+
+    def test_a_locked_account_is_423_with_locked_until(self, world):
+        from chann_app.data_client import DataTierError
+
+        client, fake, _ = world
+
+        async def locked(username, password):
+            raise DataTierError(423, "locked", {"error": "locked", "locked_until": "2026-09-06T14:35:00+00:00"})
+
+        fake.authenticate_platform_admin = locked
+        res = client.post(f"{API}/platform/login", json={"username": "chai", "password": "nope"})
+        assert res.status_code == 423, res.text
+        assert res.json()["detail"] == {"error": "locked", "locked_until": "2026-09-06T14:35:00+00:00"}
+
+    def test_a_data_tier_outage_at_login_is_503_not_401(self, world):
+        from chann_app.data_client import DataTierError
+
+        client, fake, _ = world
+
+        async def down(username, password):
+            raise DataTierError(500, "internal error")
+
+        fake.authenticate_platform_admin = down
+        assert client.post(f"{API}/platform/login", json={"username": "chai", "password": "x"}).status_code == 503
+
+    @pytest.mark.parametrize("upstream,expected", [(404, 404), (409, 409), (500, 502)])
+    def test_break_glass_passes_the_status_and_the_reason(self, world, upstream, expected):
+        from chann_app.data_client import DataTierError
+
+        client, fake, sent = world
+
+        async def refuse(license_id, target_chann_uid, actor_id=None):
+            raise DataTierError(upstream, "member is not active", {"error": "inactive_member"})
+
+        fake.force_transfer_owner = refuse
+        res = client.post(f"{API}/platform/break-glass/transfer-owner",
+                          json={"license_id": TENANT["id"], "target_chann_uid": "CHN-NEW"}, headers=_login(client))
+        assert res.status_code == expected, res.text
+        assert res.json()["detail"]["reason"] == {"error": "inactive_member"}
+        assert not sent

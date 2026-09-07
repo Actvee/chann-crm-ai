@@ -43,8 +43,8 @@ class _FakeStore:
 
         return StoredDocument(path=f"gs://bucket/{key}", sha256=sha256_hex(content), size=len(content))
 
-    async def signed_url(self, *, path, expires_seconds):
-        return f"https://signed.example/{path}?ttl={expires_seconds}"
+    async def get(self, *, path):
+        return b"\x89PNG-fake"
 
 
 class _FakeRenderer:
@@ -114,6 +114,10 @@ class _FakeClient:
         return self.reports[0]
 
     # ---- what issue_for_report gathers
+    async def get_service_report(self, license_id, report_id):
+        rows = await self.list_service_reports(license_id)
+        return next((r for r in rows if str(r.get("id")) == str(report_id)), None)
+
     async def list_service_reports(self, license_id):
         return [dict(r) for r in self.reports]
 
@@ -224,16 +228,79 @@ class TestIssue:
             await issue_service_report_document(client, license_id="lic-1", **_fixtures())
         assert not client.recorded and not client.attached
 
-    async def test_issue_for_report_gathers_technician_and_signed_approver(self, monkeypatch):
+    async def test_issue_for_report_gathers_technician_and_linked_approver(self, monkeypatch):
+        from chann_app.auth.document_link import decode_asset_token
+        from chann_app.config import settings
+
+        monkeypatch.setattr(settings, "jwt_secret", "test-jwt-secret")
+        monkeypatch.setattr(settings, "public_base_url", "https://app.example")
         store, renderer = self._patch(monkeypatch)
         client = _FakeClient()
         document = await issue_for_report(client, license_id="lic-1", report_id="sr-1", actor_id="CHN-1")
         snap = document["data_snapshot"]
         assert snap["technician"]["name"] == "สมศักดิ์ ช่างดี"
         assert snap["approvals"][0]["name"] == "สมหญิง ตรวจดี"
-        assert snap["approvals"][0]["signature_url"].startswith("https://signed.example/signatures/")
+        # E2: an asset link this tier serves, not a GCS signed URL.
+        sig = snap["approvals"][0]["signature_url"]
+        assert sig.startswith("https://app.example/api/v1/assets/")
+        assert decode_asset_token(sig.rsplit("/", 1)[-1])[0] == "signatures/CHN-S-000002.png"
         assert "สมหญิง ตรวจดี" in renderer.last_html
         assert client.reports[0]["generated_document_id"] == "doc-1"
-        # 13.1: the visit's pictures are on the paper, via a signed link.
-        assert snap["photos"] and snap["photos"][0].startswith("https://signed.example/documents/")
+        # 13.1: the visit's pictures are on the paper, via the same kind of link.
+        assert snap["photos"] and snap["photos"][0].startswith("https://app.example/api/v1/assets/")
         assert 'class="photo"' in renderer.last_html
+
+    async def test_without_a_public_base_the_images_go_inline(self, monkeypatch):
+        from chann_app.config import settings
+
+        monkeypatch.setattr(settings, "public_base_url", "")
+        store, renderer = self._patch(monkeypatch)
+        client = _FakeClient()
+        document = await issue_for_report(client, license_id="lic-1", report_id="sr-1", actor_id="CHN-1")
+        snap = document["data_snapshot"]
+        assert snap["approvals"][0]["signature_url"].startswith("data:image/png;base64,")
+        assert snap["photos"][0].startswith("data:image/")
+        assert "data:image/png;base64," in renderer.last_html
+
+
+class TestTechnicianSignature:
+    """Review D1 (6 Sep 2026): the technician OA lets a technician draw a
+    signature; the report used to print a hard-coded blank box."""
+
+    def test_the_snapshot_carries_the_check_out_signature(self):
+        fx = _fixtures()
+        fx["technician"]["signature_url"] = "https://s/tech.png"
+        snap = build_service_report_snapshot(**fx)
+        assert snap["technician"]["signature_url"] == "https://s/tech.png"
+        html = render_service_report_html(snap)
+        assert 'src="https://s/tech.png"' in html
+        assert "ช่างผู้ปฏิบัติงาน" in html and "สมศักดิ์ ช่างดี" in html
+
+    def test_no_signature_leaves_a_labelled_blank_not_a_broken_image(self):
+        snap = build_service_report_snapshot(**_fixtures())
+        assert snap["technician"]["signature_url"] == ""
+        html = render_service_report_html(snap)
+        technician_box = html.split("ช่างผู้ปฏิบัติงาน")[0].rsplit('<div class="sign">', 1)[1]
+        assert 'class="signature blank"' in technician_box and "<img" not in technician_box
+
+    async def test_issue_for_report_resolves_the_technicians_own_signature(self, monkeypatch):
+        import chann_app.services.report_issue as ri
+
+        store, renderer = _FakeStore(), _FakeRenderer()
+        monkeypatch.setattr(ri, "get_document_store", lambda *a, **k: store)
+        monkeypatch.setattr(ri, "get_renderer", lambda *a, **k: renderer)
+
+        class Client(_FakeClient):
+            async def identity_signature(self, chann_uid):
+                return {"CHN-T-000001": "signatures/CHN-T-000001.png",
+                        "CHN-S-000002": "signatures/CHN-S-000002.png"}.get(chann_uid)
+
+        document = await issue_for_report(Client(), license_id="lic-1", report_id="sr-1", actor_id="CHN-1")
+        snap = document["data_snapshot"]
+        # Resolved the same way as an approver's: served by this tier (an
+        # asset link when PUBLIC_BASE_URL is set, inline bytes otherwise) —
+        # never a GCS signed URL, which this deployment cannot produce.
+        for url in (snap["technician"]["signature_url"], snap["approvals"][0]["signature_url"]):
+            assert url and (url.startswith("data:image/") or "/api/v1/assets/" in url), url
+            assert "storage.googleapis.com" not in url and "X-Goog-Signature" not in url
+        assert renderer.last_html.count('class="signature"') == 2

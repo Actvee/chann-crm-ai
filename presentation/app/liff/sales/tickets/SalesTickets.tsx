@@ -1,13 +1,16 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
-import { AppShell } from "../_components";
 import { FieldRow } from "../../_field-row";
 import { Ticket, formatWhen, ticketStage } from "../../_tickets";
-import { fetchPermissions, initLiffSession, proxyHeaders } from "../_lib";
+import { dispatchFieldLabels, useFailureText } from "../_format";
+import { proxyHeaders } from "../_lib";
+import { useSalesSession } from "../_session";
+import { SalesShell } from "../_shell";
+import { useSalesText } from "../_strings";
 
 type Technician = { id: string; display_name: string; phone?: string | null };
 type Team = { id: string; team_name: string };
@@ -21,6 +24,15 @@ type Draft = {
   scheduled_time: string;
 };
 
+// The most rows one status fetch returns (the Data tier's own cap).
+// Explicit (review C10): the page used to take the default hundred and
+// an old job still open dropped off the end once the shop had done a
+// hundred jobs, with nothing on screen saying so.
+const PAGE = 500;
+// What "not finished" means when the finished ones are hidden: fetched
+// per status so a long history cannot push a live job out of the window.
+const OPEN_STATUSES = ["open", "assigned", "in_progress"];
+
 /**
  * The dispatcher's view: which tickets are waiting, what is stopping
  * each one, and — since 3 Sep — the three things chat could already do
@@ -32,17 +44,16 @@ type Draft = {
  */
 export default function SalesTickets({ liffId }: { liffId: string }) {
   const { t } = useLanguage();
+  const s = useSalesText();
+  const failureText = useFailureText();
   const copy = t.dashboard.tickets;
   const statusLabel = (status: string) =>
     (copy.status as Record<string, string>)[status] ?? status;
 
-  const [token, setToken] = useState("");
-  const [licenseId, setLicenseId] = useState("");
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [blockers, setBlockers] = useState<Record<string, string[]>>({});
   const [technicians, setTechnicians] = useState<Technician[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
-  const [canUpdate, setCanUpdate] = useState(false);
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
   const [busyId, setBusyId] = useState("");
@@ -59,73 +70,84 @@ export default function SalesTickets({ liffId }: { liffId: string }) {
     setStatus(message);
     setTone(kind);
   }, []);
+  const session = useSalesSession(liffId, say);
+  const { token, licenseId, permissions } = session;
 
-  const load = useCallback(
-    async (currentToken = token, license = licenseId) => {
-      if (!currentToken || !license) return;
-      const headers = proxyHeaders(currentToken, license);
-      const response = await fetch(`/api/phase2/licenses/${license}/tickets`, { headers });
-      if (!response.ok) {
-        throw new Error(
-          response.status === 403
-            ? t.dashboard.noPermission
-            : `${t.dashboard.loadFailed} (${response.status})`,
+  const load = useCallback(async () => {
+    if (!token || !licenseId) return;
+    const headers = proxyHeaders(token, licenseId);
+    // Server-side status filter: the finished ones are not downloaded
+    // to be hidden, and each open status gets its own window.
+    const urls = showDone
+      ? [`/api/phase2/licenses/${licenseId}/tickets?limit=${PAGE}`]
+      : OPEN_STATUSES.map(
+          (value) => `/api/phase2/licenses/${licenseId}/tickets?status=${value}&limit=${PAGE}`,
         );
-      }
-      const rows = (await response.json()) as Ticket[];
-      setTickets(rows);
-
-      // Only for the ones still waiting to go out; a dispatched ticket's
-      // gate result is history and not worth a request each.
-      const waiting = rows.filter((row) => row.status === "open");
-      const found: Record<string, string[]> = {};
-      await Promise.all(
-        waiting.map(async (row) => {
-          const check = await fetch(
-            `/api/phase2/licenses/${license}/tickets/${row.id}/dispatch-check`,
-            { headers },
-          );
-          if (check.ok) {
-            const body = (await check.json()) as { missing?: string[] };
-            if (body.missing?.length) found[row.id] = body.missing;
-          } else {
-            // A failed check must not read as "ready to dispatch": the
-            // dispatcher would act on an answer nobody gave.
-            found[row.id] = [copy.dispatchCheckFailed];
-          }
-        }),
+    const responses = await Promise.all(urls.map((url) => fetch(url, { headers })));
+    const failed = responses.find((response) => !response.ok);
+    if (failed) {
+      throw new Error(
+        failed.status === 403
+          ? t.dashboard.noPermission
+          : `${t.dashboard.loadFailed} (${failed.status})`,
       );
-      setBlockers(found);
-    },
-    [token, licenseId, t, copy.dispatchCheckFailed],
-  );
-
-  const initialize = useCallback(async () => {
-    try {
-      const session = await initLiffSession(liffId);
-      if (!session.token) return;
-      const license = session.memberships[0]?.license_id ?? "";
-      if (!license) {
-        say(t.liff.noCompany, "error");
-        return;
-      }
-      setToken(session.token);
-      setLicenseId(license);
-      const permissions = await fetchPermissions(session.token, license);
-      setCanUpdate(permissions.has("ticket.update"));
-      await load(session.token, license);
-      const headers = proxyHeaders(session.token, license);
-      const [techRes, teamRes] = await Promise.all([
-        fetch(`/api/phase2/licenses/${license}/technicians`, { headers }),
-        fetch(`/api/phase2/licenses/${license}/technician-teams`, { headers }),
-      ]);
-      setTechnicians(techRes.ok ? ((await techRes.json()) as Technician[]) : []);
-      setTeams(teamRes.ok ? ((await teamRes.json()) as Team[]) : []);
-      say("");
-    } catch (error) {
-      say(error instanceof Error ? error.message : t.dashboard.openFailed, "error");
     }
-  }, [liffId, load, say, t]);
+    const rows = (await Promise.all(responses.map((response) => response.json() as Promise<Ticket[]>)))
+      .flat()
+      .sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")));
+    setTickets(rows);
+
+    // Only for the ones still waiting to go out; a dispatched ticket's
+    // gate result is history and not worth a request each.
+    const waiting = rows.filter((row) => row.status === "open");
+    const found: Record<string, string[]> = {};
+    await Promise.all(
+      waiting.map(async (row) => {
+        const check = await fetch(
+          `/api/phase2/licenses/${licenseId}/tickets/${row.id}/dispatch-check`,
+          { headers },
+        );
+        if (check.ok) {
+          const body = (await check.json()) as { missing?: string[]; missing_fields?: string[] };
+          // The column names, said in the reader's language (review C11);
+          // the Thai labels are the fallback for an older Data tier.
+          const names = body.missing_fields?.length
+            ? dispatchFieldLabels(body.missing_fields, t)
+            : body.missing ?? [];
+          if (names.length) found[row.id] = names;
+        } else {
+          // A failed check must not read as "ready to dispatch": the
+          // dispatcher would act on an answer nobody gave.
+          found[row.id] = [copy.dispatchCheckFailed];
+        }
+      }),
+    );
+    setBlockers(found);
+  }, [token, licenseId, showDone, t, copy.dispatchCheckFailed]);
+
+  const loadPeople = useCallback(async () => {
+    if (!token || !licenseId) return;
+    const headers = proxyHeaders(token, licenseId);
+    const [techRes, teamRes] = await Promise.all([
+      fetch(`/api/phase2/licenses/${licenseId}/technicians`, { headers }),
+      fetch(`/api/phase2/licenses/${licenseId}/technician-teams`, { headers }),
+    ]);
+    setTechnicians(techRes.ok ? ((await techRes.json()) as Technician[]) : []);
+    setTeams(teamRes.ok ? ((await teamRes.json()) as Team[]) : []);
+  }, [licenseId, token]);
+
+  useEffect(() => {
+    if (!session.ready) return;
+    void (async () => {
+      try {
+        await load();
+        await loadPeople();
+        say("");
+      } catch (error) {
+        say(error instanceof Error ? error.message : t.dashboard.loadFailed, "error");
+      }
+    })();
+  }, [session.ready, load, loadPeople, say, t]);
 
   /** One request, then reload; a 409 from the gate names what is missing. */
   async function send(ticket: Ticket, request: () => Promise<Response>, done: string) {
@@ -133,17 +155,7 @@ export default function SalesTickets({ liffId }: { liffId: string }) {
     try {
       const response = await request();
       if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as
-          | { detail?: { missing?: string[]; blockers?: string[] } | string }
-          | null;
-        const detail = body && typeof body.detail === "object" ? body.detail : null;
-        const missing = detail?.missing ?? detail?.blockers;
-        say(
-          missing?.length
-            ? `${copy.blocked}: ${missing.join(", ")}`
-            : `${copy.actionFailed} (${response.status})`,
-          "error",
-        );
+        say(await failureText(response), "error");
         return false;
       }
       say(`${ticket.ticket_number} — ${done}`, "ok");
@@ -189,9 +201,12 @@ export default function SalesTickets({ liffId }: { liffId: string }) {
   }
 
   async function saveEdit(ticket: Ticket) {
+    // Every field, blanks included: an emptied box CLEARS the value
+    // (review C16). The old form dropped blanks, so a wrong serial could
+    // never be removed and an all-empty form was a 422.
     const fields: Record<string, string> = {};
     (Object.keys(draft) as (keyof Draft)[]).forEach((key) => {
-      if (draft[key].trim()) fields[key] = draft[key].trim();
+      fields[key] = draft[key].trim();
     });
     const ok = await send(
       ticket,
@@ -223,6 +238,14 @@ export default function SalesTickets({ liffId }: { liffId: string }) {
   const visible = tickets.filter(
     (x) => showDone || (x.status !== "completed" && x.status !== "cancelled"),
   );
+  // Each control on the key its route checks (review C7/C9): dispatch is
+  // ticket.assign, cancelling is ticket.close, editing the gate's fields
+  // is ticket.update — and ticket.update still covers all three for the
+  // roles that were built before the first two meant anything.
+  const can = (key: string) => !session.suspended && permissions.has(key);
+  const canAssign = can("ticket.assign") || can("ticket.update");
+  const canEdit = can("ticket.update");
+  const canCancel = can("ticket.close") || can("ticket.update");
   const canDispatch = (x: Ticket) =>
     x.status !== "completed" && x.status !== "cancelled" && x.accept_status !== "accepted";
   const targetLabel = (x: Ticket) => {
@@ -234,11 +257,11 @@ export default function SalesTickets({ liffId }: { liffId: string }) {
   };
 
   return (
-    <AppShell
+    <SalesShell
+      session={session}
       title={copy.title}
       back="/liff/sales"
       liffId={liffId}
-      onReady={() => void initialize()}
       onSdkError={() => say(t.liff.sdkLoadFailed, "error")}
       status={status}
       statusTone={tone}
@@ -253,6 +276,9 @@ export default function SalesTickets({ liffId }: { liffId: string }) {
           {showDone ? copy.hideDone : copy.showDone}
         </button>
       </div>
+      {tickets.length >= PAGE && (
+        <p className="count">{s.errors.showingLatest.replace("{count}", String(tickets.length))}</p>
+      )}
       {visible.length === 0 ? (
         <div className="empty">
           <p>{copy.empty}</p>
@@ -296,52 +322,58 @@ export default function SalesTickets({ liffId }: { liffId: string }) {
                 </div>
               )}
 
-              {canUpdate && canDispatch(ticket) && editing !== ticket.id && (
+              {(canAssign || canEdit || canCancel) && canDispatch(ticket) && editing !== ticket.id && (
                 <div className="card-actions">
-                  <select
-                    aria-label={copy.assignTo}
-                    value={target[ticket.id] ?? ""}
-                    onChange={(e) => setTarget({ ...target, [ticket.id]: e.target.value })}
-                  >
-                    <option value="">{copy.assignTo}</option>
-                    {teams.length > 0 && (
-                      <optgroup label={copy.teamsGroup}>
-                        {teams.map((team) => (
-                          <option key={team.id} value={`team:${team.id}`}>
-                            {team.team_name}
-                          </option>
-                        ))}
-                      </optgroup>
-                    )}
-                    {technicians.length > 0 && (
-                      <optgroup label={copy.techniciansGroup}>
-                        {technicians.map((tech) => (
-                          <option key={tech.id} value={`tech:${tech.id}`}>
-                            {tech.display_name}
-                          </option>
-                        ))}
-                      </optgroup>
-                    )}
-                  </select>
-                  <button
-                    type="button"
-                    className="btn"
-                    data-variant="primary"
-                    disabled={busyId !== "" || !target[ticket.id]}
-                    onClick={() => void assign(ticket)}
-                  >
-                    {busyId === ticket.id ? t.dashboard.related.saving : copy.assign}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn"
-                    data-variant="quiet"
-                    disabled={busyId !== ""}
-                    onClick={() => startEdit(ticket)}
-                  >
-                    {copy.edit}
-                  </button>
-                  {confirmCancel === ticket.id ? (
+                  {canAssign && (
+                    <>
+                      <select
+                        aria-label={copy.assignTo}
+                        value={target[ticket.id] ?? ""}
+                        onChange={(e) => setTarget({ ...target, [ticket.id]: e.target.value })}
+                      >
+                        <option value="">{copy.assignTo}</option>
+                        {teams.length > 0 && (
+                          <optgroup label={copy.teamsGroup}>
+                            {teams.map((team) => (
+                              <option key={team.id} value={`team:${team.id}`}>
+                                {team.team_name}
+                              </option>
+                            ))}
+                          </optgroup>
+                        )}
+                        {technicians.length > 0 && (
+                          <optgroup label={copy.techniciansGroup}>
+                            {technicians.map((tech) => (
+                              <option key={tech.id} value={`tech:${tech.id}`}>
+                                {tech.display_name}
+                              </option>
+                            ))}
+                          </optgroup>
+                        )}
+                      </select>
+                      <button
+                        type="button"
+                        className="btn"
+                        data-variant="primary"
+                        disabled={busyId !== "" || !target[ticket.id]}
+                        onClick={() => void assign(ticket)}
+                      >
+                        {busyId === ticket.id ? t.dashboard.related.saving : copy.assign}
+                      </button>
+                    </>
+                  )}
+                  {canEdit && (
+                    <button
+                      type="button"
+                      className="btn"
+                      data-variant="quiet"
+                      disabled={busyId !== ""}
+                      onClick={() => startEdit(ticket)}
+                    >
+                      {copy.edit}
+                    </button>
+                  )}
+                  {canCancel && (confirmCancel === ticket.id ? (
                     <>
                       <button
                         type="button"
@@ -371,7 +403,7 @@ export default function SalesTickets({ liffId }: { liffId: string }) {
                     >
                       {copy.cancel}
                     </button>
-                  )}
+                  ))}
                 </div>
               )}
 
@@ -462,6 +494,6 @@ export default function SalesTickets({ liffId }: { liffId: string }) {
           ))}
         </ul>
       )}
-    </AppShell>
+    </SalesShell>
   );
 }

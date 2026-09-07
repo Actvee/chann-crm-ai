@@ -11,7 +11,7 @@ import { FieldRow } from "../_field-row";
 import { ProfileCard } from "../_profile-card";
 import { ShopSwitcher } from "../_shop-switcher";
 import { Ticket, TicketRow } from "../_tickets";
-import { Membership, fetchPermissions, initLiffSession, proxyHeaders } from "../_shared";
+import { Membership, completeLiffRedirect, fetchPermissions, initLiffSession, proxyHeaders } from "../_shared";
 
 type ServiceReport = {
   id: string;
@@ -35,7 +35,7 @@ type ServiceReport = {
  * un-make that guarantee one tap at a time.
  */
 export default function TechnicianHome({ liffId }: { liffId: string }) {
-  const { t } = useLanguage();
+  const { t, bindSession } = useLanguage();
   const statusLabel = (status: string) =>
     (t.dashboard.tickets.status as Record<string, string>)[status] ?? status;
 
@@ -102,10 +102,18 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
 
   const onReady = useCallback(async () => {
     try {
+      // The rich menu's "รายงานของฉัน" arrives here as liff.state=/reports;
+      // follow it once the LIFF code is consumed (review D8, 6 Sep 2026).
+      const next = await completeLiffRedirect(liffId, "technician");
+      if (next) {
+        window.location.replace(next);
+        return;
+      }
       const session = await initLiffSession(liffId, "technician");
       if (!session.token) return;
       const license = session.memberships[0]?.license_id ?? "";
       setToken(session.token);
+      bindSession({ token: session.token, audience: "technician" });
       setLicenseId(license);
       if (!session.memberships.length) {
         say(t.liff.noCompany, "error");
@@ -121,7 +129,7 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
     } catch (error) {
       say(error instanceof Error ? error.message : t.dashboard.openFailed, "error");
     }
-  }, [liffId, load, say, t]);
+  }, [bindSession, liffId, load, say, t]);
 
   async function claim(ticket: Ticket) {
     setBusyId(ticket.id);
@@ -242,6 +250,17 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
    *  of sending it in chat). Read as a data: URL — no multipart. */
   async function addPhoto(ticket: Ticket, file: File | null) {
     if (!file) return;
+    // The two refusals the server makes (photos.py: 10 MB, image/*), said
+    // before the upload and in the person's language — a generic "try
+    // again" on a 12 MB photo had them trying again (review D12).
+    if (file.size > 10 * 1024 * 1024) {
+      say(t.dashboard.technician.photoTooLarge, "error");
+      return;
+    }
+    if (file.type && !file.type.startsWith("image/")) {
+      say(t.dashboard.technician.photoNotImage, "error");
+      return;
+    }
     setBusyId(ticket.id);
     try {
       const image = await new Promise<string>((resolve, reject) => {
@@ -261,7 +280,19 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
           }),
         },
       );
-      if (!response.ok) throw new Error(String(response.status));
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as { detail?: unknown } | null;
+        const detail = typeof body?.detail === "string" ? body.detail : "";
+        say(
+          detail.includes("10 MB")
+            ? t.dashboard.technician.photoTooLarge
+            : detail.includes("not an image")
+              ? t.dashboard.technician.photoNotImage
+              : t.dashboard.technician.photoFailed,
+          "error",
+        );
+        return;
+      }
       say(`${ticket.ticket_number} — ${t.dashboard.technician.photoAdded}`, "ok");
     } catch {
       say(t.dashboard.technician.photoFailed, "error");
@@ -425,7 +456,7 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
     <div data-theme="technician">
       <AppShell
         title={t.dashboard.technician.home}
-        notice={<SuspendedNotice memberships={shops} />}
+        notice={<SuspendedNotice memberships={shops} current={licenseId} />}
         back={null}
         liffId={liffId}
         onReady={onReady}

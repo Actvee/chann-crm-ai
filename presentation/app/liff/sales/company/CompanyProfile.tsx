@@ -2,10 +2,15 @@
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
 
-import { AppShell, CompanyPicker } from "../_components";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
-import { Membership, initLiffSession, proxyHeaders } from "../_lib";
+import { FieldRow } from "../../_field-row";
+import { PickerOption, SearchablePicker } from "../../_searchable-picker";
+import { useFailureText } from "../_format";
+import { proxyHeaders } from "../_lib";
+import { useSalesSession } from "../_session";
+import { SalesShell } from "../_shell";
+import { useSalesText } from "../_strings";
 
 type Profile = {
   legal_name: string | null;
@@ -19,8 +24,13 @@ type Profile = {
   missing_for_documents: string[];
 };
 
+type Member = { id: string; chann_uid: string; role: string; display_name: string; phone?: string | null };
+type Transfer = { id: string; status: string; from_chann_uid?: string | null; to_chann_uid?: string | null };
+
 export default function CompanyProfile({ liffId }: { liffId: string }) {
   const { t } = useLanguage();
+  const s = useSalesText();
+  const failureText = useFailureText();
   const c = t.dashboard.companyProfile;
   const fieldLabel = (field: string) =>
     ({
@@ -31,9 +41,6 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
       company_email: c.email,
       vat_rate: c.vat,
     })[field] ?? field;
-  const [token, setToken] = useState("");
-  const [memberships, setMemberships] = useState<Membership[]>([]);
-  const [licenseId, setLicenseId] = useState("");
   const [profile, setProfile] = useState<Profile | null>(null);
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
@@ -56,11 +63,19 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
   const [chatTimeout, setChatTimeout] = useState("");
   const [leadCleanupDays, setLeadCleanupDays] = useState("0");
   const [policySaving, setPolicySaving] = useState(false);
+  // E6: handing the shop to someone else. The owner picks a member; the
+  // member accepts on their own menu; only then does it take effect.
+  const [members, setMembers] = useState<Member[]>([]);
+  const [pending, setPending] = useState<Transfer | null>(null);
+  const [nominee, setNominee] = useState("");
+  const [transferring, setTransferring] = useState(false);
 
   const say = useCallback((message: string, kind?: "ok" | "error") => {
     setStatus(message);
     setTone(kind);
   }, []);
+  const session = useSalesSession(liffId, say);
+  const { token, licenseId, permissions } = session;
 
   const applyProfile = useCallback((data: Profile) => {
     setProfile(data);
@@ -92,32 +107,12 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
     }
     applyProfile((await response.json()) as Profile);
     say("");
-  }, [applyProfile, licenseId, say, token]);
+  }, [applyProfile, c.settingDenied, licenseId, say, t, token]);
 
-  useEffect(() => {
+  const loadSettings = useCallback(async () => {
     if (!token || !licenseId) return;
-    void load().catch((error: unknown) =>
-      say(error instanceof Error ? error.message : t.dashboard.loadFailed, "error"),
-    );
-  }, [licenseId, load, say, token]);
-
-  const initialize = useCallback(async () => {
-    try {
-      const session = await initLiffSession(liffId);
-      if (!session.token) return;
-      setToken(session.token);
-      setMemberships(session.memberships);
-      setLicenseId(session.memberships[0]?.license_id ?? "");
-      if (!session.memberships.length) say(t.liff.noCompany, "error");
-      else void loadAutoAccept(session.token, session.memberships[0].license_id);
-    } catch (error) {
-      say(error instanceof Error ? error.message : t.dashboard.openFailed, "error");
-    }
-  }, [liffId, say]);
-
-  async function loadAutoAccept(currentToken: string, license: string) {
-    const response = await fetch(`/api/phase2/licenses/${license}/settings`, {
-      headers: proxyHeaders(currentToken, license),
+    const response = await fetch(`/api/phase2/licenses/${licenseId}/settings`, {
+      headers: proxyHeaders(token, licenseId),
     });
     if (!response.ok) return;  // no setting.manage: the switch stays hidden
     const rows = (await response.json()) as { setting_key: string; setting_value: unknown }[];
@@ -129,7 +124,33 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
     setChatTimeout(quiet ? String(quiet.setting_value) : "60");
     const cleanup = rows.find((r) => r.setting_key === "lead_auto_archive_days");
     setLeadCleanupDays(cleanup ? String(cleanup.setting_value) : "0");
-  }
+  }, [licenseId, token]);
+
+  const loadTransfer = useCallback(async () => {
+    if (!token || !licenseId || !session.isOwner) return;
+    const headers = proxyHeaders(token, licenseId);
+    const [membersRes, transfersRes] = await Promise.all([
+      fetch(`/api/phase2/licenses/${licenseId}/members`, { headers }),
+      fetch(`/api/phase2/licenses/${licenseId}/ownership-transfers`, { headers }),
+    ]);
+    if (membersRes.ok) {
+      const rows = (await membersRes.json()) as Member[];
+      setMembers(rows.filter((m) => m.chann_uid !== session.channUid));
+    }
+    if (transfersRes.ok) {
+      const rows = (await transfersRes.json()) as Transfer[];
+      setPending(rows.find((r) => r.status === "pending") ?? null);
+    }
+  }, [licenseId, session.channUid, session.isOwner, token]);
+
+  useEffect(() => {
+    if (!session.ready) return;
+    void load().catch((error: unknown) =>
+      say(error instanceof Error ? error.message : t.dashboard.loadFailed, "error"),
+    );
+    void loadSettings().catch(() => undefined);
+    void loadTransfer().catch(() => undefined);
+  }, [session.ready, load, loadSettings, loadTransfer, say, t]);
 
   async function saveChatPolicy() {
     const sla = Number(chatSla);
@@ -151,7 +172,10 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
           headers: proxyHeaders(token, licenseId),
           body: JSON.stringify({ setting_value: value }),
         });
-        if (!response.ok) throw new Error(String(response.status));
+        if (!response.ok) {
+          say(await failureText(response), "error");
+          return;
+        }
       }
       say(c.autoAcceptSaved, "ok");
     } catch {
@@ -162,6 +186,7 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
   }
 
   async function saveAutoAccept(next: boolean) {
+    const before = autoAccept;
     setAutoAccept(next);
     try {
       const response = await fetch(`/api/phase2/licenses/${licenseId}/settings/auto_accept_new_customers`, {
@@ -169,9 +194,14 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
         headers: proxyHeaders(token, licenseId),
         body: JSON.stringify({ setting_value: next }),
       });
-      if (!response.ok) throw new Error(String(response.status));
+      if (!response.ok) {
+        setAutoAccept(before);
+        say(await failureText(response), "error");
+        return;
+      }
       say(c.autoAcceptSaved, "ok");
     } catch {
+      setAutoAccept(before);
       say(t.common.error, "error");
     }
   }
@@ -202,12 +232,7 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
         }),
       });
       if (!response.ok) {
-        say(
-          response.status === 422
-            ? c.invalid
-            : `${t.common.error} (${response.status})`,
-          "error",
-        );
+        say(response.status === 422 ? c.invalid : await failureText(response), "error");
         return;
       }
       applyProfile((await response.json()) as Profile);
@@ -219,17 +244,50 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
     }
   }
 
+  const memberName = (uid: string | null | undefined) =>
+    members.find((m) => m.chann_uid === uid)?.display_name ?? uid ?? "";
+
+  async function requestTransfer() {
+    const target = members.find((m) => m.chann_uid === nominee);
+    if (!target) return;
+    if (!window.confirm(s.company.confirm.replace("{name}", target.display_name))) return;
+    setTransferring(true);
+    try {
+      const response = await fetch(`/api/phase2/licenses/${licenseId}/ownership-transfers`, {
+        method: "POST",
+        headers: proxyHeaders(token, licenseId),
+        body: JSON.stringify({ to_chann_uid: target.chann_uid }),
+      });
+      if (!response.ok) {
+        say(await failureText(response), "error");
+        return;
+      }
+      setPending((await response.json()) as Transfer);
+      setNominee("");
+      say(s.company.requested.replace("{name}", target.display_name), "ok");
+    } catch {
+      say(t.common.error, "error");
+    } finally {
+      setTransferring(false);
+    }
+  }
+
+  // The profile and the settings are behind setting.manage (review C7):
+  // the form used to save, get a 403, and keep looking editable.
+  const canEdit = !session.suspended && permissions.has("setting.manage");
+  const memberOptions: PickerOption[] = members.map((m) => ({
+    value: m.chann_uid, label: m.display_name, keywords: [m.role, m.phone].filter(Boolean).join(" "),
+  }));
+
   return (
-    <AppShell
+    <SalesShell
+      session={session}
       title={t.dashboard.companyTitle}
       liffId={liffId}
-      onReady={() => void initialize()}
       onSdkError={() => say(t.liff.sdkLoadFailed, "error")}
       status={status}
       statusTone={tone}
     >
-      <CompanyPicker memberships={memberships} licenseId={licenseId} onChange={setLicenseId} />
-
       {profile && (
         <div className="callout" data-tone={profile.is_document_ready ? "ok" : "warn"} role="status">
           <span className="dot" />
@@ -244,7 +302,12 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
         </div>
       )}
 
+      {profile && !canEdit && !session.suspended && (
+        <p className="card-meta" style={{ marginBottom: 12 }}>{s.company.readOnly}</p>
+      )}
+
       <form onSubmit={save}>
+        <fieldset disabled={!canEdit} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
         <label className="field">
           <span>{c.shopName}</span>
           <input value={profile?.company_name ?? ""} disabled />
@@ -322,12 +385,15 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
           </p>
         </fieldset>
 
-        <button type="submit" className="btn" data-variant="primary" disabled={!licenseId || saving}>
-          {saving ? t.dashboard.saving : t.common.save}
-        </button>
+        {canEdit && (
+          <button type="submit" className="btn" data-variant="primary" disabled={!licenseId || saving}>
+            {saving ? t.dashboard.saving : t.common.save}
+          </button>
+        )}
+        </fieldset>
       </form>
 
-      {autoAccept !== null && (
+      {autoAccept !== null && canEdit && (
         <section className="section" style={{ marginTop: 16 }}>
           <label className="field">
             <span>
@@ -344,7 +410,7 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
         </section>
       )}
 
-      {autoAccept !== null && (
+      {autoAccept !== null && canEdit && (
         <section className="section" style={{ marginTop: 16 }}>
           <div className="section-head">
             <h2>{c.chatPolicy}</h2>
@@ -406,6 +472,52 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
           </dl>
         </section>
       )}
-    </AppShell>
+
+      {/* E6: two-party owner transfer. The Data tier has had the routes
+          since Phase 2 and nothing on any screen or in chat called them,
+          so a shop could never change hands. Owner only — it is not a
+          permission a role can be granted. */}
+      {session.isOwner && !session.suspended && (
+        <section className="section" style={{ marginTop: 16 }}>
+          <div className="section-head">
+            <h2>{s.company.transferTitle}</h2>
+          </div>
+          <p className="hint" style={{ marginBottom: 10 }}>{s.company.transferIntro}</p>
+          {pending ? (
+            <div className="callout" data-tone="warn" role="status">
+              <span className="dot" />
+              <span>{s.company.pending.replace("{name}", memberName(pending.to_chann_uid))}</span>
+            </div>
+          ) : members.length === 0 ? (
+            <p className="card-meta">{s.company.noOtherMembers}</p>
+          ) : (
+            <dl className="fields">
+              <FieldRow label={s.company.pickMember}>
+                {(id) => (
+                  <SearchablePicker
+                    id={id}
+                    options={memberOptions}
+                    value={nominee}
+                    placeholder={s.company.pickMember}
+                    onChange={setNominee}
+                  />
+                )}
+              </FieldRow>
+              <div className="actions">
+                <button
+                  type="button"
+                  className="btn"
+                  data-variant="danger"
+                  disabled={transferring || !nominee}
+                  onClick={() => void requestTransfer()}
+                >
+                  {transferring ? t.dashboard.saving : s.company.request}
+                </button>
+              </div>
+            </dl>
+          )}
+        </section>
+      )}
+    </SalesShell>
   );
 }

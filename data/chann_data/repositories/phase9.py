@@ -154,6 +154,18 @@ class CustomerRepository:
         # same instant both passed the scan and both succeeded (review, 6
         # Sep 2026). The lock also covers the number allocation below.
         serialise(self._s, f"{scope.license_id}:customer")
+        if customer_chann_uid and phone:
+            # A LINE-linked person whose number the shop already keyed in
+            # by hand IS that customer (review E8, 6 Sep 2026): attach the
+            # identity to the row that exists instead of refusing with a
+            # duplicate. Until this, the app counted the 409 as success,
+            # so the ticket carried a chann_uid the customer row never
+            # learned of and PDPA export could not see the person.
+            matched = self._attach_identity_by_phone(
+                scope, phone=phone, customer_chann_uid=customer_chann_uid,
+            )
+            if matched is not None:
+                return matched
         self._refuse_duplicates(scope, phone=phone, email=email)
         if customer_chann_uid:
             existing = self._s.execute(
@@ -192,6 +204,58 @@ class CustomerRepository:
         self._s.add(row)
         self._s.flush()
         return row
+
+    def _by_phone(self, scope: TenantScope, phone: str | None) -> Customer | None:
+        normalised = _normalise_phone(phone)
+        if not normalised:
+            return None
+        rows = self._s.execute(
+            select(Customer).where(
+                Customer.license_id == scope.license_id,
+                Customer.archived_at.is_(None),
+            ).order_by(Customer.created_at)
+        ).scalars().all()
+        return next((r for r in rows if _normalise_phone(r.phone) == normalised), None)
+
+    def _attach_identity_by_phone(
+        self, scope: TenantScope, *, phone: str | None, customer_chann_uid: str,
+    ) -> Customer | None:
+        """The row with this phone, now carrying this identity — or None
+        when no row has the number. A row that already belongs to a
+        DIFFERENT identity is left alone and reported as a conflict: two
+        LINE accounts cannot both be C-2026-0001."""
+        match = self._by_phone(scope, phone)
+        if match is None:
+            return None
+        if match.customer_chann_uid and match.customer_chann_uid != customer_chann_uid:
+            raise Phase9Duplicate(
+                f"{match.customer_id} already has this phone number",
+                existing_id=str(match.id), existing_code=match.customer_id, field="phone",
+            )
+        if not match.customer_chann_uid:
+            # The identity may already have a row of its own here (an
+            # earlier auto-create with a different number); the unique
+            # constraint on (license_id, customer_chann_uid) would then
+            # refuse a second one. That row wins — it is already theirs.
+            own = self.find_by_chann_uid(scope, customer_chann_uid)
+            if own is not None and own.id != match.id:
+                return own
+            match.customer_chann_uid = customer_chann_uid
+            self._s.flush()
+        return match
+
+    def link_identity_by_phone(
+        self, scope: TenantScope, *, phone: str, customer_chann_uid: str,
+    ) -> Customer | None:
+        """Public form of the attach step, for a link made when the shop
+        does NOT auto-create customers: the person's existing record still
+        becomes theirs, nothing new is written."""
+        if not (phone or "").strip() or not customer_chann_uid:
+            raise Phase9Conflict("a phone number and a chann_uid are required")
+        serialise(self._s, f"{scope.license_id}:customer")
+        return self._attach_identity_by_phone(
+            scope, phone=phone, customer_chann_uid=customer_chann_uid,
+        )
 
     def _refuse_duplicates(
         self, scope: TenantScope, *, phone: str | None, email: str | None,

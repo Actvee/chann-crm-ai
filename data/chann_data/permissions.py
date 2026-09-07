@@ -23,9 +23,12 @@ PERMISSION_KEYS = frozenset(
         "followup.read",
         "followup.create",
         "followup.update",
+        # review C8 (6 Sep 2026): reading the catalogue is not managing
+        # it — a salesperson picking a line for a deal needs the list, not
+        # the right to change prices.
+        "product.read",
         "product.manage",
         "team.manage",
-        "assignment_rule.manage",
         "ticket.read",
         "ticket.create",
         "ticket.update",
@@ -44,10 +47,13 @@ PERMISSION_KEYS = frozenset(
         # policy in chat or on the config page). Owner/Admin by the
         # templates below; CS approves but does not redesign the flow.
         "approval.manage",
+        # chat_session.claim / chat_session.transfer, assignment_rule.manage
+        # and billing.* were catalogue entries nothing enforced (review C9,
+        # 6 Sep 2026): a role built from them granted nothing, which read as
+        # a broken roles page. Re-add a key only together with the route
+        # that checks it.
         "chat_session.view",
-        "chat_session.claim",
         "chat_session.reply",
-        "chat_session.transfer",
         "reassign_records",
         "view_reports",
         "role.manage",
@@ -61,8 +67,6 @@ PERMISSION_KEYS = frozenset(
         "platform.admin.break_glass",
         "pdpa.request.view",
         "pdpa.request.process",
-        "billing.view",
-        "billing.manage",
     }
 )
 
@@ -84,12 +88,11 @@ DEFAULT_ROLE_TEMPLATES: dict[str, frozenset[str] | None] = {
             *(key for key in PERMISSION_KEYS if key.startswith("followup.")),
             *(key for key in PERMISSION_KEYS if key.startswith("quote.")),
             *(key for key in PERMISSION_KEYS if key.startswith("warranty.")),
+            "product.read",
             "chat_session.view",
-            "chat_session.claim",
             "chat_session.reply",
             "view_reports",
             "reassign_records",
-            "billing.view",
         }
     ),
     "cs": frozenset(
@@ -100,6 +103,7 @@ DEFAULT_ROLE_TEMPLATES: dict[str, frozenset[str] | None] = {
             *(key for key in PERMISSION_KEYS if key.startswith("chat_session.")),
             "customer.read",
             "customer.update",
+            "product.read",
             "audit_log.view",
             "reassign_records",
         }
@@ -116,6 +120,9 @@ DEFAULT_ROLE_TEMPLATES: dict[str, frozenset[str] | None] = {
         {
             *(key for key in PERMISSION_KEYS if key.startswith("ticket.")),
             *(key for key in PERMISSION_KEYS if key.startswith("service_report.")),
+            # The warranty picker on a job and the part a report names come
+            # from the catalogue; reading it is part of the job.
+            "product.read",
         }
     ),
 }
@@ -147,9 +154,9 @@ PERMISSION_DESCRIPTIONS: dict[str, dict[str, str]] = {
     "followup.read": {"th": "ดูรายการติดตาม", "en": "View follow-ups"},
     "followup.create": {"th": "ตั้งรายการติดตาม", "en": "Create follow-ups"},
     "followup.update": {"th": "แก้ไขรายการติดตาม", "en": "Edit follow-ups"},
+    "product.read": {"th": "ดูรายการสินค้า", "en": "View products"},
     "product.manage": {"th": "จัดการสินค้า", "en": "Manage products"},
     "team.manage": {"th": "จัดการทีม", "en": "Manage teams"},
-    "assignment_rule.manage": {"th": "จัดการกฎการมอบหมายงาน", "en": "Manage assignment rules"},
     "ticket.read": {"th": "ดูใบงาน", "en": "View tickets"},
     "ticket.create": {"th": "เปิดใบงาน", "en": "Create tickets"},
     "ticket.update": {"th": "แก้ไขใบงาน", "en": "Edit tickets"},
@@ -166,9 +173,7 @@ PERMISSION_DESCRIPTIONS: dict[str, dict[str, str]] = {
     "approval.reject": {"th": "ไม่อนุมัติ", "en": "Reject"},
     "approval.manage": {"th": "ตั้งค่าขั้นตอนอนุมัติ", "en": "Manage approval flows"},
     "chat_session.view": {"th": "ดูห้องแชท", "en": "View chat sessions"},
-    "chat_session.claim": {"th": "รับห้องแชท", "en": "Claim chat sessions"},
     "chat_session.reply": {"th": "ตอบแชทลูกค้า", "en": "Reply to chats"},
-    "chat_session.transfer": {"th": "โอนห้องแชทให้คนอื่น", "en": "Transfer chat sessions"},
     "reassign_records": {"th": "โอนงานให้ผู้รับผิดชอบคนอื่น", "en": "Reassign records"},
     "view_reports": {"th": "ดูรายงาน", "en": "View reports"},
     "role.manage": {"th": "จัดการบทบาทและสิทธิ์", "en": "Manage roles and permissions"},
@@ -182,8 +187,6 @@ PERMISSION_DESCRIPTIONS: dict[str, dict[str, str]] = {
     "platform.admin.break_glass": {"th": "ใช้สิทธิ์ฉุกเฉินของแพลตฟอร์ม", "en": "Platform break-glass"},
     "pdpa.request.view": {"th": "ดูคำขอ PDPA", "en": "View PDPA requests"},
     "pdpa.request.process": {"th": "ดำเนินการคำขอ PDPA", "en": "Process PDPA requests"},
-    "billing.view": {"th": "ดูข้อมูลการเรียกเก็บเงิน", "en": "View billing"},
-    "billing.manage": {"th": "จัดการการเรียกเก็บเงิน", "en": "Manage billing"},
 }
 
 

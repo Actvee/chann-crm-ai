@@ -177,8 +177,15 @@ def parse_thai_date(text: str, today: date) -> date | None:
 
 def _explicit_date(cleaned: str, today: date) -> date | None:
     """A date written out: "15 มีนาคม", "15 มี.ค. 2569", "15/03/2569"."""
-    # "15 มีนาคม" / "15 มี.ค. 2569"
-    named = re.search(r"(\d{1,2})\s*([ก-๙.]+)\s*(\d{2,4})?", cleaned)
+    # "15 มีนาคม" / "15 มี.ค. 2569". The optional year must not be the
+    # hour of a time that follows: "15 ก.ย. 14:00" was read as the year
+    # 2014 and "15 ก.ย. 10 โมง" as 2010, both "already past" (review,
+    # 6 Sep 2026). A year is two or four digits NOT followed by a clock
+    # separator or an hour word.
+    named = re.search(
+        r"(\d{1,2})\s*([ก-๙.]+)\s*(\d{2,4}(?![:.]\d|\d)(?!\s*(?:โมง|ทุ่ม|น\.|น(?![ก-๙])|นาฬิกา)))?",
+        cleaned,
+    )
     if named:
         month = _THAI_MONTHS.get(named.group(2).strip().rstrip("."))
         if month is None:
@@ -197,7 +204,7 @@ def _explicit_date(cleaned: str, today: date) -> date | None:
             return candidate
 
     # 15/03/2569 or 15-03-26
-    numeric = re.search(r"(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})", cleaned)
+    numeric = re.search(r"(?<![\d/])(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})(?!\d)", cleaned)
     if numeric:
         try:
             return date(
@@ -206,6 +213,22 @@ def _explicit_date(cleaned: str, today: date) -> date | None:
                 int(numeric.group(1)),
             )
         except ValueError:
+            return None
+
+    # "15/9" — day and month, no year: the next such date (review, 6 Sep
+    # 2026: it was "ไม่เข้าใจวันที่"). Slash or dash only, so "10.30" stays
+    # a clock time.
+    short = re.search(r"(?<![\d/.:])(\d{1,2})[/-](\d{1,2})(?![/\-\d.:])", cleaned)
+    if short:
+        day, month = int(short.group(1)), int(short.group(2))
+        if 1 <= day <= 31 and 1 <= month <= 12:
+            for year in (today.year, today.year + 1):
+                try:
+                    candidate = date(year, month, day)
+                except ValueError:
+                    return None
+                if candidate >= today:
+                    return candidate
             return None
 
     return None
@@ -225,27 +248,52 @@ def parse_thai_time(text: str) -> time | None:
             return time(hour, minute)
         return None
 
+    # "N โมงครึ่ง" / "บ่าย 2 ครึ่ง" / "2 ทุ่มครึ่ง": the half hour.
+    def _half(pattern: str, hour: int) -> time:
+        return time(hour, 30 if re.search(pattern + r"\s*(?:โมง)?\s*ครึ่ง", cleaned) else 0)
+
     # "บ่าย 2" / "บ่ายสองโมง" style: the vague word plus a number. Handled
     # before the bare vague words so "บ่าย 3" is 15:00, not 13:00.
     afternoon = re.search(r"บ่าย\s*(\d{1,2})", cleaned)
     if afternoon:
         hour = int(afternoon.group(1))
         if 1 <= hour <= 6:
-            return time(hour + 12, 0)
+            return _half(re.escape(afternoon.group(0)), hour + 12)
+        if 13 <= hour <= 18:
+            return _half(re.escape(afternoon.group(0)), hour)
+    if re.search(r"บ่ายโมง", cleaned):
+        return _half(r"บ่ายโมง", 13)
 
     morning = re.search(r"(\d{1,2})\s*โมงเช้า", cleaned)
     if morning:
         hour = int(morning.group(1))
         if 6 <= hour <= 11:
-            return time(hour, 0)
+            return _half(re.escape(morning.group(0)), hour)
 
-    evening = re.search(r"(?:ทุ่ม)", cleaned)
-    if evening:
-        count = re.search(r"(\d{1,2})\s*ทุ่ม", cleaned)
-        if count:
-            hour = int(count.group(1))
-            if 1 <= hour <= 5:
-                return time(hour + 18, 0)
+    evening_hour = re.search(r"(\d{1,2})\s*โมงเย็น", cleaned)
+    if evening_hour:
+        hour = int(evening_hour.group(1))
+        if 1 <= hour <= 6:
+            return _half(re.escape(evening_hour.group(0)), hour + 12)
+        if 13 <= hour <= 18:
+            return _half(re.escape(evening_hour.group(0)), hour)
+
+    count = re.search(r"(\d{1,2})\s*ทุ่ม", cleaned)
+    if count:
+        hour = int(count.group(1))
+        if 1 <= hour <= 5:
+            return _half(re.escape(count.group(0)), hour + 18)
+
+    # "10 โมง" with no qualifier (review, 6 Sep 2026: it fell to the 09:00
+    # default). Spoken Thai: 6–11 โมง is the morning, 1–5 โมง the afternoon
+    # (บ่ายโมง … ห้าโมง), and a 24-hour figure is itself.
+    plain = re.search(r"(\d{1,2})\s*โมง", cleaned)
+    if plain:
+        hour = int(plain.group(1))
+        if 1 <= hour <= 5:
+            return _half(re.escape(plain.group(0)), hour + 12)
+        if 6 <= hour <= 23:
+            return _half(re.escape(plain.group(0)), hour)
 
     # "14 น." — a bare hour with the Thai hour marker.
     bare = re.search(r"(\d{1,2})\s*น\.?(?!\d)", cleaned)
@@ -254,6 +302,8 @@ def parse_thai_time(text: str) -> time | None:
         if 0 <= hour <= 23:
             return time(hour, 0)
 
+    if "เที่ยงครึ่ง" in cleaned:
+        return time(12, 30)
     for word, value in _VAGUE_TIMES.items():
         if word in cleaned:
             return value

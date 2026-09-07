@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import timedelta
 
 from google.api_core import exceptions as gcs_exceptions
 from google.cloud import storage
@@ -78,54 +77,6 @@ class GcsDocumentStore:
         log.info("stored document at %s (%d bytes)", path, len(content))
         return StoredDocument(path=path, sha256=sha256_hex(content), size=len(content))
 
-    def _blocking_signed_url(self, *, object_name: str, expires_seconds: int) -> str:
-        bucket = _get_client().bucket(settings.gcs_bucket_name)
-        return bucket.blob(object_name).generate_signed_url(
-            version="v4",
-            expiration=timedelta(seconds=expires_seconds),
-            method="GET",
-            # Forces a download with the original filename rather than
-            # rendering inline, so a customer who opens the link on a phone
-            # gets a file they keep instead of a tab they lose.
-            response_disposition=(
-                f'attachment; filename="{object_name.rsplit("/", 1)[-1]}"'
-            ),
-        )
-
-    async def signed_url(self, *, path: str, expires_seconds: int) -> str:
-        """A time-limited public link to an object stored under gs://.
-
-        Signed URLs, not public objects: the bucket has
-        public_access_prevention enforced, and a quote is commercial
-        information that should stop being reachable once it is stale.
-        Requires the signing service account to have token-creator rights
-        on itself; on Cloud Run with the default compute SA and
-        roles/editor this is satisfied, but the failure is surfaced rather
-        than swallowed so a misconfiguration is visible immediately.
-        """
-        if not settings.gcs_bucket_name:
-            raise DocumentStoreNotConfigured(
-                "document storage is not configured — GCS_BUCKET_NAME is unset"
-            )
-        prefix = f"gs://{settings.gcs_bucket_name}/"
-        if not path.startswith(prefix):
-            # Refuses cross-bucket paths outright: a stored path that does
-            # not belong to this deployment's bucket is a data problem, and
-            # signing it anyway would hand out a link to someone else's
-            # object.
-            raise DocumentStoreError(
-                f"stored path {path!r} does not belong to bucket "
-                f"{settings.gcs_bucket_name}"
-            )
-        object_name = path[len(prefix):]
-        try:
-            return await asyncio.to_thread(
-                self._blocking_signed_url,
-                object_name=object_name, expires_seconds=expires_seconds,
-            )
-        except Exception as exc:  # noqa: BLE001
-            raise DocumentStoreError(f"failed to sign a URL for {path}: {exc}") from exc
-
     def _blocking_get(self, *, object_name: str) -> bytes:
         bucket = _get_client().bucket(settings.gcs_bucket_name)
         return bucket.blob(object_name).download_as_bytes()
@@ -164,7 +115,7 @@ class GcsDocumentStore:
 
     async def delete(self, *, path: str) -> None:
         """Remove an object for good (Phase 16.5 erasure). A path outside
-        this deployment's bucket is refused like signed_url does; an
+        this deployment's bucket is refused like get does; an
         object already gone is not an error — the goal is absence."""
         if not settings.gcs_bucket_name:
             raise DocumentStoreNotConfigured(

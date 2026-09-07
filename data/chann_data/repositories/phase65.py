@@ -418,6 +418,36 @@ class RegistrationRepository:
         self._s.flush()
         return row
 
+    def trials_expiring_on(self, day) -> list[dict]:
+        """Trials whose deadline falls on this Bangkok calendar day, with
+        who to tell (the owner; the creator when no owner row exists yet).
+        Master Spec 17.5.4: a notice 3 days and 1 day before the trial
+        ends (review E3 — nothing ever sent one)."""
+        from .localtime import bangkok_date
+
+        rows = self._s.execute(
+            select(License).where(
+                License.status == "trial", License.trial_expires_at.is_not(None),
+            ).order_by(License.created_at)
+        ).scalars().all()
+        out = []
+        for row in rows:
+            if bangkok_date(row.trial_expires_at) != day:
+                continue
+            owner = self._s.execute(
+                select(LicenseMember.chann_uid).where(
+                    LicenseMember.license_id == row.id,
+                    LicenseMember.role == OWNER_ROLE_NAME,
+                    LicenseMember.status == "active",
+                ).order_by(LicenseMember.created_at)
+            ).scalars().first()
+            out.append({
+                "id": row.id, "license_code": row.license_code, "company_name": row.company_name,
+                "trial_expires_at": row.trial_expires_at,
+                "owner_chann_uid": owner or row.created_by_chann_uid,
+            })
+        return out
+
     def expire_due_trials(self, *, now: datetime | None = None) -> list[License]:
         """Suspend trials past their date. Suspended means read-only, not deleted.
 

@@ -241,7 +241,7 @@ variable "smartbrowz_client_secret" {
 
 variable "smartbrowz_refresh_token" {
   type        = string
-  description = "One-time grant token already exchanged for a refresh_token via the Self Client's Generate Code flow. The long-lived secret. Used directly by the zcatalyst-sdk's own RefreshTokenCredential (which handles its own per-instance access-token caching/refresh) — not the Data-tier cache SmartBrowzTokenManager uses, a separate, lower-level utility kept for now but not wired into the actual render adapter."
+  description = "One-time grant token already exchanged for a refresh_token via the Self Client's Generate Code flow. The long-lived secret. Used directly by the zcatalyst-sdk's own RefreshTokenCredential, which handles its own per-instance access-token caching/refresh."
   sensitive   = true
   default     = ""
 }

@@ -1,15 +1,18 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
-import { AppShell } from "../_components";
 import { CsvImport } from "../_csv-import";
 import { FieldRow } from "../../_field-row";
 import { shortDate } from "../../_list-controls";
 import { PickerOption, SearchablePicker } from "../../_searchable-picker";
-import { fetchPermissions, initLiffSession, proxyHeaders } from "../_lib";
+import { useFailureText } from "../_format";
+import { proxyHeaders } from "../_lib";
+import { useSalesSession } from "../_session";
+import { SalesShell } from "../_shell";
+import { useSalesText } from "../_strings";
 
 type Warranty = {
   id: string;
@@ -28,8 +31,12 @@ type Customer = {
   first_name?: string | null;
   last_name?: string | null;
   phone?: string | null;
-  customer_code?: string | null;
+  customer_id?: string | null;
 };
+
+// The Data tier's cap for the book; explicit so the page knows what it
+// asked for (review C10) and can say when the shop has more.
+const PAGE = 500;
 
 /**
  * The shop's book of sold units (Phase 7.5, the staff half).
@@ -42,18 +49,22 @@ type Customer = {
  * all, so the parity rule (chat ⇄ UI) was broken on the shop side too.
  */
 export default function SalesWarranties({ liffId }: { liffId: string }) {
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
+  const s = useSalesText();
+  const failureText = useFailureText();
   const copy = t.dashboard.warranties;
 
-  const [token, setToken] = useState("");
-  const [licenseId, setLicenseId] = useState("");
   const [rows, setRows] = useState<Warranty[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [customers, setCustomers] = useState<PickerOption[]>([]);
-  const [canCreate, setCanCreate] = useState(false);
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
   const [busy, setBusy] = useState(false);
+  // A serial looked up on the server (review C10): the list shows the
+  // latest units, and a unit sold two years ago is found by its sticker,
+  // not by scrolling.
+  const [serialQuery, setSerialQuery] = useState("");
+  const [searchedSerial, setSearchedSerial] = useState("");
 
   const [serial, setSerial] = useState("");
   const [productId, setProductId] = useState("");
@@ -64,12 +75,17 @@ export default function SalesWarranties({ liffId }: { liffId: string }) {
     setStatus(message);
     setTone(kind);
   }, []);
+  const session = useSalesSession(liffId, say);
+  const { token, licenseId, permissions } = session;
 
   const load = useCallback(
-    async (currentToken = token, license = licenseId) => {
-      if (!currentToken || !license) return;
-      const headers = proxyHeaders(currentToken, license);
-      const response = await fetch(`/api/phase2/licenses/${license}/warranties`, { headers });
+    async (serialNumber = "") => {
+      if (!token || !licenseId) return;
+      const headers = proxyHeaders(token, licenseId);
+      const url = serialNumber
+        ? `/api/phase2/licenses/${licenseId}/warranties?serial_number=${encodeURIComponent(serialNumber)}`
+        : `/api/phase2/licenses/${licenseId}/warranties?limit=${PAGE}`;
+      const response = await fetch(url, { headers });
       if (!response.ok) {
         throw new Error(
           response.status === 403
@@ -77,47 +93,51 @@ export default function SalesWarranties({ liffId }: { liffId: string }) {
             : `${t.dashboard.loadFailed} (${response.status})`,
         );
       }
-      setRows((await response.json()) as Warranty[]);
+      const found = (await response.json()) as Warranty[];
+      setRows(found);
+      setSearchedSerial(serialNumber);
+      if (serialNumber && found.length === 0) {
+        say(s.warranties.serialNotFound.replace("{serial}", serialNumber), "error");
+      }
     },
-    [token, licenseId, t],
+    [token, licenseId, t, s, say],
   );
 
-  const initialize = useCallback(async () => {
-    try {
-      const session = await initLiffSession(liffId);
-      if (!session.token) return;
-      const license = session.memberships[0]?.license_id ?? "";
-      if (!license) {
-        say(t.liff.noCompany, "error");
-        return;
-      }
-      setToken(session.token);
-      setLicenseId(license);
-      const permissions = await fetchPermissions(session.token, license);
-      setCanCreate(permissions.has("warranty.create"));
-      await load(session.token, license);
-      const headers = proxyHeaders(session.token, license);
-      // The pickers are secondary: a failure there leaves free entry.
-      const [productsRes, customersRes] = await Promise.all([
-        fetch(`/api/phase2/licenses/${license}/products`, { headers }),
-        fetch(`/api/phase2/licenses/${license}/customers`, { headers }),
-      ]);
-      if (productsRes.ok) setProducts((await productsRes.json()) as Product[]);
-      if (customersRes.ok) {
-        const list = (await customersRes.json()) as Customer[];
-        setCustomers(
-          list.map((c) => ({
-            value: c.id,
-            label: [c.first_name, c.last_name].filter(Boolean).join(" ") || c.id,
-            keywords: [c.phone, c.customer_code].filter(Boolean).join(" "),
-          })),
-        );
-      }
-      say("");
-    } catch (error) {
-      say(error instanceof Error ? error.message : t.dashboard.openFailed, "error");
+  const loadPickers = useCallback(async () => {
+    if (!token || !licenseId) return;
+    const headers = proxyHeaders(token, licenseId);
+    // The pickers are secondary: a failure there leaves free entry.
+    const [productsRes, customersRes] = await Promise.all([
+      fetch(`/api/phase2/licenses/${licenseId}/products?limit=1000`, { headers }),
+      fetch(`/api/phase2/licenses/${licenseId}/customers`, { headers }),
+    ]);
+    if (productsRes.ok) setProducts((await productsRes.json()) as Product[]);
+    if (customersRes.ok) {
+      const list = (await customersRes.json()) as Customer[];
+      setCustomers(
+        list.map((c) => ({
+          value: c.id,
+          label: [c.first_name, c.last_name].filter(Boolean).join(" ") || c.id,
+          // customer_id, the code that exists (review C13): the picker
+          // searched a `customer_code` no API has ever sent.
+          keywords: [c.phone, c.customer_id].filter(Boolean).join(" "),
+        })),
+      );
     }
-  }, [liffId, load, say, t]);
+  }, [licenseId, token]);
+
+  useEffect(() => {
+    if (!session.ready) return;
+    void (async () => {
+      try {
+        await load();
+        if (permissions.has("warranty.create")) await loadPickers();
+        say("");
+      } catch (error) {
+        say(error instanceof Error ? error.message : t.dashboard.loadFailed, "error");
+      }
+    })();
+  }, [session.ready, load, loadPickers, permissions, say, t]);
 
   async function register() {
     if (!serial.trim()) return;
@@ -139,7 +159,10 @@ export default function SalesWarranties({ liffId }: { liffId: string }) {
         say(copy.duplicate, "error");
         return;
       }
-      if (!response.ok) throw new Error(String(response.status));
+      if (!response.ok) {
+        say(await failureText(response), "error");
+        return;
+      }
       setSerial("");
       setProductId("");
       setContactId("");
@@ -153,16 +176,56 @@ export default function SalesWarranties({ liffId }: { liffId: string }) {
     }
   }
 
+  const canCreate = !session.suspended && permissions.has("warranty.create");
+
   return (
-    <AppShell
+    <SalesShell
+      session={session}
       title={copy.title}
       liffId={liffId}
-      onReady={() => void initialize()}
       onSdkError={() => say(t.liff.sdkLoadFailed, "error")}
       status={status}
       statusTone={tone}
     >
       <p className="page-intro">{copy.intro}</p>
+
+      <label className="field">
+        <span>{s.warranties.serialSearch}</span>
+        <input
+          type="search"
+          value={serialQuery}
+          autoCapitalize="characters"
+          placeholder={s.warranties.serialSearchHint}
+          onChange={(event) => setSerialQuery(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") void load(serialQuery.trim()).catch(() => undefined);
+          }}
+        />
+      </label>
+      <div className="actions" style={{ marginBottom: 14 }}>
+        <button
+          type="button"
+          className="btn"
+          data-variant="primary"
+          disabled={!serialQuery.trim()}
+          onClick={() => void load(serialQuery.trim()).catch(() => undefined)}
+        >
+          {s.warranties.search}
+        </button>
+        {searchedSerial && (
+          <button
+            type="button"
+            className="btn"
+            data-variant="quiet"
+            onClick={() => {
+              setSerialQuery("");
+              void load().then(() => say("")).catch(() => undefined);
+            }}
+          >
+            {s.warranties.clearSearch}
+          </button>
+        )}
+      </div>
 
       {canCreate && (
         <CsvImport kind="warranties" token={token} licenseId={licenseId} onDone={() => load()} />
@@ -234,6 +297,9 @@ export default function SalesWarranties({ liffId }: { liffId: string }) {
             {copy.title} ({rows.length})
           </h2>
         </div>
+        {!searchedSerial && rows.length >= PAGE && (
+          <p className="count">{s.errors.showingLatest.replace("{count}", String(rows.length))}</p>
+        )}
         {rows.length === 0 ? (
           <div className="empty">
             <p>{copy.empty}</p>
@@ -255,13 +321,13 @@ export default function SalesWarranties({ liffId }: { liffId: string }) {
                 </div>
                 <div className="card-meta">
                   {row.warranty_number}
-                  {row.warranty_end ? ` · ${copy.expires} ${shortDate(row.warranty_end)}` : ""}
+                  {row.warranty_end ? ` · ${copy.expires} ${shortDate(row.warranty_end, locale)}` : ""}
                 </div>
               </li>
             ))}
           </ul>
         )}
       </section>
-    </AppShell>
+    </SalesShell>
   );
 }

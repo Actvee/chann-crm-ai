@@ -48,6 +48,20 @@ def _approvals(rows: list[dict]) -> str:
     return "".join(cells)
 
 
+def _technician_box(technician: dict) -> str:
+    """The technician's cell: their signature when one is on file, the
+    same labelled blank line as an approver without one otherwise."""
+    url = str(technician.get("signature_url") or "")
+    signature = (
+        f'<img class="signature" src="{escape(url, quote=True)}" alt="">'
+        if url else '<div class="signature blank"></div>'
+    )
+    return (
+        f'<div class="sign">{signature}<div class="line">ช่างผู้ปฏิบัติงาน<br>'
+        f'<span class="muted">{escape(technician.get("name") or "")}</span></div></div>'
+    )
+
+
 def _photos(urls: list[str]) -> str:
     if not urls:
         return ""
@@ -151,7 +165,7 @@ def render_service_report_html(snapshot: dict) -> str:
 {_photos(snapshot.get("photos") or [])}
 
 <footer>
-  <div class="sign"><div class="signature blank"></div><div class="line">ช่างผู้ปฏิบัติงาน<br><span class="muted">{escape(technician["name"])}</span></div></div>
+  {_technician_box(technician)}
   {_approvals(snapshot["approvals"])}
 </footer>
 </body>

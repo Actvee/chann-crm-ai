@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { CsvImport } from "../_csv-import";
-import { AppShell, Badge, CompanyPicker, Count, Empty } from "../_components";
+import { Badge, Count, Empty } from "../_components";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { InlineCreateForm } from "../../_inline-create";
@@ -12,7 +12,11 @@ import {
   ListControls, byNewest, byOldest, useListControls,
 } from "../../_list-controls";
 
-import { Membership, fetchPermissions, initLiffSession, proxyHeaders } from "../_lib";
+import { useFailureText } from "../_format";
+import { proxyHeaders } from "../_lib";
+import { useSalesSession } from "../_session";
+import { SalesShell } from "../_shell";
+import { useSalesText } from "../_strings";
 
 type Customer = {
   id: string;
@@ -31,18 +35,16 @@ function fullName(customer: Customer): string {
 
 export default function CustomerList({ liffId }: { liffId: string }) {
   const { t } = useLanguage();
+  const s = useSalesText();
+  const failureText = useFailureText();
   // Customer stages are only two, and both already have names in the
   // dictionary under their own sections.
   const stageLabel = (stage: string) =>
     stage === "contact" ? t.customer.title : t.customer.lead;
-  const [token, setToken] = useState("");
-  const [memberships, setMemberships] = useState<Membership[]>([]);
-  const [licenseId, setLicenseId] = useState("");
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
   const [busy, setBusy] = useState(false);
-  const [permissions, setPermissions] = useState<Set<string>>(new Set());
   const [busyId, setBusyId] = useState("");
   const [query, setQuery] = useState("");
 
@@ -50,6 +52,8 @@ export default function CustomerList({ liffId }: { liffId: string }) {
     setStatus(message);
     setTone(kind);
   }, []);
+  const session = useSalesSession(liffId, say);
+  const { token, licenseId, permissions } = session;
 
   const load = useCallback(async () => {
     if (!token || !licenseId) return;
@@ -65,36 +69,19 @@ export default function CustomerList({ liffId }: { liffId: string }) {
     }
     setCustomers((await response.json()) as Customer[]);
     say("");
-  }, [licenseId, say, token]);
+  }, [licenseId, say, t, token]);
 
   useEffect(() => {
-    if (!token || !licenseId) return;
+    if (!session.ready) return;
     void load().catch((error: unknown) =>
       say(error instanceof Error ? error.message : t.dashboard.loadFailed, "error"),
     );
-  }, [licenseId, load, say, token]);
-
-  const initialize = useCallback(async () => {
-    try {
-      const session = await initLiffSession(liffId);
-      if (!session.token) return;
-      setToken(session.token);
-      setMemberships(session.memberships);
-      setLicenseId(session.memberships[0]?.license_id ?? "");
-      const license = session.memberships[0]?.license_id ?? "";
-      if (license) {
-        setPermissions(await fetchPermissions(session.token, license));
-      }
-      if (!session.memberships.length) say(t.liff.noCompany, "error");
-    } catch (error) {
-      say(error instanceof Error ? error.message : t.dashboard.openFailed, "error");
-    }
-  }, [liffId, say]);
+  }, [session.ready, load, say, t]);
 
   async function createCustomer(values: Record<string, string>) {
     if (values.phone && !/^\+?[\d\s\-().]+$/.test(values.phone)) {
       say(t.dashboard.customers.phoneLetters, "error");
-      return;
+      throw new Error("phone");
     }
     setBusy(true);
     try {
@@ -107,19 +94,15 @@ export default function CustomerList({ liffId }: { liffId: string }) {
         },
       );
       if (!response.ok) {
-        const detail = await response.json().catch(() => ({}));
-        const body = detail.detail;
-        // A duplicate phone names the record that already holds it, so
-        // the answer is "here it is" rather than "that failed".
+        // The API's own reason, in the reader's language — a duplicate
+        // names the record that already holds the number, a 422 names
+        // the field. Thrown so the form keeps what was typed (C3).
+        const why = await failureText(response);
         say(
-          body && typeof body === "object" && body.error === "duplicate"
-            ? t.dashboard.customers.duplicate.replace(
-                "{code}", String(body.existing_code ?? ""),
-              )
-            : `${t.common.error} (${response.status})`,
+          response.status === 422 ? `${why} — ${s.customers.lastNameAndPhone}` : why,
           "error",
         );
-        return;
+        throw new Error(why);
       }
       await load();
       say(t.dashboard.saved, "ok");
@@ -139,7 +122,7 @@ export default function CustomerList({ liffId }: { liffId: string }) {
         { method: "POST", headers: proxyHeaders(token, licenseId) },
       );
       if (!response.ok) {
-        say(response.status === 403 ? t.dashboard.customers.archiveDenied : t.common.error, "error");
+        say(response.status === 403 ? t.dashboard.customers.archiveDenied : await failureText(response), "error");
         return;
       }
       setCustomers((rows) => rows.filter((row) => row.id !== customer.id));
@@ -161,9 +144,7 @@ export default function CustomerList({ liffId }: { liffId: string }) {
       );
       if (!response.ok) {
         say(
-          response.status === 403
-            ? t.dashboard.customers.promoteDenied
-            : `${t.common.error} (${response.status})`,
+          response.status === 403 ? t.dashboard.customers.promoteDenied : await failureText(response),
           "error",
         );
         return;
@@ -200,18 +181,19 @@ export default function CustomerList({ liffId }: { liffId: string }) {
   ];
   const controls = useListControls(searched, sorts, "newest");
   const visible = controls.visible;
+  // Every control is gated on the key its route actually checks (C7);
+  // a suspended shop offers none of them (C4).
+  const can = (key: string) => !session.suspended && permissions.has(key);
 
   return (
-    <AppShell
+    <SalesShell
+      session={session}
       title={t.customer.title}
       liffId={liffId}
-      onReady={() => void initialize()}
       onSdkError={() => say(t.liff.sdkLoadFailed, "error")}
       status={status}
       statusTone={tone}
     >
-      <CompanyPicker memberships={memberships} licenseId={licenseId} onChange={setLicenseId} />
-
       <label className="field">
         <span>{t.dashboard.search}</span>
         <input
@@ -234,17 +216,20 @@ export default function CustomerList({ liffId }: { liffId: string }) {
 
       <Count shown={visible.length} total={customers.length} />
 
-      {permissions.has("customer.create") && (
+      {can("customer.create") && (
         <CsvImport kind="customers" token={token} licenseId={licenseId} onDone={() => void load()} />
       )}
 
-      {permissions.has("customer.create") && (
+      {can("customer.create") && (
         <InlineCreateForm
           title={t.dashboard.customers.add}
           busy={busy}
           fields={[
-            { name: "first_name", label: t.dashboard.fields.firstName, required: true },
-            { name: "last_name", label: t.dashboard.fields.lastName },
+            // What the API requires (Phase 9): a last name and a phone.
+            // The old form demanded a first name instead and every
+            // "สมชาย + phone" ended in a 422 (review C3).
+            { name: "first_name", label: t.dashboard.fields.firstName },
+            { name: "last_name", label: t.dashboard.fields.lastName, required: true },
             { name: "phone", label: t.dashboard.fields.phone, type: "tel", required: true },
             { name: "email", label: t.dashboard.fields.email },
           ]}
@@ -280,18 +265,20 @@ export default function CustomerList({ liffId }: { liffId: string }) {
                 {customer.email ? ` · ${customer.email}` : ""}
               </div>
               </Link>
-              {customer.stage === "lead" && (
+              {customer.stage === "lead" && (can("customer.update") || can("customer.archive")) && (
                 <div className="card-actions">
-                  <button
-                    type="button"
-                    className="btn"
-                    data-variant="primary"
-                    onClick={() => void promote(customer)}
-                    disabled={busyId === customer.id}
-                  >
-                    {busyId === customer.id ? t.dashboard.saving : t.dashboard.customers.promote}
-                  </button>
-                  {permissions.has("customer.archive") && (
+                  {can("customer.update") && (
+                    <button
+                      type="button"
+                      className="btn"
+                      data-variant="primary"
+                      onClick={() => void promote(customer)}
+                      disabled={busyId === customer.id}
+                    >
+                      {busyId === customer.id ? t.dashboard.saving : t.dashboard.customers.promote}
+                    </button>
+                  )}
+                  {can("customer.archive") && (
                     <button
                       type="button"
                       className="btn"
@@ -308,6 +295,6 @@ export default function CustomerList({ liffId }: { liffId: string }) {
           ))}
         </ul>
       )}
-    </AppShell>
+    </SalesShell>
   );
 }

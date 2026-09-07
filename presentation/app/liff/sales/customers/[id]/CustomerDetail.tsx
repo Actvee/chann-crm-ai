@@ -6,10 +6,13 @@ import { useCallback, useEffect, useState } from "react";
 
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
-import { AppShell, Badge } from "../../_components";
-import { Membership, fetchPermissions, initLiffSession, proxyHeaders } from "../../_lib";
+import { Badge } from "../../_components";
+import { useFailureText } from "../../_format";
+import { proxyHeaders } from "../../_lib";
 import { FieldSection, RecordHead, RelatedHeading } from "../../_record";
 import { RelatedActivity } from "../../_related";
+import { useSalesSession } from "../../_session";
+import { SalesShell } from "../../_shell";
 
 type Customer = {
   created_at?: string | null;
@@ -46,14 +49,12 @@ export default function CustomerDetail({
   customerId: string;
 }) {
   const { t } = useLanguage();
+  const failureText = useFailureText();
   const stageLabel = (stage: string) =>
     stage === "contact" ? t.customer.title : t.customer.lead;
   const dealStageLabel = (stage: string) =>
     (t.deal.stage as Record<string, string>)[stage] ?? stage;
 
-  const [token, setToken] = useState("");
-  const [licenseId, setLicenseId] = useState("");
-  const [permissions, setPermissions] = useState<Set<string>>(new Set());
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [deals, setDeals] = useState<Deal[]>([]);
   const [status, setStatus] = useState(t.dashboard.opening);
@@ -65,23 +66,26 @@ export default function CustomerDetail({
     setStatus(message);
     setTone(kind);
   }, []);
+  const session = useSalesSession(liffId, say);
+  const { token, licenseId, permissions } = session;
 
   const load = useCallback(async () => {
     if (!token || !licenseId) return;
     const headers = proxyHeaders(token, licenseId);
-    const [customersResponse, dealsResponse] = await Promise.all([
-      fetch(`/api/phase2/licenses/${licenseId}/customers`, { headers }),
+    // One customer, not the whole book (review C10): the page used to
+    // download every customer in the shop to find this one.
+    const [customerResponse, dealsResponse] = await Promise.all([
+      fetch(`/api/phase2/licenses/${licenseId}/customers/${customerId}`, { headers }),
       fetch(`/api/phase2/licenses/${licenseId}/deals`, { headers }),
     ]);
-    if (!customersResponse.ok) {
+    if (!customerResponse.ok) {
       throw new Error(
-        customersResponse.status === 403
+        customerResponse.status === 403
           ? t.dashboard.noPermission
-          : `${t.dashboard.loadFailed} (${customersResponse.status})`,
+          : `${t.dashboard.loadFailed} (${customerResponse.status})`,
       );
     }
-    const customers = (await customersResponse.json()) as Customer[];
-    setCustomer(customers.find((row) => row.id === customerId) ?? null);
+    setCustomer((await customerResponse.json()) as Customer);
     if (!dealsResponse.ok) {
       // "No deals for this customer" and "could not load deals" are
       // different facts; showing the first when the second is true
@@ -94,28 +98,11 @@ export default function CustomerDetail({
   }, [customerId, licenseId, say, t, token]);
 
   useEffect(() => {
-    if (!token || !licenseId) return;
+    if (!session.ready) return;
     void load().catch((error: unknown) =>
       say(error instanceof Error ? error.message : t.dashboard.loadFailed, "error"),
     );
-  }, [licenseId, load, say, t, token]);
-
-  const initialize = useCallback(async () => {
-    try {
-      const session = await initLiffSession(liffId);
-      if (!session.token) return;
-      const license = session.memberships[0]?.license_id ?? "";
-      setToken(session.token);
-      setLicenseId(license);
-      if (!session.memberships.length) {
-        say(t.liff.noCompany, "error");
-        return;
-      }
-      setPermissions(await fetchPermissions(session.token, license));
-    } catch (error) {
-      say(error instanceof Error ? error.message : t.dashboard.openFailed, "error");
-    }
-  }, [liffId, say, t]);
+  }, [session.ready, load, say, t]);
 
   async function createDeal() {
     setBusy(true);
@@ -126,6 +113,7 @@ export default function CustomerDetail({
         body: JSON.stringify({ contact_id: customerId }),
       });
       if (!response.ok) {
+        const failure = await failureText(response);
         const detail = await response.json().catch(() => ({}));
         const body = detail.detail;
         say(
@@ -133,7 +121,7 @@ export default function CustomerDetail({
             ? t.dashboard.deals.alreadyOpen.replace(
                 "{code}", String(body.existing_code ?? ""),
               )
-            : `${t.common.error} (${response.status})`,
+            : failure,
           "error",
         );
         return;
@@ -157,12 +145,7 @@ export default function CustomerDetail({
       },
     );
     if (!response.ok) {
-      say(
-        response.status === 403
-          ? t.dashboard.noPermission
-          : `${t.common.error} (${response.status})`,
-        "error",
-      );
+      say(await failureText(response), "error");
       throw new Error("save failed");
     }
     say(t.dashboard.saved, "ok");
@@ -180,9 +163,7 @@ export default function CustomerDetail({
       );
       if (!response.ok) {
         say(
-          response.status === 403
-            ? t.dashboard.customers.promoteDenied
-            : `${t.common.error} (${response.status})`,
+          response.status === 403 ? t.dashboard.customers.promoteDenied : await failureText(response),
           "error",
         );
         return;
@@ -194,14 +175,15 @@ export default function CustomerDetail({
     }
   }
 
-  const canEdit = permissions.has("customer.update");
+  const can = (key: string) => !session.suspended && permissions.has(key);
+  const canEdit = can("customer.update");
 
   return (
-    <AppShell
+    <SalesShell
+      session={session}
       title={t.customer.title}
       back="/liff/sales/customers"
       liffId={liffId}
-      onReady={() => void initialize()}
       onSdkError={() => say(t.liff.sdkLoadFailed, "error")}
       status={status}
       statusTone={tone}
@@ -254,8 +236,9 @@ export default function CustomerDetail({
           {/* Opening a deal from the customer you are looking at. The
               customer is already known here, so asking for one — as the
               deal list has to — would be asking a question the page can
-              already answer. */}
-          {canEdit && !deals.some((d) => d.stage === "new" || d.stage === "proposed") && (
+              already answer. Gated on deal.create, which is what the
+              route checks (review C7): customer.update was the wrong key. */}
+          {can("deal.create") && !deals.some((d) => d.stage === "new" || d.stage === "proposed") && (
             <div className="actions" style={{ margin: "0 0 12px" }}>
               <button
                 type="button"
@@ -301,9 +284,11 @@ export default function CustomerDetail({
             token={token}
             entityType="customer"
             entityId={customerId}
+            permissions={permissions}
+            readOnly={session.suspended}
           />
         </>
       )}
-    </AppShell>
+    </SalesShell>
   );
 }

@@ -22,6 +22,7 @@ import re
 from datetime import datetime, timezone
 
 from ..data_client import DataClient
+from .assets import image_for_render
 from .documents.fill import fill_template
 from .documents.report_html import render_service_report_html
 from .documents.report_snapshot import build_service_report_snapshot
@@ -36,6 +37,8 @@ BUILTIN_REPORT_TEMPLATE_NAME = "รายงานการซ่อม (แบ�
 BUILTIN_REPORT_TEMPLATE_VERSION = 1
 # The renderer fetches a signature image while it renders; an hour is far
 # longer than a render takes and far shorter than a link worth leaking.
+# The link is an asset token served by this tier (review E2), or the
+# image inline when the deployment has no public base URL.
 SIGNATURE_LINK_TTL_SECONDS = 3600
 
 _SAFE_KEY = re.compile(r"[^A-Za-z0-9_-]+")
@@ -215,8 +218,7 @@ async def issue_for_report(
     Data Tier by report id — the one entry point chat, the approval hook
     and the reports page all use."""
     license_id = str(license_id)
-    rows = await client.list_service_reports(license_id)
-    report = next((r for r in rows if str(r.get("id")) == str(report_id)), None)
+    report = await client.get_service_report(license_id, str(report_id))
     if report is None:
         raise LookupError(f"report {report_id} not found")
 
@@ -248,10 +250,11 @@ async def issue_for_report(
             "signature_url": person.get("signature_url") or "",
         })
 
-    # 13.1: the visit's pictures, signed for the render — through this
-    # module's store reference, which is the one the tests patch.
+    # 13.1: the visit's pictures, as links the renderer can fetch.
     photos: list[str] = []
     try:
+        # Through this module's store reference, which is the one the
+        # tests patch.
         store = get_document_store()
         for row in await client.list_ticket_photos(license_id, str(report.get("ticket_id") or "")):
             path = str(row.get("photo_url") or "")
@@ -259,7 +262,7 @@ async def issue_for_report(
                 continue
             photos.append(
                 path if path.startswith("http")
-                else await store.signed_url(path=path, expires_seconds=SIGNATURE_LINK_TTL_SECONDS)
+                else await image_for_render(path, ttl_seconds=SIGNATURE_LINK_TTL_SECONDS, store=store)
             )
     except Exception:
         log.exception("could not gather photos for %s", report.get("report_id"))
@@ -274,7 +277,8 @@ async def issue_for_report(
 async def _person(client: DataClient, member: dict) -> dict:
     """Name, phone and (13.5) a renderer-fetchable signature link for one
     member. A signature is stored as an object path; the renderer needs a
-    URL it can fetch during the render, so it is signed for an hour."""
+    URL it can fetch during the render, so it gets an asset link good for
+    an hour (or the image inline when there is no public base URL)."""
     chann_uid = str(member.get("chann_uid") or "")
     try:
         profile = await client.get_profile(chann_uid) or {}
@@ -287,8 +291,8 @@ async def _person(client: DataClient, member: dict) -> dict:
         if path:
             signature_url = (
                 path if path.startswith("http")
-                else await get_document_store().signed_url(
-                    path=path, expires_seconds=SIGNATURE_LINK_TTL_SECONDS,
+                else await image_for_render(
+                    path, ttl_seconds=SIGNATURE_LINK_TTL_SECONDS, store=get_document_store(),
                 )
             )
     except Exception:

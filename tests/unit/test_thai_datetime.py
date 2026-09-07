@@ -193,3 +193,43 @@ class TestReminderSubject:
 
     def test_a_single_stray_character_is_not_a_subject(self):
         assert self._subject("เตือน ก วันนี้") == ""
+
+
+class TestReviewA11:
+    """Review round 2 (6 Sep 2026), A11: the phrasings the bot's own
+    examples and the customers' replies use."""
+
+    TODAY = date(2026, 9, 6)
+
+    def test_n_mong_without_a_qualifier(self):
+        assert parse_thai_time("พรุ่งนี้ 10 โมง") == time(10, 0)
+        assert parse_thai_time("เลื่อนนัด พรุ่งนี้ 10 โมง") == time(10, 0)
+        assert parse_thai_time("15 กันยายน 2569 เวลา 10 โมง") == time(10, 0)
+        assert parse_thai_time("9 โมง") == time(9, 0)
+        assert parse_thai_time("2 โมง") == time(14, 0)  # บ่ายสอง
+        assert parse_thai_time("5 โมงเย็น") == time(17, 0)
+        assert parse_thai_time("10 โมงเช้า") == time(10, 0)
+        assert parse_thai_time("บ่ายโมง") == time(13, 0)
+        assert parse_thai_time("บ่าย 3 ครึ่ง") == time(15, 30)
+        assert parse_thai_time("10 โมงครึ่ง") == time(10, 30)
+        assert parse_thai_time("2 ทุ่ม") == time(20, 0)
+        assert parse_thai_time("เที่ยง") == time(12, 0)
+
+    def test_a_clock_time_after_a_named_month_is_not_the_year(self):
+        assert parse_thai_date("15 ก.ย. 14:00", self.TODAY) == date(2026, 9, 15)
+        assert parse_thai_time("15 ก.ย. 14:00") == time(14, 0)
+        assert parse_thai_date("15 ก.ย. 10 โมง", self.TODAY) == date(2026, 9, 15)
+        assert parse_thai_time("15 ก.ย. 10 โมง") == time(10, 0)
+
+    def test_day_and_month_without_a_year_is_the_next_occurrence(self):
+        assert parse_thai_date("15/9", self.TODAY) == date(2026, 9, 15)
+        assert parse_thai_date("15/9 10.30", self.TODAY) == date(2026, 9, 15)
+        assert parse_thai_time("15/9 10.30") == time(10, 30)
+        assert parse_thai_date("1/3", self.TODAY) == date(2027, 3, 1)
+        assert parse_thai_date("10.30", self.TODAY) is None  # a time, not a date
+
+    def test_buddhist_years_two_and_four_digits(self):
+        assert parse_thai_date("15 ก.ย. 69", self.TODAY) == date(2026, 9, 15)
+        assert parse_thai_date("15 ก.ย. 2569", self.TODAY) == date(2026, 9, 15)
+        assert parse_thai_date("15/9/69", self.TODAY) == date(2026, 9, 15)
+        assert parse_thai_date("15/09/2569", self.TODAY) == date(2026, 9, 15)

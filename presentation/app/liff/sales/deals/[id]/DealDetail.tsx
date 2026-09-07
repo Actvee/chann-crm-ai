@@ -6,11 +6,17 @@ import { useCallback, useEffect, useState } from "react";
 
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
-import { AppShell, Badge } from "../../_components";
-import { fetchPermissions, initLiffSession, proxyHeaders } from "../../_lib";
+import { Badge } from "../../_components";
+import { FieldRow } from "../../../_field-row";
+import { shortDate } from "../../../_list-controls";
+import { useFailureText, useFormatters } from "../../_format";
+import { proxyHeaders } from "../../_lib";
 import { ProductLineForm } from "../../../_product-line-form";
 import { FieldSection, RecordHead, RelatedHeading } from "../../_record";
 import { RelatedActivity } from "../../_related";
+import { useSalesSession } from "../../_session";
+import { SalesShell } from "../../_shell";
+import { useSalesText } from "../../_strings";
 
 type Product = {
   id: string;
@@ -64,13 +70,6 @@ function nextStages(stage: string, canReopen: boolean): string[] {
   return canReopen && REOPEN_STAGES.includes(stage) ? [...base, "new"] : base;
 }
 
-function money(value: unknown): string {
-  const n = Number(value ?? 0);
-  return Number.isFinite(n)
-    ? n.toLocaleString("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-    : "—";
-}
-
 export default function DealDetail({
   liffId,
   dealId,
@@ -78,13 +77,13 @@ export default function DealDetail({
   liffId: string;
   dealId: string;
 }) {
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
+  const s = useSalesText();
+  const { money } = useFormatters();
+  const failureText = useFailureText();
   const stageLabel = (stage: string) =>
     (t.deal.stage as Record<string, string>)[stage] ?? stage;
 
-  const [token, setToken] = useState("");
-  const [licenseId, setLicenseId] = useState("");
-  const [permissions, setPermissions] = useState<Set<string>>(new Set());
   const [deal, setDeal] = useState<Deal | null>(null);
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [status, setStatus] = useState(t.dashboard.opening);
@@ -93,11 +92,17 @@ export default function DealDetail({
   const [busy, setBusy] = useState(false);
   const [addingProduct, setAddingProduct] = useState(false);
   const [editingLine, setEditingLine] = useState<string>("");
+  // Asked inline rather than with window.prompt (review C20), which some
+  // LINE webviews swallow without a word.
+  const [losing, setLosing] = useState(false);
+  const [lostReason, setLostReason] = useState("");
 
   const say = useCallback((message: string, kind?: "ok" | "error") => {
     setStatus(message);
     setTone(kind);
   }, []);
+  const session = useSalesSession(liffId, say);
+  const { token, licenseId, permissions } = session;
 
   const load = useCallback(async () => {
     if (!token || !licenseId) return;
@@ -118,49 +123,33 @@ export default function DealDetail({
 
     // Who this deal is for. A deal row carries only contact_id, and a deal
     // without a name attached is most of the way to useless on a screen
-    // someone opens to decide what to do next.
+    // someone opens to decide what to do next. One record, not the whole
+    // customer book (review C10).
     if (found.contact_id) {
-      const customersResponse = await fetch(
-        `/api/phase2/licenses/${licenseId}/customers`,
+      const customerResponse = await fetch(
+        `/api/phase2/licenses/${licenseId}/customers/${found.contact_id}`,
         { headers },
       );
-      if (!customersResponse.ok) {
+      if (!customerResponse.ok) {
         // A blank subtitle with no explanation is worse than a status
         // line saying the name could not be loaded.
-        say(`${t.dashboard.loadFailed} (${customersResponse.status})`, "error");
+        say(`${t.dashboard.loadFailed} (${customerResponse.status})`, "error");
         return;
       }
-      const customers = (await customersResponse.json()) as Customer[];
-      setCustomer(customers.find((c) => c.id === found.contact_id) ?? null);
+      setCustomer((await customerResponse.json()) as Customer);
     }
     say("");
   }, [dealId, licenseId, say, t, token]);
 
   useEffect(() => {
-    if (!token || !licenseId) return;
+    if (!session.ready) return;
     void load().catch((error: unknown) =>
       say(error instanceof Error ? error.message : t.dashboard.loadFailed, "error"),
     );
-  }, [licenseId, load, say, t, token]);
+  }, [session.ready, load, say, t]);
 
-  const initialize = useCallback(async () => {
-    try {
-      const session = await initLiffSession(liffId);
-      if (!session.token) return;
-      const license = session.memberships[0]?.license_id ?? "";
-      setToken(session.token);
-      setLicenseId(license);
-      if (!session.memberships.length) {
-        say(t.liff.noCompany, "error");
-        return;
-      }
-      setPermissions(await fetchPermissions(session.token, license));
-    } catch (error) {
-      say(error instanceof Error ? error.message : t.dashboard.openFailed, "error");
-    }
-  }, [liffId, say, t]);
-
-  const canEdit = permissions.has("deal.update");
+  const can = (key: string) => !session.suspended && permissions.has(key);
+  const canEdit = can("deal.update");
 
   async function saveFields(changes: Record<string, string | null>) {
     const response = await fetch(
@@ -172,12 +161,7 @@ export default function DealDetail({
       },
     );
     if (!response.ok) {
-      say(
-        response.status === 403
-          ? t.dashboard.noPermission
-          : `${t.common.error} (${response.status})`,
-        "error",
-      );
+      say(await failureText(response), "error");
       throw new Error("save failed");
     }
     say(t.dashboard.saved, "ok");
@@ -205,7 +189,7 @@ export default function DealDetail({
         },
       );
       if (!response.ok) {
-        say(`${t.common.error} (${response.status})`, "error");
+        say(await failureText(response), "error");
         return;
       }
       setEditingLine("");
@@ -235,12 +219,7 @@ export default function DealDetail({
         },
       );
       if (!response.ok) {
-        say(
-          response.status === 403
-            ? t.dashboard.noPermission
-            : `${t.common.error} (${response.status})`,
-          "error",
-        );
+        say(await failureText(response), "error");
         return;
       }
       say(t.dashboard.saved, "ok");
@@ -260,7 +239,7 @@ export default function DealDetail({
         body: JSON.stringify({ deal_id: dealId }),
       });
       if (!response.ok) {
-        say(`${t.common.error} (${response.status})`, "error");
+        say(await failureText(response), "error");
         return;
       }
       const created = (await response.json()) as { id: string };
@@ -272,16 +251,7 @@ export default function DealDetail({
     }
   }
 
-  async function setStage(stage: string) {
-    // Why, when it is a loss. Asked for once and never demanded: an
-    // empty answer is recorded as no reason, not refused, because a
-    // column full of "-" looks answered and teaches nothing.
-    let lostReason: string | undefined;
-    if (stage === "lost") {
-      const answer = window.prompt(t.dashboard.deals.askLostReason, "");
-      if (answer === null) return;
-      lostReason = answer.trim() || undefined;
-    }
+  async function setStage(stage: string, reason?: string) {
     if (!deal) return;
     setBusy(true);
     say(t.dashboard.working);
@@ -291,25 +261,38 @@ export default function DealDetail({
         {
           method: "POST",
           headers: proxyHeaders(token, licenseId),
-          body: JSON.stringify({ stage, allow_reopen: permissions.has("deal.reopen"), lost_reason: lostReason }),
+          body: JSON.stringify({
+            stage,
+            allow_reopen: stage === "new" && permissions.has("deal.reopen"),
+            lost_reason: reason?.trim() || undefined,
+          }),
         },
       );
       if (!response.ok) {
         say(
-          response.status === 403
-            ? t.dashboard.deals.stageDenied
-            : `${t.common.error} (${response.status})`,
+          response.status === 403 ? t.dashboard.deals.stageDenied : await failureText(response),
           "error",
         );
         return;
       }
       say(`${deal.deal_id} → ${stageLabel(stage)}`, "ok");
+      setLosing(false);
+      setLostReason("");
       await load();
     } catch (error) {
       say(error instanceof Error ? error.message : t.common.error, "error");
     } finally {
       setBusy(false);
     }
+  }
+
+  function askOrSet(stage: string) {
+    if (stage === "lost") {
+      setLosing(true);
+      setLostReason("");
+      return;
+    }
+    void setStage(stage);
   }
 
   async function removeProduct(product: Product) {
@@ -323,7 +306,7 @@ export default function DealDetail({
         { method: "DELETE", headers: proxyHeaders(token, licenseId) },
       );
       if (!response.ok) {
-        say(`${t.common.error} (${response.status})`, "error");
+        say(await failureText(response), "error");
         return;
       }
       say(t.dashboard.saved, "ok");
@@ -340,13 +323,14 @@ export default function DealDetail({
     (sum, p) => sum + Number(p.qty ?? 0) * Number(p.quoted_unit_price ?? 0),
     0,
   );
+  const moves = deal && canEdit ? nextStages(deal.stage, can("deal.reopen")) : [];
 
   return (
-    <AppShell
+    <SalesShell
+      session={session}
       title={deal?.deal_id ?? t.deal.title}
       back="/liff/sales/deals"
       liffId={liffId}
-      onReady={() => void initialize()}
       onSdkError={() => say(t.liff.sdkLoadFailed, "error")}
       status={status}
       statusTone={tone}
@@ -368,14 +352,14 @@ export default function DealDetail({
               ) : null
             }
             actions={
-              canEdit && nextStages(deal.stage, permissions.has("deal.reopen")).length
-                ? nextStages(deal.stage, permissions.has("deal.reopen")).map((stage) => (
+              moves.length
+                ? moves.map((stage) => (
                     <button
                       key={stage}
                       type="button"
                       className="btn"
                       data-variant={stage === "won" ? "primary" : undefined}
-                      onClick={() => void setStage(stage)}
+                      onClick={() => askOrSet(stage)}
                       disabled={busy}
                     >
                       {t.dashboard.deals.changeTo.replace("{stage}", stageLabel(stage))}
@@ -384,6 +368,47 @@ export default function DealDetail({
                 : null
             }
           />
+
+          {losing && (
+            <section className="section" style={{ marginBottom: 14 }}>
+              <div className="section-head">
+                <h2>{s.deals.lostReasonTitle}</h2>
+              </div>
+              <dl className="fields">
+                <FieldRow label={t.dashboard.deals.lostReason}>
+                  {(id) => (
+                    <textarea
+                      id={id}
+                      rows={2}
+                      value={lostReason}
+                      placeholder={s.deals.lostReasonHint}
+                      onChange={(event) => setLostReason(event.target.value)}
+                    />
+                  )}
+                </FieldRow>
+                <div className="actions">
+                  <button
+                    type="button"
+                    className="btn"
+                    data-variant="quiet"
+                    onClick={() => setLosing(false)}
+                    disabled={busy}
+                  >
+                    {t.common.cancel}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn"
+                    data-variant="danger"
+                    onClick={() => void setStage("lost", lostReason)}
+                    disabled={busy}
+                  >
+                    {busy ? t.dashboard.saving : s.deals.confirmLost}
+                  </button>
+                </div>
+              </dl>
+            </section>
+          )}
 
           <FieldSection
             title={t.deal.title}
@@ -398,16 +423,7 @@ export default function DealDetail({
               {
                 name: "value",
                 label: t.dashboard.deals.value,
-                display: () =>
-                  items.length
-                    ? money(
-                        items.reduce(
-                          (sum, p) =>
-                            sum + Number(p.qty ?? 0) * Number(p.quoted_unit_price ?? 0),
-                          0,
-                        ),
-                      )
-                    : "—",
+                display: () => (items.length ? money(subtotal) : "—"),
               },
               {
                 name: "amount",
@@ -422,6 +438,7 @@ export default function DealDetail({
                 label: t.dashboard.deals.expectedClose,
                 editable: true,
                 type: "date",
+                display: (value: unknown) => shortDate(String(value), locale) || String(value),
               },
               ...(deal.stage === "lost"
                 ? [{
@@ -465,8 +482,9 @@ export default function DealDetail({
           {/* Quoting the deal being looked at. Shown only once there is
               something to quote — the rule that a quote needs a line is
               enforced in the Data Tier, and offering the button before
-              then is offering a button that fails. */}
-          {canEdit && items.length > 0 && (
+              then is offering a button that fails. quote.create is the
+              key the route checks (review C7), not deal.update. */}
+          {can("quote.create") && items.length > 0 && (
             <div className="actions" style={{ margin: "0 0 12px" }}>
               <button
                 type="button"
@@ -554,9 +572,11 @@ export default function DealDetail({
             token={token}
             entityType="deal"
             entityId={dealId}
+            permissions={permissions}
+            readOnly={session.suspended}
           />
         </>
       )}
-    </AppShell>
+    </SalesShell>
   );
 }

@@ -27,17 +27,17 @@ from ..cache import (
     k_member,
     k_pending_intent,
     k_permissions,
-    k_smartbrowz_token,
 )
 from ..config import settings
 from ..db import get_session
 from .. import assignment_engine
-from ..models import ChannIdentity, License, LicenseMember
+from ..models import ChannIdentity, License, LicenseMember, SalesGroup
 from ..repositories.tenant_scope import (
     CrossTenantAccessDenied,
     IdentityRepository,
     LicenseRepository,
     MemberRepository,
+    PlatformAdminLocked,
     PlatformAdminRepository,
     TenantScope,
 )
@@ -141,6 +141,7 @@ from ..schemas import (
     AuditLogOut,
     CompanyProfileIn,
     CompanyProfileOut,
+    CustomerIdentityLinkIn,
     CustomerIn,
     CustomerOut,
     DealIn,
@@ -157,8 +158,6 @@ from ..schemas import (
     QuoteIn,
     QuoteOut,
     QuoteStatusIn,
-    SmartBrowzTokenIn,
-    SmartBrowzTokenOut,
     StorefrontInterestIn,
     StorefrontProductOut,
     AuditLogWriteIn,
@@ -203,6 +202,7 @@ from ..schemas import (
     AssignmentRuleIn,
     AssignmentRuleOut,
     LicenseOut,
+    TrialExpiringOut,
     LineTargetOut,
     CheckInIn,
     CheckOutIn,
@@ -273,7 +273,16 @@ def record_webhook_event(payload: WebhookEventIn, session: Session = Depends(get
 def authenticate_platform_admin(
     payload: PlatformAdminAuthIn, session: Session = Depends(get_session)
 ):
-    admin = PlatformAdminRepository(session).authenticate(payload.username, payload.password)
+    try:
+        admin = PlatformAdminRepository(session).authenticate(payload.username, payload.password)
+    except PlatformAdminLocked as exc:
+        # The lock (or the failure that set it) is committed, then named:
+        # 423 with locked_until, so the operator stops retrying.
+        session.commit()
+        raise HTTPException(
+            status_code=status.HTTP_423_LOCKED,
+            detail={"error": "locked", "locked_until": exc.locked_until.isoformat()},
+        )
     # Committed either way: a refused attempt must count.
     session.commit()
     if admin is None:
@@ -820,6 +829,17 @@ def delete_license_setting(
         raise _phase2_http_error(exc)
 
 
+def _transfer_out(session: Session, transfer) -> OwnershipTransferOut:
+    """OwnershipTransferOut with the two chann_uids resolved — the member
+    ids alone told the sales app nothing about whose transfer it was."""
+    out = OwnershipTransferOut.model_validate(transfer, from_attributes=True)
+    source = session.get(LicenseMember, transfer.from_member_id)
+    target = session.get(LicenseMember, transfer.to_member_id)
+    out.from_chann_uid = source.chann_uid if source is not None else None
+    out.to_chann_uid = target.chann_uid if target is not None else None
+    return out
+
+
 @router.post(
     "/licenses/{license_id}/ownership-transfers",
     response_model=OwnershipTransferOut,
@@ -836,10 +856,29 @@ def request_ownership_transfer(
             scope, payload.from_chann_uid, payload.to_chann_uid
         )
         session.commit()
-        return OwnershipTransferOut.model_validate(transfer, from_attributes=True)
+        return _transfer_out(session, transfer)
     except Exception as exc:
         session.rollback()
         raise _phase2_http_error(exc)
+
+
+@router.get(
+    "/licenses/{license_id}/ownership-transfers",
+    response_model=list[OwnershipTransferOut],
+)
+def list_ownership_transfers(
+    license_id: uuid.UUID,
+    status: str | None = "pending",
+    session: Session = Depends(get_session),
+):
+    """Pending by default (E6, 6 Sep 2026): the owner's "waiting on X" and
+    the nominee's "accept?" banner both read this. `status=all` lists
+    every transfer the tenant ever made."""
+    scope = TenantScope(license_id=license_id)
+    rows = OwnershipTransferRepository(session).list(
+        scope, status=None if status in (None, "", "all") else status,
+    )
+    return [_transfer_out(session, row) for row in rows]
 
 
 @router.post(
@@ -869,7 +908,7 @@ def accept_ownership_transfer(
         )
         session.commit()
         _invalidate_authorization_for_license(session, scope)
-        return OwnershipTransferOut.model_validate(transfer, from_attributes=True)
+        return _transfer_out(session, transfer)
     except Exception as exc:
         session.rollback()
         raise _phase2_http_error(exc)
@@ -1411,12 +1450,22 @@ def set_license_status(
             actor_id=x_actor_id or None,
             action="update",
             field_changes=diff_fields({"status": before_status}, {"status": row.status}),
+            # A platform operator acting on a tenant: the admin console's
+            # audit view defaults to cross-tenant rows, and this one was
+            # missing from it (review, 6 Sep 2026).
+            cross_tenant=True,
         )
         session.commit()
         return LicenseOut.model_validate(row, from_attributes=True)
     except Exception as exc:
         session.rollback()
         raise _phase65_http_error(exc)
+
+
+@router.get("/platform/trials/expiring", response_model=list[TrialExpiringOut])
+def trials_expiring(on_day: date, session: Session = Depends(get_session)):
+    """Trials ending on this Bangkok calendar day (17.5.4 pre-warnings)."""
+    return RegistrationRepository(session).trials_expiring_on(on_day)
 
 
 @router.post("/platform/trials/expire", response_model=list[LicenseOut])
@@ -1614,6 +1663,29 @@ def delete_sales_group(
     except Exception as exc:
         session.rollback()
         raise _phase7_http_error(exc)
+
+
+@router.get("/licenses/{license_id}/sales-groups/{group_id}/members")
+def list_sales_group_members(
+    license_id: uuid.UUID, group_id: uuid.UUID, session: Session = Depends(get_session),
+):
+    """The people in a group (E7, 6 Sep 2026): the membership rows joined to
+    the member row, in MemberOut's shape plus group_id, so the sales app
+    can name them the way it names a technician team's members."""
+    scope = TenantScope(license_id=license_id)
+    group = session.get(SalesGroup, group_id)
+    if group is None or group.license_id != scope.license_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="group not found")
+    out = []
+    for row in SalesGroupRepository(session).members(scope, group_id):
+        member = session.get(LicenseMember, row.member_id)
+        if member is None or member.license_id != scope.license_id:
+            continue
+        out.append({
+            "id": str(member.id), "chann_uid": member.chann_uid,
+            "role": member.role, "status": member.status, "group_id": str(group_id),
+        })
+    return out
 
 
 @router.post("/licenses/{license_id}/sales-groups/{group_id}/members", status_code=201)
@@ -1883,11 +1955,6 @@ def get_active_tenant(oa: str, chann_uid: str):
     return ActiveTenantOut(**raw)
 
 
-@router.delete("/chat/active-tenant/{oa}/{chann_uid}", status_code=204)
-def clear_active_tenant(oa: str, chann_uid: str):
-    cache.invalidate(k_active_tenant(chann_uid, oa))
-
-
 @router.put("/chat/last-customer/{oa}/{chann_uid}", status_code=204)
 def set_last_customer_ref(oa: str, chann_uid: str, payload: LastCustomerRefIn):
     """9.7 follow-up, reported live: "บันทึกสมชายเป็น Contact แล้ว" followed
@@ -1938,37 +2005,6 @@ def get_last_entity_ref(oa: str, chann_uid: str):
     return LastEntityRefOut(**raw)
 
 
-@router.put("/chat/smartbrowz-token", status_code=204)
-def set_smartbrowz_token(payload: SmartBrowzTokenIn):
-    """Phase 10 — caches a freshly-refreshed SmartBrowz access token.
-
-    Global (no chann_uid/oa in the key — see cache.k_smartbrowz_token for
-    why), so every Application-tier instance shares the same still-valid
-    token instead of each one refreshing independently against Zoho's own
-    rate limit.
-    """
-    cache.set(
-        k_smartbrowz_token(),
-        {"access_token": payload.access_token, "api_domain": payload.api_domain},
-        payload.ttl_seconds,
-    )
-
-
-@router.get("/chat/smartbrowz-token", response_model=SmartBrowzTokenOut)
-def get_smartbrowz_token():
-    raw = cache.get_or_load(k_smartbrowz_token(), ttl_s=0, loader=lambda: None)
-    if raw is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="no cached smartbrowz token"
-        )
-    return SmartBrowzTokenOut(**raw)
-
-
-@router.delete("/chat/smartbrowz-token", status_code=204)
-def clear_smartbrowz_token():
-    cache.invalidate(k_smartbrowz_token())
-
-
 # ---------------------------------------------------------------- Phase 9 CRM
 
 
@@ -2010,6 +2046,7 @@ def _deal_out(deal, products) -> DealOut:
         updated_at=deal.updated_at,
         expected_close_date=deal.expected_close_date, amount=deal.amount,
         currency=getattr(deal, "currency", None) or "THB",
+        lost_reason=deal.lost_reason,
         products=[
             DealProductOut(
                 id=p.id, deal_id=p.deal_id, product_id=p.product_id,
@@ -2039,6 +2076,33 @@ def create_customer(
             license_id=license_id, entity_type="customer", entity_id=row.id,
             actor_type="user", actor_id=x_actor_id or None, action="create",
             field_changes=diff_fields({}, {"stage": row.stage}),
+        )
+        session.commit()
+        return CustomerOut.model_validate(row, from_attributes=True)
+    except Exception as exc:
+        session.rollback()
+        raise _phase9_http_error(exc)
+
+
+@router.post("/licenses/{license_id}/customers/link-identity", response_model=CustomerOut)
+def link_customer_identity(
+    license_id: uuid.UUID, payload: CustomerIdentityLinkIn,
+    session: Session = Depends(get_session), x_actor_id: str = Header(default=""),
+):
+    """The staff-created row with this phone becomes the linked person's
+    own record. 404 when no row has the number; 409 when another identity
+    already holds it."""
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = CustomerRepository(session).link_identity_by_phone(
+            scope, phone=payload.phone, customer_chann_uid=payload.customer_chann_uid,
+        )
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="no customer has this phone")
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="customer", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="update",
+            field_changes=diff_fields({}, {"customer_chann_uid": row.customer_chann_uid}),
         )
         session.commit()
         return CustomerOut.model_validate(row, from_attributes=True)
@@ -2466,20 +2530,6 @@ def list_document_templates(
     scope = TenantScope(license_id=license_id)
     rows = DocumentTemplateRepository(session).list_templates(scope, document_type=document_type)
     return [DocumentTemplateOut.model_validate(r, from_attributes=True) for r in rows]
-
-
-@router.get(
-    "/licenses/{license_id}/document-templates/{template_id}",
-    response_model=DocumentTemplateOut,
-)
-def get_document_template(
-    license_id: uuid.UUID, template_id: uuid.UUID, session: Session = Depends(get_session),
-):
-    scope = TenantScope(license_id=license_id)
-    row = DocumentTemplateRepository(session).get_template(scope, template_id)
-    if row is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="template not found")
-    return DocumentTemplateOut.model_validate(row, from_attributes=True)
 
 
 @router.post(
@@ -3210,7 +3260,8 @@ def _ticket_error(exc: Exception):
     if isinstance(exc, DispatchBlocked):
         return HTTPException(
             status_code=409,
-            detail={"error": "dispatch_blocked", "missing": exc.missing},
+            detail={"error": "dispatch_blocked", "missing": exc.missing,
+                    "missing_fields": exc.fields},
         )
     if isinstance(exc, TicketNotFound):
         return HTTPException(status_code=404, detail=str(exc))
@@ -3247,18 +3298,23 @@ def list_tickets(
     license_id: uuid.UUID,
     status: str | None = None,
     visible_to: uuid.UUID | None = None,
+    limit: int = 100,
     session: Session = Depends(get_session),
 ):
     """Tickets, optionally filtered to what one technician may see.
 
     visible_to is not a convenience: a technician browsing without it would
     read the address and phone number of every private job in the tenant.
+
+    `limit` is explicit (review C10, 6 Sep 2026): the queue page used to
+    take the default hundred and an old job still open fell off the end
+    once a shop had done a hundred jobs, with nothing on screen saying so.
     """
     scope = TenantScope(license_id=license_id)
     repo = ServiceTicketRepository(session)
     if visible_to:
         return repo.list_visible_to(scope, member_id=visible_to)
-    return repo.list_for_license(scope, status=status)
+    return repo.list_for_license(scope, status=status, limit=limit)
 
 
 @router.get("/licenses/{license_id}/tickets/{ticket_id}", response_model=TicketOut)
@@ -3312,7 +3368,12 @@ def dispatch_check(
     if row is None:
         raise HTTPException(status_code=404, detail="ticket not found")
     missing = repo.dispatch_blockers(row)
-    return {"ready": not missing, "missing": missing}
+    return {
+        "ready": not missing, "missing": missing,
+        # The column names, so a screen can say the same thing in the
+        # reader's language (review C11).
+        "missing_fields": repo.dispatch_missing_fields(row),
+    }
 
 
 @router.post("/licenses/{license_id}/tickets/{ticket_id}/assign", response_model=TicketOut)
@@ -3515,25 +3576,6 @@ def check_out(
     except Exception as exc:
         session.rollback()
         raise _field_service_error(exc)
-
-
-@router.get("/licenses/{license_id}/tickets/{ticket_id}/checkout-check")
-def checkout_check(
-    license_id: uuid.UUID,
-    ticket_id: uuid.UUID,
-    found_issue: str = "",
-    work_done: str = "",
-    session: Session = Depends(get_session),
-):
-    """What the report still has to say, without attempting a check-out.
-
-    So a form can show the gaps while the technician is still typing,
-    rather than only when they try to leave.
-    """
-    missing = FieldServiceRepository(session).report_blockers(
-        {"found_issue": found_issue, "work_done": work_done}
-    )
-    return {"ready": not missing, "missing": missing}
 
 
 @router.post(
@@ -3983,6 +4025,7 @@ def list_warranties(
     license_id: uuid.UUID,
     serial_number: str | None = None,
     customer_chann_uid: str | None = None,
+    limit: int = 100,
     session: Session = Depends(get_session),
 ):
     scope = TenantScope(license_id=license_id)
@@ -3993,17 +4036,39 @@ def list_warranties(
     elif customer_chann_uid:
         rows = repo.for_customer(scope, customer_chann_uid)
     else:
-        rows = repo.list_for_license(scope)
-    return [
-        {
-            "id": str(r.id), "warranty_number": r.warranty_number,
-            "serial_number": r.serial_number, "product_name": r.product_name,
-            "customer_chann_uid": r.customer_chann_uid,
-            "warranty_start": r.warranty_start.isoformat(),
-            "warranty_end": r.warranty_end.isoformat(), "status": r.status,
-        }
-        for r in rows
-    ]
+        rows = repo.list_for_license(scope, limit=limit)
+    return [_warranty_out(r) for r in rows]
+
+
+def _warranty_out(row) -> dict:
+    """The row as the app sees it. `status` is what the cover IS today —
+    a row the nightly sweep has not reached yet must not say "active"
+    past its end date (review E5)."""
+    return {
+        "id": str(row.id), "warranty_number": row.warranty_number,
+        "serial_number": row.serial_number, "product_name": row.product_name,
+        "customer_chann_uid": row.customer_chann_uid,
+        "warranty_start": row.warranty_start.isoformat(),
+        "warranty_end": row.warranty_end.isoformat(),
+        "status": WarrantyRepository.effective_status(row),
+    }
+
+
+@router.post("/licenses/{license_id}/warranties/expire-overdue")
+def expire_overdue_warranties(
+    license_id: uuid.UUID, session: Session = Depends(get_session),
+):
+    """Mark active cover whose end date has passed (Bangkok calendar).
+    The sweep behind the quotes-expire Scheduler job calls this per
+    tenant; until now nothing did (review E5)."""
+    scope = TenantScope(license_id=license_id)
+    try:
+        count = WarrantyRepository(session).expire_overdue(scope)
+        session.commit()
+        return {"expired": count}
+    except Exception as exc:
+        session.rollback()
+        raise _warranty_error(exc)
 
 
 @router.post("/licenses/{license_id}/warranties/claim")
@@ -4029,13 +4094,7 @@ def claim_warranty(
         )
         session.commit()
         session.refresh(row)
-        return {
-            "id": str(row.id), "warranty_number": row.warranty_number,
-            "serial_number": row.serial_number, "product_name": row.product_name,
-            "customer_chann_uid": row.customer_chann_uid,
-            "warranty_start": row.warranty_start.isoformat(),
-            "warranty_end": row.warranty_end.isoformat(), "status": row.status,
-        }
+        return _warranty_out(row)
     except Exception as exc:
         session.rollback()
         raise _warranty_error(exc)

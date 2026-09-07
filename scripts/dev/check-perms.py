@@ -10,11 +10,16 @@ for f in [
 ]:
     text = f.read_text()
     used |= set(re.findall(r'principal\.require\("([a-z_.]+)"\)', text))
+    for group in re.findall(r'principal\.require_any\(([^)]*)\)', text):
+        used |= set(re.findall(r'"([a-z_.]+)"', group))
     used |= set(re.findall(r'"([a-z_]+\.[a-z_]+)" (?:not )?in set\(permission_keys\)', text))
     used |= set(re.findall(r'permissions\.has\("([a-z_.]+)"\)', text))
 
 for f in Path("presentation/app").rglob("*.tsx"):
-    used |= set(re.findall(r'permissions\.has\("([a-z_.]+)"\)', f.read_text()))
+    text = f.read_text()
+    used |= set(re.findall(r'permissions\.has\("([a-z_.]+)"\)', text))
+    # The sales pages' gate helper (permission AND the shop not suspended).
+    used |= set(re.findall(r'\bcan\("([a-z_.]+)"\)', text))
 
 unknown = sorted(k for k in used if k not in PERMISSION_KEYS)
 print(f"checked {len(used)} permission keys in use")

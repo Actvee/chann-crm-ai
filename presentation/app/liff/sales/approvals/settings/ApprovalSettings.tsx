@@ -1,12 +1,13 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
-import { AppShell } from "../../_components";
+import { useSalesSession } from "../../_session";
+import { SalesShell } from "../../_shell";
 import { FieldRow } from "../../../_field-row";
-import { fetchPermissions, initLiffSession, proxyHeaders } from "../../../_shared";
+import { proxyHeaders } from "../../../_shared";
 
 type Workflow = {
   rules_json?: { steps?: { order: number; approver_type: string; approver_ref: string }[] } | null;
@@ -56,23 +57,18 @@ export default function ApprovalSettings({ liffId }: { liffId: string }) {
     [licenseId, say, t, token],
   );
 
-  const initialize = useCallback(async () => {
-    try {
-      const session = await initLiffSession(liffId, "sales");
-      if (!session.token) return;
-      const license = session.memberships[0]?.license_id ?? "";
-      setToken(session.token);
-      setLicenseId(license);
-      if (!license) {
-        say(t.liff.noCompany, "error");
-        return;
-      }
-      setPermissions(await fetchPermissions(session.token, license, "sales"));
-      await load(session.token, license);
-    } catch (error) {
-      say(error instanceof Error ? error.message : t.dashboard.openFailed, "error");
-    }
-  }, [liffId, load, say, t]);
+  // The shared session (review C4/C5): the shop, its permissions and the
+  // suspended notice come from one place, and a switch starts over.
+  const session = useSalesSession(liffId, say);
+  useEffect(() => {
+    if (!session.ready) return;
+    setToken(session.token);
+    setLicenseId(session.licenseId);
+    setPermissions(session.permissions);
+    load(session.token, session.licenseId).catch((error: unknown) =>
+      say(error instanceof Error ? error.message : t.dashboard.openFailed, "error"),
+    );
+  }, [session.ready, session.token, session.licenseId, session.permissions, load, say, t]);
 
   async function save() {
     if (!policy.trim()) return;
@@ -117,14 +113,14 @@ export default function ApprovalSettings({ liffId }: { liffId: string }) {
     }
   }
 
-  const canManage = permissions.has("approval.manage");
+  const canManage = !session.suspended && permissions.has("approval.manage");
 
   return (
-    <AppShell
+    <SalesShell
+      session={session}
       title={t.dashboard.approvals.settingsTitle}
       back="/liff/sales/approvals"
       liffId={liffId}
-      onReady={() => void initialize()}
       onSdkError={() => say(t.liff.sdkLoadFailed, "error")}
       status={status}
       statusTone={tone}
@@ -179,6 +175,6 @@ export default function ApprovalSettings({ liffId }: { liffId: string }) {
           <p className="card-meta">{t.dashboard.approvals.readOnly}</p>
         )}
       </section>
-    </AppShell>
+    </SalesShell>
   );
 }

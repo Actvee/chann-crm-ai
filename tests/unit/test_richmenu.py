@@ -1,7 +1,8 @@
-"""Phase 19 (PLAN_3OA B7) — two rich-menu pages per OA. The layout is
-pure JSON; every message tile must be a phrase the chat engine answers
-literally (a tile that reaches the AI is a dead button), and the tabs
-must point at the aliases the apply script creates.
+"""Phase 19 (PLAN_3OA B7) + v3 design — two rich-menu pages per OA in two
+languages. The layout is pure JSON; every message tile must be a phrase the
+chat engine answers literally (a tile that reaches the AI is a dead button),
+the six cards must not overlap or touch, and the tabs must point at the
+aliases the apply script creates for that language.
 """
 from __future__ import annotations
 
@@ -48,21 +49,49 @@ def _handled_literally(text: str) -> bool:
 
 class TestLayout:
     @pytest.mark.parametrize("oa", ["sales", "technician", "customer"])
-    def test_each_page_has_six_tiles_and_two_tabs(self, oa):
+    @pytest.mark.parametrize("lang", ["th", "en"])
+    def test_each_page_has_six_tiles_and_two_tabs(self, oa, lang):
+        tail = "" if lang == "th" else "-en"
         for page in generate.PAGES:
-            doc = generate.layout(oa, page)
+            doc = generate.layout(oa, page, lang)
             tabs = [a for a in doc["areas"] if a["action"]["type"] == "richmenuswitch"]
             tiles = [a for a in doc["areas"] if a["action"]["type"] != "richmenuswitch"]
             assert len(tabs) == 2 and len(tiles) == 6
             assert {t["action"]["richMenuAliasId"] for t in tabs} == {
-                f"chann-{oa}-main", f"chann-{oa}-more",
+                f"chann-{oa}-main{tail}", f"chann-{oa}-more{tail}",
             }
-            assert doc["_alias"] == f"chann-{oa}-{page}"
-            assert doc["name"] == f"chann-{oa}-v2-{page}"
+            assert doc["_alias"] == f"chann-{oa}-{page}{tail}"
+            assert doc["name"] == f"chann-{oa}-v3-{page}{tail}"
+            assert doc["chatBarText"] == ("เมนู" if lang == "th" else "Menu")
             for area in doc["areas"]:
                 b = area["bounds"]
                 assert 0 <= b["x"] and b["x"] + b["width"] <= generate.W
                 assert 0 <= b["y"] and b["y"] + b["height"] <= generate.H
+
+    def test_the_language_variants_share_actions_and_tap_areas(self):
+        # Same tile, same action, same place — only the picture reads the
+        # other way, so a person who switches language never relearns the menu.
+        for oa in generate.TILES:
+            for page in generate.PAGES:
+                th = generate.layout(oa, page, "th")["areas"]
+                en = generate.layout(oa, page, "en")["areas"]
+                assert [a["bounds"] for a in th] == [a["bounds"] for a in en]
+                assert [a["action"] for a in th if a["action"]["type"] != "richmenuswitch"] == \
+                    [a["action"] for a in en if a["action"]["type"] != "richmenuswitch"]
+
+    def test_cards_do_not_overlap_and_keep_a_gutter(self):
+        boxes = generate.card_bounds()
+        assert len(boxes) == 6
+        for i, a in enumerate(boxes):
+            assert a[2] - a[0] >= 400 and a[3] - a[1] >= 600, a
+            for b in boxes[i + 1:]:
+                separated = a[2] + generate.GAP <= b[0] or b[2] + generate.GAP <= a[0] \
+                    or a[3] + generate.GAP <= b[1] or b[3] + generate.GAP <= a[1]
+                assert separated, (a, b)
+        # The primary action is the biggest card and the first tap area.
+        primary = boxes[0]
+        assert all((primary[2] - primary[0]) * (primary[3] - primary[1])
+                   > (b[2] - b[0]) * (b[3] - b[1]) for b in boxes[1:])
 
     @pytest.mark.parametrize("oa", ["sales", "technician", "customer"])
     def test_every_message_tile_is_answered_without_the_ai(self, oa):
@@ -85,3 +114,6 @@ class TestLayout:
         assert "del(._alias)" in script
         assert "richmenu/alias" in script
         assert 'sub("\\\\{" + $var + "\\\\}"; $val)' in script
+        # Four menus per OA: both pages in both languages, Thai main as default.
+        assert "for page in main more main-en more-en; do" in script
+        assert '"chann-${oa}-main-en" "chann-${oa}-more-en"' in script

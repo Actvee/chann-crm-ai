@@ -19,6 +19,7 @@ import re
 from ..data_client import DataClient
 from .identity import ResolvedContext, TenantResolution
 from . import pdpa as pdpa_service
+from .richmenu import sync_rich_menu
 
 log = logging.getLogger(__name__)
 
@@ -225,6 +226,10 @@ BAD_CODE = {
     "th": "ไม่พบรหัสนี้ กรุณาตรวจสอบอีกครั้ง",
     "en": "That code was not found — please check it",
 }
+ALREADY_LINKED = {
+    "th": "บัญชีนี้ผูกกับร้าน {name} ไว้แล้วครับ แจ้งซ่อมได้เลย พิมพ์อาการมา หรือพิมพ์ \"งานของฉัน\" เพื่อดูสถานะ",
+    "en": "This account is already linked to {name}. Describe a fault to report it, or type \"my jobs\".",
+}
 
 ALREADY_HAVE_COMPANY = {
     "th": "บัญชีนี้สร้างบริษัทไปแล้ว หนึ่งบัญชี LINE สร้างได้บริษัทเดียว",
@@ -320,6 +325,13 @@ async def handle_registration(
     if gate_reply is not None and carried is None:
         return gate_reply
     reply = await _handle_registration(client, message=carried if gate_reply else message, ctx=ctx, audience=audience, language=language)
+    # Phase 19 / review E10: once they are in (joined, linked, created),
+    # the person gets the rich menu for their language. Best effort —
+    # sync_rich_menu never raises — and judged by the reply itself so
+    # this stays the one call site.
+    text = reply if isinstance(reply, str) else getattr(reply, "text", "")
+    if any(str(text or "").startswith(_t(t, language).split("{", 1)[0]) for t in (LINKED, JOINED, CREATED)):
+        await sync_rich_menu(client, oa=audience, chann_uid=ctx.chann_uid, language=language)
     if gate_reply is None:
         return reply
     if isinstance(reply, str):
@@ -393,7 +405,19 @@ _CUSTOMER_COMMAND_WORDS = frozenset({
     "วิธีใช้", "ช่วยเหลือ", "help", "เมนู", "menu", "เริ่ม", "start",
     "แจ้งซ่อม", "แจ้งปัญหา", "เช็คประกัน", "ลงทะเบียนสินค้า",
     "ดูงาน", "งานของฉัน", "สวัสดี", "สอบถาม",
+    # Every customer rich-menu tile, and the words on the other OAs' tiles
+    # (review, 6 Sep 2026: 7 of 11 tiles were "held" as the customer's
+    # problem and answered "รับเรื่องแล้ว").
+    "สถานะการซ่อม", "คุยกับร้าน", "สินค้าทั้งหมด", "ประวัติการซื้อ", "ประกันของฉัน", "ติดต่อร้าน",
+    "ข้อมูลของฉัน", "สลับภาษา", "เปิดหน้าจอลูกค้า", "แจ้งเสีย", "ยกเลิก", "ยกเลิกงาน", "เลื่อนนัด",
+    "ไม่มีหมายเลขเครื่อง", "จบการสนทนา", "เปลี่ยนร้าน", "เปลี่ยนภาษา",
+    "งานวันนี้", "รายชื่อลูกค้า", "รายการรออนุมัติ", "นัดหมายทั้งหมด", "นัดหมาย", "เปิดแดชบอร์ด", "รายการดีล",
+    "รายการสินค้า", "ทีมช่าง", "ข้อมูลบริษัท", "แชทลูกค้า", "งานที่เปิดรับ", "เช็คอิน", "ปิดงาน", "รับงาน",
+    "เปิดหน้าจอช่าง", "รายงานของฉัน", "งานของทีม", "ปฏิเสธงาน", "สิทธิ์ของฉัน", "ถึงแล้ว",
+    "my jobs", "repair status", "talk to the shop", "all products", "my warranties", "contact shop", "my profile",
+    "switch language", "report a fault", "register product",
 })
+_POLITE_TAILS = ("นะครับ", "นะคะ", "หน่อยครับ", "หน่อยค่ะ", "ครับผม", "ครับ", "ค่ะ", "คะ", "หน่อย", "ด้วย", "นะ")
 
 
 def _is_a_command_not_a_message(text: str) -> bool:
@@ -403,7 +427,13 @@ def _is_a_command_not_a_message(text: str) -> bool:
     แอร์ไม่เย็น" is a real report with the trigger in front of it and
     must still be held.
     """
-    return (text or "").strip().lower() in _CUSTOMER_COMMAND_WORDS
+    compact = (text or "").strip().lower().rstrip("!?. ")
+    if compact in _CUSTOMER_COMMAND_WORDS:
+        return True
+    for tail in _POLITE_TAILS:
+        if compact.endswith(tail) and compact[: -len(tail)].strip() in _CUSTOMER_COMMAND_WORDS:
+            return True
+    return bool(re.match(r"^(?:วิธีใช้|help)\s*\d{1,2}$", compact))
 
 
 async def _link_and_continue(
@@ -422,7 +452,11 @@ async def _link_and_continue(
     try:
         link = await client.link_customer(chann_uid=ctx.chann_uid, company_code=company_code)
     except Exception as exc:  # noqa: BLE001
-        if _is_not_found(exc) or _is_conflict(exc):
+        if _is_conflict(exc):
+            # Linked to this shop already: not "no such code" (review,
+            # 6 Sep 2026).
+            return _t(ALREADY_LINKED, language).format(name=company_name or company_code)
+        if _is_not_found(exc):
             return _t(BAD_CODE, language)
         raise
     license_id = str(link.get("license_id") or license_id or "")

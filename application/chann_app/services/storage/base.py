@@ -5,6 +5,11 @@ Mirrors the `PdfRenderer` seam (ADR-021's pattern) for the same reason:
 actual bytes a customer received, and the thing holding those bytes should
 be swappable without touching anything that records or reads that link.
 
+Links to a stored object are asset tokens served by the Application tier
+(services/assets.py) — never GCS signed URLs, which this deployment
+cannot produce (no signBlob; see auth/document_link.py). The seam is
+therefore put / get / delete only.
+
 Two implementations:
 
   * `GcsDocumentStore` — the real one.
@@ -47,9 +52,6 @@ class DocumentStore(Protocol):
     async def put(self, *, key: str, content: bytes, content_type: str) -> StoredDocument:
         ...
 
-    async def signed_url(self, *, path: str, expires_seconds: int) -> str:
-        ...
-
     async def get(self, *, path: str) -> bytes:
         ...
 
@@ -61,11 +63,6 @@ class NullDocumentStore:
     name = "null"
 
     async def put(self, *, key: str, content: bytes, content_type: str) -> StoredDocument:
-        raise DocumentStoreNotConfigured(
-            "document storage is not configured — GCS_BUCKET_NAME is unset"
-        )
-
-    async def signed_url(self, *, path: str, expires_seconds: int) -> str:
         raise DocumentStoreNotConfigured(
             "document storage is not configured — GCS_BUCKET_NAME is unset"
         )

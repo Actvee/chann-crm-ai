@@ -57,6 +57,7 @@ PERMISSION_KEY_PATTERN = re.compile(r"[a-z_]+(?:\.[a-z_]+)+|reassign_records|vie
 
 
 async def get_tenant_principal(
+    request: Request,
     x_liff_id_token: str = Header(default=""),
     x_liff_audience: str = Header(default="sales"),
     x_license_id: str = Header(default=""),
@@ -67,12 +68,56 @@ async def get_tenant_principal(
         x_liff_id_token=x_liff_id_token,
         x_liff_audience=x_liff_audience,
         x_license_id=x_license_id,
+        # A suspended shop is read-only (C4): refused here, for every route.
+        method=request.method,
     )
 
 
 def _require_same_tenant(principal: TenantPrincipal, license_id: str) -> None:
     if principal.license_id != license_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="tenant scope mismatch")
+
+
+def _document_filename(document: dict) -> str:
+    """quote-Q-2026-0001.pdf / report-SR-2026-0001.pdf — the document's own
+    code, so two downloads do not both land as quote.pdf (review D14)."""
+    snapshot = document.get("data_snapshot") or {}
+    kind = str(document.get("document_type") or "document")
+    if kind == "service_report":
+        prefix, code = "report", str((snapshot.get("report") or {}).get("report_id") or "")
+    else:
+        prefix, code = ("quote" if kind == "quote" else kind), str((snapshot.get("quote") or {}).get("quote_id") or "")
+    safe = re.sub(r"[^A-Za-z0-9_-]+", "-", code).strip("-")
+    return f"{prefix}-{safe}.pdf" if safe else f"{prefix}.pdf"
+
+
+# Data-tier refusals the sales pages need to say in the reader's language
+# (review C11, 6 Sep 2026). The Data tier phrases them once, in English,
+# for chat and logs; the page gets a code to look up instead of the prose.
+_REASON_CODES = (
+    ("no products", "deal_has_no_products"),
+    ("cannot move a quote", "quote_transition_not_allowed"),
+    ("already pending", "transfer_already_pending"),
+    ("must be another member", "transfer_target_is_self"),
+    ("only the current owner", "not_owner"),
+    ("only the nominated new owner", "not_nominee"),
+    ("no longer pending", "transfer_not_pending"),
+    ("must be active in the tenant", "member_not_active"),
+    ("already exists", "already_exists"),
+)
+
+
+def _with_reason(exc: DataTierError) -> HTTPException:
+    """_propagate, plus a `reason_code` when the message is one the UI
+    translates. Structured bodies pass through untouched."""
+    out = _propagate(exc)
+    if isinstance(out.detail, str):
+        text = out.detail.lower()
+        for needle, code in _REASON_CODES:
+            if needle in text:
+                out.detail = {"error": code, "reason_code": code, "message": exc.detail}
+                break
+    return out
 
 
 def _propagate(exc: DataTierError) -> HTTPException:
@@ -243,11 +288,54 @@ async def request_owner_transfer(
     if not principal.is_owner:
         raise HTTPException(status_code=403, detail="only the current owner can transfer ownership")
     try:
-        return await client.request_ownership_transfer(
+        transfer = await client.request_ownership_transfer(
             license_id, principal.chann_uid, payload.to_chann_uid
         )
     except DataTierError as exc:
+        raise _with_reason(exc)
+    # The nominee hears about it (E6, 6 Sep 2026): notify.py has mapped
+    # `transfer_request` to the Sales OA since Phase 6 and nothing ever
+    # sent one, so a transfer sat pending until the nominee happened to
+    # open the company page. Best-effort — the request stands either way.
+    try:
+        from .services.notify import send_notification
+
+        await send_notification(
+            client,
+            license_id=license_id,
+            target_chann_uid=payload.to_chann_uid,
+            target_line_user_id=await client.line_target_of(payload.to_chann_uid),
+            type="transfer_request",
+            message="เจ้าของร้านขอโอนความเป็นเจ้าของร้านให้คุณ เปิดเมนูทีมขายแล้วกด \"รับโอน\" เพื่อยืนยัน",
+            message_en="The shop owner wants to hand ownership of the shop to you. Open the sales menu and tap \"Accept\" to confirm.",
+            entity_type="ownership_transfer",
+            entity_id=str(transfer.get("id") or "") or None,
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("could not tell the nominee about an ownership transfer")
+    return transfer
+
+
+@router.get("/licenses/{license_id}/ownership-transfers")
+async def list_owner_transfers(
+    license_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Pending transfers this person is party to: the owner sees the one
+    they opened, the nominee sees the one waiting for them. Nobody else
+    learns that a handover is under way."""
+    _require_same_tenant(principal, license_id)
+    if principal.is_customer:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="staff only")
+    try:
+        rows = await client.list_ownership_transfers(license_id, status="pending")
+    except DataTierError as exc:
         raise _propagate(exc)
+    return [
+        r for r in rows
+        if principal.is_owner or str(r.get("to_chann_uid") or "") == principal.chann_uid
+    ]
 
 
 @router.post("/licenses/{license_id}/ownership-transfers/{transfer_id}/accept")
@@ -263,7 +351,28 @@ async def accept_owner_transfer(
             license_id, transfer_id, principal.chann_uid, actor_id=principal.chann_uid
         )
     except DataTierError as exc:
+        raise _with_reason(exc)
+
+
+@router.get("/licenses/{license_id}/members")
+async def list_members_with_names(
+    license_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Every active member with a display name — the pool an owner picks a
+    successor from and a sales group is filled from. Behind the keys
+    that manage people, or ownership itself."""
+    _require_same_tenant(principal, license_id)
+    _staff_only(principal)
+    if not principal.is_owner:
+        principal.require_any("member.manage", "team.manage", "role.manage")
+    try:
+        members = await client.list_members(license_id)
+    except DataTierError as exc:
         raise _propagate(exc)
+    active = [m for m in members if str(m.get("status") or "active") == "active"]
+    return await _with_names(client, active)
 
 
 @router.post("/platform/licenses/{license_id}/break-glass/transfer-owner")
@@ -416,7 +525,9 @@ async def render_quote_pdf(
         # 409, not 500: nothing is broken, the tenant has not finished
         # filling in details only they can supply. The message names the
         # missing fields so the reply can say what to do next.
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=_company_incomplete(company, exc),
+        )
 
     renderer = get_renderer("smartbrowz")
     try:
@@ -497,9 +608,14 @@ async def issue_quote(
         # 409 with a distinct message: the caller can retry with
         # allow_reissue once a human has confirmed, which is not true of the
         # other 409 (incomplete company data) that needs data entry first.
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"error": "already_issued", "reason_code": "already_issued", "message": str(exc)},
+        )
     except QuoteNotRenderable as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=_company_incomplete(company, exc),
+        )
     except SmartBrowzNotConfigured as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
     except DocumentStoreNotConfigured as exc:
@@ -516,6 +632,17 @@ async def issue_quote(
         "output_path": document.get("output_path"),
         "sha256": document.get("sha256"),
         "renderer": document.get("renderer"),
+    }
+
+
+def _company_incomplete(company: dict, exc: Exception) -> dict:
+    """The 409 body for a quote that cannot be rendered yet: the fields the
+    company profile still lacks, by name, so the page can translate them."""
+    return {
+        "error": "company_incomplete",
+        "reason_code": "company_incomplete",
+        "missing": list((company or {}).get("missing_for_documents") or []),
+        "message": str(exc),
     }
 
 
@@ -538,6 +665,29 @@ async def list_customers(
         return await client.list_customers(license_id, stage)
     except DataTierError as exc:
         raise _propagate(exc)
+
+
+@router.get("/licenses/{license_id}/customers/{customer_id}")
+async def get_customer(
+    license_id: str,
+    customer_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """One customer (review C10, 6 Sep 2026): the detail pages loaded the
+    whole list to find one row. A linked customer may read only their own."""
+    _require_same_tenant(principal, license_id)
+    principal.require("customer.read")
+    try:
+        row = await client.get_customer(license_id, customer_id)
+    except DataTierError as exc:
+        raise _propagate(exc)
+    if row is None or (
+        principal.is_customer
+        and str(row.get("customer_chann_uid") or "") != principal.chann_uid
+    ):
+        raise HTTPException(status_code=404, detail="customer not found")
+    return row
 
 
 # ---------------------------------------------------------------- B5
@@ -621,13 +771,18 @@ async def list_deals(
 @router.get("/licenses/{license_id}/products")
 async def list_products(
     license_id: str,
+    limit: int = 200,
     principal: TenantPrincipal = Depends(get_tenant_principal),
     client: DataClient = Depends(get_data_client),
 ):
+    """product.read OR product.manage (review C8): a salesperson picking a
+    catalogue line for a deal needs the list, not the right to change it.
+    product.manage keeps working so roles built before product.read
+    existed lose nothing."""
     _require_same_tenant(principal, license_id)
-    principal.require("product.manage")
+    principal.require_any("product.read", "product.manage")
     try:
-        return await client.list_products(license_id)
+        return await client.list_products(license_id, limit=max(1, min(limit, 1000)))
     except DataTierError as exc:
         raise _propagate(exc)
 
@@ -863,7 +1018,7 @@ async def download_document(
         content=content,
         media_type="application/pdf",
         headers={
-            "Content-Disposition": 'inline; filename="quote.pdf"',
+            "Content-Disposition": f'inline; filename="{_document_filename(document)}"',
             # The digest the audit row recorded, so a recipient can verify
             # the bytes match what the system says it issued.
             "X-Document-Sha256": str(document.get("sha256") or ""),
@@ -912,7 +1067,7 @@ async def get_document_bytes(
         content=content,
         media_type="application/pdf",
         headers={
-            "Content-Disposition": 'inline; filename="document.pdf"',
+            "Content-Disposition": f'inline; filename="{_document_filename(document)}"',
             "X-Document-Sha256": str(document.get("sha256") or ""),
         },
     )
@@ -967,7 +1122,7 @@ async def get_quote_document(
         content=content,
         media_type="application/pdf",
         headers={
-            "Content-Disposition": 'inline; filename="quote.pdf"',
+            "Content-Disposition": f'inline; filename="{_document_filename(document)}"',
             "X-Document-Sha256": str(document.get("sha256") or ""),
         },
     )
@@ -994,6 +1149,7 @@ async def my_permissions(
         "chann_uid": principal.chann_uid,
         "is_owner": principal.is_owner,
         "permission_keys": sorted(principal.permission_keys),
+        "license_status": principal.license_status,
     }
 
 
@@ -1203,6 +1359,7 @@ async def claim_warranty(
 async def list_warranties(
     license_id: str,
     serial_number: str | None = None,
+    limit: int | None = None,
     principal: TenantPrincipal = Depends(get_tenant_principal),
     client: DataClient = Depends(get_data_client),
 ):
@@ -1213,7 +1370,10 @@ async def list_warranties(
     try:
         if principal.is_customer:
             return await client.list_warranties(license_id, customer_chann_uid=principal.chann_uid)
-        return await client.list_warranties(license_id, serial_number=serial_number)
+        return await client.list_warranties(
+            license_id, serial_number=serial_number,
+            limit=max(1, min(limit, 500)) if limit else None,
+        )
     except DataTierError as exc:
         raise _propagate(exc)
 
@@ -1252,8 +1412,10 @@ async def issue_service_report_document(
     from .services.report_issue import ReportAlreadyIssued, ReportNotApproved, issue_for_report
 
     _require_same_tenant(principal, license_id)
-    principal.require("service_report.read")
-    reissue = bool((payload or {}).get("reissue"))
+    # A customer holds ticket.read, not service_report.read: they may open
+    # the paper for their own job (review D4, 6 Sep 2026), never issue it.
+    principal.require("ticket.read" if principal.is_customer else "service_report.read")
+    reissue = bool((payload or {}).get("reissue")) and not principal.is_customer
     try:
         rows = await client.list_service_reports(license_id)
     except DataTierError as exc:
@@ -1261,9 +1423,21 @@ async def issue_service_report_document(
     report = next((r for r in rows if str(r.get("id")) == report_id), None)
     if report is None:
         raise HTTPException(status_code=404, detail="report not found")
-    if principal.is_customer and str(report.get("customer_chann_uid") or "") not in ("", principal.chann_uid):
-        raise HTTPException(status_code=404, detail="report not found")
+    if principal.is_customer:
+        # The report row carries no customer; its ticket does.
+        try:
+            tickets = await client.list_tickets(license_id)
+        except DataTierError as exc:
+            raise _propagate(exc)
+        if not any(
+            str(t.get("id")) == str(report.get("ticket_id") or "")
+            and str(t.get("customer_chann_uid") or "") == principal.chann_uid
+            for t in tickets
+        ):
+            raise HTTPException(status_code=404, detail="report not found")
     document_id = str(report.get("generated_document_id") or "")
+    if principal.is_customer and not document_id:
+        raise HTTPException(status_code=409, detail={"error": "not_issued", "message": "no document has been issued for this report"})
     if document_id and not reissue:
         document = await client.get_generated_document(license_id, document_id) or {}
     else:
@@ -1499,19 +1673,39 @@ async def list_tickets(
     license_id: str,
     status: str | None = None,
     visible_to: str | None = None,
+    limit: int | None = None,
     principal: TenantPrincipal = Depends(get_tenant_principal),
     client: DataClient = Depends(get_data_client),
 ):
     _require_same_tenant(principal, license_id)
     principal.require("ticket.read")
+    if _field_scoped(principal):
+        # A technician's list is what a technician may see, whatever the
+        # query said: the Data tier warns that without visible_to the
+        # address and phone of every private job come back, and the
+        # reports page called this route bare (review D3, 6 Sep 2026).
+        visible_to = await _member_of(client, license_id, principal)
     try:
-        rows = await client.list_tickets(license_id, status=status, visible_to=visible_to)
+        rows = await client.list_tickets(
+            license_id, status=status, visible_to=visible_to,
+            limit=max(1, min(limit, 500)) if limit else None,
+        )
         if principal.is_customer:
             # A customer sees their own repairs, never the shop's queue.
             rows = [r for r in rows if str(r.get("customer_chann_uid") or "") == principal.chann_uid]
         return rows
     except DataTierError as exc:
         raise _propagate(exc)
+
+
+def _field_scoped(principal: TenantPrincipal) -> bool:
+    """A field technician, as opposed to a dispatcher: staff without
+    `customer.read`. The technician role template is defined by that
+    absence (permissions.py: "a field technician has no business with
+    customer records"), and a person who may not open a customer record
+    may not read the shop's whole queue of names and addresses either.
+    Owners, admins and CS all hold customer.read."""
+    return not principal.is_customer and "customer.read" not in principal.permission_keys
 
 
 async def _member_of(client: DataClient, license_id: str, principal: TenantPrincipal) -> str:
@@ -1596,6 +1790,7 @@ def _decode_data_url(data_url: str) -> tuple[bytes, str]:
 
 @router.get("/licenses/{license_id}/tickets/{ticket_id}/photos")
 async def ticket_photos(
+    request: Request,
     license_id: str,
     ticket_id: str,
     principal: TenantPrincipal = Depends(get_tenant_principal),
@@ -1611,7 +1806,10 @@ async def ticket_photos(
         rows = await client.list_tickets(license_id)
         if not any(str(t.get("id")) == ticket_id and str(t.get("customer_chann_uid") or "") == principal.chann_uid for t in rows):
             raise HTTPException(status_code=404, detail="ticket not found")
-    return await photo_links(client, license_id=license_id, ticket_id=ticket_id)
+    # The request origin is the fallback when PUBLIC_BASE_URL is unset (dev),
+    # so the gallery is never a list of unreachable links.
+    return await photo_links(client, license_id=license_id, ticket_id=ticket_id,
+                             base_url=str(request.base_url))
 
 
 @router.post("/licenses/{license_id}/tickets/{ticket_id}/photos", status_code=201)
@@ -1768,6 +1966,20 @@ async def list_service_reports(
                 if str(t.get("customer_chann_uid") or "") == principal.chann_uid
             }
             rows = [r for r in rows if str(r.get("ticket_id") or "") in mine]
+        elif _field_scoped(principal):
+            # "รายงานของฉัน" means mine: the reports I filed, and those on
+            # jobs given to me — not every visit in the shop, with each
+            # customer's address on it (review D3, 6 Sep 2026).
+            member_id = await _member_of(client, license_id, principal)
+            assigned = {
+                str(t.get("id")) for t in await client.list_tickets(license_id, visible_to=member_id)
+                if str(t.get("assigned_to_ref") or "") == member_id
+            }
+            rows = [
+                r for r in rows
+                if str(r.get("technician_member_id") or "") == member_id
+                or str(r.get("ticket_id") or "") in assigned
+            ]
         return rows
     except DataTierError as exc:
         raise _propagate(exc)
@@ -1798,10 +2010,7 @@ async def get_quote_detail(
         deal = await client.get_deal(license_id, str(quote["deal_id"]))
         customer = None
         if deal and deal.get("contact_id"):
-            customers = await client.list_customers(license_id)
-            customer = next(
-                (c for c in customers if str(c.get("id")) == str(deal["contact_id"])), None,
-            )
+            customer = await client.get_customer(license_id, str(deal["contact_id"]))
         return {"quote": quote, "deal": deal, "customer": customer}
     except DataTierError as exc:
         raise _propagate(exc)
@@ -1989,7 +2198,7 @@ async def create_quote(
             license_id, body, actor_id=principal.chann_uid,
         )
     except DataTierError as exc:
-        raise _propagate(exc)
+        raise _with_reason(exc)
 
 
 class TicketCreateIn(BaseModel):
@@ -2032,7 +2241,11 @@ async def create_ticket(
     except DataTierError as exc:
         raise _propagate(exc)
     # The dispatchers hear about it — the home-screen report used to reach
-    # nobody (review, 6 Sep 2026). Best-effort.
+    # nobody (review, 6 Sep 2026). Best-effort. Each dispatcher is told in
+    # their own language: the notice carries both texts and
+    # send_notification picks by the RECIPIENT's display preference; the
+    # language passed here is the caller's, and decides nothing for them
+    # (review D16 — tested in test_routes_h2).
     try:
         from .services.chat import _notify_new_ticket
         await _notify_new_ticket(client, license_id, str(row.get("id") or ""), "th")
@@ -2050,9 +2263,12 @@ async def assign_ticket_from_dashboard(
     client: DataClient = Depends(get_data_client),
 ):
     """Dispatch from the queue the dispatcher is already looking at,
-    instead of switching to LINE to type a code they can see on screen."""
+    instead of switching to LINE to type a code they can see on screen.
+
+    ticket.assign is the catalogue's own name for this (review C9); roles
+    built on ticket.update before the key was enforced keep working."""
     _require_same_tenant(principal, license_id)
-    principal.require("ticket.update")
+    principal.require_any("ticket.assign", "ticket.update")
     target_type = str(payload.get("target_type") or "")
     target_ref = str(payload.get("target_ref") or "")
     try:
@@ -2091,11 +2307,14 @@ async def update_ticket_from_dashboard(
     owns the allowed-field list; anything else is ignored there."""
     _require_same_tenant(principal, license_id)
     principal.require("ticket.update")
+    # An empty value clears the field (review C16, 6 Sep 2026): the old
+    # filter dropped blanks, so a wrong serial could never be removed and
+    # a form with every box empty was a 422. The Data tier already treats
+    # "" as NULL; only a body with no known field at all is refused.
     fields = {
-        k: v for k, v in (payload or {}).items()
+        k: (None if v in (None, "") else v) for k, v in (payload or {}).items()
         if k in ("customer_name", "customer_phone", "service_address", "serial_number",
                  "issue_description", "scheduled_date", "scheduled_time")
-        and v not in (None, "")
     }
     if not fields:
         raise HTTPException(status_code=422, detail="nothing to update")
@@ -2134,7 +2353,9 @@ async def set_ticket_status_from_dashboard(
     as chat's cancellation does — a cancelled job nobody mentions is a
     drive to an empty house."""
     _require_same_tenant(principal, license_id)
-    principal.require("ticket.update")
+    # ticket.close is what the catalogue calls ending a job (review C9);
+    # ticket.update stays accepted for the roles that already have it.
+    principal.require_any("ticket.close", "ticket.update")
     new_status = str((payload or {}).get("status") or "")
     # Cancel only. "completed" from here skipped check-in, the report and
     # approval — the whole Phase 13 gate (review, 6 Sep 2026); "open"
@@ -2251,14 +2472,41 @@ async def list_technicians(
     _staff_only(principal)
     try:
         members = await client.list_members(license_id)
+        roles = await client.list_roles(license_id)
     except DataTierError as exc:
         raise _propagate(exc)
+    technician_roles = _technician_role_names(roles)
     technicians = [
         m for m in members
         if str(m.get("status") or "active") == "active"
-        and ("technician" in str(m.get("role") or "").lower() or "ช่าง" in str(m.get("role") or ""))
+        and str(m.get("role") or "") in technician_roles
     ]
     return await _with_names(client, technicians)
+
+
+def _technician_role_names(roles: list[dict]) -> set[str]:
+    """Which of the tenant's roles are field roles.
+
+    By what the role can do, not only by what it is called (review C15,
+    6 Sep 2026): a shop that named its role "ทีมติดตั้ง" had no
+    technicians to dispatch to. A role is a field role when it can work
+    a job and file the report but not approve one — approvals belong to
+    CS/owner/admin, who also hold ticket.update and would otherwise be
+    offered as dispatch targets. The name test stays for the default
+    template and for roles a shop deliberately named that way."""
+    out: set[str] = set()
+    for role in roles:
+        name = str(role.get("role_name") or "")
+        keys = set(role.get("permission_keys") or [])
+        by_name = "technician" in name.lower() or "ช่าง" in name
+        by_capability = (
+            {"ticket.update", "service_report.create"} <= keys
+            and "approval.approve" not in keys
+            and "role.manage" not in keys
+        )
+        if name and (by_name or by_capability):
+            out.add(name)
+    return out
 
 
 @router.post("/licenses/{license_id}/technician-teams/{team_id}/members", status_code=201)
@@ -2293,6 +2541,116 @@ async def remove_technician_team_member(
     principal.require("team.manage")
     try:
         await client.remove_team_member(license_id, team_id, member_id)
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+# Sales groups (Phase 7, Master Spec 7.5). E7 (6 Sep 2026): the Data Tier
+# could add and remove members since Phase 7 and nothing called it, so a
+# group could be created and never populated. Same key as chat's
+# "สร้างกลุ่มเซลส์" (team.manage), same shape as the technician teams above.
+
+
+class SalesGroupCreateIn(BaseModel):
+    group_name: str
+
+
+class SalesGroupMemberIn(BaseModel):
+    member_id: str
+
+
+@router.get("/licenses/{license_id}/sales-groups")
+async def list_sales_groups(
+    license_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    _require_same_tenant(principal, license_id)
+    _staff_only(principal)
+    principal.require("team.manage")
+    try:
+        return await client.list_sales_groups(license_id)
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.post("/licenses/{license_id}/sales-groups", status_code=201)
+async def create_sales_group(
+    license_id: str,
+    payload: SalesGroupCreateIn,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    _require_same_tenant(principal, license_id)
+    principal.require("team.manage")
+    try:
+        return await client.create_sales_group(license_id, payload.group_name.strip())
+    except DataTierError as exc:
+        raise _with_reason(exc)
+
+
+@router.delete("/licenses/{license_id}/sales-groups/{group_id}", status_code=204)
+async def delete_sales_group(
+    license_id: str,
+    group_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    _require_same_tenant(principal, license_id)
+    principal.require("team.manage")
+    try:
+        await client.delete_sales_group(license_id, group_id)
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.get("/licenses/{license_id}/sales-groups/{group_id}/members")
+async def list_sales_group_members(
+    license_id: str,
+    group_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    _require_same_tenant(principal, license_id)
+    _staff_only(principal)
+    principal.require("team.manage")
+    try:
+        members = await client.list_sales_group_members(license_id, group_id)
+    except DataTierError as exc:
+        raise _propagate(exc)
+    return await _with_names(client, members)
+
+
+@router.post("/licenses/{license_id}/sales-groups/{group_id}/members", status_code=201)
+async def add_sales_group_member(
+    license_id: str,
+    group_id: str,
+    payload: SalesGroupMemberIn,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    _require_same_tenant(principal, license_id)
+    principal.require("team.manage")
+    try:
+        return await client.add_sales_group_member(license_id, group_id, payload.member_id)
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.delete(
+    "/licenses/{license_id}/sales-groups/{group_id}/members/{member_id}", status_code=204,
+)
+async def remove_sales_group_member(
+    license_id: str,
+    group_id: str,
+    member_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    _require_same_tenant(principal, license_id)
+    principal.require("team.manage")
+    try:
+        await client.remove_sales_group_member(license_id, group_id, member_id)
     except DataTierError as exc:
         raise _propagate(exc)
 
@@ -2436,7 +2794,7 @@ async def set_quote_status(
             license_id, quote_id, payload.status, actor_id=principal.chann_uid,
         )
     except DataTierError as exc:
-        raise _propagate(exc)
+        raise _with_reason(exc)
 
 
 @router.get("/licenses/{license_id}/documents/{document_id}/link")
@@ -2897,9 +3255,24 @@ async def list_notes(
     # the same permission as reading the record they hang off.
     principal.require(f"{entity_type}.read")
     try:
-        return await client.list_notes(license_id, entity_type, entity_id)
+        rows = await client.list_notes(license_id, entity_type, entity_id)
     except DataTierError as exc:
         raise _propagate(exc)
+    # Who wrote it (review C18, 6 Sep 2026): the row carries a chann_uid
+    # and the panel showed nothing, so every note read as anonymous.
+    names: dict[str, str] = {}
+    for row in rows:
+        uid = str(row.get("author_chann_uid") or "")
+        if uid and uid not in names:
+            try:
+                profile = await client.get_profile(uid) or {}
+            except Exception:  # noqa: BLE001 — a nameless note, not a failure
+                profile = {}
+            names[uid] = " ".join(
+                p for p in (profile.get("first_name"), profile.get("last_name")) if p
+            )
+        row["author_display_name"] = names.get(uid) or None
+    return rows
 
 
 
@@ -3138,3 +3511,29 @@ async def ai_report_run(
 
 def _company_name_of(principal: TenantPrincipal) -> str:
     return str(getattr(principal, "company_name", "") or "")
+
+
+# ==================================================================== audit (3.4/3.5)
+
+
+@router.get("/licenses/{license_id}/audit-log")
+async def tenant_audit_log(
+    license_id: str,
+    entity_type: str | None = None,
+    actor_type: str | None = None,
+    limit: int = 100,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """The shop's own audit trail. The Data Tier route existed with no
+    caller, so `audit_log.view` was a permission that unlocked nothing
+    (review, 6 Sep 2026)."""
+    _require_same_tenant(principal, license_id)
+    principal.require("audit_log.view")
+    try:
+        return await client.list_audit_log(
+            license_id, entity_type=entity_type, actor_type=actor_type,
+            limit=max(1, min(int(limit), 500)),
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)

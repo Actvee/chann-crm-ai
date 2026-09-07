@@ -22,9 +22,12 @@ type ServiceReport = {
 type Ticket = {
   id: string;
   ticket_number: string;
+  status?: string | null;
   customer_name?: string | null;
   service_address?: string | null;
   issue_description?: string | null;
+  scheduled_date?: string | null;
+  scheduled_time?: string | null;
 };
 
 /**
@@ -47,7 +50,7 @@ export default function ServiceReports({
   liffId: string;
   audience: Audience;
 }) {
-  const { t } = useLanguage();
+  const { t, bindSession } = useLanguage();
   const [reports, setReports] = useState<ServiceReport[]>([]);
   const [photos, setPhotos] = useState<Record<string, { id: string; url?: string | null }[]>>({});
   const [tickets, setTickets] = useState<Record<string, Ticket>>({});
@@ -110,6 +113,7 @@ export default function ServiceReports({
       if (!session.token) return;
       const license = session.memberships[0]?.license_id ?? "";
       setToken(session.token);
+      bindSession({ token: session.token, audience });
       setLicenseId(license);
       if (!license) {
         say(t.liff.noCompany, "error");
@@ -120,7 +124,7 @@ export default function ServiceReports({
     } catch (error) {
       say(error instanceof Error ? error.message : t.dashboard.openFailed, "error");
     }
-  }, [audience, liffId, load, say, t]);
+  }, [audience, bindSession, liffId, load, say, t]);
 
   /**
    * 13.4/13.5: the report as paper. The route returns the existing
@@ -140,7 +144,14 @@ export default function ServiceReports({
         },
       );
       if (response.status === 409) {
-        say(t.dashboard.reports.pdfNotApproved, "error");
+        // A customer cannot issue the paper, only open it once the shop has.
+        const body = (await response.json().catch(() => null)) as { detail?: { error?: string } } | null;
+        say(
+          body?.detail?.error === "not_issued"
+            ? t.dashboard.reports.pdfNotIssued
+            : t.dashboard.reports.pdfNotApproved,
+          "error",
+        );
         return;
       }
       if (!response.ok) throw new Error(String(response.status));
@@ -181,13 +192,16 @@ export default function ServiceReports({
   // technician approving their own visit would make the step meaningless.
   const canApprove = audience === "sales" && permissions.has("ticket.update");
 
+  const statusLabel = (code: string) =>
+    (t.dashboard.tickets.status as Record<string, string>)[code] ?? code;
+
   // The back link must be explicit per audience: an undefined `back` falls
   // through to AppShell's default (the sales menu) and would send a
   // technician to the wrong OA's home.
   return (
     <AppShell
       title={t.dashboard.reports.title}
-      back={audience === "sales" ? "/liff/sales" : "/liff/technician"}
+      back={audience === "sales" ? "/liff/sales" : `/liff/${audience}`}
       nav={audience === "sales"}
       liffId={liffId}
       onReady={() => void initialize()}
@@ -195,6 +209,11 @@ export default function ServiceReports({
       status={status}
       statusTone={tone}
     >
+      {audience === "customer" && (
+        // Review D4 (6 Sep 2026): the customer's view of the same rows —
+        // their own jobs only, scoped by the server.
+        <p className="card-meta">{t.dashboard.reports.customerIntro}</p>
+      )}
       {reports.length === 0 ? (
         <div className="empty">
           <p>{t.dashboard.reports.empty}</p>
@@ -237,7 +256,18 @@ export default function ServiceReports({
                 {ticket && (
                   <div className="card-meta">
                     {ticket.ticket_number}
-                    {ticket.customer_name ? ` · ${ticket.customer_name}` : ""}
+                    {audience !== "customer" && ticket.customer_name ? ` · ${ticket.customer_name}` : ""}
+                    {ticket.issue_description ? ` · ${ticket.issue_description}` : ""}
+                  </div>
+                )}
+                {ticket && audience === "customer" && (
+                  <div className="card-meta">
+                    {t.dashboard.reports.jobStatus}: {statusLabel(ticket.status ?? "")}
+                    {ticket.scheduled_date
+                      ? ` · ${t.dashboard.tickets.scheduled}: ${ticket.scheduled_date}${
+                          ticket.scheduled_time ? ` ${String(ticket.scheduled_time).slice(0, 5)}` : ""
+                        }`
+                      : ""}
                   </div>
                 )}
 

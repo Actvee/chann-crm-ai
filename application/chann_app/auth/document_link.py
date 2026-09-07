@@ -14,6 +14,11 @@ already configured for platform admin sessions.
 The token names exactly one document and nothing else. It is not a session
 and grants no other access, so a forwarded link exposes that one quote and
 expires on its own.
+
+Asset tokens (review E2, 6 Sep 2026) are the same idea for everything else
+that used to be handed out as a GCS signed URL and therefore never worked
+here: ticket photos, signatures, the PDPA export page, AI report files.
+One names one stored object path; `GET /api/v1/assets/{token}` streams it.
 """
 from __future__ import annotations
 
@@ -28,6 +33,7 @@ from ..config import settings
 DOCUMENT_LINK_TTL_S = 7 * 24 * 3600
 
 _PURPOSE = "document.download"
+_ASSET_PURPOSE = "asset.download"
 
 
 class DocumentLinkInvalid(Exception):
@@ -74,3 +80,45 @@ def decode_document_token(token: str) -> tuple[str, str]:
     if not license_id or not document_id:
         raise DocumentLinkInvalid("token is missing its document reference")
     return str(license_id), str(document_id)
+
+
+def issue_asset_token(
+    path: str, content_type: str, ttl_seconds: int = DOCUMENT_LINK_TTL_S,
+    *, filename: str | None = None,
+) -> str:
+    """A link token for one stored object (a gs:// path, as the store
+    recorded it). The content type travels in the token so the serving
+    route never has to guess from an extension."""
+    if not settings.jwt_secret:
+        raise RuntimeError("JWT_SECRET is REQUIRED_NOT_CONFIGURED")
+    if not path:
+        raise ValueError("an asset token needs a stored path")
+    now = dt.datetime.now(dt.timezone.utc)
+    claims = {
+        "path": str(path),
+        "ct": str(content_type or "application/octet-stream"),
+        "purpose": _ASSET_PURPOSE,
+        "iat": now,
+        "exp": now + dt.timedelta(seconds=ttl_seconds),
+    }
+    if filename:
+        claims["fn"] = str(filename)
+    return jwt.encode(claims, settings.jwt_secret, algorithm="HS256")
+
+
+def decode_asset_token(token: str) -> tuple[str, str, str | None]:
+    """(path, content_type, filename), or raise DocumentLinkInvalid."""
+    if not settings.jwt_secret:
+        raise RuntimeError("JWT_SECRET is REQUIRED_NOT_CONFIGURED")
+    try:
+        claims = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
+    except Exception as exc:  # noqa: BLE001
+        raise DocumentLinkInvalid(str(exc)) from exc
+    # A document token or an admin session token must not double as an
+    # asset link — same reasoning as decode_document_token.
+    if claims.get("purpose") != _ASSET_PURPOSE:
+        raise DocumentLinkInvalid("not an asset link token")
+    path = claims.get("path")
+    if not path:
+        raise DocumentLinkInvalid("token is missing its object path")
+    return str(path), str(claims.get("ct") or "application/octet-stream"), claims.get("fn")

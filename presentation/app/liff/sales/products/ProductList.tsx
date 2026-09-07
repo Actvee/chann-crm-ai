@@ -3,11 +3,15 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { FieldRow } from "../../_field-row";
-import { AppShell, CompanyPicker, Count, Empty } from "../_components";
+import { Count, Empty } from "../_components";
 import { CsvImport } from "../_csv-import";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
-import { Membership, fetchPermissions, initLiffSession, proxyHeaders } from "../_lib";
+import { useFailureText, useFormatters } from "../_format";
+import { proxyHeaders } from "../_lib";
+import { useSalesSession } from "../_session";
+import { SalesShell } from "../_shell";
+import { useSalesText } from "../_strings";
 
 // Mirrors ProductOut exactly. The earlier version declared `name`, which
 // the API has never returned — it sends `product_name` — so every row
@@ -26,17 +30,26 @@ type Product = {
   description?: string | null;
 };
 
+// The Data tier's cap; asked for explicitly (review C10) rather than
+// taking a default of 200 that hid the rest of a bigger catalogue.
+const PAGE = 1000;
+
+const BLANK = {
+  product_id: "", product_name: "", unit_price: "", category: "", sku: "", description: "",
+};
+
 export default function ProductList({ liffId }: { liffId: string }) {
   const { t } = useLanguage();
-  const [token, setToken] = useState("");
-  const [memberships, setMemberships] = useState<Membership[]>([]);
-  const [licenseId, setLicenseId] = useState("");
+  const s = useSalesText();
+  const { money } = useFormatters();
+  const failureText = useFailureText();
   const [products, setProducts] = useState<Product[]>([]);
-  const [permissions, setPermissions] = useState<Set<string>>(new Set());
   const [adding, setAdding] = useState(false);
-  const [draft, setDraft] = useState({
-    product_id: "", product_name: "", unit_price: "", category: "", sku: "", description: "",
-  });
+  // Editing an existing row locks its code (review C19): the save is an
+  // upsert keyed on product_id, so a changed code created a second
+  // product instead of correcting the first.
+  const [editingExisting, setEditingExisting] = useState(false);
+  const [draft, setDraft] = useState(BLANK);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
@@ -46,10 +59,12 @@ export default function ProductList({ liffId }: { liffId: string }) {
     setStatus(message);
     setTone(kind);
   }, []);
+  const session = useSalesSession(liffId, say);
+  const { token, licenseId, permissions } = session;
 
   const load = useCallback(async () => {
     if (!token || !licenseId) return;
-    const response = await fetch(`/api/phase2/licenses/${licenseId}/products`, {
+    const response = await fetch(`/api/phase2/licenses/${licenseId}/products?limit=${PAGE}`, {
       headers: proxyHeaders(token, licenseId),
     });
     if (!response.ok) {
@@ -61,30 +76,14 @@ export default function ProductList({ liffId }: { liffId: string }) {
     }
     setProducts((await response.json()) as Product[]);
     say("");
-  }, [licenseId, say, token]);
+  }, [licenseId, say, t, token]);
 
   useEffect(() => {
-    if (!token || !licenseId) return;
+    if (!session.ready) return;
     void load().catch((error: unknown) =>
       say(error instanceof Error ? error.message : t.dashboard.loadFailed, "error"),
     );
-  }, [licenseId, load, say, token]);
-
-  const initialize = useCallback(async () => {
-    try {
-      const session = await initLiffSession(liffId);
-      if (!session.token) return;
-      setToken(session.token);
-      setMemberships(session.memberships);
-      setLicenseId(session.memberships[0]?.license_id ?? "");
-      setPermissions(
-        await fetchPermissions(session.token, session.memberships[0]?.license_id ?? ""),
-      );
-      if (!session.memberships.length) say(t.liff.noCompany, "error");
-    } catch (error) {
-      say(error instanceof Error ? error.message : t.dashboard.openFailed, "error");
-    }
-  }, [liffId, say]);
+  }, [session.ready, load, say, t]);
 
   const needle = query.trim().toLowerCase();
   const visible = needle
@@ -121,34 +120,32 @@ export default function ProductList({ liffId }: { liffId: string }) {
         },
       );
       if (!response.ok) {
-        say(
-          response.status === 403
-            ? t.dashboard.noPermission
-            : `${t.common.error} (${response.status})`,
-          "error",
-        );
+        say(await failureText(response), "error");
         return;
       }
       say(t.dashboard.saved, "ok");
-      setDraft({ product_id: "", product_name: "", unit_price: "", category: "", sku: "", description: "" });
+      setDraft(BLANK);
       setAdding(false);
+      setEditingExisting(false);
       await load();
     } finally {
       setSaving(false);
     }
   }
 
+  // The list itself needs only product.read (review C8); changing it
+  // needs product.manage. A suspended shop changes nothing.
+  const canManage = !session.suspended && permissions.has("product.manage");
+
   return (
-    <AppShell
+    <SalesShell
+      session={session}
       title={t.product.title}
       liffId={liffId}
-      onReady={() => void initialize()}
       onSdkError={() => say(t.liff.sdkLoadFailed, "error")}
       status={status}
       statusTone={tone}
     >
-      <CompanyPicker memberships={memberships} licenseId={licenseId} onChange={setLicenseId} />
-
       <label className="field">
         <span>{t.dashboard.search}</span>
         <input
@@ -160,21 +157,32 @@ export default function ProductList({ liffId }: { liffId: string }) {
       </label>
 
       <Count shown={visible.length} total={products.length} />
+      {products.length >= PAGE && (
+        <p className="count">{s.errors.showingLatest.replace("{count}", String(products.length))}</p>
+      )}
 
-      {permissions.has("product.manage") && (
+      {canManage && (
         <CsvImport kind="products" token={token} licenseId={licenseId} onDone={() => load()} />
       )}
 
-      {permissions.has("product.manage") && (
+      {!canManage && !session.suspended && session.ready && (
+        <p className="card-meta" style={{ marginBottom: 12 }}>{s.products.readOnly}</p>
+      )}
+
+      {canManage && (
         <section className="section" style={{ margin: "12px 0 16px" }}>
           <div className="section-head">
-            <h2>{t.dashboard.products.add}</h2>
+            <h2>{editingExisting ? t.common.edit : t.dashboard.products.add}</h2>
             {!adding && (
               <button
                 type="button"
                 className="btn"
                 data-variant="primary"
-                onClick={() => setAdding(true)}
+                onClick={() => {
+                  setDraft(BLANK);
+                  setEditingExisting(false);
+                  setAdding(true);
+                }}
               >
                 {t.dashboard.products.add}
               </button>
@@ -196,6 +204,7 @@ export default function ProductList({ liffId }: { liffId: string }) {
                       id={id}
                       value={draft[field]}
                       placeholder={placeholder}
+                      disabled={field === "product_id" && editingExisting}
                       inputMode={field === "unit_price" ? "decimal" : undefined}
                       onChange={(event) =>
                         setDraft({ ...draft, [field]: event.target.value })
@@ -204,12 +213,18 @@ export default function ProductList({ liffId }: { liffId: string }) {
                   )}
                 </FieldRow>
               ))}
+              {editingExisting && (
+                <p className="card-meta" style={{ margin: "0 0 8px" }}>{s.products.codeLocked}</p>
+              )}
               <div className="actions">
                 <button
                   type="button"
                   className="btn"
                   data-variant="quiet"
-                  onClick={() => setAdding(false)}
+                  onClick={() => {
+                    setAdding(false);
+                    setEditingExisting(false);
+                  }}
                   disabled={saving}
                 >
                   {t.common.cancel}
@@ -247,10 +262,7 @@ export default function ProductList({ liffId }: { liffId: string }) {
                   {product.product_id || product.sku || t.dashboard.products.noSku}
                 </span>
                 {product.unit_price != null && product.unit_price !== ""
-                  ? ` · ${Number(product.unit_price).toLocaleString("th-TH", {
-                      minimumFractionDigits: 2,
-                      maximumFractionDigits: 2,
-                    })}`
+                  ? ` · ${money(product.unit_price)}`
                   : ` · ${t.dashboard.products.noPrice}`}
               </div>
               {product.description && (
@@ -260,7 +272,7 @@ export default function ProductList({ liffId }: { liffId: string }) {
                   on product_id, so the form already handled edits — it
                   just had no way to be filled with a product's current
                   values, which made it a create-only form in practice. */}
-              {permissions.has("product.manage") && (
+              {canManage && (
                 <div className="card-actions">
                   <button
                     type="button"
@@ -276,6 +288,7 @@ export default function ProductList({ liffId }: { liffId: string }) {
                         sku: String(product.sku ?? ""),
                         description: String(product.description ?? ""),
                       });
+                      setEditingExisting(true);
                       setAdding(true);
                       window.scrollTo({ top: 0, behavior: "smooth" });
                     }}
@@ -288,6 +301,6 @@ export default function ProductList({ liffId }: { liffId: string }) {
           ))}
         </ul>
       )}
-    </AppShell>
+    </SalesShell>
   );
 }

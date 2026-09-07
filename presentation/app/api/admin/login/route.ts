@@ -22,6 +22,12 @@ export async function POST(request: Request) {
     return response;
   } catch (error) {
     const status = error instanceof ApplicationError ? error.status : 503;
-    return NextResponse.json({ ok: false }, { status });
+    // 423 carries locked_until; the page tells the operator when to
+    // come back instead of "wrong password" (review D2, 6 Sep 2026).
+    const detail =
+      error instanceof ApplicationError && error.body && typeof error.body === "object"
+        ? (error.body as { detail?: unknown }).detail
+        : undefined;
+    return NextResponse.json({ ok: false, detail }, { status });
   }
 }

@@ -3,15 +3,18 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Script from "next/script";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { LanguageSwitcher } from "@/lib/i18n/LanguageSwitcher";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import PipelineSummary from "./PipelineSummary";
-import { LIFF_SDK_SRC, completeLiffRedirect, initLiffSession, whenLiffReady } from "./_lib";
+import { useFailureText } from "./_format";
+import { LIFF_SDK_SRC, completeLiffRedirect, proxyHeaders, whenLiffReady } from "./_lib";
+import { useSalesSession } from "./_session";
+import { useSalesText } from "./_strings";
+import { ShopSwitcher } from "../_shop-switcher";
 import { SuspendedNotice } from "../_suspended";
-import type { Membership } from "../_shared";
 
 /**
  * The Sales dashboard index — the page every other one links back to.
@@ -57,6 +60,9 @@ export default function SalesMenu({ liffId }: { liffId: string }) {
   // call it and stay out of the way.
   const [redirecting, setRedirecting] = useState(false);
   const router = useRouter();
+  // Bumped when the shop changes so the pipeline card starts again in
+  // the new shop rather than showing the old one's numbers.
+  const [shopEpoch, setShopEpoch] = useState(0);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -131,12 +137,12 @@ export default function SalesMenu({ liffId }: { liffId: string }) {
         </div>
       </header>
       <div className="page">
-        <SalesSuspended liffId={liffId} />
+        <MenuSession liffId={liffId} onShopChanged={() => setShopEpoch((n) => n + 1)} />
         <p style={{ color: "var(--ink-soft)", fontSize: 14.5, margin: "0 0 16px" }}>
           {t.dashboard.menuIntro}
         </p>
 
-        <PipelineSummary liffId={liffId} />
+        <PipelineSummary key={shopEpoch} liffId={liffId} />
 
         <ul className="tiles">
           {SECTIONS.map((section) => (
@@ -161,22 +167,125 @@ export default function SalesMenu({ liffId }: { liffId: string }) {
   );
 }
 
+type Transfer = { id: string; status: string; to_chann_uid?: string | null };
 
-/** The menu itself needs no session; the suspended notice does. It asks
- *  once and stays silent for an active shop. */
-function SalesSuspended({ liffId }: { liffId: string }) {
-  const [memberships, setMemberships] = useState<Membership[]>([]);
+/**
+ * The menu itself needs no session; three things on it do: the
+ * suspended-shop notice, the shop switcher for someone who belongs to
+ * several (review C5), and the "accept ownership" banner for a member
+ * the owner has nominated (E6). Asks once and stays silent otherwise.
+ */
+function MenuSession({ liffId, onShopChanged }: { liffId: string; onShopChanged: () => void }) {
+  const { t } = useLanguage();
+  const s = useSalesText();
+  const failureText = useFailureText();
+  const [note, setNote] = useState<{ text: string; tone?: "ok" | "error" } | null>(null);
+  const say = useCallback((text: string, tone?: "ok" | "error") => {
+    // The menu has no status line; init failures stay in the console,
+    // outcomes of the banner's own button show under it.
+    if (tone) setNote({ text, tone });
+  }, []);
+  const session = useSalesSession(liffId, say);
+  const [offer, setOffer] = useState<Transfer | null>(null);
+  const [busy, setBusy] = useState(false);
+
   useEffect(() => {
     let alive = true;
     whenLiffReady()
-      .then(() => initLiffSession(liffId))
-      .then((session: { memberships: Membership[] }) => {
-        if (alive) setMemberships(session.memberships);
-      })
+      .then(() => session.initialize())
       .catch(() => undefined);
     return () => {
       alive = false;
+      void alive;
     };
+    // Once on mount: initialize is stable per liffId.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liffId]);
-  return <SuspendedNotice memberships={memberships} />;
+
+  useEffect(() => {
+    if (!session.ready || session.isOwner) {
+      setOffer(null);
+      return;
+    }
+    let alive = true;
+    void (async () => {
+      try {
+        const response = await fetch(
+          `/api/phase2/licenses/${session.licenseId}/ownership-transfers`,
+          { headers: proxyHeaders(session.token, session.licenseId) },
+        );
+        if (!response.ok || !alive) return;
+        const rows = (await response.json()) as Transfer[];
+        setOffer(rows.find((r) => r.status === "pending" && r.to_chann_uid === session.channUid) ?? null);
+      } catch {
+        // No banner is the right outcome for a failed lookup.
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [session.ready, session.isOwner, session.licenseId, session.token, session.channUid]);
+
+  const shop = session.memberships[0];
+
+  async function accept() {
+    if (!offer || !shop) return;
+    if (!window.confirm(s.menu.confirmAccept.replace("{shop}", shop.company_name))) return;
+    setBusy(true);
+    try {
+      const response = await fetch(
+        `/api/phase2/licenses/${session.licenseId}/ownership-transfers/${offer.id}/accept`,
+        { method: "POST", headers: proxyHeaders(session.token, session.licenseId) },
+      );
+      if (!response.ok) {
+        setNote({ text: await failureText(response), tone: "error" });
+        return;
+      }
+      setOffer(null);
+      setNote({ text: s.menu.accepted, tone: "ok" });
+      await session.initialize();
+    } catch {
+      setNote({ text: t.common.error, tone: "error" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <SuspendedNotice memberships={session.memberships} />
+      {session.memberships.length > 1 && (
+        <ShopSwitcher
+          token={session.token}
+          audience="sales"
+          shops={session.memberships}
+          current={session.licenseId}
+          label={t.dashboard.customer.shopSwitch}
+          onSwitched={() => {
+            void session.switchShop().then(onShopChanged);
+          }}
+        />
+      )}
+      {offer && shop && (
+        <div className="callout" data-tone="warn" role="status">
+          <span className="dot" />
+          <span style={{ flex: 1 }}>
+            {s.menu.transferOffer.replace("{shop}", shop.company_name)}
+          </span>
+          <button
+            type="button"
+            className="btn"
+            data-variant="primary"
+            disabled={busy}
+            onClick={() => void accept()}
+          >
+            {busy ? t.dashboard.working : s.menu.accept}
+          </button>
+        </div>
+      )}
+      {note && (
+        <p className="status" data-tone={note.tone} aria-live="polite">{note.text}</p>
+      )}
+    </>
+  );
 }

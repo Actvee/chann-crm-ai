@@ -684,7 +684,9 @@ class TestEveryTenantRouteIsGuarded:
             body = ast.dump(node)
             if "_require_same_tenant" not in body:
                 problems.append(f"{paths[0]} ({node.name}) — no tenant check")
-            if "'require'" not in body:
+            # require_any: one of several keys (review C9, 6 Sep 2026 —
+            # ticket.assign next to the ticket.update roles already hold).
+            if "'require'" not in body and "'require_any'" not in body:
                 problems.append(f"{paths[0]} ({node.name}) — no permission check")
 
         assert not problems, "\n".join(["unguarded tenant routes:", *problems])
@@ -747,12 +749,15 @@ class TestCreateFormsAreActuallyWired:
         problems = []
         for name, key in self.LISTS.items():
             source = self._source(name)
-            if f'permissions.has("{key}")' not in source:
+            # `can("key")` is the page's gate since the shared session
+            # (review C4/C7, 6 Sep 2026): permissions.has(key) AND not
+            # suspended. Either spelling names the key the route checks.
+            if f'permissions.has("{key}")' not in source and f'can("{key}")' not in source:
                 problems.append(f"{name}: no create form gated on {key}")
                 continue
-            if "await fetchPermissions(" not in source:
+            if "await fetchPermissions(" not in source and "useSalesSession(" not in source:
                 problems.append(
-                    f"{name}: gates on {key} but never calls fetchPermissions — "
+                    f"{name}: gates on {key} but never loads permissions — "
                     "the button can never appear"
                 )
         assert not problems, "\n".join(problems)

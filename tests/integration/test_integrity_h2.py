@@ -26,7 +26,7 @@ from chann_data.repositories.phase17 import ReportQueryRepository  # noqa: E402
 from chann_data.repositories.phase2 import MemberRoleRepository, Phase2Conflict  # noqa: E402
 from chann_data.repositories.phase7 import MasterDataNotFound, TechnicianTeamRepository  # noqa: E402
 from chann_data.repositories.phase9 import CustomerRepository, DealRepository, Phase9Duplicate  # noqa: E402
-from chann_data.repositories.tenant_scope import PlatformAdminRepository, TenantScope  # noqa: E402
+from chann_data.repositories.tenant_scope import PlatformAdminLocked, PlatformAdminRepository, TenantScope  # noqa: E402
 
 COMPLETE = {
     "customer_name": "จุใจ มาติกา", "customer_phone": "0659635642",
@@ -285,10 +285,15 @@ class TestPlatformAndWebhook:
             session.commit()
         with tenant["session"]() as session:
             repo = PlatformAdminRepository(session)
-            for _ in range(5):
+            for _ in range(4):
                 assert repo.authenticate(name, "wrong") is None
+            # The fifth failure trips the lock and says so (review D2).
+            with pytest.raises(PlatformAdminLocked) as tripped:
+                repo.authenticate(name, "wrong")
             session.commit()
-            assert repo.authenticate(name, "right") is None  # locked, even with the right password
+            with pytest.raises(PlatformAdminLocked) as locked:  # locked, even with the right password
+                repo.authenticate(name, "right")
+            assert locked.value.locked_until == tripped.value.locked_until
             admin = session.execute(__import__("sqlalchemy").select(PlatformAdmin).where(PlatformAdmin.username == name)).scalar_one()
             assert admin.locked_until is not None and admin.locked_until > datetime.now(timezone.utc)
             admin.locked_until = datetime.now(timezone.utc) - timedelta(minutes=1)

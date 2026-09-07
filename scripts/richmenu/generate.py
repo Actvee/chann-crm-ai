@@ -1,33 +1,15 @@
-"""Generate the three OA rich menus as one design system, three accents.
+"""Generate Chann Rich Menu v3: clear hierarchy, six exact tap areas.
 
-Owner spec (2 Sep): CS=orange, Sale=green, Tech=blue, "ตกแต่งให้สวยงาม
-กว่านี้" — so the design decisions, written down the way a design review
-would ask for them:
+The first action is intentionally large because it is the highest-frequency
+task for each audience. Five secondary actions use two card sizes. This keeps
+all existing commands while giving the menu a clear visual starting point.
 
-* **One layout, three skins.** All three menus share the same 3×2 grid,
-  the same type scale, the same icon language. A person who is both a
-  salesperson and a technician (common in a Thai SMB) should feel they
-  are in the same product, told apart by color — not in three products.
-* **The color is the theme, not decoration.** Header band and one accent
-  tile carry the OA color at full strength; the other five tiles stay
-  near-white with the accent only in the icon and a 6px baseline. Six
-  saturated tiles would shout; one accented "primary action" tile per
-  menu tells the thumb where to start (Tech → งานของฉัน, CS → แจ้งซ่อม,
-  Sale → งานวันนี้).
-* **Icons are drawn, not fonts.** Simple geometric glyphs (24px stroke at
-  this scale) render identically everywhere and keep the file small.
-  Emoji render differently per device and age badly.
-* **Text is the label, Thai first.** Garuda Bold at 96px for tile labels
-  — readable at the ~23% scale LINE actually displays the menu at.
-  A small EN sub-label anchors meaning for mixed teams.
-* **Tap targets are the full tile.** 833×703px each — far beyond any
-  reachability guideline; the 12px gutters exist to stop mis-taps
-  between tiles, not to look airy.
-
-Sizes per LINE spec: 2500×1686, six tiles + two header tabs. Two pages
-per OA (Phase 19): richmenu-<oa>.png/.json is page 1 ("หน้าหลัก"),
-richmenu-<oa>-more.png/.json page 2 ("เพิ่มเติม"); the tabs switch
-through rich-menu aliases that richmenu-apply.sh creates.
+Two pages per OA (main / more) and two languages (th / en — Phase 20):
+  out/richmenu-<oa>[-more][-en].png + .json
+The tabs switch pages through rich-menu aliases (chann-<oa>-<page>[-en]);
+the application links the -en pair to a person who chose English
+(services/richmenu.py), so the picture follows the language of the chat.
+Output stays compatible with richmenu-apply.sh.
 """
 
 from __future__ import annotations
@@ -35,11 +17,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-
-W, H = 2500, 1686
-HEADER_H = 280
-COLS, ROWS = 3, 2
-GUTTER = 12
+from PIL import Image, ImageDraw, ImageFont
 # Bundled with the script (scripts/richmenu/fonts/, TLWG Garuda, GPL-2+
 # with font exception) so this runs on any machine — Cloud Shell has no
 # sudo for apt and resets installed fonts on every restart. A system copy
@@ -57,161 +35,6 @@ _FONT_DIR = next(
 FONT_BOLD = str(Path(_FONT_DIR) / "Garuda-Bold.ttf")
 FONT_REG = str(Path(_FONT_DIR) / "Garuda.ttf")
 
-THEMES = {
-    "sales": {
-        "accent": "#178a50", "deep": "#0d5c34", "soft": "#e7f6ee",
-        "ink": "#10281b", "title": "Chann CRM — ทีมขาย",
-    },
-    "technician": {
-        "accent": "#1f6fd6", "deep": "#134a92", "soft": "#e8f1fd",
-        "ink": "#12233d", "title": "Chann CRM — ทีมช่าง",
-    },
-    "customer": {
-        "accent": "#e8731a", "deep": "#a94f0d", "soft": "#fdefe2",
-        "ink": "#3c2410", "title": "Chann — บริการลูกค้า",
-    },
-}
-
-# (thai, en, icon, action) per tile, reading order; first tile is the
-# accent tile — the one thing this audience does most.
-# Owner (3 Sep): every OA gets the same two anchors — one tile that
-# plainly opens the full-screen app ("เปิดแดชบอร์ด"), one that explains
-# what this OA can do ("วิธีใช้") — and only the everyday verbs beside
-# them. Anything a person would not reach for weekly is cut; the chat
-# and the app still do it. Message tiles send the exact phrase the chat's
-# deterministic triggers match, so a tap never falls through to the AI.
-def _rounded(draw, box, radius, fill):
-    draw.rounded_rectangle(box, radius=radius, fill=fill)
-
-
-def _icon(draw: ImageDraw.ImageDraw, name: str, cx: int, cy: int, color: str):
-    """Geometric glyphs, 24px stroke, drawn inside a 150px box."""
-    s = 75  # half-size
-    w = 24
-    if name == "sun":
-        import math
-        draw.ellipse([cx - 38, cy - 38, cx + 38, cy + 38], outline=color, width=w)
-        for k in range(8):
-            a = math.radians(k * 45)
-            draw.line(
-                [cx + 56 * math.cos(a), cy + 56 * math.sin(a),
-                 cx + 82 * math.cos(a), cy + 82 * math.sin(a)],
-                fill=color, width=w - 2,
-            )
-    elif name == "people":
-        draw.ellipse([cx - 62, cy - 55, cx - 6, cy + 1], outline=color, width=w)
-        draw.arc([cx - 78, cy - 5, cx + 10, cy + 75], 180, 360, fill=color, width=w)
-        draw.ellipse([cx + 14, cy - 45, cx + 58, cy - 1], outline=color, width=w)
-        draw.arc([cx + 2, cy + 3, cx + 72, cy + 63], 180, 360, fill=color, width=w)
-    elif name == "calendar":
-        draw.rounded_rectangle([cx - s, cy - 55, cx + s, cy + 60], 14, outline=color, width=w)
-        draw.line([cx - s, cy - 18, cx + s, cy - 18], fill=color, width=w)
-        draw.line([cx - 35, cy - 75, cx - 35, cy - 45], fill=color, width=w)
-        draw.line([cx + 35, cy - 75, cx + 35, cy - 45], fill=color, width=w)
-    elif name == "plus":
-        draw.line([cx - s, cy, cx + s, cy], fill=color, width=w + 8)
-        draw.line([cx, cy - s, cx, cy + s], fill=color, width=w + 8)
-    elif name == "doc":
-        draw.rounded_rectangle([cx - 55, cy - s, cx + 55, cy + s], 12, outline=color, width=w)
-        for i, dy in enumerate((-25, 5, 35)):
-            draw.line([cx - 28, cy + dy, cx + (28 if i < 2 else 0), cy + dy], fill=color, width=w - 6)
-    elif name == "grid":
-        for dx in (-1, 1):
-            for dy in (-1, 1):
-                draw.rounded_rectangle(
-                    [cx + dx * 58 - 32, cy + dy * 58 - 32, cx + dx * 58 + 32, cy + dy * 58 + 32],
-                    10, outline=color, width=w - 4,
-                )
-    elif name == "wrench":
-        draw.arc([cx - 70, cy - 70, cx + 10, cy + 10], 300, 200, fill=color, width=w)
-        draw.line([cx - 8, cy - 8, cx + 62, cy + 62], fill=color, width=w + 6)
-    elif name == "inbox":
-        draw.rounded_rectangle([cx - s, cy - 45, cx + s, cy + 55], 12, outline=color, width=w)
-        draw.line([cx - s, cy + 8, cx - 30, cy + 8], fill=color, width=w)
-        draw.line([cx + 30, cy + 8, cx + s, cy + 8], fill=color, width=w)
-        draw.arc([cx - 30, cy - 12, cx + 30, cy + 28], 0, 180, fill=color, width=w)
-    elif name == "pin":
-        draw.ellipse([cx - 45, cy - 65, cx + 45, cy + 25], outline=color, width=w)
-        draw.polygon([(cx - 26, cy + 8), (cx + 26, cy + 8), (cx, cy + 70)], fill=color)
-        draw.ellipse([cx - 14, cy - 34, cx + 14, cy - 6], fill=color)
-    elif name == "check":
-        draw.line([cx - 55, cy + 5, cx - 12, cy + 48], fill=color, width=w + 8)
-        draw.line([cx - 12, cy + 48, cx + 60, cy - 45], fill=color, width=w + 8)
-    elif name == "clock":
-        draw.ellipse([cx - s, cy - s, cx + s, cy + s], outline=color, width=w)
-        draw.line([cx, cy, cx, cy - 42], fill=color, width=w - 4)
-        draw.line([cx, cy, cx + 30, cy + 14], fill=color, width=w - 4)
-    elif name == "shield":
-        draw.polygon(
-            [(cx, cy - 70), (cx + 58, cy - 45), (cx + 58, cy + 10),
-             (cx, cy + 70), (cx - 58, cy + 10), (cx - 58, cy - 45)],
-            outline=color, width=w,
-        )
-        draw.line([cx - 24, cy, cx - 4, cy + 22], fill=color, width=w - 4)
-        draw.line([cx - 4, cy + 22, cx + 30, cy - 20], fill=color, width=w - 4)
-    elif name == "search":
-        draw.ellipse([cx - 60, cy - 60, cx + 20, cy + 20], outline=color, width=w)
-        draw.line([cx + 16, cy + 16, cx + 62, cy + 62], fill=color, width=w + 6)
-    elif name == "chat":
-        draw.rounded_rectangle([cx - 65, cy - 55, cx + 65, cy + 30], 26, outline=color, width=w)
-        draw.polygon([(cx - 25, cy + 28), (cx + 8, cy + 28), (cx - 20, cy + 62)], fill=color)
-    elif name == "help":
-        from PIL import ImageFont
-
-        draw.ellipse([cx - s, cy - s, cx + s, cy + s], outline=color, width=w)
-        font = ImageFont.truetype(FONT_BOLD, 88)
-        draw.text((cx, cy - 6), "?", font=font, fill=color, anchor="mm")
-    elif name == "briefcase":
-        draw.rounded_rectangle([cx - s, cy - 40, cx + s, cy + 60], 14, outline=color, width=w)
-        draw.rounded_rectangle([cx - 30, cy - 70, cx + 30, cy - 40], 8, outline=color, width=w - 6)
-        draw.line([cx - s, cy + 5, cx + s, cy + 5], fill=color, width=w - 8)
-    elif name == "tag":
-        draw.polygon(
-            [(cx - 65, cy - 60), (cx + 10, cy - 60), (cx + 65, cy - 5), (cx + 5, cy + 60), (cx - 65, cy - 10)],
-            outline=color, width=w,
-        )
-        draw.ellipse([cx - 44, cy - 42, cx - 20, cy - 18], fill=color)
-    elif name == "building":
-        draw.rounded_rectangle([cx - 60, cy - s, cx + 60, cy + s], 10, outline=color, width=w)
-        for dy in (-40, -5, 30):
-            for dx in (-32, 8):
-                draw.rectangle([cx + dx, cy + dy, cx + dx + 22, cy + dy + 20], fill=color)
-    elif name == "globe":
-        draw.ellipse([cx - s, cy - s, cx + s, cy + s], outline=color, width=w)
-        draw.ellipse([cx - 32, cy - s, cx + 32, cy + s], outline=color, width=w - 8)
-        draw.line([cx - s, cy, cx + s, cy], fill=color, width=w - 8)
-    elif name == "user":
-        draw.ellipse([cx - 34, cy - 70, cx + 34, cy - 2], outline=color, width=w)
-        draw.arc([cx - 70, cy + 5, cx + 70, cy + 120], 180, 360, fill=color, width=w)
-    elif name == "key":
-        draw.ellipse([cx - 70, cy - 30, cx - 10, cy + 30], outline=color, width=w)
-        draw.line([cx - 12, cy, cx + 70, cy], fill=color, width=w)
-        draw.line([cx + 40, cy, cx + 40, cy + 28], fill=color, width=w - 4)
-        draw.line([cx + 64, cy, cx + 64, cy + 28], fill=color, width=w - 4)
-    elif name == "cart":
-        draw.line([cx - 70, cy - 55, cx - 45, cy - 55, cx - 20, cy + 25, cx + 55, cy + 25, cx + 70, cy - 25, cx - 35, cy - 25],
-                  fill=color, width=w - 4, joint="curve")
-        draw.ellipse([cx - 22, cy + 40, cx + 2, cy + 64], fill=color)
-        draw.ellipse([cx + 30, cy + 40, cx + 54, cy + 64], fill=color)
-    elif name == "phone":
-        draw.rounded_rectangle([cx - 40, cy - s, cx + 40, cy + s], 16, outline=color, width=w)
-        draw.line([cx - 14, cy + 50, cx + 14, cy + 50], fill=color, width=w - 8)
-    elif name == "cross":
-        draw.line([cx - 50, cy - 50, cx + 50, cy + 50], fill=color, width=w + 6)
-        draw.line([cx - 50, cy + 50, cx + 50, cy - 50], fill=color, width=w + 6)
-
-
-# Two pages per OA (Master Spec §19 / PLAN_3OA B7). The header carries the
-# page tabs — a tap swaps the menu through a rich-menu alias, so to the
-# person it is one menu with two pages: page 1 the everyday verbs (the
-# six the owner signed off on 3 Sep), page 2 the rest. Every tile is a
-# phrase the chat engine handles literally or a LIFF link; nothing here
-# reaches the AI.
-PAGES = ("main", "more")
-ALIAS = "chann-{oa}-{page}"
-PAGE_TABS = {"main": ("หน้าหลัก", "Main"), "more": ("เพิ่มเติม", "More")}
-# "สลับภาษา" is one tile that works in either language: the chat engine
-# flips whichever language the person is reading now.
 _LANG = ("สลับภาษา EN/TH", "Switch language", "globe", {"type": "message", "text": "สลับภาษา"})
 TILES = {
     "sales": {
@@ -271,132 +94,501 @@ TILES = {
 }
 
 
-def layout(oa: str, page: str) -> dict:
+W, H = 2500, 1686
+HEADER_H = 300
+GAP = 24
+PAGES = ("main", "more")
+LANGS = ("th", "en")
+ALIAS = "chann-{oa}-{page}"
+OAS = ("customer", "sales", "technician")
+
+# Words on the chrome (not the tiles) per language.
+CHROME = {
+    "th": {"tabs": {"main": "หน้าหลัก", "more": "เพิ่มเติม"}, "pill": "งานหลัก · PRIMARY",
+           "tap": "แตะเพื่อเริ่ม", "bar": "เมนู"},
+    "en": {"tabs": {"main": "Home", "more": "More"}, "pill": "PRIMARY",
+           "tap": "Tap to start", "bar": "Menu"},
+}
+
+ROOT = Path(__file__).resolve().parent
+LOGO_PATH = ROOT / "assets" / "chann-logo.png"
+OUT_DIR = ROOT / "out"
+
+THEMES = {
+    "customer": {
+        "accent": "#EA6A12",
+        "deep": "#A83D08",
+        "soft": "#FFF0E6",
+        "surface": "#FFF8F3",
+        "role": "บริการลูกค้า",
+        "role_en": "CUSTOMER SERVICE",
+    },
+    "sales": {
+        "accent": "#0F8B57",
+        "deep": "#075B3A",
+        "soft": "#E6F6EF",
+        "surface": "#F4FBF8",
+        "role": "ทีมขาย",
+        "role_en": "SALES WORKSPACE",
+    },
+    "technician": {
+        "accent": "#1769D2",
+        "deep": "#0A438F",
+        "soft": "#E8F1FE",
+        "surface": "#F5F9FF",
+        "role": "ทีมช่าง",
+        "role_en": "TECHNICIAN WORKSPACE",
+    },
+}
+
+
+def _icon(draw: ImageDraw.ImageDraw, name: str, cx: int, cy: int,
+          color: str, size: int = 180):
+    """Draw one flat, solid, front-facing glyph with a transparent mask.
+
+    The icon language follows approved concept A: one colour, no badge,
+    no outline container, no shadow and only essential negative space.
+    Rendering through a 4x mask keeps curves crisp in LINE's scaled view.
+    """
+    import math
+
+    aa = 4
+    base = 200
+    mask = Image.new("L", (base * aa, base * aa), 0)
+    md = ImageDraw.Draw(mask)
+
+    def box(values):
+        return tuple(round(v * aa) for v in values)
+
+    def point(values):
+        return tuple((round(x * aa), round(y * aa)) for x, y in values)
+
+    def ellipse(values, fill=255):
+        md.ellipse(box(values), fill=fill)
+
+    def rect(values, fill=255):
+        md.rectangle(box(values), fill=fill)
+
+    def rounded(values, radius, fill=255):
+        md.rounded_rectangle(box(values), radius=round(radius * aa), fill=fill)
+
+    def polygon(values, fill=255):
+        md.polygon(point(values), fill=fill)
+
+    def line(values, width, fill=255, caps=True):
+        pts = point(values)
+        scaled_width = round(width * aa)
+        md.line(pts, fill=fill, width=scaled_width, joint="curve")
+        if caps:
+            radius = width / 2
+            for x, y in (values[0], values[-1]):
+                ellipse((x - radius, y - radius, x + radius, y + radius), fill)
+
+    if name == "sun":
+        ellipse((62, 62, 138, 138))
+        for angle in range(0, 360, 45):
+            rad = math.radians(angle)
+            p1 = (100 + 55 * math.cos(rad), 100 + 55 * math.sin(rad))
+            p2 = (100 + 79 * math.cos(rad), 100 + 79 * math.sin(rad))
+            line((p1, p2), 14)
+
+    elif name == "people":
+        ellipse((28, 38, 84, 94))
+        rounded((15, 98, 98, 170), 38)
+        ellipse((111, 48, 159, 96))
+        rounded((99, 102, 174, 164), 32)
+
+    elif name == "calendar":
+        rounded((28, 36, 172, 176), 18)
+        rect((28, 66, 172, 88), 0)
+        rounded((48, 94, 152, 155), 10, 0)
+        rounded((52, 22, 74, 58), 10)
+        rounded((126, 22, 148, 58), 10)
+
+    elif name == "plus":
+        rounded((85, 28, 115, 172), 15)
+        rounded((28, 85, 172, 115), 15)
+
+    elif name == "doc":
+        rounded((43, 18, 157, 182), 15)
+        polygon(((119, 18), (157, 56), (119, 56)), 0)
+        rounded((65, 84, 135, 98), 7, 0)
+        rounded((65, 114, 135, 128), 7, 0)
+        rounded((65, 144, 114, 158), 7, 0)
+
+    elif name == "grid":
+        for x in (28, 108):
+            for y in (28, 108):
+                rounded((x, y, x + 64, y + 64), 15)
+
+    elif name == "wrench":
+        # Upright construction avoids the usability problem of a steep tilt.
+        ellipse((46, 12, 154, 120))
+        ellipse((76, 42, 124, 90), 0)
+        polygon(((66, 0), (134, 0), (119, 57), (81, 57)), 0)
+        line(((100, 91), (100, 166)), 38)
+        ellipse((81, 147, 119, 185))
+        ellipse((92, 158, 108, 174), 0)
+
+    elif name == "inbox":
+        polygon(((26, 55), (174, 55), (160, 166), (40, 166)))
+        polygon(((54, 78), (146, 78), (137, 116), (119, 116),
+                 (109, 132), (91, 132), (81, 116), (63, 116)), 0)
+        rounded((57, 143, 143, 157), 7, 0)
+
+    elif name == "pin":
+        ellipse((42, 18, 158, 134))
+        polygon(((56, 101), (144, 101), (100, 184)))
+        ellipse((78, 54, 122, 98), 0)
+
+    elif name == "check":
+        line(((34, 104), (80, 149), (168, 51)), 28)
+
+    elif name == "clock":
+        ellipse((20, 20, 180, 180))
+        ellipse((47, 47, 153, 153), 0)
+        line(((100, 100), (100, 63)), 18)
+        line(((100, 100), (132, 118)), 18)
+
+    elif name == "shield":
+        polygon(((100, 16), (166, 42), (158, 123), (100, 184), (42, 123), (34, 42)))
+        polygon(((67, 99), (88, 120), (137, 70), (147, 82), (88, 143), (57, 112)), 0)
+
+    elif name == "search":
+        ellipse((24, 24, 135, 135))
+        ellipse((49, 49, 110, 110), 0)
+        line(((122, 122), (171, 171)), 28)
+
+    elif name == "chat":
+        rounded((22, 34, 178, 143), 31)
+        polygon(((50, 132), (94, 132), (55, 178)))
+
+    elif name == "help":
+        font = ImageFont.truetype(FONT_BOLD, 166 * aa)
+        md.text((100 * aa, 91 * aa), "?", font=font, fill=255, anchor="mm")
+
+    elif name == "briefcase":
+        rounded((20, 56, 180, 170), 18)
+        rounded((70, 28, 130, 72), 14)
+        rounded((85, 44, 115, 65), 6, 0)
+        rect((20, 103, 180, 119), 0)
+        rounded((88, 96, 112, 126), 7)
+
+    elif name == "tag":
+        polygon(((24, 46), (112, 46), (178, 112), (106, 184), (24, 102)))
+        ellipse((48, 66, 76, 94), 0)
+
+    elif name == "building":
+        rounded((37, 18, 163, 180), 12)
+        for x in (61, 111):
+            for y in (49, 91):
+                rounded((x, y, x + 28, y + 25), 5, 0)
+        rounded((83, 137, 117, 180), 5, 0)
+
+    elif name == "globe":
+        ellipse((18, 18, 182, 182))
+        ellipse((44, 44, 156, 156), 0)
+        line(((100, 23), (100, 177)), 16)
+        line(((25, 100), (175, 100)), 16)
+        md.arc(box((55, 22, 145, 178)), 90, 270, fill=255, width=12 * aa)
+        md.arc(box((55, 22, 145, 178)), 270, 90, fill=255, width=12 * aa)
+
+    elif name == "user":
+        ellipse((62, 25, 138, 101))
+        rounded((28, 107, 172, 181), 48)
+
+    elif name == "key":
+        ellipse((20, 54, 103, 137))
+        ellipse((46, 80, 77, 111), 0)
+        line(((91, 96), (176, 96)), 28)
+        rect((140, 95, 161, 132))
+        rect((164, 95, 181, 119))
+
+    elif name == "cart":
+        line(((23, 45), (43, 45), (61, 126), (155, 126), (174, 69), (53, 69)), 18)
+        ellipse((56, 143, 84, 171))
+        ellipse((132, 143, 160, 171))
+
+    elif name == "phone":
+        rounded((51, 14, 149, 186), 22)
+        rounded((69, 38, 131, 151), 9, 0)
+        rounded((87, 164, 113, 174), 5, 0)
+
+    elif name == "cross":
+        line(((44, 44), (156, 156)), 30)
+        line(((156, 44), (44, 156)), 30)
+
+    else:
+        ellipse((55, 55, 145, 145))
+
+    rendered = mask.resize((size, size), Image.Resampling.LANCZOS)
+    draw.bitmap((cx - size // 2, cy - size // 2), rendered, fill=color)
+
+
+def _rgb(value: str) -> tuple[int, int, int]:
+    value = value.lstrip("#")
+    return tuple(int(value[i : i + 2], 16) for i in (0, 2, 4))
+
+
+def _mix(a: str, b: str, ratio: float) -> tuple[int, int, int]:
+    aa, bb = _rgb(a), _rgb(b)
+    return tuple(round(x + (y - x) * ratio) for x, y in zip(aa, bb))
+
+
+def _font(path: str, size: int) -> ImageFont.FreeTypeFont:
+    return ImageFont.truetype(path, size)
+
+
+def _fit(draw: ImageDraw.ImageDraw, text: str, max_width: int, sizes, bold=True):
+    path = FONT_BOLD if bold else FONT_REG
+    for size in sizes:
+        candidate = _font(path, size)
+        if draw.textlength(text, font=candidate) <= max_width:
+            return candidate
+    return _font(path, sizes[-1])
+
+
+def _round(draw, box, radius, fill, outline=None, width=1):
+    draw.rounded_rectangle(box, radius=radius, fill=fill, outline=outline, width=width)
+
+
+def _shadow_card(canvas: Image.Image, box, radius=34, shadow=12):
+    layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    x0, y0, x1, y1 = box
+    d.rounded_rectangle(
+        [x0, y0 + shadow, x1, y1 + shadow], radius=radius,
+        fill=(15, 23, 42, 25),
+    )
+    canvas.alpha_composite(layer)
+
+
+def _primary_gradient(canvas: Image.Image, box, start: str, end: str, radius=42):
+    x0, y0, x1, y1 = box
+    width, height = x1 - x0, y1 - y0
+    panel = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    pd = ImageDraw.Draw(panel)
+    for y in range(height):
+        c = _mix(start, end, y / max(1, height - 1))
+        pd.line((0, y, width, y), fill=(*c, 255))
+    mask = Image.new("L", (width, height), 0)
+    ImageDraw.Draw(mask).rounded_rectangle((0, 0, width - 1, height - 1), radius, fill=255)
+    panel.putalpha(mask)
+    canvas.alpha_composite(panel, (x0, y0))
+
+
+def card_bounds():
+    """Six non-overlapping regions in reading/priority order."""
+    y0 = HEADER_H + GAP
+    y1 = H - GAP
+    content_h = y1 - y0
+
+    primary_w = 900
+    primary = (GAP, y0, GAP + primary_w, y1)
+
+    rx0 = primary[2] + GAP
+    rx1 = W - GAP
+    right_w = rx1 - rx0
+    row_h = (content_h - GAP) // 2
+    top_y1 = y0 + row_h
+    bottom_y0 = top_y1 + GAP
+
+    top_w = (right_w - GAP) // 2
+    top_1 = (rx0, y0, rx0 + top_w, top_y1)
+    top_2 = (rx0 + top_w + GAP, y0, rx1, top_y1)
+
+    base = (right_w - 2 * GAP) // 3
+    bottom_1 = (rx0, bottom_y0, rx0 + base, y1)
+    bottom_2 = (rx0 + base + GAP, bottom_y0, rx0 + 2 * base + GAP, y1)
+    bottom_3 = (rx0 + 2 * (base + GAP), bottom_y0, rx1, y1)
+    return [primary, top_1, top_2, bottom_1, bottom_2, bottom_3]
+
+
+def _alias(oa: str, page: str, lang: str = "th") -> str:
+    return ALIAS.format(oa=oa, page=page) + ("" if lang == "th" else f"-{lang}")
+
+
+def _suffix(page: str, lang: str = "th") -> str:
+    return ("" if page == "main" else "-more") + ("" if lang == "th" else f"-{lang}")
+
+
+def _labels(tile, lang: str) -> tuple[str, str]:
+    """(big label, small label): Thai first on the Thai menu, English first
+    on the English one — the same tile, the same action, read the other way."""
+    thai, english = tile[0], tile[1]
+    return (thai, english) if lang == "th" else (english, thai)
+
+
+def layout(oa: str, page: str, lang: str = "th") -> dict:
     """The JSON LINE needs for one page — areas for six tiles and the two
     header tabs — without drawing anything. Pure, so it is testable where
-    Pillow is not installed; build() draws the picture to match."""
-    tile_w = (W - GUTTER * (COLS + 1)) // COLS
-    tile_h = (H - HEADER_H - GUTTER * (ROWS + 1)) // ROWS
+    Pillow is not."""
     areas = []
-    # Header tabs: the right half of the band, one tab per page. Tapping
-    # the page you are on switches to itself — harmless, and it means a
-    # mis-tap never fires a verb the person did not see.
-    tab_w = TAB_W
-    for i, tab_page in enumerate(PAGES):
-        x = W - GUTTER - (len(PAGES) - i) * (tab_w + GUTTER)
+    tab_w, tab_h, tab_gap = 320, 112, 16
+    tabs_start = W - GAP - (2 * tab_w + tab_gap)
+    tab_y = 98
+    for index, tab_page in enumerate(PAGES):
         areas.append({
-            "bounds": {"x": x, "y": TAB_Y, "width": tab_w, "height": TAB_H},
+            "bounds": {
+                "x": tabs_start + index * (tab_w + tab_gap),
+                "y": tab_y,
+                "width": tab_w,
+                "height": tab_h,
+            },
             "action": {
                 "type": "richmenuswitch",
-                "richMenuAliasId": ALIAS.format(oa=oa, page=tab_page),
+                "richMenuAliasId": _alias(oa, tab_page, lang),
                 "data": f"page={tab_page}",
             },
         })
-    for i, (_thai, _en, _icon_name, action) in enumerate(TILES[oa][page]):
-        col, row = i % COLS, i // COLS
-        x = GUTTER + col * (tile_w + GUTTER)
-        y = HEADER_H + GUTTER + row * (tile_h + GUTTER)
+
+    for bounds, tile in zip(card_bounds(), TILES[oa][page]):
+        x0, y0, x1, y1 = bounds
         areas.append({
-            "bounds": {"x": x, "y": y, "width": tile_w, "height": tile_h},
-            "action": action,
+            "bounds": {"x": x0, "y": y0, "width": x1 - x0, "height": y1 - y0},
+            "action": tile[3],
         })
+
     return {
         "size": {"width": W, "height": H},
         "selected": True,
-        "name": f"chann-{oa}-v2-{page}",
-        "chatBarText": "เมนู",
+        "name": f"chann-{oa}-v3-{page}" + ("" if lang == "th" else f"-{lang}"),
+        "chatBarText": CHROME[lang]["bar"],
         "areas": areas,
-        # Stripped by richmenu-apply.sh before the POST; it is how the
-        # script knows which alias this page answers to.
-        "_alias": ALIAS.format(oa=oa, page=page),
+        "_alias": _alias(oa, page, lang),
     }
 
 
-TAB_W, TAB_H, TAB_Y = 600, 170, (HEADER_H - 14 - 170) // 2
+def draw_header(canvas: Image.Image, draw: ImageDraw.ImageDraw, theme, page: str, lang: str):
+    draw.rectangle((0, 0, W, HEADER_H), fill="#FFFFFF")
+    draw.rectangle((0, 0, W, 16), fill=theme["accent"])
+    draw.line((0, HEADER_H - 1, W, HEADER_H - 1), fill="#DDE4EC", width=2)
 
+    logo = Image.open(LOGO_PATH).convert("RGBA")
+    bbox = logo.getchannel("A").getbbox()
+    if bbox:
+        logo = logo.crop(bbox)
+    logo.thumbnail((150, 150), Image.Resampling.LANCZOS)
+    canvas.alpha_composite(logo, (48, 74))
 
-def build(oa: str, page: str, out_dir: Path):
-    from PIL import Image, ImageDraw, ImageFont
+    role_big, role_small = (theme["role"], theme["role_en"]) if lang == "th" else (theme["role_en"].title(), theme["role"])
+    draw.text((230, 82), "Chann CRM", font=_font(FONT_BOLD, 86), fill="#102A43", anchor="la")
+    draw.text((234, 180), role_big, font=_font(FONT_BOLD, 46), fill=theme["accent"], anchor="la")
+    draw.text((234, 250), role_small, font=_font(FONT_BOLD, 23), fill="#6B7C93", anchor="la")
 
-    theme = THEMES[oa]
-    img = Image.new("RGB", (W, H), theme["soft"])
-    draw = ImageDraw.Draw(img)
-
-    # Header band: brand + which OA this is, at a glance in the chat list;
-    # the page tabs on the right.
-    draw.rectangle([0, 0, W, HEADER_H], fill=theme["accent"])
-    draw.rectangle([0, HEADER_H - 14, W, HEADER_H], fill=theme["deep"])
-    title_font = ImageFont.truetype(FONT_BOLD, 110)
-    draw.text((70, HEADER_H // 2 - 8), theme["title"], font=title_font,
-              fill="#ffffff", anchor="lm")
-    for i, tab_page in enumerate(PAGES):
-        x = W - GUTTER - (len(PAGES) - i) * (TAB_W + GUTTER)
+    tab_w, tab_h, tab_gap = 320, 112, 16
+    tabs_start = W - GAP - (2 * tab_w + tab_gap)
+    tab_y = 98
+    for index, tab_page in enumerate(PAGES):
+        x = tabs_start + index * (tab_w + tab_gap)
         active = tab_page == page
-        box = [x, TAB_Y, x + TAB_W, TAB_Y + TAB_H]
+        label = CHROME[lang]["tabs"][tab_page]
         if active:
-            draw.rounded_rectangle(box, 30, fill="#ffffff")
+            _round(draw, (x, tab_y, x + tab_w, tab_y + tab_h), 30, theme["accent"])
+            color = "#FFFFFF"
         else:
-            draw.rounded_rectangle(box, 30, outline="#ffffff", width=6)
-        thai, en = PAGE_TABS[tab_page]
-        label = f"{thai} · {en}"
-        # The largest size that stays inside the pill with 30px each side.
-        tab_font = ImageFont.truetype(FONT_BOLD, 56)
-        for size in (76, 70, 64, 58):
-            candidate = ImageFont.truetype(FONT_BOLD, size)
-            if draw.textlength(label, font=candidate) <= TAB_W - 60:
-                tab_font = candidate
-                break
-        draw.text((x + TAB_W // 2, TAB_Y + TAB_H // 2 + 2), label,
-                  font=tab_font, fill=theme["accent"] if active else "#ffffff", anchor="mm")
+            _round(
+                draw, (x, tab_y, x + tab_w, tab_y + tab_h), 30,
+                theme["soft"], outline=_mix(theme["accent"], "#FFFFFF", 0.45), width=3,
+            )
+            color = theme["deep"]
+        draw.text((x + tab_w // 2, tab_y + tab_h // 2 + 2), label,
+                  font=_font(FONT_BOLD, 48), fill=color, anchor="mm")
 
-    tile_w = (W - GUTTER * (COLS + 1)) // COLS
-    tile_h = (H - HEADER_H - GUTTER * (ROWS + 1)) // ROWS
 
-    def fitted(text: str, bold: bool = True,
-               sizes=(96, 86, 76, 68, 60), floor: int = 54) -> ImageFont.FreeTypeFont:
-        """The largest size that keeps the label inside its tile.
+def draw_primary(canvas, draw, box, tile, theme, lang: str):
+    x0, y0, x1, y1 = box
+    _shadow_card(canvas, box, radius=42, shadow=14)
+    _primary_gradient(canvas, box, theme["accent"], theme["deep"], radius=42)
+    draw = ImageDraw.Draw(canvas)
 
-        Thai compounds run long ("ลงทะเบียนรับประกัน") and clipped a tile
-        edge in review; shrinking beats wrapping here because a rich menu
-        label is a button, and two-line buttons read as two buttons.
-        """
-        face = FONT_BOLD if bold else FONT_REG
-        for size in sizes:
-            font = ImageFont.truetype(face, size)
-            if draw.textlength(text, font=font) <= tile_w - 90:
-                return font
-        return ImageFont.truetype(face, floor)
+    pill_fill = _mix(theme["deep"], theme["accent"], 0.46)
+    _round(draw, (x0 + 56, y0 + 56, x0 + 300, y0 + 116), 30, pill_fill)
+    draw.text((x0 + 178, y0 + 86), CHROME[lang]["pill"], font=_font(FONT_BOLD, 25),
+              fill="#FFFFFF", anchor="mm")
 
-    for i, (thai, en, icon, _action) in enumerate(TILES[oa][page]):
-        col, row = i % COLS, i // COLS
-        x = GUTTER + col * (tile_w + GUTTER)
-        y = HEADER_H + GUTTER + row * (tile_h + GUTTER)
-        # Six identical tiles (owner, 3 Sep): every tile is white with the
-        # accent icon and baseline; the header carries the OA's colour.
-        _rounded(draw, [x, y, x + tile_w, y + tile_h], 34, "#ffffff")
-        draw.rounded_rectangle(
-            [x + 34, y + tile_h - 18, x + tile_w - 34, y + tile_h - 12],
-            3, fill=theme["accent"],
-        )
-        _icon(draw, icon, x + tile_w // 2, y + 205, theme["accent"])
-        draw.text((x + tile_w // 2, y + 400), thai, font=fitted(thai),
-                  fill=theme["ink"], anchor="mm")
-        # 60% black over white is ~5.7:1 for text this small.
-        draw.text((x + tile_w // 2, y + 505), en,
-                  font=fitted(en, bold=False, sizes=(84, 76, 68), floor=60),
-                  fill="#00000099", anchor="mm")
+    _icon(draw, tile[2], x0 + 183, y0 + 317, "#FFFFFF", size=240)
 
-    out_dir.mkdir(parents=True, exist_ok=True)
-    suffix = "" if page == "main" else f"-{page}"
-    img.save(out_dir / f"richmenu-{oa}{suffix}.png", optimize=True)
-    (out_dir / f"richmenu-{oa}{suffix}.json").write_text(
-        json.dumps(layout(oa, page), ensure_ascii=False, indent=2), encoding="utf-8",
-    )
-    print(f"{oa}/{page}: richmenu-{oa}{suffix}.png + .json")
+    big, small = _labels(tile, lang)
+    # Latin capitals sit lower on the line than Thai glyphs, so the English
+    # headline is capped smaller and both labels get a little more air.
+    big_sizes = (112, 102, 92, 82, 72, 62) if lang == "th" else (96, 88, 80, 72, 64)
+    big_font = _fit(draw, big, x1 - x0 - 112, big_sizes, bold=True)
+    small_font = _fit(draw, small, x1 - x0 - 112, (52, 46, 42, 38), bold=False)
+    draw.text((x0 + 56, y0 + 556), big, font=big_font, fill="#FFFFFF", anchor="la")
+    draw.text((x0 + 60, y0 + 706), small, font=small_font, fill=(255, 255, 255, 218), anchor="la")
+
+    draw.line((x0 + 56, y1 - 164, x1 - 56, y1 - 164), fill=_mix(theme["accent"], "#FFFFFF", 0.58), width=2)
+    draw.text((x0 + 60, y1 - 92), CHROME[lang]["tap"], font=_font(FONT_BOLD, 38), fill="#FFFFFF", anchor="lm")
+    _round(draw, (x1 - 154, y1 - 140, x1 - 56, y1 - 42), 49, "#FFFFFF")
+    arrow_y = y1 - 92
+    draw.line((x1 - 129, arrow_y, x1 - 84, arrow_y), fill=theme["deep"], width=9)
+    draw.line((x1 - 101, arrow_y - 18, x1 - 83, arrow_y), fill=theme["deep"], width=9)
+    draw.line((x1 - 101, arrow_y + 18, x1 - 83, arrow_y), fill=theme["deep"], width=9)
+
+
+def draw_top_card(canvas, draw, box, tile, theme, lang: str):
+    x0, y0, x1, y1 = box
+    _shadow_card(canvas, box)
+    _round(draw, box, 34, "#FFFFFF", outline="#E5EAF0", width=2)
+
+    _icon(draw, tile[2], x0 + 133, y0 + 133, theme["accent"], size=168)
+
+    big, small = _labels(tile, lang)
+    big_font = _fit(draw, big, x1 - x0 - 96, (78, 70, 64, 58, 52, 46), bold=True)
+    small_font = _fit(draw, small, x1 - x0 - 96, (40, 36, 32, 28), bold=False)
+    draw.text((x0 + 48, y0 + 300), big, font=big_font, fill="#102A43", anchor="la")
+    draw.text((x0 + 50, y0 + 390), small, font=small_font, fill="#66788A", anchor="la")
+    draw.rounded_rectangle((x0 + 48, y1 - 58, x1 - 48, y1 - 50), 4, fill=theme["accent"])
+
+
+def draw_small_card(canvas, draw, box, tile, theme, lang: str):
+    x0, y0, x1, y1 = box
+    _shadow_card(canvas, box)
+    _round(draw, box, 34, "#FFFFFF", outline="#E5EAF0", width=2)
+
+    _icon(draw, tile[2], x0 + 118, y0 + 134, theme["accent"], size=148)
+
+    max_text = x1 - x0 - 72
+    big, small = _labels(tile, lang)
+    big_font = _fit(draw, big, max_text, (56, 50, 46, 42, 38, 34), bold=True)
+    small_font = _fit(draw, small, max_text, (31, 28, 25, 22), bold=False)
+    draw.text((x0 + 38, y0 + 294), big, font=big_font, fill="#102A43", anchor="la")
+    draw.text((x0 + 40, y0 + 372), small, font=small_font, fill="#66788A", anchor="la")
+    draw.rounded_rectangle((x0 + 38, y1 - 54, x1 - 38, y1 - 46), 4, fill=theme["accent"])
+
+
+def render(oa: str, page: str, lang: str = "th") -> Image.Image:
+    theme = THEMES[oa]
+    canvas = Image.new("RGBA", (W, H), theme["surface"])
+    draw = ImageDraw.Draw(canvas)
+    draw_header(canvas, draw, theme, page, lang)
+
+    tiles = TILES[oa][page]
+    bounds = card_bounds()
+    draw_primary(canvas, draw, bounds[0], tiles[0], theme, lang)
+    draw = ImageDraw.Draw(canvas)
+    draw_top_card(canvas, draw, bounds[1], tiles[1], theme, lang)
+    draw_top_card(canvas, draw, bounds[2], tiles[2], theme, lang)
+    draw_small_card(canvas, draw, bounds[3], tiles[3], theme, lang)
+    draw_small_card(canvas, draw, bounds[4], tiles[4], theme, lang)
+    draw_small_card(canvas, draw, bounds[5], tiles[5], theme, lang)
+    return canvas
+
+
+def build(oa: str, page: str, lang: str = "th", out: Path | None = None) -> tuple[Path, Path]:
+    out = out or OUT_DIR
+    out.mkdir(parents=True, exist_ok=True)
+    image_path = out / f"richmenu-{oa}{_suffix(page, lang)}.png"
+    json_path = out / f"richmenu-{oa}{_suffix(page, lang)}.json"
+    render(oa, page, lang).convert("RGB").save(image_path, optimize=True)
+    json_path.write_text(json.dumps(layout(oa, page, lang), ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"{oa}/{page}/{lang}: {image_path.name} + {json_path.name}")
+    return image_path, json_path
 
 
 if __name__ == "__main__":
-    out = Path(__file__).parent / "out"
-    for oa in THEMES:
-        for page in PAGES:
-            build(oa, page, out)
+    for oa_name in OAS:
+        for lang_name in LANGS:
+            for page_name in PAGES:
+                build(oa_name, page_name, lang_name)

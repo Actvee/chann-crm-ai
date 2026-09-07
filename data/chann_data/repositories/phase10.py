@@ -214,9 +214,11 @@ class QuoteRepository:
         standing. Only `sent` quotes expire: a draft was never an offer,
         and an accepted one is a commitment that a date does not undo.
         """
-        from datetime import date as _date, datetime as _dt, timezone as _tz
+        from .localtime import bangkok_today
 
-        today = on_day or _dt.now(_tz.utc).date()
+        # The shop's calendar, not UTC's: the 00:30 Bangkok job used to
+        # run on "yesterday" and expire a day late (review E4).
+        today = on_day or bangkok_today()
         rows = self._s.execute(
             select(Quote).where(
                 Quote.license_id == scope.license_id,

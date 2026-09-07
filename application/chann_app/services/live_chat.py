@@ -21,7 +21,12 @@ from .notify import send_notification
 
 log = logging.getLogger(__name__)
 
-AGENT_ROLES = ("owner", "admin", "sales", "cs")
+AGENT_ROLES = ("owner", "admin", "sales", "cs", "member")
+# The people who answer customers are whoever may see/claim/reply to a
+# chat session — by permission (spec §4), not by the name of a role.
+# The default "member" (salesperson) template holds all three and was
+# never told a customer wanted to talk (review, 6 Sep 2026).
+AGENT_PERMISSIONS = ("chat_session.view", "chat_session.claim", "chat_session.reply")
 LIVE = ("open", "assigned")
 DEFAULT_SLA_MINUTES = 15  # owner, 4 Sep: the shop answers within 15 minutes
 DEFAULT_TIMEOUT_MINUTES = 60  # owner, 4 Sep: an hour of silence closes it
@@ -73,16 +78,30 @@ def _shown(session: dict) -> str:
 
 
 async def _agents(client: DataClient, license_id: str) -> list[dict]:
+    """Members who handle customer chats: anyone holding a chat_session
+    permission; owners and admins as the fallback when the permission
+    lookup is unavailable."""
     try:
         members = await client.list_members(str(license_id))
     except Exception:
         log.exception("could not list members for a chat notification")
         return []
-    return [
-        m for m in members
-        if str(m.get("role") or "").lower() in AGENT_ROLES
-        and str(m.get("status") or "active") == "active" and m.get("chann_uid")
-    ]
+    out = []
+    for m in members:
+        if str(m.get("status") or "active") != "active" or not m.get("chann_uid"):
+            continue
+        try:
+            context = await client.authorization_context(str(license_id), str(m["chann_uid"]))
+        except Exception:  # noqa: BLE001
+            context = None
+        if context is None:
+            if str(m.get("role") or "").lower() in AGENT_ROLES:
+                out.append(m)
+            continue
+        held = set(context.get("permission_keys") or [])
+        if held & set(AGENT_PERMISSIONS) or str(m.get("role") or "").lower() in AGENT_ROLES:
+            out.append(m)
+    return out
 
 
 async def _tell(

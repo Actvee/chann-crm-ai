@@ -96,8 +96,16 @@ async function withTimeout<T>(label: string, ms: number, work: Promise<T>): Prom
  * Returns the in-app path to navigate to, or null when there is nothing to
  * follow.
  */
-export async function completeLiffRedirect(liffId: string): Promise<string | null> {
+export async function completeLiffRedirect(
+  liffId: string,
+  audience: Audience = "sales",
+): Promise<string | null> {
   if (typeof window === "undefined") return null;
+  // Per audience, not hard-wired to the sales app: the technician rich
+  // menu's "รายงานของฉัน" carries liff.state=/reports and used to land on
+  // a blank technician home because only SalesMenu called this, and it
+  // only ever built sales paths (review D8, 6 Sep 2026).
+  const basePath = basePathFor(audience);
   const state = new URLSearchParams(window.location.search).get("liff.state");
   if (!state) return null;
 
@@ -115,13 +123,15 @@ export async function completeLiffRedirect(liffId: string): Promise<string | nul
 
   // init() may have already navigated. If it did, the path no longer
   // matches the endpoint and there is nothing left to do.
-  if (!window.location.pathname.endsWith(SALES_BASE_PATH)) return null;
+  if (!window.location.pathname.replace(/\/$/, "").endsWith(basePath)) return null;
 
   // Only ever within this app. liff.state comes off a URL anyone can craft,
   // so following an absolute target would be an open redirect.
   const target = state.startsWith("/") ? state : `/${state}`;
   if (target.startsWith("//") || target.includes("://")) return null;
-  return `${SALES_BASE_PATH}${target}`;
+  // Already here (liff.state=/ or the app's own path): nothing to follow.
+  if (target === "/" || target === basePath) return null;
+  return target.startsWith(`${basePath}/`) ? target : `${basePath}${target}`;
 }
 
 export function proxyHeaders(
@@ -196,7 +206,9 @@ export async function initLiffSession(
 ): Promise<{ token: string; memberships: Membership[] }> {
   const liff = getLiff();
   if (!liffId || !liff) {
-    throw new Error("NEXT_PUBLIC_LIFF_SALES_ID is REQUIRED_NOT_CONFIGURED");
+    // Named per audience: the customer app saying NEXT_PUBLIC_LIFF_SALES_ID
+    // sent the owner to fix the wrong variable (review D16, 6 Sep 2026).
+    throw new Error(`NEXT_PUBLIC_LIFF_${audience.toUpperCase()}_ID is REQUIRED_NOT_CONFIGURED`);
   }
   // withLoginOnExternalBrowser is deliberately NOT set.
   //

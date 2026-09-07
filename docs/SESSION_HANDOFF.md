@@ -1,3 +1,72 @@
+### Review round 2 (6 Sep) — ~95 findings fixed in one release (`review2-v1`)
+
+Second review after `65b85c9`: three tiers read against each other, the
+chat handler driven through ~1,000 adversarial turns (every rich-menu
+tile × role × pending state, interrupted flows, double actions, wrong OA)
+and a 737-utterance corpus. Report: `~/REVIEW_3OA_2026-09-06.md` on the
+owner's Cloud Shell (sections A chat, B language, C sales LIFF, D
+customer/technician LIFF + admin, E backend). Everything in A, C, D, E is
+in this release; B (language breadth) follows as `review2-b`.
+
+- **Rich menu v3** (owner's redesign): one primary card + five secondary
+  cards per page, the Chann logo, the same 36 actions. `scripts/richmenu/
+  generate.py` is self-contained and draws every page in Thai and English
+  (`-en` files, `chann-<oa>-<page>-en` aliases); `richmenu-apply.sh`
+  uploads four menus per OA, Thai main as default; `services/richmenu.py`
+  links the English pair to a person who chose English (after
+  registration and on "สลับภาษา"). `scripts/setup-richmenu.py` retired.
+  Run `python3 scripts/richmenu/generate.py && bash scripts/richmenu/
+  richmenu-apply.sh` with the three tokens + LIFF urls to publish.
+- **Chat (A1–A26 + Low)**: rich-menu tiles and commands are answered as
+  themselves in every pending state (a close-job draft survives a tap);
+  approve/reject/claim/assign/check-out only from a command, never from a
+  question or a sentence that mentions the verb; the bot's own quick
+  replies round-trip (cancel confirm, decline reason); "done" on the sales
+  OA no longer opens a report; the storefront picker releases on any
+  command; list/view tiles gate on read-level keys so the default member/
+  cs templates can use every tile; ติดต่อร้าน shows company_phone/email
+  and forwards the next line to the shop; address/phone/price-question/
+  negation are recognised before "fault"; Thai date-time parser handles
+  N โมง, hour-vs-year, day/month without year, BE years; decline asks for
+  confirmation + reason; CS is notified on decline/cancel/reschedule;
+  deal stage changes notify the deal owner (`deal_stage_changed`).
+  `tests/unit/test_chat_review_a.py` (67 tests).
+- **Sales LIFF (C1–C20, E6, E7)**: `DealOut` carries amount/currency/
+  expected_close_date/lost_reason and `QuoteOut` valid_until/discounts
+  (they were saved and never returned); InlineCreateForm keeps its state
+  on a refusal and the customer form asks for what the API requires;
+  suspended tenants are read-only in the application (423
+  `tenant_suspended`) and the notice shows on every sales page; one
+  server-persisted shop switcher on every page; quote actions follow the
+  state machine + an Issue button on the detail; every control gated on
+  the key its route requires; `product.read` permission; `ticket.assign`
+  (dispatch) / `ticket.close` (cancel) enforced, unenforced keys removed
+  from the catalog; explicit limits + serial search + `GET customers/{id}`;
+  refusals carry `reason_code` for the UI to translate; owner transfer
+  (nominate on the company page, accept banner on the menu,
+  `transfer_request` notification); sales groups get members.
+- **Customer/technician LIFF + admin (D1–D16, PDPA)**: technician
+  signature on the report PDF; admin lockout answers 423 with the time;
+  a technician (no `customer.read`) sees only their own tickets/reports;
+  customer reports page with PDF; unlinked customer gets a working home +
+  "type the shop code" hint; one language for screen and chat; suspended
+  notice per selected shop; rich-menu deep links land per audience;
+  PDPA erasure reaches frozen document snapshots, notes, follow-ups, deal
+  notes, audit values, PDFs and export pages.
+- **Backend (E1–E5, E8, E10–E14)**: notification `entity_id` is a UUID
+  or None (the "customer linked" notice used to 422 silently); every
+  stored object is served by the application tier through
+  `GET /api/v1/assets/{token}` — GCS signed URLs (unavailable here) are
+  gone; trials expire (Scheduler job `trials-expire` 00:15, owners warned
+  3 and 1 days ahead); warranties expire nightly and a read never says
+  active past `warranty_end`; expiry sweeps count Bangkok days; a LINE-
+  linked customer is attached to the phone-matching staff row; morning
+  digest looks one day ahead; dead `PDF_RENDERER`/SmartBrowz token
+  manager removed and the runtime config contract matches `config.py`
+  (test-enforced); Thai Excel CSV (Windows-874) imports.
+- No migration. Tests: unit+boundary 1341, integration 340, three
+  simulators at baseline, all check-* scripts at baseline, tsc + build.
+
 ### Plan C8 (4 Sep) — where you left off (`catch-up-v1`)
 
 - `live_chat.catch_up` now renders the customer's last line before the

@@ -181,7 +181,13 @@ class TestTechnicianPhrasings:
     async def test_accept_and_decline_words_on_their_own(self):
         client = _tech()
         client._tickets[0].update({"accept_status": "pending"})
+        # Declining sends the job back to the dispatcher: a bare "ไม่รับ"
+        # is confirmed with a reason first (review, 6 Sep 2026); the reason
+        # is the confirmation.
         reply, calls = await say(client, "technician", "ไม่รับ")
+        assert calls == 0 and "ใช่ไหม" in reply.text
+        assert not [r for r in client.recorded if r[0] == "reject_ticket"]
+        reply, calls = await say(client, "technician", "ไม่ว่างวันนั้น")
         assert calls == 0 and [r for r in client.recorded if r[0] == "reject_ticket"]
 
     async def test_check_out_prefers_the_job_in_progress(self):

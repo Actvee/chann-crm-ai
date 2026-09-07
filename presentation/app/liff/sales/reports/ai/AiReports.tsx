@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
-import { AppShell } from "../../_components";
-import { fetchPermissions, initLiffSession, openExternal, proxyHeaders } from "../../_lib";
+import { useSalesSession } from "../../_session";
+import { SalesShell } from "../../_shell";
+import { openExternal, proxyHeaders } from "../../_lib";
 
 type Row = { key: string; label: string; value: number };
 type Result = {
@@ -45,24 +46,16 @@ export default function AiReports({ liffId }: { liffId: string }) {
     setTone(next);
   }, []);
 
-  const initialize = useCallback(async () => {
-    try {
-      const session = await initLiffSession(liffId);
-      if (!session.token) return;
-      const license = session.memberships[0]?.license_id ?? "";
-      if (!license) {
-        say(t.liff.noCompany, "error");
-        return;
-      }
-      setToken(session.token);
-      setLicenseId(license);
-      const permissions = await fetchPermissions(session.token, license);
-      setAllowed(permissions.has("view_reports"));
-      say("");
-    } catch {
-      say(t.liff.sdkLoadFailed, "error");
-    }
-  }, [liffId, say, t]);
+  // The shared session (review C4/C5): the shop, its permissions and the
+  // suspended notice come from one place, and a switch starts over.
+  const session = useSalesSession(liffId, say);
+  useEffect(() => {
+    if (!session.ready) return;
+    setToken(session.token);
+    setLicenseId(session.licenseId);
+    setAllowed(session.permissions.has("view_reports"));
+    say("");
+  }, [session.ready, session.token, session.licenseId, session.permissions, say]);
 
   async function ask(text: string) {
     const message = text.trim();
@@ -95,10 +88,10 @@ export default function AiReports({ liffId }: { liffId: string }) {
   const peak = Math.max(1, ...rows.map((r) => r.value));
 
   return (
-    <AppShell
+    <SalesShell
+      session={session}
       title={copy.title}
       liffId={liffId}
-      onReady={() => void initialize()}
       onSdkError={() => say(t.liff.sdkLoadFailed, "error")}
       status={status}
       statusTone={tone}
@@ -216,6 +209,6 @@ export default function AiReports({ liffId }: { liffId: string }) {
           <p className="footnote">{copy.footnote}</p>
         </section>
       )}
-    </AppShell>
+    </SalesShell>
   );
 }

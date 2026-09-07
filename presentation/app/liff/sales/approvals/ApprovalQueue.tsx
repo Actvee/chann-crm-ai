@@ -1,13 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
-import { AppShell } from "../_components";
+import { useSalesSession } from "../_session";
+import { SalesShell } from "../_shell";
 import { FieldRow } from "../../_field-row";
-import { fetchPermissions, initLiffSession, openExternal, proxyHeaders } from "../../_shared";
+import { openExternal, proxyHeaders } from "../../_shared";
 
 type Step = {
   id: string;
@@ -78,23 +79,18 @@ export default function ApprovalQueue({ liffId }: { liffId: string }) {
     [licenseId, say, t, token],
   );
 
-  const initialize = useCallback(async () => {
-    try {
-      const session = await initLiffSession(liffId, "sales");
-      if (!session.token) return;
-      const license = session.memberships[0]?.license_id ?? "";
-      setToken(session.token);
-      setLicenseId(license);
-      if (!license) {
-        say(t.liff.noCompany, "error");
-        return;
-      }
-      setPermissions(await fetchPermissions(session.token, license, "sales"));
-      await load(session.token, license);
-    } catch (error) {
-      say(error instanceof Error ? error.message : t.dashboard.openFailed, "error");
-    }
-  }, [liffId, load, say, t]);
+  // The shared session (review C4/C5): the shop, its permissions and the
+  // suspended notice come from one place, and a switch starts over.
+  const session = useSalesSession(liffId, say);
+  useEffect(() => {
+    if (!session.ready) return;
+    setToken(session.token);
+    setLicenseId(session.licenseId);
+    setPermissions(session.permissions);
+    load(session.token, session.licenseId).catch((error: unknown) =>
+      say(error instanceof Error ? error.message : t.dashboard.openFailed, "error"),
+    );
+  }, [session.ready, session.token, session.licenseId, session.permissions, load, say, t]);
 
   async function act(row: Pending, approve: boolean) {
     const code = row.report?.report_id ?? "";
@@ -152,16 +148,17 @@ export default function ApprovalQueue({ liffId }: { liffId: string }) {
     }
   }
 
-  const canApprove = permissions.has("approval.approve");
-  const canReject = permissions.has("approval.reject");
-  const canManage = permissions.has("approval.manage");
+  // A suspended shop reads its queue and acts on nothing (review C4).
+  const canApprove = !session.suspended && permissions.has("approval.approve");
+  const canReject = !session.suspended && permissions.has("approval.reject");
+  const canManage = !session.suspended && permissions.has("approval.manage");
 
   return (
-    <AppShell
+    <SalesShell
+      session={session}
       title={t.dashboard.approvals.title}
       back="/liff/sales"
       liffId={liffId}
-      onReady={() => void initialize()}
       onSdkError={() => say(t.liff.sdkLoadFailed, "error")}
       status={status}
       statusTone={tone}
@@ -294,6 +291,6 @@ export default function ApprovalQueue({ liffId }: { liffId: string }) {
           })}
         </ul>
       )}
-    </AppShell>
+    </SalesShell>
   );
 }

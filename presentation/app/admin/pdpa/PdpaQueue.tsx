@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 
 import { ADMIN } from "@/lib/admin-copy";
 
+import { adminCall } from "../_client";
 import { fmtDate, type PdpaRequest } from "../_types";
 
 const copy = ADMIN.pdpa;
@@ -28,16 +29,14 @@ export function PdpaQueue({ rows }: { rows: PdpaRequest[] }) {
     setBusy(id);
     setNote(null);
     try {
-      const res = await fetch(`/api/admin/pdpa/${id}/${action}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ reason }),
-      });
-      if (!res.ok) throw new Error(String(res.status));
+      const res = await adminCall(`/api/admin/pdpa/${id}/${action}`, { reason });
+      if (!res.ok) {
+        if (res.status === 401) return;
+        setNote({ text: res.reason ? `${copy.failed} · ${res.reason}` : copy.failed, tone: "error" });
+        return;
+      }
       setNote({ text: action === "process" ? copy.processed : copy.rejected, tone: "ok" });
       router.refresh();
-    } catch {
-      setNote({ text: copy.failed, tone: "error" });
     } finally {
       setBusy("");
     }
@@ -48,17 +47,15 @@ export function PdpaQueue({ rows }: { rows: PdpaRequest[] }) {
     setBusy("new");
     setNote(null);
     try {
-      const res = await fetch("/api/admin/pdpa/new/create", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chann_uid: newUid.trim(), request_type: newType }),
-      });
-      if (!res.ok) throw new Error(String(res.status));
+      const res = await adminCall("/api/admin/pdpa/new/create", { chann_uid: newUid.trim(), request_type: newType });
+      if (!res.ok) {
+        if (res.status === 401) return;
+        setNote({ text: res.reason ? `${copy.createFailed} · ${res.reason}` : copy.createFailed, tone: "error" });
+        return;
+      }
       setNote({ text: copy.created, tone: "ok" });
       setNewUid("");
       router.refresh();
-    } catch {
-      setNote({ text: copy.createFailed, tone: "error" });
     } finally {
       setBusy("");
     }

@@ -3,15 +3,20 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
-import { AppShell, Badge, CompanyPicker, Count, Empty } from "../_components";
+import { Badge, Count, Empty } from "../_components";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
+import { FieldRow } from "../../_field-row";
 import { InlineCreateForm } from "../../_inline-create";
 import {
   ListControls, byNewest, byOldest, shortDate, useListControls,
 } from "../../_list-controls";
 
-import { Membership, fetchPermissions, initLiffSession, proxyHeaders } from "../_lib";
+import { useFailureText, useFormatters } from "../_format";
+import { proxyHeaders } from "../_lib";
+import { useSalesSession } from "../_session";
+import { SalesShell } from "../_shell";
+import { useSalesText } from "../_strings";
 
 type Deal = {
   id: string;
@@ -50,27 +55,33 @@ function nextStages(stage: string, canReopen: boolean): string[] {
 }
 
 export default function DealList({ liffId }: { liffId: string }) {
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
+  const s = useSalesText();
+  const { money } = useFormatters();
+  const failureText = useFailureText();
   const stageLabel = (stage: string) =>
     (t.deal.stage as Record<string, string>)[stage] ?? stage;
-  const [token, setToken] = useState("");
-  const [memberships, setMemberships] = useState<Membership[]>([]);
-  const [licenseId, setLicenseId] = useState("");
   const [deals, setDeals] = useState<Deal[]>([]);
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
   const [busy, setBusy] = useState(false);
-  const [permissions, setPermissions] = useState<Set<string>>(new Set());
   const [contacts, setContacts] = useState<
     { id: string; name: string; keywords?: string }[]
   >([]);
   const [busyId, setBusyId] = useState("");
   const [openOnly, setOpenOnly] = useState(false);
+  // Why a deal was lost, asked inline (review C20): window.prompt is
+  // silently a no-op inside some LINE webviews, which made "ปิดไม่สำเร็จ"
+  // a button that did nothing.
+  const [losing, setLosing] = useState<Deal | null>(null);
+  const [lostReason, setLostReason] = useState("");
 
   const say = useCallback((message: string, kind?: "ok" | "error") => {
     setStatus(message);
     setTone(kind);
   }, []);
+  const session = useSalesSession(liffId, say);
+  const { token, licenseId, permissions } = session;
 
   const load = useCallback(async () => {
     if (!token || !licenseId) return;
@@ -86,58 +97,49 @@ export default function DealList({ liffId }: { liffId: string }) {
     }
     setDeals((await response.json()) as Deal[]);
     say("");
-  }, [licenseId, say, token]);
+  }, [licenseId, say, t, token]);
+
+  const loadContacts = useCallback(async () => {
+    if (!token || !licenseId || !permissions.has("deal.create")) return;
+    // A deal needs a customer, so the picker is filled up front rather
+    // than asking anyone to remember a code.
+    const response = await fetch(
+      `/api/phase2/licenses/${licenseId}/customers`,
+      { headers: proxyHeaders(token, licenseId) },
+    );
+    if (!response.ok) {
+      // Without customers the create-deal form silently does not
+      // appear, which reads as "you cannot create deals". Say why.
+      say(`${t.dashboard.loadFailed} (${response.status})`, "error");
+      return;
+    }
+    const rows = (await response.json()) as {
+      id: string; first_name?: string; last_name?: string;
+      customer_id?: string; stage?: string; phone?: string | null;
+    }[];
+    setContacts(
+      rows
+        // Contacts only: a lead has not agreed to anything, and
+        // opening a deal on one skips the step that says they did.
+        .filter((row) => row.stage !== "lead")
+        .map((row) => ({
+          id: row.id,
+          name: `${row.first_name ?? ""} ${row.last_name ?? ""}`.trim()
+            || (row.customer_id ?? row.id),
+          // Searchable by the number off a missed call and by the code
+          // (review C14): the picker matched on the name alone.
+          keywords: [row.phone, row.customer_id].filter(Boolean).join(" "),
+        })),
+    );
+  }, [licenseId, permissions, say, t, token]);
 
   useEffect(() => {
-    if (!token || !licenseId) return;
+    if (!session.ready) return;
     void load().catch((error: unknown) =>
       say(error instanceof Error ? error.message : t.dashboard.loadFailed, "error"),
     );
-  }, [licenseId, load, say, token]);
-
-  const initialize = useCallback(async () => {
-    try {
-      const session = await initLiffSession(liffId);
-      if (!session.token) return;
-      setToken(session.token);
-      setMemberships(session.memberships);
-      setLicenseId(session.memberships[0]?.license_id ?? "");
-      const license = session.memberships[0]?.license_id ?? "";
-      if (license) {
-        setPermissions(await fetchPermissions(session.token, license));
-        // A deal needs a customer, so the picker is filled up front
-        // rather than asking anyone to remember a code.
-        const response = await fetch(
-          `/api/phase2/licenses/${license}/customers`,
-          { headers: proxyHeaders(session.token, license) },
-        );
-        if (!response.ok) {
-          // Without customers the create-deal form silently does not
-          // appear, which reads as "you cannot create deals". Say why.
-          say(`${t.dashboard.loadFailed} (${response.status})`, "error");
-        } else {
-          const rows = (await response.json()) as {
-            id: string; first_name?: string; last_name?: string;
-            customer_id?: string; stage?: string;
-          }[];
-          setContacts(
-            rows
-              // Contacts only: a lead has not agreed to anything, and
-              // opening a deal on one skips the step that says they did.
-              .filter((row) => row.stage !== "lead")
-              .map((row) => ({
-                id: row.id,
-                name: `${row.first_name ?? ""} ${row.last_name ?? ""}`.trim()
-                  || (row.customer_id ?? row.id),
-              })),
-          );
-        }
-      }
-      if (!session.memberships.length) say(t.liff.noCompany, "error");
-    } catch (error) {
-      say(error instanceof Error ? error.message : t.dashboard.openFailed, "error");
-    }
-  }, [liffId, say]);
+    void loadContacts().catch(() => undefined);
+  }, [session.ready, load, loadContacts, say, t]);
 
   async function createDeal(values: Record<string, string>) {
     setBusy(true);
@@ -151,15 +153,14 @@ export default function DealList({ liffId }: { liffId: string }) {
         const detail = await response.json().catch(() => ({}));
         const body = detail.detail;
         // One open deal per customer: saying which one beats "conflict".
-        say(
+        const why =
           body && typeof body === "object" && body.error === "duplicate"
             ? t.dashboard.deals.alreadyOpen.replace(
                 "{code}", String(body.existing_code ?? ""),
               )
-            : `${t.common.error} (${response.status})`,
-          "error",
-        );
-        return;
+            : await failureText(response);
+        say(why, "error");
+        throw new Error(why);
       }
       await load();
       say(t.dashboard.saved, "ok");
@@ -168,16 +169,7 @@ export default function DealList({ liffId }: { liffId: string }) {
     }
   }
 
-  async function setStage(deal: Deal, stage: string) {
-    // Why, when it is a loss. Asked for once and never demanded: an
-    // empty answer is recorded as no reason, not refused, because a
-    // column full of "-" looks answered and teaches nothing.
-    let lostReason: string | undefined;
-    if (stage === "lost") {
-      const answer = window.prompt(t.dashboard.deals.askLostReason, "");
-      if (answer === null) return;
-      lostReason = answer.trim() || undefined;
-    }
+  async function setStage(deal: Deal, stage: string, reason?: string) {
     setBusyId(deal.id);
     say(t.dashboard.working);
     try {
@@ -186,25 +178,38 @@ export default function DealList({ liffId }: { liffId: string }) {
         {
           method: "POST",
           headers: proxyHeaders(token, licenseId),
-          body: JSON.stringify({ stage, allow_reopen: permissions.has("deal.reopen"), lost_reason: lostReason }),
+          body: JSON.stringify({
+            stage,
+            allow_reopen: stage === "new" && permissions.has("deal.reopen"),
+            lost_reason: reason?.trim() || undefined,
+          }),
         },
       );
       if (!response.ok) {
         say(
-          response.status === 403
-            ? t.dashboard.deals.stageDenied
-            : `${t.common.error} (${response.status})`,
+          response.status === 403 ? t.dashboard.deals.stageDenied : await failureText(response),
           "error",
         );
         return;
       }
       say(`${deal.deal_id} → ${stageLabel(stage)}`, "ok");
+      setLosing(null);
+      setLostReason("");
       await load();
     } catch (error) {
       say(error instanceof Error ? error.message : t.common.error, "error");
     } finally {
       setBusyId("");
     }
+  }
+
+  function askOrSet(deal: Deal, stage: string) {
+    if (stage === "lost") {
+      setLosing(deal);
+      setLostReason("");
+      return;
+    }
+    void setStage(deal, stage);
   }
 
   const stageFiltered = openOnly
@@ -233,18 +238,20 @@ export default function DealList({ liffId }: { liffId: string }) {
   ];
   const controls = useListControls(stageFiltered, sorts, "newest");
   const visible = controls.visible;
+  const can = (key: string) => !session.suspended && permissions.has(key);
+  // The stage buttons need deal.update (C7); the list offered them to
+  // everyone who could read.
+  const moves = (deal: Deal) => (can("deal.update") ? nextStages(deal.stage, can("deal.reopen")) : []);
 
   return (
-    <AppShell
+    <SalesShell
+      session={session}
       title={t.deal.title}
       liffId={liffId}
-      onReady={() => void initialize()}
       onSdkError={() => say(t.liff.sdkLoadFailed, "error")}
       status={status}
       statusTone={tone}
     >
-      <CompanyPicker memberships={memberships} licenseId={licenseId} onChange={setLicenseId} />
-
       <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
         <button
           type="button"
@@ -276,7 +283,7 @@ export default function DealList({ liffId }: { liffId: string }) {
 
       <Count shown={visible.length} total={deals.length} />
 
-      {permissions.has("deal.create") && contacts.length > 0 && (
+      {can("deal.create") && contacts.length > 0 && (
         <InlineCreateForm
           title={t.dashboard.deals.add}
           busy={busy}
@@ -295,6 +302,47 @@ export default function DealList({ liffId }: { liffId: string }) {
           ]}
           onSubmit={createDeal}
         />
+      )}
+
+      {losing && (
+        <section className="section" style={{ marginBottom: 16 }}>
+          <div className="section-head">
+            <h2>{s.deals.lostReasonTitle} — <span className="code">{losing.deal_id}</span></h2>
+          </div>
+          <dl className="fields">
+            <FieldRow label={t.dashboard.deals.lostReason}>
+              {(id) => (
+                <textarea
+                  id={id}
+                  rows={2}
+                  value={lostReason}
+                  placeholder={s.deals.lostReasonHint}
+                  onChange={(event) => setLostReason(event.target.value)}
+                />
+              )}
+            </FieldRow>
+            <div className="actions">
+              <button
+                type="button"
+                className="btn"
+                data-variant="quiet"
+                onClick={() => setLosing(null)}
+                disabled={busyId === losing.id}
+              >
+                {t.common.cancel}
+              </button>
+              <button
+                type="button"
+                className="btn"
+                data-variant="danger"
+                onClick={() => void setStage(losing, "lost", lostReason)}
+                disabled={busyId === losing.id}
+              >
+                {busyId === losing.id ? t.dashboard.saving : s.deals.confirmLost}
+              </button>
+            </div>
+          </dl>
+        </section>
       )}
 
       {visible.length === 0 ? (
@@ -324,7 +372,10 @@ export default function DealList({ liffId }: { liffId: string }) {
                     )
                   : t.dashboard.deals.noLineItems}
                 {dealValue(deal) > 0
-                  ? ` · ${t.dashboard.deals.amount} ${dealValue(deal).toLocaleString("th-TH", { maximumFractionDigits: 0 })} ${deal.currency ?? "THB"}`
+                  ? ` · ${t.dashboard.deals.amount} ${money(dealValue(deal), 0)} ${deal.currency ?? "THB"}`
+                  : ""}
+                {deal.expected_close_date
+                  ? ` · ${t.dashboard.deals.expectedClose} ${shortDate(deal.expected_close_date, locale)}`
                   : ""}
                 {deal.notes ? ` · ${deal.notes}` : ""}
               </div>
@@ -332,18 +383,18 @@ export default function DealList({ liffId }: { liffId: string }) {
                   the thing a date filter is filtering on — a list that
                   can be filtered by a date it does not show is a puzzle. */}
               <div className="card-meta" style={{ fontSize: 12, color: "var(--ink-faint)" }}>
-                {shortDate(deal.created_at)}
+                {shortDate(deal.created_at, locale)}
               </div>
               </Link>
-              {nextStages(deal.stage, permissions.has("deal.reopen")).length ? (
+              {moves(deal).length ? (
                 <div className="card-actions">
-                  {nextStages(deal.stage, permissions.has("deal.reopen")).map((stage) => (
+                  {moves(deal).map((stage) => (
                     <button
                       key={stage}
                       type="button"
                       className="btn"
                       data-variant={stage === "won" ? "primary" : undefined}
-                      onClick={() => void setStage(deal, stage)}
+                      onClick={() => askOrSet(deal, stage)}
                       disabled={busyId === deal.id}
                     >
                       {busyId === deal.id
@@ -357,6 +408,6 @@ export default function DealList({ liffId }: { liffId: string }) {
           ))}
         </ul>
       )}
-    </AppShell>
+    </SalesShell>
   );
 }

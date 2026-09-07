@@ -64,6 +64,25 @@ function parseCsv(text: string): string[][] {
  * its own; the result names each refused row with the reason, next to
  * the button that caused it.
  */
+
+/** Read a CSV the way Thai Excel writes it: UTF-8 (with or without BOM) when
+ * it is valid UTF-8, otherwise Windows-874 / TIS-620 — the encoding Excel on a
+ * Thai PC still exports by default. Decoding cp874 bytes as UTF-8 turns every
+ * header into mojibake and the import fails with "missing columns" although
+ * the file is fine (review E9). */
+export async function readCsvText(file: Blob): Promise<string> {
+  const bytes = await file.arrayBuffer();
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    try {
+      return new TextDecoder("windows-874").decode(bytes);
+    } catch {
+      return new TextDecoder("utf-8").decode(bytes);
+    }
+  }
+}
+
 export function CsvImport({
   kind,
   token,
@@ -115,7 +134,7 @@ export function CsvImport({
     setError("");
     setResult(null);
     try {
-      const text = await file.text();
+      const text = await readCsvText(file);
       // Spelled out per kind (not `${kind}/import`) so the boundary check
       // can see both routes exist.
       const url =

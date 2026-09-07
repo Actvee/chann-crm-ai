@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 
 from ..data_client import DataClient, DataTierError
 from .ai.client import AINotConfigured, AIUnavailable, complete
+from .assets import asset_link
 from .storage.base import DocumentStoreNotConfigured, get_document_store
 
 log = logging.getLogger(__name__)
@@ -290,7 +291,7 @@ def report_html(spec: dict, result: dict, language: str, *, company_name: str = 
 
 
 async def publish_files(spec: dict, result: dict, language: str, *, license_id: str, company_name: str = "") -> dict:
-    """CSV and a printable page in the document store (signed, 7 days);
+    """CSV and a printable page in the document store (asset links, 7 days);
     a PDF as well when the renderer is configured. Missing storage is
     not an error: the text answer stands on its own."""
     files: dict[str, str | None] = {"csv": None, "html": None, "pdf": None}
@@ -302,9 +303,9 @@ async def publish_files(spec: dict, result: dict, language: str, *, license_id: 
     page = report_html(spec, result, language, company_name=company_name)
     try:
         stored = await store.put(key=f"reports/{license_id}/{stamp}.csv", content=report_csv(spec, result, language), content_type="text/csv; charset=utf-8")
-        files["csv"] = await store.signed_url(path=stored.path, expires_seconds=FILE_LINK_SECONDS)
+        files["csv"] = asset_link(stored.path, content_type="text/csv; charset=utf-8", ttl_seconds=FILE_LINK_SECONDS, filename="report.csv")
         stored = await store.put(key=f"reports/{license_id}/{stamp}.html", content=page.encode("utf-8"), content_type="text/html; charset=utf-8")
-        files["html"] = await store.signed_url(path=stored.path, expires_seconds=FILE_LINK_SECONDS)
+        files["html"] = asset_link(stored.path, content_type="text/html; charset=utf-8", ttl_seconds=FILE_LINK_SECONDS, filename="report.html")
     except DocumentStoreNotConfigured:
         return files
     except Exception:  # noqa: BLE001
@@ -316,7 +317,7 @@ async def publish_files(spec: dict, result: dict, language: str, *, license_id: 
         rendered = await get_renderer("smartbrowz").render(page, PdfOptions(), idempotency_key=f"report:{license_id}:{stamp}")
         if rendered.content:
             stored = await store.put(key=f"reports/{license_id}/{stamp}.pdf", content=rendered.content, content_type="application/pdf")
-            files["pdf"] = await store.signed_url(path=stored.path, expires_seconds=FILE_LINK_SECONDS)
+            files["pdf"] = asset_link(stored.path, content_type="application/pdf", ttl_seconds=FILE_LINK_SECONDS, filename="report.pdf")
     except Exception:  # noqa: BLE001
         log.info("report PDF skipped (renderer not available)")
     return files

@@ -50,13 +50,19 @@ export function InlineCreateForm({
   );
 
   async function submit() {
-    await onSubmit(
-      Object.fromEntries(
-        Object.entries(values).map(([key, value]) => [key, value.trim()]),
-      ),
-    );
-    // Cleared only on the way out: leaving the values in place after a
-    // failure means the person does not retype what they just typed.
+    // The page's onSubmit THROWS when the API refuses (and shows why in
+    // its status line). Only a save that returned normally closes the
+    // form: an earlier version reset on every outcome, so a 422 wiped
+    // what had just been typed (review C3, 6 Sep 2026).
+    try {
+      await onSubmit(
+        Object.fromEntries(
+          Object.entries(values).map(([key, value]) => [key, value.trim()]),
+        ),
+      );
+    } catch {
+      return;
+    }
     setValues({});
     setOpen(false);
   }

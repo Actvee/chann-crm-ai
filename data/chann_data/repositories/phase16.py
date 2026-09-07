@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 from .locks import serialise
 
 from ..models import Customer, License, Product, Warranty
+from .localtime import bangkok_today
 from .tenant_scope import TenantScope
 
 WARRANTY_STATUSES = frozenset({"active", "expired", "void"})
@@ -253,12 +254,22 @@ class WarrantyRepository:
                 "warranty_number": r.warranty_number,
                 "product_name": r.product_name,
                 "warranty_end": r.warranty_end.isoformat() if r.warranty_end else None,
-                "status": r.status,
+                "status": "expired" if (r.status == "active" and r.warranty_end and r.warranty_end < bangkok_today()) else r.status,
             }
             for r in rows
         ]
 
     # -------------------------------------------------------------- status
+
+    @staticmethod
+    def effective_status(row: Warranty, on_day: date | None = None) -> str:
+        """What the cover IS today, whatever the column says: `status` is
+        a cache the nightly sweep refreshes, and a row nobody has swept
+        yet must not tell a customer they are still covered (review E5).
+        `void` and `expired` are final; only `active` is re-derived."""
+        if row.status == "active" and row.warranty_end and row.warranty_end < (on_day or bangkok_today()):
+            return "expired"
+        return row.status
 
     def set_status(
         self, scope: TenantScope, warranty_id: uuid.UUID, *, status: str,
@@ -279,7 +290,7 @@ class WarrantyRepository:
         comparison, and a row nobody has swept is still expired in fact.
         Callers that need certainty should compare warranty_end directly.
         """
-        today = on_day or datetime.now(timezone.utc).date()
+        today = on_day or bangkok_today()
         rows = self._s.execute(
             select(Warranty).where(
                 Warranty.license_id == scope.license_id,

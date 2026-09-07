@@ -322,6 +322,20 @@ class OwnershipTransferRepository:
         self._s.flush()
         return transfer
 
+    def list(
+        self, scope: TenantScope, *, status: str | None = "pending"
+    ) -> list[OwnershipTransfer]:
+        """The tenant's transfers, pending ones by default — what the owner
+        sees as "waiting" and the nominee sees as "accept?" (E6)."""
+        query = select(OwnershipTransfer).where(
+            OwnershipTransfer.license_id == scope.license_id
+        )
+        if status:
+            query = query.where(OwnershipTransfer.status == status)
+        return list(
+            self._s.execute(query.order_by(OwnershipTransfer.created_at.desc())).scalars()
+        )
+
     def accept(
         self, scope: TenantScope, transfer_id: uuid.UUID, accepting_chann_uid: str
     ) -> OwnershipTransfer:

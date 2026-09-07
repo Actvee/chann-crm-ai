@@ -60,7 +60,9 @@ async def main():
     await say(t,"technician","งานที่เปิดรับ")                    # rich-menu tile (3 Sep audit)
     await say(t,"technician","วิธีใช้งาน")                       # rich-menu tile → help, not AI
     await say(t,"technician","งานพรุ่งนี้")  # 6 Sep: a way of saying "my jobs"
-    await say(t,"technician","ลูกค้าไม่อยู่บ้าน", ai_client=ai({"action":"update","entity":"ticket","fields":{"status":"customer_absent"},"missing":[]}), expect_ok=False)
+    # 6 Sep review (A24): the model understood a ticket update the chat cannot
+    # do — a technician who HOLDS ticket.update is told what to type, not "no permission".
+    await say(t,"technician","ลูกค้าไม่อยู่บ้าน", ai_client=ai({"action":"update","entity":"ticket","fields":{"status":"customer_absent"},"missing":[]}), expect_ok=True)
 
     print("\n=== EDGE CASES: customer ===")
     u = T.FakeDataClient(permission_keys=["customer.read","ticket.create","ticket.read","warranty.read","warranty.create"])

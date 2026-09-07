@@ -106,7 +106,11 @@ class TestDecline:
 
     async def test_the_only_pending_job_needs_no_code(self):
         client = _shop_with_jobs()
-        await handle_chat_message(client, message="ไม่รับงาน", ctx=_tech())
+        reply = await handle_chat_message(client, message="ไม่รับงาน", ctx=_tech())
+        # Confirmed with a reason first (review, 6 Sep 2026); the reason is
+        # the confirmation, and the job needed no code.
+        assert "ปฏิเสธงาน T-" in reply.text and not any(r[0] == "reject_ticket" for r in client.recorded)
+        await handle_chat_message(client, message="ไม่ว่างวันนั้น", ctx=_tech())
         assert any(r[0] == "reject_ticket" for r in client.recorded)
 
 

@@ -11,6 +11,7 @@ type Profile = {
   first_name?: string | null;
   last_name?: string | null;
   phone?: string | null;
+  email?: string | null;
   address?: string | null;
 };
 
@@ -33,14 +34,16 @@ export function ProfileCard({
   audience: "customer" | "technician";
   shopName?: string | null;
 }) {
-  const { t } = useLanguage();
+  const { t, locale, setLocale } = useLanguage();
   const copy = t.dashboard.profile;
   const [profile, setProfile] = useState<Profile | null>(null);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<Profile>({});
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ text: string; tone: "ok" | "error" } | null>(null);
-  const [language, setLanguage] = useState<string>("th");
+  // The reply language IS the page language: one value, kept on the
+  // server by LanguageProvider (review D6, 6 Sep 2026).
+  const language = locale;
   const [dateFormat, setDateFormat] = useState<string>("");
   const [timezone, setTimezone] = useState<string>("Asia/Bangkok");
   const [signature, setSignature] = useState<string | null>(null);
@@ -151,13 +154,15 @@ export function ProfileCard({
         });
         if (prefs.ok && !cancelled) {
           const p = (await prefs.json()) as { language?: string | null; date_format?: string | null; timezone?: string | null };
-          setLanguage(p.language === "en" ? "en" : "th");
           setDateFormat(p.date_format && p.date_format !== "dd/mm/yyyy" ? p.date_format : (p.date_format ?? ""));
           setTimezone(p.timezone || "Asia/Bangkok");
         }
         // 13.5: whether a signature is on file (printed on approved reports).
-        const sig = await fetch(`/api/liff/${audience}/signature`, { headers: headers() });
-        if (sig.ok && !cancelled) {
+        // Technicians only — nothing prints a customer's.
+        const sig = audience === "technician"
+          ? await fetch(`/api/liff/${audience}/signature`, { headers: headers() })
+          : null;
+        if (sig && sig.ok && !cancelled) {
           const body = (await sig.json()) as { url?: string | null };
           setSignature(body.url ?? null);
         }
@@ -181,6 +186,7 @@ export function ProfileCard({
           first_name: draft.first_name ?? "",
           last_name: draft.last_name ?? "",
           phone: draft.phone ?? "",
+          email: draft.email ?? "",
           address: draft.address ?? "",
         }),
       });
@@ -211,19 +217,11 @@ export function ProfileCard({
     }
   }
 
-  async function chooseLanguage(next: string) {
-    setLanguage(next);
-    try {
-      const response = await fetch(`/api/liff/${audience}/display-preferences`, {
-        method: "PUT",
-        headers: headers(),
-        body: JSON.stringify({ language: next }),
-      });
-      if (!response.ok) throw new Error(String(response.status));
-      setNote({ text: copy.languageSaved, tone: "ok" });
-    } catch {
-      setNote({ text: copy.saveFailed, tone: "error" });
-    }
+  function chooseLanguage(next: string) {
+    // The provider switches the page and writes the preference back
+    // (it is bound to this session by the home screen).
+    setLocale(next === "en" ? "en" : "th");
+    setNote({ text: copy.languageSaved, tone: "ok" });
   }
 
   return (
@@ -267,16 +265,25 @@ export function ProfileCard({
           <FieldRow label={copy.phone} empty={!profile.phone}>
             {profile.phone || copy.notSet}
           </FieldRow>
+          <FieldRow label={copy.email} empty={!profile.email}>
+            {profile.email || copy.notSet}
+          </FieldRow>
           <FieldRow label={copy.address} empty={!profile.address}>
             {profile.address || copy.notSet}
           </FieldRow>
-          <FieldRow label={copy.signature}>
-            <span>
-              {signature ? copy.signatureSet : copy.signatureNone}
-              {" · "}
-              <a href={`/liff/${audience}/signature`}>{copy.signatureEdit}</a>
-            </span>
-          </FieldRow>
+          {audience === "technician" && (
+            // Only a technician's signature is printed anywhere (13.5: on
+            // the service report they check out). Nothing signs for a
+            // customer, so offering them a pad promised a use that does
+            // not exist (review D1, 6 Sep 2026).
+            <FieldRow label={copy.signature}>
+              <span>
+                {signature ? copy.signatureSet : copy.signatureNone}
+                {" · "}
+                <a href={`/liff/${audience}/signature`}>{copy.signatureEdit}</a>
+              </span>
+            </FieldRow>
+          )}
           <FieldRow label={copy.pdpaConsent} empty={consent ? !consent.accepted : false}>
             {consent === null ? (
               <span>…</span>
@@ -382,6 +389,18 @@ export function ProfileCard({
                 value={draft.phone ?? ""}
                 autoComplete="tel"
                 onChange={(e) => setDraft({ ...draft, phone: e.target.value })}
+              />
+            )}
+          </FieldRow>
+          <FieldRow label={copy.email}>
+            {(id) => (
+              <input
+                id={id}
+                type="email"
+                inputMode="email"
+                value={draft.email ?? ""}
+                autoComplete="email"
+                onChange={(e) => setDraft({ ...draft, email: e.target.value })}
               />
             )}
           </FieldRow>

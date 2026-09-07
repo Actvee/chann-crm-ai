@@ -8,6 +8,7 @@ know the wire shape, and every existing call site stays correct.
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 
 import httpx
@@ -139,6 +140,98 @@ async def _send(
             # still a successful send; only the reply mapping is lost.
             log.warning("LINE %s succeeded but sentMessages could not be read", what)
             return []
+    finally:
+        if owns_client:
+            await client.aclose()
+
+
+# ------------------------------------------------------------ rich menus
+#
+# Review E10 (6 Sep 2026): every OA had one default (Thai, main) rich menu
+# and nobody was ever linked to another, so the English pages the
+# rich-menu stream generates could never reach a person who switched
+# language. LINE links a menu to a user by richMenuId; the apply script
+# addresses menus by alias (chann-<oa>-main, chann-<oa>-more, and the
+# -en variants), so the alias is resolved first and remembered for a
+# while — the id changes only when the script re-applies the menus.
+
+LINE_RICH_MENU_ALIAS_URL = "https://api.line.me/v2/bot/richmenu/alias/{alias}"
+LINE_USER_RICH_MENU_URL = "https://api.line.me/v2/bot/user/{user_id}/richmenu/{rich_menu_id}"
+RICH_MENU_ALIAS_CACHE_S = 600
+
+_alias_cache: dict[tuple[str, str], tuple[str, float]] = {}
+
+
+def _bearer(oa: str) -> dict:
+    access_token = channel_access_token(oa)
+    if not access_token:
+        raise LineReplyError(f"LINE_{oa.upper()}_CHANNEL_ACCESS_TOKEN is REQUIRED_NOT_CONFIGURED")
+    return {"Authorization": f"Bearer {access_token}"}
+
+
+def forget_rich_menu_aliases() -> None:
+    """For tests, and for anything that re-applies menus in-process."""
+    _alias_cache.clear()
+
+
+async def rich_menu_id_for_alias(
+    oa: str, alias_id: str, client: httpx.AsyncClient | None = None,
+) -> str:
+    """The richMenuId behind an alias on this OA, cached ~10 minutes."""
+    key = (oa, alias_id)
+    cached = _alias_cache.get(key)
+    now = time.monotonic()
+    if cached and cached[1] > now:
+        return cached[0]
+    headers = _bearer(oa)
+    owns_client = client is None
+    client = client or httpx.AsyncClient(timeout=10.0)
+    try:
+        response = await client.get(LINE_RICH_MENU_ALIAS_URL.format(alias=alias_id), headers=headers)
+    finally:
+        if owns_client:
+            await client.aclose()
+    if response.status_code >= 400:
+        raise LineReplyError(
+            f"LINE rich menu alias {alias_id} lookup failed: {response.status_code} {response.text[:200]}"
+        )
+    rich_menu_id = str((response.json() or {}).get("richMenuId") or "")
+    if not rich_menu_id:
+        raise LineReplyError(f"LINE rich menu alias {alias_id} has no richMenuId")
+    _alias_cache[key] = (rich_menu_id, now + RICH_MENU_ALIAS_CACHE_S)
+    return rich_menu_id
+
+
+async def link_rich_menu(
+    oa: str, user_id: str, alias_id: str, client: httpx.AsyncClient | None = None,
+) -> str:
+    """Give this person the menu behind `alias_id` on this OA. Returns
+    the richMenuId that was linked; raises LineReplyError otherwise."""
+    if not user_id:
+        raise LineReplyError("rich menu link requires a LINE user id")
+    owns_client = client is None
+    client = client or httpx.AsyncClient(timeout=10.0)
+    try:
+        rich_menu_id = await rich_menu_id_for_alias(oa, alias_id, client)
+        response = await client.post(
+            LINE_USER_RICH_MENU_URL.format(user_id=user_id, rich_menu_id=rich_menu_id),
+            headers=_bearer(oa),
+        )
+        if response.status_code == 404:
+            # The alias pointed at a menu that has since been replaced
+            # (the apply script deletes and recreates them). Forget the
+            # stale id and try once more with a fresh lookup.
+            _alias_cache.pop((oa, alias_id), None)
+            rich_menu_id = await rich_menu_id_for_alias(oa, alias_id, client)
+            response = await client.post(
+                LINE_USER_RICH_MENU_URL.format(user_id=user_id, rich_menu_id=rich_menu_id),
+                headers=_bearer(oa),
+            )
+        if response.status_code >= 400:
+            raise LineReplyError(
+                f"LINE rich menu link failed: {response.status_code} {response.text[:200]}"
+            )
+        return rich_menu_id
     finally:
         if owns_client:
             await client.aclose()

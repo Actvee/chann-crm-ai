@@ -34,29 +34,39 @@
 
 ## Application
 
+ตารางนี้ต้องตรงกับ `application/chann_app/config.py` ทุกตัว (`tests/unit/test_config_contract.py` บังคับ) — ตัวแปรที่ config ไม่อ่านห้ามอยู่ในตาราง และ field ใน config ทุกตัวต้องมีแถวที่นี่
+
 | Variable | Status | Purpose |
 |---|---|---|
 | `DATA_BASE_URL` | DERIVED_AT_DEPLOY | internal Data Tier endpoint |
+| `ADMIN_SECRET` | REQUIRED_NOT_CONFIGURED | shared secret for the internal Data Tier API (`X-Internal-Secret`) |
+| `REMINDER_SWEEP_SECRET` | REQUIRED_FOR_SCHEDULED_JOBS | static `X-Sweep-Secret` Cloud Scheduler sends to the sweep endpoints (reminders, quotes/warranties expiry, chat SLA, trials); unset = every sweep refuses (`routers_admin.require_scheduler`) |
 | `LINE_CUSTOMER_CHANNEL_SECRET` | REQUIRED_NOT_CONFIGURED | verify Customer OA webhook |
-| `LINE_CUSTOMER_CHANNEL_ACCESS_TOKEN` | REQUIRED_NOT_CONFIGURED | push/reply Customer OA |
+| `LINE_CUSTOMER_CHANNEL_ACCESS_TOKEN` | REQUIRED_NOT_CONFIGURED | push/reply Customer OA, rich-menu linking |
 | `LINE_SALES_CHANNEL_SECRET` | REQUIRED_NOT_CONFIGURED | verify Sales OA webhook |
-| `LINE_SALES_CHANNEL_ACCESS_TOKEN` | REQUIRED_NOT_CONFIGURED | push/reply Sales OA |
+| `LINE_SALES_CHANNEL_ACCESS_TOKEN` | REQUIRED_NOT_CONFIGURED | push/reply Sales OA, rich-menu linking |
 | `LINE_TECHNICIAN_CHANNEL_SECRET` | REQUIRED_NOT_CONFIGURED | verify Technician OA webhook |
-| `LINE_TECHNICIAN_CHANNEL_ACCESS_TOKEN` | REQUIRED_NOT_CONFIGURED | push/reply Technician OA |
+| `LINE_TECHNICIAN_CHANNEL_ACCESS_TOKEN` | REQUIRED_NOT_CONFIGURED | push/reply Technician OA, rich-menu linking |
 | `LINE_LOGIN_CHANNEL_ID` | REQUIRED_NOT_CONFIGURED | expected ID-token audience (`client_id`); Channel ID, not full LIFF app ID |
+| `JWT_SECRET` | REQUIRED_NOT_CONFIGURED | signs platform-admin session tokens AND the one-object links sent into LINE (`/api/v1/documents/{token}`, `/api/v1/assets/{token}`) |
+| `JWT_TTL_S` | OPTIONAL (default 86400) | platform-admin session lifetime, seconds |
 | `OPENROUTER_API_KEY` | REQUIRED_NOT_CONFIGURED | OpenRouter access |
-| `OPENROUTER_MODEL` | REQUIRED_NOT_CONFIGURED | default Qwen model selector |
-| `OPENROUTER_MODEL_REASONING` | OPTIONAL_UNTIL_PHASE_17 | DeepSeek reasoning model selector |
-| `ADMIN_SECRET` | REQUIRED_NOT_CONFIGURED | reduced-security internal/admin header auth where specified |
-| `CRON_SECRET` | OPTIONAL_UNTIL_SCHEDULED_JOBS | reduced-security scheduled endpoint auth |
-| `SMARTBROWZ_RENDER_MODE` | REQUIRED_BY_PHASE_10 | baseline: application-managed HTML -> SmartBrowz PDF; optional predefined-template mode only after verified |
-| `SMARTBROWZ_CATALYST_PROJECT_ID` | REQUIRED_BY_PHASE_10 | Zoho Catalyst project containing SmartBrowz |
-| `SMARTBROWZ_CATALYST_ORG_ID` | REQUIRED_BY_PHASE_10 | Catalyst organization identifier when required by REST integration |
-| `SMARTBROWZ_ACCOUNTS_URL` | REQUIRED_NOT_CONFIGURED_IN_TFVARS | datacenter-specific Zoho accounts host for the OAuth token exchange — confirmed `https://accounts.zoho.com` (US datacenter) from the real token response's `api_domain` field; Terraform variable now wired with this as its default |
-| `SMARTBROWZ_CLIENT_ID` | REQUIRED_NOT_CONFIGURED_IN_TFVARS | from the Catalyst API Console's Self Client — owner has generated this; Terraform variable declared (`infrastructure/terraform/variables.tf`), needs the real value added to `terraform.tfvars` (never committed) |
-| `SMARTBROWZ_CLIENT_SECRET` | REQUIRED_NOT_CONFIGURED_IN_TFVARS | from the Catalyst API Console's Self Client — owner has generated this; same as above |
-| `SMARTBROWZ_REFRESH_TOKEN` | REQUIRED_NOT_CONFIGURED_IN_TFVARS | one-time grant token already exchanged for a refresh_token — owner has generated this; confirmed scope `ZohoCatalyst.pdfshot.execute ZohoCatalyst.dataverse.execute` (the first is what this project needs; `dataverse` — web-scraping/lead-enrichment — came along with Self Client's default scope set and isn't used, harmlessly). Same as above: needs the real value added to `terraform.tfvars` |
-| `GCS_BUCKET_NAME` | REQUIRED_BY_FILE_FEATURES | PDF/photo/signature storage |
+| `OPENROUTER_MODEL` | REQUIRED_NOT_CONFIGURED | chat-tier model selector (thinking off) |
+| `OPENROUTER_MODEL_REASONING` | OPTIONAL_UNTIL_PHASE_17 | reasoning-tier model selector (ad-hoc reports) |
+| `CATALYST_API_DOMAIN` | OPTIONAL (default `https://api.catalyst.zoho.com`) | Catalyst API host (datacenter-specific); Terraform also exports it to the SDK as `X_ZOHO_CATALYST_CONSOLE_URL` |
+| `CATALYST_PROJECT_ID` | REQUIRED_BY_PHASE_10 | Zoho Catalyst project containing SmartBrowz |
+| `CATALYST_ENVIRONMENT` | OPTIONAL (default `Development`) | Catalyst environment name |
+| `CATALYST_ZAID` | REQUIRED_BY_PHASE_10 | Zoho Account ID of the Catalyst project environment (mandatory in the SDK's `ICatalystOptions`) |
+| `SMARTBROWZ_ACCOUNTS_URL` | OPTIONAL (default `https://accounts.zoho.com`) | datacenter-specific Zoho accounts host for the OAuth token exchange; Terraform also exports it to the SDK as `X_ZOHO_CATALYST_ACCOUNTS_URL` |
+| `SMARTBROWZ_CLIENT_ID` | REQUIRED_BY_PHASE_10 | Self Client id from the Catalyst API Console |
+| `SMARTBROWZ_CLIENT_SECRET` | REQUIRED_BY_PHASE_10 | Self Client secret |
+| `SMARTBROWZ_REFRESH_TOKEN` | REQUIRED_BY_PHASE_10 | the long-lived refresh token (scope `ZohoCatalyst.pdfshot.execute`); the zcatalyst-sdk refreshes access tokens from it per process — there is no project-side token cache |
+| `GCS_BUCKET_NAME` | REQUIRED_BY_FILE_FEATURES | PDF / photo / signature / export storage; unset = `NullDocumentStore` refuses every write loudly |
+| `GCP_PROJECT_ID` | DERIVED_AT_DEPLOY | project for the GCS client (ADC on Cloud Run; no key file) |
+| `LIFF_SALES_ID` / `LIFF_TECHNICIAN_ID` / `LIFF_CUSTOMER_ID` | REQUIRED_NOT_CONFIGURED | deep links from chat into each OA's LIFF app; empty = the link is omitted |
+| `PUBLIC_BASE_URL` | DERIVED_AT_DEPLOY | this tier's own externally reachable origin, used to build links sent into LINE and handed to the PDF renderer (documents, photos, signatures, exports); empty = such links are omitted (routes that have the request fall back to its origin) |
+
+ไม่มี `PDF_RENDERER` (SmartBrowz ถูกเลือกในโค้ด), ไม่มี `CRON_SECRET` (ใช้ `REMINDER_SWEEP_SECRET`), ไม่มี `SMARTBROWZ_RENDER_MODE` / `SMARTBROWZ_CATALYST_*` (ชื่อจริงคือ `CATALYST_*`) — ลบออก 6 ก.ย. 2569 (review E12)
 
 ## Data
 
@@ -68,13 +78,7 @@
 
 ## Document rendering / Zoho Catalyst SmartBrowz
 
-| Variable | Status | Purpose |
-|---|---|---|
-| `GCS_BUCKET_NAME` | REQUIRED_BY_PHASE_10 | original DOCX, compiled template source, generated PDF and evidence storage |
-| `SMARTBROWZ_RENDER_MODE` | REQUIRED_BY_PHASE_10 | `html_convert` is the v1 baseline; `predefined_template` is optional after management automation is verified |
-| `SMARTBROWZ_CATALYST_PROJECT_ID` | REQUIRED_BY_PHASE_10 | Catalyst project identifier |
-| `SMARTBROWZ_CATALYST_ORG_ID` | REQUIRED_BY_PHASE_10_WHEN_REST_USED | Catalyst org identifier for REST calls when required |
-| `SMARTBROWZ_ACCOUNTS_URL` / `SMARTBROWZ_CLIENT_ID` / `SMARTBROWZ_CLIENT_SECRET` / `SMARTBROWZ_REFRESH_TOKEN` | REQUIRED_NOT_CONFIGURED_IN_TFVARS | token-refresh mechanism built and tested (`smartbrowz_auth.py`); Terraform wiring now added (`infrastructure/terraform/variables.tf` + `cloud_run.tf`); real credentials generated by the owner, not yet added to `terraform.tfvars`; not yet wired to a real SmartBrowz render call, which is separate, later work — see `docs/SESSION_HANDOFF.md` |
+The Application variables above (`CATALYST_*`, `SMARTBROWZ_*`, `GCS_BUCKET_NAME`) are the whole contract; the SDK is initialised in "third-party application" mode from them (`services/pdf/smartbrowz.py`). Links to stored objects are served by the Application tier itself (`/api/v1/documents/{token}`, `/api/v1/assets/{token}`, signed with `JWT_SECRET`) — GCS signed URLs are not used because the runtime service account is deliberately not granted `signBlob`.
 
 Authoring rule: Word/DOCX is an input to the AI-assisted template compiler, not the runtime rendering format. Published Chann CRM template versions are immutable application records. Runtime PDF generation must be deterministic and must not call the LLM.
 

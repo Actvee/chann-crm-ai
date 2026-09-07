@@ -18,6 +18,7 @@ import uuid
 from datetime import datetime, timezone
 
 from ..data_client import DataClient
+from .assets import asset_link
 from .storage.base import get_document_store
 
 log = logging.getLogger(__name__)
@@ -65,30 +66,30 @@ async def store_ticket_photo(
     )
 
 
-async def photo_links(client: DataClient, *, license_id: str, ticket_id: str) -> list[dict]:
-    """The ticket's photos with a fetchable link each (signed for an
-    hour). A photo whose object cannot be signed is listed without a
-    link rather than dropped — the row is still the record."""
+async def photo_links(
+    client: DataClient, *, license_id: str, ticket_id: str, base_url: str | None = None,
+) -> list[dict]:
+    """The ticket's photos with a fetchable link each (an asset link, good
+    for an hour — review E2: a signed URL never worked here). A photo
+    that cannot be linked is listed without a link rather than dropped —
+    the row is still the record."""
     try:
         rows = await client.list_ticket_photos(license_id, ticket_id)
     except Exception:
         log.exception("could not list photos for %s", ticket_id)
         return []
-    store = get_document_store()
     out = []
     for row in rows:
         path = str(row.get("photo_url") or "")
         if not path:
             # A GPS-only check-in row: coordinates, no picture. Not a
-            # blank entry on the report page, not a signing attempt.
+            # blank entry on the report page, not a link attempt.
             continue
         url = ""
         try:
-            url = path if path.startswith("http") else await store.signed_url(
-                path=path, expires_seconds=PHOTO_LINK_TTL_SECONDS,
-            )
+            url = asset_link(path, ttl_seconds=PHOTO_LINK_TTL_SECONDS, base_url=base_url) or ""
         except Exception:
-            log.warning("could not sign %s", path)
+            log.warning("could not link %s", path)
         out.append({**row, "url": url})
     return out
 
@@ -104,17 +105,17 @@ async def store_signature(client: DataClient, *, chann_uid: str, content: bytes,
     return stored.path
 
 
-async def signature_link(client: DataClient, *, chann_uid: str) -> str | None:
+async def signature_link(
+    client: DataClient, *, chann_uid: str, base_url: str | None = None,
+) -> str | None:
     try:
         path = await client.identity_signature(chann_uid)
     except Exception:
         return None
     if not path:
         return None
-    if path.startswith("http"):
-        return path
     try:
-        return await get_document_store().signed_url(path=path, expires_seconds=PHOTO_LINK_TTL_SECONDS)
+        return asset_link(path, ttl_seconds=PHOTO_LINK_TTL_SECONDS, base_url=base_url)
     except Exception:
-        log.warning("could not sign signature %s", path)
+        log.warning("could not link signature %s", path)
         return None
