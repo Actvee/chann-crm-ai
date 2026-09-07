@@ -1542,6 +1542,14 @@ class TestConversationContinuity:
         reply = await handle_chat_message(
             client, message="สร้างดีลใหม่", ctx=_ctx(primary_role="sales"), ai_client=ai,
         )
+        # Owner, 7 Sep 2026: the switch is confirmed first — the lead is
+        # named, and nothing is filed into it. Tapping the new command then
+        # runs it as typed, with the old flow cleared.
+        assert reply.intent is None and "สมชาย" in reply.text and "สร้างดีล" in reply.text
+        assert not any(r[0] == "clear_pending_intent" for r in client.recorded)
+        reply = await handle_chat_message(
+            client, message=reply.quick_replies[0][1], ctx=_ctx(primary_role="sales"), ai_client=ai,
+        )
         assert reply.intent["entity"] == "deal"
         assert "สมชาย" not in json.dumps(reply.intent, ensure_ascii=False)
         assert any(r[0] == "clear_pending_intent" for r in client.recorded)
@@ -1946,7 +1954,7 @@ class TestPhase9DealChat:
             ctx=_ctx(primary_role="sales"), ai_client=None,
         )
         assert "D-2026-0001" in reply.text
-        assert "proposed" in reply.text
+        assert "เสนอราคาแล้ว" in reply.text  # the label, never the raw key (review B15)
         assert any(r[0] == "transition_deal_stage" for r in client.recorded)
 
     async def test_deal_stage_command_requires_deal_update_permission(self):
@@ -1981,7 +1989,7 @@ class TestPhase9DealChat:
             ctx=_ctx(primary_role="sales"), ai_client=None,
         )
         assert any(r[0] == "transition_deal_stage" for r in client.recorded)
-        assert "new" in reply.text
+        assert "ใหม่" in reply.text  # the label, never the raw key (review B15)
 
     async def test_deal_stage_command_only_recognised_on_sales_oa(self):
         """A Technician OA account must not be able to close deals just
@@ -2022,7 +2030,7 @@ class TestPhase9DealChat:
         )
         call = next(r for r in client.recorded if r[0] == "transition_deal_stage")
         assert call[3] == "lost"
-        assert "lost" in reply.text
+        assert "ไม่สำเร็จ" in reply.text  # the label, never the raw key (review B15)
 
     async def test_reopen_phrase_with_deal_code_in_the_middle(self):
         """"เปิดดีล D-2026-0001 ใหม่" splits the reopen phrase across the
@@ -2601,7 +2609,7 @@ class TestPhase10QuoteChat:
             ctx=_ctx(primary_role="sales"), ai_client=None,
         )
         assert any(r[0] == "transition_deal_stage" for r in client.recorded)
-        assert "proposed" in reply.text
+        assert "เสนอราคาแล้ว" in reply.text  # the label, never the raw key (review B15)
 
 
 class TestCustomerDisambiguation:
@@ -5963,6 +5971,8 @@ class TestButtonsTheSystemWritesDoNotNeedTheAI:
             "รายการใบเสนอราคา", "แจ้งซ่อม", "en",
             # a profile edit — parsed by the model (entity=profile), not a trigger
             "แก้ที่อยู่เป็น {clean}",
+            # the bulk-lead phone prompt's own answer words (_BULK_SKIP_WORDS)
+            "ข้าม",
         }
         remaining = [t for t in dead if t not in handled_by_literal]
         assert not remaining, f"buttons that lead nowhere: {remaining}"

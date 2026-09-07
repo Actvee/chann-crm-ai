@@ -368,4 +368,8 @@ def format_thai_date(value: date) -> str:
 
 
 def format_thai_time(value: time | None) -> str:
-    return f"{value.hour:02d}:{value.minute:02d} น." if value else ""
+    """"10:00 น." for a Thai reader, "10:00" for an English one."""
+    if not value:
+        return ""
+    english = str(display_prefs().get("language") or "th") == "en"
+    return f"{value.hour:02d}:{value.minute:02d}" + ("" if english else " น.")

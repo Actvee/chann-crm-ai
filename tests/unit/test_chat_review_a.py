@@ -578,7 +578,9 @@ class TestA24NoPermissionWallForAHeldPermission:
         reply = await say(client, "technician", "ลูกค้าไม่อยู่บ้าน",
                           ai=_ai_json({"action": "update", "entity": "ticket", "fields": {"status": "customer_absent"}, "missing": []}))
         assert "⛔" not in reply.text and "ไม่มีสิทธิ์" not in reply.text
-        assert "เช่น" in reply.text and "T-2026-0001" in reply.text
+        # Round B gave "ลูกค้าไม่อยู่บ้าน" its own handler: the job is named
+        # and the situation is written on it, no model call at all.
+        assert "T-2026-0001" in reply.text and ("เช่น" in reply.text or "บันทึกไว้" in reply.text)
 
 
 # -------------------------------------------------------------------- A25

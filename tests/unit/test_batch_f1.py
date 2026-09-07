@@ -83,7 +83,9 @@ class TestBulkCustomerAdd:
         assert created[0][2]["owner_member_id"] == "member-1"
         assert "เพิ่มลูกค้าแล้ว 2 ราย" in reply.text
         assert "ข้ามเพราะมีอยู่แล้ว 1 ราย" in reply.text and "C-2026-0001" in reply.text
-        assert "ไม่สำเร็จ 2 ราย" in reply.text
+        # Owner, 7 Sep 2026: a row without a usable phone is asked for, one
+        # at a time, instead of being failed.
+        assert "ยังไม่มีเบอร์ 2 ราย" in reply.text and "บรรทัด 4 (คนที่สี่ ไม่มีเบอร์)" in reply.text
         assert not [r for r in client.recorded if r[0] == "parse_intent"]
 
     async def test_single_customer_message_is_untouched(self):

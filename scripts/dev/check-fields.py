@@ -73,6 +73,8 @@ ACCEPTED_TS: dict[tuple[str, str], str] = {
     ("GuidePage.tsx", "Step"): "GET guides/{audience} is built by services/guides.py, not a schema",
     ("PipelineSummary.tsx", "Pipeline"): "GET licenses/{id}/pipeline returns the Data tier's summary dict (phase9 pipeline_summary)",
     ("_csv-import.tsx", "ImportResult"): "POST …/import returns csv_import.py's per-row verdicts",
+    ("_bulk-paste.tsx", "ImportResult"): "same route as the CSV import — pasted lines go through it",
+    ("_bulk-paste.tsx", "Parsed"): "client-side parse of a pasted line, never sent as-is",
     ("ServiceReports.tsx", "PdfResult"): "POST service-reports/{id}/document returns {document_id, sha256, url} from routers_phase2",
 }
 

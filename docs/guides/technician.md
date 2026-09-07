@@ -26,13 +26,13 @@ _EN: Take a job — "open jobs" then tap one, or "claim T-2026-0001". A job give
 
 ## 3. เช็คอินเมื่อถึงหน้างาน
 
-ถึงบ้านลูกค้าแล้วพิมพ์ "เช็คอิน" หรือ **ส่งตำแหน่ง** (LINE > + > ตำแหน่ง) เพื่อเช็คอินพร้อมพิกัด (มีงานเดียวระบบรู้เอง) งานจะเปลี่ยนเป็น กำลังทำ — ปิดงานได้หลังจากนี้เท่านั้น · ส่งรูปหน้างานมาในแชทได้เลย ระบบแนบกับงานและใส่ในรายงาน PDF
+ถึงบ้านลูกค้าแล้วพิมพ์ "เช็คอิน" หรือ **ส่งตำแหน่ง** (LINE > + > ตำแหน่ง) เพื่อเช็คอินพร้อมพิกัด (มีงานเดียวระบบรู้เอง) งานจะเปลี่ยนเป็น กำลังทำ — ปิดงานได้หลังจากนี้เท่านั้น · ส่งรูปหน้างานมาในแชทได้เลย ระบบแนบกับงานและใส่ในรายงาน PDF · บอกสถานการณ์ได้เลย: "กำลังไป" "ถึงช้า 20 นาที" "ลูกค้าไม่อยู่บ้าน" "ต้องสั่งอะไหล่" "วันนี้ทำไม่จบ" ระบบบันทึกลงงาน แจ้งร้าน/ลูกค้าให้ และเสนอปุ่มเลื่อนนัดหรือปิดงาน
 
 พิมพ์: `เช็คอิน T-2026-0001`
 
 [IMAGE: tech-checkin — ช่างยืนหน้าบ้านลูกค้า กดปุ่ม 'เช็คอินเริ่มงาน' บนโทรศัพท์ มีหมุดตำแหน่งสีน้ำเงิน]
 
-_EN: Check in on site — On arrival type "check in" (one job: it knows which). The job becomes in progress — finishing is only possible after this. Send photos of the site here; they go on the job and into the PDF._
+_EN: Check in on site — On arrival type "check in" (one job: it knows which). The job becomes in progress — finishing is only possible after this. Send photos of the site here; they go on the job and into the PDF. · just say what is happening: "on my way", "running 20 min late", "customer not home", "need parts", "cannot finish today" — noted on the job, the shop or customer is told, and you get reschedule / finish buttons_
 
 ## 4. ปิดงาน + รายงาน
 

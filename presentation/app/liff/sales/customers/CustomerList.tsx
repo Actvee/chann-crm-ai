@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
+import { BulkPaste } from "../_bulk-paste";
 import { CsvImport } from "../_csv-import";
 import { Badge, Count, Empty } from "../_components";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
@@ -215,6 +216,10 @@ export default function CustomerList({ liffId }: { liffId: string }) {
       />
 
       <Count shown={visible.length} total={customers.length} />
+
+      {can("customer.create") && (
+        <BulkPaste token={token} licenseId={licenseId} onDone={() => void load()} />
+      )}
 
       {can("customer.create") && (
         <CsvImport kind="customers" token={token} licenseId={licenseId} onDone={() => void load()} />

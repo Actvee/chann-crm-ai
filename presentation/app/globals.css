@@ -159,7 +159,11 @@ body {
   /* Opaque, no backdrop-filter: on WebKit inside LINE a blurred sticky bar
      re-rasterises the text under it on every scroll frame, which reads as
      letters shimmering (owner, 4 Sep: "ตัวอักษรเคลื่อน"). */
-  background: var(--bg);
+  /* --paper is the page ground. An earlier build named --bg, which is not
+     defined anywhere, so the bar was transparent and the title, "วิธีใช้"
+     and the language switch sat over whatever scrolled beneath them
+     (owner, 7 Sep). */
+  background: var(--paper);
   border-bottom: 1px solid var(--line);
 }
 
@@ -1419,7 +1423,7 @@ fieldset.group legend {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  background: var(--bg);
+  background: var(--paper);
   overscroll-behavior: contain;
 }
 

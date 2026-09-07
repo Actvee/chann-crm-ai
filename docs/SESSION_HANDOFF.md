@@ -1,3 +1,32 @@
+### Review round 2, part B (7 Sep) — the chat reads the many ways people type (`review2-b-v1`)
+
+- One normalisation pass at the top of `handle_chat_message`: Thai digits,
+  k/หมื่น amounts, repeated final characters, spelling and dialect map
+  (เชค/เช็ก→เช็ค, ฮอด→ถึง, บ่→ไม่, ละ→แล้ว, แปง→ซ่อม …), karaoke Thai
+  (krub/ka, mai yen), pronoun folding (ผม/ดิฉัน/เรา→ฉัน), single-layer
+  particle stripping (the old loop turned "สถานะครับ" into "สถา"), question
+  frames (มี…ไหม/มั้ย/บ้าง). Fault / contact / talk-to-a-human / price
+  vocabulary on the customer OA; staff synonyms (lead, pipeline, warranty,
+  eng); bare C-/D-/Q-/SR- codes open the detail; questions about a named job;
+  technician situation sentences (กำลังไป, ถึงช้า, ลูกค้าไม่อยู่, ต้องสั่ง
+  อะไหล่, วันนี้ทำไม่จบ) are noted on the job, the shop or customer is told,
+  and buttons offer เลื่อนนัด / ปิดงาน; two requests in one line; English
+  replies without Thai leaking through; capability detail layered ≤12 lines.
+- Corpus accuracy (737 utterances): customer 56% → 97%, sales 64% → 99%,
+  technician 67% → 92% under the review's original spec; the corpus is now
+  `tests/unit/test_chat_corpus.py` + `chat_corpus_baseline.json` — any
+  utterance that classifies worse than the baseline fails the test.
+- Owner items (7 Sep): a different command typed while a create flow is
+  waiting for an answer is CONFIRMED first ("กำลังเพิ่มลูกค้า X อยู่ — จะ
+  ยกเลิกแล้วสร้างดีลแทนไหม" with [สร้างดีลเลย] [เพิ่มลูกค้าต่อ]); many leads
+  at once: pasted "name … phone" lines without a trigger word, comma/และ
+  separated, phoneless rows asked one at a time; on the customers page a
+  "เพิ่มลูกค้าหลายคนในครั้งเดียว" paste box saves through the CSV import
+  route. The sticky top bar has a background again (`--bg` was never
+  defined; it is `--paper`). Guides updated.
+- No migration. Tests: unit+boundary 1361, integration 340, simulators at
+  baseline (phrasings 11/441), check-* at baseline, tsc + build.
+
 ### Review round 2 (6 Sep) — ~95 findings fixed in one release (`review2-v1`)
 
 Second review after `65b85c9`: three tiers read against each other, the
