@@ -283,13 +283,13 @@ GUIDES: dict[str, dict] = {
             {
                 "key": "ai-reports", "title": {"th": "ถามรายงานด้วย AI", "en": "Ask for a report"},
                 "body": {
-                    "th": "พิมพ์สิ่งที่อยากรู้เป็นภาษาคนในแชท เช่น \"ยอดดีลปิดสำเร็จ 3 เดือนล่าสุด\" หรือ \"สรุปงานค้างแยกตามช่าง\" ระบบสรุปเป็นตัวเลขทันที · บนหน้าจอ เมนู \"รายงาน AI\" มีตารางพร้อมกราฟแท่งและปุ่มดาวน์โหลด CSV/PDF · ต้องมีสิทธิ์ \"ดูรายงาน\" (Sale มีตั้งแต่ต้น CS ต้องให้เจ้าของเปิด) · AI ไม่แตะฐานข้อมูลเอง มันแค่แปลคำถามเป็นรายการที่ระบบอนุญาต แล้วนับจากข้อมูลของร้านคุณเท่านั้น",
-                    "en": "Type what you want to know in the chat — \"won deals in the last 3 months\", \"open tickets by technician\" — and get the numbers at once. The dashboard's \"AI reports\" page adds a table with bars and CSV/PDF downloads. Needs the \"View reports\" permission (Sales has it; the owner grants it to CS).",
+                    "th": "พิมพ์สิ่งที่อยากรู้เป็นภาษาคนในแชท เช่น \"ยอดดีลปิดสำเร็จ 3 เดือนล่าสุด\" หรือ \"สรุปงานค้างแยกตามช่าง\" ระบบสรุปเป็นตัวเลขทันที · อยากเห็นเป็นรูป ให้เติมคำว่า \"เป็นกราฟ\" เช่น \"ขอกราฟยอดขาย\" \"กราฟยอดขายรายเดือน\" \"กราฟสินค้าขายดี\" \"กราฟยอดขายรายคน\" \"กราฟดีลแต่ละสถานะ\" ระบบจะส่งรูปกราฟมาในแชทพร้อมสรุปสั้น ๆ (หรือกดปุ่ม \"ดูเป็นกราฟ\" ใต้คำตอบยอดขายก็ได้) · บนหน้าจอ เมนู \"รายงาน AI\" มีตารางพร้อมกราฟแท่งและปุ่มดาวน์โหลด CSV/PDF · ต้องมีสิทธิ์ \"ดูรายงาน\" (Sale มีตั้งแต่ต้น CS ต้องให้เจ้าของเปิด) กราฟยอดขายตามสถานะดีลใช้สิทธิ์ \"ดูดีล\" เท่ากับคำสั่ง \"ยอดขาย\" · AI ไม่แตะฐานข้อมูลเอง มันแค่แปลคำถามเป็นรายการที่ระบบอนุญาต แล้วนับจากข้อมูลของร้านคุณเท่านั้น",
+                    "en": "Type what you want to know in the chat — \"won deals in the last 3 months\", \"open tickets by technician\" — and get the numbers at once. Add \"as a chart\" (\"sales report as a chart\", \"monthly sales chart\", \"top products chart\", \"sales chart per person\") and the picture comes back in the chat with a one-line summary; the \"View as chart\" button under a sales summary does the same. The dashboard's \"AI reports\" page adds a table with bars and CSV/PDF downloads. Needs the \"View reports\" permission (Sales has it; the owner grants it to CS); the pipeline chart uses \"View deals\", the same key as \"sales\".",
                 },
-                "commands": ["รายงานยอดขายเดือนนี้", "สรุปงานค้างแยกตามช่าง", "ดูยอดดีลปิดสำเร็จ 3 เดือนล่าสุด"],
+                "commands": ["รายงานยอดขายเดือนนี้", "สรุปงานค้างแยกตามช่าง", "ดูยอดดีลปิดสำเร็จ 3 เดือนล่าสุด", "ขอกราฟยอดขาย", "กราฟยอดขายรายเดือน", "กราฟสินค้าขายดี"],
                 "example": "สรุปงานค้างแยกตามช่าง",
                 "image": "sales-ai-report",
-                "image_prompt": "แชท LINE ข้อความ 'สรุปงานค้างแยกตามช่าง' ตอบกลับเป็นรายการชื่อช่างกับตัวเลข และหน้าจอตารางมีกราฟแท่งสีเขียว",
+                "image_prompt": "แชท LINE ข้อความ 'สรุปงานค้างแยกตามช่าง' ตอบกลับเป็นรายการชื่อช่างกับตัวเลข ถัดมาข้อความ 'ขอกราฟยอดขาย' ตอบกลับเป็นรูปกราฟแท่งสีเขียว และหน้าจอตารางมีกราฟแท่งสีเขียว",
             },
             {
                 "key": "help", "title": {"th": "ติดขัด", "en": "Stuck"},

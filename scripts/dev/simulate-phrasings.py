@@ -143,6 +143,11 @@ async def sales():
         ("ปิดดีล D-2026-0001", "any"), ("ปิดสำเร็จ D-2026-0001", "rule"), ("ดีล D-2026-0001 ปิดแล้ว", "any"),
         ("ปิดการขายสำเร็จ D-2026-0001", "any"), ("ลูกค้าไม่เอา D-2026-0001", "any"), ("ข้อมูลดีล D-2026-0001", "rule"),
         ("ยอดขาย", "rule"), ("ยอดขายเดือนนี้", "rule"), ("ขายได้เท่าไหร่เดือนนี้", "ai"), ("สรุปยอดขาย", "rule"), ("pipeline", "any"),
+        # the same numbers as a picture (owner, 8 Sep 2026) — no model call
+        ("อยากดู report ยอดขายเป็นกราฟ", "rule"), ("ขอกราฟยอดขาย", "rule"), ("ยอดขาย 6 เดือนเป็นกราฟ", "rule"),
+        ("กราฟดีลแต่ละสถานะ", "rule"), ("กราฟยอดขายรายเดือน", "rule"), ("สินค้าขายดี 5 อันดับ เป็นกราฟ", "rule"),
+        ("ยอดขายรายคนเป็นกราฟ", "rule"), ("ขอแผนภูมิยอดขายหน่อย", "rule"), ("sales report as a chart", "rule"),
+        ("show me a graph of monthly sales", "rule"), ("top products chart", "rule"),
         ("ดีลเกิน 10000", "rule"), ("ดีลของสมชาย", "rule"),
         # quotes
         ("ใบเสนอราคา", "any"), ("ขอใบเสนอราคา", "any"), ("ทำใบเสนอราคาให้สมชาย", "rule"), ("ออกใบเสนอราคา D-2026-0001", "rule"),
@@ -173,6 +178,17 @@ async def sales():
         ("แก้ทีวี 40 นิ้วเป็น 5 ตัว", "rule"), ("ลดทีวี 40 นิ้ว 2 ตัว", "rule"), ("ปรับราคาเป็น 3500", "rule"),
         ("เพิ่มพัดลม 18 นิ้ว 2 ตัว", "rule"), ("เป็นสินค้ารายการใหม่", "rule"), ("1500", "rule"),
         ("D-2026-0001 ลบสินค้าพัดลม 18 นิ้วออก", "rule"), ("เอาทีวีออก", "rule"),
+        # reads phrased the way people phrase them (owner, 8 Sep 2026): each
+        # of these was answered "ในแชทยังทำรายการนี้ไม่ได้" while the typed
+        # form worked. The ones marked "ai" reach the model, which is fine —
+        # what must not happen is the model understanding and the router
+        # dropping it, and tests/unit/test_chat_read_intents.py holds that.
+        ("ขอดูข้อมูลคุณสมชาย", "ai"), ("ดูข้อมูลลูกค้าสมชาย", "rule"), ("ขอดูข้อมูลของสมชาย", "ai"),
+        ("show me Somchai's details", "ai"), ("open deal D-2026-0001", "ai"),
+        ("ขอดูดีล D-2026-0001", "rule"), ("ขอดูใบเสนอราคาล่าสุด", "ai"),
+        ("ขอดูใบเสนอราคา Q-2026-0001", "rule"), ("อยากเห็นบันทึกของ C-2026-0001", "rule"),
+        ("อยากเห็นรายการรออนุมัติ", "rule"), ("อยากเห็นทีมที่ตั้งไว้", "ai"),
+        ("อยากเห็นช่างที่อยู่ในร้าน", "ai"), ("อยากเห็นข้อมูลบริษัทที่บันทึกไว้", "ai"),
         # off topic
         ("อากาศวันนี้เป็นไง", "any"), ("ราคาแอร์เท่าไหร่", "any"),
     ]
@@ -209,6 +225,8 @@ async def technician():
         ("งานของทีม", "rule"), ("ทีมมีงานไหม", "any"),
         ("โปรไฟล์", "any"), ("ข้อมูลของฉัน", "rule"), ("แก้เบอร์เป็น 0899999999", "ai"), ("สิทธิ์ของฉัน", "rule"),
         ("เปลี่ยนภาษา", "rule"), ("เปลี่ยนร้าน", "any"),
+        # the technician's own reads, phrased freely
+        ("อยากเห็นรายละเอียดของงาน T-2026-0001", "rule"), ("อยากเห็นรายงานที่ผมส่งไปแล้ว", "ai"),
     ]
     await run("technician", c, cases)
 

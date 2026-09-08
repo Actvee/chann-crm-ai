@@ -1302,22 +1302,28 @@ class TestPermissionGateIsEnforcedInCode:
         assert reply.entity_type == "customer"
 
     async def test_action_aliases_are_normalised(self):
-        """The model uses view/list/read interchangeably; all must resolve.
+        """The model uses view/list/read/search interchangeably; all must resolve.
 
         The message deliberately is NOT one of the Phase 10 list triggers
         ("ดูลูกค้า", "รายชื่อลูกค้า", ...): those are matched
         deterministically before the AI is consulted at all, so using one
         here would exercise the list handler and never reach the alias
         normalisation this test exists to check.
+
+        Since 8 Sep 2026 a normalised read is EXECUTED rather than echoed
+        back, so the proof is the customer list itself — every alias must
+        reach it, and none may come back "ยังทำรายการนี้ไม่ได้".
         """
-        for action in ("view", "list", "read", "show", "get"):
+        for action in ("view", "list", "read", "show", "get", "search", "find"):
+            client = FakeDataClient(permission_keys=["customer.read"])
+            await client.create_customer("L1", {"first_name": "สมชาย", "last_name": "ใจดี", "phone": "0812345678"})
             ai = httpx.AsyncClient(transport=_ai(json.dumps(
                 {"action": action, "entity": "customer", "fields": {}, "missing": []})))
             reply = await handle_chat_message(
-                FakeDataClient(permission_keys=["customer.read"]),
-                message="อยากทราบข้อมูลของลูกค้ารายนี้หน่อย", ctx=_ctx(), ai_client=ai,
+                client, message="อยากทราบข้อมูลของลูกค้ารายนี้หน่อย", ctx=_ctx(), ai_client=ai,
             )
-            assert "เข้าใจแล้ว" in reply.text, f"action={action} was not normalised"
+            assert "สมชาย" in reply.text, f"action={action} was not normalised"
+            assert "ยังทำรายการนี้ไม่ได้" not in reply.text
 
     def test_required_permission_mapping(self):
         assert required_permission("create", "customer") == "customer.create"

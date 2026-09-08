@@ -1,4 +1,4 @@
-"""The chat corpus: 737 realistic utterances per intent per OA, tagged with
+"""The chat corpus: realistic utterances per intent per OA, tagged with
 the linguistic pattern each one exercises (review of 6 Sep 2026, section
 B). test_chat_corpus.py plays every one through the real router and fails
 when any of them classifies worse than the committed baseline.
@@ -421,6 +421,19 @@ SALES = [
     _e("สรุปยอดหน่อย", "s.sales_summary", "particle"),
     _e("ขายได้กี่บาทแล้ว", "s.sales_summary", "question colloquial"),
     _e("ยอดขายวันนี้", "s.sales_summary", "period"),
+    # ---- the same numbers as a picture (owner, 8 Sep 2026) ---------------------
+    _e("อยากดู report ยอดขายเป็นกราฟ", "s.sales_chart", "chart polite_prefix"),
+    _e("ขอกราฟยอดขาย", "s.sales_chart", "chart polite_prefix"),
+    _e("ขอดูยอดขายเป็นกราฟหน่อยครับ", "s.sales_chart", "chart particle"),
+    _e("ยอดขาย 6 เดือนเป็นกราฟ", "s.sales_chart", "chart period"),
+    _e("กราฟยอดขายรายเดือน", "s.sales_chart", "chart period"),
+    _e("กราฟดีลแต่ละสถานะ", "s.sales_chart", "chart"),
+    _e("สินค้าขายดี 5 อันดับ เป็นกราฟ", "s.sales_chart", "chart with_data"),
+    _e("ยอดขายรายคนเป็นกราฟ", "s.sales_chart", "chart"),
+    _e("ขอแผนภูมิยอดขายหน่อย", "s.sales_chart", "chart synonym"),
+    _e("sales report as a chart", "s.sales_chart", "chart english"),
+    _e("show me a graph of monthly sales", "s.sales_chart", "chart english"),
+    _e("top products chart", "s.sales_chart", "chart english"),
     _e("ดีลเกิน 10000 ครับ", "s.deal_value", "particle"),
     _e("ดีลที่มากกว่า 20,000", "s.deal_value", "with_data"),
     _e("ดีลมูลค่า 50000", "s.deal_by_amount", "with_data amount"),
@@ -448,6 +461,41 @@ SALES = [
     _e("ลูกค้าโอเคใบเสนอราคา Q-2026-0001", "s.quote_accept", "colloquial with_data"),
     _e("ส่งใบเสนอราคาให้ลูกค้าหน่อย", "s.quote_send", "particle"),
     _e("ขอ pdf ใบเสนอราคา", "s.quote_send", "mixed polite_prefix"),
+    # ---- reads the model understood and the router dropped (owner, 8 Sep 2026) --
+    # Every line here answered "เข้าใจแล้วครับ ต้องการดูลูกค้า แต่ในแชทยัง
+    # ทำรายการนี้ไม่ได้" while the typed form of the same request worked.
+    _e("ขอดูข้อมูลคุณสมชายหน่อยครับ", "s.customer_detail", "ai crafted honorific polite_prefix",
+       ai={"action": "read", "entity": "customer", "fields": {"target_name": "คุณสมชาย"}, "missing": []}),
+    _e("อยากเห็นข้อมูลของลูกค้าสมชาย", "s.customer_detail", "ai crafted",
+       ai={"action": "view", "entity": "customer", "fields": {"target_name": "สมชาย"}, "missing": []}),
+    _e("show me Somchai's details please", "s.customer_detail", "ai crafted english",
+       ai={"action": "read", "entity": "customer", "fields": {"target_name": "สมชาย"}, "missing": []}),
+    _e("อยากเห็นรายชื่อลูกค้าที่มีอยู่ตอนนี้", "s.customer_list", "ai crafted",
+       ai={"action": "list", "entity": "customer", "fields": {}, "missing": []}),
+    _e("อยากเห็นรายละเอียดของดีล D-2026-0001", "s.deal_detail", "ai crafted with_data",
+       ai={"action": "read", "entity": "deal", "fields": {"deal_code": "D-2026-0001"}, "missing": []}),
+    _e("open deal D-2026-0001", "s.deal_detail", "ai crafted english",
+       ai={"action": "read", "entity": "deal", "fields": {"deal_code": "D-2026-0001"}, "missing": []}),
+    _e("อยากเห็นดีลของลูกค้าสมชายทั้งหมด", "s.deal_for_customer", "ai crafted",
+       ai={"action": "read", "entity": "deal", "fields": {"target_name": "สมชาย"}, "missing": []}),
+    _e("อยากเห็นใบเสนอราคาที่ออกไปแล้ว", "s.quote_list", "ai crafted",
+       ai={"action": "read", "entity": "quote", "fields": {}, "missing": []}),
+    _e("อยากเห็นรายงานที่ยังรอตรวจอยู่", "s.approval_list", "ai crafted",
+       ai={"action": "read", "entity": "approval", "fields": {}, "missing": []}),
+    _e("อยากเห็นบันทึกของ C-2026-0001", "s.note_list", "ai crafted with_data",
+       ai={"action": "read", "entity": "note", "fields": {"entity_code": "C-2026-0001"}, "missing": []}),
+    _e("อยากเห็นรายการรับประกันที่ร้านลงไว้", "s.warranty_book", "ai crafted",
+       ai={"action": "read", "entity": "warranty", "fields": {}, "missing": []}),
+    _e("อยากเห็นทีมที่ตั้งไว้ในระบบ", "s.team_list", "ai crafted",
+       ai={"action": "read", "entity": "team", "fields": {}, "missing": []}),
+    _e("อยากเห็นรายชื่อช่างที่อยู่ในร้าน", "s.technician_list", "ai crafted",
+       ai={"action": "read", "entity": "member", "fields": {}, "missing": []}),
+    _e("อยากเห็นข้อมูลของบริษัทที่บันทึกไว้", "s.company_view", "ai crafted",
+       ai={"action": "read", "entity": "setting", "fields": {}, "missing": []}),
+    # Genuinely nothing behind it — member.manage is held, and changing a
+    # member's role is a dashboard job. The honest reply, with the page named.
+    _e("อยากเปลี่ยนบทบาทของสมาชิกคนนี้ในระบบ", "s.no_handler", "ai crafted",
+       ai={"action": "update", "entity": "member", "fields": {}, "missing": []}),
     # ---- notes / reminders / appointments ------------------------------------
     _e("บันทึกว่าสมชายขอเลื่อนนะ", "s.note_create", "particle"),
     _e("จดไว้หน่อยว่าลูกค้าขอส่วนลด", "s.note_create", "polite_prefix particle"),
@@ -852,6 +900,14 @@ TECH = [
        ai={"action": "create", "entity": "service_report", "fields": {"found_issue": "ท่อรั่ว", "work_done": "เปลี่ยนคอมเพรสเซอร์", "parts_changed": "คอมเพรสเซอร์"}, "missing": []}),
     _e("กำลังไปครับ อีก 15 นาที", "t.ai_status_update", "ai crafted",
        ai={"action": "update", "entity": "ticket", "fields": {"status": "on_the_way"}, "missing": []}),
+    # Reads the model understood: ticket.read and service_report.read were
+    # registered in Phase 6 and reached nothing until 8 Sep 2026.
+    _e("อยากเห็นรายละเอียดของงาน T-2026-0001", "t.detail", "ai crafted with_data",
+       ai={"action": "read", "entity": "ticket", "fields": {"code": "T-2026-0001"}, "missing": []}),
+    _e("อยากเห็นงานที่ผมถืออยู่ตอนนี้ทั้งหมด", "t.mine", "ai crafted",
+       ai={"action": "read", "entity": "ticket", "fields": {}, "missing": []}),
+    _e("อยากเห็นรายงานที่ผมส่งไปแล้วทั้งหมด", "t.report_list", "ai crafted",
+       ai={"action": "read", "entity": "service_report", "fields": {}, "missing": []}),
 ]
 
 ALL = [dict(e, oa="customer") for e in CUSTOMER] + [dict(e, oa="sales") for e in SALES] + [dict(e, oa="technician") for e in TECH]

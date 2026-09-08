@@ -18,6 +18,7 @@ import uuid
 from datetime import datetime, timezone
 
 from ..data_client import DataClient, DataTierError
+from . import charts
 from .ai.client import AINotConfigured, AIUnavailable, complete
 from .assets import asset_link
 from .storage.base import DocumentStoreNotConfigured, get_document_store
@@ -25,6 +26,11 @@ from .storage.base import DocumentStoreNotConfigured, get_document_store
 log = logging.getLogger(__name__)
 
 FILE_LINK_SECONDS = 7 * 24 * 3600
+# A chart is a picture of the same tenant numbers, handed out behind a
+# bearer link, so it expires in an hour rather than a week (the CSV and the
+# printable page are files a person deliberately saves; the chart is looked
+# at once, in the chat).
+CHART_LINK_SECONDS = 3600
 
 # The same whitelist the Data tier enforces (chann_data.repositories.phase17).
 # Kept here too so a bad spec is refused before a network call — and so the
@@ -77,6 +83,18 @@ INVALID = {
 }
 FILES_LINE = {"th": "ไฟล์ (ใช้ได้ 7 วัน): CSV {csv} · หน้าเว็บ {html}", "en": "Files (valid 7 days): CSV {csv} · web page {html}"}
 PDF_LINE = {"th": " · PDF {pdf}", "en": " · PDF {pdf}"}
+# Phase 17's third output shape, asked for by name (owner, 8 Sep 2026:
+# "อยากดู report ยอดขายเป็นกราฟ").
+CHART_KIND = {"owner_member_id": "hbar", "assigned_to": "hbar", "product_id": "hbar",
+              "stage": "bar", "status": "bar"}
+CHART_UNAVAILABLE = {
+    "th": "\n(ยังส่งรูปกราฟไม่ได้ตอนนี้ — ตัวเลขด้านบนถูกต้องครับ)",
+    "en": "\n(The chart picture could not be sent right now — the numbers above are correct.)",
+}
+CHART_NEEDS_GROUPS = {
+    "th": "\n(รายงานนี้เป็นตัวเลขเดียว ยังไม่มีกราฟให้ดู ลองเพิ่ม \"แยกตาม...\" เช่น \"แยกตามผู้ดูแล\")",
+    "en": "\n(This report is a single number, so there is nothing to plot — try adding \"by owner\" or \"by stage\".)",
+}
 
 
 class ReportSpecInvalid(ValueError):
@@ -290,6 +308,72 @@ def report_html(spec: dict, result: dict, language: str, *, company_name: str = 
     )
 
 
+def chart_for(spec: dict, result: dict, language: str) -> charts.Chart | None:
+    """The same result, as a picture — or None when there is nothing to
+    plot. A report with no group_by is one number; a bar chart of one bar
+    tells the reader strictly less than the sentence does, so it is not
+    drawn and the caller says why."""
+    if not spec.get("group_by"):
+        return None
+    rows = result.get("rows") or []
+    money = spec.get("metric") != "count"
+    total = result.get("total")
+    footer = ""
+    if total is not None:
+        footer = ("รวม " if language != "en" else "Total ") + _fmt(total)
+    return charts.Chart(
+        title=describe(spec, language),
+        subtitle=_t(RANGE_LABEL[spec["date_range"]], language) if spec.get("date_range") else "",
+        points=[(str(row.get("label") or ""), float(row.get("value") or 0)) for row in rows],
+        kind=CHART_KIND.get(str(spec.get("group_by")), "bar"),
+        money=money, language=language, footer=footer,
+    )
+
+
+async def publish_chart(png: bytes, *, license_id: str, store=None) -> str | None:
+    """One chart PNG in the document store, as a short-lived asset link.
+
+    None when there is no store (dev without a bucket), no PUBLIC_BASE_URL,
+    or the write fails — the reply always has the numbers in it, and a
+    missing picture must never cost the person their answer."""
+    if not png:
+        return None
+    try:
+        store = store or get_document_store()
+    except DocumentStoreNotConfigured:
+        return None
+    try:
+        stored = await store.put(
+            # Tenant-scoped path, same shape as the report files above, so a
+            # token issued for one shop can never name another shop's chart.
+            key=f"reports/{license_id}/charts/{uuid.uuid4().hex}.png",
+            content=png, content_type="image/png",
+        )
+    except DocumentStoreNotConfigured:
+        return None
+    except Exception:  # noqa: BLE001
+        log.exception("could not store the report chart")
+        return None
+    return asset_link(
+        stored.path, content_type="image/png", ttl_seconds=CHART_LINK_SECONDS,
+        filename="chart.png",
+    )
+
+
+async def publish_chart_for(
+    spec: dict, result: dict, language: str, *, license_id: str, store=None,
+) -> tuple[str | None, bool]:
+    """(link, plottable). `plottable` is False when the result is a single
+    number, which is a different sentence from "the picture failed"."""
+    chart = chart_for(spec, result, language)
+    if chart is None:
+        return None, False
+    png = charts.render_or_none(chart)
+    if png is None:
+        return None, True
+    return await publish_chart(png, license_id=license_id, store=store), True
+
+
 async def publish_files(spec: dict, result: dict, language: str, *, license_id: str, company_name: str = "") -> dict:
     """CSV and a printable page in the document store (asset links, 7 days);
     a PDF as well when the renderer is configured. Missing storage is
@@ -333,10 +417,16 @@ async def run_spec(client: DataClient, *, license_id: str, spec: dict, actor_id:
 async def handle_report_request(
     client: DataClient, *, license_id: str, message: str, language: str = "th",
     actor_id: str | None = None, ai_client=None, company_name: str = "", with_files: bool = True,
+    with_chart: bool = False,
 ) -> dict:
     """The whole path for one request. Returns one of:
-    {"clarify": question} · {"spec", "result", "text", "files"} · raises
-    ReportSpecInvalid / AIUnavailable / AINotConfigured / DataTierError."""
+    {"clarify": question} · {"spec", "result", "text", "files", "chart",
+    "plottable"} · raises ReportSpecInvalid / AIUnavailable /
+    AINotConfigured / DataTierError.
+
+    `with_chart` is the same result in its picture form — asked for only
+    when the person said "กราฟ", because drawing and storing one costs a
+    round trip that a plain report should not pay for."""
     data = await generate_query_spec(message, language=language, client=ai_client)
     if data.get("clarify"):
         return {"clarify": str(data["clarify"])[:300]}
@@ -344,7 +434,11 @@ async def handle_report_request(
     result = await client.run_report_query(license_id, spec, actor_id=actor_id)
     text = report_text(spec, result, language)
     files = await publish_files(spec, result, language, license_id=license_id, company_name=company_name) if with_files else {}
-    return {"spec": spec, "result": result, "text": text, "files": files}
+    chart, plottable = (None, False)
+    if with_chart:
+        chart, plottable = await publish_chart_for(spec, result, language, license_id=license_id)
+    return {"spec": spec, "result": result, "text": text, "files": files,
+            "chart": chart, "plottable": plottable}
 
 
 def files_line(files: dict, language: str) -> str:

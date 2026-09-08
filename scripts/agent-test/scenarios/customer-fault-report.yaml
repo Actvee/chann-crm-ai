@@ -1,0 +1,73 @@
+# A customer reports a broken air conditioner on the Customer OA.
+#
+# The thing worth guarding here is that a customer never has to know how the
+# system works: they type what is wrong in their own words, and the reply
+# asks only for what the shop genuinely cannot know. A customer who is shown
+# a permission list, a raw field name, or "not a feature" has been failed,
+# which is what the `is_not` and `not_contains` assertions below say.
+name: customer-fault-report
+description: a customer reports a fault, registers the serial, and asks about the job
+backend: fake
+actor:
+  oa: customer
+  role: sales
+  permissions: customer
+
+steps:
+  # The shop recorded this unit when it was sold; the customer has not
+  # claimed it yet.
+  - seed:
+      warranties:
+        - serial_number: "SN12345678"
+          product_name: "แอร์ 12000 BTU"
+          warranty_end: "2027-01-01"
+
+  - send: "สวัสดีครับ"
+    expect:
+      contains: "สวัสดี"
+      is_not: [generic_error, permission, not_sure]
+
+  # The Customer OA's guide must not advertise staff capabilities.
+  - send: "วิธีใช้"
+    expect:
+      contains: "วิธีใช้"
+      not_contains: ["ใบเสนอราคา", "รายชื่อช่าง", "มอบหมาย"]
+      is_not: [generic_error, not_sure, permission]
+
+  # Plain words, no command shape, no model call: the fault report opens.
+  - send: "แอร์ไม่เย็นครับ"
+    expect:
+      used_ai: false
+      is_not: [generic_error, permission, not_sure, not_a_feature]
+      not_contains: ["issue_description", "service_address", "scheduled_date"]
+
+  # Answering with the serial both registers the product and files the fault
+  # that was being held.
+  - send: "SN12345678"
+    expect:
+      is_not: [generic_error, permission, not_sure, not_a_feature]
+
+  - send: "เช็คประกัน"
+    expect:
+      is_not: [generic_error, permission, not_a_feature]
+
+  - send: "งานของฉัน"
+    expect:
+      is_not: [generic_error, permission, not_a_feature]
+
+  - send: "ติดต่อร้าน"
+    expect:
+      is_not: [generic_error, permission, not_a_feature, not_sure]
+
+  # A customer must never be able to read another shop's CRM through this OA,
+  # whatever permission keys their row happens to carry.
+  - send:
+      message: "รายชื่อลูกค้า"
+      permissions: all
+    expect:
+      not_contains: "C-2026-"
+
+  - send: "ขอบคุณครับ"
+    expect:
+      is_not: [generic_error, not_a_feature]
+      max_lines: 12

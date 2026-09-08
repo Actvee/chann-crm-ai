@@ -25,6 +25,10 @@ type Answer = {
   result?: Result;
   text?: string;
   files?: { csv?: string | null; html?: string | null; pdf?: string | null };
+  /** Phase 17 ตาราง/กราฟ — the same numbers as a picture, the one form of
+   *  this report a person can forward into a chat. Null when the document
+   *  store is not configured or the result is a single number. */
+  chart?: string | null;
 };
 
 /** Phase 17 — the report viewer. One question box, the model turns it
@@ -187,19 +191,24 @@ export default function AiReports({ liffId }: { liffId: string }) {
           ) : (
             <p className="report-big">{(answer.result.total ?? 0).toLocaleString()}</p>
           )}
-          {answer.files && (answer.files.csv || answer.files.html || answer.files.pdf) && (
+          {(answer.chart || (answer.files && (answer.files.csv || answer.files.html || answer.files.pdf))) && (
             <div className="card-actions">
-              {answer.files.csv && (
+              {answer.chart && (
+                <button type="button" className="card-button" onClick={() => openExternal(answer.chart!)}>
+                  {copy.openChart}
+                </button>
+              )}
+              {answer.files?.csv && (
                 <button type="button" className="card-button" onClick={() => openExternal(answer.files!.csv!)}>
                   {copy.downloadCsv}
                 </button>
               )}
-              {answer.files.pdf && (
+              {answer.files?.pdf && (
                 <button type="button" className="card-button" onClick={() => openExternal(answer.files!.pdf!)}>
                   {copy.downloadPdf}
                 </button>
               )}
-              {answer.files.html && (
+              {answer.files?.html && (
                 <button type="button" className="card-button" onClick={() => openExternal(answer.files!.html!)}>
                   {copy.openPage}
                 </button>

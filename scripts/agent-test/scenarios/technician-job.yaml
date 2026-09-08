@@ -1,0 +1,112 @@
+# One job on the Technician OA, end to end: the technician is invited to a
+# ticket, takes it, arrives, and files the report that closes it.
+#
+# Fake backend only. The job has to start in the exact state a dispatcher
+# leaves it in — assigned to this technician, acceptance still pending — and
+# that state is reached through `seed.raw`, which writes onto the fake client
+# directly. Building the same state for real needs a technician member row,
+# which is what per-oa-registration.yaml covers on the db backend.
+name: technician-job
+description: a technician takes a job, checks in, and files the closing report
+backend: fake
+actor:
+  oa: technician
+  role: technician
+  permissions: technician
+
+steps:
+  - seed:
+      raw:
+        tickets:
+          - id: t1
+            ticket_number: "T-2026-0001"
+            status: assigned
+            accept_status: pending
+            assigned_to_ref: member-1
+            customer_name: "สมชาย"
+            customer_phone: "0812345678"
+            service_address: "99/1 สุขุมวิท"
+            issue_description: "แอร์ไม่เย็น"
+            scheduled_date: "2026-09-08"
+            scheduled_time: "10:00"
+      # Through the client, so the real allocation of a warranty number
+      # happens instead of being invented in the file.
+      warranties:
+        - serial_number: "SN12345678"
+          product_name: "แอร์ 12000 BTU"
+          warranty_end: "2027-01-01"
+
+  - send: "สวัสดี"
+    expect:
+      contains: "สวัสดี"
+      is_not: [generic_error, permission]
+
+  # The Technician OA must never advertise sales capabilities.
+  - send: "วิธีใช้"
+    expect:
+      contains: "วิธีใช้"
+      not_contains: ["ใบเสนอราคา", "ดีล"]
+      is_not: [generic_error, not_sure, permission]
+
+  - send: "งานของฉัน"
+    expect:
+      contains: ["T-2026-0001", "สมชาย"]
+      used_ai: false
+      is_not: [not_found, permission]
+
+  - send: "ข้อมูลงาน T-2026-0001"
+    expect:
+      contains: ["แอร์ไม่เย็น", "0812345678"]
+      is_not: [not_found, generic_error]
+
+  # The invitation: accepting is what turns a dispatch into this
+  # technician's job.
+  - send: "รับงาน"
+    expect:
+      contains: "T-2026-0001"
+      is_not: [not_found, permission, generic_error, not_sure]
+
+  - send: "ถึงแล้ว"
+    expect:
+      is_not: [not_found, permission, generic_error, not_sure]
+
+  - send: "เช็คอิน"
+    expect:
+      is_not: [not_found, permission, generic_error, not_sure]
+
+  # A warranty lookup mid-job — the technician has warranty.read and nothing
+  # more, so this proves the read works without any sales permission.
+  - send: "เช็คประกัน SN12345678"
+    expect:
+      contains: ["W-2026-0001", "แอร์ 12000 BTU"]
+      is_not: [not_found, permission, generic_error]
+
+  # Closing the job is a short conversation, not one long command: the
+  # engine asks for what it still needs and remembers the answers.
+  - send: "ปิดงาน"
+    expect:
+      is_not: [generic_error, permission, not_a_feature]
+
+  - send: "คอมเพรสเซอร์รั่ว"
+    expect:
+      is_not: [generic_error, permission]
+
+  - send: "เปลี่ยนคอมเพรสเซอร์แล้ว"
+    expect:
+      is_not: [generic_error, permission]
+
+  - send: "ไม่มี"
+    expect:
+      is_not: [generic_error, permission]
+
+  - send: "รายงานของฉัน"
+    expect:
+      is_not: [generic_error, permission, not_a_feature]
+
+  # A sales-only action asked on the Technician OA must be refused, whatever
+  # permissions the row happens to carry. This is the OA scoping rule.
+  - send:
+      message: "รายชื่อลูกค้า"
+      permissions: all
+    expect:
+      not_contains: "C-2026-"

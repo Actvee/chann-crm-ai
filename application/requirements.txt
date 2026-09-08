@@ -7,3 +7,7 @@ argon2-cffi==23.1.0
 pyjwt[crypto]==2.10.1
 zcatalyst-sdk==1.4.0
 google-cloud-storage==2.19.0
+# Chart pictures for the chat (services/charts.py). Pinned to the same
+# version requirements-test.txt uses, so what the tests draw is what the
+# container draws.
+Pillow==12.3.0

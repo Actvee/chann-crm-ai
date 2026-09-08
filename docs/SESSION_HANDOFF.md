@@ -1,3 +1,71 @@
+### Charts in the chat (8 Sep) — Phase 17's "ตาราง/กราฟ" output, `fix/chat-charts`
+
+- Owner's report: `อยากดู report ยอดขายเป็นกราฟ` came back as a paragraph of
+  numbers. Master Spec 17.1 lists three output shapes — **ข้อความ, ตาราง/กราฟ,
+  Excel/PDF** — and only text and files existed. LINE has no table and no
+  chart component, so the chart output **is** a picture; §17.6's third
+  acceptance line ("Output 3 แบบ") now has its middle third: the chat and
+  the AI-report page both answer with a rendered chart. (The checkbox is
+  left unticked — 17.6 is a runtime acceptance list, not a progress bar.)
+- **`application/chann_app/services/charts.py`** — pure renderer, data in →
+  PNG bytes out, no I/O and no clock, so the same numbers always draw the
+  same picture and every drawing failure (long Thai label, empty result,
+  all-zero series) is a unit test. Vertical bar, horizontal bar and a line
+  chart, 1040x780, the guide pictures' palette and Sarabun, value labels on
+  every mark, whole-number gridlines for counts, `อื่น ๆ` for the tail past
+  eight bars, "ไม่มีข้อมูลในช่วงที่ขอ" when there is nothing. ~20-40 KB a chart.
+- **`services/sales_charts.py`** — the four fixed pictures, built only from
+  endpoints the tier already calls: `pipeline_summary` (by stage — the same
+  numbers the text "สรุปการขาย" gives, so they cannot disagree) and
+  `list_deals(stage="won")` for by-month, best sellers and per-person. No
+  new SQL, no new Data route; a deal's value is read the way
+  `DealRepository.pipeline_summary` reads it (line items, else `amount`).
+- **`reports_ai.chart_for` / `publish_chart` / `publish_chart_for`** — the
+  ad-hoc engine's result as a picture, i.e. one more output format of the
+  same answer rather than a parallel query path. A report with no
+  `group_by` is one number and says "รายงานนี้เป็นตัวเลขเดียว ยังไม่มีกราฟให้ดู".
+- **Storing and linking**: `reports/{license_id}/charts/{uuid}.png` in the
+  document store, handed out as an **asset token** (`services/assets.py`,
+  `GET /api/v1/assets/{token}`) — never a GCS signed URL, which this
+  deployment cannot produce. The token is tenant-path-scoped and lives
+  **1 hour** (`CHART_LINK_TTL_SECONDS`), not the files' 7 days: LINE fetches
+  the picture on delivery and keeps its own copy, so what expires is a
+  forwarded link. **No store, no PUBLIC_BASE_URL, or a failed write is not
+  an error** — the reply keeps its numbers and adds one sentence,
+  "(ยังส่งรูปกราฟไม่ได้ตอนนี้ — ที่เก็บไฟล์ยังไม่พร้อม ตัวเลขด้านบนถูกต้องครับ)".
+- **Chat**: `_chart_request()` reads กราฟ/แผนภูมิ/ชาร์ต/chart/graph and picks
+  pipeline · monthly (`N เดือน`) · products (`N อันดับ` / `top N`) · owner.
+  A free-form question asked as a chart still goes to the report engine
+  (`_handle_ai_report(with_chart=True)`); the four fixed ones are
+  deterministic and cost no model call. A plain report keeps its text and
+  gains a **"ดูเป็นกราฟ"** quick reply — on `_handle_sales_summary` and on
+  every AI report answer. Permissions follow the text answer they replace:
+  the pipeline chart needs `deal.read` (like "ยอดขาย"), the other three
+  `view_reports` (like the report engine); without it, the existing refusal.
+- **Dashboard parity**: `/liff/sales/reports/ai` now shows an "เปิดรูปกราฟ
+  (PNG)" button beside CSV/PDF — `reports/ai` and `reports/ai/run` return
+  `chart` alongside `files`. The page keeps its own table-with-bars.
+- **Ships with the app**: `Pillow==12.3.0` in `application/requirements.txt`
+  (same pin as the test requirements) and the two Sarabun faces copied to
+  `application/chann_app/static/fonts/` (188 KB, SIL OFL 1.1 — see the
+  README there). A slim container has no Thai system font; without them
+  every label is tofu. `COPY chann_app` already carries them, so the
+  Dockerfile is unchanged. `tests/unit/test_charts.py` fails if these
+  copies drift from `scripts/dev/guide-fonts/`.
+- Month buckets are Bangkok days (`BANGKOK_TZ`), matching the Data tier's
+  own report windows — a deal created at 20:30 UTC on the 31st belongs to
+  the next month's bar, as the shop sees it.
+- Tests: `tests/unit/test_charts.py` (25) + `tests/unit/test_chat_charts.py`
+  (50) — PNG bytes, size, determinism, empty state, labels inside the card,
+  every phrasing, the asset route serving the picture, no permission, no
+  store, and the numbers behind each picture. **unit+boundary 1600 passed**
+  (was 1522; +75 here and +3 in `test_guides` from the new guide commands),
+  integration 358. Corpus +12 `s.sales_chart` utterances (baseline additions
+  only, all `correct`); simulate-phrasings 473 cases · 11 not as expected ·
+  0 long replies (was 462 · 11 · 0); simulate-day / simulate-edge-cases
+  0 FINDINGS; every `check-*` unchanged (check-i18n-usage declares one more
+  key). Guide step "ถามรายงานด้วย AI" updated and re-rendered.
+
 ### Per-OA persona separation (8 Sep) — `persona-v1`, **migration `0026_member_channel`**
 
 - Owner's report: the LINE account registered on the CS/Sales OA, added to

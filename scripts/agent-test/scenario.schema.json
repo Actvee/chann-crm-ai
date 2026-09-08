@@ -1,0 +1,283 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chann-crm-ai.local/schemas/agent-test-scenario.json",
+  "title": "Chann CRM AI agent-test scenario",
+  "description": "One test case, written as data. The runner (scripts/agent-test/run.py) enforces this contract itself before executing anything, so a scenario that runs is a scenario every key of which was understood; this file is the same contract in a form other tools can read. YAML files are validated against it after being parsed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "steps"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$",
+      "description": "Unique, lowercase, dashes only. This is what --only matches on."
+    },
+    "description": {
+      "type": "string",
+      "description": "One line saying what journey this covers; shown by --list."
+    },
+    "backend": {
+      "enum": ["fake", "db", "any"],
+      "default": "any",
+      "description": "fake = the in-memory Data client, no database. db = the real Data tier over HTTP against TEST_DATABASE_URL. any = runs on either; the runner skips a scenario whose backend does not match the one selected."
+    },
+    "actor": {
+      "$ref": "#/$defs/actor",
+      "description": "Defaults every `send` step inherits."
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/step" }
+    }
+  },
+  "$defs": {
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "oa": {
+          "enum": ["sales", "technician", "customer"],
+          "default": "sales",
+          "description": "Which LINE Official Account the message arrives on. This, not the role, decides what the OA is allowed to offer."
+        },
+        "role": {
+          "type": "string",
+          "default": "sales",
+          "description": "The identity's primary role (sales, technician, owner, cs...). Defaults to technician on the technician OA, sales otherwise."
+        },
+        "language": { "enum": ["th", "en"], "default": "th" },
+        "permissions": {
+          "$ref": "#/$defs/permissions",
+          "description": "fake backend only; on the db backend the member's real role decides and this is reported as ignored."
+        },
+        "line_user_id": {
+          "type": "string",
+          "description": "db backend only. Omit unless a scenario needs a SECOND person: the default is one LINE account shared by every OA, which is what migration 0026 is about."
+        }
+      }
+    },
+    "permissions": {
+      "oneOf": [
+        {
+          "enum": ["all", "none", "sales", "technician", "customer"],
+          "description": "A named set. sales/technician/customer are the sets the three OAs normally carry."
+        },
+        {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Explicit permission keys, e.g. [customer.read, deal.create]."
+        }
+      ]
+    },
+    "step": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Exactly one of send / seed / reset / http, optionally with `expect`; or a bare `expect` that asserts on the last reply.",
+      "properties": {
+        "note": {
+          "type": "string",
+          "description": "A comment carried into the JSON report. Does nothing."
+        },
+        "send": { "$ref": "#/$defs/send" },
+        "seed": { "$ref": "#/$defs/seed" },
+        "reset": {
+          "description": "Fresh state: a new fake client, or a new tenant on the db backend. Any value; `true` reads best.",
+          "type": ["boolean", "object", "null"]
+        },
+        "http": { "$ref": "#/$defs/http" },
+        "expect": { "$ref": "#/$defs/expect" }
+      },
+      "not": {
+        "anyOf": [
+          { "required": ["send", "seed"] },
+          { "required": ["send", "http"] },
+          { "required": ["send", "reset"] },
+          { "required": ["seed", "http"] },
+          { "required": ["seed", "reset"] },
+          { "required": ["http", "reset"] }
+        ]
+      },
+      "anyOf": [
+        { "required": ["send"] },
+        { "required": ["seed"] },
+        { "required": ["reset"] },
+        { "required": ["http"] },
+        { "required": ["expect"] }
+      ]
+    },
+    "send": {
+      "description": "A chat message. A plain string is the message with every actor default; a mapping overrides them for this message only.",
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["message"],
+          "properties": {
+            "message": { "type": "string", "minLength": 1 },
+            "oa": { "enum": ["sales", "technician", "customer"] },
+            "role": { "type": "string" },
+            "language": { "enum": ["th", "en"] },
+            "permissions": { "$ref": "#/$defs/permissions" },
+            "ai": {
+              "type": "object",
+              "description": "What the language model would have answered, had it been called. Supplied because no scenario may reach a real model. Omit and the model answers 'suggest', which is how you prove a message is handled deterministically (see used_ai).",
+              "properties": {
+                "action": { "type": "string" },
+                "entity": { "type": ["string", "null"] },
+                "fields": { "type": "object" },
+                "missing": { "type": "array", "items": { "type": "string" } }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "seed": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Shop data the scenario needs, created through the same data client the run is using — so the tier's own validation applies. Every row may carry `ref: <name>`, which makes it referable later as \"$name\" (its id) or \"$name.field\".",
+      "properties": {
+        "products":   { "$ref": "#/$defs/rows" },
+        "customers":  { "$ref": "#/$defs/rows" },
+        "deals":      { "$ref": "#/$defs/rows" },
+        "quotes":     { "$ref": "#/$defs/rows" },
+        "tickets":    { "$ref": "#/$defs/rows" },
+        "warranties": { "$ref": "#/$defs/rows" },
+        "invites":    { "$ref": "#/$defs/rows" },
+        "members": {
+          "$ref": "#/$defs/rows",
+          "description": "fake backend only — a membership row invented directly. On the db backend a member is made by redeeming an invite."
+        },
+        "redeem": {
+          "$ref": "#/$defs/rows",
+          "description": "db backend only. Each row: {invite: \"$ref.invite_code\", oa: technician|sales, line_user_id?, display_name?}. Omitting line_user_id means the scenario's own LINE account redeems it, which is the migration-0026 case."
+        },
+        "raw": {
+          "type": "object",
+          "description": "fake backend only. Writes rows straight onto the fake client's private state (`tickets` sets _tickets, and so on). The escape hatch for a starting state no client call can produce, such as a ticket already assigned and awaiting acceptance."
+        },
+        "call": {
+          "type": "array",
+          "description": "Anything the shorthands do not cover: {method: <data client method>, args: {...}, ref?: <name>}. The licence id is passed as the first argument for you.",
+          "items": {
+            "type": "object",
+            "required": ["method"],
+            "properties": {
+              "method": { "type": "string" },
+              "args": { "type": "object" },
+              "ref": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "rows": {
+      "type": "array",
+      "items": { "type": "object" }
+    },
+    "http": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path"],
+      "description": "db backend only: call an Application-tier route the dashboard uses. `{license_id}` in the path is filled in.",
+      "properties": {
+        "method": {
+          "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"],
+          "default": "GET"
+        },
+        "path": { "type": "string" },
+        "json": { "description": "Request body." },
+        "params": { "type": "object", "description": "Query string." },
+        "as": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Who is calling. Defaults to the shop owner with every permission.",
+          "properties": {
+            "oa": { "enum": ["sales", "technician", "customer"] },
+            "role": { "type": "string" },
+            "is_owner": { "type": "boolean" },
+            "chann_uid": { "type": "string" },
+            "permissions": { "$ref": "#/$defs/permissions" }
+          }
+        }
+      }
+    },
+    "expect": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "description": "Assertions on the step's result — the reply of a `send`, the response of an `http`, or the last of either for a bare expect. All of them must hold; all of them are reported, not just the first that fails.",
+      "properties": {
+        "contains": {
+          "$ref": "#/$defs/stringOrStrings",
+          "description": "Every one of these must appear in the reply text."
+        },
+        "not_contains": {
+          "$ref": "#/$defs/stringOrStrings",
+          "description": "None of these may appear. Use it to keep raw field names (due_time, service_address) and other OAs' vocabulary out of a reply."
+        },
+        "regex": {
+          "$ref": "#/$defs/stringOrStrings",
+          "description": "Python regular expressions, searched multi-line."
+        },
+        "quick_replies_include": {
+          "$ref": "#/$defs/stringOrStrings",
+          "description": "Matches a quick-reply button's label or the text it sends."
+        },
+        "has_image": {
+          "type": "boolean",
+          "description": "Whether the reply carries image URLs (guides that need a picture do)."
+        },
+        "intent": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "action": { "type": "string" },
+            "entity": { "type": "string" }
+          },
+          "description": "The parsed intent the reply carried. Only replies routed through the model carry one."
+        },
+        "max_lines": {
+          "type": "integer",
+          "description": "LINE readability: a bubble longer than about 15 lines is not read."
+        },
+        "max_chars": { "type": "integer" },
+        "is_not": {
+          "oneOf": [
+            { "$ref": "#/$defs/badClass" },
+            { "type": "array", "items": { "$ref": "#/$defs/badClass" } }
+          ],
+          "description": "The reply must not be one of the known failure shapes."
+        },
+        "used_ai": {
+          "type": "boolean",
+          "description": "false asserts the answer came from the deterministic layer without calling the model at all."
+        },
+        "status": {
+          "type": "integer",
+          "description": "http steps only: the HTTP status code."
+        },
+        "json_path": {
+          "type": "object",
+          "description": "http steps only: dotted path -> expected value, compared as strings. Digits index into arrays, e.g. \"0.channel\"."
+        },
+        "json_contains": {
+          "$ref": "#/$defs/stringOrStrings",
+          "description": "http steps only: the serialised response body must contain each string."
+        }
+      }
+    },
+    "badClass": {
+      "enum": ["not_sure", "permission", "not_found", "generic_error", "not_a_feature", "ai_down"],
+      "description": "not_sure = 'I am not sure what you want'. permission = a refusal for lack of a permission key. not_found = nothing matched. generic_error = a bare apology. not_a_feature = 'the system does not do that'. ai_down = the model was unreachable."
+    },
+    "stringOrStrings": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "array", "items": { "type": "string" } }
+      ]
+    }
+  }
+}

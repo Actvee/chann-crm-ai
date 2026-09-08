@@ -429,7 +429,8 @@ export const en: Dictionary = {
       downloadCsv: "Download CSV",
       downloadPdf: "Open PDF",
       openPage: "Open report page",
-      footnote: "Counts come from your shop's data only. Files stay valid for 7 days.",
+      openChart: "Open chart (PNG)",
+      footnote: "Counts come from your shop's data only. Files stay valid for 7 days; the chart picture for one hour.",
     },
     reports: {
       title: "Service reports",

@@ -70,6 +70,18 @@ use entity="profile", action="update", and put only the changed value(s) in
 address. Do not use "profile" for anyone else's details — only the current
 user's own.
 
+Looking something up rather than changing it is action="read" on the entity
+being looked at, with whatever identifies the record in "fields" — a code
+("C-2026-0001", "D-2026-0001", "Q-2026-0001", "T-2026-0001") or, for a
+person, "target_name" with the name as the user wrote it. Omit "fields"
+entirely when they asked for everything ("ขอดูรายชื่อลูกค้า"), and never
+list an identifier as "missing": the system falls back to the list, or to
+the record the conversation is already about. Examples:
+"ขอดูข้อมูลคุณสมหมาย" -> {{"action": "read", "entity": "customer",
+"fields": {{"target_name": "คุณสมหมาย"}}}}; "ขอดูดีล D-2026-0001" ->
+{{"action": "read", "entity": "deal", "fields": {{"deal_code": "D-2026-0001"}}}};
+"ขอดูใบเสนอราคาล่าสุด" -> {{"action": "read", "entity": "quote"}}.
+
 Entity field shapes (Phase 9 CRM — use EXACTLY these field names, never
 invent additional ones, because the entity another party's fields describes
 does not exist anywhere else the model can check against):

@@ -242,6 +242,10 @@ SPEC = {
     "s.deal_create_bare": [A(h=["_handle_bare_create_prompt", "_handle_deal_create_direct"]), A(ai=True, partial=True)],
     "s.deal_stage": [A(h=["_handle_deal_stage_command"])],
     "s.sales_summary": [A(h=["_handle_sales_summary", "_handle_ai_report"])],
+    # Phase 17 ตาราง/กราฟ: the picture, or the report engine answering the
+    # same question with one (the reply carries an image URL when a
+    # document store is configured; there is none in a unit test).
+    "s.sales_chart": [A(h=["_handle_sales_chart", "_handle_ai_report"])],
     "s.deal_value": [A(h=["_handle_deal_query|kind=over_value"])],
     "s.deal_by_amount": [A(h=["_handle_deal_query"]), A(ai=True, partial=True)],
     "s.deal_query": [A(h=["_handle_deal_query", "_handle_ai_report"]), A(ai=True, partial=True)],
@@ -302,6 +306,9 @@ SPEC = {
     "s.undo": [A(h=["_handle_reminder_cancel"], partial=True), A(ai=True, partial=True)],
     "s.offtopic": [A(ai=True), A(h=["_help_reply"], partial=True)],
     "s.report_ai": [A(h=["_handle_ai_report"]), A(ai=True, partial=True)],
+    # Nothing behind this pair yet — the reply must SAY so and name the
+    # dashboard page, never pretend and never come back a permission list.
+    "s.no_handler": [A(ai=True, h=["_pending_execution_reply"], text=["ในแดชบอร์ด", "in the dashboard"])],
     # technician
     "t.greet": [A(text=["สวัสดี", "Hello"], noai=True)],
     "t.small": [A(text=SMALL)],

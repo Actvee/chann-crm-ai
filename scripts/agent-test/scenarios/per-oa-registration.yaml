@@ -1,0 +1,90 @@
+# Migration 0026, proved end to end: every OA is its own registration.
+#
+# One LINE account is one person on every OA — the same chann_uid — but a
+# license_members row is per (licence, person, channel). So the owner of a
+# shop is a stranger to the Technician OA until they redeem a technician
+# invite, and redeeming one adds a SECOND row rather than relabelling the
+# first. Getting this wrong in either direction is severe: one way an owner
+# silently gains technician powers they never asked for, the other way
+# redeeming a code destroys their ownership.
+#
+# db backend only, and deliberately so. There is no way to fake this: the
+# whole subject is what the real license_members table does, and the fake
+# Data client has one flat permission list with no channel at all.
+name: per-oa-registration
+description: the same LINE identity is not a technician until they redeem a technician invite
+backend: db
+actor:
+  oa: sales
+  role: sales
+
+steps:
+  # On the Sales OA this identity is the shop owner: a real membership, so
+  # the shop answers.
+  - send: "ข้อมูลร้าน"
+    expect:
+      contains: "ร้านทดสอบ"
+      is_not: [permission, not_found, generic_error]
+
+  # The same LINE account, messaging the Technician OA. It has no
+  # technician row yet, so the reply must be the way in — not a job list,
+  # and not an error.
+  - send:
+      message: "งานของฉัน"
+      oa: technician
+      role: technician
+    expect:
+      not_contains: "T-2026-"
+      is_not: [generic_error]
+
+  # The shop issues a technician code and the same person redeems it on the
+  # Technician OA — the real registration path, through the Data tier.
+  - seed:
+      invites:
+        - ref: tech_code
+          role: technician
+      redeem:
+        - invite: "$tech_code.invite_code"
+          oa: technician
+
+  # Now the Technician OA knows them, and the technician guide is what
+  # comes back — never the sales one.
+  - send:
+      message: "วิธีใช้"
+      oa: technician
+      role: technician
+    expect:
+      contains: "วิธีใช้"
+      not_contains: ["ใบเสนอราคา", "ดีล"]
+      is_not: [generic_error, not_sure, permission]
+
+  - send:
+      message: "งานของฉัน"
+      oa: technician
+      role: technician
+    expect:
+      is_not: [generic_error, permission, not_a_feature]
+
+  # And the sales side is untouched: still the owner, still able to run the
+  # shop. If redeeming had relabelled the one row, this step would fail.
+  - send: "ข้อมูลร้าน"
+    expect:
+      contains: "ร้านทดสอบ"
+      is_not: [permission, not_found, generic_error]
+
+  - send: "รายชื่อลูกค้า"
+    expect:
+      is_not: [permission, generic_error, not_a_feature]
+
+  # The members page sees the same thing the chat does: one person, two
+  # rows, one per channel. This crosses the tier seam over real HTTP.
+  - http:
+      method: GET
+      path: "/api/v1/licenses/{license_id}/members"
+    expect:
+      status: 200
+      json_path:
+        "0.channel": "sales"
+        "1.channel": "technician"
+        "0.role": "owner"
+        "1.role": "technician"

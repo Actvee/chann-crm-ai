@@ -1,0 +1,121 @@
+# A salesperson's morning on the Sales/CS OA: a lead arrives, becomes a deal,
+# the deal gets lines, the lines become a quote. This is the journey the shop
+# runs every day, so it is the one that must never break.
+#
+# It also doubles as the worked example in README.md — every step type except
+# `http` (which needs the db backend) appears here at least once.
+name: sales-day
+description: lead to customer to deal to line items to quote, on the Sales OA
+backend: any
+actor:
+  oa: sales
+  role: sales
+  language: th
+  permissions: sales
+
+steps:
+  # The catalogue the salesperson sells from.
+  - seed:
+      products:
+        - product_id: AC12
+          product_name: "แอร์ 12000 BTU"
+          unit_price: "15900.00"
+        - product_id: FAN16
+          product_name: "พัดลมตั้งพื้น 16 นิ้ว"
+          unit_price: "1500.00"
+
+  - send: "สวัสดี"
+    expect:
+      contains: "สวัสดี"
+      is_not: [generic_error, not_sure, permission]
+      max_lines: 6
+
+  # The guide is the first thing a new user asks for; it must never come back
+  # as a permission list or a shrug.
+  - send: "วิธีใช้"
+    expect:
+      contains: "วิธีใช้"
+      is_not: [generic_error, not_sure, permission, not_a_feature]
+
+  # A lead typed as a sentence. The deterministic layer does not parse free
+  # prose, so this step says what the model would have answered.
+  - send:
+      message: "มีลูกค้าใหม่ สมชาย ใจดี เบอร์ 0812345678 สนใจแอร์"
+      ai:
+        action: create
+        entity: customer
+        fields:
+          first_name: "สมชาย"
+          last_name: "ใจดี"
+          phone: "0812345678"
+          notes: "สนใจแอร์"
+        missing: []
+    expect:
+      contains: "สมชาย"
+      is_not: [generic_error, not_sure, permission, not_found]
+      intent:
+        action: create
+        entity: customer
+
+  - send: "รายชื่อลูกค้า"
+    expect:
+      contains: ["สมชาย", "C-2026-0001"]
+      used_ai: false
+      is_not: [not_found, permission]
+
+  - send: "ข้อมูลลูกค้า สมชาย"
+    expect:
+      contains: "0812345678"
+      is_not: [not_found, generic_error]
+
+  # A deal for the customer just discussed — no code retyped, because an
+  # assistant is expected to know who is on screen.
+  - send: "เปิดดีลให้สมชาย"
+    expect:
+      contains: "D-2026-0001"
+      is_not: [not_found, permission, generic_error]
+
+  - send: "ข้อมูลดีล D-2026-0001"
+    expect:
+      contains: "D-2026-0001"
+      is_not: [not_found, generic_error]
+
+  # Line items, typed the way the owner types them (8 Sep 2026).
+  - send: "เพิ่มทีวี 40 นิ้ว ราคา 4000 อีก 2 รายการ"
+    expect:
+      contains: "ทีวี"
+      is_not: [not_sure, generic_error, permission]
+
+  - send: "เพิ่มอีก 1 ตัว"
+    expect:
+      is_not: [not_sure, generic_error, permission, not_found]
+
+  - send: "สร้างใบเสนอราคา D-2026-0001"
+    expect:
+      contains: "Q-2026-0001"
+      is_not: [not_found, permission, generic_error]
+
+  - send: "รายการใบเสนอราคา"
+    expect:
+      contains: "Q-2026-0001"
+      is_not: [not_found, permission]
+
+  # A note and a reminder against the record in context.
+  - send: "บันทึกว่า ลูกค้าขอส่วนลด"
+    expect:
+      is_not: [not_sure, generic_error, permission]
+
+  - send: "รายการเตือน"
+    expect:
+      is_not: [generic_error, permission]
+      # No raw field key may ever reach a person (owner's rule 4).
+      not_contains: ["due_time", "due_date", "owner_member_id"]
+
+  # Losing the permission must read as a clear refusal, not as a crash and
+  # not as silence — and it must name what to ask for.
+  - send:
+      message: "เพิ่มลูกค้า"
+      permissions: [customer.read]
+    expect:
+      is_not: [generic_error, not_a_feature]
+      max_chars: 900

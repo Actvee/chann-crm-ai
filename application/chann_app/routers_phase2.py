@@ -3631,6 +3631,9 @@ async def ai_report_ask(
         out = await reports_ai.handle_report_request(
             client, license_id=license_id, message=body.message, language=language,
             actor_id=principal.chann_uid, company_name=_company_name_of(principal),
+            # The dashboard draws its own bars, but the picture is what a
+            # person forwards to a colleague — same chart the chat sends.
+            with_chart=True,
         )
     except reports_ai.ReportSpecInvalid as exc:
         return {"error": "spec_invalid", "message": reports_ai.INVALID[language if language in reports_ai.INVALID else "th"].format(reason=str(exc))}
@@ -3663,7 +3666,9 @@ async def ai_report_run(
         raise _propagate(exc)
     text = reports_ai.report_text(spec, result, language)
     files = await reports_ai.publish_files(spec, result, language, license_id=license_id, company_name=_company_name_of(principal))
-    return {"spec": spec, "result": result, "text": text, "files": files}
+    chart, plottable = await reports_ai.publish_chart_for(spec, result, language, license_id=license_id)
+    return {"spec": spec, "result": result, "text": text, "files": files,
+            "chart": chart, "plottable": plottable}
 
 
 def _company_name_of(principal: TenantPrincipal) -> str:

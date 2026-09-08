@@ -58,12 +58,27 @@ ACTION_ALIASES = {
     "list": "read",
     "get": "read",
     "show": "read",
+    # The model reaches for these whenever the sentence is a lookup rather
+    # than a list — "หาลูกค้าชื่อสมหมาย" comes back as action="search",
+    # "ขอดูข้อมูลคุณสมหมาย" as action="find". Neither was an alias, so
+    # required_permission answered None and a plain read was reported as
+    # something the system cannot do at all (owner, 8 Sep 2026).
+    "search": "read",
+    "find": "read",
     "add": "create",
     "new": "create",
     "edit": "update",
     "modify": "update",
     "remove": "delete",
 }
+
+# Every verb that means "show me". Derived from the aliases above rather
+# than written out a second time: the per-entity handlers below see the
+# model's RAW verb (the dispatcher normalises only for the permission
+# gate), so a list kept by hand would drift from what the gate accepts and
+# a read would pass the gate and then fall off the end of its handler —
+# which is exactly the bug this set exists to stop.
+READ_ACTIONS = frozenset({"read"} | {a for a, canon in ACTION_ALIASES.items() if canon == "read"})
 
 # (action, entity) -> permission key. An entity that is not in this table is
 # not something the system can do at all, which is a different answer from
@@ -7585,6 +7600,14 @@ DASHBOARD_PATHS = {
     "company": "company",
     "warranties": "warranties",
     "teams": "teams",
+    # These pages exist under presentation/app/liff/sales and had no path
+    # here, so every deep link to them came back None — the person was told
+    # "try the dashboard" with nothing to tap and no page named.
+    "tickets": "tickets",
+    "reports": "reports",
+    "approvals": "approvals",
+    "roles": "roles",
+    "members": "members",
     "guide": "guide",
     "chats": "chats",
     "index": "",
@@ -9601,6 +9624,8 @@ async def _handle_sales_summary(
     return ChatReply(
         text=text,
         quick_replies=[
+            # The same numbers as a picture, one tap away (owner, 8 Sep 2026).
+            (_t(CHART_AS_CHART_BUTTON, language), _t(CHART_AS_CHART_SAYS, language)),
             ("ดีลเดือนนี้", "ดีลเดือนนี้"),
             ("ดีลเลยกำหนด", "ดีลเลยกำหนด"),
         ],
@@ -9653,6 +9678,54 @@ async def _handle_ai_understood_intent(
                 trigger="มอบหมาย", permission_keys=permission_keys,
                 language=language,
             )
+        if action in READ_ACTIONS:
+            # "งานนี้เป็นยังไงบ้าง" / "ขอดูงาน T-2026-0001": ticket.read has
+            # been registered since Phase 6 and reached nothing — the model
+            # understood, the gate passed, and the router answered with a
+            # list of permissions instead of the job.
+            if ctx.oa == "customer":
+                # ticket.read is in scope for the Customer OA, but it means
+                # "my own repair", never the shop's job list.
+                # _handle_customer_report answers that long before anything
+                # reaches the model; this is the belt to that brace.
+                return _customer_fallback(message, language)
+            if code or TICKET_CODE_RE.search(message or ""):
+                return await _handle_ticket_detail(
+                    client, ctx=ctx, license_id=license_id,
+                    message=_joined(code, message),
+                    permission_keys=permission_keys, language=language,
+                )
+            return await _handle_ticket_list(
+                client, ctx=ctx, license_id=license_id,
+                permission_keys=permission_keys, language=language,
+                mine=(ctx.oa == "technician"),
+            )
+        if action == "reject":
+            return await _handle_ticket_reject(
+                client, ctx=ctx, license_id=license_id,
+                message=_joined("ไม่รับงาน", code, fields.get("reason")),
+                permission_keys=permission_keys, language=language,
+            )
+        if action == "close":
+            # Closing a job in this product IS the technician's check-out:
+            # the visit ends with a report, and there is no other way to
+            # finish one. Same handler as the typed "ปิดงาน".
+            return await _handle_check_out(
+                client, ctx=ctx, license_id=license_id,
+                message=_joined("ปิดงาน", code),
+                permission_keys=permission_keys, language=language,
+            )
+        if action == "update" and ctx.oa == "technician":
+            # "เลื่อนไปพรุ่งนี้บ่าย", "ลูกค้าขอเปลี่ยนที่อยู่" — the same
+            # situation handler the technician's own words already reach.
+            # Sales has no equivalent handler, so a sales OA update falls
+            # through to the honest reply with the Jobs page on it.
+            return await _handle_technician_situation(
+                client, ctx=ctx, license_id=license_id, kind="reschedule",
+                message=_joined(code, fields.get("scheduled_date"), fields.get("scheduled_time"),
+                                fields.get("service_address"), message),
+                permission_keys=permission_keys, language=language,
+            )
 
     if entity == "service_report":
         if action == "check_in":
@@ -9665,6 +9738,39 @@ async def _handle_ai_understood_intent(
             return await _handle_check_out(
                 client, ctx=ctx, license_id=license_id,
                 message=_joined("ปิดงาน", code),
+                permission_keys=permission_keys, language=language,
+            )
+        if action in READ_ACTIONS:
+            found = SERVICE_REPORT_CODE_RE.search(_joined(code, message))
+            if found:
+                return await _handle_report_detail(
+                    client, ctx=ctx, license_id=license_id, code=found.group(1).upper(),
+                    permission_keys=permission_keys, language=language,
+                )
+            return await _handle_report_list(
+                client, ctx=ctx, license_id=license_id,
+                permission_keys=permission_keys, language=language,
+            )
+        if action in ("create", "update"):
+            # "คอมเพรสเซอร์เสีย เปลี่ยนให้แล้ว": a report is filed by
+            # closing the job, so the model's fields are rewritten into the
+            # marker form _handle_check_out already parses — one parser,
+            # one set of rules about which ticket it belongs to.
+            written = _joined(
+                "ปิดงาน", code,
+                f"พบ: {fields.get('found_issue')}" if fields.get("found_issue") else "",
+                f"แก้: {fields.get('work_done')}" if fields.get("work_done") else "",
+                fields.get("parts_changed"), fields.get("notes"),
+            )
+            return await _handle_check_out(
+                client, ctx=ctx, license_id=license_id,
+                message=written if fields.get("found_issue") or fields.get("work_done") else _joined("ปิดงาน", code, message),
+                permission_keys=permission_keys, language=language,
+            )
+        if action == "issue":
+            return await _handle_report_pdf(
+                client, ctx=ctx, license_id=license_id,
+                message=_joined("ออกรายงาน", code),
                 permission_keys=permission_keys, language=language,
             )
 
@@ -9750,13 +9856,29 @@ async def _handle_ai_understood_intent(
             actor_id=ctx.chann_uid,
         )
 
-    if entity == "warranty" and action == "read":
+    if entity == "warranty" and action in READ_ACTIONS:
         serial = str(fields.get("serial_number") or "").strip()
         if serial:
             return await _handle_serial_enquiry(
                 client, ctx=ctx, license_id=license_id,
                 message=_joined("เช็คประกัน", serial), language=language,
             )
+        if ctx.oa != "customer":
+            # "ดูรายการรับประกัน" with no serial: the shop's own book, the
+            # same list "สมุดรับประกัน" shows. A customer asking this means
+            # their own units, which _handle_warranty_mine answers on the
+            # customer OA long before anything reaches the model.
+            return await _handle_warranty_book(
+                client, license_id=license_id,
+                permission_keys=permission_keys, language=language,
+            )
+
+    if entity == "warranty" and action == "create":
+        return await _handle_warranty_register(
+            client, ctx=ctx, license_id=license_id,
+            message=_joined(fields.get("serial_number"), fields.get("product_name"), target, message),
+            language=language, permission_keys=permission_keys,
+        )
 
     # Understood as a category but not as something with a handler behind
     # it. Saying what IS possible beats "not a feature", which is wrong —
@@ -9771,7 +9893,7 @@ async def _handle_ai_understood_intent(
             _filter_by_oa(permission_keys, ctx.oa), catalog, language, oa=ctx.oa,
             requested_action=action, requested_entity=entity,
         ),
-        quick_reply_url=_guide_button(ctx.oa, language),
+        quick_reply_url=_entity_page_button(entity, language, ctx.oa) or _guide_button(ctx.oa, language),
     )
 
 
@@ -11767,6 +11889,42 @@ AI_REPORT_UNAVAILABLE = {
     "en": "AI reports are not available right now — try again, or open \"AI reports\" on the dashboard.",
 }
 
+# Phase 17's second output shape — ตาราง/กราฟ. The owner asked for it by
+# name on 8 Sep 2026 ("อยากดู report ยอดขายเป็นกราฟ"): the chat could say
+# the numbers and could hand over a CSV, but a picture of them was the one
+# thing the spec listed and the chat could not do. LINE has no table and no
+# chart component, so the chart is a PNG this tier draws and sends as an
+# image message ahead of the summary (services/charts.py, sales_charts.py).
+CHART_WORDS = ("กราฟ", "แผนภูมิ", "ชาร์ต", "chart", "graph")
+# Which of the four sales pictures they meant. Checked in this order:
+# "รายคน" and "ขายดี" name a chart outright, "เดือน" names a period, and a
+# request that names none of them is the pipeline — the same numbers the
+# text "สรุปการขาย" already answers with, so the button on that reply and
+# a bare "ขอกราฟยอดขาย" land on the same picture.
+CHART_OWNER_WORDS = ("รายคน", "แต่ละคน", "ต่อคน", "รายบุคคล", "แยกตามคน", "แยกตามพนักงาน", "แยกตามเซล",
+                     "ของพนักงาน", "by person", "per person", "by owner", "by rep", "by salesperson")
+CHART_PRODUCT_WORDS = ("สินค้าขายดี", "ขายดี", "สินค้า", "รุ่นไหนขายดี", "top product", "best seller",
+                       "best-selling", "best selling", "product")
+CHART_MONTHLY_WORDS = ("รายเดือน", "แต่ละเดือน", "ต่อเดือน", "เดือน", "monthly", "by month", "per month", "month")
+_CHART_MONTHS_RE = re.compile(r"(\d{1,2})\s*(?:เดือน|months?\b)")
+_CHART_TOP_RE = re.compile(r"(?:top|อันดับ)\s*(\d{1,2})|(\d{1,2})\s*อันดับ", re.I)
+
+CHART_AS_CHART_BUTTON = {"th": "ดูเป็นกราฟ", "en": "View as chart"}
+CHART_AS_CHART_SAYS = {"th": "ขอกราฟยอดขาย", "en": "sales chart"}
+CHART_OTHER_BUTTONS = (
+    ("monthly", {"th": "กราฟรายเดือน", "en": "By month"}, {"th": "กราฟยอดขายรายเดือน", "en": "monthly sales chart"}),
+    ("products", {"th": "สินค้าขายดี", "en": "Best sellers"}, {"th": "กราฟสินค้าขายดี", "en": "top products chart"}),
+    ("owner", {"th": "ยอดขายรายคน", "en": "By person"}, {"th": "กราฟยอดขายรายคน", "en": "sales chart per person"}),
+    ("pipeline", {"th": "ดีลแต่ละสถานะ", "en": "By stage"}, {"th": "กราฟดีลแต่ละสถานะ", "en": "deals by stage chart"}),
+)
+# Storage is not configured in dev and can fail in production. The numbers
+# are the answer; the picture is an extra, and its absence is said plainly
+# rather than swallowed or turned into an apology for the whole request.
+CHART_TEXT_ONLY = {
+    "th": "\n(ยังส่งรูปกราฟไม่ได้ตอนนี้ — ที่เก็บไฟล์ยังไม่พร้อม ตัวเลขด้านบนถูกต้องครับ)",
+    "en": "\n(The chart picture cannot be sent right now — file storage is not ready. The numbers above are correct.)",
+}
+
 
 
 
@@ -12924,7 +13082,64 @@ async def _handle_customer_intent(
             ctx=ctx, license_id=license_id, language=language,
         )
 
-    return ChatReply(text=_pending_execution_reply(intent, language), intent=intent)
+    if action in READ_ACTIONS:
+        # "ขอดูข้อมูลคุณสมหมาย" (owner, 8 Sep 2026). The typed "ดูลูกค้า
+        # สมชาย" has worked since Phase 9; the same sentence understood by
+        # the model fell off the end of this function and was answered
+        # "ในแชทยังทำรายการนี้ไม่ได้" about a thing the chat plainly does.
+        #
+        # One name, one lookup: _handle_customer_detail already reads a
+        # code, a name or a phone number, and already owns the "not found"
+        # and "several match" replies with the buttons that pick a person —
+        # so a read routed here can never disagree with a read typed.
+        if ctx.oa == "customer":
+            # customer.read is in scope for the Customer OA (spec §6), but
+            # it means "my own record" there, never the shop's book — a
+            # customer must never be handed the tenant's whole contact
+            # list because the model labelled their question a read.
+            return await _handle_customer_profile_view(
+                client, ctx=ctx, license_id=license_id, language=language,
+            )
+        held = list(permission_keys or []) or ["customer.read"]
+        who = _named_customer(fields)
+        if who:
+            return await _handle_customer_detail(
+                client, license_id=license_id, code=who,
+                permission_keys=held, language=language, ctx=ctx,
+            )
+        return await _handle_customer_list(
+            client, license_id=license_id, permission_keys=held, language=language,
+        )
+
+    return _no_handler_reply(intent, language, ctx.oa)
+
+
+# "คุณสมหมาย", "นายสมชาย", "Mr Somchai": the model copies the honorific
+# the person typed, and a substring lookup for "คุณสมหมาย" matches nobody
+# because the record holds "สมหมาย". Stripped only from the FRONT and only
+# when something is left, so a customer actually called "คุณ" survives.
+_HONORIFICS = ("คุณ", "คุน", "นางสาว", "น.ส.", "นาย", "นาง", "ท่าน", "พี่", "น้อง",
+               "mr.", "mr", "mrs.", "mrs", "ms.", "ms", "miss", "khun", "k.")
+
+
+def _strip_honorific(name: str) -> str:
+    text = (name or "").strip()
+    for lead in sorted(_HONORIFICS, key=len, reverse=True):
+        if text.lower().startswith(lead) and len(text) > len(lead):
+            return text[len(lead):].strip(" .")
+    return text
+
+
+def _named_customer(fields: dict) -> str:
+    """Who a read intent is about — a code, a name or a phone number, in
+    whichever of the model's field names it landed in. Empty when the
+    person named nobody, which means "the list"."""
+    for key in ("target_name", "customer_id", "code", "name", "query", "search",
+                "first_name", "last_name", "phone"):
+        value = str((fields or {}).get(key) or "").strip()
+        if value:
+            return _strip_polite_tail(_strip_honorific(value))
+    return ""
 
 
 def _private_fields(fields: dict) -> dict:
@@ -13077,7 +13292,33 @@ async def _handle_deal_intent(
             client, contact=contact, fields=deal_fields, ctx=ctx,
             license_id=license_id, language=language,
         )
-    return ChatReply(text=_pending_execution_reply(intent, language), intent=intent)
+
+    if action in READ_ACTIONS:
+        # The typed "ข้อมูลดีล D-2026-0001" and "รายการดีล" have always
+        # worked; the model's reading of the same request did not.
+        code = str(fields.get("deal_code") or fields.get("code") or fields.get("deal_id") or "").strip().upper()
+        if not code:
+            found = DEAL_ID_RE.search(message or "")
+            code = found.group(0).upper() if found else ""
+        if code:
+            return await _handle_deal_detail(
+                client, license_id=license_id, code=code,
+                permission_keys=permission_keys, language=language, ctx=ctx,
+            )
+        if message and _asks_latest_deal(message):
+            # "ขอข้อมูลดีลล่าสุด" — the deal in play, never a deal called
+            # "ล่าสุด"; the same handler the trigger reaches.
+            return await _handle_latest_deal(
+                client, ctx=ctx, license_id=license_id, message=message,
+                permission_keys=permission_keys, language=language,
+            )
+        who = _strip_polite_tail(_strip_honorific(str(fields.get("target_name") or "").strip()))
+        return await _handle_deal_list(
+            client, ctx=ctx, license_id=license_id, permission_keys=permission_keys,
+            language=language, for_customer=who or None,
+        )
+
+    return _no_handler_reply(intent, language, ctx.oa)
 
 
 async def _apply_deal_create(
@@ -13193,7 +13434,7 @@ async def _handle_product_intent(
     fields = intent.get("fields") or {}
     license_id = str(license_id)
 
-    if action in ("read", "view", "search", "list", "find"):
+    if action in READ_ACTIONS:
         # "มีสินค้าอะไรบ้างที่เป็น พัดลม", understood by the model as viewing
         # products, used to be told the chat could not do it (owner test,
         # 8 Sep 2026). The catalogue list, filtered by whatever was named.
@@ -13206,7 +13447,7 @@ async def _handle_product_intent(
             language=language, query=query,
         )
     if action not in ("create", "update"):
-        return ChatReply(text=_pending_execution_reply(intent, language), intent=intent)
+        return _no_handler_reply(intent, language, ctx.oa)
 
     product_id = (fields.get("product_id") or "").strip()
     product_name = (fields.get("product_name") or "").strip()
@@ -13249,7 +13490,8 @@ QUOTE_CREATED = {
 
 async def _handle_quote_intent(
     client: DataClient, *, intent: dict, ctx: ResolvedContext,
-    license_id, language: str,
+    license_id, language: str, permission_keys: list[str] | None = None,
+    message: str = "",
 ) -> ChatReply:
     """10.1's quote-from-deal creation only — the DOCX-authoring/AI-mapping/
     SmartBrowz-render pipeline (10.4-10.6) isn't wired to chat at all yet;
@@ -13260,9 +13502,36 @@ async def _handle_quote_intent(
     action = intent.get("action")
     fields = intent.get("fields") or {}
     license_id = str(license_id)
+    held = list(permission_keys or []) or ["quote.read"]
+
+    if action in READ_ACTIONS:
+        # "ขอดูใบเสนอราคา Q-2026-0001" / "ขอดูใบเสนอราคาล่าสุด": the same
+        # detail and list handlers the typed triggers reach.
+        code = str(fields.get("quote_code") or fields.get("code") or fields.get("quote_id") or "").strip().upper()
+        if not code:
+            found = QUOTE_CODE_RE.search(message or "")
+            code = found.group(1).upper() if found else ""
+        if not code:
+            # "the latest one" is the quote this conversation is already on;
+            # with nothing in context the list is the honest answer, not a
+            # guess at which quote was meant.
+            try:
+                ref = await client.get_last_entity_ref(ctx.chann_uid, ctx.oa)
+            except Exception:  # noqa: BLE001
+                ref = None
+            if ref and ref.get("entity_type") == "quote" and ref.get("code"):
+                code = str(ref["code"]).upper()
+        if code:
+            return await _handle_quote_detail(
+                client, ctx=ctx, license_id=license_id, code=code,
+                permission_keys=held, language=language,
+            )
+        return await _handle_quote_list(
+            client, license_id=license_id, permission_keys=held, language=language,
+        )
 
     if action != "create":
-        return ChatReply(text=_pending_execution_reply(intent, language), intent=intent)
+        return _no_handler_reply(intent, language, ctx.oa)
 
     deal_code = (fields.get("deal_code") or "").strip().upper()
     if not deal_code:
@@ -13286,6 +13555,9 @@ async def _handle_quote_intent(
                 text=_t(QUOTE_DEAL_NOT_FOUND, language).format(deal_id=deal_code), intent=intent,
             )
         raise
+    await _remember_entity(
+        client, ctx, entity_type="quote", entity_id=row["id"], code=row["quote_id"],
+    )
     return ChatReply(
         text=_t(QUOTE_CREATED, language).format(quote_id=row["quote_id"], deal_id=deal_code),
         entity_type="quote", entity_id=row["id"], intent=intent,
@@ -14518,6 +14790,22 @@ async def _route_chat_message(
                 client, ctx=ctx, license_id=license_id, name=lead_target or None,
                 permission_keys=permission_keys, language=language,
             )
+        # Phase 17 ตาราง/กราฟ. A free-form question asked as a chart stays
+        # with the report engine and gets the picture as one more output of
+        # the same answer; the four fixed sales pictures are deterministic,
+        # so "ขอกราฟยอดขาย" never costs a model call.
+        chart_request = _chart_request(message) if ctx.oa == "sales" else None
+        if chart_request is not None and _is_ai_report_request(message):
+            return await _handle_ai_report(
+                client, ctx=ctx, license_id=license_id, message=message,
+                permission_keys=permission_keys, language=language, ai_client=ai_client,
+                with_chart=True,
+            )
+        if chart_request is not None:
+            return await _handle_sales_chart(
+                client, ctx=ctx, license_id=license_id, request=chart_request,
+                permission_keys=permission_keys, language=language,
+            )
         if ctx.oa == "sales" and _is_ai_report_request(message):
             return await _handle_ai_report(
                 client, ctx=ctx, license_id=license_id, message=message,
@@ -15544,13 +15832,18 @@ async def _execute_intent(
     if intent.get("entity") == "quote":
         return await _handle_quote_intent(
             client, intent=intent, ctx=ctx, license_id=license_id, language=language,
+            permission_keys=permission_keys, message=message,
         )
     if intent.get("entity") == "report":
         return await _handle_sales_summary(
             client, license_id=license_id,
             permission_keys=permission_keys, language=language,
         )
-    if intent.get("entity") in ("ticket", "service_report", "followup", "warranty"):
+    if intent.get("entity") in ("ticket", "service_report", "followup", "warranty", "approval"):
+        # "approval" was handled inside _handle_ai_understood_intent and
+        # never dispatched TO it: "มีอะไรรอผมตรวจบ้าง" and "อนุมัติ
+        # SR-2026-0001" passed the gate and fell to the stub below, with
+        # working handlers three lines away.
         return await _handle_ai_understood_intent(
             client, intent=intent, ctx=ctx, license_id=license_id,
             permission_keys=permission_keys, language=language, message=message,
@@ -15562,6 +15855,20 @@ async def _execute_intent(
         )
     if intent.get("entity") == "note":
         note_action = intent.get("action")
+        if note_action in READ_ACTIONS:
+            # "ดูบันทึกของลูกค้ารายนี้" — note.read has been in
+            # ACTION_PERMISSIONS since Phase 6 and reached nothing.
+            fields = intent.get("fields") or {}
+            return await _handle_note_list(
+                client, ctx=ctx, license_id=license_id,
+                message=" ".join(
+                    str(p) for p in (
+                        "ดูบันทึก", fields.get("entity_code") or fields.get("code") or "",
+                        fields.get("target_name") or "", message,
+                    ) if str(p or "").strip()
+                ),
+                permission_keys=permission_keys, language=language,
+            )
         if note_action in ("update", "delete"):
             fields = intent.get("fields") or {}
             return await _handle_note_edit(
@@ -15583,15 +15890,98 @@ async def _execute_intent(
         return await _handle_note_intent(
             client, intent=intent, ctx=ctx, license_id=license_id, language=language,
         )
+    if intent.get("entity") in ("team", "sales_group"):
+        return await _handle_team_intent(
+            client, intent=intent, ctx=ctx, license_id=license_id,
+            permission_keys=permission_keys, language=language, message=message,
+        )
+    if intent.get("entity") == "member" and intent.get("action") in READ_ACTIONS:
+        # "มีช่างคนไหนบ้าง" — the roster the typed "รายชื่อช่าง" shows.
+        return await _handle_technician_list(
+            client, license_id=license_id, permission_keys=permission_keys, language=language,
+        )
+    if intent.get("entity") == "setting":
+        return await _handle_setting_intent(
+            client, intent=intent, ctx=ctx, license_id=license_id,
+            permission_keys=permission_keys, language=language,
+        )
 
     # Domain execution arrives with the entities themselves (Phase 7+). Until
     # then the parse is echoed back rather than pretending work was done —
     # claiming "created" with nothing written would be a lie the user acts on.
-    return ChatReply(
-        text=_pending_execution_reply(intent, language),
-        entity_type=intent.get("entity"),
-        intent=intent,
+    # The reply names the dashboard page that DOES do it, so an honest "not
+    # here" is still somewhere to go.
+    return _no_handler_reply(intent, language, ctx.oa)
+
+
+async def _handle_team_intent(
+    client: DataClient, *, intent: dict, ctx: ResolvedContext, license_id,
+    permission_keys: list[str], language: str, message: str = "",
+) -> ChatReply:
+    """A team request the model read, routed to the handler the typed words
+    reach. _maybe_handle_teams parses a sentence, so the model's reading is
+    rebuilt into one — and when it declines (returns None) the honest reply
+    with the Teams page is what comes back, never silence."""
+    action = str(intent.get("action") or "")
+    fields = intent.get("fields") or {}
+    name = str(fields.get("team_name") or fields.get("name") or "").strip()
+    members = fields.get("members")
+    if isinstance(members, (list, tuple)):
+        members = ", ".join(str(m) for m in members if str(m or "").strip())
+    members = str(members or fields.get("target_name") or "").strip()
+
+    if action in READ_ACTIONS:
+        rebuilt = "รายชื่อทีมช่าง"
+    elif action == "create" and name:
+        # The create trigger takes everything after it as the team's name,
+        # so the members must NOT be appended here — "สร้างทีมช่าง ทีมแอร์
+        # มี สมศักดิ์" would name the team "ทีมแอร์ มี สมศักดิ์".
+        rebuilt = f"สร้างทีมช่าง {name}"
+    elif action == "delete" and name:
+        rebuilt = f"ลบทีมช่าง {name}"
+    elif action == "update" and name and members:
+        rebuilt = f"เพิ่ม {members} เข้าทีม {name}"
+    else:
+        rebuilt = message or ""
+
+    handled = await _maybe_handle_teams(
+        client, ctx=ctx, license_id=license_id, message=rebuilt,
+        permission_keys=permission_keys, language=language,
     )
+    return handled if handled is not None else _no_handler_reply(intent, language, ctx.oa)
+
+
+async def _handle_setting_intent(
+    client: DataClient, *, intent: dict, ctx: ResolvedContext, license_id,
+    permission_keys: list[str], language: str,
+) -> ChatReply:
+    """The shop's own details. Reading is the company card every member can
+    see; writing goes through the same validate-all-then-write path the
+    typed commands use, so one bad tax id still refuses the whole message."""
+    action = str(intent.get("action") or "")
+    fields = intent.get("fields") or {}
+    if action in READ_ACTIONS:
+        return await _handle_company_profile_view(
+            client, license_id=license_id, permission_keys=permission_keys, language=language,
+        )
+    if action == "update":
+        # The prompt asks the model for "phone"; the profile column is
+        # company_phone. Translating here rather than widening
+        # _company_field_to_payload keeps one name per column.
+        aliases = {"phone": "company_phone", "email": "company_email",
+                   "address": "company_address", "name": "legal_name"}
+        updates = []
+        for key, value in fields.items():
+            field = aliases.get(str(key), str(key))
+            if field in COMPANY_PROFILE_LABELS and value not in (None, ""):
+                updates.append((field, str(value).strip()))
+        if not updates:
+            return _no_handler_reply(intent, language, ctx.oa)
+        return await _handle_company_profile_command(
+            client, license_id=license_id, updates=updates,
+            permission_keys=permission_keys, language=language, actor_id=ctx.chann_uid,
+        )
+    return _no_handler_reply(intent, language, ctx.oa)
 
 
 _ACTION_VERBS = {
@@ -15605,6 +15995,73 @@ _ACTION_VERBS = {
     "reject": {"th": "ไม่อนุมัติ", "en": "reject"},
     "manage": {"th": "จัดการ", "en": "manage"},
 }
+
+# Where in the dashboard each entity is managed, and what that page is
+# called. A reply that says "not in chat yet — try the dashboard" and stops
+# is a dead end: the person has to go and find the screen themselves, and
+# the ones who cannot are exactly the ones who asked in chat. Naming the
+# page — and handing over the button when a LIFF id is configured — is the
+# difference between an answer and a shrug (owner, 8 Sep 2026).
+#
+# Kept separate from CAPABILITY_GROUP_PAGE on purpose: that map is keyed by
+# capability GROUP for "what can I do with X", this one by the entity the
+# model emits, and the two vocabularies are not the same list.
+ENTITY_DASHBOARD_PAGE: dict[str, tuple[str, dict[str, str]]] = {
+    "customer": ("customers", {"th": "รายชื่อลูกค้า", "en": "Customers"}),
+    "note": ("customers", {"th": "รายชื่อลูกค้า", "en": "Customers"}),
+    "followup": ("customers", {"th": "รายชื่อลูกค้า", "en": "Customers"}),
+    "deal": ("deals", {"th": "ดีล", "en": "Deals"}),
+    "line_item": ("deals", {"th": "ดีล", "en": "Deals"}),
+    "quote": ("quotes", {"th": "ใบเสนอราคา", "en": "Quotes"}),
+    "product": ("products", {"th": "สินค้า", "en": "Products"}),
+    "ticket": ("tickets", {"th": "งานซ่อม", "en": "Jobs"}),
+    "service_report": ("reports", {"th": "รายงานบริการ", "en": "Service reports"}),
+    "approval": ("approvals", {"th": "รออนุมัติ", "en": "Approvals"}),
+    "warranty": ("warranties", {"th": "การรับประกัน", "en": "Warranties"}),
+    "team": ("teams", {"th": "ทีม", "en": "Teams"}),
+    "sales_group": ("teams", {"th": "ทีม", "en": "Teams"}),
+    "member": ("members", {"th": "สมาชิกและสิทธิ์", "en": "Members and permissions"}),
+    "role": ("roles", {"th": "บทบาทและสิทธิ์", "en": "Roles and permissions"}),
+    "setting": ("company", {"th": "ข้อมูลบริษัท", "en": "Company details"}),
+    "audit_log": ("company", {"th": "ข้อมูลบริษัท", "en": "Company details"}),
+    "report": ("index", {"th": "แดชบอร์ด", "en": "Dashboard"}),
+}
+NO_HANDLER_ON_PAGE = {
+    "th": "แต่ในแชทยังทำรายการนี้ไม่ได้ ทำได้ที่หน้า \"{page}\" ในแดชบอร์ดครับ",
+    "en": "That is not available in chat yet — the \"{page}\" page in the dashboard does it.",
+}
+NO_HANDLER_NO_PAGE = {
+    "th": "แต่ในแชทยังทำรายการนี้ไม่ได้ ลองใช้แดชบอร์ด หรือแจ้งผู้ดูแลบริษัท",
+    "en": "That is not available in chat yet — try the dashboard, or ask the shop admin.",
+}
+OPEN_ENTITY_PAGE = {"th": "เปิดหน้า{page}", "en": "Open {page}"}
+
+
+def _entity_page_button(entity, language: str, oa: str = "sales") -> tuple[str, str] | None:
+    """The (label, url) that opens the dashboard page for this entity, or
+    None when the entity has no page or the shop has no LIFF id."""
+    known = ENTITY_DASHBOARD_PAGE.get(str(entity or "").strip().lower())
+    if not known:
+        return None
+    section, label = known
+    url = dashboard_link(section, oa)
+    return (_t(OPEN_ENTITY_PAGE, language).format(page=_t(label, language)), url) if url else None
+
+
+def _no_handler_reply(intent: dict, language: str, oa: str = "sales") -> ChatReply:
+    """The honest answer, with somewhere to go.
+
+    Nothing is faked here — the request really has no handler — but the
+    reply now names the screen that does have one, and carries the button
+    to it when the shop is set up for deep links.
+    """
+    return ChatReply(
+        text=_pending_execution_reply(intent, language),
+        entity_type=intent.get("entity"),
+        intent=intent,
+        quick_reply_url=_entity_page_button(intent.get("entity"), language, oa)
+        or _guide_button(oa, language),
+    )
 
 
 _SLOT_FILL_ABORT_WORDS = frozenset({"ยกเลิก", "cancel", "ไม่เอาแล้ว", "เลิก", "ยกเลิกก่อน", "ไม่ทำแล้ว", "never mind"})
@@ -15624,18 +16081,21 @@ def _pending_execution_reply(intent: dict, language: str) -> str:
     customer" — because the raw action/entity pair was the single most
     common machine token to reach a screen.
     """
-    action = str(intent.get("action") or "")
+    raw = str(intent.get("action") or "")
+    action = ACTION_ALIASES.get(raw.strip().lower(), raw.strip().lower())
     entity = str(intent.get("entity") or "")
-    verb = _t(_ACTION_VERBS.get(action, {"th": action, "en": action}), language)
+    verb = _t(_ACTION_VERBS.get(action, {"th": raw, "en": raw}), language)
     noun = _entity_noun(entity, language) if entity else ""
+    known = ENTITY_DASHBOARD_PAGE.get(entity.strip().lower())
+    tail = (
+        _t(NO_HANDLER_ON_PAGE, language).format(page=_t(known[1], language))
+        if known else _t(NO_HANDLER_NO_PAGE, language)
+    )
     if language == "en":
-        return (
-            f"Understood — you want to {verb} {noun}".rstrip() + ". "
-            "That is not available in chat yet — try the dashboard, or ask the shop admin."
-        )
+        return f"Understood — you want to {verb} {noun}".rstrip() + ". " + tail
     return (
         f"เข้าใจแล้วครับ ต้องการ{verb}{noun} " if noun else "เข้าใจแล้วครับ "
-    ) + "แต่ในแชทยังทำรายการนี้ไม่ได้ ลองใช้แดชบอร์ด หรือแจ้งผู้ดูแลบริษัท"
+    ) + tail
 
 
 async def handle_reply(
@@ -15702,7 +16162,7 @@ def _is_ai_report_request(message: str) -> bool:
 
 async def _handle_ai_report(
     client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
-    permission_keys: list[str], language: str, ai_client=None,
+    permission_keys: list[str], language: str, ai_client=None, with_chart: bool = False,
 ) -> ChatReply:
     from . import reports_ai
 
@@ -15717,6 +16177,7 @@ async def _handle_ai_report(
         out = await reports_ai.handle_report_request(
             client, license_id=str(license_id), message=message, language=language,
             actor_id=ctx.chann_uid, ai_client=ai_client, company_name=company,
+            with_chart=with_chart,
         )
     except reports_ai.ReportSpecInvalid as exc:
         return ChatReply(text=_t(reports_ai.INVALID, language).format(reason=str(exc)))
@@ -15731,7 +16192,99 @@ async def _handle_ai_report(
     files_line = reports_ai.files_line(out.get("files") or {}, language)
     if files_line:
         text = f"{text}\n\n{files_line}"
-    return ChatReply(text=text, intent={"action": "report", "entity": out["spec"]["entity"]})
+    images: list[str] = []
+    buttons: list[tuple[str, str]] = []
+    if with_chart:
+        # The same result, in the shape they asked for. Three outcomes, and
+        # each one is said: the picture; "this is one number, there is
+        # nothing to plot"; "the picture could not be made".
+        if out.get("chart"):
+            images = [out["chart"]]
+        elif not out.get("plottable"):
+            text += _t(reports_ai.CHART_NEEDS_GROUPS, language)
+        else:
+            text += _t(reports_ai.CHART_UNAVAILABLE, language)
+    else:
+        buttons.append((_t(CHART_AS_CHART_BUTTON, language), f"{message.strip()[:250]} เป็นกราฟ"
+                        if language != "en" else f"{message.strip()[:250]} as a chart"))
+    return ChatReply(
+        text=text, images=images, quick_replies=buttons,
+        intent={"action": "report", "entity": out["spec"]["entity"]},
+    )
+
+
+def _chart_request(message: str) -> dict | None:
+    """Which sales picture this message is asking for, or None when it is
+    not asking for one. Kept next to the report handlers on purpose: a
+    chart is a report's output format, not a new feature with its own
+    vocabulary."""
+    text = (message or "").strip().lower()
+    if not text or not any(word in text for word in CHART_WORDS):
+        return None
+    if any(word in text for word in CHART_OWNER_WORDS):
+        return {"kind": "owner", "options": {}}
+    if any(word in text for word in CHART_PRODUCT_WORDS):
+        top = _CHART_TOP_RE.search(text)
+        n = next((g for g in (top.groups() if top else ()) if g), None)
+        return {"kind": "products", "options": {"top": int(n)} if n else {}}
+    if any(word in text for word in CHART_MONTHLY_WORDS):
+        months = _CHART_MONTHS_RE.search(text)
+        return {"kind": "monthly", "options": {"months": int(months.group(1))} if months else {}}
+    # "กราฟดีลแต่ละสถานะ" and a bare "ขอกราฟยอดขาย" are the same picture:
+    # the pipeline, which is what "สรุปการขาย" already answers in words.
+    return {"kind": "pipeline", "options": {}}
+
+
+# The pipeline chart is the sales summary with a different skin, so it asks
+# for the same permission that summary asks for; the three that slice the
+# shop's numbers a new way are reports and ask for view_reports, the key
+# the AI report engine already uses.
+CHART_PERMISSION = {"pipeline": "deal.read", "monthly": "view_reports",
+                    "products": "view_reports", "owner": "view_reports"}
+
+
+async def _handle_sales_chart(
+    client: DataClient, *, ctx: ResolvedContext, license_id, request: dict,
+    permission_keys: list[str], language: str,
+) -> ChatReply:
+    """A picture of the shop's numbers, plus the sentence that says what it
+    shows. The text is always complete on its own — a LINE notification
+    preview never renders an image, and storage may not be configured."""
+    from . import charts, reports_ai, sales_charts
+
+    kind = str(request.get("kind") or "pipeline")
+    if CHART_PERMISSION.get(kind, "view_reports") not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    company = ""
+    try:
+        company = str((ctx.memberships[0] if ctx.memberships else {}).get("company_name") or "")
+    except Exception:  # noqa: BLE001
+        company = ""
+    try:
+        answer = await sales_charts.build(
+            kind, client, license_id=str(license_id), language=language,
+            company_name=company, **(request.get("options") or {}),
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("sales chart failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    text = answer.summary
+    images: list[str] = []
+    png = charts.render_or_none(answer.chart)
+    url = await reports_ai.publish_chart(png, license_id=str(license_id)) if png else None
+    if url:
+        images = [url]
+    else:
+        text += _t(CHART_TEXT_ONLY, language)
+    buttons = [
+        (_t(label, language), _t(says, language))
+        for other, label, says in CHART_OTHER_BUTTONS if other != kind
+    ][:3]
+    return ChatReply(
+        text=text, images=images, quick_replies=buttons,
+        intent={"action": "report", "entity": "deals"},
+    )
 
 
 
