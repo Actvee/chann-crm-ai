@@ -10,7 +10,7 @@ from datetime import date
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .config import settings
 from .data_client import DataClient, DataTierError
@@ -19,6 +19,7 @@ from .services import approval as approval_service
 from .services import storefront as storefront_service
 from .services import csv_import, live_chat
 from .services.authorization import TenantPrincipal, resolve_tenant_principal
+from .services.identity import member_channel
 
 router = APIRouter(prefix="/api/v1", tags=["phase2"])
 log = logging.getLogger(__name__)
@@ -38,7 +39,33 @@ class SettingWriteIn(BaseModel):
 
 
 class MemberRoleWriteIn(BaseModel):
-    role_name: str = Field(min_length=1, max_length=64)
+    """`role` is the members page's name for the field; `role_name` the
+    roles page's. Either is accepted, unknown fields are ignored."""
+    role: str | None = Field(default=None, max_length=64)
+    role_name: str | None = Field(default=None, max_length=64)
+    # Which OA's row (owner, 8 Sep 2026): the same person may be staff on
+    # the Sales OA and a technician on the Technician OA, each with its
+    # own role.
+    channel: str = Field(default="sales", pattern="^(sales|technician)$")
+
+    @property
+    def effective_role(self) -> str:
+        return (self.role or self.role_name or "").strip()
+
+    @model_validator(mode="after")
+    def _one_role(self):
+        if not self.effective_role:
+            raise ValueError("role is required")
+        return self
+
+
+class MemberStatusWriteIn(BaseModel):
+    status: str = Field(pattern="^(active|removed)$")
+    channel: str = Field(default="sales", pattern="^(sales|technician)$")
+
+
+class MemberResetWriteIn(BaseModel):
+    channel: str = Field(default="sales", pattern="^(sales|technician)$")
 
 
 class TransferRequestIn(BaseModel):
@@ -104,6 +131,11 @@ _REASON_CODES = (
     ("no longer pending", "transfer_not_pending"),
     ("must be active in the tenant", "member_not_active"),
     ("already exists", "already_exists"),
+    # Members page (8 Sep 2026): the owner's row is never removed or
+    # demoted; a row is addressed per channel; an invite is for one OA.
+    ("owner cannot be removed", "owner_protected"),
+    ("not found on this channel", "member_not_on_channel"),
+    ("invite is for the", "invite_wrong_oa"),
 )
 
 
@@ -227,9 +259,105 @@ async def set_member_role(
     _require_same_tenant(principal, license_id)
     principal.require("member.manage")
     try:
-        return await client.set_member_role(license_id, chann_uid, payload.role_name, actor_id=principal.chann_uid)
+        return await client.set_member_role(
+            license_id, chann_uid, payload.effective_role, actor_id=principal.chann_uid,
+            channel=payload.channel,
+        )
     except DataTierError as exc:
-        raise _propagate(exc)
+        raise _with_reason(exc)
+
+
+@router.patch("/licenses/{license_id}/members/{chann_uid}/status")
+async def set_member_status(
+    license_id: str,
+    chann_uid: str,
+    payload: MemberStatusWriteIn,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Remove a member from one OA (status "removed" — the row stays for
+    the audit trail and can be reactivated) or bring them back. The
+    owner's row answers 409 `owner_protected`. A removed technician is
+    taken off their teams and their open jobs go back to the queue; the
+    dispatchers are told which ones."""
+    _require_same_tenant(principal, license_id)
+    principal.require("member.manage")
+    try:
+        member = await client.set_member_status(
+            license_id, chann_uid, status=payload.status, channel=payload.channel,
+            actor_id=principal.chann_uid,
+        )
+    except DataTierError as exc:
+        raise _with_reason(exc)
+    unassigned = list(member.pop("unassigned_tickets", None) or [])
+    if unassigned:
+        await _notify_dispatchers_of_unassigned(client, license_id, chann_uid, unassigned)
+    return (await _with_names(client, [member]))[0]
+
+
+@router.post("/licenses/{license_id}/members/{chann_uid}/reset")
+async def reset_member(
+    license_id: str,
+    chann_uid: str,
+    payload: MemberResetWriteIn,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Forget the member's in-progress chat on one OA — a stuck
+    onboarding or a half-finished flow starts clean on their next
+    message. The membership itself is untouched."""
+    _require_same_tenant(principal, license_id)
+    principal.require("member.manage")
+    try:
+        member = await client.reset_member(
+            license_id, chann_uid, channel=payload.channel, actor_id=principal.chann_uid,
+        )
+    except DataTierError as exc:
+        raise _with_reason(exc)
+    return (await _with_names(client, [member]))[0]
+
+
+async def _notify_dispatchers_of_unassigned(
+    client: DataClient, license_id: str, removed_chann_uid: str, tickets: list[dict],
+) -> None:
+    """Tell everyone who dispatches (ticket.assign, by permission) that a
+    removed technician's jobs are back in the queue. Best effort: the
+    removal already stands."""
+    from .services.notify import send_notification
+
+    numbers = ", ".join(str(t.get("ticket_number") or "") for t in tickets if t.get("ticket_number"))
+    try:
+        members = await client.list_members(license_id)
+    except Exception:  # noqa: BLE001
+        log.exception("could not list members to announce unassigned jobs")
+        return
+    for m in members:
+        uid = str(m.get("chann_uid") or "")
+        if not uid or uid == removed_chann_uid or str(m.get("status") or "active") != "active":
+            continue
+        if str(m.get("channel") or "sales") != "sales":
+            continue
+        try:
+            context = await client.authorization_context(license_id, uid, channel="sales")
+        except Exception:  # noqa: BLE001
+            context = None
+        if not context or "ticket.assign" not in set(context.get("permission_keys") or []):
+            continue
+        try:
+            line_target = await client.line_target_of(uid)
+            await send_notification(
+                client,
+                license_id=license_id,
+                target_chann_uid=uid,
+                target_line_user_id=line_target,
+                type="ticket_unassigned",
+                message=f"ช่างถูกนำออกจากร้าน งาน {numbers} กลับเข้าคิวรอมอบหมายใหม่",
+                message_en=f"A technician was removed; job(s) {numbers} are back in the queue for dispatch",
+                entity_type="service_ticket",
+                entity_id=str(tickets[0].get("id") or "") if len(tickets) == 1 else None,
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("could not tell %s about unassigned jobs", uid)
 
 
 @router.get("/licenses/{license_id}/settings")
@@ -357,12 +485,18 @@ async def accept_owner_transfer(
 @router.get("/licenses/{license_id}/members")
 async def list_members_with_names(
     license_id: str,
+    include_removed: bool = False,
     principal: TenantPrincipal = Depends(get_tenant_principal),
     client: DataClient = Depends(get_data_client),
 ):
     """Every active member with a display name — the pool an owner picks a
     successor from and a sales group is filled from. Behind the keys
-    that manage people, or ownership itself."""
+    that manage people, or ownership itself.
+
+    One item per (person, channel): the same chann_uid appears twice when
+    they are staff on the Sales OA and a technician on the Technician OA.
+    `?include_removed=1` adds the removed rows, so the members page can
+    reactivate them."""
     _require_same_tenant(principal, license_id)
     _staff_only(principal)
     if not principal.is_owner:
@@ -371,8 +505,11 @@ async def list_members_with_names(
         members = await client.list_members(license_id)
     except DataTierError as exc:
         raise _propagate(exc)
-    active = [m for m in members if str(m.get("status") or "active") == "active"]
-    return await _with_names(client, active)
+    rows = [
+        m for m in members
+        if include_removed or str(m.get("status") or "active") == "active"
+    ]
+    return await _with_names(client, rows)
 
 
 @router.post("/platform/licenses/{license_id}/break-glass/transfer-owner")
@@ -1716,7 +1853,12 @@ async def _member_of(client: DataClient, license_id: str, principal: TenantPrinc
     if principal.is_customer:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="staff only")
     try:
-        member = await client.get_member(license_id, principal.chann_uid)
+        # The row of the OA this app is for: a ticket is assigned to the
+        # technician row, and the sales row of the same person is a
+        # different member (owner, 8 Sep 2026).
+        member = await client.get_member(
+            license_id, principal.chann_uid, channel=member_channel(principal.audience),
+        )
     except DataTierError as exc:
         raise _propagate(exc)
     member_id = str((member or {}).get("id") or "")
@@ -1834,7 +1976,9 @@ async def upload_ticket_photo(
             raise HTTPException(status_code=404, detail="ticket not found")
     else:
         try:
-            member = await client.get_member(license_id, principal.chann_uid)
+            member = await client.get_member(
+                license_id, principal.chann_uid, channel=member_channel(principal.audience),
+            )
             member_id = str((member or {}).get("id") or "") or None
         except Exception:  # noqa: BLE001
             member_id = None
@@ -2476,9 +2620,12 @@ async def list_technicians(
     except DataTierError as exc:
         raise _propagate(exc)
     technician_roles = _technician_role_names(roles)
+    # The Technician-OA rows only (owner, 8 Sep 2026): a job dispatched
+    # to someone's sales row would never show on their technician app.
     technicians = [
         m for m in members
         if str(m.get("status") or "active") == "active"
+        and str(m.get("channel") or "technician") == "technician"
         and str(m.get("role") or "") in technician_roles
     ]
     return await _with_names(client, technicians)
@@ -2666,8 +2813,16 @@ async def _with_names(client: DataClient, members: list[dict]) -> list[dict]:
         name = " ".join(
             p for p in (profile.get("first_name"), profile.get("last_name")) if p
         )
-        out.append({**m, "id": str(m.get("id") or ""), "display_name": name or chann_uid,
-                    "phone": profile.get("phone")})
+        out.append({
+            **m,
+            "id": str(m.get("id") or ""),
+            "display_name": name or str(m.get("display_name") or "") or chann_uid,
+            "phone": profile.get("phone"),
+            "channel": str(m.get("channel") or "sales"),
+            "status": str(m.get("status") or "active"),
+            "is_owner": bool(m.get("is_owner", False)),
+            "joined_at": m.get("joined_at"),
+        })
     return out
 
 
@@ -3409,7 +3564,9 @@ async def send_chat_message(
                 text=payload.content,
             )
         principal.require("chat_session.reply")
-        member = await client.get_member(license_id, principal.chann_uid)
+        member = await client.get_member(
+                license_id, principal.chann_uid, channel=member_channel(principal.audience),
+            )
         return await live_chat.agent_reply(
             client, license_id=license_id, session=session, agent_chann_uid=principal.chann_uid,
             member_id=str(member.get("id")) if member else None, text=payload.content,

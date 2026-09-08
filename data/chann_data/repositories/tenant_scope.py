@@ -55,6 +55,14 @@ class LicenseRepository:
         ).scalar_one_or_none()
 
 
+class MemberNotFound(LookupError):
+    """No such membership row in this tenant (for the given channel)."""
+
+
+class MemberConflict(Exception):
+    """A membership change the rules refuse — chiefly touching the owner."""
+
+
 class MemberRepository:
     def __init__(self, session: Session):
         self._s = session
@@ -62,16 +70,33 @@ class MemberRepository:
     def list_for_license(self, scope: TenantScope) -> list[LicenseMember]:
         return list(
             self._s.execute(
-                select(LicenseMember).where(LicenseMember.license_id == scope.license_id)
+                select(LicenseMember)
+                .where(LicenseMember.license_id == scope.license_id)
+                .order_by(LicenseMember.joined_at, LicenseMember.channel)
             ).scalars()
         )
 
-    def get(self, scope: TenantScope, chann_uid: str) -> LicenseMember | None:
+    def get(
+        self, scope: TenantScope, chann_uid: str, *, channel: str | None = None,
+    ) -> LicenseMember | None:
+        """One membership row. `channel` names which OA's row is wanted
+        ("sales" | "technician"); a caller that does not say gets the
+        sales row when there is one, else the technician row — the
+        explicit form is the right one wherever the caller knows which OA
+        it is acting for, because the two rows have different ids and
+        different roles."""
+        query = select(LicenseMember).where(
+            LicenseMember.license_id == scope.license_id,
+            LicenseMember.chann_uid == chann_uid,
+        )
+        if channel is not None:
+            return self._s.execute(query.where(LicenseMember.channel == channel)).scalar_one_or_none()
+        # "sales" sorts before "technician"; among two rows an active one
+        # first, so a removed sales row does not hide a live technician.
         return self._s.execute(
-            select(LicenseMember).where(
-                LicenseMember.license_id == scope.license_id,
-                LicenseMember.chann_uid == chann_uid,
-            )
+            query.order_by(
+                (LicenseMember.status != "active"), LicenseMember.channel,
+            ).limit(1)
         ).scalar_one_or_none()
 
     def memberships_of(
@@ -84,79 +109,93 @@ class MemberRepository:
         reveal which other companies a person works with. Callers inside the
         Application Tier use it only to select a scope.
 
-        `oa` narrows by role when given, because holding ANY active
-        membership at a company is not the same as being onboarded for that
-        specific channel's persona. LINE gives one physical account the same
-        userId across every OA under a provider (see cache.k_pending_intent
-        for the fuller explanation), so a person who is Sales staff at
-        Company X was, before this filter existed, treated as already
-        "belonging" to Company X the instant they messaged the Technician
-        OA too — despite never having been invited as a technician there.
+        `oa` is the official account the message arrived on, and it
+        selects the rows for THAT channel only (owner, 8 Sep 2026): LINE
+        gives one physical account the same userId across every OA under
+        a provider, and the owner's rule is that the OAs are separate
+        registrations that share nothing but the person. An owner or CS
+        who adds the Technician OA is not a technician there until they
+        redeem a technician invite; a technician is not Sales staff. No
+        inference from the role or its permissions — the earlier
+        "anyone with ticket.read" reading is exactly what told the owner
+        "already linked" on an OA they had never registered on.
 
-        "sales" (or omitted): every role except "technician" — Master Spec
-        section 6 lists Sales OA as Sales/CS/Admin/Owner, technician is a
-        separate persona with its own onboarding.
-
-        "technician": any role whose permissions include ticket.read, at
-        the owner's direction. Requiring role == "technician" exactly was
-        right about the risk — a salesperson should not silently become a
-        technician — but wrong about who works: in a small shop the owner
-        goes out on jobs, and the rule left them told they were "not
-        linked to any company as a technician" at their own company.
-
-        Capability, not job title, is also what the rest of the system
-        already uses; OA_ALLOWED_PERMISSION_KEYS gates the channel's
-        actions the same way. A role with no ticket.read still cannot get
-        in, which is the protection that mattered.
+        "sales" → channel "sales"; "technician" → channel "technician";
+        omitted → every active row (identity-level callers only).
         """
         query = select(LicenseMember).where(
             LicenseMember.chann_uid == chann_uid,
             LicenseMember.status == "active",
         )
-        rows = list(self._s.execute(query).scalars())
-
-        if oa == "technician":
-            return [row for row in rows if self._can_do_field_work(row)]
         if oa is not None:
-            return [row for row in rows if row.role != "technician"]
-        return rows
+            query = query.where(LicenseMember.channel == oa)
+        return list(self._s.execute(query.order_by(LicenseMember.joined_at)).scalars())
 
-    def _can_do_field_work(self, member: LicenseMember) -> bool:
-        """Does this member's role let them see service tickets?
+    def is_owner_row(self, scope: TenantScope, member: LicenseMember) -> bool:
+        from ..models import CustomRole
 
-        Custom roles are read from the tenant's own definitions; the
-        built-in ones fall back to the template. A tenant that removed
-        ticket.read from a role has said that role does not do field work,
-        and this must honour that rather than assuming from the name.
-        """
-        from ..models import RolePermission
-        from ..permissions import DEFAULT_ROLE_TEMPLATES
-
-        # A tenant's explicit grant wins. Overrides live per key, so the
-        # question is whether THIS key is granted, not whether the role
-        # has any overrides at all.
-        override = self._s.execute(
-            select(RolePermission).where(
-                RolePermission.license_id == member.license_id,
-                RolePermission.role == member.role,
-                RolePermission.permission_key == "ticket.read",
+        role = self._s.execute(
+            select(CustomRole).where(
+                CustomRole.license_id == scope.license_id,
+                CustomRole.role_name == member.role,
             )
         ).scalars().first()
-        if override is not None:
-            return bool(override.allowed)
+        return bool(role is not None and role.is_owner)
 
-        if member.role not in DEFAULT_ROLE_TEMPLATES:
-            # An unknown role name. Refuse rather than assume: a typo or a
-            # role deleted after members were assigned to it must not open
-            # a channel, and `.get()` returning None for a missing key
-            # looks identical to the owner template's deliberate None.
-            return False
+    def set_status(
+        self, scope: TenantScope, chann_uid: str, *, channel: str, status: str,
+    ) -> tuple[LicenseMember, list]:
+        """Remove (status "removed") or reactivate ("active") one channel's
+        row. The row stays for audit — a removed member's tickets and
+        reports still name them. The owner's row is never removed.
 
-        template = DEFAULT_ROLE_TEMPLATES[member.role]
-        # Only the owner template is None, and it means everything.
-        if template is None:
-            return True
-        return "ticket.read" in template
+        Removing a technician row also takes them off every team and
+        hands their open jobs back to the queue; the tickets returned are
+        the ones unassigned, so the caller can tell the dispatchers.
+        """
+        if status not in ("active", "removed"):
+            raise ValueError("status must be 'active' or 'removed'")
+        member = self.get(scope, chann_uid, channel=channel)
+        if member is None:
+            raise MemberNotFound("member not found on this channel")
+        if status == "removed" and self.is_owner_row(scope, member):
+            raise MemberConflict("the owner cannot be removed or demoted")
+        unassigned: list = []
+        if status == "removed" and member.status != "removed" and channel == "technician":
+            unassigned = self._release_field_work(scope, member)
+        member.status = status
+        self._s.flush()
+        return member, unassigned
+
+    def _release_field_work(self, scope: TenantScope, member: LicenseMember) -> list:
+        from sqlalchemy import delete
+
+        from ..models import ServiceTicket, TechnicianTeamMember
+
+        self._s.execute(
+            delete(TechnicianTeamMember).where(
+                TechnicianTeamMember.license_id == scope.license_id,
+                TechnicianTeamMember.member_id == member.id,
+            )
+        )
+        tickets = list(
+            self._s.execute(
+                select(ServiceTicket).where(
+                    ServiceTicket.license_id == scope.license_id,
+                    ServiceTicket.assigned_target_type == "technician",
+                    ServiceTicket.assigned_to_ref == member.id,
+                    ServiceTicket.status.notin_(("completed", "cancelled")),
+                )
+            ).scalars()
+        )
+        for ticket in tickets:
+            ticket.assigned_target_type = None
+            ticket.assigned_to_ref = None
+            ticket.accept_status = "pending"
+            if ticket.status in ("assigned", "in_progress"):
+                ticket.status = "open"
+        self._s.flush()
+        return tickets
 
 
 class IdentityRepository:

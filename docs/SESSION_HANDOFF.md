@@ -1,3 +1,81 @@
+### Per-OA persona separation (8 Sep) — `persona-v1`, **migration `0026_member_channel`**
+
+- Owner's report: the LINE account registered on the CS/Sales OA, added to
+  the Tech OA, was told "ผูกกับบริษัทแล้ว". Rule: **the three OAs are three
+  separate registrations that share only the person** (ChannIdentity:
+  name, phone, email). Someone who is the owner of A on the Sales OA may be
+  a technician of B on the Tech OA and a customer of C on the CS OA.
+- Root cause: `MemberRepository.memberships_of(uid, oa="technician")`
+  inferred Tech-OA membership from any role holding `ticket.read`
+  (owner/admin/cs). Gone — no role-based inference anywhere.
+- **Data model**: `license_members.channel` VARCHAR NOT NULL default
+  `'sales'` (`'sales' | 'technician'`, CHECK), backfilled from
+  `role == 'technician'`; unique is now `(license_id, chann_uid, channel)`
+  (`uq_license_member_channel`, replaces `uq_license_member`). One row per
+  (person, OA); the owner's sales row and their technician row have
+  **different ids** — tickets/teams point at the technician row.
+  `EXPECTED_MIGRATION_HEAD = "0026_member_channel"`; the deploy must run
+  the migration job before the data tier (`tests/integration/
+  test_member_channel_migration.py` proves the backfill from 0025).
+  `permissions.channel_for_role(role)`: `technician` → technician, every
+  other role → sales. An invite's channel is derived from its role
+  (`InviteOut.channel`); `POST /invites/redeem` takes `oa` and refuses a
+  code for the other OA (409 "invite is for the technician OA, not the
+  sales OA"); redeeming again on the same channel is idempotent; a removed
+  row is reactivated by a fresh invite.
+- **Reads are per channel**: `memberships_of(oa=)` is strict on channel +
+  status active (customer OA unchanged: customer_license_links);
+  `GET /licenses/{id}/members/{uid}?channel=` (omitted → sales row, else
+  technician); `GET …/authorization/{uid}?channel=` (default sales);
+  `PATCH …/members/{uid}/role` body `{role_name, channel}`; cache keys
+  `k_member`/`k_permissions` carry the channel; ownership transfer / break-
+  glass act on sales rows only. `MemberOut` now: `id, chann_uid, role,
+  status, channel, joined_at, is_owner, display_name` (+ `company_name` on
+  the redeem reply, which used to omit the required `id` and 500).
+- **New Data routes**: `PATCH /licenses/{id}/members/{uid}/status`
+  (`{status: active|removed, channel}` → `MemberStatusOut` = MemberOut +
+  `unassigned_tickets[{id, ticket_number}]`; 409 "the owner cannot be
+  removed or demoted"; removing a technician deletes their
+  technician_team_members rows and returns their open/assigned/in_progress
+  tickets to `open` with no assignee, audited `status` + `assign`),
+  `POST /licenses/{id}/members/{uid}/reset` (`{channel}` → drops
+  pending_intent / last_customer_ref / last_entity_ref / active_tenant for
+  (uid, oa) and the member caches; audited `update`).
+- **Application** (`DataClient.get_member(channel=)`,
+  `authorization_context(channel=)`, `set_member_role(channel=)`,
+  `set_member_status`, `reset_member`, `redeem_invite(oa=)`;
+  `identity.member_channel(oa)`): the LIFF principal reads the row of its
+  audience; `_member_of` and every chat `get_member` pass the OA's channel;
+  `GET /licenses/{id}/technicians` = technician-channel rows. Members page
+  contract (`/api/phase2/licenses/{id}/members…`, all `member.manage`
+  except the list which keeps its keys): `GET ?include_removed=1` → items
+  `{id, chann_uid, display_name, phone, role, channel, status, joined_at,
+  is_owner}` (one per person × channel; removed rows only with the flag);
+  `PATCH …/role` body `{role | role_name, channel='sales'}`;
+  `PATCH …/status` body `{status, channel}` → the member item, and tells
+  every sales-channel holder of `ticket.assign` about returned jobs
+  (`ticket_unassigned` notification); `POST …/reset` body `{channel}`.
+  Errors: `{detail: {error, reason_code, message}}` with `owner_protected`,
+  `member_not_on_channel`, `invite_wrong_oa` (added to `_REASON_CODES`).
+- **Chat**: on the Tech OA a sales-only person (even the owner) gets
+  `KNOWN_ELSEWHERE` ("พบข้อมูลส่วนตัวของคุณแล้ว (ชื่อ) แต่บัญชีนี้ยังไม่ได้
+  ลงทะเบียนใน LINE นี้ …") + the technician welcome, never
+  JOINED/LINKED/ALREADY_LINKED; the Sales OA does the same for a
+  technician-only person; a code typed on the wrong OA answers
+  `INVITE_WRONG_OA` naming the right LINE. Pending flow state was already
+  keyed (chann_uid, oa) — verified, unchanged.
+- Guides: sales step "สมาชิกในร้าน" (slot `sales-members`, drawn by
+  render-guide-images.py) and the technician "join" step say each LINE is
+  its own registration. Test cases T-40…T-45 in `docs/TEST_CASES_3OA.md`.
+- Tests: `tests/integration/test_member_channel.py` (12),
+  `test_member_channel_migration.py` (1), `tests/unit/test_persona_members.py`
+  (28); `test_database_from_empty.py`'s OA-scope tests rewritten for the
+  strict rule. Unit+boundary 1394, integration 358, simulators at
+  baseline (0 / 0 / 441·11), check-* at baseline.
+- Not done: channel is derived from the role name only (`technician`), so a
+  tenant's custom field role is a sales-channel role — a shop wanting a
+  custom technician role needs a follow-up (channel on the invite form).
+
 ### Admin console: the tenant page works and edits (7 Sep) — `admin-tenant-v1`
 
 - Root cause of "กดเข้าไปข้อมูลแต่ละบริษัทไม่ได้": `PlatformRepository.tenant()`

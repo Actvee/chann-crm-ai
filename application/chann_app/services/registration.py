@@ -54,9 +54,10 @@ WELCOME = {
 # not start a company through this channel, they join one that already
 # exists. Holding a Sales-side membership at Company X does not count either
 # (see identity.resolve_context / MemberRepository.memberships_of): only a
-# license_members row with role="technician" does, and the only way to get
-# one is this invite code, requested by someone on the Sales OA who holds
-# member.manage (see TECHNICIAN_INVITE_TRIGGERS in chat.py).
+# license_members row on the technician channel does — even for the owner —
+# and the only way to get one is this invite code, requested by someone on
+# the Sales OA who holds member.manage (see TECHNICIAN_INVITE_TRIGGERS in
+# chat.py). Owner, 8 Sep 2026: each OA is its own registration.
 WELCOME_TECHNICIAN = {
     "th": (
         "ยินดีต้อนรับ\n"
@@ -69,6 +70,33 @@ WELCOME_TECHNICIAN = {
         "Ask the company you'll be working with for an invite code, then "
         "type that code here."
     ),
+}
+
+# Someone the platform already knows — staff or a technician at some
+# company on ANOTHER OA — writing on an OA they have not registered on
+# (owner, 8 Sep 2026). Their name is on file, and nothing else carries
+# over: the OA's own welcome follows.
+KNOWN_ELSEWHERE = {
+    "th": (
+        "พบข้อมูลส่วนตัวของคุณแล้ว{name} แต่บัญชีนี้ยังไม่ได้ลงทะเบียนใน LINE นี้\n"
+        "แต่ละ LINE ลงทะเบียนแยกกัน ใช้ร่วมกันเฉพาะข้อมูลส่วนตัว\n\n"
+    ),
+    "en": (
+        "Your personal details are on file{name}, but this account is not registered "
+        "on this LINE yet. Each LINE is a separate registration; only your personal "
+        "details are shared.\n\n"
+    ),
+}
+
+# An invite code typed on the OA it is not for: a technician code on the
+# Sales OA, a staff code on the Technician OA.
+OA_LABEL = {
+    "sales": {"th": "LINE ทีมขาย / CS", "en": "the sales / CS LINE"},
+    "technician": {"th": "LINE ช่าง", "en": "the technician LINE"},
+}
+INVITE_WRONG_OA = {
+    "th": "รหัสนี้เป็นรหัสเชิญสำหรับ{target} ไม่ใช่ LINE นี้ พิมพ์รหัสใน{target} หรือขอรหัสเชิญสำหรับ LINE นี้จากร้าน",
+    "en": "That code is an invite for {target}, not this one. Type it in {target}, or ask the shop for an invite for this LINE.",
 }
 
 ASK_COMPANY_NAME = {
@@ -365,13 +393,16 @@ async def _handle_registration(
     # Technician OA: same reasoning as Customer OA above — the only thing to
     # do is redeem an invite code obtained from the company beforehand.
     # "Create a company" is a Sales-OA-only concept and never offered here.
+    # An owner or CS who adds this OA is a stranger to it until they redeem
+    # a technician invite (owner, 8 Sep 2026); they are told their details
+    # are on file and that this LINE is its own registration.
     if audience == "technician":
         if INVITE_CODE_RE.match(text.upper()):
-            return await _redeem_invite_reply(client, text, ctx, language)
-        return _t(WELCOME_TECHNICIAN, language)
+            return await _redeem_invite_reply(client, text, ctx, language, oa="technician")
+        return await _known_elsewhere(client, ctx, language) + _t(WELCOME_TECHNICIAN, language)
 
     if not text:
-        return _t(WELCOME, language)
+        return await _known_elsewhere(client, ctx, language) + _t(WELCOME, language)
 
     name = parse_create_company(text)
     if name is not None:
@@ -394,9 +425,23 @@ async def _handle_registration(
         )
 
     if INVITE_CODE_RE.match(text.upper()):
-        return await _redeem_invite_reply(client, text, ctx, language)
+        return await _redeem_invite_reply(client, text, ctx, language, oa="sales")
 
-    return _t(WELCOME, language)
+    return await _known_elsewhere(client, ctx, language) + _t(WELCOME, language)
+
+
+async def _known_elsewhere(client: DataClient, ctx: ResolvedContext, language: str) -> str:
+    """The KNOWN_ELSEWHERE line when this identity holds a membership on
+    some other OA, else "". Best effort: a lookup failure means the
+    plain welcome, never a lost reply."""
+    try:
+        rows = await client.memberships_of(ctx.chann_uid)
+    except Exception:  # noqa: BLE001
+        return ""
+    if not rows:
+        return ""
+    name = f" ({ctx.display_name})" if ctx.display_name else ""
+    return _t(KNOWN_ELSEWHERE, language).format(name=name)
 
 
 # The bot's own vocabulary. Held and repeated back, these read as the
@@ -644,18 +689,27 @@ def _is_bare_token(text: str) -> bool:
 
 
 async def _redeem_invite_reply(
-    client: DataClient, text: str, ctx: ResolvedContext, language: str
+    client: DataClient, text: str, ctx: ResolvedContext, language: str,
+    oa: str = "sales",
 ) -> str:
-    """Shared by the Sales-OA and Technician-OA invite-code paths — the code
-    itself carries the role being granted, so redemption does not need to
-    know or care which OA it arrived on."""
+    """Shared by the Sales-OA and Technician-OA invite-code paths. The code
+    carries the role being granted, and the role decides which OA the
+    membership is for — so the OA it was typed on is sent along and a
+    code for the other OA is refused with a pointer to the right one
+    (owner, 8 Sep 2026)."""
     try:
         member = await client.redeem_invite(
             invite_code=text.upper(),
             chann_uid=ctx.chann_uid,
             display_name=ctx.display_name,
+            oa=oa,
         )
     except Exception as exc:  # noqa: BLE001
+        detail = str(getattr(exc, "detail", "") or exc)
+        wrong_oa = re.search(r"invite is for the (sales|technician) OA", detail)
+        if _is_conflict(exc) and wrong_oa:
+            target = wrong_oa.group(1)
+            return _t(INVITE_WRONG_OA, language).format(target=_t(OA_LABEL[target], language))
         if _is_not_found(exc) or _is_conflict(exc):
             return _t(BAD_CODE, language)
         raise

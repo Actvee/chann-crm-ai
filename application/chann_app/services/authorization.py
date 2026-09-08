@@ -7,7 +7,7 @@ from fastapi import Header, HTTPException, status
 
 from ..auth.liff import LiffTokenInvalid, verify_id_token
 from ..data_client import DataClient
-from .identity import apply_active_tenant
+from .identity import apply_active_tenant, member_channel
 
 # Methods that read. Anything else against a suspended tenant is refused
 # before the route runs (review C4, 6 Sep 2026): chat already treated a
@@ -158,8 +158,11 @@ async def resolve_tenant_principal(
             license_status=license_status,
         )
 
+    # The row of the channel in use: the technician app reads the
+    # technician row, the sales dashboard the sales row (owner, 8 Sep 2026).
     context = await client.authorization_context(
-        str(selected["license_id"]), identity["chann_uid"]
+        str(selected["license_id"]), identity["chann_uid"],
+        channel=member_channel(x_liff_audience),
     )
     if context is None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="inactive tenant member")

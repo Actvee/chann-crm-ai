@@ -153,8 +153,8 @@ GUIDES: dict[str, dict] = {
             {
                 "key": "join", "title": {"th": "เข้าร่วมร้าน (ครั้งแรก)", "en": "Join the shop (once)"},
                 "body": {
-                    "th": "ขอรหัสเชิญจากร้าน แล้วพิมพ์รหัสนั้นในแชทนี้ ถ้าอยู่หลายร้าน พิมพ์ \"เปลี่ยนร้าน\" เพื่อสลับ",
-                    "en": "Get an invite code from the shop and type it here. Several shops → \"switch shop\".",
+                    "th": "ขอรหัสเชิญช่างจากร้าน แล้วพิมพ์รหัสนั้นในแชทนี้ — LINE ช่างลงทะเบียนแยกจาก LINE ทีมขาย แม้เป็นเจ้าของหรือ CS ของร้านก็ต้องมีรหัสเชิญช่าง (ข้อมูลส่วนตัวใช้ร่วมกัน) ถ้าอยู่หลายร้าน พิมพ์ \"เปลี่ยนร้าน\" เพื่อสลับ",
+                    "en": "Get a technician invite code from the shop and type it here — the technician LINE is its own registration; even the shop's owner or CS needs a technician code (personal details are shared). Several shops → \"switch shop\".",
                 },
                 "commands": ["เปลี่ยนร้าน"],
                 "example": "ABCD1234",
@@ -272,10 +272,10 @@ GUIDES: dict[str, dict] = {
             {
                 "key": "crm", "title": {"th": "ลูกค้า ดีล ใบเสนอราคา", "en": "Customers, deals, quotes"},
                 "body": {
-                    "th": "\"รายชื่อลูกค้า\" · \"สร้างลูกค้า สมชาย ใจดี 0812345678\" · \"สร้างดีลให้ สมชาย\" · \"ออกเอกสาร Q-2026-0001\" · \"งานวันนี้\" ดูสิ่งที่ต้องทำ · \"เตือน D-… พรุ่งนี้\" · \"สร้างดีลให้ อาทิตย์ มูลค่า 250,000 ปิดสิ้นเดือนนี้\" ใส่มูลค่าและวันคาดว่าจะปิดในประโยคเดียว · \"ลบ Lead สมชาย\" ระบบถามยืนยันก่อน (เก็บถาวร ไม่ลบทิ้ง) · เพิ่มลูกค้าซ้ำเบอร์/อีเมลเดิม ระบบบอกว่าเป็นใครและให้เลือก ใช้เดิม / อัปเดต / ยกเลิก · \"ทำอะไรกับ Lead ได้บ้าง\" ดูสิ่งที่ทำได้ทีละหมวด · เพิ่มหลายคนในข้อความเดียว: วางรายชื่อทีละบรรทัด \"ชื่อ นามสกุล เบอร์ อีเมล\" (จะพิมพ์ \"เพิ่มลูกค้าหลายคน\" นำหน้าหรือคั่นด้วยจุลภาคก็ได้) คนที่ไม่มีเบอร์ระบบจะถามทีละคน · บนหน้ารายชื่อลูกค้าใช้กล่อง \"เพิ่มลูกค้าหลายคนในครั้งเดียว\" วางรายชื่อ หรือปุ่ม \"นำเข้า CSV\" (มีไฟล์ตัวอย่าง) · ถ้ากำลังเพิ่มลูกค้าอยู่แล้วพิมพ์คำสั่งอื่น เช่น \"สร้างดีล\" ระบบจะถามก่อนว่าจะเปลี่ยนไปทำสิ่งนั้นหรือทำต่อ · เบอร์โทรต้องเป็นตัวเลข ระบบไม่บันทึกเบอร์ที่มีตัวอักษรและบอกเหตุผล",
-                    "en": "\"customers\" · \"create customer …\" · \"create deal for Somchai\" · \"issue quote Q-…\" · \"today\" · \"remind D-… tomorrow\" · \"create deal for Arthit worth 250,000, closing end of month\" · \"delete lead Somchai\" (asks first) · a duplicate phone/email is named, with use / update / cancel · \"what can I do with leads?\" for that area in detail several at once: paste one person per line \"first last phone email\" (a leading \"add customers\" or commas also work); a row without a phone is asked for one at a time · on the customers page use the \"Add several customers at once\" box or \"Import CSV\" (sample file provided) · typing another command such as \"create deal\" while a customer is half-added asks whether to switch or continue",
+                    "th": "\"รายชื่อลูกค้า\" · \"สร้างลูกค้า สมชาย ใจดี 0812345678\" · \"สร้างดีลให้ สมชาย\" · \"ออกเอกสาร Q-2026-0001\" · \"งานวันนี้\" ดูสิ่งที่ต้องทำ · \"เตือน D-… พรุ่งนี้\" · \"สร้างดีลให้ อาทิตย์ มูลค่า 250,000 ปิดสิ้นเดือนนี้\" ใส่มูลค่าและวันคาดว่าจะปิดในประโยคเดียว · \"ลบ Lead สมชาย\" ระบบถามยืนยันก่อน (เก็บถาวร ไม่ลบทิ้ง) · เพิ่มลูกค้าซ้ำเบอร์/อีเมลเดิม ระบบบอกว่าเป็นใครและให้เลือก ใช้เดิม / อัปเดต / ยกเลิก · \"ทำอะไรกับ Lead ได้บ้าง\" ดูสิ่งที่ทำได้ทีละหมวด · เพิ่มหลายคนในข้อความเดียว: วางรายชื่อทีละบรรทัด \"ชื่อ นามสกุล เบอร์ อีเมล\" (จะพิมพ์ \"เพิ่มลูกค้าหลายคน\" นำหน้าหรือคั่นด้วยจุลภาคก็ได้) คนที่ไม่มีเบอร์ระบบจะถามทีละคน · บนหน้ารายชื่อลูกค้าใช้กล่อง \"เพิ่มลูกค้าหลายคนในครั้งเดียว\" วางรายชื่อ หรือปุ่ม \"นำเข้า CSV\" (มีไฟล์ตัวอย่าง) · ถ้ากำลังเพิ่มลูกค้าอยู่แล้วพิมพ์คำสั่งอื่น เช่น \"สร้างดีล\" ระบบจะถามก่อนว่าจะเปลี่ยนไปทำสิ่งนั้นหรือทำต่อ (ถ้าเปลี่ยนไปแล้ว ระบบจะบอก และยังจำลูกค้าที่ค้างไว้ให้เปิดดีลได้) · เบอร์โทรต้องเป็นตัวเลข ระบบไม่บันทึกเบอร์ที่มีตัวอักษรและบอกเหตุผล · สินค้าในดีล พิมพ์ตามที่พูด: \"เพิ่มสินค้า พัดลม 2 ตัว ราคา 1500\" (ไม่บอกราคา ระบบดูจากรายการสินค้า ไม่มีก็ถามราคาแล้วจำรายการไว้ ตอบแค่ \"1500\" ได้เลย) · \"เพิ่มพัดลมอีก 3 ตัว\" / \"เพิ่มอีก 1 ตัว\" คือบวกเพิ่มจากเดิม · \"แก้พัดลมเป็น 3 ตัว\" คือตั้งจำนวนใหม่ · \"ลดพัดลม 1 ตัว\" ลดจำนวน · \"ลบสินค้าพัดลมออก\" เอาออกจากดีล · \"ปรับราคาพัดลมเป็น 2000\" · ทุกครั้งระบบบอกยอดรวมดีล · \"ดีลล่าสุด\" หรือ \"สินค้าในดีล\" ดูดีลที่เพิ่งทำ · \"ลูกค้าสนใจอยากได้พัดลม 1 ตัว\" หลังเพิ่มลูกค้า ระบบเสนอเปิดดีลพร้อมสินค้าให้ · \"มีสินค้าอะไรบ้างที่เป็น พัดลม\" หรือ \"ค้นหาสินค้า พัดลม\" ค้นรายการสินค้า",
+                    "en": "\"customers\" · \"create customer …\" · \"create deal for Somchai\" · \"issue quote Q-…\" · \"today\" · \"remind D-… tomorrow\" · \"create deal for Arthit worth 250,000, closing end of month\" · \"delete lead Somchai\" (asks first) · a duplicate phone/email is named, with use / update / cancel · \"what can I do with leads?\" for that area in detail several at once: paste one person per line \"first last phone email\" (a leading \"add customers\" or commas also work); a row without a phone is asked for one at a time · on the customers page use the \"Add several customers at once\" box or \"Import CSV\" (sample file provided) · typing another command such as \"create deal\" while a customer is half-added asks whether to switch or continue (a switch is announced, and the half-added customer is still offered for the deal) · lines on a deal, as you would say it: \"add product fan 2 at 1500\" (no price: the catalogue is checked, else the price is asked and the item remembered — reply \"1500\") · \"add 2 more fans\" adds to the quantity, \"set fan to 3\" sets it, \"remove 1 fan\" takes off, \"remove the fan\" deletes the line · every reply states the deal total · \"latest deal\" / \"items on the deal\" show the deal in play · \"customer wants 2 fans\" right after adding a customer offers a deal with that line · \"search products fan\" searches the catalogue",
                 },
-                "commands": ["รายชื่อลูกค้า", "สร้างดีลให้", "ออกเอกสาร", "งานวันนี้", "ลบ Lead", "ทำอะไรกับ Lead ได้บ้าง", "เพิ่มลูกค้าหลายคน"],
+                "commands": ["รายชื่อลูกค้า", "สร้างดีลให้", "ออกเอกสาร", "งานวันนี้", "ลบ Lead", "ทำอะไรกับ Lead ได้บ้าง", "เพิ่มลูกค้าหลายคน", "เพิ่มสินค้า", "ลบสินค้า", "ค้นหาสินค้า"],
                 "example": "งานวันนี้",
                 "image": "sales-crm",
                 "image_prompt": "แดชบอร์ดขายธีมเขียว: tile ลูกค้า / ดีล / ใบเสนอราคา / งานซ่อม / รอการอนุมัติ / ทีมช่าง",
@@ -301,6 +301,17 @@ GUIDES: dict[str, dict] = {
                 "example": "วิธีใช้",
                 "image": "sales-help",
                 "image_prompt": "หน้าจอ 'บทบาทและทีม' แสดงรายชื่อสมาชิกและสิทธิ์เป็น toggle ธีมเขียว",
+            },
+            {
+                "key": "members", "title": {"th": "สมาชิกในร้าน", "en": "Members"},
+                "body": {
+                    "th": "หน้าจอ > สมาชิกในร้าน (ข้างบทบาท) ดูว่าใครผูกกับบริษัทใน LINE ไหน — LINE ทีมขาย/CS หรือ LINE ช่าง คนเดียวกันอาจอยู่ทั้งสองฝั่งคนละบทบาท · เปลี่ยนบทบาท · นำออก / กลับมาใช้งาน (นำช่างออก = ถอดจากทีมและคืนงานที่ค้างเข้าคิว) · รีเซ็ตการลงทะเบียน เมื่อแชทของคนนั้นค้าง · เจ้าของร้านนำออกไม่ได้ ต้องโอนความเป็นเจ้าของก่อน · เพิ่มคน: ช่างพิมพ์ \"ขอรหัสเชิญช่าง\" ให้เขาไปพิมพ์ใน LINE ช่าง ทีมขาย/CS ใช้รหัสเชิญของ LINE ทีมขาย · แต่ละ LINE ลงทะเบียนแยกกัน ใช้ร่วมกันเฉพาะข้อมูลส่วนตัว",
+                    "en": "Home > Members (next to roles): who is linked to the company on which LINE — the sales/CS LINE or the technician LINE; one person can be on both with different roles · change a role · remove / reactivate (removing a technician also takes them off teams and returns their open jobs to the queue) · reset onboarding when someone's chat is stuck · the owner cannot be removed; transfer ownership first · to add people: \"invite technician\" gives a code they type in the technician LINE; sales/CS staff use a sales-LINE invite code · each LINE is a separate registration; only personal details are shared.",
+                },
+                "commands": ["ขอรหัสเชิญช่าง"],
+                "example": "หน้าจอ > สมาชิกในร้าน",
+                "image": "sales-members",
+                "image_prompt": "หน้าจอแดชบอร์ดสีเขียว 'สมาชิกในร้าน' ตารางชื่อ / LINE (ทีมขาย·ช่าง) / บทบาท / สถานะ ปุ่ม เปลี่ยนบทบาท นำออก รีเซ็ต แถวเจ้าของมีป้าย 'เจ้าของ'",
             },
         ],
     },

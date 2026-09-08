@@ -40,6 +40,7 @@ const SECTIONS = [
   { href: "/liff/sales/products", key: "products" },
   { href: "/liff/sales/templates", key: "templates" },
   { href: "/liff/sales/company", key: "company" },
+  { href: "/liff/sales/members", key: "members" },
   { href: "/liff/sales/roles", key: "roles" },
 ] as const;
 
@@ -101,6 +102,7 @@ export default function SalesMenu({ liffId }: { liffId: string }) {
     quotes: t.quote.title,
     products: t.product.title,
     company: t.dashboard.companyTitle,
+    members: t.dashboard.members.title,
     roles: t.role.title,
     tickets: t.dashboard.tickets.title,
     reports: t.dashboard.reports.title,

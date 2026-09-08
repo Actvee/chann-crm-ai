@@ -36,6 +36,8 @@ from ..repositories.tenant_scope import (
     CrossTenantAccessDenied,
     IdentityRepository,
     LicenseRepository,
+    MemberConflict,
+    MemberNotFound,
     MemberRepository,
     PlatformAdminLocked,
     PlatformAdminRepository,
@@ -51,7 +53,7 @@ from ..repositories.phase2 import (
     RoleRepository,
 )
 from ..repositories.audit import AuditRepository, diff_fields
-from ..permissions import PERMISSION_DESCRIPTIONS, PERMISSION_KEYS
+from ..permissions import PERMISSION_DESCRIPTIONS, PERMISSION_KEYS, channel_for_role
 from ..repositories.phase7 import (
     MasterDataConflict,
     MasterDataNotFound,
@@ -236,6 +238,9 @@ from ..schemas import (
     LicenseSettingWriteIn,
     MemberRoleIn,
     MemberOut,
+    MemberResetIn,
+    MemberStatusIn,
+    MemberStatusOut,
     MembershipOut,
     OwnershipTransferAcceptIn,
     OwnershipTransferOut,
@@ -398,11 +403,12 @@ def list_memberships(
       links via customer_license_links (Phase 6.5's company code), which
       grants no tenant permissions at all. Resolved from that table instead
       of license_members entirely.
-    - oa="technician": only a license_members row whose role is literally
-      "technician" counts — any other staff role at the same company must
-      not grant Technician OA access just because a membership exists.
-    - "sales" or omitted: the pre-existing behaviour, everyone except
-      "technician".
+    - oa="technician": only the person's rows with channel "technician"
+      — the row a technician invite creates. An owner or CS at the same
+      company holds a sales row and is NOT a technician there (owner,
+      8 Sep 2026: the OAs are separate registrations).
+    - oa="sales": only rows with channel "sales".
+    - omitted: every active row, for identity-level callers only.
     """
     if oa == "customer":
         shops = RegistrationRepository(session).my_shops(chann_uid)
@@ -414,6 +420,7 @@ def list_memberships(
                 chann_uid=chann_uid,
                 role="customer",
                 status="active",
+                channel="customer",
                 license_status=shop.status,
             )
             for shop in shops
@@ -429,10 +436,44 @@ def list_memberships(
             chann_uid=m.chann_uid,
             role=m.role,
             status=m.status,
+            channel=m.channel,
             license_status=m.license.status,
         )
         for m in members
     ]
+
+
+def _member_out(
+    session: Session, scope: TenantScope, member: LicenseMember, *, model=MemberOut, **extra,
+) -> MemberOut:
+    """The one place a members row becomes a MemberOut — every field the
+    dashboard's members page reads, on every route that returns one.
+    `model` is the (sub)class to build, so an extra field for one route
+    is not silently dropped by the base schema."""
+    identity = session.get(ChannIdentity, member.chann_uid)
+    return model(
+        id=member.id,
+        chann_uid=member.chann_uid,
+        role=member.role,
+        status=member.status,
+        channel=member.channel,
+        joined_at=member.joined_at,
+        is_owner=MemberRepository(session).is_owner_row(scope, member),
+        display_name=identity.display_name if identity is not None else None,
+        **extra,
+    )
+
+
+def _member_cache_keys(license_id, chann_uid: str, channel: str | None = None) -> list[str]:
+    """Every cached view of one person's membership at a license: the
+    per-channel member and permission entries, and the channel-less
+    member lookup."""
+    channels = [channel] if channel else ["sales", "technician"]
+    keys = [k_member(str(license_id), chann_uid, "any")]
+    for ch in channels:
+        keys.append(k_member(str(license_id), chann_uid, ch))
+        keys.append(k_permissions(str(license_id), chann_uid, ch))
+    return keys
 
 
 @router.get("/licenses/{license_id}/members", response_model=list[MemberOut])
@@ -443,29 +484,30 @@ def list_members(license_id: uuid.UUID, session: Session = Depends(get_session))
     if LicenseRepository(session).get_scoped(scope) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="license not found")
     members = MemberRepository(session).list_for_license(scope)
-    return [
-        MemberOut(id=m.id, chann_uid=m.chann_uid, role=m.role, status=m.status)
-        for m in members
-    ]
+    return [_member_out(session, scope, m) for m in members]
 
 
 @router.get("/licenses/{license_id}/members/{chann_uid}", response_model=MemberOut)
-def get_member(license_id: uuid.UUID, chann_uid: str, session: Session = Depends(get_session)):
+def get_member(
+    license_id: uuid.UUID, chann_uid: str, channel: str | None = None,
+    session: Session = Depends(get_session),
+):
+    """`channel` ("sales" | "technician") names which OA's row; omitted
+    means the sales row if there is one, else the technician row. A
+    caller acting for a known OA passes it — the two rows have different
+    ids, and a ticket is assigned to the technician one."""
+    if channel is not None and channel not in ("sales", "technician"):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="unknown channel")
     scope = TenantScope(license_id=license_id)
 
     def load():
-        member = MemberRepository(session).get(scope, chann_uid)
+        member = MemberRepository(session).get(scope, chann_uid, channel=channel)
         if member is None:
             return None
-        return {
-            "id": member.id,
-            "chann_uid": member.chann_uid,
-            "role": member.role,
-            "status": member.status,
-        }
+        return _member_out(session, scope, member).model_dump(mode="json")
 
     cached = cache.get_or_load(
-        k_member(str(license_id), chann_uid),
+        k_member(str(license_id), chann_uid, channel or "any"),
         settings.cache_ttl_member_s,
         load,
         CacheFailureMode.FALLBACK_DB,
@@ -473,6 +515,104 @@ def get_member(license_id: uuid.UUID, chann_uid: str, session: Session = Depends
     if cached is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="member not found")
     return MemberOut(**cached)
+
+
+@router.patch("/licenses/{license_id}/members/{chann_uid}/status", response_model=MemberStatusOut)
+def set_member_status(
+    license_id: uuid.UUID,
+    chann_uid: str,
+    payload: MemberStatusIn,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    """Remove ("removed") or reactivate ("active") one channel's row. The
+    owner's row is refused with 409. Removing a technician takes them off
+    their teams and returns their open jobs to the queue; the response
+    lists those tickets so the caller can tell the dispatchers."""
+    scope = TenantScope(license_id=license_id)
+    try:
+        repo = MemberRepository(session)
+        before = repo.get(scope, chann_uid, channel=payload.channel)
+        before_status = before.status if before is not None else None
+        member, unassigned = repo.set_status(
+            scope, chann_uid, channel=payload.channel, status=payload.status,
+        )
+        AuditRepository(session).write(
+            license_id=license_id,
+            entity_type="license_member",
+            entity_id=member.id,
+            actor_type="user",
+            actor_id=x_actor_id or None,
+            action="status",
+            field_changes=diff_fields(
+                {"status": before_status, "channel": member.channel},
+                {"status": member.status, "channel": member.channel},
+            ) or {"status": {"old": before_status, "new": member.status}},
+        )
+        for ticket in unassigned:
+            AuditRepository(session).write(
+                license_id=license_id,
+                entity_type="service_ticket",
+                entity_id=ticket.id,
+                actor_type="user",
+                actor_id=x_actor_id or None,
+                action="assign",
+                field_changes={"assigned_to_ref": {"old": str(member.id), "new": None}},
+            )
+        session.commit()
+        cache.invalidate(*_member_cache_keys(license_id, chann_uid))
+        return _member_out(
+            session, scope, member, model=MemberStatusOut,
+            unassigned_tickets=[
+                {"id": str(t.id), "ticket_number": t.ticket_number} for t in unassigned
+            ],
+        )
+    except MemberNotFound as exc:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except MemberConflict as exc:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    except ValueError as exc:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+
+
+@router.post("/licenses/{license_id}/members/{chann_uid}/reset", response_model=MemberOut)
+def reset_member(
+    license_id: uuid.UUID,
+    chann_uid: str,
+    payload: MemberResetIn,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    """Forget this member's in-progress conversation on one OA: the
+    pending flow, the "record we were just looking at" references, the
+    stored shop choice and the cached membership. The person's next
+    message starts clean. Nothing about the membership itself changes."""
+    scope = TenantScope(license_id=license_id)
+    member = MemberRepository(session).get(scope, chann_uid, channel=payload.channel)
+    if member is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="member not found on this channel")
+    oa = payload.channel
+    cache.invalidate(
+        k_pending_intent(chann_uid, oa),
+        k_last_customer_ref(chann_uid, oa),
+        k_last_entity_ref(chann_uid, oa),
+        k_active_tenant(chann_uid, oa),
+        *_member_cache_keys(license_id, chann_uid),
+    )
+    AuditRepository(session).write(
+        license_id=license_id,
+        entity_type="license_member",
+        entity_id=member.id,
+        actor_type="user",
+        actor_id=x_actor_id or None,
+        action="update",
+        field_changes={"conversation_state": {"old": oa, "new": "reset"}},
+    )
+    session.commit()
+    return _member_out(session, scope, member)
 
 
 @router.get("/licenses/{license_id}/members/{chann_uid}/cross-check")
@@ -596,8 +736,9 @@ def _invalidate_authorization_for_license(session: Session, scope: TenantScope) 
     # single call site here needs to cover both caches or GET /members/{uid}
     # can serve a stale role for up to cache_ttl_member_s after any of them.
     members = MemberRepository(session).list_for_license(scope)
-    keys = [k_permissions(str(scope.license_id), m.chann_uid) for m in members]
-    keys += [k_member(str(scope.license_id), m.chann_uid) for m in members]
+    keys: list[str] = []
+    for m in members:
+        keys += _member_cache_keys(scope.license_id, m.chann_uid)
     cache.invalidate(*keys)
 
 
@@ -606,15 +747,21 @@ def _invalidate_authorization_for_license(session: Session, scope: TenantScope) 
     response_model=AuthorizationContextOut,
 )
 def get_authorization_context(
-    license_id: uuid.UUID, chann_uid: str, session: Session = Depends(get_session)
+    license_id: uuid.UUID, chann_uid: str, channel: str = "sales",
+    session: Session = Depends(get_session),
 ):
+    """Permissions of the row for THIS channel ("sales" by default,
+    "technician" for the Technician OA) — the same person may be the
+    owner on one and a technician on the other."""
+    if channel not in ("sales", "technician"):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="unknown channel")
     scope = TenantScope(license_id=license_id)
 
     def load():
-        return AuthorizationRepository(session).context(scope, chann_uid)
+        return AuthorizationRepository(session).context(scope, chann_uid, channel=channel)
 
     value = cache.get_or_load(
-        k_permissions(str(license_id), chann_uid),
+        k_permissions(str(license_id), chann_uid, channel),
         settings.cache_ttl_permissions_s,
         load,
         CacheFailureMode.FALLBACK_DB,
@@ -736,9 +883,11 @@ def set_member_role(
 ):
     scope = TenantScope(license_id=license_id)
     try:
-        before_member = MemberRepository(session).get(scope, chann_uid)
+        before_member = MemberRepository(session).get(scope, chann_uid, channel=payload.channel)
         before = {"role": before_member.role} if before_member is not None else {}
-        member = MemberRoleRepository(session).set_role(scope, chann_uid, payload.role_name)
+        member = MemberRoleRepository(session).set_role(
+            scope, chann_uid, payload.role_name, channel=payload.channel,
+        )
         AuditRepository(session).write(
             license_id=license_id,
             entity_type="license_member",
@@ -749,11 +898,8 @@ def set_member_role(
             field_changes=diff_fields(before, {"role": member.role}),
         )
         session.commit()
-        cache.invalidate(
-            k_member(str(license_id), chann_uid),
-            k_permissions(str(license_id), chann_uid),
-        )
-        return MemberOut(id=member.id, chann_uid=member.chann_uid, role=member.role, status=member.status)
+        cache.invalidate(*_member_cache_keys(license_id, chann_uid))
+        return _member_out(session, scope, member)
     except Exception as exc:
         session.rollback()
         raise _phase2_http_error(exc)
@@ -924,7 +1070,7 @@ def force_transfer_owner(
 ):
     scope = TenantScope(license_id=license_id)
     try:
-        before_target = MemberRepository(session).get(scope, payload.target_chann_uid)
+        before_target = MemberRepository(session).get(scope, payload.target_chann_uid, channel="sales")
         before = {"role": before_target.role} if before_target is not None else {}
         member = OwnershipTransferRepository(session).force(scope, payload.target_chann_uid)
         AuditRepository(session).write(
@@ -941,7 +1087,7 @@ def force_transfer_owner(
         )
         session.commit()
         _invalidate_authorization_for_license(session, scope)
-        return MemberOut(id=member.id, chann_uid=member.chann_uid, role=member.role, status=member.status)
+        return _member_out(session, scope, member)
     except Exception as exc:
         session.rollback()
         raise _phase2_http_error(exc)
@@ -1343,16 +1489,22 @@ def create_invite(
             field_changes=diff_fields({}, {"role": row.role, "max_uses": row.max_uses}),
         )
         session.commit()
-        return InviteOut.model_validate(row, from_attributes=True)
+        return _invite_out(row)
     except Exception as exc:
         session.rollback()
         raise _phase65_http_error(exc)
 
 
+def _invite_out(row) -> InviteOut:
+    out = InviteOut.model_validate(row, from_attributes=True)
+    out.channel = channel_for_role(row.role)
+    return out
+
+
 @router.get("/licenses/{license_id}/invites", response_model=list[InviteOut])
 def list_invites(license_id: uuid.UUID, session: Session = Depends(get_session)):
     rows = RegistrationRepository(session).list_invites(license_id)
-    return [InviteOut.model_validate(r, from_attributes=True) for r in rows]
+    return [_invite_out(r) for r in rows]
 
 
 @router.post("/licenses/{license_id}/invites/{invite_id}/revoke", response_model=InviteOut)
@@ -1374,7 +1526,7 @@ def revoke_invite(
             field_changes=diff_fields({"revoked": False}, {"revoked": True}),
         )
         session.commit()
-        return InviteOut.model_validate(row, from_attributes=True)
+        return _invite_out(row)
     except Exception as exc:
         session.rollback()
         raise _phase65_http_error(exc)
@@ -1389,6 +1541,7 @@ def redeem_invite(payload: InviteRedeemIn, session: Session = Depends(get_sessio
             invite_code=payload.invite_code,
             chann_uid=payload.chann_uid,
             display_name=payload.display_name,
+            oa=payload.oa,
         )
         AuditRepository(session).write(
             license_id=member.license_id,
@@ -1397,11 +1550,13 @@ def redeem_invite(payload: InviteRedeemIn, session: Session = Depends(get_sessio
             actor_type="user",
             actor_id=payload.chann_uid,
             action="create",
-            field_changes=diff_fields({}, {"role": member.role}),
+            field_changes=diff_fields({}, {"role": member.role, "channel": member.channel}),
         )
         session.commit()
-        return MemberOut(
-            chann_uid=member.chann_uid, role=member.role, status=member.status
+        cache.invalidate(*_member_cache_keys(member.license_id, member.chann_uid))
+        scope = TenantScope(license_id=member.license_id)
+        return _member_out(
+            session, scope, member, company_name=member.license.company_name,
         )
     except Exception as exc:
         session.rollback()
@@ -1991,6 +2146,7 @@ def set_last_entity_ref(oa: str, chann_uid: str, payload: LastEntityRefIn):
             "entity_type": payload.entity_type,
             "entity_id": payload.entity_id,
             "code": payload.code,
+            "extra": payload.extra,
         },
         payload.ttl_seconds,
     )

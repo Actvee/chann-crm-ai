@@ -202,3 +202,19 @@ def describe(permission_key: str, language: str = "th") -> str:
     if entry is None:
         return permission_key
     return entry.get(language) or entry.get("th") or permission_key
+
+
+# The two staff channels a license_members row can be for (owner, 8 Sep
+# 2026). The Customer OA has no members row at all — a customer links
+# through customer_license_links.
+MEMBER_CHANNELS = ("sales", "technician")
+TECHNICIAN_ROLE_NAME = "technician"
+
+
+def channel_for_role(role: str) -> str:
+    """Which OA a membership with this role is for. The technician
+    persona is its own registration on the Technician OA; every other
+    role — owner, admin, cs, member, a tenant's custom roles — works on
+    the Sales/CS OA. An invite carries its role, so this is also which OA
+    the invite may be redeemed on."""
+    return "technician" if (role or "").strip().lower() == TECHNICIAN_ROLE_NAME else "sales"

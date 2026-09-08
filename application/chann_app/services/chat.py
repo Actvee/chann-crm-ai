@@ -33,7 +33,7 @@ from .thai_datetime import DATE_FORMATS, local_today
 from .photos import PhotoRefused, store_ticket_photo
 from ..line.client import get_message_content
 from .ai.intent import parse_intent, unavailable_reply
-from .identity import ResolvedContext, TenantResolution
+from .identity import ResolvedContext, TenantResolution, member_channel
 from .registration import COMPANY_CODE_RE
 from . import storefront as storefront_service
 from . import live_chat
@@ -5278,7 +5278,7 @@ async def _resolve_ticket_for_member(
     client: DataClient, license_id: str, ctx: ResolvedContext, code: str,
 ) -> tuple[dict | None, dict | None]:
     """(member, ticket) for a code this person may act on, or (member, None)."""
-    member = await client.get_member(license_id, ctx.chann_uid)
+    member = await client.get_member(license_id, ctx.chann_uid, channel=member_channel(ctx.oa))
     if member is None:
         return None, None
     tickets = await client.list_tickets(license_id, visible_to=str(member["id"]))
@@ -5303,7 +5303,7 @@ async def _ticket_for_action(
     ticket fits: two candidates means asking is the only honest option,
     since guessing would file a report against the wrong customer.
     """
-    member = await client.get_member(license_id, ctx.chann_uid)
+    member = await client.get_member(license_id, ctx.chann_uid, channel=member_channel(ctx.oa))
     if member is None:
         return None, None, False
 
@@ -5453,7 +5453,7 @@ async def _handle_check_out(
                 # 6 Sep 2026, B13).
                 wanted = switch.group(1).upper()
                 try:
-                    member = await client.get_member(license_id, ctx.chann_uid)
+                    member = await client.get_member(license_id, ctx.chann_uid, channel=member_channel(ctx.oa))
                     tickets = await client.list_tickets(license_id, visible_to=str((member or {}).get("id") or ""))
                 except Exception:
                     tickets = []
@@ -5522,7 +5522,7 @@ async def _handle_check_out(
             return ChatReply(text=_t(REPORT_QUESTIONS[awaiting[0]], language))
 
         try:
-            member = await client.get_member(license_id, ctx.chann_uid)
+            member = await client.get_member(license_id, ctx.chann_uid, channel=member_channel(ctx.oa))
             result = await client.check_out_ticket(
                 license_id, str(ticket_id),
                 member_id=str((member or {}).get("id") or ""),
@@ -5859,7 +5859,7 @@ async def _handle_report_pdf(
     if not code:
         # One approved report of mine and no code: that one. Otherwise ask.
         try:
-            member = await client.get_member(license_id, ctx.chann_uid)
+            member = await client.get_member(license_id, ctx.chann_uid, channel=member_channel(ctx.oa))
         except Exception:
             member = None
         mine = [
@@ -5935,7 +5935,7 @@ async def _handle_report_list(
     if "service_report.read" not in set(permission_keys):
         return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
     try:
-        member = await client.get_member(str(license_id), ctx.chann_uid)
+        member = await client.get_member(str(license_id), ctx.chann_uid, channel=member_channel(ctx.oa))
         rows = await client.list_service_reports(str(license_id))
     except Exception:
         log.exception("report list failed")
@@ -5985,7 +5985,7 @@ async def _handle_ticket_detail(
     else:
         code = match.group(1).upper()
         try:
-            member = await client.get_member(str(license_id), ctx.chann_uid)
+            member = await client.get_member(str(license_id), ctx.chann_uid, channel=member_channel(ctx.oa))
             tickets = await client.list_tickets(
                 str(license_id), visible_to=str(member["id"]) if member else None,
             )
@@ -6043,7 +6043,7 @@ async def _handle_ticket_list(
     license_id = str(license_id)
     try:
         if mine or open_only or team_only:
-            member = await client.get_member(license_id, ctx.chann_uid)
+            member = await client.get_member(license_id, ctx.chann_uid, channel=member_channel(ctx.oa))
             if member is None:
                 return ChatReply(text=_t(TICKET_EMPTY, language))
             # visible_to, not a plain list: a technician browsing without
@@ -6454,7 +6454,7 @@ async def _handle_ticket_claim(
     code = match.group(1).upper() if match else ""
 
     try:
-        member = await client.get_member(license_id, ctx.chann_uid)
+        member = await client.get_member(license_id, ctx.chann_uid, channel=member_channel(ctx.oa))
         if member is None:
             return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
         tickets = await client.list_tickets(license_id, visible_to=str(member["id"]))
@@ -6677,7 +6677,7 @@ async def _handle_ticket_reject(
         # "ไม่ว่าง" / "ไปไม่ได้" alone: a decline, not yet a reason.
         reason = ""
     try:
-        member = await client.get_member(license_id, ctx.chann_uid)
+        member = await client.get_member(license_id, ctx.chann_uid, channel=member_channel(ctx.oa))
         if member is None:
             return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
         tickets = await client.list_tickets(license_id, visible_to=str(member["id"]))
@@ -6780,7 +6780,7 @@ async def _resolve_ticket_reject_confirm(
         if reason.lower().startswith(word):
             reason = reason[len(word):].strip(" :-—,")
     try:
-        member = await client.get_member(str(license_id), ctx.chann_uid)
+        member = await client.get_member(str(license_id), ctx.chann_uid, channel=member_channel(ctx.oa))
     except Exception:
         member = None
     if member is None:
@@ -8628,6 +8628,741 @@ LINE_QUOTE_LOCKED = {
 _NEW_PRICE_RE = re.compile(r"(?:เหลือ|เป็น|as|to)\s*([\d,]+(?:\.\d{1,2})?)\s*(?:บาท|฿|baht)?", re.I)
 
 
+# ---------------------------------------------------------------- line items, as spoken
+#
+# Owner's live test (8 Sep 2026): "เพิ่ม ทีวี 40 นิ้ว ราคา 4000 ไปอีก 2 รายการ"
+# was answered "ไม่พบสินค้า"; "เพิ่มพัดลมอีก 3 ตัว" SET the quantity to 3
+# instead of adding 3; "ลบสินค้าพัดลมออก" looked for a product called
+# "พัดลมออก". One normaliser for the words around a product's name, one
+# parser for the shapes people type, and one handler behind both the
+# typed path and the model's reading of the same sentence.
+
+_ITEM_COUNT_UNITS = r"ตัว|ชิ้น|อัน|เครื่อง|ชุด|รายการ|units?|pcs|pieces?|items?"
+# "อีก 2", "เอาเพิ่ม 2", "2 more": the delta of an increment, with or
+# without a counting word. A size ("อีก 18 นิ้ว") is never a delta.
+_ITEM_MORE_QTY_RE = re.compile(
+    r"(?:อีก|ไปอีก|เพิ่มอีก|เอาเพิ่ม|เพิ่มเติม|another)\s*(?:สัก)?\s*(\d+)(?!\s*(?:นิ้ว|ตัน|ลิตร|btu|วัตต์|แรง))"
+    r"|(\d+)\s*(?:more|extra|additional)\b",
+    re.I,
+)
+_ITEM_MORE_WORDS_RE = re.compile(r"ไปอีก|เพิ่มอีก|เอาเพิ่ม|เพิ่มเติม|อีก|\bmore\b|\bextra\b|\badditional\b|\banother\b", re.I)
+_ITEM_LESS_QTY_RE = re.compile(r"(\d+)\s*(?:less|fewer)\b|(?:by|off)\s*(\d+)\b", re.I)
+# A number followed by one of these is a SIZE inside the name, never a count.
+_ITEM_SIZE_AFTER_NUMBER_RE = re.compile(r"\d+\s*(?:นิ้ว|ตัน|ลิตร|btu|วัตต์|แรง|ซม|มม|กก|kg|cm|mm|hp)", re.I)
+
+# Words that join a product to the record, anywhere in the sentence.
+_ITEM_INNER_PHRASES = (
+    "ออกจากดีลนี้", "ออกจากดีล", "ออกจากใบเสนอราคา", "จากดีลนี้", "จากดีล", "ในดีลนี้", "ในดีล", "เข้าดีลนี้", "เข้าดีล",
+    "ให้ดีลนี้", "ให้ดีล", "ของดีลนี้", "ของดีล", "ในใบเสนอราคา", "เข้าใบเสนอราคา", "ของใบเสนอราคา",
+    "to this deal", "to the deal", "on this deal", "on the deal", "from this deal", "from the deal", "into the deal",
+    "in the deal", "in this deal", "to the quote", "on the quote", "from the quote", "to deal", "from deal",
+    "more", "extra", "additional",
+)
+# Verbs and fillers in front of the name.
+_ITEM_LEAD_WORDS = (
+    "เพิ่มสินค้า", "ใส่สินค้า", "ลบสินค้า", "เอาสินค้า", "ตัดสินค้า", "เพิ่มรายการ", "ใส่รายการ", "ลบรายการ", "เอารายการ",
+    "เพิ่มจำนวน", "ลดจำนวน", "เพิ่ม", "ใส่", "เอา", "ลบ", "ตัด", "ลด", "สินค้า", "รายการ", "ที่ชื่อ", "ชื่อ", "ที่เป็น",
+    "add product", "add item", "add the", "add a", "add an", "add", "put in", "put", "insert", "remove product",
+    "remove item", "remove the", "remove a", "remove", "delete the", "delete item", "delete", "drop the", "drop",
+    "take the", "take", "the", "an", "a",
+)
+# Particles and fillers after it.
+_ITEM_TAIL_WORDS = (
+    "ให้หน่อยครับ", "ให้หน่อยค่ะ", "ให้หน่อย", "ให้ด้วย", "ด้วยนะครับ", "ด้วยนะคะ", "ด้วยนะ", "ด้วยครับ", "ด้วยค่ะ", "ด้วย",
+    "หน่อยครับ", "หน่อยค่ะ", "หน่อยนะ", "หน่อย", "นะครับ", "นะคะ", "นะค่ะ", "ครับ", "ค่ะ", "คะ", "นะ", "เลย", "ที", "ออก",
+    "ทิ้ง", "ทิ้งไป", "ไปเลย", "ไป", "ซะ", "เข้าไป", "ไปอีก", "เพิ่มอีก", "อีก", "เพิ่มเติม", "ราคา", "จำนวน", "ลง", "สัก",
+    "ใน", "เข้า", "ให้", "จาก", "ของ",
+    "please", "pls", "more", "extra", "additional", "off", "away", "out", "in", "into", "on", "to", "from",
+)
+_ITEM_LEAD_SORTED = tuple(sorted(_ITEM_LEAD_WORDS, key=len, reverse=True))
+_ITEM_TAIL_SORTED = tuple(sorted(_ITEM_TAIL_WORDS, key=len, reverse=True))
+# A name made of one of these is another feature's object, not a product.
+_ITEM_EXCLUDED_NOUNS = (
+    "ลูกค้า", "lead", "ลีด", "บันทึก", "โน้ต", "นัด", "เตือน", "ช่าง", "ทีม", "สมาชิก", "ผู้ใช้", "งานซ่อม", "ใบงาน",
+    "ใบเสนอราคา", "สิทธิ์", "กฎ", "ประกัน", "ซีเรียล", "รูป", "ที่อยู่", "เบอร์", "โทร", "อีเมล", "ส่วนลด", "ดีล", "บริษัท",
+    "ร้าน", "รหัส", "เอกสาร", "รายงาน", "แชท", "ภาษา", "ใหม่", "ทั้งหมด", "รายชื่อ", "ระบบ", "ทะเบียน", "ฐานข้อมูล",
+    "customer", "note", "reminder", "appointment", "technician", "team", "member", "ticket", "job", "warranty",
+    "serial", "photo", "address", "phone", "email", "discount", "deal", "quote", "company", "shop", "document", "report",
+    "chat", "language", "new", "everything", "all", "list", "system", "database", "record",
+)
+
+
+def _strip_item_particles(name: str) -> str:
+    """The product's name and nothing else.
+
+    "ลบสินค้าพัดลมออก" -> "พัดลม"; "ใส่สินค้า พัดลม 18 นิ้ว อีก" ->
+    "พัดลม 18 นิ้ว"; "ทีวี 40 นิ้ว ไปอีก" -> "ทีวี 40 นิ้ว". Sizes stay
+    inside the name — "18 นิ้ว" is what the fan IS. Quantities and prices
+    are taken out by the callers before this runs.
+    """
+    text = " ".join(str(name or "").split())
+    text = re.sub(r"(?<![A-Za-z0-9])[QD]-\d{4}-\d{4}(?![0-9])", " ", text, flags=re.I)
+    for phrase in sorted(_ITEM_INNER_PHRASES, key=len, reverse=True):
+        if phrase.isascii():
+            text = re.sub(r"\b" + re.escape(phrase) + r"\b", " ", text, flags=re.I)
+        else:
+            text = text.replace(phrase, " ")
+    text = " ".join(text.split()).strip(" :·-,")
+    text = re.sub(
+        r"^(?:ช่วย|รบกวน|ขอ|กรุณา|please)\s*(?=เพิ่ม|ใส่|ลบ|เอา|ตัด|ลด|add|remove|delete|put|insert|drop|take)",
+        "", text, flags=re.I,
+    )
+    changed = True
+    while changed and text:
+        changed = False
+        low = text.lower()
+        for lead in _ITEM_LEAD_SORTED:
+            if not low.startswith(lead) or len(text) <= len(lead):
+                continue
+            if lead.isascii() and not low[len(lead)].isspace():
+                continue
+            text = text[len(lead):].strip(" :·-,")
+            changed = True
+            break
+        low = text.lower()
+        for tail in _ITEM_TAIL_SORTED:
+            if not low.endswith(tail) or len(text) <= len(tail):
+                continue
+            if tail.isascii() and not low[-len(tail) - 1].isspace():
+                continue
+            text = text[: -len(tail)].strip(" :·-,")
+            changed = True
+            break
+    if text.lower() in _ITEM_TAIL_SORTED or text.lower() in _ITEM_LEAD_SORTED or text.lower() in ("product", "item"):
+        # "เพิ่มอีก 1 ตัว" leaves only "อีก", "เอาเพิ่ม 2 ตัว" only "เพิ่ม": no
+        # name was given at all.
+        return ""
+    return " ".join(text.split())
+
+
+def _item_is_excluded(name: str) -> bool:
+    low = (name or "").strip().lower()
+    return not low or any(w in low for w in _ITEM_EXCLUDED_NOUNS)
+
+
+def _line_code_in(message: str) -> str | None:
+    m = re.search(r"(?<![A-Za-z0-9])([QD]-\d{4}-\d{4})(?![0-9])", message or "", re.I)
+    return m.group(1).upper() if m else None
+
+
+def _item_unit_word(message: str) -> str:
+    """The counting word the person used ("ตัว", "ชิ้น" …), for the reply."""
+    m = re.search(r"\d+\s*(ตัว|ชิ้น|อัน|เครื่อง|ชุด|รายการ)", message or "")
+    return m.group(1) if m else "ตัว"
+
+
+_ITEM_HEAD_RE = re.compile(
+    r"^(?:ช่วย|รบกวน|ขอ|กรุณา|please)?\s*"
+    r"(เพิ่มสินค้า|ใส่สินค้า|เพิ่มรายการ|ใส่รายการ|เพิ่มจำนวน|ลดจำนวน|ลบสินค้า|ลบรายการ|เอาสินค้าออก|ตัดสินค้า|เอาเพิ่ม|เอาออก|"
+    r"เพิ่ม|ใส่|เอา|ลด|ลบ|ตัด|ไปอีก|อีก|add|put|insert|remove|delete|drop|take)",
+    re.I,
+)
+_ITEM_SET_QTY_RE = re.compile(
+    r"^(?:แก้ไข|แก้|เปลี่ยน|ปรับ|ตั้ง|set|change|update)\s*(?:สินค้า|รายการ|จำนวน|the)?\s*(.+?)\s*(?:เป็น|เหลือ|ให้เหลือ|to|=)\s*(\d+)\s*"
+    + r"(?:" + _ITEM_COUNT_UNITS + r")?\s*(?:ครับ|ค่ะ|คะ|นะ)?$",
+    re.I,
+)
+_ITEM_BARE_QTY_RE = re.compile(r"^(.+?)\s*(\d+)\s*(?:" + _ITEM_COUNT_UNITS + r")\s*(?:ครับ|ค่ะ|คะ|นะ)?$", re.I)
+
+
+def _parse_line_item_command(message: str) -> dict | None:
+    """What a sentence about a line item asks for, or None when it is not one.
+
+    Returns {"op", "name", "qty", "price", "more", "code", "unit"} with op
+    one of add / decrement / delete / set_qty / bare_qty:
+      "เพิ่ม ทีวี 40 นิ้ว ราคา 4000 ไปอีก 2 รายการ" -> add, qty 2, price 4000
+      "เพิ่มพัดลมอีก 3 ตัว" / "เพิ่มอีก 1 ตัว" / "อีก 1"  -> add with more=True
+      "ลดพัดลม 1 ตัว" / "เอาออก 1 ตัว"                    -> decrement
+      "ลบสินค้าพัดลมออก" / "เอาพัดลมออก" / "remove the fan" -> delete
+      "แก้พัดลมเป็น 3 ตัว"                                -> set_qty
+      "พัดลม 3 ตัว"                                       -> bare_qty (set, when the line exists)
+    The price-and-quantity triggers ("แก้ราคา", "เปลี่ยนจำนวน") keep their
+    own path; a sentence with "อีก" is an increment whatever verb it uses.
+    """
+    raw = " ".join((message or "").split())
+    if not raw or "\n" in (message or "") or len(raw) > 120:
+        return None
+    lowered = raw.lower()
+    if any(w in lowered for w in ("ส่วนลด", "discount", "%")):
+        return None
+    more = bool(_ITEM_MORE_WORDS_RE.search(raw))
+    code = _line_code_in(raw)
+    body = _strip_polite_tail(" ".join(re.sub(r"(?<![A-Za-z0-9])[QD]-\d{4}-\d{4}(?![0-9])", " ", raw, flags=re.I).split()))
+    low = body.lower()
+
+    if not more:
+        if any(t in lowered for t in LINE_EDIT_TRIGGERS):
+            return None
+        m = _ITEM_SET_QTY_RE.match(body)
+        if m and not any(w in low for w in ("ราคา", "price", "บาท")):
+            name = _strip_item_particles(m.group(1))
+            if _item_is_excluded(name):
+                return None
+            return {"op": "set_qty", "name": name, "qty": int(m.group(2)), "price": None, "more": False,
+                    "code": code, "unit": _item_unit_word(body)}
+
+    price = None
+    pm = _PRICE_RE.search(body)
+    if pm:
+        price = pm.group(1).replace(",", "")
+        body = body.replace(pm.group(0), " ")
+        low = body.lower()
+
+    head = _ITEM_HEAD_RE.match(body)
+    verb = head.group(1).lower() if head else ""
+    unit = _item_unit_word(body)
+
+    qty = None
+    rest = body
+    # The unit-anchored count first ("3 ตัว"), then a bare "อีก 3" — the
+    # other order left " ตัว" behind as part of the name.
+    qm = _QTY_RE.search(body) or _ITEM_MORE_QTY_RE.search(body)
+    if qm:
+        qty = int(qm.group(1) or qm.group(2))
+        rest = body.replace(qm.group(0), " ")
+    elif head:
+        # "add 2 heaters", "remove 1 fan": the count right after the verb.
+        lead = re.match(r"\s*(\d+)\s+(?!\d)(?!(?:นิ้ว|ตัน|ลิตร|btu|วัตต์|แรง|more|extra)\b)", body[head.end():], re.I)
+        if lead:
+            qty = int(lead.group(1))
+            rest = body[: head.end()] + " " + body[head.end() + lead.end():]
+    rest = re.sub(r"(?:^|(?<=\s))(?:" + _ITEM_COUNT_UNITS + r")(?=\s|$)", " ", rest, flags=re.I)
+
+    if verb in ("เพิ่มสินค้า", "ใส่สินค้า", "เพิ่มรายการ", "ใส่รายการ", "เพิ่มจำนวน", "เพิ่ม", "ใส่", "เอาเพิ่ม", "ไปอีก", "อีก",
+                "add", "put", "insert") or (verb == "เอา" and more):
+        if verb == "เพิ่มจำนวน" and not more:
+            return None
+        name = _strip_item_particles(rest)
+        if name and _item_is_excluded(name):
+            return None
+        if not name and not more:
+            return None
+        if not name and qty is None:
+            return None
+        return {"op": "add", "name": name or None, "qty": qty or 1, "price": price, "more": more, "code": code, "unit": unit}
+
+    if verb in ("ลด", "ลดจำนวน"):
+        if price is not None or any(w in low for w in ("ราคา", "price", "บาท")):
+            return None
+        if re.search(r"(?:เหลือ|เป็น)\s*\d", low) and not more:
+            return None
+        if qty is None:
+            lm = _ITEM_LESS_QTY_RE.search(body)
+            if lm:
+                qty = int(lm.group(1) or lm.group(2))
+                rest = body.replace(lm.group(0), " ")
+        if qty is None:
+            return None
+        name = _strip_item_particles(rest)
+        if name and _item_is_excluded(name):
+            return None
+        return {"op": "decrement", "name": name or None, "qty": qty, "price": None, "more": False, "code": code, "unit": unit}
+
+    if verb in ("ลบสินค้า", "ลบรายการ", "เอาสินค้าออก", "ตัดสินค้า", "เอาออก", "เอา", "ลบ", "ตัด", "remove", "delete", "drop", "take"):
+        has_out = "ออก" in low or "ทิ้ง" in low or bool(re.search(r"\b(?:off|out|away)\b", low))
+        if qty is None and verb in ("remove", "take"):
+            lm = _ITEM_LESS_QTY_RE.search(body)
+            if lm:
+                qty = int(lm.group(1) or lm.group(2))
+                rest = body.replace(lm.group(0), " ")
+        if qty is not None and "ทั้งหมด" not in low and not re.search(r"\ball\b", low):
+            # "เอาพัดลมออก 1 ตัว", "remove 1 fan": fewer, not gone.
+            name = _strip_item_particles(rest)
+            if name and _item_is_excluded(name):
+                return None
+            return {"op": "decrement", "name": name or None, "qty": qty, "price": None, "more": False, "code": code, "unit": unit}
+        explicit = verb in ("ลบสินค้า", "ลบรายการ", "เอาสินค้าออก", "ตัดสินค้า", "remove", "delete", "drop")
+        if not (explicit or has_out):
+            return None
+        name = _strip_item_particles(rest)
+        if name and _item_is_excluded(name):
+            return None
+        if not name and verb in ("ลบ", "delete", "drop", "take") and not has_out:
+            return None
+        return {"op": "delete", "name": name or None, "qty": None, "price": None, "more": False, "code": code, "unit": unit,
+                "explicit": explicit or "สินค้า" in low or "รายการ" in low}
+
+    if verb:
+        return None
+    if _looks_like_a_question(raw) or price is not None:
+        return None
+    m = _ITEM_BARE_QTY_RE.match(body)
+    if not m:
+        return None
+    name = _strip_item_particles(m.group(1))
+    if _item_is_excluded(name) or re.search(r"\d\s*$", name) or len(name) < 2:
+        return None
+    if re.match(r"^(?:สร้าง|เปิด|ดู|ขอ|มี|create|open|show|view)", name.lower()):
+        return None
+    return {"op": "bare_qty", "name": name, "qty": int(m.group(2)), "price": None, "more": False, "code": code, "unit": unit}
+
+
+LINE_INCREMENTED = {
+    "th": "เพิ่ม{name}อีก {delta} {unit}แล้ว ตอนนี้{name}รวมเป็น {qty} × {price} = {total} ใน{where} {code}{record_total}",
+    "en": "Added {delta} more {name}. Now {qty} × {price} = {total} on {code}{record_total}",
+}
+LINE_DECREMENTED = {
+    "th": "ลด{name}ลง {delta} {unit}แล้ว ตอนนี้{name}เหลือ {qty} × {price} = {total} ใน{where} {code}{record_total}",
+    "en": "Took {delta} {name} off. Now {qty} × {price} = {total} on {code}{record_total}",
+}
+LINE_DECREMENTED_TO_ZERO = {
+    "th": "ลด{name}ลง {delta} {unit} เหลือ 0 จึงลบ{name}ออกจาก{where} {code} แล้ว{record_total}",
+    "en": "Took {delta} {name} off — none left, so the line is off {code}{record_total}",
+}
+LINE_NEW_ASK_PRICE = {
+    "th": "ยังไม่มี {name} ใน{where} {code} ต้องการเพิ่มเป็นรายการใหม่ใช่ไหมครับ? กรุณาระบุราคาต่อชิ้น เช่น \"1500\"",
+    "en": '"{name}" is not on {code} yet — add it as a new line? Send the unit price, e.g. "1500".',
+}
+LINE_NEW_OFFER = {
+    "th": "ไม่พบสินค้า \"{name}\" ใน{where} {code} ต้องการเพิ่มเป็นรายการใหม่ ({qty} × {price}) ใช่ไหมครับ?",
+    "en": 'No line called "{name}" on {code} — add it as a new line ({qty} × {price})?',
+}
+LINE_NEW_ADDED = {
+    "th": "รับทราบครับ เพิ่มเป็นสินค้ารายการใหม่: {name} × {qty} ราคา {price} ใน{where} {code} แล้ว รวม {total}{record_total}",
+    "en": "Added as a new line: {name} × {qty} at {price} on {code}. Line total {total}{record_total}",
+}
+LINE_NEW_STILL_NEEDS_PRICE = {
+    "th": "รับทราบครับ จะเพิ่ม {name} × {qty} เป็นสินค้ารายการใหม่ใน{where} {code} กรุณาระบุราคาต่อชิ้น เช่น \"1500\"",
+    "en": 'Got it — {name} × {qty} goes on {code} as a new line. What is the unit price? e.g. "1500"',
+}
+LINE_NEW_CANCELLED = {"th": "ยังไม่ได้เพิ่ม {name} ครับ", "en": "{name} was not added."}
+LINE_NEW_YES_LABEL = {"th": "ใช่ เพิ่มเลย", "en": "Yes, add it"}
+LINE_NEW_NO_LABEL = {"th": "ไม่ใช่", "en": "No"}
+LINE_WHICH_LAST = {
+    "th": "{where} {code} มีหลายรายการ หมายถึงรายการไหนครับ\n{options}",
+    "en": "{code} has several lines — which one?\n{options}",
+}
+RECORD_TOTAL_SUFFIX = {"th": " · ยอดรวม{where} {total}", "en": " · {where} total {total}"}
+DEAL_ZERO_TOTAL = {"th": "รวม: 0.00 บาท", "en": "Total: 0.00 THB"}
+
+_LINE_NEW_YES_WORDS = frozenset({
+    "ใช่", "ใช่เลย", "ใช่ครับ", "ใช่ค่ะ", "ใช่เพิ่มเลย", "เพิ่มเลย", "เพิ่ม", "ตกลง", "โอเค", "ได้", "ได้เลย", "เอาเลย",
+    "รายการใหม่", "เป็นรายการใหม่", "เป็นสินค้ารายการใหม่", "สินค้ารายการใหม่", "เพิ่มเป็นรายการใหม่", "เพิ่มเป็นสินค้ารายการใหม่",
+    "สินค้าใหม่", "เป็นสินค้าใหม่", "รายการใหม่เลย", "yes", "ok", "okay", "sure", "yes add it", "add it", "new item", "its new",
+    "it's new", "new line", "as a new line", "as new",
+})
+_LINE_NEW_YES_NORM = frozenset(w.replace(" ", "").replace("'", "") for w in _LINE_NEW_YES_WORDS)
+_LINE_NEW_NO_WORDS = frozenset({"ไม่", "ไม่ใช่", "ไม่เอา", "ไม่ต้อง", "no", "nope", "cancel", "ยกเลิก", "ไม่เพิ่ม"})
+_LINE_PRICE_ANSWER_RE = re.compile(
+    r"^(?:ราคา|@|฿|price)?\s*([\d,]+(?:\.\d{1,2})?)\s*(?:บาท|฿|baht|ต่อชิ้น|ต่อตัว|/ชิ้น|/ตัว|each|per unit)?\s*(?:ครับ|ค่ะ|คะ|นะ)?$",
+    re.I,
+)
+
+
+def _where_label(kind: str, language: str) -> str:
+    if language == "en":
+        return "quote" if kind == "quote" else "deal"
+    return "ใบเสนอราคา" if kind == "quote" else "ดีล"
+
+
+async def _record_lines(client: DataClient, license_id: str, kind: str, entity_id: str) -> list[dict]:
+    """The lines on the deal or quote, re-read after a change."""
+    try:
+        if kind == "quote":
+            return list(await client.list_quote_products(license_id, entity_id) or [])
+        deals = await client.list_deals(license_id)
+        row = next((d for d in deals if str(d.get("id")) == str(entity_id)), None)
+        return list((row or {}).get("products") or [])
+    except Exception:
+        log.exception("could not re-read the lines for a total")
+        return []
+
+
+def _lines_total(lines: list[dict]) -> Decimal:
+    return sum(
+        (Decimal(str(l.get("quoted_unit_price") or 0)) * int(l.get("qty") or 0) for l in lines),
+        Decimal("0"),
+    )
+
+
+async def _record_total_suffix(client: DataClient, license_id: str, kind: str, entity_id: str, language: str) -> str:
+    """" · ยอดรวมดีล 8,000.00": every line reply ends with where the record
+    stands, so nobody has to open it to check (owner test, 8 Sep 2026)."""
+    lines = await _record_lines(client, license_id, kind, entity_id)
+    return _t(RECORD_TOTAL_SUFFIX, language).format(
+        where=_where_label(kind, language), total=f"{_lines_total(lines):,.2f}",
+    )
+
+
+async def _remember_line(client: DataClient, ctx: ResolvedContext, *, kind: str, entity_id: str, code: str, line: dict | None) -> None:
+    """The record AND the line just touched, so "เพิ่มอีก 1 ตัว" with no
+    name means this one."""
+    extra = None
+    if line:
+        extra = {"line_id": str(line.get("id") or ""), "line_name": str(line.get("product_name") or "")}
+    await _remember_entity(client, ctx, entity_type=kind, entity_id=entity_id, code=code, extra=extra)
+
+
+def _match_lines_loosely(lines: list[dict], name: str) -> list[dict]:
+    """_match_lines, then the English plural dropped: "fans" means the "fan" line."""
+    found = _match_lines(lines, name)
+    if not found and name and name.isascii() and name.lower().endswith("s"):
+        found = _match_lines(lines, name[:-1])
+    return found
+
+
+async def _line_from_context(client: DataClient, ctx: ResolvedContext, lines: list[dict], entity_id: str) -> dict | None:
+    """The line "เพิ่มอีก 1 ตัว" refers to: the one last added or edited on
+    this record, else the only line there is."""
+    try:
+        ref = await client.get_last_entity_ref(ctx.chann_uid, ctx.oa)
+    except Exception:
+        ref = None
+    extra = (ref or {}).get("extra") or {}
+    if ref and str(ref.get("entity_id") or "") == str(entity_id) and extra.get("line_id"):
+        hit = next((l for l in lines if str(l.get("id")) == str(extra["line_id"])), None)
+        if hit is not None:
+            return hit
+    if len(lines) == 1:
+        return lines[0]
+    return None
+
+
+def _which_line_reply(lines: list[dict], kind: str, code: str, language: str, template: dict, trigger: str) -> ChatReply:
+    return ChatReply(
+        text=_t(template, language).format(
+            where=_where_label(kind, language), code=code or "",
+            options="\n".join(f"· {l.get('product_name')}" for l in lines[:LIST_LIMIT]),
+        ),
+        quick_replies=[(str(l.get("product_name"))[:20], f"{trigger}{l.get('product_name')} ") for l in lines[:4]],
+    )
+
+
+async def _apply_line_qty_change(
+    client: DataClient, *, ctx: ResolvedContext, license_id: str, kind: str, code: str, entity_id: str,
+    line: dict, delta: int, language: str, unit: str = "ตัว",
+) -> ChatReply:
+    """old + delta (or old − delta), never "set to delta". A line that
+    reaches zero comes off the record, and the reply says so."""
+    old_qty = int(line.get("qty") or 1)
+    new_qty = old_qty + delta
+    name = str(line.get("product_name") or "")
+    unit_price = Decimal(str(line.get("quoted_unit_price") or 0))
+    where = _where_label(kind, language)
+    try:
+        if new_qty <= 0:
+            if kind == "quote":
+                await client.remove_quote_product(license_id, entity_id, str(line["id"]), actor_id=ctx.chann_uid)
+            else:
+                await client.remove_deal_product(license_id, entity_id, str(line["id"]), actor_id=ctx.chann_uid)
+            await _remember_line(client, ctx, kind=kind, entity_id=entity_id, code=code, line=None)
+            return ChatReply(
+                text=_t(LINE_DECREMENTED_TO_ZERO, language).format(
+                    name=name, delta=-delta, unit=unit, where=where, code=code,
+                    record_total=await _record_total_suffix(client, license_id, kind, entity_id, language),
+                ),
+                entity_type=kind, entity_id=entity_id,
+            )
+        if kind == "quote":
+            updated = await client.update_quote_product(license_id, entity_id, str(line["id"]), {"qty": new_qty}, actor_id=ctx.chann_uid)
+        else:
+            updated = await client.update_deal_product(license_id, entity_id, str(line["id"]), {"qty": new_qty}, actor_id=ctx.chann_uid)
+    except DataTierError as exc:
+        if kind == "quote" and "can no longer be edited" in str(exc.detail):
+            return ChatReply(text=_t(LINE_QUOTE_LOCKED, language).format(code=code))
+        log.exception("line quantity change failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    except Exception:
+        log.exception("line quantity change failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    unit_price = Decimal(str((updated or {}).get("quoted_unit_price") or unit_price))
+    qty = int((updated or {}).get("qty") or new_qty)
+    await _remember_line(client, ctx, kind=kind, entity_id=entity_id, code=code, line={**line, **(updated or {})})
+    template = LINE_INCREMENTED if delta > 0 else LINE_DECREMENTED
+    return ChatReply(
+        text=_t(template, language).format(
+            name=name, delta=abs(delta), unit=unit, qty=qty, price=f"{unit_price:,.2f}",
+            total=f"{unit_price * qty:,.2f}", where=where, code=code,
+            record_total=await _record_total_suffix(client, license_id, kind, entity_id, language),
+        ),
+        entity_type=kind, entity_id=entity_id,
+    )
+
+
+async def _apply_new_line(
+    client: DataClient, *, ctx: ResolvedContext, license_id: str, kind: str, code: str, entity_id: str,
+    name: str, qty: int, price: str, product_id: str | None, language: str, as_new: bool = False,
+    quick_replies: list | None = None,
+) -> ChatReply:
+    """Put a line the record does not have yet on it, and say where the
+    record stands afterwards."""
+    payload = {"product_name": name, "quoted_unit_price": price, "qty": qty}
+    try:
+        if kind == "quote":
+            row = await client.add_quote_product(license_id, entity_id, payload, actor_id=ctx.chann_uid)
+        else:
+            row = await client.add_deal_product(license_id, entity_id, {**payload, "product_id": product_id}, actor_id=ctx.chann_uid)
+    except DataTierError as exc:
+        if kind == "quote" and "can no longer be edited" in str(exc.detail):
+            return ChatReply(text=_t(LINE_QUOTE_LOCKED, language).format(code=code))
+        log.exception("adding a line failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    except Exception:
+        log.exception("adding a line failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    row = row or {}
+    await _remember_line(client, ctx, kind=kind, entity_id=entity_id, code=code, line={**payload, **row})
+    unit = Decimal(str(row.get("quoted_unit_price") or price))
+    record_total = await _record_total_suffix(client, license_id, kind, entity_id, language)
+    if as_new:
+        text = _t(LINE_NEW_ADDED, language).format(
+            name=row.get("product_name") or name, qty=qty, price=f"{unit:,.2f}", total=f"{unit * qty:,.2f}",
+            where=_where_label(kind, language), code=code, record_total=record_total,
+        )
+    else:
+        text = _t(DEAL_PRODUCT_ADDED, language).format(
+            name=row.get("product_name") or name, qty=qty, deal_id=code, price=f"{unit:,.2f}",
+            total=f"{unit * qty:,.2f}",
+        ) + record_total
+    return ChatReply(
+        text=text, entity_type=kind, entity_id=entity_id,
+        quick_replies=quick_replies if quick_replies is not None else (
+            [("สร้างใบเสนอราคา", f"สร้างใบเสนอราคาจากดีล {code}")] if kind == "deal" else []
+        ),
+    )
+
+
+async def _hold_new_line(
+    client: DataClient, *, ctx: ResolvedContext, kind: str, code: str, entity_id: str,
+    name: str, qty: int, price: str | None, language: str,
+) -> ChatReply:
+    """Ask about a line the record does not have, remembering everything
+    already said so "1500" / "ใช่" / "เป็นสินค้ารายการใหม่" finishes it."""
+    await client.set_pending_intent(
+        ctx.chann_uid, ctx.oa, action="add", entity="line_item_add",
+        fields={"kind": kind, "code": code, "entity_id": str(entity_id), "name": name, "qty": int(qty), "price": price},
+        missing=["price"] if price is None else [], ttl_seconds=PENDING_INTENT_TTL_S,
+    )
+    where = _where_label(kind, language)
+    if price is None:
+        return ChatReply(
+            text=_t(LINE_NEW_ASK_PRICE, language).format(name=name, where=where, code=code),
+            quick_replies=[("ยกเลิก", "ยกเลิก")],
+        )
+    return ChatReply(
+        text=_t(LINE_NEW_OFFER, language).format(
+            name=name, where=where, code=code, qty=qty, price=f"{Decimal(str(price)):,.2f}",
+        ),
+        quick_replies=[(_t(LINE_NEW_YES_LABEL, language), "ใช่"), (_t(LINE_NEW_NO_LABEL, language), "ไม่ใช่")],
+    )
+
+
+async def _resolve_line_item_add(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str, pending: dict,
+    permission_keys: list[str], language: str,
+) -> ChatReply | None:
+    """The answer to "add it as a new line?" — a price, a yes, a no. Any
+    other message is a new request: the question is dropped and the
+    router goes on."""
+    fields = pending.get("fields") or {}
+    name = str(fields.get("name") or "")
+    kind = str(fields.get("kind") or "deal")
+    code = str(fields.get("code") or "")
+    entity_id = str(fields.get("entity_id") or "")
+    qty = int(fields.get("qty") or 1)
+    price = fields.get("price")
+    norm = _normalise(message)
+    stripped = (message or "").strip().lower()
+    if norm in _SLOT_FILL_ABORT_WORDS or norm in _LINE_NEW_NO_WORDS or stripped in _LINE_NEW_NO_WORDS:
+        await _drop_pending_quietly(client, ctx)
+        return ChatReply(text=_t(LINE_NEW_CANCELLED, language).format(name=name))
+    answered_price = None
+    pm = _LINE_PRICE_ANSWER_RE.match((message or "").strip())
+    if pm:
+        answered_price = pm.group(1).replace(",", "")
+    said_yes = norm in _LINE_NEW_YES_NORM or stripped in _LINE_NEW_YES_WORDS
+    if answered_price is None and not said_yes:
+        await _drop_pending_quietly(client, ctx)
+        return None
+    needed = "quote.update" if kind == "quote" else "deal.update"
+    if needed not in set(permission_keys):
+        await _drop_pending_quietly(client, ctx)
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    final_price = answered_price or price
+    if final_price is None:
+        # "ใช่" without a price: the line is agreed, the price still is not.
+        return ChatReply(
+            text=_t(LINE_NEW_STILL_NEEDS_PRICE, language).format(
+                name=name, qty=qty, where=_where_label(kind, language), code=code,
+            ),
+        )
+    await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
+    return await _apply_new_line(
+        client, ctx=ctx, license_id=str(license_id), kind=kind, code=code, entity_id=entity_id,
+        name=name, qty=qty, price=str(final_price), product_id=None, language=language, as_new=True,
+    )
+
+
+async def _handle_line_item_command(
+    client: DataClient, *, ctx: ResolvedContext, license_id, cmd: dict, message: str,
+    permission_keys: list[str], language: str,
+) -> ChatReply | None:
+    """One handler for every way of changing what is on a deal or quote —
+    the typed forms and the model's reading of them both land here.
+
+    Returns None when the sentence turns out not to be about a line at all
+    (a bare "พัดลม 3 ตัว" with no such line, an "เพิ่ม …" with no deal in
+    play), so the router carries on with the other readings.
+    """
+    license_id = str(license_id)
+    op = str(cmd.get("op") or "")
+    kind, code, entity_id, lines = await _resolve_line_target(client, license_id, ctx, message)
+    if kind is None or entity_id is None:
+        if code:
+            needed = "quote.update" if code.upper().startswith("Q") else "deal.update"
+            if needed not in set(permission_keys):
+                return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+            return ChatReply(text=_t(QUOTE_DEAL_NOT_FOUND, language).format(deal_id=code))
+        # No deal or quote in play: "เอาสมชายออก" is about a lead, "เพิ่มพัดลม
+        # 2 ตัว" about the catalogue — the other readings get the sentence.
+        return None
+    needed = "quote.update" if kind == "quote" else "deal.update"
+    if needed not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    where = _where_label(kind, language)
+    code = code or ""
+    name = str(cmd.get("name") or "").strip()
+    qty = int(cmd.get("qty") or 1)
+    unit = str(cmd.get("unit") or "ตัว")
+    trigger = {"delete": "ลบสินค้า", "decrement": "ลด", "add": "เพิ่ม", "set_qty": "แก้จำนวน", "bare_qty": "แก้จำนวน"}.get(op, "แก้จำนวน")
+
+    line = None
+    if name and not _is_generic_product_word(name):
+        matches = _match_lines_loosely(lines, name)
+        exact = [l for l in matches if str(l.get("product_name") or "").lower() == name.lower()]
+        if len(matches) == 1:
+            line = matches[0]
+        elif len(matches) > 1:
+            if op == "add" and not cmd.get("more") and not exact:
+                line = None
+            else:
+                return _which_line_reply(matches, kind, code, language, LINE_WHICH_ONE, trigger)
+        if op == "add" and line is not None and not exact and not cmd.get("more"):
+            # "เพิ่มพัดลม 2 ตัว" on a deal holding "พัดลม 16 นิ้ว" means a
+            # new line; only "อีก" (or the exact name) means more of that one.
+            line = None
+    elif lines:
+        line = await _line_from_context(client, ctx, lines, entity_id)
+        if line is None and op != "add":
+            return _which_line_reply(lines, kind, code, language, LINE_WHICH_LAST, trigger)
+
+    if op == "add":
+        if line is not None:
+            return await _apply_line_qty_change(
+                client, ctx=ctx, license_id=license_id, kind=kind, code=code, entity_id=entity_id,
+                line=line, delta=qty, language=language, unit=unit,
+            )
+        if not name:
+            if lines:
+                return _which_line_reply(lines, kind, code, language, LINE_WHICH_LAST, trigger)
+            return ChatReply(text=_t(DEAL_PRODUCT_NEEDS_NAME, language))
+        if kind == "deal":
+            return await _handle_deal_product_add(
+                client, ctx=ctx, license_id=license_id,
+                message=_joined_words("เพิ่มสินค้า", name, f"{qty} ตัว", f"ราคา {cmd['price']}" if cmd.get("price") else "", f"เข้าดีล {code}"),
+                trigger="เพิ่มสินค้า", permission_keys=permission_keys, language=language,
+            )
+        price = cmd.get("price")
+        product = None
+        if price is None:
+            product, problem = await _catalogue_product(client, license_id, name, qty=qty, code=code, language=language, kind=kind)
+            if problem is not None:
+                return problem
+            if product is not None and product.get("unit_price") is not None:
+                price = str(product["unit_price"])
+                name = str(product.get("product_name") or name)
+        if price is None:
+            return await _hold_new_line(client, ctx=ctx, kind=kind, code=code, entity_id=entity_id, name=name, qty=qty, price=None, language=language)
+        return await _apply_new_line(
+            client, ctx=ctx, license_id=license_id, kind=kind, code=code, entity_id=entity_id,
+            name=name, qty=qty, price=str(price), product_id=str(product["id"]) if product else None, language=language,
+            quick_replies=[],
+        )
+
+    if op == "bare_qty" and line is None:
+        return None
+    if line is None and op == "delete" and not cmd.get("explicit"):
+        # "เอาสมชายออกไปเลย" with a deal in play: not a line here, and the
+        # sentence may be about something else entirely.
+        return None
+    if line is None:
+        if not lines:
+            return ChatReply(text=_t(LINE_NONE_YET, language).format(where=where, code=code))
+        return ChatReply(text=_t(LINE_NOT_FOUND, language).format(name=name or "—", where=where, code=code))
+
+    if op == "delete":
+        return await _handle_line_edit(
+            client, ctx=ctx, license_id=license_id,
+            message=_joined_words("ลบสินค้า", str(line.get("product_name") or ""), code),
+            trigger="ลบสินค้า", permission_keys=permission_keys, language=language, remove=True,
+        )
+    if op == "decrement":
+        return await _apply_line_qty_change(
+            client, ctx=ctx, license_id=license_id, kind=kind, code=code, entity_id=entity_id,
+            line=line, delta=-qty, language=language, unit=unit,
+        )
+    # set_qty / bare_qty: the number IS the quantity.
+    return await _handle_line_edit(
+        client, ctx=ctx, license_id=license_id,
+        message=_joined_words("แก้จำนวน", str(line.get("product_name") or ""), code, f"เป็น {qty}"),
+        trigger="แก้จำนวน", permission_keys=permission_keys, language=language,
+    )
+
+
+def _joined_words(*parts) -> str:
+    return " ".join(str(p) for p in parts if str(p or "").strip())
+
+
+async def _catalogue_product(
+    client: DataClient, license_id: str, name: str, *, qty: int, code: str, language: str, kind: str = "deal",
+) -> tuple[dict | None, ChatReply | None]:
+    """The catalogue product a name means: (product, None), (None, None)
+    when there is none, or (None, reply) when several could be meant.
+
+    Exact first — a product code or a full name is an unambiguous answer
+    and must not be beaten by a partial match on something else. Then
+    partial, because "พัดลม" is what someone types and "พัดลมตั้งพื้น 16
+    นิ้ว" is what the catalogue calls it.
+    """
+    try:
+        products = await client.list_products(license_id)
+    except Exception:
+        products = []
+    needle = name.lower()
+    exact = [
+        p for p in products
+        if str(p.get("product_id") or "").lower() == needle or str(p.get("product_name") or "").lower() == needle
+    ]
+    candidates = exact or [
+        p for p in products
+        if needle in str(p.get("product_name") or "").lower() or needle in str(p.get("product_id") or "").lower()
+    ]
+    if len(candidates) > 1:
+        # Several models of the same thing at different prices. Picking one
+        # silently puts the wrong price on a document that goes to a
+        # customer — the one place a quiet guess is least acceptable.
+        shown = candidates[:LIST_LIMIT]
+        options = "\n".join(
+            f"· {c.get('product_name')}"
+            + (f" — {Decimal(str(c['unit_price'])):,.2f}" if c.get("unit_price") is not None else "")
+            for c in shown
+        )
+        # Labels drop the part every candidate shares: LINE's 20-character
+        # limit would otherwise cut off the only bit that differs.
+        send = (
+            (lambda c: f"เพิ่มสินค้าในใบเสนอราคา {c.get('product_name')} {qty} ตัว") if kind == "quote"
+            else (lambda c: f"เพิ่มสินค้า {c.get('product_name')} {qty} ตัว เข้าดีล {code}")
+        )
+        return None, ChatReply(
+            text=_t(DEAL_PRODUCT_AMBIGUOUS, language).format(name=name, options=options),
+            quick_replies=[
+                (_distinguishing_part(str(c.get("product_name") or ""), [str(o.get("product_name") or "") for o in shown]), send(c))
+                for c in shown[:4]
+            ],
+        )
+    return (candidates[0] if candidates else None), None
+
+
 async def _resolve_line_target(
     client: DataClient, license_id: str, ctx: ResolvedContext, message: str,
 ):
@@ -9042,7 +9777,7 @@ async def _handle_ai_understood_intent(
 
 async def _handle_line_item_intent(
     client: DataClient, *, intent: dict, ctx: ResolvedContext, license_id,
-    permission_keys: list[str], language: str,
+    permission_keys: list[str], language: str, message: str = "",
 ) -> ChatReply:
     """A line edit the AI understood, rather than one a trigger matched.
 
@@ -9059,17 +9794,28 @@ async def _handle_line_item_intent(
     fields = intent.get("fields") or {}
     action = str(intent.get("action") or "update")
 
-    # Rebuild a sentence the shared parser understands. Passing the
-    # extracted values through the same code path as the typed version
-    # means one set of rules about matching a line, one set about
-    # ambiguity, and no way for the two to disagree.
+    # The person's own sentence first: the shared parser reads "อีก" as an
+    # increment and "ออก" as a delete where the model's fields cannot say
+    # which (owner test, 8 Sep 2026). Then the model's reading, rebuilt as
+    # a sentence the same handler parses.
+    parsed = _parse_line_item_command(message) if message else None
+    if parsed is not None:
+        handled = await _handle_line_item_command(
+            client, ctx=ctx, license_id=license_id, cmd=parsed, message=message,
+            permission_keys=permission_keys, language=language,
+        )
+        if handled is not None:
+            return handled
+
     parts: list[str] = []
-    name = str(fields.get("target_name") or "").strip()
+    name = _strip_item_particles(str(fields.get("target_name") or "").strip())
     if name:
         parts.append(name)
     code = str(fields.get("code") or "").strip()
     if code:
         parts.append(code)
+    qty = fields.get("qty")
+    price = fields.get("quoted_unit_price")
 
     if action == "delete":
         return await _handle_line_edit(
@@ -9079,12 +9825,21 @@ async def _handle_line_item_intent(
             language=language, remove=True,
         )
 
-    price = fields.get("quoted_unit_price")
-    qty = fields.get("qty")
     if price is None and qty is None:
         # Recognised as a line edit but with nothing to change. Asking
         # beats guessing which of price or quantity was meant.
         return ChatReply(text=_t(LINE_NEEDS_TARGET, language))
+
+    if qty is not None and message and _ITEM_MORE_WORDS_RE.search(message):
+        # "เพิ่มพัดลมอีก 3 ตัว" read by the model as qty=3: more, not set.
+        handled = await _handle_line_item_command(
+            client, ctx=ctx, license_id=license_id,
+            cmd={"op": "add", "name": name or None, "qty": int(qty), "price": price, "more": True,
+                 "code": code or None, "unit": _item_unit_word(message)},
+            message=message, permission_keys=permission_keys, language=language,
+        )
+        if handled is not None:
+            return handled
 
     if price is not None:
         trigger = "แก้ราคา"
@@ -9330,8 +10085,18 @@ async def _handle_line_edit(
 
     for word in ("ใน", "ของ", "ออกจาก", "จาก", "on", "from"):
         text = text.replace(word, " ")
-    name = " ".join(text.split()).strip(" :·-,")
+    # "ลบสินค้าพัดลมออก" pointed at a product called "พัดลมออก" (owner test,
+    # 8 Sep 2026): the words around the name come off first.
+    name = _strip_item_particles(" ".join(text.split()).strip(" :·-,"))
 
+    if not lines and not remove and name and not _is_generic_product_word(name) and (new_price is not None or new_qty is not None):
+        # Nothing on the record yet and a price or quantity in hand: the
+        # line is new, and the person is asked so rather than told "no
+        # lines to change".
+        return await _hold_new_line(
+            client, ctx=ctx, kind=kind, code=code or "", entity_id=entity_id, name=name,
+            qty=new_qty or 1, price=new_price, language=language,
+        )
     if not lines:
         return ChatReply(
             text=_t(LINE_NONE_YET, language).format(
@@ -9339,7 +10104,9 @@ async def _handle_line_edit(
             )
         )
 
-    line = _match_line(lines, name)
+    line = _match_line(lines, _strip_item_particles(name) if name else name)
+    if line is None and name and name.isascii() and name.lower().endswith("s"):
+        line = _match_line(lines, name[:-1])
     if line is None and len(lines) == 1 and (
         not name or _is_generic_product_word(name)
     ):
@@ -9385,6 +10152,14 @@ async def _handle_line_edit(
                 for l in candidates[:4]
             ],
         )
+    if line is None and not remove and name and (new_price is not None or new_qty is not None):
+        # Not on the record, but a price or a quantity was given: this is a
+        # NEW line, and "ไม่พบสินค้า" is the wrong answer to it. Offered,
+        # with everything said so far remembered (owner test, 8 Sep 2026).
+        return await _hold_new_line(
+            client, ctx=ctx, kind=kind, code=code or "", entity_id=entity_id, name=name,
+            qty=new_qty or 1, price=new_price, language=language,
+        )
     if line is None:
         return ChatReply(
             text=_t(LINE_NOT_FOUND, language).format(
@@ -9405,10 +10180,12 @@ async def _handle_line_edit(
                 await client.remove_deal_product(
                     license_id, entity_id, str(line["id"]), actor_id=ctx.chann_uid,
                 )
+            await _remember_line(client, ctx, kind=kind, entity_id=entity_id, code=code or "", line=None)
             return ChatReply(
                 text=_t(LINE_REMOVED, language).format(
                     name=line.get("product_name"), where=where, code=code,
-                )
+                ) + await _record_total_suffix(client, license_id, kind, entity_id, language),
+                entity_type=kind, entity_id=entity_id,
             )
 
         fields: dict = {}
@@ -9438,12 +10215,14 @@ async def _handle_line_edit(
 
     unit = Decimal(str(updated.get("quoted_unit_price") or 0))
     qty = int(updated.get("qty") or 1)
+    await _remember_line(client, ctx, kind=kind, entity_id=entity_id, code=code or "", line={**line, **(updated or {})})
     return ChatReply(
         text=_t(LINE_UPDATED, language).format(
-            name=updated.get("product_name"), qty=qty,
+            name=updated.get("product_name") or line.get("product_name"), qty=qty,
             price=f"{unit:,.2f}", total=f"{unit * qty:,.2f}",
             where=where, code=code,
-        )
+        ) + await _record_total_suffix(client, license_id, kind, entity_id, language),
+        entity_type=kind, entity_id=entity_id,
     )
 
 
@@ -9499,8 +10278,8 @@ async def _handle_deal_product_add(
         qty = max(1, int(qty_match.group(1) or qty_match.group(2)))
         text = text.replace(qty_match.group(0), " ")
 
-    name = " ".join(text.split()).strip(" :·-,")
-    if not name:
+    name = _strip_item_particles(" ".join(text.split()).strip(" :·-,"))
+    if not name or _is_generic_product_word(name):
         return ChatReply(text=_t(DEAL_PRODUCT_NEEDS_NAME, language))
 
     try:
@@ -9508,111 +10287,52 @@ async def _handle_deal_product_add(
         deal = next(
             (d for d in deals if str(d.get("deal_id", "")).upper() == deal_code), None,
         )
-        if deal is None:
-            return ChatReply(
-                text=_t(QUOTE_DEAL_NOT_FOUND, language).format(deal_id=deal_code)
-            )
-
-        product = None
-        if price is None:
-            # Look it up rather than asking: a shop that has entered its
-            # catalogue should not have to retype prices it already knows.
-            try:
-                products = await client.list_products(license_id)
-            except Exception:
-                products = []
-            needle = name.lower()
-
-            # Exact first — a product code or a full name is an unambiguous
-            # answer and must not be beaten by a partial match on something
-            # else.
-            exact = [
-                p for p in products
-                if str(p.get("product_id") or "").lower() == needle
-                or str(p.get("product_name") or "").lower() == needle
-            ]
-            # Then partial, because "พัดลม" is what someone types and
-            # "พัดลมตั้งพื้น 16 นิ้ว" is what the catalogue calls it.
-            # Requiring the full name would mean reading it off a screen
-            # and copying it, which is the work chat is meant to remove.
-            candidates = exact or [
-                p for p in products
-                if needle in str(p.get("product_name") or "").lower()
-                or needle in str(p.get("product_id") or "").lower()
-            ]
-
-            if len(candidates) > 1:
-                # Several models of the same thing at different prices.
-                # Picking one silently puts the wrong price on a document
-                # that goes to a customer — the one place a quiet guess is
-                # least acceptable.
-                shown = candidates[:LIST_LIMIT]
-                lines = "\n".join(
-                    f"· {c.get('product_name')}"
-                    + (f" — {Decimal(str(c['unit_price'])):,.2f}"
-                       if c.get("unit_price") is not None else "")
-                    for c in shown
-                )
-                return ChatReply(
-                    text=_t(DEAL_PRODUCT_AMBIGUOUS, language).format(
-                        name=name, options=lines,
-                    ),
-                    # Labels drop the part every candidate shares. These
-                    # buttons exist to tell near-identical products apart,
-                    # and LINE's 20-character limit would otherwise cut off
-                    # the only bit that differs — leaving four buttons all
-                    # reading "พัดลมตั้งพื้น 16…".
-                    quick_replies=[
-                        (
-                            _distinguishing_part(
-                                str(c.get("product_name") or ""),
-                                [str(o.get("product_name") or "") for o in shown],
-                            ),
-                            f"เพิ่มสินค้า {c.get('product_name')} "
-                            f"{qty} ตัว เข้าดีล {deal_code}",
-                        )
-                        for c in shown[:4]
-                    ],
-                )
-
-            product = candidates[0] if candidates else None
-            if product and product.get("unit_price") is not None:
-                price = str(product["unit_price"])
-                name = str(product.get("product_name") or name)
-
-        if price is None:
-            # Not in the catalogue and no price given. Naming the gap and
-            # showing the shape of an answer beats a bare "what price?",
-            # which leaves someone guessing at the format too.
-            return ChatReply(
-                text=_t(PRODUCT_UNKNOWN_NEEDS_PRICE, language).format(name=name)
-            )
-
-        row = await client.add_deal_product(
-            license_id, str(deal["id"]),
-            {
-                "product_name": name,
-                "quoted_unit_price": price,
-                "qty": qty,
-                "product_id": str(product["id"]) if product else None,
-            },
-            actor_id=ctx.chann_uid,
-        )
     except Exception:
         log.exception("adding a product to a deal failed")
         return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    if deal is None:
+        return ChatReply(
+            text=_t(QUOTE_DEAL_NOT_FOUND, language).format(deal_id=deal_code)
+        )
+    deal_id = str(deal["id"])
+    lines = list(deal.get("products") or [])
 
-    await _remember_entity(
-        client, ctx, entity_type="deal", entity_id=str(deal["id"]), code=deal_code,
+    product = None
+    if price is None:
+        # Look it up rather than asking: a shop that has entered its
+        # catalogue should not have to retype prices it already knows.
+        product, problem = await _catalogue_product(
+            client, license_id, name, qty=qty, code=deal_code, language=language,
+        )
+        if problem is not None:
+            return problem
+        if product and product.get("unit_price") is not None:
+            price = str(product["unit_price"])
+            name = str(product.get("product_name") or name)
+
+    existing = next(
+        (l for l in lines if str(l.get("product_name") or "").lower() == name.lower()), None,
     )
-    unit = Decimal(str(row.get("quoted_unit_price") or price))
-    return ChatReply(
-        text=_t(DEAL_PRODUCT_ADDED, language).format(
-            name=row.get("product_name") or name, qty=qty, deal_id=deal_code,
-            price=f"{unit:,.2f}", total=f"{unit * qty:,.2f}",
-        ),
-        entity_type="deal", entity_id=str(deal["id"]),
-        quick_replies=[("สร้างใบเสนอราคา", f"สร้างใบเสนอราคาจากดีล {deal_code}")],
+    if existing is not None:
+        # Already on the deal: "เพิ่มพัดลม 3 ตัว" means three MORE, not a
+        # second line called the same thing (owner test, 8 Sep 2026).
+        return await _apply_line_qty_change(
+            client, ctx=ctx, license_id=license_id, kind="deal", code=deal_code, entity_id=deal_id,
+            line=existing, delta=qty, language=language, unit=_item_unit_word(message),
+        )
+
+    if price is None:
+        # Not in the catalogue and no price given. The line is held with
+        # its name and quantity, so "1500" on its own finishes it.
+        return await _hold_new_line(
+            client, ctx=ctx, kind="deal", code=deal_code, entity_id=deal_id, name=name, qty=qty,
+            price=None, language=language,
+        )
+
+    return await _apply_new_line(
+        client, ctx=ctx, license_id=license_id, kind="deal", code=deal_code, entity_id=deal_id,
+        name=name, qty=qty, price=str(price), product_id=str(product["id"]) if product else None,
+        language=language,
     )
 
 
@@ -9989,6 +10709,7 @@ def _deal_name_from_message(message: str | None) -> str | None:
 async def _handle_deal_create_direct(
     client: DataClient, *, ctx: ResolvedContext, license_id, name: str | None,
     permission_keys: list[str], language: str, rest: str | None = None, message: str | None = None,
+    abandoned: dict | None = None,
 ) -> ChatReply:
     """Create a deal, then optionally act on it in the same breath.
 
@@ -10009,6 +10730,11 @@ async def _handle_deal_create_direct(
             ctx=ctx, resume_entity="deal", resume_action="create", resume_fields={},
         )
         if problem is not None:
+            if _draft_matches_name(abandoned, name) and problem.text == _t(CUSTOMER_NOT_FOUND, language).format(name=name):
+                deal_fields, _ambiguous = _deal_fields_from_message(message or "", None)
+                return await _offer_draft_customer_deal(
+                    client, ctx=ctx, draft=abandoned, deal_fields=deal_fields, language=language,
+                )
             return problem
         if contact is None:
             return ChatReply(
@@ -10424,6 +11150,7 @@ async def _handle_deal_detail(
         )
     else:
         rows.append("No line items on this deal yet" if language == "en" else "ยังไม่มีรายการสินค้าในดีลนี้")
+        rows.append(_t(DEAL_ZERO_TOTAL, language))
 
     return ChatReply(
         text="\n".join(rows),
@@ -10437,9 +11164,62 @@ async def _handle_deal_detail(
     )
 
 
+_PRODUCT_SEARCH_RES = (
+    re.compile(
+        r"^(?:ขอ|ช่วย|รบกวน)?\s*(?:ค้นหา|ค้น|หา|search(?: for)?|find|look ?up)\s*(?:สินค้า|products?|items?|catalogue|catalog)"
+        r"\s*(?:ที่)?(?:ชื่อ|เป็น|เกี่ยวกับ|ว่า|called|named|matching|like|for)?\s*(.+)$",
+        re.I,
+    ),
+    re.compile(
+        r"^(?:มี|ขอดู|ดู|show|list|which)\s*(?:สินค้า|products?|items?)\s*(?:อะไรบ้าง|ไหนบ้าง|อะไร)?\s*(?:ที่)?"
+        r"(?:เป็น|ชื่อ|เกี่ยวกับ|ประเภท|หมวด|ว่า|matching|like|called|named|for)\s*(.+?)\s*(?:บ้าง|ไหม|มั้ย|หน่อย|ครับ|ค่ะ|คะ)*$",
+        re.I,
+    ),
+    re.compile(r"^มี\s*(.+?)\s*(?:รุ่น|แบบ|ยี่ห้อ)?(?:อะไรบ้าง|ไหนบ้าง|บ้างไหม|บ้างมั้ย|บ้าง)\s*(?:ครับ|ค่ะ|คะ)?$"),
+    re.compile(r"^(?:สินค้า|products?)\s*(.+?)\s*(?:มีไหม|มีมั้ย|มีบ้างไหม|มีรึเปล่า|มีหรือเปล่า)\s*(?:ครับ|ค่ะ|คะ)?$"),
+    re.compile(r"^what\s+(.+?)\s+do (?:we|you) (?:have|sell|stock)\??$", re.I),
+)
+_PRODUCT_SEARCH_STOP = (
+    "ดีล", "ลูกค้า", "งาน", "นัด", "ใบเสนอราคา", "ทีม", "ช่าง", "สิทธิ์", "รายงาน", "เมนู", "คำสั่ง", "ฟังก์ชัน", "สินค้า", "ของ",
+    "อะไร", "ทั้งหมด", "ประกัน", "ใคร", "เตือน", "บันทึก", "โน้ต", "อนุมัติ", "ร้าน", "บริษัท", "ตั้งค่า",
+    "deal", "customer", "job", "ticket", "quote", "team", "product", "products", "everything", "all", "warranty",
+    "reminder", "note", "report", "shop", "menu",
+)
+
+
+def _product_search_term(message: str) -> str | None:
+    """"พัดลม" out of "มีสินค้าอะไรบ้างที่เป็น พัดลม" / "ค้นหาสินค้า พัดลม" /
+    "มีพัดลมอะไรบ้าง" — a catalogue search by name, which used to reach
+    the model and come back "ในแชทยังทำรายการนี้ไม่ได้" (owner test, 8 Sep 2026)."""
+    text = " ".join((message or "").split())
+    if not text or len(text) > 60 or re.search(r"(?:SR|[CDQT])-\d{4}-\d{4}", text, re.I):
+        return None
+    for rx in _PRODUCT_SEARCH_RES:
+        m = rx.match(text)
+        if not m:
+            continue
+        term = _strip_polite_tail(m.group(1).strip(" :?\"'"))
+        term = re.sub(r"^(?:ที่ชื่อ|ที่เป็น|ชื่อว่า|ชื่อ|ว่า|ที่)\s*", "", term).strip()
+        low = term.lower()
+        if not term or len(term) > 40 or re.search(r"\d{5,}", term):
+            return None
+        if low in _PRODUCT_SEARCH_STOP or any(low.startswith(w) or low.endswith(w) for w in _PRODUCT_SEARCH_STOP):
+            return None
+        return term
+    return None
+
+
+PRODUCT_SEARCH_NONE = {
+    "th": "ไม่พบสินค้าที่ตรงกับ \"{query}\" ในรายการสินค้า",
+    "en": 'No product matching "{query}" in the catalogue.',
+}
+
+
 async def _handle_product_list(
-    client: DataClient, *, license_id, permission_keys: list[str], language: str,
+    client: DataClient, *, license_id, permission_keys: list[str], language: str, query: str | None = None,
 ) -> ChatReply:
+    """The catalogue — all of it, or the products matching a name
+    ("มีสินค้าอะไรบ้างที่เป็น พัดลม", "ค้นหาสินค้า พัดลม")."""
     if not set(permission_keys) & PRODUCT_VIEW_KEYS:
         return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
     try:
@@ -10447,6 +11227,22 @@ async def _handle_product_list(
     except Exception:
         log.exception("product list failed")
         return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    query = (query or "").strip()
+    if query and products:
+        needle = query.lower()
+        products = [
+            p for p in products
+            if needle in str(p.get("product_name") or "").lower()
+            or needle in str(p.get("product_id") or "").lower()
+            or needle in str(p.get("sku") or "").lower()
+            or needle in str(p.get("category") or "").lower()
+        ]
+        if not products:
+            return ChatReply(
+                text=_t(PRODUCT_SEARCH_NONE, language).format(query=query),
+                quick_replies=[("รายการสินค้า", "รายการสินค้า"), ("เพิ่มสินค้า", "สร้างสินค้า")],
+            )
 
     if not products:
         return ChatReply(
@@ -10459,21 +11255,23 @@ async def _handle_product_list(
     for p in shown:
         price = p.get("unit_price")
         price_text = f" · {Decimal(str(price)):,.2f}" if price not in (None, "") else ""
-        lines.append(f"{p.get('sku') or '-'} · {p.get('product_name') or p.get('name') or '-'}{price_text}")
+        lines.append(f"{p.get('sku') or p.get('product_id') or '-'} · {p.get('product_name') or p.get('name') or '-'}{price_text}")
     text = "\n".join(lines) + _truncation_note(len(shown), len(products), language, "products")
     return ChatReply(
         text=text,
         quick_replies=[("รายการดีล", "รายการดีล")],
         quick_reply_url=_dashboard_button("products", language),
         list_card=_list_card(
-            title="สินค้า", section="products", language=language,
+            title=f"สินค้า: {query}" if query else "สินค้า", section="products", language=language,
             shown=len(shown), total=len(products),
             rows=[
                 {
-                    "title": str(p.get("name") or "-"),
+                    # ProductOut names it product_name; "name" was never a
+                    # key, so every row read "-" (owner test, 8 Sep 2026).
+                    "title": str(p.get("product_name") or p.get("name") or "-"),
                     "subtitle": " · ".join(
                         x for x in (
-                            str(p.get("sku") or ""),
+                            str(p.get("sku") or p.get("product_id") or ""),
                             f"{Decimal(str(p['unit_price'])):,.2f}"
                             if p.get("unit_price") not in (None, "") else "",
                         ) if x
@@ -11506,7 +12304,7 @@ async def _member_id_of(client: DataClient, license_id, ctx: ResolvedContext) ->
     """The caller's member id for owner_member_id on records they create
     (principle 6) — nothing set it until 6 Sep 2026."""
     try:
-        member = await client.get_member(str(license_id), ctx.chann_uid)
+        member = await client.get_member(str(license_id), ctx.chann_uid, channel=member_channel(ctx.oa))
     except Exception:  # noqa: BLE001
         return None
     return str((member or {}).get("id") or "") or None
@@ -12030,7 +12828,7 @@ async def _handle_customer_intent(
             editable.pop("phone", None)
             await client.set_pending_intent(
                 ctx.chann_uid, ctx.oa,
-                action="create", entity="customer", fields=editable,
+                action="create", entity="customer", fields={**editable, **_private_fields(fields)},
                 missing=["phone"], ttl_seconds=PENDING_INTENT_TTL_S,
             )
             return _phone_reply(problem, str(fields.get("phone")), language)
@@ -12038,7 +12836,7 @@ async def _handle_customer_intent(
         if still_missing:
             await client.set_pending_intent(
                 ctx.chann_uid, ctx.oa,
-                action="create", entity="customer", fields=editable,
+                action="create", entity="customer", fields={**editable, **_private_fields(fields)},
                 missing=still_missing, ttl_seconds=PENDING_INTENT_TTL_S,
             )
             return ChatReply(text=ask_for_missing(still_missing, language), intent=intent)
@@ -12060,6 +12858,19 @@ async def _handle_customer_intent(
                 return ChatReply(text=_t(CUSTOMER_NEEDS_SOMETHING, language), intent=intent)
             raise
         await _remember_customer(client, ctx, row)
+
+        then_deal = fields.get("_then_deal")
+        if then_deal is not None:
+            # The customer was finished so a deal could follow ("ใส่เบอร์ก่อน"
+            # to _offer_draft_customer_deal): both, in one reply.
+            deal_reply = await _apply_deal_create(
+                client, contact=row, fields=dict(then_deal), ctx=ctx, license_id=license_id, language=language,
+            )
+            return ChatReply(
+                text=_t(CUSTOMER_CREATED, language).format(name=f" {_display_name(row)} ") + "\n" + deal_reply.text,
+                entity_type=deal_reply.entity_type or "customer", entity_id=deal_reply.entity_id or row["id"],
+                intent=intent, quick_replies=deal_reply.quick_replies,
+            )
 
         # A date in what they said is almost always an appointment.
         # Offered rather than made: guessing wrong puts a reminder in
@@ -12114,6 +12925,12 @@ async def _handle_customer_intent(
         )
 
     return ChatReply(text=_pending_execution_reply(intent, language), intent=intent)
+
+
+def _private_fields(fields: dict) -> dict:
+    """The "_then_deal" / "_abandoned" carriers a pending intent holds
+    alongside the person's own fields — kept when the flow is re-asked."""
+    return {k: v for k, v in (fields or {}).items() if str(k).startswith("_") and v is not None}
 
 
 async def _apply_customer_action(
@@ -12191,6 +13008,7 @@ LAST_ENTITY_REF_TTL_S = 3600
 
 async def _remember_entity(
     client: DataClient, ctx: ResolvedContext, *, entity_type: str, entity_id, code: str,
+    extra: dict | None = None,
 ) -> None:
     """Records "the record we were just looking at" — generalises
     _remember_customer to deals and quotes, for notes and reminders. See
@@ -12199,7 +13017,7 @@ async def _remember_entity(
     try:
         await client.set_last_entity_ref(
             ctx.chann_uid, ctx.oa, entity_type=entity_type, entity_id=str(entity_id),
-            code=code, ttl_seconds=LAST_ENTITY_REF_TTL_S,
+            code=code, ttl_seconds=LAST_ENTITY_REF_TTL_S, extra=extra,
         )
     except Exception:
         # Best-effort: failing to cache "what we were just looking at" must
@@ -12218,9 +13036,11 @@ DEAL_CREATED_FROM_CONTEXT = {
 async def _handle_deal_intent(
     client: DataClient, *, intent: dict, ctx: ResolvedContext,
     license_id, permission_keys: list[str], language: str, message: str | None = None,
+    abandoned: dict | None = None,
 ) -> ChatReply:
     action = intent.get("action")
-    fields = intent.get("fields") or {}
+    fields = dict(intent.get("fields") or {})
+    abandoned = fields.pop("_abandoned", None) or abandoned
     license_id = str(license_id)
     if action == "create":
         target_name = (fields.get("target_name") or "").strip()
@@ -12246,6 +13066,12 @@ async def _handle_deal_intent(
             resume_fields={**fields, **{k: str(v) for k, v in deal_fields.items()}},
         )
         if err is not None:
+            if _draft_matches_name(abandoned, target_name) and err.text == _t(CUSTOMER_NOT_FOUND, language).format(name=target_name):
+                # The name is the customer whose creation was just
+                # abandoned — offered, not "not found" (owner test, 8 Sep 2026).
+                return await _offer_draft_customer_deal(
+                    client, ctx=ctx, draft=abandoned, deal_fields=deal_fields, language=language,
+                )
             return err
         return await _apply_deal_create(
             client, contact=contact, fields=deal_fields, ctx=ctx,
@@ -12356,7 +13182,7 @@ PRODUCT_INVALID_VALUE = {
 
 async def _handle_product_intent(
     client: DataClient, *, intent: dict, ctx: ResolvedContext,
-    license_id, language: str,
+    license_id, language: str, permission_keys: list[str] | None = None,
 ) -> ChatReply:
     """Phase 7 master data, made reachable from chat. ProductRepository.
     upsert (already idempotent on product_id since 7.5) means create and
@@ -12367,6 +13193,18 @@ async def _handle_product_intent(
     fields = intent.get("fields") or {}
     license_id = str(license_id)
 
+    if action in ("read", "view", "search", "list", "find"):
+        # "มีสินค้าอะไรบ้างที่เป็น พัดลม", understood by the model as viewing
+        # products, used to be told the chat could not do it (owner test,
+        # 8 Sep 2026). The catalogue list, filtered by whatever was named.
+        query = next(
+            (str(fields.get(k)).strip() for k in ("product_name", "target_name", "query", "name", "category")
+             if fields.get(k)), None,
+        )
+        return await _handle_product_list(
+            client, license_id=license_id, permission_keys=list(permission_keys or []) or ["product.manage"],
+            language=language, query=query,
+        )
     if action not in ("create", "update"):
         return ChatReply(text=_pending_execution_reply(intent, language), intent=intent)
 
@@ -13320,8 +14158,12 @@ async def _route_chat_message(
     ctx: ResolvedContext,
     language: str = "th",
     ai_client=None,
+    abandoned: dict | None = None,
 ) -> ChatReply:
-    """The router: one message, one handler."""
+    """The router: one message, one handler.
+
+    `abandoned` is the create flow a confirmed switch just dropped, carried
+    so the half-made record can still be offered (see _offer_draft_customer_deal)."""
     if ctx.resolution is TenantResolution.MULTIPLE:
         # Several companies and no stored choice: the message is either
         # the choice itself, or it gets the chooser (buttons, rule 3:
@@ -13414,7 +14256,9 @@ async def _route_chat_message(
         permission_keys: list[str] = []
         context: dict = {}
     else:
-        context = await client.authorization_context(str(license_id), ctx.chann_uid)
+        context = await client.authorization_context(
+            str(license_id), ctx.chann_uid, channel=member_channel(ctx.oa),
+        )
         if context is None:
             return ChatReply(text=_t(REPLY_NOT_REGISTERED, language))
         permission_keys = list(context.get("permission_keys") or [])
@@ -13436,6 +14280,7 @@ async def _route_chat_message(
                 await _drop_pending_quietly(client, ctx)
                 return await _route_chat_message(
                     client, message=command, ctx=ctx, language=language, ai_client=ai_client,
+                    abandoned=_abandoned_flow(original),
                 )
             await _restore_flow(client, ctx, original)
             if norm in _FLOW_SWITCH_KEEP_WORDS or (message or "").strip() == FLOW_SWITCH_KEEP_TEXT:
@@ -13451,6 +14296,16 @@ async def _route_chat_message(
             )
             if resolved is not None:
                 return resolved
+        if early_pending is not None and early_pending.get("entity") == "line_item_add":
+            # "1500" / "ใช่" / "เป็นสินค้ารายการใหม่" after "add it as a new
+            # line?" — anything else is a new request and the question is dropped.
+            resolved = await _resolve_line_item_add(
+                client, ctx=ctx, license_id=license_id, message=message, pending=early_pending,
+                permission_keys=permission_keys, language=language,
+            )
+            if resolved is not None:
+                return resolved
+            early_pending = None
         if (
             early_pending is not None and early_pending.get("entity") in _CREATE_FLOW_ENTITIES
             and early_pending.get("missing") and _is_new_command(message, ctx.oa)
@@ -14095,6 +14950,35 @@ async def _route_chat_message(
         # the one just being discussed. Someone who has just opened a deal
         # and says "เพิ่มสินค้า พัดลม ราคา 500" means that deal; someone
         # with no deal in context is building their catalogue.
+        # "ขอข้อมูลดีลล่าสุด" / "ดีลนี้" / "สินค้าในดีล": the deal in play, never
+        # a deal whose code is "ล่าสุด" (owner test, 8 Sep 2026).
+        if _asks_latest_deal(message):
+            return await _handle_latest_deal(
+                client, ctx=ctx, license_id=license_id, message=message,
+                permission_keys=permission_keys, language=language,
+            )
+        if _asks_latest_customer(message):
+            return await _handle_latest_customer(
+                client, ctx=ctx, license_id=license_id, permission_keys=permission_keys, language=language,
+            )
+        # Lines on a deal or quote, the way people say it: "เพิ่มพัดลมอีก 3
+        # ตัว", "เพิ่ม ทีวี 40 นิ้ว ราคา 4000 ไปอีก 2 รายการ", "ลบสินค้าพัดลมออก",
+        # "ลดพัดลม 1 ตัว". None from the handler means the sentence was not
+        # about a line after all, and the readings below still get it.
+        line_cmd = _parse_line_item_command(message)
+        if line_cmd is not None:
+            handled = await _handle_line_item_command(
+                client, ctx=ctx, license_id=license_id, cmd=line_cmd, message=message,
+                permission_keys=permission_keys, language=language,
+            )
+            if handled is not None:
+                return handled
+        product_query = _product_search_term(message)
+        if product_query is not None:
+            return await _handle_product_list(
+                client, license_id=license_id, permission_keys=permission_keys,
+                language=language, query=product_query,
+            )
         remove_trigger = next(
             (t for t in LINE_REMOVE_TRIGGERS if t in message.lower()), None,
         )
@@ -14168,7 +15052,7 @@ async def _route_chat_message(
             return await _handle_deal_create_direct(
                 client, ctx=ctx, license_id=license_id, name=_strip_polite_tail(_deal_name_only(create_for) or ""),
                 permission_keys=permission_keys, language=language,
-                rest=_after_deal_conjunction(message), message=message,
+                rest=_after_deal_conjunction(message), message=message, abandoned=abandoned,
             )
         # "สร้างดีล" on its own, right after looking at a customer. Naming
         # them again immediately after being shown their record is the kind
@@ -14186,6 +15070,7 @@ async def _route_chat_message(
                     client, ctx=ctx, license_id=license_id, name=_deal_name_from_message(message),
                     permission_keys=permission_keys, language=language,
                     rest=_after_deal_conjunction(message) or _trailing_product(message), message=message,
+                    abandoned=abandoned,
                 )
             # Deliberately NO refusal here. Falling through lets the AI
             # pull a customer name out of a longer sentence, which it can
@@ -14315,6 +15200,16 @@ async def _route_chat_message(
                 client, license_id=license_id, code=deal_code,
                 permission_keys=permission_keys, language=language, ctx=ctx,
             )
+        # "ลูกค้าสนใจอยากได้พัดลม 1 ตัว" right after adding the customer: a
+        # deal with that line, offered (owner test, 8 Sep 2026).
+        interest = _sales_interest_item(message)
+        if interest is not None:
+            offered = await _handle_sales_interest(
+                client, ctx=ctx, license_id=license_id, item=interest, message=message,
+                permission_keys=permission_keys, language=language,
+            )
+            if offered is not None:
+                return offered
 
     # Company identity (Phase 10) — same closed-pattern reasoning, and one
     # step stronger: these values are printed on a legal document the
@@ -14424,8 +15319,19 @@ async def _route_chat_message(
     # word or a number and never sent through the model.
     if pending_intent is not None and pending_intent.get("entity") in (
         "customer_duplicate", "customer_merge_confirm", "customer_archive_confirm", "deal_context_confirm",
+        "deal_item_confirm", "draft_customer_deal_confirm",
     ):
         kind = pending_intent.get("entity")
+        if kind == "deal_item_confirm":
+            return await _resolve_deal_item_confirm(
+                client, ctx=ctx, license_id=license_id, message=message, pending=pending_intent,
+                permission_keys=permission_keys, language=language,
+            )
+        if kind == "draft_customer_deal_confirm":
+            return await _resolve_draft_customer_deal_confirm(
+                client, ctx=ctx, license_id=license_id, message=message, pending=pending_intent,
+                permission_keys=permission_keys, language=language,
+            )
         if kind == "customer_duplicate":
             return await _resolve_customer_duplicate(
                 client, ctx=ctx, license_id=str(license_id), message=message, pending=pending_intent, language=language,
@@ -14492,29 +15398,65 @@ async def _route_chat_message(
         log.warning("AI unavailable: %s", exc)
         return ChatReply(text=unavailable_reply(language))
 
+    switched_from = None
     if _is_continuation(pending_intent, intent):
         intent = _merge_pending(pending_intent, intent)
+    elif (
+        pending_intent is not None and pending_intent.get("missing")
+        and pending_intent.get("entity") in _CREATE_FLOW_ENTITIES and intent.get("action") != "suggest"
+    ):
+        # A different request while a create flow waited for its answer:
+        # the flow is dropped, and the reply says so — a silent switch reads
+        # as the assistant losing the thread (owner test, 8 Sep 2026).
+        switched_from = pending_intent
+    carried = _abandoned_flow(switched_from) or abandoned
+    notice = _switch_notice(switched_from, message, language, intent) if switched_from else ""
 
     # Missing fields come first: never refuse a request we did not understand.
     missing = _prune_missing(intent.get("missing") or [], intent, message)
     if missing:
         # Remember what is still outstanding so the next message — which may
         # be nothing but the answer itself — can be understood as part of it.
+        held_fields = dict(intent.get("fields") or {})
+        if carried is not None:
+            held_fields["_abandoned"] = carried
         await client.set_pending_intent(
             ctx.chann_uid, ctx.oa,
             action=intent.get("action", ""),
             entity=intent.get("entity"),
-            fields=intent.get("fields") or {},
+            fields=held_fields,
             missing=missing,
             ttl_seconds=PENDING_INTENT_TTL_S,
         )
-        return ChatReply(text=ask_for_missing(missing, language), intent=intent)
+        return ChatReply(text=notice + ask_for_missing(missing, language), intent=intent)
 
     # Nothing outstanding any more: whatever was open is either now complete
     # or has been abandoned for a new request. Either way it must not linger.
     if pending_intent is not None:
         await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
+    if (intent.get("fields") or {}).get("_abandoned") is not None:
+        # Carried through the pending intent; handed on beside the intent,
+        # never inside it — the reply's intent is the person's request.
+        fields = dict(intent.get("fields") or {})
+        carried = carried or fields.pop("_abandoned")
+        fields.pop("_abandoned", None)
+        intent = {**intent, "fields": fields}
 
+    reply = await _execute_intent(
+        client, intent=intent, ctx=ctx, license_id=license_id, message=message,
+        permission_keys=permission_keys, language=language, abandoned=carried,
+    )
+    if notice and (reply.text or "").strip():
+        reply.text = notice + reply.text
+    return reply
+
+
+async def _execute_intent(
+    client: DataClient, *, intent: dict, ctx: ResolvedContext, license_id, message: str,
+    permission_keys: list[str], language: str, abandoned: dict | None = None,
+) -> ChatReply:
+    """The model's reading, gated and dispatched — the tail of the router,
+    separate so a switch notice can be put in front of whatever it says."""
     if intent.get("action") == "suggest" and ctx.oa == "customer":
         # A customer holds no permission keys; "you have no permissions,
         # ask your admin" is the wrong sentence for them.
@@ -14592,11 +15534,12 @@ async def _route_chat_message(
     if intent.get("entity") == "deal":
         return await _handle_deal_intent(
             client, intent=intent, ctx=ctx, license_id=license_id,
-            permission_keys=permission_keys, language=language, message=message,
+            permission_keys=permission_keys, language=language, message=message, abandoned=abandoned,
         )
     if intent.get("entity") == "product":
         return await _handle_product_intent(
             client, intent=intent, ctx=ctx, license_id=license_id, language=language,
+            permission_keys=permission_keys,
         )
     if intent.get("entity") == "quote":
         return await _handle_quote_intent(
@@ -14615,7 +15558,7 @@ async def _route_chat_message(
     if intent.get("entity") == "line_item":
         return await _handle_line_item_intent(
             client, intent=intent, ctx=ctx, license_id=license_id,
-            permission_keys=permission_keys, language=language,
+            permission_keys=permission_keys, language=language, message=message,
         )
     if intent.get("entity") == "note":
         note_action = intent.get("action")
@@ -15167,6 +16110,372 @@ async def _confirm_deal_for_context(
     return ChatReply(
         text=_t(DEAL_CONTEXT_CONFIRM, language).format(name=_display_name(contact), details=_deal_details_line(fields, language)),
         quick_replies=[("ใช่ สร้างเลย", "ใช่"), ("ไม่ใช่ ระบุชื่อ", "ไม่ใช่")],
+    )
+
+
+# ---------------------------------------------------------------- what the customer wants (owner test, 8 Sep 2026)
+#
+# "ลูกค้าสนใจอยากได้พัดลม 1 ตัว", said right after adding the customer, is a
+# sale in the making. It used to go to the model and come back "ยังไม่แน่ใจ".
+# Now it is an offer: open a deal for the customer just added, with that
+# line on it — confirmed, because the wrong customer on a deal is worse
+# than one tap.
+DEAL_INTEREST_CONFIRM = {
+    "th": "ต้องการสร้างดีลสำหรับ {name} และเพิ่ม{item}ใช่ไหมครับ?",
+    "en": "Create a deal for {name} and add {item}?",
+}
+DEAL_INTEREST_CANCELLED = {
+    "th": "ยังไม่ได้สร้างดีลครับ ถ้าต้องการ พิมพ์ \"สร้างดีลให้ {name}\"",
+    "en": 'No deal created. Type "create deal for {name}" when you want one.',
+}
+DEAL_INTEREST_CHOICE_INVALID = {
+    "th": "ตอบ \"ใช่\" เพื่อสร้างดีลและเพิ่มสินค้า หรือ \"ไม่ใช่\"",
+    "en": 'Reply "yes" to create the deal with that item, or "no".',
+}
+DEAL_INTEREST_YES_LABEL = {"th": "ใช่ สร้างเลย", "en": "Yes, create it"}
+DEAL_INTEREST_NO_LABEL = {"th": "ไม่ใช่", "en": "No"}
+
+_INTEREST_RE = re.compile(
+    r"^(?:ลูกค้า(?:คนนี้|รายนี้|ท่านนี้)?|เขา|เค้า|คนนี้|customer|they|he|she)?\s*"
+    r"(?:สนใจ(?:อยากได้|อยากซื้อ|จะซื้อ|ซื้อ|จะเอา)?|อยากได้|อยากซื้อ|ต้องการ(?:ซื้อ|จะซื้อ)?|จะซื้อ|จะเอา|เอา|ขอ(?:ซื้อ)?|สั่ง(?:ซื้อ)?|"
+    r"wants?(?: to buy)?|would like|is interested in|interested in|asked for|ordered?)\s*(.+)$",
+    re.I,
+)
+_INTEREST_STOP_WORDS = (
+    "ดีล", "ดู", "ข้อมูล", "รายการ", "รายชื่อ", "เบอร์", "โทร", "รหัส", "ใบเสนอราคา", "pdf", "ไฟล์", "เอกสาร", "นัด", "เตือน",
+    "วันที่", "พรุ่งนี้", "วันนี้", "บ่าย", "เช้า", "โมง", "ลูกค้าใหม่", "ชื่อ", "ที่อยู่", "ซ่อม", "แจ้ง", "เปลี่ยน", "แก้", "ลบ", "ยกเลิก",
+    "เรื่อง", "บ้าน", "คุย", "ปรึกษา", "สอบถาม", "ถาม", "ทราบ", "รู้",
+    "ประกัน", "ช่าง", "ทีม", "สิทธิ์", "ภาษา", "เมนู", "วิธี", "quote", "deal", "phone", "address", "repair", "reminder",
+    "appointment", "list", "report", "help", "menu",
+)
+
+
+def _sales_interest_item(message: str) -> str | None:
+    """"พัดลม 1 ตัว" out of "ลูกค้าสนใจอยากได้พัดลม 1 ตัว", or None when the
+    sentence is not a customer wanting a product."""
+    text = " ".join((message or "").split())
+    if not text or len(text) > 80 or _looks_like_a_question(text):
+        return None
+    m = _INTEREST_RE.match(text)
+    if not m:
+        return None
+    rest = _strip_polite_tail(m.group(1).strip(" :,"))
+    low = rest.lower()
+    if not rest or any(w in low for w in _INTEREST_STOP_WORDS) or re.search(r"[CDQT]-\d{4}-\d{4}|\d{7,}", rest, re.I):
+        return None
+    # "ขอ …" / "เอา …" alone are how people ask for anything; only a counted
+    # thing ("ขอพัดลม 2 ตัว") is a customer wanting a product.
+    verb = text[: m.start(1)].strip().lower()
+    counted = bool(_QTY_RE.search(rest))
+    if any(verb.endswith(v) for v in ("ขอ", "ขอซื้อ", "เอา", "จะเอา")) and not counted:
+        return None
+    return rest
+
+
+def _interest_is_counted(item: str) -> bool:
+    return bool(_QTY_RE.search(item or ""))
+
+
+async def _handle_sales_interest(
+    client: DataClient, *, ctx: ResolvedContext, license_id, item: str, message: str,
+    permission_keys: list[str], language: str,
+) -> ChatReply | None:
+    """Offer a deal for the customer just added, with the item on it.
+
+    None when there is no customer in context — the model still gets the
+    sentence, as before.
+    """
+    last_ref = await client.get_last_customer_ref(ctx.chann_uid, ctx.oa)
+    if not last_ref:
+        return None
+    if not _interest_is_counted(item):
+        # "ลูกค้าสนใจเรื่องการซื้อบ้าน" is a remark, not an order. Uncounted,
+        # the thing wanted has to be a product the shop sells.
+        try:
+            products = await client.list_products(str(license_id))
+        except Exception:
+            products = []
+        needle = _strip_item_particles(item).lower()
+        if not needle or not any(
+            needle in str(p.get("product_name") or "").lower() or str(p.get("product_name") or "").lower() in needle
+            for p in products
+        ):
+            return None
+    if "deal.create" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    try:
+        pending = await client.get_pending_intent(ctx.chann_uid, ctx.oa)
+    except Exception:
+        pending = None
+    if pending is not None and pending.get("missing") and pending.get("entity") in _CREATE_FLOW_ENTITIES:
+        # A flow is waiting for its answer: confirm before replacing it,
+        # the same as any other command typed mid-flow.
+        return await _confirm_flow_switch(client, ctx=ctx, pending=pending, message=message, language=language)
+    contact = {"id": last_ref["customer_id"], "first_name": last_ref["name"]}
+    await client.set_pending_intent(
+        ctx.chann_uid, ctx.oa, action="resolve", entity="deal_item_confirm",
+        fields={"contact": contact, "item": item}, missing=[], ttl_seconds=DEAL_CONTEXT_TTL_S,
+    )
+    return ChatReply(
+        text=_t(DEAL_INTEREST_CONFIRM, language).format(name=_display_name(contact), item=item),
+        quick_replies=[(_t(DEAL_INTEREST_YES_LABEL, language), "ใช่"), (_t(DEAL_INTEREST_NO_LABEL, language), "ไม่ใช่")],
+    )
+
+
+async def _resolve_deal_item_confirm(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str, pending: dict,
+    permission_keys: list[str], language: str,
+) -> ChatReply:
+    fields = pending.get("fields") or {}
+    contact = fields.get("contact") or {}
+    item = str(fields.get("item") or "")
+    if _matches_any(message, DEAL_CONTEXT_NO) or _matches_any(message, DUPLICATE_CANCEL_PHRASES):
+        await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
+        return ChatReply(text=_t(DEAL_INTEREST_CANCELLED, language).format(name=_display_name(contact)))
+    if not _matches_any(message, DEAL_CONTEXT_YES):
+        return ChatReply(
+            text=_t(DEAL_INTEREST_CHOICE_INVALID, language),
+            quick_replies=[(_t(DEAL_INTEREST_YES_LABEL, language), "ใช่"), (_t(DEAL_INTEREST_NO_LABEL, language), "ไม่ใช่")],
+        )
+    await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
+    if "deal.create" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    license_id = str(license_id)
+    reply = await _apply_deal_create(
+        client, contact=contact, fields={}, ctx=ctx, license_id=license_id, language=language,
+    )
+    deal_code = None
+    if reply.entity_id:
+        try:
+            deals = await client.list_deals(license_id)
+            deal_code = next((str(d.get("deal_id")) for d in deals if str(d.get("id")) == str(reply.entity_id)), None)
+        except Exception:
+            deal_code = None
+    elif reply.quick_replies:
+        # "already has D-… open": the item goes on that one instead.
+        existing = DEAL_ID_RE.search(reply.quick_replies[0][1] or "")
+        deal_code = existing.group(0).upper() if existing else None
+    if not deal_code or not item:
+        return reply
+    follow_on = await _handle_deal_product_add(
+        client, ctx=ctx, license_id=license_id, message=f"เพิ่มสินค้า {item} เข้าดีล {deal_code}",
+        trigger="เพิ่มสินค้า", permission_keys=permission_keys, language=language,
+    )
+    return ChatReply(
+        text=f"{reply.text}\n{follow_on.text}",
+        entity_type=follow_on.entity_type or reply.entity_type,
+        entity_id=follow_on.entity_id or reply.entity_id,
+        quick_replies=follow_on.quick_replies,
+    )
+
+
+# ---------------------------------------------------------------- "the latest deal"
+#
+# "ขอข้อมูลดีลล่าสุด" was read as a deal whose code is "ล่าสุด". The deal
+# just created or edited is what "ล่าสุด" / "นี้" / "เมื่อกี้" mean; with no
+# deal in the conversation, the list of recent deals is the honest answer.
+_LATEST_DEAL_RE = re.compile(
+    r"^(?:ขอ)?(?:ดู|ข้อมูล|รายละเอียด|เปิด|เช็ค|โชว์|แสดง|show|view|open|see)?(?:ข้อมูล|รายละเอียด)?(?:ดีล|deal)"
+    r"(?:ล่าสุด|ที่เพิ่งสร้าง|ที่เพิ่งเปิด|ที่เพิ่งทำ|เมื่อกี้|เมื่อสักครู่|นี้|อันนี้|ตัวนี้|ปัจจุบัน|ที่กำลังทำ|ที่เพิ่งคุย)"
+    r"(?:มีอะไรบ้าง|มีสินค้าอะไรบ้าง|หน่อย|เป็นไงบ้าง|เป็นยังไงบ้าง)?$"
+)
+_LATEST_DEAL_EN_RE = re.compile(
+    r"^(?:show|view|open|see|whats|what'?s|details?of|info(?:on|of)?)?(?:me)?(?:the)?(?:latest|last|this|current|newest|mostrecent|recent)deal(?:details?|info)?$"
+    r"|^(?:the)?deal(?:i|we)?(?:just)?(?:created|made|opened)$"
+)
+_DEAL_ITEMS_RE = re.compile(
+    r"^(?:ขอ)?(?:ดู)?(?:รายการ)?(?:สินค้า|รายการ|ของ)(?:ที่อยู่|ที่มี)?(?:ใน|ของ|บน)ดีล(?:นี้|ล่าสุด|เมื่อกี้)?(?:มีอะไรบ้าง|ทั้งหมด)?$"
+    r"|^ดีล(?:นี้|ล่าสุด|เมื่อกี้)?มี(?:สินค้า|รายการ|ของ)?อะไรบ้าง$"
+    r"|^(?:the)?(?:items|lines|products)(?:on|in)(?:the|this)?deal$|^dealitems$|^whatsonthedeal$|^whatisonthedeal$"
+)
+_LATEST_CUSTOMER_RE = re.compile(
+    r"^(?:ขอ)?(?:ดู|ข้อมูล|รายละเอียด|เปิด|เช็ค|show|view)?(?:ข้อมูล)?(?:ลูกค้า|customer)"
+    r"(?:ล่าสุด|ที่เพิ่งเพิ่ม|ที่เพิ่งสร้าง|เมื่อกี้|คนล่าสุด|รายล่าสุด|ที่เพิ่งคุย)$"
+    r"|^(?:show|view)?(?:me)?(?:the)?(?:latest|last|newest|mostrecent)customer$"
+)
+DEAL_NO_CONTEXT_LIST = {
+    "th": "ยังไม่มีดีลที่เพิ่งคุยถึงในแชทนี้ นี่คือรายการดีลล่าสุดครับ",
+    "en": "No deal in this conversation yet — here are the latest deals.",
+}
+CUSTOMER_NO_CONTEXT_LIST = {
+    "th": "ยังไม่มีลูกค้าที่เพิ่งคุยถึงในแชทนี้ นี่คือรายชื่อลูกค้าครับ",
+    "en": "No customer in this conversation yet — here is the customer list.",
+}
+
+
+def _asks_latest_deal(message: str) -> bool:
+    norm = _normalise(DEAL_ID_RE.sub(" ", message or ""))
+    return bool(norm) and bool(_LATEST_DEAL_RE.match(norm) or _LATEST_DEAL_EN_RE.match(norm) or _DEAL_ITEMS_RE.match(norm))
+
+
+def _asks_latest_customer(message: str) -> bool:
+    norm = _normalise(message)
+    return bool(norm) and bool(_LATEST_CUSTOMER_RE.match(norm))
+
+
+async def _handle_latest_deal(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str, permission_keys: list[str], language: str,
+) -> ChatReply:
+    code_match = DEAL_ID_RE.search(message or "")
+    if code_match:
+        return await _handle_deal_detail(
+            client, license_id=license_id, code=code_match.group(0).upper(), permission_keys=permission_keys,
+            language=language, ctx=ctx,
+        )
+    try:
+        last_ref = await client.get_last_entity_ref(ctx.chann_uid, ctx.oa)
+    except Exception:
+        last_ref = None
+    if last_ref and last_ref.get("entity_type") == "deal" and last_ref.get("code"):
+        return await _handle_deal_detail(
+            client, license_id=license_id, code=str(last_ref["code"]), permission_keys=permission_keys,
+            language=language, ctx=ctx,
+        )
+    listed = await _handle_deal_list(
+        client, ctx=ctx, license_id=license_id, permission_keys=permission_keys, language=language,
+    )
+    if set(permission_keys) & DEAL_VIEW_KEYS:
+        listed.text = _t(DEAL_NO_CONTEXT_LIST, language) + "\n" + (listed.text or "")
+    return listed
+
+
+async def _handle_latest_customer(
+    client: DataClient, *, ctx: ResolvedContext, license_id, permission_keys: list[str], language: str,
+) -> ChatReply:
+    last_ref = await client.get_last_customer_ref(ctx.chann_uid, ctx.oa)
+    if last_ref and last_ref.get("name"):
+        return await _handle_customer_detail(
+            client, license_id=license_id, code=str(last_ref["name"]), permission_keys=permission_keys,
+            language=language, ctx=ctx,
+        )
+    listed = await _handle_customer_list(client, license_id=license_id, permission_keys=permission_keys, language=language)
+    if "customer.read" in set(permission_keys):
+        listed.text = _t(CUSTOMER_NO_CONTEXT_LIST, language) + "\n" + (listed.text or "")
+    return listed
+
+
+# ---------------------------------------------------------------- an abandoned flow, said out loud
+#
+# "ลูกค้าใหม่ สามเสน เขตคิงคิ" → "กรุณาระบุเบอร์โทร" → "สร้างดีล" → "กรุณาระบุ
+# ชื่อลูกค้า": the customer flow was dropped without a word, and when the
+# person then typed the same name for the deal they were told no such
+# customer exists. Two fixes: a switch that happens without a confirmation
+# says so, and the half-made customer is remembered and offered.
+FLOW_SWITCHED = {"th": "เปลี่ยนจาก{flow}เป็น{new}แล้วครับ ", "en": "Switched from {flow} to {new}. "}
+DRAFT_CUSTOMER_DEAL_OFFER = {
+    "th": "ยังสร้างลูกค้า {name} ไม่เสร็จ (ขาด{missing}) ต้องการสร้างลูกค้าโดยไม่มี{missing}และเปิดดีลให้เลยไหมครับ?",
+    "en": "Customer {name} is still unfinished (no {missing}). Create them without it and open the deal now?",
+}
+DRAFT_CUSTOMER_FINISH_FIRST = {
+    "th": "งั้นพิมพ์{missing}ของ {name} มาก่อนครับ จะสร้างลูกค้าให้เสร็จแล้วเปิดดีลให้ต่อเลย",
+    "en": "Then send {name}'s {missing} first — the customer is finished, and the deal opened right after.",
+}
+DRAFT_CUSTOMER_CHOICE_INVALID = {
+    "th": "ตอบ \"ใช่\" เพื่อสร้างลูกค้าและเปิดดีลเลย หรือ \"ไม่ใช่\" เพื่อใส่{missing}ก่อน",
+    "en": 'Reply "yes" to create the customer and the deal now, or "no" to add the {missing} first.',
+}
+DRAFT_CUSTOMER_YES_LABEL = {"th": "ใช่ สร้างเลย", "en": "Yes, create both"}
+DRAFT_CUSTOMER_NO_LABEL = {"th": "ใส่เบอร์ก่อน", "en": "Add the phone first"}
+
+
+def _abandoned_flow(pending: dict | None) -> dict | None:
+    """What a dropped create flow held, small enough to carry inside the
+    next pending intent."""
+    if not pending or pending.get("entity") not in _CREATE_FLOW_ENTITIES:
+        return None
+    fields = {k: v for k, v in (pending.get("fields") or {}).items() if not str(k).startswith("_")}
+    return {"entity": pending.get("entity"), "action": pending.get("action") or "create", "fields": fields,
+            "missing": list(pending.get("missing") or [])}
+
+
+def _switch_notice(pending: dict, message: str, language: str, intent: dict | None = None) -> str:
+    flow = _t(FLOW_LABELS.get(str(pending.get("entity") or ""), {"th": "รายการเดิม", "en": "the previous request"}), language)
+    new = ""
+    if intent and str(intent.get("action") or "") == "create" and str(intent.get("entity") or "") in FLOW_LABELS:
+        new = _t(FLOW_LABELS[str(intent["entity"])], language)
+    return _t(FLOW_SWITCHED, language).format(flow=flow, new=new or _new_command_label(message, language))
+
+
+def _draft_matches_name(draft: dict | None, name: str) -> bool:
+    if not draft or draft.get("entity") != "customer" or not name:
+        return False
+    full = _flow_name(draft.get("fields") or {}).lower()
+    needle = name.strip().lower()
+    return bool(full) and (needle in full or full in needle)
+
+
+def _missing_label(missing: list[str], language: str) -> str:
+    return ", ".join(MISSING_FIELD_LABELS.get(m, {}).get(language) or str(m) for m in missing) or (
+        "ข้อมูล" if language != "en" else "details"
+    )
+
+
+async def _offer_draft_customer_deal(
+    client: DataClient, *, ctx: ResolvedContext, draft: dict, deal_fields: dict, language: str,
+) -> ChatReply:
+    missing = [m for m in (draft.get("missing") or []) if m != "last_name"] or list(draft.get("missing") or [])
+    held = {k: (str(v) if not isinstance(v, (str, int, float)) else v) for k, v in (deal_fields or {}).items()}
+    await client.set_pending_intent(
+        ctx.chann_uid, ctx.oa, action="resolve", entity="draft_customer_deal_confirm",
+        fields={"draft": draft.get("fields") or {}, "missing": missing, "deal_fields": held},
+        missing=[], ttl_seconds=DEAL_CONTEXT_TTL_S,
+    )
+    label = _missing_label(missing, language)
+    return ChatReply(
+        text=_t(DRAFT_CUSTOMER_DEAL_OFFER, language).format(name=_flow_name(draft.get("fields") or {}), missing=label),
+        quick_replies=[(_t(DRAFT_CUSTOMER_YES_LABEL, language), "ใช่"), (_t(DRAFT_CUSTOMER_NO_LABEL, language)[:20], "ไม่ใช่")],
+    )
+
+
+async def _resolve_draft_customer_deal_confirm(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str, pending: dict,
+    permission_keys: list[str], language: str,
+) -> ChatReply:
+    fields = pending.get("fields") or {}
+    draft = dict(fields.get("draft") or {})
+    missing = list(fields.get("missing") or [])
+    deal_fields = dict(fields.get("deal_fields") or {})
+    name = _flow_name(draft)
+    label = _missing_label(missing, language)
+    if _matches_any(message, DEAL_CONTEXT_NO) or _matches_any(message, DUPLICATE_CANCEL_PHRASES):
+        # Back to the customer, with the deal to follow once it is complete.
+        await client.set_pending_intent(
+            ctx.chann_uid, ctx.oa, action="create", entity="customer",
+            fields={**draft, "_then_deal": deal_fields}, missing=missing, ttl_seconds=PENDING_INTENT_TTL_S,
+        )
+        return ChatReply(text=_t(DRAFT_CUSTOMER_FINISH_FIRST, language).format(name=name, missing=label))
+    if not _matches_any(message, DEAL_CONTEXT_YES):
+        return ChatReply(
+            text=_t(DRAFT_CUSTOMER_CHOICE_INVALID, language).format(missing=label),
+            quick_replies=[(_t(DRAFT_CUSTOMER_YES_LABEL, language), "ใช่"), (_t(DRAFT_CUSTOMER_NO_LABEL, language)[:20], "ไม่ใช่")],
+        )
+    await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
+    keys = set(permission_keys)
+    if "customer.create" not in keys or "deal.create" not in keys:
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    license_id = str(license_id)
+    editable = {k: v for k, v in draft.items() if k in ("first_name", "last_name", "phone", "email", "address", "notes") and v not in (None, "")}
+    try:
+        owner = await _member_id_of(client, license_id, ctx)
+        if owner:
+            editable = {**editable, "owner_member_id": owner}
+        row = await client.create_customer(license_id, editable, actor_id=ctx.chann_uid)
+    except Exception as exc:  # noqa: BLE001
+        structured = getattr(exc, "structured", None) or {}
+        if structured.get("error") == "duplicate":
+            return await _handle_customer_duplicate(
+                client, ctx=ctx, license_id=license_id, language=language, duplicate=structured, new_fields=editable,
+            )
+        log.exception("creating the drafted customer failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    await _remember_customer(client, ctx, row)
+    created = _t(CUSTOMER_CREATED, language).format(name=f" {_display_name(row)} ")
+    deal_reply = await _apply_deal_create(
+        client, contact=row, fields=deal_fields, ctx=ctx, license_id=license_id, language=language,
+    )
+    return ChatReply(
+        text=f"{created}\n{deal_reply.text}", entity_type=deal_reply.entity_type or "customer",
+        entity_id=deal_reply.entity_id or row.get("id"), quick_replies=deal_reply.quick_replies,
     )
 
 

@@ -113,12 +113,14 @@ def k_identity(line_user_id: str) -> str:
     return f"chann_id:{line_user_id}"
 
 
-def k_member(license_id: str, chann_uid: str) -> str:
-    return f"license_member:{license_id}:{chann_uid}"
+def k_member(license_id: str, chann_uid: str, channel: str = "sales") -> str:
+    """Per channel (owner, 8 Sep 2026): the same person's Sales-OA and
+    Technician-OA rows are different rows with different roles."""
+    return f"license_member:{license_id}:{chann_uid}:{channel}"
 
 
-def k_permissions(license_id: str, chann_uid: str) -> str:
-    return f"permissions:{license_id}:{chann_uid}"
+def k_permissions(license_id: str, chann_uid: str, channel: str = "sales") -> str:
+    return f"permissions:{license_id}:{chann_uid}:{channel}"
 
 
 def k_license_setting(license_id: str, setting_key: str) -> str:

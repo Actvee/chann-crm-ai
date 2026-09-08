@@ -28,6 +28,9 @@ class MembershipOut(BaseModel):
     chann_uid: str
     role: str
     status: str
+    # Which OA this membership is for: "sales" | "technician", or
+    # "customer" for a shop link (owner, 8 Sep 2026).
+    channel: str = "sales"
     # Phase 18 — a suspended tenant is read-only; the Application tier
     # refuses new work and says so, instead of treating the person as
     # unregistered.
@@ -53,6 +56,31 @@ class MemberOut(BaseModel):
     chann_uid: str
     role: str
     status: str
+    # Per-OA persona (owner, 8 Sep 2026): "sales" | "technician". The
+    # same person may hold one row per channel with different roles.
+    channel: str = "sales"
+    joined_at: datetime | None = None
+    # The license owner's row — the one that can never be removed.
+    is_owner: bool = False
+    display_name: str | None = None
+    # Only on the invite-redeem reply, which is the one place a caller
+    # holds a member before knowing the tenant.
+    company_name: str | None = None
+
+
+class MemberStatusIn(BaseModel):
+    status: Literal["active", "removed"]
+    channel: Literal["sales", "technician"] = "sales"
+
+
+class MemberResetIn(BaseModel):
+    channel: Literal["sales", "technician"] = "sales"
+
+
+class MemberStatusOut(MemberOut):
+    # Tickets handed back to the queue when a technician was removed —
+    # (id, ticket_number) so the caller can tell the dispatchers.
+    unassigned_tickets: list[dict] = []
 
 
 class PlatformAdminAuthIn(BaseModel):
@@ -101,6 +129,7 @@ class AuthorizationContextOut(BaseModel):
     member_id: uuid.UUID
     chann_uid: str
     role: str
+    channel: str = "sales"
     is_owner: bool
     permission_keys: list[str]
 
@@ -120,6 +149,7 @@ class RoleOut(BaseModel):
 
 class MemberRoleIn(BaseModel):
     role_name: str
+    channel: Literal["sales", "technician"] = "sales"
 
 
 class LicenseSettingWriteIn(BaseModel):
@@ -381,6 +411,8 @@ class InviteOut(BaseModel):
     license_id: uuid.UUID
     invite_code: str
     role: str
+    # The OA this code may be redeemed on, derived from the role.
+    channel: str = "sales"
     max_uses: int
     used_count: int
     expires_at: datetime | None
@@ -392,6 +424,8 @@ class InviteRedeemIn(BaseModel):
     invite_code: str
     chann_uid: str
     display_name: str | None = None
+    # The OA the code was typed on; a code for the other OA is refused.
+    oa: Literal["sales", "technician"] | None = None
 
 
 class CustomerLinkIn(BaseModel):
@@ -593,12 +627,16 @@ class LastEntityRefIn(BaseModel):
     entity_id: str
     code: str
     ttl_seconds: int = 600
+    # Free-form detail about the record just touched — the line item an
+    # "เพิ่มอีก 1 ตัว" with no name refers to (owner test, 8 Sep 2026).
+    extra: dict | None = None
 
 
 class LastEntityRefOut(BaseModel):
     entity_type: str
     entity_id: str
     code: str
+    extra: dict | None = None
 
 
 class TicketIn(BaseModel):
@@ -1173,6 +1211,7 @@ class TenantSummaryOut(BaseModel):
 class TenantMemberOut(BaseModel):
     chann_uid: str
     role: str
+    channel: str = "sales"
     status: str
     display_name: str | None
     joined_at: datetime | None

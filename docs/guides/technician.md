@@ -6,13 +6,13 @@
 
 ## 1. เข้าร่วมร้าน (ครั้งแรก)
 
-ขอรหัสเชิญจากร้าน แล้วพิมพ์รหัสนั้นในแชทนี้ ถ้าอยู่หลายร้าน พิมพ์ "เปลี่ยนร้าน" เพื่อสลับ
+ขอรหัสเชิญช่างจากร้าน แล้วพิมพ์รหัสนั้นในแชทนี้ — LINE ช่างลงทะเบียนแยกจาก LINE ทีมขาย แม้เป็นเจ้าของหรือ CS ของร้านก็ต้องมีรหัสเชิญช่าง (ข้อมูลส่วนตัวใช้ร่วมกัน) ถ้าอยู่หลายร้าน พิมพ์ "เปลี่ยนร้าน" เพื่อสลับ
 
 พิมพ์: `ABCD1234`
 
 [IMAGE: tech-join — ช่างถือโทรศัพท์ พิมพ์รหัสเชิญ 8 ตัวในแชท บอทตอบ 'เข้าร่วม ร้านแอร์ดี แล้ว' ธีมน้ำเงิน]
 
-_EN: Join the shop (once) — Get an invite code from the shop and type it here. Several shops → "switch shop"._
+_EN: Join the shop (once) — Get a technician invite code from the shop and type it here — the technician LINE is its own registration; even the shop's owner or CS needs a technician code (personal details are shared). Several shops → "switch shop"._
 
 ## 2. รับงาน
 

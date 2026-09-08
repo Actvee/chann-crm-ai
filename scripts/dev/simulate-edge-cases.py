@@ -47,6 +47,23 @@ async def main():
     await say(c,"sales","แก้เบอร์สมชายเป็น 0899999999", ai_client=ai({"action":"update","entity":"customer","fields":{"target_name":"สมชาย","phone":"0899999999"},"missing":[]}))
     await say(c,"sales","ลบลูกค้าสมชาย", expect_ok=False)     # not supported — see how it fails
     await say(c,"sales","ยอดขายเดือนนี้", ai_client=ai({"action":"read","entity":"report","fields":{"period":"month"},"missing":[]}))
+    # The owner's live test (8 Sep 2026): lines on a deal, as spoken. A fresh
+    # customer and deal, then every line of the transcript.
+    await say(c,"sales","ลูกค้าใหม่ จรสิงค์ กิ่งปัญญา 0576788866", ai_client=ai({"action":"create","entity":"customer","fields":{"first_name":"จรสิงค์","last_name":"กิ่งปัญญา","phone":"0576788866"},"missing":[]}))
+    await say(c,"sales","ลูกค้าสนใจอยากได้พัดลม 1 ตัว")            # offers a deal with the line
+    await say(c,"sales","ใช่")                                    # deal + line
+    await say(c,"sales","ปรับราคาเป็น 2000")
+    await say(c,"sales","เพิ่ม ทีวี 40 นิ้ว ราคา 4000 ไปอีก 2 รายการ")  # a NEW line, never "ไม่พบ"
+    await say(c,"sales","เพิ่มพัดลมอีก 3 ตัว")                     # 1 + 3
+    await say(c,"sales","เพิ่มอีก 1 ตัว")                          # 4 + 1, the line last touched
+    await say(c,"sales","ขอข้อมูลดีลล่าสุด")                       # the deal in play
+    await say(c,"sales","ลบสินค้าพัดลมออก")                        # "พัดลม", not "พัดลมออก"
+    await say(c,"sales","เพิ่มพัดลม 18 นิ้ว 2 ตัว")                 # unknown: asks the price, remembers the item
+    await say(c,"sales","เป็นสินค้ารายการใหม่")
+    await say(c,"sales","1500")
+    await say(c,"sales","ใส่สินค้า พัดลม 18 นิ้ว อีก 3 ตัว")         # 2 + 3
+    await say(c,"sales","มีสินค้าอะไรบ้างที่เป็น พัดลม")             # catalogue search
+    await say(c,"sales","สินค้าในดีล")
 
     print("\n=== EDGE CASES: technician ===")
     t = T.FakeDataClient(permission_keys=["ticket.read","ticket.update","ticket.close","service_report.create","service_report.read","warranty.read"], role="technician")

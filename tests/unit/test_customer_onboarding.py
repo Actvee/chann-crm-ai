@@ -50,7 +50,7 @@ class NoMemberRow(FakeDataClient):
     """The real Data Tier for a customer: no license_members row, so the
     authorization lookup 404s and the client returns None."""
 
-    async def authorization_context(self, license_id, chann_uid):
+    async def authorization_context(self, license_id, chann_uid, channel="sales"):
         return None
 
 

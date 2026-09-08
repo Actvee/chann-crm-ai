@@ -44,7 +44,7 @@ def _ai_configured(monkeypatch):
 
 
 class NoMemberRow(FakeDataClient):
-    async def authorization_context(self, license_id, chann_uid):
+    async def authorization_context(self, license_id, chann_uid, channel="sales"):
         return None
 
 

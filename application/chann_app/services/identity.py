@@ -65,6 +65,14 @@ OA_TO_ROLE = {
 }
 
 
+def member_channel(oa: str | None) -> str:
+    """Which license_members channel an OA acts through (owner, 8 Sep
+    2026): the Technician OA reads the "technician" row, the Sales/CS OA
+    the "sales" row. The Customer OA has no members row; callers on it
+    that ask anyway get the sales answer, which is "not a member"."""
+    return "technician" if oa == "technician" else "sales"
+
+
 async def resolve_context(client: DataClient, oa: str, line_user_id: str,
                           display_name: str | None = None) -> ResolvedContext:
     primary_role = OA_TO_ROLE[oa]

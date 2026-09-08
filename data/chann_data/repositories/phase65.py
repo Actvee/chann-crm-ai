@@ -114,6 +114,7 @@ class RegistrationRepository:
                 license_id=license_row.id,
                 chann_uid=created_by_chann_uid,
                 role=OWNER_ROLE_NAME,
+                channel="sales",
                 status="active",
             )
         )
@@ -293,9 +294,21 @@ class RegistrationRepository:
         )
 
     def redeem_invite(
-        self, *, invite_code: str, chann_uid: str, display_name: str | None = None
+        self, *, invite_code: str, chann_uid: str, display_name: str | None = None,
+        oa: str | None = None,
     ) -> LicenseMember:
-        """Join a tenant. Idempotent for someone who is already a member."""
+        """Join a tenant on the OA the invite is for. Idempotent for someone
+        who is already a member on that channel.
+
+        The invite's role decides the channel (permissions.channel_for_role):
+        a technician invite makes a technician row, any other role a sales
+        row — so the owner, who already holds the sales row, gets a SECOND
+        row when they redeem a technician invite, and only then works on
+        the Technician OA (owner, 8 Sep 2026). `oa` is the OA the code
+        was typed on; a code for the other OA is refused with a message
+        that says which OA to use.
+        """
+        from ..permissions import channel_for_role
         invite = self._s.execute(
             select(LicenseInvite)
             .where(LicenseInvite.invite_code == (invite_code or "").strip().upper())
@@ -309,16 +322,29 @@ class RegistrationRepository:
         if invite.expires_at is not None and invite.expires_at <= datetime.now(timezone.utc):
             raise RegistrationConflict("invite code has expired")
 
+        channel = channel_for_role(invite.role)
+        if oa is not None and oa != channel:
+            raise RegistrationConflict(
+                f"invite is for the {channel} OA, not the {oa} OA"
+            )
+
         existing = self._s.execute(
             select(LicenseMember).where(
                 LicenseMember.license_id == invite.license_id,
                 LicenseMember.chann_uid == chann_uid,
+                LicenseMember.channel == channel,
             )
         ).scalars().first()
         if existing is not None:
-            # Already a member: return them unchanged and do NOT burn a use.
-            # Otherwise re-tapping the same link would silently exhaust a
-            # multi-use invite meant for other people.
+            # Already a member on this channel: return them unchanged and
+            # do NOT burn a use. Otherwise re-tapping the same link would
+            # silently exhaust a multi-use invite meant for other people.
+            # A removed member re-joins with the invite's role.
+            if existing.status != "active":
+                existing.status = "active"
+                existing.role = invite.role
+                invite.used_count += 1
+                self._s.flush()
             return existing
 
         if invite.used_count >= invite.max_uses:
@@ -329,6 +355,7 @@ class RegistrationRepository:
             license_id=invite.license_id,
             chann_uid=chann_uid,
             role=invite.role,
+            channel=channel,
             status="active",
         )
         self._s.add(member)

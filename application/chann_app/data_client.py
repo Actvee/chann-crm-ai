@@ -98,19 +98,27 @@ class DataClient:
         )
         return self._unwrap(resp)
 
-    async def get_member(self, license_id: str, chann_uid: str) -> dict | None:
+    async def get_member(
+        self, license_id: str, chann_uid: str, channel: str | None = None,
+    ) -> dict | None:
+        """`channel` is which OA's row ("sales" | "technician"); a caller
+        acting for a known OA passes identity.member_channel(oa)."""
         resp = await self._client.get(
             f"{self._base}/internal/v1/licenses/{license_id}/members/{chann_uid}",
             headers=self._headers,
+            params={"channel": channel} if channel else None,
         )
         if resp.status_code == 404:
             return None
         return self._unwrap(resp)
 
-    async def authorization_context(self, license_id: str, chann_uid: str) -> dict | None:
+    async def authorization_context(
+        self, license_id: str, chann_uid: str, channel: str = "sales",
+    ) -> dict | None:
         resp = await self._client.get(
             f"{self._base}/internal/v1/licenses/{license_id}/authorization/{chann_uid}",
             headers=self._headers,
+            params={"channel": channel},
         )
         if resp.status_code == 404:
             return None
@@ -171,12 +179,39 @@ class DataClient:
             self._unwrap(resp)
 
     async def set_member_role(
-        self, license_id: str, chann_uid: str, role_name: str, actor_id: str | None = None
+        self, license_id: str, chann_uid: str, role_name: str, actor_id: str | None = None,
+        channel: str = "sales",
     ) -> dict:
         resp = await self._client.patch(
             f"{self._base}/internal/v1/licenses/{license_id}/members/{chann_uid}/role",
             headers=self._headers_for(actor_id),
-            json={"role_name": role_name},
+            json={"role_name": role_name, "channel": channel},
+        )
+        return self._unwrap(resp)
+
+    async def set_member_status(
+        self, license_id: str, chann_uid: str, *, status: str, channel: str = "sales",
+        actor_id: str | None = None,
+    ) -> dict:
+        """Remove ("removed") or reactivate ("active") one channel's row.
+        The reply carries `unassigned_tickets` when a removed technician
+        had open jobs."""
+        resp = await self._client.patch(
+            f"{self._base}/internal/v1/licenses/{license_id}/members/{chann_uid}/status",
+            headers=self._headers_for(actor_id),
+            json={"status": status, "channel": channel},
+        )
+        return self._unwrap(resp)
+
+    async def reset_member(
+        self, license_id: str, chann_uid: str, *, channel: str = "sales",
+        actor_id: str | None = None,
+    ) -> dict:
+        """Clear the member's in-progress conversation on one OA."""
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/members/{chann_uid}/reset",
+            headers=self._headers_for(actor_id),
+            json={"channel": channel},
         )
         return self._unwrap(resp)
 
@@ -904,8 +939,11 @@ class DataClient:
         return self._unwrap(resp)
 
     async def redeem_invite(
-        self, *, invite_code: str, chann_uid: str, display_name: str | None = None
+        self, *, invite_code: str, chann_uid: str, display_name: str | None = None,
+        oa: str | None = None,
     ) -> dict:
+        """`oa` is the OA the code was typed on ("sales" | "technician");
+        the Data tier refuses a code meant for the other one."""
         resp = await self._client.post(
             f"{self._base}/internal/v1/invites/redeem",
             headers=self._headers,
@@ -913,6 +951,7 @@ class DataClient:
                 "invite_code": invite_code,
                 "chann_uid": chann_uid,
                 "display_name": display_name,
+                "oa": oa,
             },
         )
         return self._unwrap(resp)
@@ -1271,14 +1310,14 @@ class DataClient:
 
     async def set_last_entity_ref(
         self, chann_uid: str, oa: str, *, entity_type: str, entity_id: str,
-        code: str, ttl_seconds: int = 600,
+        code: str, ttl_seconds: int = 600, extra: dict | None = None,
     ) -> None:
         resp = await self._client.put(
             f"{self._base}/internal/v1/chat/last-entity/{oa}/{chann_uid}",
             headers=self._headers,
             json={
                 "entity_type": entity_type, "entity_id": entity_id,
-                "code": code, "ttl_seconds": ttl_seconds,
+                "code": code, "ttl_seconds": ttl_seconds, "extra": extra,
             },
         )
         self._unwrap(resp)

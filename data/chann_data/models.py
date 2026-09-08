@@ -161,7 +161,9 @@ class LicenseMember(TimestampMixin, Base):
     """
 
     __tablename__ = "license_members"
-    __table_args__ = (UniqueConstraint("license_id", "chann_uid", name="uq_license_member"),)
+    __table_args__ = (
+        UniqueConstraint("license_id", "chann_uid", "channel", name="uq_license_member_channel"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
     license_id: Mapped[uuid.UUID] = mapped_column(
@@ -171,6 +173,13 @@ class LicenseMember(TimestampMixin, Base):
         String(32), ForeignKey("chann_identities.chann_uid", ondelete="CASCADE"), nullable=False, index=True
     )
     role: Mapped[str] = mapped_column(String(64), nullable=False, default="member")
+    # Which official account this membership is for (owner, 8 Sep 2026):
+    # "sales" for the Sales/CS OA, "technician" for the Technician OA.
+    # One LINE account is the same chann_uid on every OA, and the OAs are
+    # separate registrations that share only the person — so a person
+    # holds at most one row per (license, channel), and a row on one
+    # channel says nothing about the other.
+    channel: Mapped[str] = mapped_column(String(16), nullable=False, default="sales", server_default="sales")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
     joined_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

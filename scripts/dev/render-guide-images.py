@@ -362,6 +362,19 @@ def sales_setup(c: Canvas):
     c.table(["คำสั่ง", "ผล"], [["ข้อมูลร้าน", "รหัสร้าน ชื่อ ที่อยู่"], ["ขอรหัสเชิญช่าง", "รหัส 8 ตัว ใช้ได้ 7 วัน"], ["สร้างทีมช่าง แอร์", "ทีมใหม่ พร้อมมอบหมายงาน"]], [330, 490])
 
 
+def sales_members(c: Canvas):
+    c.dash_frame("สมาชิกในร้าน", "ข้างบทบาท")
+    c.table(["ชื่อ", "LINE", "บทบาท", "สถานะ"],
+            [["สมชาย ใจดี", "ทีมขาย", "เจ้าของ", "ใช้งาน"],
+             ["สมชาย ใจดี", "ช่าง", "technician", "ใช้งาน"],
+             ["สมหญิง ดีใจ", "ทีมขาย", "cs", "ใช้งาน"],
+             ["สมศักดิ์ ขยัน", "ช่าง", "technician", "นำออกแล้ว"]],
+            [270, 160, 200, 190])
+    c.card("สมศักดิ์ ขยัน · LINE ช่าง", ["ถอดจากทีมแล้ว งานที่ค้างกลับเข้าคิวรอมอบหมาย"],
+           [("กลับมาใช้งาน", True), ("เปลี่ยนบทบาท", False), ("รีเซ็ตการลงทะเบียน", False)], badge="นำออกแล้ว")
+    c.note("คนเดียวกันอยู่ได้ทั้ง LINE ทีมขาย และ LINE ช่าง คนละบทบาท · แต่ละ LINE ลงทะเบียนแยกกัน · เพิ่มช่าง: พิมพ์ \"ขอรหัสเชิญช่าง\" ในแชท · เจ้าของร้านนำออกไม่ได้")
+
+
 def sales_units(c: Canvas):
     c.dash_frame("เครื่องที่ลงทะเบียน", "รายการประกัน")
     c.table(["S/N", "สินค้า", "ลูกค้า", "สถานะ"],
@@ -494,7 +507,7 @@ SCENES = {
                  "customer-after": customer_after, "customer-pdpa": customer_pdpa},
     "technician": {"tech-join": tech_join, "tech-take": tech_take, "tech-checkin": tech_checkin, "tech-finish": tech_finish,
                    "tech-approved": tech_approved},
-    "sales": {"sales-setup": sales_setup, "sales-units": sales_units, "sales-dispatch": sales_dispatch, "sales-chats": sales_chats,
+    "sales": {"sales-setup": sales_setup, "sales-members": sales_members, "sales-units": sales_units, "sales-dispatch": sales_dispatch, "sales-chats": sales_chats,
               "sales-approve": sales_approve, "sales-crm": sales_crm, "sales-ai-report": sales_ai_report, "sales-help": sales_help,
               "permissions-overview": permissions_overview},
 }

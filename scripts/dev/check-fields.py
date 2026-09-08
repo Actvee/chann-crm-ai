@@ -60,6 +60,7 @@ LOCAL_TYPES: set[tuple[str, str]] = {
     ("_inline-create.tsx", "CreateField"),
     ("_searchable-picker.tsx", "PickerOption"),
     ("_record.tsx", "FieldSpec"),
+    ("MemberManagement.tsx", "Person"),  # one member grouped with every OA row they hold; page state
 }
 
 # (file, TS type) whose fields the Application tier composes rather than
@@ -76,6 +77,7 @@ ACCEPTED_TS: dict[tuple[str, str], str] = {
     ("_bulk-paste.tsx", "ImportResult"): "same route as the CSV import — pasted lines go through it",
     ("_bulk-paste.tsx", "Parsed"): "client-side parse of a pasted line, never sent as-is",
     ("ServiceReports.tsx", "PdfResult"): "POST service-reports/{id}/document returns {document_id, sha256, url} from routers_phase2",
+    ("MemberManagement.tsx", "MemberRow"): "GET licenses/{id}/members?include_removed=1 is composed by routers_phase2: one row per (member, OA) with channel, is_owner, joined_at and the profile's display_name/phone",
 }
 
 # Application-composed fields any TS type may declare (added by routers_phase2).

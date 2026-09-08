@@ -133,7 +133,7 @@ class FakeDataClient:
         self._company_profile.update(payload)
         return self._company_out()
 
-    async def authorization_context(self, license_id, chann_uid):
+    async def authorization_context(self, license_id, chann_uid, channel="sales"):
         # Mirrors AuthorizationContextOut: member_id is part of the real
         # payload (Phase 14 reads it to act on approval steps).
         return {
@@ -336,11 +336,11 @@ class FakeDataClient:
         self.recorded.append(("get_last_customer_ref", chann_uid, oa))
         return self._last_customer_ref
 
-    async def set_last_entity_ref(self, chann_uid, oa, *, entity_type, entity_id, code, ttl_seconds=600):
-        self._last_entity_ref = {"entity_type": entity_type, "entity_id": entity_id, "code": code}
+    async def set_last_entity_ref(self, chann_uid, oa, *, entity_type, entity_id, code, ttl_seconds=600, extra=None):
+        self._last_entity_ref = {"entity_type": entity_type, "entity_id": entity_id, "code": code, "extra": extra}
         self.recorded.append(("set_last_entity_ref", chann_uid, oa, entity_type, entity_id, code))
 
-    async def get_member(self, license_id, chann_uid):
+    async def get_member(self, license_id, chann_uid, channel=None):
         # Mirrors MemberOut exactly. This fake used to return an "id" the
         # real endpoint never sent, which hid a KeyError that made every
         # technician's "งานของฉัน" fail in production while the tests

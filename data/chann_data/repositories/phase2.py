@@ -169,11 +169,17 @@ class AuthorizationRepository:
     def __init__(self, session: Session):
         self._s = session
 
-    def context(self, scope: TenantScope, chann_uid: str) -> dict | None:
+    def context(
+        self, scope: TenantScope, chann_uid: str, *, channel: str = "sales",
+    ) -> dict | None:
+        """Permissions come from the row of the channel in use (owner,
+        8 Sep 2026): the same person may be the owner on the Sales OA and
+        a technician on the Technician OA, and each OA sees its own role."""
         member = self._s.execute(
             select(LicenseMember).where(
                 LicenseMember.license_id == scope.license_id,
                 LicenseMember.chann_uid == chann_uid,
+                LicenseMember.channel == channel,
                 LicenseMember.status == "active",
             )
         ).scalar_one_or_none()
@@ -192,6 +198,7 @@ class AuthorizationRepository:
             "member_id": member.id,
             "chann_uid": member.chann_uid,
             "role": member.role,
+            "channel": member.channel,
             "is_owner": is_owner,
             "permission_keys": sorted(keys),
         }
@@ -201,7 +208,9 @@ class MemberRoleRepository:
     def __init__(self, session: Session):
         self._s = session
 
-    def set_role(self, scope: TenantScope, chann_uid: str, role_name: str) -> LicenseMember:
+    def set_role(
+        self, scope: TenantScope, chann_uid: str, role_name: str, *, channel: str = "sales",
+    ) -> LicenseMember:
         role = RoleRepository(self._s).get(scope, role_name)
         if role is None:
             raise Phase2NotFound("role not found")
@@ -209,10 +218,11 @@ class MemberRoleRepository:
             select(LicenseMember).where(
                 LicenseMember.license_id == scope.license_id,
                 LicenseMember.chann_uid == chann_uid,
+                LicenseMember.channel == channel,
             )
         ).scalar_one_or_none()
         if member is None:
-            raise Phase2NotFound("member not found")
+            raise Phase2NotFound("member not found on this channel")
         current_role = RoleRepository(self._s).get(scope, member.role)
         currently_owner = current_role is not None and current_role.is_owner
         if currently_owner and not role.is_owner:
@@ -289,6 +299,9 @@ class OwnershipTransferRepository:
                 .where(
                     LicenseMember.license_id == scope.license_id,
                     LicenseMember.chann_uid.in_([from_chann_uid, to_chann_uid]),
+                    # Ownership is a Sales-OA role; a technician row of
+                    # the same person is not a candidate.
+                    LicenseMember.channel == "sales",
                     LicenseMember.status == "active",
                 )
                 .with_for_update()
@@ -374,6 +387,7 @@ class OwnershipTransferRepository:
             .where(
                 LicenseMember.license_id == scope.license_id,
                 LicenseMember.chann_uid == target_chann_uid,
+                LicenseMember.channel == "sales",
                 LicenseMember.status == "active",
             )
             .with_for_update()

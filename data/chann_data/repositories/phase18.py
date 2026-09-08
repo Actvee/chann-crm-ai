@@ -109,6 +109,7 @@ class PlatformRepository:
             identity = self._s.get(ChannIdentity, member.chann_uid)
             members.append({
                 "chann_uid": member.chann_uid, "role": member.role, "status": member.status,
+                "channel": member.channel,
                 "display_name": identity.display_name if identity is not None else None,
                 "joined_at": member.created_at,
             })

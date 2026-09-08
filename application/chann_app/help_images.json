@@ -15,6 +15,7 @@
     "tech-finish": "/api/v1/guide/images/tech-finish.png",
     "tech-approved": "/api/v1/guide/images/tech-approved.png",
     "sales-setup": "/api/v1/guide/images/sales-setup.png",
+    "sales-members": "/api/v1/guide/images/sales-members.png",
     "sales-units": "/api/v1/guide/images/sales-units.png",
     "sales-dispatch": "/api/v1/guide/images/sales-dispatch.png",
     "sales-chats": "/api/v1/guide/images/sales-chats.png",
