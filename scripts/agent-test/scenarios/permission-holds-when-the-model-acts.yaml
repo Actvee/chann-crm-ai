@@ -1,0 +1,11 @@
+name: permission-holds-when-the-model-acts
+description: permissions are enforced in code even when the model returns the real action; set-quantity works deterministically
+backend: fake
+actor: {oa: sales, role: member, language: th, permissions: [customer.read, deal.read]}
+steps:
+- send:
+    message: ลบลูกค้า สมชาย
+    ai: {action: archive, entity: customer, fields: {target_name: สมชาย}, missing: []}
+  expect:
+    is_not: [generic_error]
+    not_contains: ["เก็บถาวรแล้ว", "ลบแล้ว"]

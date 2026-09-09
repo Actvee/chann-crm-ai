@@ -1,0 +1,16 @@
+name: set-quantity-phrasings
+description: the three ways people say "make it 3"
+backend: fake
+actor: {oa: sales, role: sales, language: th, permissions: sales}
+steps:
+- seed:
+    customers: [{ref: somchai, first_name: สมชาย, last_name: ใจดี, phone: '0812345678'}]
+    deals: [{ref: deal1, contact_id: $somchai}]
+- send: ข้อมูลดีล D-2026-0001
+  expect: {contains: D-2026-0001}
+- send: เพิ่มพัดลม ราคา 1000 อีก 2 ตัว
+  expect: {contains: "2,000.00"}
+- send: ปรับจำนวนเป็น 3
+  expect: {contains: "3,000.00", is_not: [not_sure, generic_error]}
+- send: เปลี่ยนจำนวนให้เหลือ 2
+  expect: {contains: "2,000.00", is_not: [not_sure, generic_error]}

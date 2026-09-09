@@ -397,3 +397,30 @@ class TestACustomerOnlyEverReadsTheirOwn:
         client = await self._customer(["ticket.read"])
         reply = await say(client, "ขอดูงานหน่อย", ai=_read("ticket"), oa="customer", role="customer")
         assert "T-2026-0009" not in reply.text and "ลับ 1/1" not in reply.text
+
+
+class TestTheModelDoesNotOutrankTheSentence:
+    """Real-model corpus, 9 Sep 2026: the model answers check_in to
+    "ยังไม่ถึงหน้างาน" about two times in three. The trigger table has
+    refused that since 8 Sep; the AI path executed it anyway."""
+
+    def test_a_negation_disclaims_the_job_step(self):
+        for text in (
+            "ยังไม่ถึงหน้างาน",
+            "ยังไม่ถึงครับ",
+            "อย่าเช็คอิน T-2026-0001",
+            "ห้ามปิดงานนะ",
+            "พรุ่งนี้ค่อยเช็คอิน",
+            "ลูกค้าบอกว่าถึงแล้ว",
+        ):
+            assert chat._disclaims_a_job_action(text) is True, text
+
+    def test_a_real_command_is_not_disclaimed(self):
+        for text in (
+            "เช็คอิน T-2026-0001",
+            "ถึงแล้วครับ",
+            "ช่วยเช็คอินให้หน่อยได้ไหมครับ",
+            "ปิดงาน T-2026-0001",
+            "ฮอดแล้วเด้อ",
+        ):
+            assert chat._disclaims_a_job_action(text) is False, text

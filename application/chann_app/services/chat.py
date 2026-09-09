@@ -8244,6 +8244,33 @@ def _matches_phrase(message: str, phrases: tuple[str, ...]) -> bool:
 _POLITE_REQUEST_RE = re.compile(r"^(?:ช่วย|รบกวน|กรุณา|ขอความกรุณา|please|pls)")
 
 
+_JOB_DISCLAIMER_RE = re.compile(
+    r"(?:ยังไม่|ไม่ได้|ไม่ต้อง|อย่า|ห้าม).{0,10}(?:เช็คอิน|checkin|ถึง|ปิดงาน|เสร็จ)|"
+    r"(?:ถ้า|หาก|พรุ่งนี้|ค่อย).{0,24}(?:เช็คอิน|checkin|ถึง|ปิดงาน)|"
+    r"(?:บอกว่า|บอกให้|ถามว่า)"
+)
+
+
+_JOB_STEP_ACTIONS = frozenset({"check_in", "check_out", "close", "claim", "reject", "cancel"})
+JOB_ACTION_NOT_REQUESTED = {
+    "th": 'รับทราบครับ ยังไม่ได้บันทึกอะไรกับงานนี้ ถ้าต้องการให้บันทึก พิมพ์คำสั่งตรง ๆ เช่น "เช็คอิน T-2026-0001"',
+    "en": 'Understood — nothing was recorded on this job. Send the command itself when you want it, e.g. "check in T-2026-0001".',
+}
+
+
+def _disclaims_a_job_action(message: str) -> bool:
+    """The sentence says the job step has NOT happened, or is about someone
+    else saying it happened.
+
+    Held against the model's answer as well as the trigger table. The
+    model reads "ยังไม่ถึงหน้างาน" as action=check_in about two times in
+    three (real-model corpus, 9 Sep 2026), and the AI path executed it —
+    the same wrong check-in the owner reported, arriving by the other
+    road. A guard on only one of the two roads is not a guard.
+    """
+    return bool(_JOB_DISCLAIMER_RE.search(_normalise(message)))
+
+
 def _command_like(message: str, triggers: tuple[str, ...]) -> bool:
     """A command word at the START of a short message, or anywhere when a
     ticket code is named. "ลูกค้าบอกว่าถึงแล้วค่อยโทร" is a sentence about
@@ -8256,11 +8283,7 @@ def _command_like(message: str, triggers: tuple[str, ...]) -> bool:
     # refusing it sent the technician the guide instead (owner, 9 Sep 2026).
     if _looks_like_a_question(message) and not _POLITE_REQUEST_RE.match(compact):
         return False
-    if re.search(
-        r"(?:ยังไม่|ไม่ได้|ไม่ต้อง|อย่า|ห้าม).{0,10}(?:เช็คอิน|checkin|ถึง|ปิดงาน|เสร็จ)|"
-        r"(?:ถ้า|หาก|พรุ่งนี้|ค่อย).{0,24}(?:เช็คอิน|checkin|ถึง|ปิดงาน)|"
-        r"(?:บอกว่า|บอกให้|ถามว่า)", compact,
-    ):
+    if _disclaims_a_job_action(message):
         return False
     words = [t.replace(" ", "").lower() for t in triggers]
     if TICKET_CODE_RE.search(message or ""):
@@ -9829,6 +9852,13 @@ async def _handle_ai_understood_intent(
     entity = str(intent.get("entity") or "")
     action = str(intent.get("action") or "")
     fields = intent.get("fields") or {}
+
+    # The model's reading does not outrank what the sentence says. It
+    # answers check_in to "ยังไม่ถึงหน้างาน" about twice in three tries,
+    # and acting on that is the wrong check-in the owner reported — the
+    # trigger table has refused it since 8 Sep, so this road must too.
+    if action in _JOB_STEP_ACTIONS and _disclaims_a_job_action(message):
+        return ChatReply(text=_t(JOB_ACTION_NOT_REQUESTED, language))
 
     def _joined(*parts) -> str:
         return " ".join(str(p) for p in parts if str(p or "").strip())
