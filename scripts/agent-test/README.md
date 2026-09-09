@@ -492,8 +492,12 @@ Be honest about these in any report you write.
   Application-tier routes, which is where the dashboard's data comes from, but
   a broken button is invisible here. `check-parity.py` and `check-routes.py`
   are the closest local cover.
-- **PDFs and external services.** SmartBrowz (the PDF renderer), GCS, and the
-  payment provider are not called.
+- **PDFs and external services.** SmartBrowz (the PDF renderer) and the payment
+  provider are not called. Object storage is stood in with an in-process
+  dictionary, the way the `db` backend stands in Redis (`bootstrap.py`'s
+  `MemoryDocumentStore`) — so a feature that stores a file can be driven here,
+  but bucket permissions, real signed links, retention and lifecycle rules
+  cannot. Nothing reaches GCS.
 - **Redis, as itself.** The `db` backend stands Redis in with an in-process
   dictionary, because the Data tier keeps conversational state there and with
   no Redis every scenario would restart at every message. Real eviction, real

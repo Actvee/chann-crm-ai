@@ -334,10 +334,10 @@ class TestTemplateUploadOverHttp:
         class _MemoryStore:
             async def put(self, *, key, content, content_type=None):
                 stored[key] = content
-                return type("Stored", (), {"path": f"mem://{key}"})()
+                return type("Stored", (), {"path": f"gs://test-bucket/{key}"})()
 
             async def get(self, *, path):
-                return stored[path.removeprefix("mem://")]
+                return stored[path.removeprefix("gs://test-bucket/")]
 
         monkeypatch.setattr(storage_base, "get_document_store", lambda: _MemoryStore())
 
@@ -406,11 +406,11 @@ class TestTemplateUploadOverHttp:
                 # what goes into generated_documents as the proof of
                 # which bytes the customer received.
                 return StoredDocument(
-                    path=f"mem://{key}", sha256=sha256_hex(content), size=len(content),
+                    path=f"gs://test-bucket/{key}", sha256=sha256_hex(content), size=len(content),
                 )
 
             async def get(self, *, path):
-                return stored[path.removeprefix("mem://")]
+                return stored[path.removeprefix("gs://test-bucket/")]
 
         memory = _MemoryStore()
         monkeypatch.setattr(storage_base, "get_document_store", lambda: memory)
@@ -456,7 +456,7 @@ class TestTemplateUploadOverHttp:
             _api(license_id, f"/document-templates/{template_id}/versions")
         ).json()
         assert versions[0]["source_docx_path"].endswith(".docx")
-        assert stored[versions[0]["source_docx_path"].removeprefix("mem://")] == content
+        assert stored[versions[0]["source_docx_path"].removeprefix("gs://test-bucket/")] == content
 
         # ---- 2. it can be looked at, and looking does not publish
         response = client.post(
@@ -534,3 +534,298 @@ class TestTemplateUploadOverHttp:
         assert "3600.00" in rendered["html"]
         assert "QT-2026-0042" not in rendered["html"]
         assert "{{" not in rendered["html"]
+
+
+class TestChoosingWhichTemplateADocumentUses:
+    """The owner's third report, 9 Sep 2026, across both tiers.
+
+    Uploading a template was only half of it: with two published ones,
+    nothing said which the shop's documents would come out on, and there
+    was no way to say. This walks the whole thing over HTTP — upload two
+    service-report layouts, publish both, ask which is in use, switch,
+    issue a real report, and switch back to the built-in — because the
+    selection rule spans three tiers (`is_active` is a Data tier column,
+    the rule is Application code, the answer is what a page renders) and
+    a single-tier test cannot see it.
+    """
+
+    #: Two layouts a shop could plausibly have, told apart by a marker in
+    #: the file rather than by which id came back — the whole question is
+    #: "which FILE rendered".
+    LAYOUTS = {
+        "แบบเก่า": (
+            "<h1>LAYOUT-OLD</h1><p>{{report.report_id}} {{ticket.ticket_number}}</p>"
+        ),
+        "แบบใหม่": (
+            "<h1>LAYOUT-NEW</h1><p>{{report.report_id}} {{ticket.ticket_number}}</p>"
+        ),
+    }
+
+    def _stub_renderer_and_store(self, monkeypatch):
+        """Everything below the renderer is real; SmartBrowz is not."""
+        from chann_app.services import report_issue
+        from chann_app.services.storage import base as storage_base
+        from chann_app.services.storage.base import StoredDocument, sha256_hex
+
+        stored: dict[str, bytes] = {}
+
+        class _MemoryStore:
+            async def put(self, *, key, content, content_type=None):
+                stored[key] = content
+                return StoredDocument(
+                    path=f"gs://test-bucket/{key}", sha256=sha256_hex(content),
+                    size=len(content),
+                )
+
+            async def get(self, *, path):
+                return stored[path.removeprefix("gs://test-bucket/")]
+
+        memory = _MemoryStore()
+        rendered: dict[str, str] = {}
+
+        class _Renderer:
+            async def render(self, html, options, idempotency_key=None):
+                rendered["html"] = html
+                return type(
+                    "Result", (),
+                    {"content": b"%PDF-1.4 stub", "renderer": "smartbrowz"},
+                )()
+
+        monkeypatch.setattr(storage_base, "get_document_store", lambda: memory)
+        monkeypatch.setattr(report_issue, "get_document_store", lambda *a, **k: memory)
+        monkeypatch.setattr(report_issue, "get_renderer", lambda *a, **k: _Renderer())
+        return rendered
+
+    def _approved_report(self, migrated_db, license_id):
+        """A real ticket, visited and written up, approved — the state the
+        PDF is produced in (13.5 puts the approver's signature on it)."""
+        from datetime import date, time
+
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import ChannIdentity, LicenseMember
+        from chann_data.repositories.phase12 import ServiceTicketRepository
+        from chann_data.repositories.phase13 import FieldServiceRepository
+        from chann_data.repositories.tenant_scope import TenantScope
+
+        scope = TenantScope(license_id=uuid.UUID(license_id))
+        suffix = uuid.uuid4().hex[:6]
+        with Session(migrated_db) as session:
+            session.add(ChannIdentity(
+                chann_uid=f"CHN-TT-{suffix}", line_user_id=f"line-tt-{suffix}",
+                primary_role="technician",
+            ))
+            session.flush()
+            member = LicenseMember(
+                id=uuid.uuid4(), license_id=scope.license_id,
+                chann_uid=f"CHN-TT-{suffix}", role="technician", status="active",
+            )
+            session.add(member)
+            session.commit()
+            member_id = member.id
+
+        with Session(migrated_db) as session:
+            tickets = ServiceTicketRepository(session)
+            ticket = tickets.create(
+                scope, issue_description="แอร์ไม่เย็น",
+                customer_name="จุใจ มาติกา", customer_phone="0659635642",
+                service_address="99/1 ถนนสุขุมวิท",
+                scheduled_date=date(2026, 9, 4), scheduled_time=time(14, 0),
+            )
+            session.flush()
+            tickets.assign(
+                scope, ticket.id, target_type="technician", target_ref=member_id,
+            )
+            session.commit()
+            ticket_id = ticket.id
+
+        with Session(migrated_db) as session:
+            field = FieldServiceRepository(session)
+            field.check_in(scope, ticket_id, member_id=member_id)
+            session.commit()
+        with Session(migrated_db) as session:
+            field = FieldServiceRepository(session)
+            report = field.check_out(
+                scope, ticket_id, member_id=member_id,
+                report_data={
+                    "found_issue": "คอมเพรสเซอร์รั่ว",
+                    "work_done": "เปลี่ยนคอมเพรสเซอร์",
+                    "parts_changed": "คอมเพรสเซอร์ 1 ตัว",
+                },
+            )
+            session.flush()
+            report_id = report.id
+            field.set_report_status(scope, report_id, status="approved")
+            session.commit()
+        return str(report_id)
+
+    def _publish(self, client, license_id, name, html):
+        """Upload a service-report layout and publish it. Returns
+        (template_id, version_id)."""
+        response = client.post(
+            _api(license_id, "/document-templates/upload"),
+            json={
+                "template_name": name, "html": html,
+                "document_type": "service_report",
+            },
+        )
+        assert response.status_code == 201, response.text
+        body = response.json()
+        assert body["unknown_placeholders"] == [], body
+        published = client.post(
+            _api(
+                license_id,
+                f"/document-templates/{body['template_id']}"
+                f"/versions/{body['version_id']}/publish",
+            ),
+        )
+        assert published.status_code == 200, published.text
+        assert published.json()["status"] == "published"
+        return body["template_id"], body["version_id"]
+
+    def test_a_service_report_template_can_be_uploaded_at_all(self, shop, monkeypatch):
+        """It could not before: the page hard-coded `document_type: quote`
+        on every upload, so the layout the report issue path looks for was
+        impossible to create from the dashboard."""
+        self._stub_renderer_and_store(monkeypatch)
+        client, license_id = shop
+        self._publish(client, license_id, "แบบเก่า", self.LAYOUTS["แบบเก่า"])
+
+        rows = client.get(
+            _api(license_id, "/document-templates?document_type=service_report")
+        ).json()
+        assert [r["template_name"] for r in rows] == ["แบบเก่า"]
+        # And it did not land in the quote list by accident.
+        quotes = client.get(
+            _api(license_id, "/document-templates?document_type=quote")
+        ).json()
+        assert quotes == []
+
+    def test_an_unsupported_document_type_is_refused(self, shop, monkeypatch):
+        """A template for a document nothing renders would be a file the
+        shop maintains for nothing."""
+        self._stub_renderer_and_store(monkeypatch)
+        client, license_id = shop
+        response = client.post(
+            _api(license_id, "/document-templates/upload"),
+            json={
+                "template_name": "ใบรับประกัน", "html": "<p>x</p>",
+                "document_type": "warranty",
+            },
+        )
+        assert response.status_code == 400, response.text
+
+    def test_the_chosen_template_is_the_one_the_issued_report_uses(
+        self, shop, migrated_db, monkeypatch,
+    ):
+        rendered = self._stub_renderer_and_store(monkeypatch)
+        client, license_id = shop
+
+        old_id, old_version = self._publish(
+            client, license_id, "แบบเก่า", self.LAYOUTS["แบบเก่า"],
+        )
+        new_id, new_version = self._publish(
+            client, license_id, "แบบใหม่", self.LAYOUTS["แบบใหม่"],
+        )
+
+        # With two published and no choice made, the most recent wins —
+        # which is what "first in the list" did before this change, so a
+        # shop that never chooses sees no difference.
+        in_use = client.get(_api(license_id, "/document-templates/in-use")).json()
+        assert in_use["service_report"]["template_id"] == new_id
+        assert in_use["service_report"]["source"] == "tenant"
+        # A quote template was never uploaded, so quotes stay on the
+        # built-in: one type's choice says nothing about the other's.
+        assert in_use["quote"]["source"] == "builtin"
+
+        # The shop chooses the older layout instead.
+        chosen = client.post(
+            _api(license_id, f"/document-templates/{old_id}/active"),
+            json={"is_active": True},
+        )
+        assert chosen.status_code == 200, chosen.text
+        assert chosen.json()["is_active"] is True
+        # Exactly one active per (license, document_type): choosing one
+        # switched the other off in the Data tier, not just on the page.
+        rows = client.get(
+            _api(license_id, "/document-templates?document_type=service_report")
+        ).json()
+        assert {r["id"]: r["is_active"] for r in rows} == {old_id: True, new_id: False}
+
+        in_use = client.get(_api(license_id, "/document-templates/in-use")).json()
+        assert in_use["service_report"]["template_id"] == old_id
+        assert in_use["service_report"]["version_id"] == old_version
+
+        # Audited like every other template route — and the row that
+        # usually answers "why did my documents change shape" is the
+        # sibling that stopped being active, so that one is written too.
+        from sqlalchemy import select
+        from sqlalchemy.orm import Session as _Session
+
+        from chann_data.models import AuditLog
+
+        with _Session(migrated_db) as session:
+            trail = session.execute(
+                select(AuditLog).where(
+                    AuditLog.license_id == uuid.UUID(license_id),
+                    AuditLog.entity_type == "document_template",
+                    AuditLog.action == "update",
+                )
+            ).scalars().all()
+            changed = {str(row.entity_id): row.field_changes for row in trail}
+            assert changed[old_id]["is_active"]["new"] is True
+            assert changed[new_id]["is_active"] == {"old": True, "new": False}
+
+        # ---- and the document actually comes out on it
+        report_id = self._approved_report(migrated_db, license_id)
+        response = client.post(_api(license_id, f"/service-reports/{report_id}/document"))
+        assert response.status_code in (200, 201), response.text
+        assert "LAYOUT-OLD" in rendered["html"]
+        assert "LAYOUT-NEW" not in rendered["html"]
+        # Filled with this report's real values through the real engine.
+        assert "{{" not in rendered["html"]
+
+        # The row records which version rendered it, which is what makes a
+        # document reproducible — so the choice has to be visible there,
+        # not only in what was handed to the renderer.
+        from sqlalchemy.orm import Session
+
+        from chann_data.models import GeneratedDocument
+
+        with Session(migrated_db) as session:
+            row = session.get(
+                GeneratedDocument, uuid.UUID(response.json()["document_id"]),
+            )
+            assert str(row.template_version_id) == old_version
+            assert row.document_type == "service_report"
+
+    def test_switching_the_chosen_template_off_falls_back_to_the_builtin(
+        self, shop, migrated_db, monkeypatch,
+    ):
+        """The documented answer to "what if the chosen one is taken out
+        of use": the standard layout, not a failure. Losing the ability to
+        issue a report over a template decision would be the worse bug.
+        """
+        rendered = self._stub_renderer_and_store(monkeypatch)
+        client, license_id = shop
+        template_id, _version = self._publish(
+            client, license_id, "แบบเก่า", self.LAYOUTS["แบบเก่า"],
+        )
+
+        off = client.post(
+            _api(license_id, f"/document-templates/{template_id}/active"),
+            json={"is_active": False},
+        )
+        assert off.status_code == 200, off.text
+        assert off.json()["is_active"] is False
+
+        in_use = client.get(_api(license_id, "/document-templates/in-use")).json()
+        assert in_use["service_report"]["source"] == "builtin"
+        assert in_use["service_report"]["template_id"] is None
+
+        report_id = self._approved_report(migrated_db, license_id)
+        response = client.post(_api(license_id, f"/service-reports/{report_id}/document"))
+        assert response.status_code in (200, 201), response.text
+        assert "LAYOUT-OLD" not in rendered["html"]
+        # The built-in service report names itself.
+        assert "รายงานการซ่อม" in rendered["html"]

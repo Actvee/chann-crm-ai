@@ -1764,6 +1764,19 @@ class DataClient:
         )
         return self._unwrap(resp)
 
+    async def set_document_template_active(
+        self, license_id: str, template_id: str, *, is_active: bool,
+        actor_id: str | None = None,
+    ) -> dict:
+        """Make this the template its document type is rendered from, or
+        take it out of use (which falls back to the built-in layout)."""
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}"
+            f"/document-templates/{template_id}/active",
+            headers=self._headers_for(actor_id), json={"is_active": is_active},
+        )
+        return self._unwrap(resp)
+
     async def create_document_template_version(
         self, license_id: str, template_id: str, payload: dict,
         actor_id: str | None = None,

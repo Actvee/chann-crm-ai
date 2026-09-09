@@ -20,6 +20,7 @@ from .services import approval as approval_service
 from .services import storefront as storefront_service
 from .services import csv_import, live_chat
 from .services.authorization import TenantPrincipal, resolve_tenant_principal
+from .services.documents.selection import TEMPLATE_DOCUMENT_TYPES
 from .services.identity import member_channel
 
 router = APIRouter(prefix="/api/v1", tags=["phase2"])
@@ -3103,6 +3104,11 @@ class TemplateUploadIn(BaseModel):
     html: str | None = None
     docx_base64: str | None = None
     filename: str | None = None
+    # Which kind of document this layout is for. Defaulted to "quote"
+    # because that is what every caller sent before the field could be
+    # chosen; the dashboard now asks. Only the types with a real issue
+    # path are accepted (see documents/selection.py) — a template for a
+    # type nothing renders is a file a shop would maintain for nothing.
     document_type: str = "quote"
 
 
@@ -3139,6 +3145,16 @@ async def upload_document_template(
 
     _require_same_tenant(principal, license_id)
     principal.require("setting.manage")
+
+    if payload.document_type not in TEMPLATE_DOCUMENT_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "ยังไม่รองรับแบบฟอร์มของเอกสารประเภทนี้ "
+                f"(unsupported document_type {payload.document_type!r}; "
+                f"expected one of {', '.join(TEMPLATE_DOCUMENT_TYPES)})"
+            ),
+        )
 
     source_name = (payload.filename or "").strip()
     docx_bytes: bytes | None = None
@@ -3316,6 +3332,85 @@ async def list_document_templates(
         raise _propagate(exc)
 
 
+@router.get("/licenses/{license_id}/document-templates/in-use")
+async def document_templates_in_use(
+    license_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Which layout each kind of document is being rendered from, right now.
+
+    Answered by the same function the renderer calls
+    (`documents/selection.py`), not by re-deriving the rule here — the
+    page's whole job is to tell a shop what their customers are about to
+    receive, and a second implementation of "which one wins" would
+    eventually disagree with the first.
+
+    `source` is "tenant" or "builtin". "builtin" is a normal, expected
+    answer: a shop that has uploaded nothing, has switched their template
+    off, or whose only published version was archived, is issuing
+    documents with the system's standard layout.
+    """
+    _require_same_tenant(principal, license_id)
+    principal.require("setting.manage")
+
+    from .services.documents.selection import resolve_tenant_template
+
+    # No error branch: the resolver treats a Data tier failure as "no
+    # tenant template" and says so, because that is what the renderer
+    # would do a minute later. This page must not claim a shop is on a
+    # layout the next document would not use.
+    in_use: dict[str, dict] = {}
+    for document_type in TEMPLATE_DOCUMENT_TYPES:
+        template, version = await resolve_tenant_template(
+            client, license_id, document_type,
+        )
+        in_use[document_type] = {
+            "source": "tenant" if version is not None else "builtin",
+            "template_id": str(template["id"]) if template else None,
+            "template_name": (template or {}).get("template_name"),
+            "version_id": str(version["id"]) if version else None,
+            "version": (version or {}).get("version"),
+        }
+    return in_use
+
+
+class TemplateActiveIn(BaseModel):
+    is_active: bool = True
+
+
+@router.post("/licenses/{license_id}/document-templates/{template_id}/active")
+async def set_document_template_active(
+    license_id: str,
+    template_id: str,
+    payload: TemplateActiveIn,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Choose the template this document type is rendered from.
+
+    `is_active: true` makes this the one and turns off every other
+    template of the same type in this shop; `false` takes it out of use,
+    which puts the shop back on the built-in layout unless they pick
+    another. Nothing already issued changes — a generated document names
+    the version that rendered it, which is what
+    `generated_documents.template_version_id` is for.
+
+    `setting.manage`, like every other template route, and audited by the
+    Data tier the same way (one row for the template chosen, one for each
+    that stopped being active).
+    """
+    _require_same_tenant(principal, license_id)
+    principal.require("setting.manage")
+    try:
+        return await client.set_document_template_active(
+            license_id, template_id, is_active=payload.is_active,
+            actor_id=principal.chann_uid,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
 @router.get("/licenses/{license_id}/document-templates/{template_id}/versions")
 async def list_document_template_versions(
     license_id: str,
@@ -3338,19 +3433,26 @@ async def list_document_template_versions(
     # A link back to the Word file this version was made from, when there
     # is one. The compiled HTML is what renders, so without this a shop
     # that wants to change one line of their layout has nothing to open.
+    #
+    # Offered only when a real .docx was uploaded. The test used to be
+    # "not upload://", which is a list of the paths that are NOT files —
+    # and it missed `builtin://none`, the path a built-in version carries,
+    # so the built-in layout showed a download button that answered
+    # "stored path 'builtin://none' does not belong to bucket …" (owner,
+    # 9 Sep 2026). `intermediate_model.kind == "docx_upload"` is the
+    # positive signal: it is written by the upload route at the moment the
+    # original bytes are stored, and by nothing else.
     from .services.assets import asset_link
 
     for version in versions:
+        model = version.get("intermediate_model") or {}
         source = str(version.get("source_docx_path") or "")
         version["source_docx_url"] = (
             asset_link(
                 source, content_type=DOCX_CONTENT_TYPE,
-                filename=str(
-                    (version.get("intermediate_model") or {}).get("filename")
-                    or "template.docx"
-                ),
+                filename=str(model.get("filename") or "template.docx"),
             )
-            if source and not source.startswith("upload://")
+            if str(model.get("kind") or "") == "docx_upload"
             else None
         )
     return versions

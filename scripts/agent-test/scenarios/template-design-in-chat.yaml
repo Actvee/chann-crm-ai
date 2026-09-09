@@ -1,0 +1,96 @@
+# The AI designing a document template from a sentence in chat.
+#
+# The owner, 9 Sep 2026: "ตอนนี้รองรับให้ผู้ใช้พิมพ์ในแชทเพื่อให้ AI ช่วย
+# ออกแบบให้ในแชทแล้วใช่ไหม สำหรับ Sale OA กับคนที่มีสิทธิ์". There was no
+# template path in chat at all — a shop could upload a .docx on the
+# dashboard, and that was the whole of it.
+#
+# What this pins is the shape of the conversation, not the model's taste:
+# a draft is shown BEFORE it is real, an edit changes the draft that
+# already exists rather than starting over, and nothing is published until
+# the person says so. The last one is the point — a published template
+# immediately becomes what every quotation the shop sends looks like.
+#
+# `ai` here is the markup the model would have returned. The stub answers
+# every model call in the step with it, so the HTML is quoted without
+# double quotes: what the probe hands back is the JSON of this mapping.
+name: template-design-in-chat
+description: a quotation template is designed, previewed, refined and published from chat
+backend: fake
+actor:
+  oa: sales
+  role: sales
+  language: th
+  permissions: sales
+
+steps:
+  # 1. The request. Deterministic — no model call decides that "ออกแบบ
+  #    ใบเสนอราคา" is a design request, because "สร้างใบเสนอราคา" one word
+  #    away issues a real document to a real customer.
+  - send:
+      message: "ออกแบบใบเสนอราคาให้หน่อย เอาแบบเรียบ ๆ มีหัวร้านตัวใหญ่"
+      ai:
+        html: <h1>{{company.name}}</h1><p>{{company.address}}</p><p>เลขประจำตัวผู้เสียภาษี {{company.tax_id}}</p><h2>ใบเสนอราคา</h2><p>เลขที่ {{quote.quote_id}} วันที่ {{issued_on}}</p><p>เรียน {{customer.name}}</p><table><tr><th>#</th><th>รายการ</th><th>จำนวน</th><th>รวม</th></tr>{{#line_items}}<tr><td>{{item.index}}</td><td>{{item.product_name}}</td><td>{{item.qty}}</td><td>{{item.line_total}}</td></tr>{{/line_items}}</table><table><tr><th>รวมทั้งสิ้น</th><td>{{totals.grand_total}}</td></tr></table><p>ผู้เสนอราคา ..........................</p>
+    expect:
+      # A draft, said in those words, with the three things to do next.
+      contains: ["ฉบับร่าง", "ใบเสนอราคา"]
+      quick_replies_include: ["ใช้เลย", "แก้เพิ่ม", "ทิ้ง"]
+      is_not: [not_sure, generic_error, permission, not_a_feature, ai_down]
+
+  # 2. Somewhere to look before deciding — "show it before it is real" is
+  #    the point of the draft. This channel has no PUBLIC_BASE_URL, so the
+  #    reply names the screen instead of carrying a signed link; either way
+  #    the person is told where to see it, and that is what is asserted.
+  - expect:
+      contains: "ดูตัวอย่าง"
+
+  # 3. An edit, in the words a shop uses. This must change the draft that
+  #    exists, not open a second unrelated template.
+  - send:
+      message: "เพิ่มช่องยืนราคาถึงวันที่ด้วย"
+      ai:
+        html: <h1>{{company.name}}</h1><p>{{company.address}}</p><p>เลขประจำตัวผู้เสียภาษี {{company.tax_id}}</p><h2>ใบเสนอราคา</h2><p>เลขที่ {{quote.quote_id}} วันที่ {{issued_on}} ยืนราคาถึง {{quote.valid_until}}</p><p>เรียน {{customer.name}}</p><table><tr><th>#</th><th>รายการ</th><th>จำนวน</th><th>รวม</th></tr>{{#line_items}}<tr><td>{{item.index}}</td><td>{{item.product_name}}</td><td>{{item.qty}}</td><td>{{item.line_total}}</td></tr>{{/line_items}}</table><table><tr><th>รวมทั้งสิ้น</th><td>{{totals.grand_total}}</td></tr></table><p>ผู้เสนอราคา ..........................</p>
+    expect:
+      contains: "ฉบับร่าง"
+      quick_replies_include: ["ใช้เลย", "ทิ้ง"]
+      is_not: [not_sure, generic_error, permission, not_found, not_a_feature]
+
+  # 4. Publishing is an explicit act, and the confirmation has to name the
+  #    document type it will be used for — this changes every one of them.
+  - send: "ใช้เลย"
+    expect:
+      contains: ["เผยแพร่", "ใบเสนอราคา"]
+      is_not: [not_sure, generic_error, permission, not_found, not_a_feature]
+
+  # 5. A second design, dropped instead. The draft is left unpublished and
+  #    the shop keeps the template it already had.
+  - send:
+      message: "ออกแบบใบเสนอราคาใหม่อีกแบบ"
+      ai:
+        html: <h1>{{company.name}}</h1><h2>ใบเสนอราคา</h2><p>{{quote.quote_id}}</p><p>{{totals.grand_total}}</p>
+    expect:
+      contains: "ฉบับร่าง"
+      is_not: [generic_error, permission]
+
+  - send: "ทิ้ง"
+    expect:
+      contains: "ทิ้งร่างแล้ว"
+      not_contains: "เผยแพร่แล้ว"
+      is_not: [not_sure, generic_error, permission, not_a_feature]
+
+  # 6. Which document, when the words do not say. Guessing here would
+  #    publish a service report over a shop's quotation layout.
+  - send: "ออกแบบเอกสารให้หน่อย"
+    expect:
+      contains: ["ใบเสนอราคา", "ใบรายงานการซ่อม"]
+      is_not: [not_sure, generic_error, permission, not_a_feature]
+
+  # 7. A draft the sanitiser refuses. Nothing is stored, and the reply says
+  #    what was wrong rather than apologising vaguely.
+  - send:
+      message: "ออกแบบใบรายงานการซ่อม"
+      ai:
+        html: <h1>{{company.name}}</h1><script>fetch(String.fromCharCode(47,47))</script>
+    expect:
+      contains: ["ไม่ได้บันทึก", "สคริปต์"]
+      is_not: [generic_error, permission, not_a_feature]

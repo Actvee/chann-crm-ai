@@ -152,6 +152,7 @@ from ..schemas import (
     DealProductIn,
     DealProductOut,
     DealStageIn,
+    DocumentTemplateActiveIn,
     DocumentTemplateIn,
     DocumentTemplateOut,
     DocumentTemplateVersionIn,
@@ -2803,6 +2804,54 @@ def list_document_templates(
     scope = TenantScope(license_id=license_id)
     rows = DocumentTemplateRepository(session).list_templates(scope, document_type=document_type)
     return [DocumentTemplateOut.model_validate(r, from_attributes=True) for r in rows]
+
+
+@router.post(
+    "/licenses/{license_id}/document-templates/{template_id}/active",
+    response_model=DocumentTemplateOut,
+)
+def set_document_template_active(
+    license_id: uuid.UUID, template_id: uuid.UUID, payload: DocumentTemplateActiveIn,
+    session: Session = Depends(get_session), x_actor_id: str = Header(default=""),
+):
+    """The shop's explicit choice of layout for one document type.
+
+    Audited per row, including the templates this turned off: "why did my
+    quotes change shape" has to be answerable from the trail, and the
+    answer is usually the sibling that stopped being active, not the one
+    that started.
+    """
+    scope = TenantScope(license_id=license_id)
+    try:
+        repo = DocumentTemplateRepository(session)
+        before = repo.get_template(scope, template_id)
+        before_active = before.is_active if before else None
+        row, turned_off = repo.set_template_active(
+            scope, template_id, active=payload.is_active,
+        )
+        audit = AuditRepository(session)
+        audit.write(
+            license_id=license_id, entity_type="document_template", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="update",
+            # Written even when the flag did not move, which is why this
+            # is not diff_fields: a shop that never chose has every
+            # template already flagged active, so the diff of choosing one
+            # of them is empty — and "who decided our quotes look like
+            # this" would have no row at all.
+            field_changes={"is_active": {"old": before_active, "new": row.is_active}},
+        )
+        for other in turned_off:
+            audit.write(
+                license_id=license_id, entity_type="document_template",
+                entity_id=other.id, actor_type="user", actor_id=x_actor_id or None,
+                action="update",
+                field_changes=diff_fields({"is_active": True}, {"is_active": False}),
+            )
+        session.commit()
+        return DocumentTemplateOut.model_validate(row, from_attributes=True)
+    except Exception as exc:
+        session.rollback()
+        raise _phase10_http_error(exc)
 
 
 @router.post(

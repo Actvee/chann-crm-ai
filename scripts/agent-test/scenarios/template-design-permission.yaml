@@ -1,0 +1,55 @@
+# Designing a template is `setting.manage`, and the flow never starts without it.
+#
+# The owner asked for this "สำหรับ Sale OA กับคนที่มีสิทธิ์" — for the Sales OA
+# and for people who have the right. `setting.manage` is the key every other
+# template route already requires, so a person who cannot upload a template
+# must not be able to conjure one by asking the AI nicely.
+#
+# The refusal is the ordinary one, not a special message: this is not a
+# feature that does not exist, it is one this person may not use, and those
+# read differently to the person who gets them.
+name: template-design-permission
+description: a member without setting.manage cannot start the AI template designer
+backend: fake
+actor:
+  oa: sales
+  role: sales
+  language: th
+  permissions: sales
+
+steps:
+  # A full sales permission set minus setting.manage — a salesperson who
+  # can do their own job and is not an administrator of the shop.
+  - send:
+      message: "ออกแบบใบเสนอราคาให้หน่อย"
+      permissions: [customer.read, customer.create, deal.read, deal.create,
+                    quote.create, quote.read, ticket.read]
+      ai:
+        html: <h1>{{company.name}}</h1><p>{{quote.quote_id}}</p>
+    expect:
+      # Refused, and told where the permission comes from.
+      contains: ["ไม่มีสิทธิ์", "เจ้าของร้าน"]
+      # Nothing was drafted, nothing is waiting to be published.
+      not_contains: ["ฉบับร่าง", "เผยแพร่", "ใช้เลย"]
+      is_not: [not_sure, generic_error, not_found, not_a_feature, ai_down]
+
+  # The same person cannot publish either, because there is nothing to
+  # publish: "ใช้เลย" is not a standing command, it answers a question that
+  # was never asked of them.
+  - send:
+      message: "ใช้เลย"
+      permissions: [customer.read, deal.read, quote.create]
+    expect:
+      not_contains: ["เผยแพร่แล้ว", "ฉบับร่าง"]
+      is_not: [generic_error]
+
+  # And it is the Sales OA only. A technician holding every permission key
+  # still has no business changing what the shop's quotations look like.
+  - send:
+      message: "ออกแบบใบเสนอราคา"
+      oa: technician
+      role: technician
+      permissions: all
+    expect:
+      not_contains: ["ฉบับร่าง", "เผยแพร่", "แก้เพิ่ม"]
+      is_not: [generic_error]

@@ -29,12 +29,14 @@ from datetime import datetime, timezone
 from ..data_client import DataClient
 from .documents.html import render_quote_html
 from .documents.fill import fill_template
+from .documents.selection import resolve_tenant_template
 from .documents.snapshot import build_quote_snapshot
 from .pdf.base import PdfOptions, get_renderer
 from .storage.base import get_document_store, sha256_hex
 
 log = logging.getLogger(__name__)
 
+DOCUMENT_TYPE = "quote"
 BUILTIN_QUOTE_TEMPLATE_CODE = "BUILTIN-QUOTE"
 BUILTIN_QUOTE_TEMPLATE_NAME = "ใบเสนอราคา (แบบมาตรฐานของระบบ)"
 # Bump this whenever render_quote_html's output changes in a way that would
@@ -66,13 +68,18 @@ def document_key(*, license_id: str, quote_code: str, issued_at: datetime, sha25
 async def _resolve_template(
     client: DataClient, license_id: str, snapshot: dict, *, actor_id: str | None = None,
 ) -> tuple[str, str]:
-    """(template_version_id, html) — the shop's own template, or the
+    """(template_version_id, html) — the shop's chosen template, or the
     built-in one.
 
-    A tenant that has published a template for this document type gets
-    theirs; everyone else gets the layout in the codebase. Falling back
-    rather than failing matters because a shop should not lose the ability
-    to issue a quote by uploading a template that turns out to be broken.
+    A tenant that has published a template for this document type and has
+    it in use gets theirs; everyone else gets the layout in the codebase.
+    Which one "theirs" is now has one definition, shared with the service
+    report and with the templates page — `documents/selection.py` — so the
+    page cannot say one thing while the renderer does another.
+
+    Falling back rather than failing matters because a shop should not
+    lose the ability to issue a quote by uploading a template that turns
+    out to be broken, or by switching one off.
 
     The published version's HTML is filled by simple placeholder
     substitution rather than a template language. Anything richer would be
@@ -80,41 +87,14 @@ async def _resolve_template(
     other tenants' snapshots — the safe version of "upload your own
     design" is one that can only put values into holes.
     """
-    try:
-        templates = await client.list_document_templates(
-            license_id, document_type="quote",
-        )
-    except Exception:
-        log.exception("could not read templates; falling back to the built-in")
-        templates = []
-
-    for template in templates:
-        if template.get("template_code") == BUILTIN_QUOTE_TEMPLATE_CODE:
-            continue
-        if not template.get("is_active", True):
-            continue
+    _template, version = await resolve_tenant_template(
+        client, license_id, DOCUMENT_TYPE,
+    )
+    if version is not None:
         try:
-            versions = await client.list_document_template_versions(
-                license_id, str(template["id"]),
+            raw = await get_document_store().get(
+                path=str(version.get("compiled_template_path") or "")
             )
-        except Exception:
-            log.exception("could not read versions for template %s", template.get("id"))
-            continue
-
-        published = [v for v in versions if v.get("status") == "published"]
-        if not published:
-            continue
-        # Highest version number, so republishing supersedes rather than
-        # having to unpublish the old one first.
-        newest = max(published, key=lambda v: int(v.get("version") or 0))
-        compiled = str(newest.get("compiled_template_path") or "")
-        if not compiled or compiled.startswith("builtin://"):
-            continue
-
-        try:
-            from .storage.base import get_document_store
-
-            raw = await get_document_store().get(path=compiled)
             html = fill_template(raw.decode("utf-8"), snapshot)
         except Exception:
             # A tenant's template that cannot be loaded or filled must not
@@ -122,11 +102,10 @@ async def _resolve_template(
             # document; their ability to do business is not.
             log.exception(
                 "tenant template %s could not be used; using the built-in",
-                newest.get("id"),
+                version.get("id"),
             )
-            break
-
-        return str(newest["id"]), html
+        else:
+            return str(version["id"]), html
 
     version_id = await _ensure_builtin_template_version(
         client, license_id, actor_id=actor_id,
@@ -144,7 +123,7 @@ async def _ensure_builtin_template_version(
     concurrent first-issues converge on the same row rather than racing to
     create duplicates.
     """
-    templates = await client.list_document_templates(license_id, document_type="quote")
+    templates = await client.list_document_templates(license_id, document_type=DOCUMENT_TYPE)
     template = next(
         (t for t in templates if t.get("template_code") == BUILTIN_QUOTE_TEMPLATE_CODE), None
     )
@@ -152,7 +131,7 @@ async def _ensure_builtin_template_version(
         template = await client.create_document_template(
             license_id,
             {
-                "document_type": "quote",
+                "document_type": DOCUMENT_TYPE,
                 "template_code": BUILTIN_QUOTE_TEMPLATE_CODE,
                 "template_name": BUILTIN_QUOTE_TEMPLATE_NAME,
             },

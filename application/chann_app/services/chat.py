@@ -7765,6 +7765,9 @@ DASHBOARD_PATHS = {
     "members": "members",
     "guide": "guide",
     "chats": "chats",
+    # The document-templates page, so a chat-designed draft can be opened,
+    # previewed and published on screen as well as from the reply.
+    "templates": "templates",
     "index": "",
 }
 
@@ -12843,6 +12846,9 @@ HELP_SECTIONS = (
     ("ตั้งค่า", (
         ("setting.manage", "ข้อมูลบริษัท", "ดูข้อมูลที่พิมพ์บนเอกสาร"),
         ("setting.manage", "ตั้งเลขผู้เสียภาษี 0105558123456", "แก้ทีละช่อง"),
+        ("setting.manage", "ออกแบบใบเสนอราคา",
+         "ให้ AI ร่างแบบฟอร์มเอกสารให้ (ใบเสนอราคา / ใบรายงานการซ่อม) "
+         "ดูตัวอย่างและแก้ได้ก่อน แล้วค่อยกดใช้จริง"),
     )),
 )
 
@@ -14811,6 +14817,19 @@ async def _route_chat_message(
             if resolved is not None:
                 return resolved
             early_pending = None
+        if ctx.oa == "sales" and early_pending is not None and early_pending.get("entity") in (
+            "template_design", "template_design_type", "template_refine",
+        ):
+            # "ใช้เลย" / "แก้เพิ่ม" / "ทิ้ง", the document type, or the edit
+            # to make. Anything else drops the draft and falls through as a
+            # new request — the draft stays on the templates page either way.
+            resolved = await _resolve_template_design(
+                client, ctx=ctx, license_id=license_id, message=message, pending=early_pending,
+                permission_keys=permission_keys, language=language, ai_client=ai_client,
+            )
+            if resolved is not None:
+                return resolved
+            early_pending = None
         if (
             early_pending is not None and early_pending.get("entity") in _CREATE_FLOW_ENTITIES
             and early_pending.get("missing") and _is_new_command(message, ctx.oa)
@@ -14824,6 +14843,16 @@ async def _route_chat_message(
     if ctx.oa == "sales" and _is_technician_invite_request(message):
         return await _handle_technician_invite_request(
             client, ctx=ctx, permission_keys=permission_keys, language=language,
+        )
+
+    # "ออกแบบใบเสนอราคา" — the AI drafting a document template (owner,
+    # 9 Sep 2026). Before the quote and report phrases below, which share
+    # the words "ใบเสนอราคา" and "รายงาน": this asks for a FORM, and a
+    # sentence that says so must not be read as issuing a document.
+    if ctx.oa == "sales" and _is_template_design_request(message):
+        return await _handle_template_design(
+            client, ctx=ctx, license_id=license_id, message=message,
+            permission_keys=permission_keys, language=language, ai_client=ai_client,
         )
 
     # Assignment policy (Phase 11.6). Sales OA only, and before the AI
@@ -16306,6 +16335,10 @@ SLOT_FILL_CANCELLED = {
 }
 _DETERMINISTIC_FLOWS = frozenset({
     "service_report", "customer_ticket", "pending_customer_message", "ticket_reject", "customer_contact",
+    # A draft template waiting for "ใช้เลย" / "แก้เพิ่ม" / "ทิ้ง" is answered
+    # by a word, resumed by hand above, and holds the draft HTML — none of
+    # which is the model's to complete or to clear.
+    "template_design", "template_design_type", "template_refine",
 })
 
 
@@ -17701,4 +17734,643 @@ async def _resolve_bulk_customer_phone(
     return ChatReply(
         text=summary,
         quick_replies=[("รายชื่อลูกค้า", "รายชื่อลูกค้า")],
+    )
+
+
+# ------------------------------------------------- AI-designed templates
+#
+# Owner, 9 Sep 2026: "ตอนนี้รองรับให้ผู้ใช้พิมพ์ในแชทเพื่อให้ AI ช่วยออกแบบให้
+# ในแชทแล้วใช่ไหม สำหรับ Sale OA กับคนที่มีสิทธิ์". It did not — a shop could
+# upload a .docx or paste HTML on the dashboard, and that was all.
+#
+# The Sales OA only, and `setting.manage` only, because that is the key every
+# other template route already requires: a person who cannot upload a
+# template must not be able to conjure one by asking nicely. The permission
+# is checked when the flow starts AND again at publish, since a published
+# template immediately becomes what every document of that type looks like
+# and the two moments can be minutes apart.
+#
+# The drafting itself is `services/documents/design.py`; this is only the
+# conversation around it.
+
+TEMPLATE_DESIGN_TRIGGERS = (
+    "ออกแบบใบเสนอราคา", "ทำแม่แบบใบเสนอราคา", "ทำเทมเพลตใบเสนอราคา",
+    "ออกแบบฟอร์มใบเสนอราคา", "ออกแบบใบรายงานการซ่อม", "ออกแบบฟอร์มรายงานการซ่อม",
+    "ทำแม่แบบใบรายงานการซ่อม", "ทำเทมเพลตรายงานการซ่อม", "ออกแบบแบบฟอร์มเอกสาร",
+    "ออกแบบเอกสาร", "ออกแบบแบบฟอร์ม", "ออกแบบฟอร์ม", "ออกแบบเทมเพลต",
+    "ทำแม่แบบเอกสาร", "ทำเทมเพลตเอกสาร", "ทำแม่แบบ", "ทำเทมเพลต", "ออกแบบ",
+    "design a quotation template", "design a quote template",
+    "design a service report template", "design a document template",
+    "make a quotation template", "create a quotation template",
+    "design a template", "make a template", "template design",
+)
+
+# The words that decide which of the two documents is meant. Only two,
+# because they are the only two the engine has a snapshot builder for —
+# a template for anything else would pass every check and then have
+# nothing to fill it at issue time.
+_TEMPLATE_QUOTE_WORDS = (
+    "ใบเสนอราคา", "ใบเสนอ", "เสนอราคา", "quotation", "quote",
+)
+_TEMPLATE_REPORT_WORDS = (
+    "รายงานการซ่อม", "รายงานซ่อม", "ใบรายงาน", "ใบแจ้งผลการบริการ",
+    "รายงานบริการ", "ใบงานซ่อม", "service report", "repair report",
+)
+
+TEMPLATE_TYPE_WORDS = {"quote": _TEMPLATE_QUOTE_WORDS, "service_report": _TEMPLATE_REPORT_WORDS}
+
+# The draft lives long enough for someone to open the preview, look at it
+# properly, and come back. The ten minutes the slot-filling flows use is
+# not long enough to read a document.
+TEMPLATE_DESIGN_TTL_S = 1800
+
+_TEMPLATE_YES_WORDS = frozenset({
+    "ใช่เลย", "ใช้เลย", "ใช้อันนี้", "เอาอันนี้", "ตกลง", "เผยแพร่", "ใช้แบบนี้",
+    "publish", "use it", "use this", "yes",
+})
+_TEMPLATE_REFINE_WORDS = frozenset({
+    "แก้เพิ่ม", "แก้อีก", "ขอแก้", "แก้ไข", "ปรับเพิ่ม", "แก้หน่อย",
+    "refine", "change it", "edit",
+})
+_TEMPLATE_DROP_WORDS = frozenset({
+    "ทิ้ง", "ทิ้งเลย", "ไม่เอา", "ไม่ใช้", "ยกเลิก", "ลบทิ้ง",
+    "discard", "drop it", "no",
+})
+# An edit said straight out, without pressing "แก้เพิ่ม" first. Recognised so
+# the draft is not thrown away by someone who simply answered the question
+# they were actually being asked.
+_TEMPLATE_EDIT_LEAD = (
+    "เพิ่ม", "ตัด", "ลบ", "เอาออก", "แก้", "เปลี่ยน", "ย้าย", "ใส่", "ทำให้",
+    "ขอให้", "อยากให้", "ปรับ", "ขยาย", "ลด", "จัด",
+    "add ", "remove ", "change ", "make ", "move ", "put ", "delete ",
+)
+
+TEMPLATE_ASK_TYPE = {
+    "th": (
+        "ได้เลยครับ จะให้ออกแบบเอกสารแบบไหนดี\n\n"
+        "• ใบเสนอราคา\n"
+        "• ใบรายงานการซ่อม\n\n"
+        "ตอบชื่อเอกสารมาได้เลย และบอกด้วยก็ได้ว่าอยากได้แบบไหน "
+        "เช่น \"ใบเสนอราคา เรียบ ๆ มีหัวร้านตัวใหญ่\""
+    ),
+    "en": (
+        "Happy to. Which document should I design?\n\n"
+        "• a quotation\n"
+        "• a service report\n\n"
+        "Say which one, and how you want it to look if you have a preference."
+    ),
+}
+TEMPLATE_TYPE_LABEL = {
+    "quote": {"th": "ใบเสนอราคา", "en": "quotation"},
+    "service_report": {"th": "ใบรายงานการซ่อม", "en": "service report"},
+}
+TEMPLATE_DRAFT_READY = {
+    "th": (
+        "ร่าง{label}ให้แล้วครับ — ยังเป็นฉบับร่าง ยังไม่ได้เอาไปใช้จริง\n\n"
+        "ชื่อแบบฟอร์ม: {name}\n"
+        "{summary}\n"
+        "{warning}"
+        "ดูตัวอย่างที่กรอกข้อมูลจริงไว้แล้วได้จากปุ่มด้านล่าง\n"
+        "ไฟล์ Word สำหรับแก้เองต่อ: {docx}\n\n"
+        "พอใจแล้วกด \"ใช้เลย\" · อยากแก้กด \"แก้เพิ่ม\" · ไม่เอากด \"ทิ้ง\""
+    ),
+    "en": (
+        "Here is a draft {label} — still a draft, not in use yet.\n\n"
+        "Template name: {name}\n"
+        "{summary}\n"
+        "{warning}"
+        "Tap below to see it filled with real sample data.\n"
+        "Word file to edit yourself: {docx}\n\n"
+        "\"ใช้เลย\" to publish · \"แก้เพิ่ม\" to change it · \"ทิ้ง\" to drop it"
+    ),
+}
+TEMPLATE_DRAFT_SUMMARY = {
+    "th": "ใส่ช่องข้อมูลให้ {n} ช่อง เช่น {examples}",
+    "en": "{n} data fields, e.g. {examples}",
+}
+TEMPLATE_NO_PREVIEW_LINK = {
+    "th": "(ยังไม่ได้ตั้งค่าลิงก์ของร้านนี้ ดูตัวอย่างได้ที่ หน้าจอ > แบบฟอร์มเอกสาร)",
+    "en": "(no public link configured — open dashboard > document templates)",
+}
+TEMPLATE_UNKNOWN_FIELDS = {
+    "th": (
+        "⚠️ AI ใส่ช่องที่ระบบไม่มีข้อมูลให้: {names}\n"
+        "ช่องพวกนี้จะพิมพ์ออกมาเป็นช่องว่างบนเอกสารจริง "
+        "ถ้าไม่ต้องการ กด \"แก้เพิ่ม\" แล้วบอกให้ตัดออกได้ครับ\n"
+    ),
+    "en": (
+        "⚠️ The AI used fields the system cannot fill: {names}\n"
+        "They will print as blanks. Tap \"แก้เพิ่ม\" to have them removed.\n"
+    ),
+}
+TEMPLATE_MISSING_ESSENTIALS = {
+    "th": (
+        "⚠️ แบบนี้ยังไม่มี: {names}\n"
+        "เอกสารที่ขาดช่องพวกนี้อาจใช้อ้างอิงไม่ได้ กด \"แก้เพิ่ม\" เพื่อให้เติมให้ได้ครับ\n"
+    ),
+    "en": "⚠️ This design is missing: {names}\nTap \"แก้เพิ่ม\" to have them added.\n",
+}
+TEMPLATE_REJECTED = {
+    "th": (
+        "ร่างที่ AI ส่งมามีสิ่งที่ระบบไม่อนุญาตให้เก็บไว้ในแบบฟอร์ม "
+        "จึงไม่ได้บันทึกอะไรไว้เลยครับ\n\n"
+        "สิ่งที่พบ:\n{reasons}\n\n"
+        "แบบฟอร์มของร้านเก็บได้เฉพาะข้อความ ตาราง และการจัดหน้า "
+        "เพราะแบบฟอร์มถูกนำไปสร้างเอกสารจริงบนเครื่องของระบบ\n"
+        "ลองสั่งใหม่อีกครั้งได้ครับ เช่น \"ออกแบบ{label} เรียบ ๆ มีหัวร้านตัวใหญ่\""
+    ),
+    "en": (
+        "The AI's draft contained things a template is not allowed to hold, "
+        "so nothing was saved.\n\nFound:\n{reasons}\n\n"
+        "A template may contain text, tables and layout only.\nTry asking again."
+    ),
+}
+TEMPLATE_REFINE_ASK = {
+    "th": (
+        "ได้ครับ อยากแก้ตรงไหนบอกมาได้เลย "
+        "เช่น \"เพิ่มช่องเลขที่ผู้เสียภาษี\" หรือ \"ตัดโลโก้ออก\" หรือ \"ทำหัวเรื่องให้ใหญ่ขึ้น\""
+    ),
+    "en": (
+        "Sure — what should change? e.g. \"add the tax id field\", "
+        "\"remove the logo\", \"make the heading bigger\"."
+    ),
+}
+TEMPLATE_PUBLISHED = {
+    "th": (
+        "เผยแพร่แล้วครับ ✅\n\n"
+        "ตั้งแต่นี้ไป {label} ทุกใบที่ออกจากระบบจะใช้แบบฟอร์ม \"{name}\" นี้\n"
+        "อยากกลับไปใช้แบบเดิมหรือแก้เพิ่ม เปิด หน้าจอ > แบบฟอร์มเอกสาร ได้ทุกเมื่อ"
+    ),
+    "en": (
+        "Published ✅\n\nEvery {label} the system issues from now on uses the "
+        "template \"{name}\".\nChange it again from dashboard > document templates."
+    ),
+}
+TEMPLATE_DISCARDED = {
+    "th": (
+        "ทิ้งร่างแล้วครับ ไม่ได้เอาไปใช้ — {label} ยังใช้แบบฟอร์มเดิมเหมือนเดิม\n"
+        "อยากลองใหม่ พิมพ์ \"ออกแบบ{label}\" ได้ทุกเมื่อ"
+    ),
+    "en": (
+        "Draft dropped — your {label} still uses the template it used before.\n"
+        "Type \"ออกแบบ{label}\" to try again any time."
+    ),
+}
+TEMPLATE_SAVE_FAILED = {
+    "th": "บันทึกร่างแบบฟอร์มไม่สำเร็จครับ ยังไม่มีอะไรถูกเปลี่ยน ลองใหม่อีกครั้งได้เลย",
+    "en": "The draft could not be saved. Nothing was changed — please try again.",
+}
+TEMPLATE_PUBLISH_FAILED = {
+    "th": "เผยแพร่ไม่สำเร็จครับ ร่างยังอยู่ ลองกด \"ใช้เลย\" อีกครั้งได้",
+    "en": "Publishing failed. The draft is still there — tap \"ใช้เลย\" again.",
+}
+TEMPLATE_DRAFT_GONE = {
+    "th": "ร่างแบบฟอร์มหมดอายุแล้วครับ พิมพ์ \"ออกแบบใบเสนอราคา\" เพื่อเริ่มใหม่ได้เลย",
+    "en": "That draft has expired. Type \"ออกแบบใบเสนอราคา\" to start again.",
+}
+
+_TEMPLATE_DECIDE_BUTTONS = [("ใช้เลย", "ใช้เลย"), ("แก้เพิ่ม", "แก้เพิ่ม"), ("ทิ้ง", "ทิ้ง")]
+
+
+def _is_template_design_request(message: str) -> bool:
+    """Does this sentence ask for a template to be designed?
+
+    Substring rather than whole-message equality: people wrap the request
+    in a sentence ("ช่วยออกแบบใบเสนอราคาให้หน่อยได้ไหม"), and none of these
+    phrases appears anywhere else in this module's triggers.
+    """
+    text = (message or "").strip().lower()
+    if not text:
+        return False
+    return any(trigger.lower() in text for trigger in TEMPLATE_DESIGN_TRIGGERS)
+
+
+def _template_type_from(message: str) -> str | None:
+    """Which document the words name, or None when they do not say.
+
+    Both named is the same as neither: the person is asked, rather than
+    the first match winning silently.
+    """
+    text = (message or "").strip().lower()
+    hits = [
+        kind for kind, words in TEMPLATE_TYPE_WORDS.items()
+        if any(word.lower() in text for word in words)
+    ]
+    return hits[0] if len(hits) == 1 else None
+
+
+def _template_description(message: str) -> str:
+    """What the person said, with the command words left in.
+
+    Deliberately not stripped down to "the rest of the sentence": the
+    trigger itself carries the request ("ออกแบบใบเสนอราคา" is the whole
+    instruction most of the time), and cutting it leaves the model an
+    empty brief.
+    """
+    return (message or "").strip()
+
+
+def _template_name_for(document_type: str) -> str:
+    return {
+        "quote": "แบบฟอร์มใบเสนอราคา (ออกแบบด้วย AI)",
+        "service_report": "แบบฟอร์มใบรายงานการซ่อม (ออกแบบด้วย AI)",
+    }[document_type]
+
+
+def _template_principal(ctx: ResolvedContext, license_id, permission_keys: list[str]):
+    """This person, as the template routes expect to be handed them.
+
+    The routes are called rather than reimplemented — they own finding-or-
+    creating the template row, storing the compiled HTML, versioning, and
+    the publish state machine, and none of that should exist twice. They
+    re-check `setting.manage` themselves against this object, which is the
+    point: the check at publish time is theirs, not a memory of ours.
+
+    `license_status` is "active" because the router already refused a
+    suspended tenant several stages above; a message never reaches here
+    otherwise.
+    """
+    from ..services.authorization import TenantPrincipal
+
+    return TenantPrincipal(
+        license_id=str(license_id),
+        chann_uid=ctx.chann_uid,
+        role="sales",
+        is_owner=False,
+        permission_keys=frozenset(permission_keys),
+        audience="sales",
+        license_status="active",
+    )
+
+
+async def _template_asset_link(store, *, path: str, content: bytes, content_type: str,
+                               filename: str | None = None) -> str | None:
+    """Store one file and return a link a phone can open, or None.
+
+    None rather than a broken URL, for `dashboard_link`'s reason: a link
+    that opens an error page is worse than no link at all. Both callers
+    print an alternative when they get None.
+    """
+    from .assets import asset_link
+
+    try:
+        await store.put(key=path, content=content, content_type=content_type)
+    except Exception:
+        log.exception("could not store a designed-template asset at %s", path)
+        return None
+    return asset_link(path, content_type=content_type, filename=filename)
+
+
+async def _template_draft_reply(
+    client: DataClient, *, ctx: ResolvedContext, license_id, document_type: str,
+    description: str, previous_html: str | None, template_id: str | None,
+    permission_keys: list[str], language: str, ai_client=None,
+) -> ChatReply:
+    """Draft, check, store as a DRAFT version, and show it.
+
+    The order matters and is the whole safety story: the model's markup is
+    sanitised and its placeholders checked BEFORE anything is written, so
+    a draft that fails leaves no template row, no version and no stored
+    object behind — there is nothing to clean up because nothing was made.
+    """
+    from ..routers_phase2 import (
+        DOCX_CONTENT_TYPE, TemplateUploadIn, preview_document_template,
+        upload_document_template,
+    )
+    from .documents.design import (
+        DOCUMENT_TYPE_LABELS, TemplateRejected, draft_template, missing_essentials,
+    )
+    from .documents.html_docx import html_to_docx
+    from .storage.base import get_document_store
+
+    label = _t(TEMPLATE_TYPE_LABEL[document_type], language)
+
+    try:
+        profile = await client.get_company_profile(str(license_id)) or {}
+    except Exception:
+        # A shop that has not filled in its profile still gets a template;
+        # the header is placeholders either way.
+        log.exception("could not read the company profile for a template design")
+        profile = {}
+
+    try:
+        html, invented = await draft_template(
+            document_type=document_type, description=description,
+            company=profile, previous_html=previous_html, ai_client=ai_client,
+        )
+    except (AINotConfigured, AIUnavailable) as exc:
+        # Point 5: the standard unavailable reply, and nothing half-made.
+        # Nothing has been written at this point, so "nothing left behind"
+        # is a property of the order above rather than a cleanup step.
+        log.warning("template design unavailable: %s", exc)
+        await _drop_pending_quietly(client, ctx)
+        return ChatReply(text=unavailable_reply(language))
+    except TemplateRejected as exc:
+        log.warning("template draft rejected: %s", exc.reasons)
+        await _drop_pending_quietly(client, ctx)
+        return ChatReply(
+            text=_t(TEMPLATE_REJECTED, language).format(
+                reasons="\n".join(f"• {r}" for r in exc.reasons), label=label,
+            ),
+        )
+
+    name = _template_name_for(document_type)
+    principal = _template_principal(ctx, license_id, permission_keys)
+    try:
+        saved = await upload_document_template(
+            str(license_id),
+            TemplateUploadIn(
+                template_name=name, html=html, document_type=document_type,
+            ),
+            principal,
+            client,
+        )
+    except Exception:
+        log.exception("storing a designed template failed")
+        await _drop_pending_quietly(client, ctx)
+        return ChatReply(text=_t(TEMPLATE_SAVE_FAILED, language))
+
+    template_id = str(saved["template_id"])
+    version_id = str(saved["version_id"])
+
+    # The preview route fills the stored template with a real sample
+    # snapshot and moves the version draft -> previewed. Calling it means
+    # what the person looks at is what the engine produces, not a second
+    # rendering path that could disagree with it.
+    preview_html = ""
+    try:
+        previewed = await preview_document_template(
+            str(license_id), template_id, version_id, principal, client,
+        )
+        preview_html = str(previewed.get("html") or "")
+    except Exception:
+        log.exception("previewing a designed template failed")
+
+    store = get_document_store()
+    preview_url = None
+    if preview_html:
+        preview_url = await _template_asset_link(
+            store,
+            path=f"{license_id}/templates/{template_id}/{version_id}-preview.html",
+            content=preview_html.encode("utf-8"),
+            content_type="text/html; charset=utf-8",
+        )
+    docx_url = await _template_asset_link(
+        store,
+        path=f"{license_id}/templates/{template_id}/{version_id}-design.docx",
+        content=html_to_docx(html),
+        content_type=DOCX_CONTENT_TYPE,
+        filename=f"{document_type}-template.docx",
+    )
+
+    try:
+        await client.set_pending_intent(
+            ctx.chann_uid, ctx.oa, action="design", entity="template_design",
+            fields={
+                "template_id": template_id, "version_id": version_id,
+                "document_type": document_type, "html": html,
+                "description": description, "name": name,
+            },
+            missing=[], ttl_seconds=TEMPLATE_DESIGN_TTL_S,
+        )
+    except Exception:
+        log.exception("could not hold a designed template for confirmation")
+
+    from .documents.fill import placeholders_in
+
+    used = sorted(placeholders_in(html))
+    examples = ", ".join(f"{{{{{p}}}}}" for p in used[:3])
+    warning = ""
+    if invented:
+        warning += _t(TEMPLATE_UNKNOWN_FIELDS, language).format(
+            names=", ".join(f"{{{{{p}}}}}" for p in invented),
+        )
+    lacking = missing_essentials(html, document_type)
+    if lacking:
+        warning += _t(TEMPLATE_MISSING_ESSENTIALS, language).format(
+            names=", ".join(
+                label_th for label_th in (
+                    dict(_template_vocabulary(document_type)).get(name_, name_)
+                    for name_ in lacking
+                )
+            ),
+        )
+
+    text = _t(TEMPLATE_DRAFT_READY, language).format(
+        label=label, name=name,
+        summary=_t(TEMPLATE_DRAFT_SUMMARY, language).format(n=len(used), examples=examples),
+        warning=warning,
+        docx=docx_url or _t(TEMPLATE_NO_PREVIEW_LINK, language),
+    )
+    return ChatReply(
+        text=text,
+        quick_replies=_TEMPLATE_DECIDE_BUTTONS,
+        quick_reply_url=(
+            (("ดูตัวอย่างเอกสาร" if language != "en" else "See the document"), preview_url)
+            if preview_url else _dashboard_button("templates", language)
+        ),
+    )
+
+
+def _template_vocabulary(document_type: str):
+    from .documents.design import vocabulary_for
+
+    return vocabulary_for(document_type)
+
+
+async def _handle_template_design(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
+    permission_keys: list[str], language: str, ai_client=None,
+) -> ChatReply:
+    """"ออกแบบใบเสนอราคา" — the first turn.
+
+    The permission gate is first and is the ordinary refusal: someone
+    without `setting.manage` gets exactly what they get for every other
+    thing they cannot do, and the flow never starts, so no draft is made
+    and no model call is spent.
+    """
+    if "setting.manage" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+
+    document_type = _template_type_from(message)
+    if document_type is None:
+        try:
+            await client.set_pending_intent(
+                ctx.chann_uid, ctx.oa, action="design", entity="template_design_type",
+                fields={"description": _template_description(message)},
+                missing=["document_type"], ttl_seconds=TEMPLATE_DESIGN_TTL_S,
+            )
+        except Exception:
+            log.exception("could not hold a template design question")
+        return ChatReply(
+            text=_t(TEMPLATE_ASK_TYPE, language),
+            # The button sends the whole request, not just the answer: the
+            # question expires after half an hour, and a tap that lands
+            # after that should still start the right design rather than
+            # be read as a bare noun the router has no use for.
+            quick_replies=[
+                ("ใบเสนอราคา", "ออกแบบใบเสนอราคา"),
+                ("ใบรายงานการซ่อม", "ออกแบบใบรายงานการซ่อม"),
+            ],
+        )
+
+    return await _template_draft_reply(
+        client, ctx=ctx, license_id=license_id, document_type=document_type,
+        description=_template_description(message), previous_html=None,
+        template_id=None, permission_keys=permission_keys, language=language,
+        ai_client=ai_client,
+    )
+
+
+async def _resolve_template_design(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str, pending: dict,
+    permission_keys: list[str], language: str, ai_client=None,
+) -> ChatReply | None:
+    """The answer to a template question — which type, or what to do with
+    a draft. `None` means "not an answer to this": the draft is dropped
+    and the router carries on with the message as a fresh request.
+    """
+    entity = pending.get("entity")
+    fields = pending.get("fields") or {}
+    norm = _normalise(message)
+    stripped = (message or "").strip().lower()
+
+    # Which of the two documents. Any other sentence is a new request.
+    if entity == "template_design_type":
+        document_type = _template_type_from(message)
+        if norm in _TEMPLATE_DROP_WORDS or stripped in _TEMPLATE_DROP_WORDS:
+            await _drop_pending_quietly(client, ctx)
+            return ChatReply(text=_t(SLOT_FILL_CANCELLED, language))
+        if document_type is None:
+            await _drop_pending_quietly(client, ctx)
+            return None
+        if "setting.manage" not in set(permission_keys):
+            await _drop_pending_quietly(client, ctx)
+            return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        await _drop_pending_quietly(client, ctx)
+        described = str(fields.get("description") or "")
+        return await _template_draft_reply(
+            client, ctx=ctx, license_id=license_id, document_type=document_type,
+            description=f"{described}\n{message}".strip(), previous_html=None,
+            template_id=None, permission_keys=permission_keys, language=language,
+            ai_client=ai_client,
+        )
+
+    document_type = str(fields.get("document_type") or "quote")
+    label = _t(TEMPLATE_TYPE_LABEL.get(document_type, TEMPLATE_TYPE_LABEL["quote"]), language)
+
+    # "แก้เพิ่ม" was pressed last turn; this message is the instruction.
+    if entity == "template_refine":
+        if norm in _TEMPLATE_DROP_WORDS or stripped in _TEMPLATE_DROP_WORDS:
+            return await _discard_template_draft(client, ctx=ctx, label=label, language=language)
+        if "setting.manage" not in set(permission_keys):
+            await _drop_pending_quietly(client, ctx)
+            return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return await _template_draft_reply(
+            client, ctx=ctx, license_id=license_id, document_type=document_type,
+            description=(message or "").strip(),
+            previous_html=str(fields.get("html") or "") or None,
+            template_id=str(fields.get("template_id") or "") or None,
+            permission_keys=permission_keys, language=language, ai_client=ai_client,
+        )
+
+    # A draft is on the table: publish it, change it, or drop it.
+    if norm in _TEMPLATE_DROP_WORDS or stripped in _TEMPLATE_DROP_WORDS:
+        return await _discard_template_draft(client, ctx=ctx, label=label, language=language)
+
+    if norm in _TEMPLATE_YES_WORDS or stripped in _TEMPLATE_YES_WORDS:
+        return await _publish_template_draft(
+            client, ctx=ctx, license_id=license_id, pending=pending,
+            permission_keys=permission_keys, language=language,
+        )
+
+    wants_edit = norm in _TEMPLATE_REFINE_WORDS or stripped in _TEMPLATE_REFINE_WORDS
+    if wants_edit:
+        try:
+            await client.set_pending_intent(
+                ctx.chann_uid, ctx.oa, action="design", entity="template_refine",
+                fields=fields, missing=["instruction"], ttl_seconds=TEMPLATE_DESIGN_TTL_S,
+            )
+        except Exception:
+            log.exception("could not hold a template refine")
+        return ChatReply(text=_t(TEMPLATE_REFINE_ASK, language))
+
+    # An edit said outright ("เพิ่มช่องเลขที่ผู้เสียภาษี") without pressing the
+    # button first. Treated as the edit it plainly is — throwing the draft
+    # away here would punish someone for answering the question directly.
+    if any(stripped.startswith(lead) for lead in _TEMPLATE_EDIT_LEAD):
+        if "setting.manage" not in set(permission_keys):
+            await _drop_pending_quietly(client, ctx)
+            return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return await _template_draft_reply(
+            client, ctx=ctx, license_id=license_id, document_type=document_type,
+            description=(message or "").strip(),
+            previous_html=str(fields.get("html") or "") or None,
+            template_id=str(fields.get("template_id") or "") or None,
+            permission_keys=permission_keys, language=language, ai_client=ai_client,
+        )
+
+    # Anything else is a different request. The draft is left unpublished
+    # (it is a DRAFT version on the templates page, not litter) and the
+    # router goes on.
+    await _drop_pending_quietly(client, ctx)
+    return None
+
+
+async def _discard_template_draft(
+    client: DataClient, *, ctx: ResolvedContext, label: str, language: str,
+) -> ChatReply:
+    """"ทิ้ง" — forget the draft, publish nothing, change nothing.
+
+    The version itself is left as a DRAFT rather than deleted: an unpublished
+    version is invisible to document issuing, the templates page shows it,
+    and 10.5's rule is that a published version is never mutated — deleting
+    drafts would be a second, different lifecycle for no gain.
+    """
+    await _drop_pending_quietly(client, ctx)
+    return ChatReply(text=_t(TEMPLATE_DISCARDED, language).format(label=label))
+
+
+async def _publish_template_draft(
+    client: DataClient, *, ctx: ResolvedContext, license_id, pending: dict,
+    permission_keys: list[str], language: str,
+) -> ChatReply:
+    """"ใช้เลย" — the explicit act, and the only way a template goes live.
+
+    `setting.manage` is checked here again rather than trusted from the
+    turn that made the draft: publishing is what changes every document
+    the shop issues, the two turns can be half an hour apart, and a role
+    can be taken away in between. The publish route checks it a third
+    time against the same principal.
+    """
+    from ..routers_phase2 import publish_document_template
+
+    fields = pending.get("fields") or {}
+    document_type = str(fields.get("document_type") or "quote")
+    label = _t(TEMPLATE_TYPE_LABEL.get(document_type, TEMPLATE_TYPE_LABEL["quote"]), language)
+    template_id = str(fields.get("template_id") or "")
+    version_id = str(fields.get("version_id") or "")
+
+    if "setting.manage" not in set(permission_keys):
+        await _drop_pending_quietly(client, ctx)
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    if not template_id or not version_id:
+        await _drop_pending_quietly(client, ctx)
+        return ChatReply(text=_t(TEMPLATE_DRAFT_GONE, language))
+
+    try:
+        await publish_document_template(
+            str(license_id), template_id, version_id,
+            _template_principal(ctx, license_id, permission_keys), client,
+        )
+    except Exception:
+        log.exception("publishing a designed template failed")
+        return ChatReply(text=_t(TEMPLATE_PUBLISH_FAILED, language))
+
+    await _drop_pending_quietly(client, ctx)
+    return ChatReply(
+        text=_t(TEMPLATE_PUBLISHED, language).format(
+            label=label, name=str(fields.get("name") or ""),
+        ),
+        quick_reply_url=_dashboard_button("templates", language),
     )

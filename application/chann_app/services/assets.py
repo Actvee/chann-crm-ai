@@ -55,6 +55,16 @@ def asset_link(
         return None
     if path.startswith("http://") or path.startswith("https://"):
         return path
+    if "://" in path and not path.startswith("gs://"):
+        # A marker, not an object. `builtin://none` and `upload://html`
+        # are how a template version records "this did not come from an
+        # uploaded file"; minting a link for one produced a button that
+        # 4xx'd with "stored path 'builtin://none' does not belong to
+        # bucket …" (owner, 9 Sep 2026). The store only ever hands out
+        # gs:// paths, so anything else with a scheme is a sentinel and
+        # has no bytes to serve — a missing button beats a broken one.
+        log.warning("refusing to link a non-storage path: %s", path)
+        return None
     base = _base(base_url)
     if not base:
         log.warning("no PUBLIC_BASE_URL; cannot link to %s", path)

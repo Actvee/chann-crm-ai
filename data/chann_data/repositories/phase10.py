@@ -473,6 +473,47 @@ class DocumentTemplateRepository:
             query = query.where(DocumentTemplate.document_type == document_type)
         return list(self._s.execute(query.order_by(DocumentTemplate.created_at.desc())).scalars())
 
+    def set_template_active(
+        self, scope: TenantScope, template_id: uuid.UUID, *, active: bool,
+    ) -> tuple[DocumentTemplate, list[DocumentTemplate]]:
+        """Choose which template of its document type the shop's new
+        documents are rendered from. Returns (template, the ones this
+        turned off).
+
+        `is_active` was always read by the issue path and never written by
+        anything, so a shop with two published quote templates got
+        whichever the list happened to yield first. Activating one here
+        turns off every other template of the SAME document_type in this
+        tenant, which is what makes "exactly one active per (license,
+        document_type)" true; a service-report template is untouched by a
+        choice about quotes.
+
+        Zero active is a legitimate state, not a broken invariant: it is
+        how a shop says "go back to the system's standard layout". So this
+        is a repository rule rather than a partial unique index — a
+        constraint could express "at most one true", but not the
+        deactivate-the-siblings write that makes choosing one click.
+        """
+        template = self.get_template(scope, template_id)
+        if template is None:
+            raise Phase10NotFound("template not found in this tenant")
+        turned_off: list[DocumentTemplate] = []
+        if active:
+            siblings = self._s.execute(
+                select(DocumentTemplate).where(
+                    DocumentTemplate.license_id == scope.license_id,
+                    DocumentTemplate.document_type == template.document_type,
+                    DocumentTemplate.id != template.id,
+                    DocumentTemplate.is_active.is_(True),
+                )
+            ).scalars().all()
+            for sibling in siblings:
+                sibling.is_active = False
+                turned_off.append(sibling)
+        template.is_active = active
+        self._s.flush()
+        return template, turned_off
+
     def create_draft_version(
         self, scope: TenantScope, template_id: uuid.UUID, *,
         source_docx_path: str, intermediate_model: dict, mapping_schema: dict,

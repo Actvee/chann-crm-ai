@@ -308,17 +308,24 @@ class TestTheSampleDownload:
 
 class _Store:
     """The document store, in memory. Production is GCS; here it only has
-    to hold bytes so the upload and preview paths can complete."""
+    to hold bytes so the upload and preview paths can complete.
+
+    The paths it hands back are `gs://` ones, like the real store's. A
+    fake that invents its own scheme is a fake that cannot catch the bug
+    these tests exist for: `asset_link` refuses any path whose scheme is
+    not one the store could serve, because `builtin://none` was minted
+    into a download link that 4xx'd.
+    """
 
     def __init__(self, seed: dict[str, bytes] | None = None):
         self.objects: dict[str, bytes] = dict(seed or {})
 
     async def put(self, *, key, content, content_type=None):
         self.objects[key] = content
-        return type("Stored", (), {"path": f"mem://{key}"})()
+        return type("Stored", (), {"path": f"gs://test-bucket/{key}"})()
 
     async def get(self, *, path):
-        key = path.removeprefix("mem://")
+        key = path.removeprefix("gs://test-bucket/")
         if key not in self.objects:
             from chann_app.services.storage.base import DocumentStoreError
 
@@ -433,7 +440,7 @@ class TestUploadingAWordFile:
         assert version["source_docx_path"].endswith(".docx")
         assert version["intermediate_model"]["kind"] == "docx_upload"
         assert version["intermediate_model"]["filename"] == "quotation.docx"
-        assert store.objects[version["source_docx_path"].removeprefix("mem://")] == content
+        assert store.objects[version["source_docx_path"].removeprefix("gs://test-bucket/")] == content
 
     def test_an_html_upload_is_unchanged(self, store):
         """The rule for this whole change: additive. An HTML template
@@ -448,7 +455,7 @@ class TestUploadingAWordFile:
         version = client.versions[-1]
         assert version["source_docx_path"] == "upload://html"
         assert version["intermediate_model"] == {"kind": "html_upload"}
-        stored = store.objects[version["compiled_template_path"].removeprefix("mem://")]
+        stored = store.objects[version["compiled_template_path"].removeprefix("gs://test-bucket/")]
         assert stored == b"<h1>{{company.name}}</h1>"
 
     def test_a_doc_is_refused_with_the_advice_to_save_as_docx(self, store):
@@ -507,8 +514,8 @@ def _draft_version(store, *, status="draft", html=None):
     store.objects[key] = body.encode("utf-8")
     return {
         "id": VERSION_ID, "template_id": TEMPLATE_ID, "version": 1,
-        "status": status, "compiled_template_path": f"mem://{key}",
-        "source_docx_path": f"mem://{LICENSE_ID}/templates/{TEMPLATE_ID}/abc.docx",
+        "status": status, "compiled_template_path": f"gs://test-bucket/{key}",
+        "source_docx_path": f"gs://test-bucket/{LICENSE_ID}/templates/{TEMPLATE_ID}/abc.docx",
         "intermediate_model": {"kind": "docx_upload", "filename": "q.docx"},
     }
 
@@ -625,7 +632,7 @@ class TestPreviewingAVersion:
             }],
             versions=[{
                 "id": VERSION_ID, "template_id": TEMPLATE_ID, "version": 1,
-                "status": "draft", "compiled_template_path": f"mem://{key}",
+                "status": "draft", "compiled_template_path": f"gs://test-bucket/{key}",
                 "source_docx_path": "upload://html", "intermediate_model": {},
             }],
         )
@@ -653,9 +660,54 @@ class TestTheVersionListLinksBackToTheWordFile:
             templates=[],
             versions=[{
                 "id": VERSION_ID, "template_id": TEMPLATE_ID, "version": 1,
-                "status": "draft", "compiled_template_path": "mem://x",
-                "source_docx_path": "upload://html", "intermediate_model": {},
+                "status": "draft", "compiled_template_path": "gs://test-bucket/x",
+                "source_docx_path": "upload://html",
+                "intermediate_model": {"kind": "html_upload"},
             }],
         )
         rows = _app(client).get(_url(f"/{TEMPLATE_ID}/versions")).json()
         assert rows[0]["source_docx_url"] is None
+
+    def test_the_builtin_version_offers_nothing_to_download(self, store, monkeypatch):
+        """The owner's first complaint, 9 Sep 2026: the download button on
+        the built-in layout answered
+
+            {"detail": "stored path 'builtin://none' does not belong to
+             bucket chann1-document-actvee-dev"}
+
+        The old test was "not upload://" — a list of the paths that are
+        NOT files, which `builtin://none` was missing from. The rule is
+        positive now: a link only when a .docx was actually uploaded.
+        """
+        from chann_app import config as app_config
+
+        monkeypatch.setattr(app_config.settings, "public_base_url", "https://x.test")
+        monkeypatch.setattr(app_config.settings, "jwt_secret", "unit-test-secret")
+        client = _Client(
+            templates=[{
+                "id": TEMPLATE_ID, "template_name": "ใบเสนอราคา (แบบมาตรฐานของระบบ)",
+                "template_code": "BUILTIN-QUOTE", "document_type": "quote",
+                "is_active": True,
+            }],
+            versions=[{
+                "id": VERSION_ID, "template_id": TEMPLATE_ID, "version": 1,
+                "status": "published",
+                "compiled_template_path": "builtin://quote/v1",
+                "source_docx_path": "builtin://none",
+                "intermediate_model": {"kind": "builtin"},
+            }],
+        )
+        rows = _app(client).get(_url(f"/{TEMPLATE_ID}/versions")).json()
+        assert rows[0]["source_docx_url"] is None
+
+    def test_a_sentinel_path_never_reaches_the_link_maker(self, monkeypatch):
+        """The same guard one layer down, so a future caller that forgets
+        the positive test still cannot mint a link for a marker."""
+        from chann_app import config as app_config
+        from chann_app.services import assets
+
+        monkeypatch.setattr(app_config.settings, "public_base_url", "https://x.test")
+        monkeypatch.setattr(app_config.settings, "jwt_secret", "unit-test-secret")
+        assert assets.asset_link("builtin://none") is None
+        assert assets.asset_link("upload://html") is None
+        assert assets.asset_link("gs://test-bucket/a.docx") is not None

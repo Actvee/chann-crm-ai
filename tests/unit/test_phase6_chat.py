@@ -10,6 +10,7 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import sys
+import uuid
 from decimal import Decimal
 from pathlib import Path
 
@@ -87,6 +88,10 @@ class FakeDataClient:
             permission_keys if permission_keys is not None else ["customer.read"]
         )
         self._mapping = mapping
+        # Phase 10 tenant templates. Empty is the real starting state: a
+        # shop uses the built-in layout until it uploads or designs one.
+        self._templates: list[dict] = []
+        self._template_versions: list[dict] = []
         # Phase 10 company identity. Defaults to a brand-new tenant: nothing
         # filled in, so not document-ready — the state every existing tenant
         # is in immediately after migration 0010.
@@ -923,6 +928,74 @@ class FakeDataClient:
     async def list_products(self, license_id, *args, **kwargs):
         self.recorded.append(("list_products", license_id))
         return list(getattr(self, "_products", []))
+
+    # ------------------------------------------- document templates (10.4)
+    #
+    # The four calls the Application tier's template routes make. Present so
+    # the chat flow that designs a template with the AI can be exercised
+    # against the same fake everything else uses; the state machine
+    # (draft -> previewed -> published) is the Data tier's own, mirrored
+    # here because a fake that publishes a draft silently would let a bug
+    # through that the real repository refuses.
+
+    async def list_document_templates(self, license_id, document_type=None):
+        self.recorded.append(("list_document_templates", license_id, document_type))
+        return [
+            dict(t) for t in self._templates
+            if document_type is None or t["document_type"] == document_type
+        ]
+
+    async def create_document_template(self, license_id, payload, actor_id=None):
+        row = {"id": str(uuid.uuid4()), "license_id": str(license_id),
+               "is_active": True, **dict(payload)}
+        self._templates.append(row)
+        self.recorded.append(("create_document_template", license_id, dict(payload)))
+        return dict(row)
+
+    async def create_document_template_version(self, license_id, template_id, payload, actor_id=None):
+        siblings = [v for v in self._template_versions if v["template_id"] == str(template_id)]
+        row = {
+            "id": str(uuid.uuid4()), "template_id": str(template_id),
+            "version": len(siblings) + 1, "status": "draft", "published_at": None,
+            **dict(payload),
+        }
+        self._template_versions.append(row)
+        self.recorded.append(("create_document_template_version", license_id, str(template_id)))
+        return dict(row)
+
+    async def list_document_template_versions(self, license_id, template_id):
+        return [
+            dict(v) for v in self._template_versions
+            if v["template_id"] == str(template_id)
+        ]
+
+    def _template_version(self, version_id):
+        for row in self._template_versions:
+            if row["id"] == str(version_id):
+                return row
+        raise KeyError(version_id)
+
+    async def preview_document_template_version(self, license_id, version_id, actor_id=None):
+        from chann_app.data_client import DataTierError
+
+        row = self._template_version(version_id)
+        if row["status"] != "draft":
+            raise DataTierError(409, "cannot preview a version that is not a draft")
+        row["status"] = "previewed"
+        return dict(row)
+
+    async def publish_document_template_version(self, license_id, version_id, actor_id=None):
+        from chann_app.data_client import DataTierError
+
+        row = self._template_version(version_id)
+        if row["status"] not in ("draft", "previewed"):
+            raise DataTierError(
+                409, f"cannot publish a version that is already {row['status']!r}",
+            )
+        row["status"] = "published"
+        row["published_at"] = "2026-09-09T00:00:00+00:00"
+        self.recorded.append(("publish_document_template_version", license_id, str(version_id)))
+        return dict(row)
 
     async def list_quotes(self, license_id, status=None):
         self.recorded.append(("list_quotes", license_id, status))
@@ -6018,6 +6091,7 @@ class TestButtonsTheSystemWritesDoNotNeedTheAI:
         # Exact-match phrase lists for the rich-menu tiles (3 Sep audit).
         triggers += list(module.TICKET_MINE_PHRASES)
         triggers += list(module.TICKET_OPEN_PHRASES)
+        triggers += list(module.TEMPLATE_DESIGN_TRIGGERS)
         triggers += list(module.PDPA_EXPORT_PHRASES) + list(module.PDPA_ERASE_PHRASES) + list(module.PDPA_ERASE_CONFIRM_PHRASES)
         triggers += list(module.CUSTOMER_STATUS_PHRASES)
         triggers += list(module.CUSTOMER_CONTACT_PHRASES)
@@ -6036,6 +6110,7 @@ class TestButtonsTheSystemWritesDoNotNeedTheAI:
         triggers += list(module.PRODUCT_LIST_PHRASES) + list(module.CUSTOMER_ORDERS_PHRASES)
         triggers += list(module.CUSTOMER_CHAT_PHRASES) + list(module.CUSTOMER_CHAT_END_PHRASES)
         triggers += list(module.TICKET_OPEN_PHRASES)
+        triggers += list(module.TEMPLATE_DESIGN_TRIGGERS)
         triggers += list(module.PDPA_EXPORT_PHRASES) + list(module.PDPA_ERASE_PHRASES) + list(module.PDPA_ERASE_CONFIRM_PHRASES)
 
         # user review (4 Sep 2026): duplicate / merge / delete / context confirmations

@@ -47,3 +47,59 @@ def migrated_db():
     )
     assert result.returncode == 0, f"alembic upgrade failed:\n{result.stdout}\n{result.stderr}"
     return engine
+
+
+@pytest.fixture
+def memory_cache():
+    """Redis, as an in-process dictionary, for the length of one test.
+
+    The Data tier keeps conversational scratch state in Redis on purpose
+    (`pending_intent`, `last_entity_ref`: short-lived, no audit trail), and
+    its documented degrade with Redis down is "ask fresh". So an
+    integration test that drives a MULTI-TURN chat flow against the real
+    tier cannot work without one — every message would start over, and the
+    test would be asserting on the degrade path rather than the feature.
+
+    The same stand-in, for the same reason, as the agent-test channel's
+    `db` backend (`scripts/agent-test/agent_test_runner/backends.py`). Only
+    the four calls `chann_data.cache` makes are implemented, so a fifth one
+    appearing in the Data tier fails loudly here rather than being quietly
+    emulated wrong. Real eviction, real TTL expiry under load and two
+    processes sharing one cache remain out of reach.
+    """
+    import time
+
+    class _MemoryRedis:
+        def __init__(self):
+            self._store: dict[str, tuple[float | None, str]] = {}
+
+        def ping(self) -> bool:
+            return True
+
+        def get(self, key: str):
+            entry = self._store.get(key)
+            if entry is None:
+                return None
+            expires_at, value = entry
+            if expires_at is not None and expires_at <= time.time():
+                self._store.pop(key, None)
+                return None
+            return value
+
+        def setex(self, key: str, ttl_s: int, value: str) -> None:
+            self._store[key] = (
+                time.time() + ttl_s if ttl_s and ttl_s > 0 else None, value,
+            )
+
+        def delete(self, *keys: str) -> None:
+            for key in keys:
+                self._store.pop(key, None)
+
+    from chann_data.cache import cache
+
+    previous = cache._client
+    cache._client = _MemoryRedis()
+    try:
+        yield cache
+    finally:
+        cache._client = previous

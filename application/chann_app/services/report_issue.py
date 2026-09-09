@@ -26,6 +26,7 @@ from .assets import image_for_render
 from .documents.fill import fill_template
 from .documents.report_html import render_service_report_html
 from .documents.report_snapshot import build_service_report_snapshot
+from .documents.selection import resolve_tenant_template
 from .pdf.base import PdfOptions, get_renderer
 from .storage.base import get_document_store, sha256_hex
 
@@ -65,37 +66,23 @@ def report_document_key(*, license_id: str, report_code: str, issued_at: datetim
 async def _resolve_template(
     client: DataClient, license_id: str, snapshot: dict, *, actor_id: str | None = None,
 ) -> tuple[str, str]:
-    """(template_version_id, html): the shop's published service_report
-    template if it has one, the built-in otherwise — the quote's rule."""
-    try:
-        templates = await client.list_document_templates(license_id, document_type=DOCUMENT_TYPE)
-    except Exception:
-        log.exception("could not read report templates; falling back to the built-in")
-        templates = []
-
-    for template in templates:
-        if template.get("template_code") == BUILTIN_REPORT_TEMPLATE_CODE:
-            continue
-        if not template.get("is_active", True):
-            continue
+    """(template_version_id, html): the shop's chosen service_report
+    template if it has one in use, the built-in otherwise — the quote's
+    rule, and now literally the same code (`documents/selection.py`)."""
+    _template, version = await resolve_tenant_template(client, license_id, DOCUMENT_TYPE)
+    if version is not None:
         try:
-            versions = await client.list_document_template_versions(license_id, str(template["id"]))
+            raw = await get_document_store().get(
+                path=str(version.get("compiled_template_path") or "")
+            )
+            html = fill_template(raw.decode("utf-8"), snapshot)
         except Exception:
-            log.exception("could not read versions for template %s", template.get("id"))
-            continue
-        published = [v for v in versions if v.get("status") == "published"]
-        if not published:
-            continue
-        newest = max(published, key=lambda v: int(v.get("version") or 0))
-        compiled = str(newest.get("compiled_template_path") or "")
-        if not compiled or compiled.startswith("builtin://"):
-            continue
-        try:
-            raw = await get_document_store().get(path=compiled)
-            return str(newest["id"]), fill_template(raw.decode("utf-8"), snapshot)
-        except Exception:
-            log.exception("tenant report template %s could not be used; using the built-in", newest.get("id"))
-            break
+            log.exception(
+                "tenant report template %s could not be used; using the built-in",
+                version.get("id"),
+            )
+        else:
+            return str(version["id"]), html
 
     version_id = await _ensure_builtin_template_version(client, license_id, actor_id=actor_id)
     return version_id, render_service_report_html(snapshot)

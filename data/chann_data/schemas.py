@@ -1033,6 +1033,17 @@ class DocumentTemplateOut(BaseModel):
     updated_at: datetime
 
 
+class DocumentTemplateActiveIn(BaseModel):
+    """Which template of a document type the shop's new documents use.
+
+    `true` makes this the one and turns off every other template of the
+    same document_type; `false` takes it out of use, which leaves the
+    tenant on the built-in layout unless another one is chosen.
+    """
+
+    is_active: bool = True
+
+
 class DocumentTemplateVersionIn(BaseModel):
     source_docx_path: str
     intermediate_model: dict

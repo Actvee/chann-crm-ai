@@ -6,13 +6,13 @@
 
 ## 1. ตั้งร้านให้พร้อม
 
-"ข้อมูลร้าน" ดูรหัสร้าน (ให้ลูกค้าใช้ผูก) · "ขอรหัสเชิญช่าง" ให้ช่างเข้าร่วม · "สร้างทีมช่าง แอร์" แล้ว "เพิ่ม สมศักดิ์ เข้าทีม แอร์ เป็นหัวหน้า" · "ข้อมูลบริษัท" สำหรับเอกสาร · "ตั้งค่ารับลูกค้าใหม่อัตโนมัติ เปิด" ให้ลูกค้าที่ผูกร้านเข้ารายชื่อทันที
+"ข้อมูลร้าน" ดูรหัสร้าน (ให้ลูกค้าใช้ผูก) · "ขอรหัสเชิญช่าง" ให้ช่างเข้าร่วม · "สร้างทีมช่าง แอร์" แล้ว "เพิ่ม สมศักดิ์ เข้าทีม แอร์ เป็นหัวหน้า" · "ข้อมูลบริษัท" สำหรับเอกสาร · "ตั้งค่ารับลูกค้าใหม่อัตโนมัติ เปิด" ให้ลูกค้าที่ผูกร้านเข้ารายชื่อทันที · อยากให้เอกสารเป็นแบบของร้านเอง พิมพ์ "ออกแบบใบเสนอราคา" หรือ "ออกแบบใบรายงานการซ่อม" แล้วบอกว่าอยากได้แบบไหน AI จะร่างให้ก่อน ยังไม่ได้ใช้จริง มีปุ่มดูตัวอย่างและไฟล์ Word ไว้แก้เอง แล้วเลือก "ใช้เลย" / "แก้เพิ่ม" / "ทิ้ง" · หรือทำบนแดชบอร์ด > แบบฟอร์มเอกสาร: เลือกก่อนว่าเป็น ใบเสนอราคา หรือ รายงานการซ่อม แล้วอัปไฟล์ Word (.docx) (มีไฟล์ตัวอย่างให้ดาวน์โหลด) กด ดูตัวอย่าง แล้ว เผยแพร่ จากนั้นกด เลือกใช้แบบนี้ เพื่อบอกว่าเอกสารที่ออกใหม่จะใช้แบบไหน (เอกสารที่ออกไปแล้วไม่เปลี่ยน · ไม่เลือกหรือเลิกใช้ = กลับไปใช้แบบมาตรฐานของระบบ) · ต้องมีสิทธิ์ "ตั้งค่าร้าน"
 
 พิมพ์: `สร้างทีมช่าง แอร์`
 
 [IMAGE: sales-setup — แผนผังร้าน: กล่อง 'ร้าน (รหัส ABCD01)' เชื่อมไป 'ทีมช่าง แอร์ (หัวหน้า สมศักดิ์)' และ 'ลูกค้า' ธีมเขียว]
 
-_EN: Set the shop up — "shop info" (the code customers link with) · "invite technician" · "create technician team AC" then "add Somsak to team AC as lead" · "company profile" for documents_
+_EN: Set the shop up — "shop info" (the code customers link with) · "invite technician" · "create technician team AC" then "add Somsak to team AC as lead" · "company profile" for documents · "auto accept new customers on" · to put the shop's own layout on its documents, type "design a quotation" or "design a service report" and say what you want — the AI drafts it, nothing is in use until you press use it, with a preview and a Word file to edit · or on the dashboard > document templates: choose quotation or service report, upload a .docx (samples to download), preview, publish, then choose this one to say which layout new documents use (issued documents never change; no choice or none active falls back to the built-in) · needs the shop settings permission_
 
 ## 2. บันทึกเครื่องที่ขาย
 

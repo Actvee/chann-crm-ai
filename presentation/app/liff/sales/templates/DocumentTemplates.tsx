@@ -15,7 +15,9 @@ type TemplateVersion = {
   version: number;
   status: string;
   /** A link back to the Word file this version was made from, when it
-   *  came from one. Null for an HTML upload and for the built-in. */
+   *  came from one. Null for an HTML upload and for the built-in — the
+   *  server sends null rather than a link that 4xxs, so the button
+   *  below is simply absent. */
   source_docx_url?: string | null;
 };
 
@@ -32,6 +34,12 @@ const DOCX_TYPE =
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 const MAX_UPLOAD_BYTES = 2_000_000;
 
+/** The kinds of document that actually have an issue path behind them.
+ *  Mirrors TEMPLATE_DOCUMENT_TYPES in the Application tier: offering a
+ *  type nothing renders would let a shop maintain a file for nothing. */
+const DOCUMENT_TYPES = ["quote", "service_report"] as const;
+type DocumentType = (typeof DOCUMENT_TYPES)[number];
+
 type Template = {
   id: string;
   template_name: string;
@@ -40,13 +48,37 @@ type Template = {
   is_active: boolean;
 };
 
+/** Which layout each kind of document is rendered from right now, as the
+ *  renderer itself resolves it (GET document-templates/in-use). */
+type InUse = {
+  source: string;
+  template_id: string | null;
+  template_name: string | null;
+  version_id: string | null;
+  version: number | null;
+};
+
+const NO_TEMPLATES: Template[] = [];
+
 /**
- * A shop's own quote layout.
+ * A shop's own document layouts.
  *
- * The hard part of this page is not the upload, it is explaining what
- * can go in the file. Placeholders are the entire language — there are
- * no conditions, no loops beyond the line-item block — so the reference
- * has to be right there rather than in documentation nobody opens.
+ * Three questions this page has to answer, in order: what can go in the
+ * file, which kind of document is this template for, and which one are
+ * my customers actually getting.
+ *
+ * The first is the placeholder reference, on the page rather than in
+ * documentation nobody opens — placeholders are the entire language.
+ *
+ * The second used to have no answer: every upload was filed as a quote
+ * template no matter what was in it, so a service-report layout could
+ * not be created from here at all even though the report issue path
+ * looks for one. There is a type chooser now, and the list is grouped by
+ * type.
+ *
+ * The third had no answer either. A shop with two published quote
+ * templates got whichever came first out of the list. Each type's
+ * section now names the template in use and offers the switch.
  *
  * Uploads land as drafts. A template goes onto documents customers
  * receive, and the person who wrote it should see it rendered before
@@ -57,9 +89,11 @@ export default function DocumentTemplates({ liffId }: { liffId: string }) {
   const [licenseId, setLicenseId] = useState("");
   const [token, setToken] = useState("");
   const [permissions, setPermissions] = useState<Set<string>>(new Set());
-  const [templates, setTemplates] = useState<Template[]>([]);
+  const [templates, setTemplates] = useState<Record<string, Template[]>>({});
+  const [inUse, setInUse] = useState<Record<string, InUse>>({});
   const [versions, setVersions] = useState<Record<string, TemplateVersion[]>>({});
   const [name, setName] = useState("");
+  const [documentType, setDocumentType] = useState<DocumentType>("quote");
   const [html, setHtml] = useState("");
   // A Word upload travels as base64 through the one JSON seam this tier
   // has (lib/api.ts); `docxName` is kept so the server can tell a .doc
@@ -78,24 +112,51 @@ export default function DocumentTemplates({ liffId }: { liffId: string }) {
     setTone(kind);
   }, []);
 
+  const typeLabel = useCallback(
+    (type: string) =>
+      (t.dashboard.templates.documentTypes as Record<string, string>)[type] ?? type,
+    [t],
+  );
+
   const load = useCallback(
     async (currentToken = token, license = licenseId) => {
       const headers = proxyHeaders(currentToken, license);
-      const response = await fetch(
-        `/api/phase2/licenses/${license}/document-templates?document_type=quote`,
-        { headers },
-      );
-      if (!response.ok) {
+      // Every type in one pass, plus the renderer's own answer to "which
+      // one is in use". Loading only quotes is what hid the whole
+      // service-report half of this page.
+      const responses = await Promise.all([
+        ...DOCUMENT_TYPES.map((type) =>
+          fetch(
+            `/api/phase2/licenses/${license}/document-templates?document_type=${type}`,
+            { headers },
+          ),
+        ),
+        fetch(`/api/phase2/licenses/${license}/document-templates/in-use`, {
+          headers,
+        }),
+      ]);
+      const failed = responses.find((response) => !response.ok);
+      if (failed) {
         throw new Error(
-          response.status === 403
+          failed.status === 403
             ? t.dashboard.noPermission
-            : `${t.dashboard.loadFailed} (${response.status})`,
+            : `${t.dashboard.loadFailed} (${failed.status})`,
         );
       }
-      const rows = (await response.json()) as Template[];
-      // The built-in layout is not a template anyone uploaded and cannot
-      // be edited here; listing it would invite someone to try.
-      setTemplates(rows.filter((row) => !row.template_code.startsWith("builtin")));
+      const byType: Record<string, Template[]> = {};
+      for (let index = 0; index < DOCUMENT_TYPES.length; index += 1) {
+        const rows = (await responses[index].json()) as Template[];
+        // The built-in layout is not a template anyone uploaded and
+        // cannot be edited here; listing it would invite someone to try.
+        // Case-insensitively, because the codes are BUILTIN-QUOTE and
+        // BUILTIN-SERVICE-REPORT and the old lowercase test matched
+        // neither — the built-in has been on this list all along.
+        byType[DOCUMENT_TYPES[index]] = rows.filter(
+          (row) => !row.template_code.toLowerCase().startsWith("builtin"),
+        );
+      }
+      setTemplates(byType);
+      setInUse((await responses[DOCUMENT_TYPES.length].json()) as Record<string, InUse>);
       say("");
     },
     [licenseId, say, t, token],
@@ -137,12 +198,12 @@ export default function DocumentTemplates({ liffId }: { liffId: string }) {
                   template_name: name.trim(),
                   docx_base64: docx,
                   filename: docxName,
-                  document_type: "quote",
+                  document_type: documentType,
                 }
               : {
                   template_name: name.trim(),
                   html,
-                  document_type: "quote",
+                  document_type: documentType,
                 },
           ),
         },
@@ -216,7 +277,50 @@ export default function DocumentTemplates({ liffId }: { liffId: string }) {
         return;
       }
       await loadVersions(template);
+      // Publishing can change which layout is in use — reload the answer
+      // rather than leaving the page asserting the old one.
+      await load();
       say(t.dashboard.templates.published, "ok");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Choose the layout a kind of document is rendered from, or hand the
+   *  type back to the system's standard one.
+   *
+   *  Nothing already issued changes: a generated document names the
+   *  version that rendered it, which is the whole point of recording it. */
+  async function chooseTemplate(template: Template, active: boolean) {
+    if (
+      !window.confirm(
+        (active
+          ? t.dashboard.templates.confirmChoose
+          : t.dashboard.templates.confirmUseBuiltin
+        ).replace("{name}", template.template_name),
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    try {
+      const response = await fetch(
+        `/api/phase2/licenses/${licenseId}/document-templates/${template.id}/active`,
+        {
+          method: "POST",
+          headers: proxyHeaders(token, licenseId),
+          body: JSON.stringify({ is_active: active }),
+        },
+      );
+      if (!response.ok) {
+        say(`${t.common.error} (${response.status})`, "error");
+        return;
+      }
+      await load();
+      say(
+        active ? t.dashboard.templates.chosen : t.dashboard.templates.builtinChosen,
+        "ok",
+      );
     } finally {
       setBusy(false);
     }
@@ -349,6 +453,27 @@ export default function DocumentTemplates({ liffId }: { liffId: string }) {
             <h2>{t.dashboard.templates.upload}</h2>
           </div>
           <dl className="fields">
+            {/* Which document this layout is for. Asked before the file,
+                because it decides which placeholder set applies and
+                which sample to start from — and because everything
+                uploaded here used to be filed as a quote. */}
+            <FieldRow label={t.dashboard.templates.documentType}>
+              {(id) => (
+                <select
+                  id={id}
+                  value={documentType}
+                  onChange={(event) =>
+                    setDocumentType(event.target.value as DocumentType)
+                  }
+                >
+                  {DOCUMENT_TYPES.map((type) => (
+                    <option key={type} value={type}>
+                      {typeLabel(type)}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </FieldRow>
             <FieldRow label={t.dashboard.templates.name}>
               {(id) => (
                 <input
@@ -485,138 +610,214 @@ export default function DocumentTemplates({ liffId }: { liffId: string }) {
         >{t.dashboard.templates.placeholderLegend}</pre>
       </details>
 
-      {templates.length === 0 ? (
-        <div className="empty">
-          <p>{t.dashboard.templates.empty}</p>
-        </div>
-      ) : (
-        <ul className="list">
-          {templates.map((template) => (
-            <li key={template.id} className="card">
-              <div className="card-title">{template.template_name}</div>
-              <div className="card-actions">
-                <button
-                  type="button"
-                  className="btn"
-                  data-variant="quiet"
-                  onClick={() => void loadVersions(template)}
-                  disabled={busy}
-                >
-                  {t.dashboard.templates.versions}
-                </button>
-              </div>
-              {versions[template.id]?.map((version) => (
-                <div key={version.id} className="card-meta">
-                  v{version.version} ·{" "}
-                  {(t.dashboard.templates.versionStatus as Record<string, string>)[
-                    version.status
-                  ] ?? "—"}
-                  {/* On every row, published ones included: "what does
-                      the layout my customers are getting look like" is
-                      the question this page could not answer at all. */}
-                  <button
-                    type="button"
-                    className="btn"
-                    data-variant="quiet"
-                    style={{ marginLeft: 8 }}
-                    onClick={() => void openPreview(template, version)}
-                    disabled={busy}
-                  >
-                    {t.dashboard.templates.preview}
-                  </button>
-                  {version.source_docx_url && (
-                    <button
-                      type="button"
-                      className="btn"
-                      data-variant="quiet"
-                      style={{ marginLeft: 8 }}
-                      onClick={() => openExternal(version.source_docx_url!)}
-                    >
-                      {t.dashboard.templates.sourceDownload}
-                    </button>
-                  )}
-                  {canManage && version.status !== "published" && (
-                    <button
-                      type="button"
-                      className="btn"
-                      data-variant="quiet"
-                      style={{ marginLeft: 8 }}
-                      onClick={() => void publish(template, version)}
-                      disabled={busy}
-                    >
-                      {t.dashboard.templates.publish}
-                    </button>
-                  )}
-                  {preview?.versionId === version.id && (
-                    <div style={{ marginTop: 10 }}>
-                      <div
-                        style={{
-                          display: "flex",
-                          gap: 8,
-                          alignItems: "center",
-                          flexWrap: "wrap",
-                          marginBottom: 6,
-                        }}
-                      >
-                        <strong style={{ fontSize: 13 }}>
-                          {t.dashboard.templates.previewTitle}
-                        </strong>
-                        <button
-                          type="button"
-                          className="btn"
-                          data-variant="quiet"
-                          onClick={openPreviewExternally}
-                        >
-                          {t.dashboard.templates.previewOpen}
-                        </button>
-                        <button
-                          type="button"
-                          className="btn"
-                          data-variant="quiet"
-                          onClick={() => setPreview(null)}
-                        >
-                          {t.dashboard.templates.previewClose}
-                        </button>
-                      </div>
-                      <p style={{ color: "var(--ink-soft)", fontSize: 12.5, margin: "0 0 8px" }}>
-                        {t.dashboard.templates.previewNote}
-                      </p>
-                      {preview.blanks.length > 0 && (
-                        <div className="info-note">
-                          <p>{t.dashboard.templates.blankWarning}</p>
-                          <ul>
-                            {preview.blanks.map((placeholder) => (
-                              <li key={placeholder}>
-                                <code>{`{{${placeholder}}}`}</code>
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
+      {/* One section per kind of document, each headed by the layout its
+          documents are actually being rendered from. Grouping is not
+          decoration: a quote template and a service-report template
+          share nothing but the upload box, and a flat list gave no way
+          to tell which was which. */}
+      {DOCUMENT_TYPES.map((type) => {
+        const rows = templates[type] ?? NO_TEMPLATES;
+        const current = inUse[type];
+        return (
+          <section key={type} className="section" style={{ marginBottom: 16 }}>
+            <div className="section-head">
+              <h2>{typeLabel(type)}</h2>
+            </div>
+            <p style={{ color: "var(--ink-soft)", fontSize: 13.5, margin: "0 0 10px" }}>
+              {t.dashboard.templates.inUse}{" "}
+              <strong style={{ color: "var(--ink)" }}>
+                {current && current.source === "tenant"
+                  ? `${current.template_name ?? ""} (${t.dashboard.templates.versionNumber.replace(
+                      "{n}",
+                      String(current.version ?? ""),
+                    )})`
+                  : t.dashboard.templates.builtinLayout}
+              </strong>
+            </p>
+
+            {rows.length === 0 ? (
+              <p style={{ color: "var(--ink-soft)", fontSize: 13.5, margin: 0 }}>
+                {t.dashboard.templates.emptyForType}
+              </p>
+            ) : (
+              <ul className="list">
+                {rows.map((template) => {
+                  const isUsed = current?.template_id === template.id;
+                  return (
+                  <li key={template.id} className="card">
+                    <div className="card-title">
+                      {template.template_name}{" "}
+                      {isUsed && (
+                        <span className="badge" data-stage="won">
+                          {t.dashboard.templates.usedNow}
+                        </span>
                       )}
-                      {/* sandbox with nothing granted: this is a
-                          tenant's own file rendered on our origin, and
-                          the preview must not be able to script, submit
-                          a form, or navigate the page it sits in. */}
-                      <iframe
-                        title={t.dashboard.templates.previewTitle}
-                        sandbox=""
-                        srcDoc={preview.html}
-                        style={{
-                          width: "100%",
-                          height: 460,
-                          border: "1px solid var(--line)",
-                          borderRadius: 8,
-                          background: "#fff",
-                        }}
-                      />
                     </div>
-                  )}
-                </div>
-              ))}
-            </li>
-          ))}
-        </ul>
-      )}
+                    <div className="card-actions">
+                      <button
+                        type="button"
+                        className="btn"
+                        data-variant="quiet"
+                        onClick={() => void loadVersions(template)}
+                        disabled={busy}
+                      >
+                        {t.dashboard.templates.versions}
+                      </button>
+                      {/* The choice itself. `is_active` is what the
+                          renderer reads; before this there was no way to
+                          write it, so two published templates meant a
+                          coin toss. The button follows what is IN USE
+                          rather than the flag: a shop that never chose
+                          has every template flagged active, and asking
+                          them to switch one off before switching another
+                          on would be a puzzle, not a choice. */}
+                      {canManage && !isUsed && (
+                        <button
+                          type="button"
+                          className="btn"
+                          data-variant="quiet"
+                          onClick={() => void chooseTemplate(template, true)}
+                          disabled={busy}
+                        >
+                          {t.dashboard.templates.chooseThis}
+                        </button>
+                      )}
+                      {canManage && isUsed && (
+                        <button
+                          type="button"
+                          className="btn"
+                          data-variant="quiet"
+                          onClick={() => void chooseTemplate(template, false)}
+                          disabled={busy}
+                        >
+                          {t.dashboard.templates.useBuiltin}
+                        </button>
+                      )}
+                    </div>
+                    {versions[template.id]?.map((version) => (
+                      <div key={version.id} className="card-meta">
+                        v{version.version} ·{" "}
+                        {(t.dashboard.templates.versionStatus as Record<string, string>)[
+                          version.status
+                        ] ?? "—"}
+                        {/* On every row, published ones included: "what
+                            does the layout my customers are getting look
+                            like" is the question this page could not
+                            answer at all. */}
+                        <button
+                          type="button"
+                          className="btn"
+                          data-variant="quiet"
+                          style={{ marginLeft: 8 }}
+                          onClick={() => void openPreview(template, version)}
+                          disabled={busy}
+                        >
+                          {t.dashboard.templates.preview}
+                        </button>
+                        {version.source_docx_url && (
+                          <button
+                            type="button"
+                            className="btn"
+                            data-variant="quiet"
+                            style={{ marginLeft: 8 }}
+                            onClick={() => openExternal(version.source_docx_url!)}
+                          >
+                            {t.dashboard.templates.sourceDownload}
+                          </button>
+                        )}
+                        {canManage && version.status !== "published" && (
+                          <button
+                            type="button"
+                            className="btn"
+                            data-variant="quiet"
+                            style={{ marginLeft: 8 }}
+                            onClick={() => void publish(template, version)}
+                            disabled={busy}
+                          >
+                            {t.dashboard.templates.publish}
+                          </button>
+                        )}
+                        {preview?.versionId === version.id && (
+                          <div style={{ marginTop: 10 }}>
+                            <div
+                              style={{
+                                display: "flex",
+                                gap: 8,
+                                alignItems: "center",
+                                flexWrap: "wrap",
+                                marginBottom: 6,
+                              }}
+                            >
+                              <strong style={{ fontSize: 13 }}>
+                                {t.dashboard.templates.previewTitle}
+                              </strong>
+                              <button
+                                type="button"
+                                className="btn"
+                                data-variant="quiet"
+                                onClick={openPreviewExternally}
+                              >
+                                {t.dashboard.templates.previewOpen}
+                              </button>
+                              <button
+                                type="button"
+                                className="btn"
+                                data-variant="quiet"
+                                onClick={() => setPreview(null)}
+                              >
+                                {t.dashboard.templates.previewClose}
+                              </button>
+                            </div>
+                            <p
+                              style={{
+                                color: "var(--ink-soft)",
+                                fontSize: 12.5,
+                                margin: "0 0 8px",
+                              }}
+                            >
+                              {t.dashboard.templates.previewNote}
+                            </p>
+                            {preview.blanks.length > 0 && (
+                              <div className="info-note">
+                                <p>{t.dashboard.templates.blankWarning}</p>
+                                <ul>
+                                  {preview.blanks.map((placeholder) => (
+                                    <li key={placeholder}>
+                                      <code>{`{{${placeholder}}}`}</code>
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+                            {/* sandbox with nothing granted: this is a
+                                tenant's own file rendered on our origin,
+                                and the preview must not be able to
+                                script, submit a form, or navigate the
+                                page it sits in. */}
+                            <iframe
+                              title={t.dashboard.templates.previewTitle}
+                              sandbox=""
+                              srcDoc={preview.html}
+                              style={{
+                                width: "100%",
+                                height: 460,
+                                border: "1px solid var(--line)",
+                                borderRadius: 8,
+                                background: "#fff",
+                              }}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </li>
+                  );
+                })}
+              </ul>
+            )}
+          </section>
+        );
+      })}
     </SalesShell>
   );
 }

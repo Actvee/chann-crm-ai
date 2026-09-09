@@ -82,6 +82,7 @@ ACCEPTED_TS: dict[tuple[str, str], str] = {
     ("_bulk-paste.tsx", "Parsed"): "client-side parse of a pasted line, never sent as-is",
     ("ServiceReports.tsx", "PdfResult"): "POST service-reports/{id}/document returns {document_id, sha256, url} from routers_phase2",
     ("MemberManagement.tsx", "MemberRow"): "GET licenses/{id}/members?include_removed=1 is composed by routers_phase2: one row per (member, OA) with channel, is_owner, joined_at and the profile's display_name/phone",
+    ("DocumentTemplates.tsx", "InUse"): "GET document-templates/in-use is composed by routers_phase2 from documents/selection.py: {source, template_id, template_name, version_id, version} per document type",
 }
 
 # Application-composed fields any TS type may declare (added by routers_phase2).
