@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
@@ -81,26 +82,24 @@ export default function PipelineSummary({ liffId }: { liffId: string }) {
         </div>
       </div>
 
-      {/* Two ways the number above can mislead, said plainly rather than
-          folded into it: an overdue deal is not a forecast, and a
-          forecast that ignores half the pipeline is not one either. */}
+      {/* Two ways the number above can mislead, and both are a job rather
+          than a figure: an overdue deal is not a forecast, and a forecast
+          that ignores half the pipeline is not one either. They are links,
+          because the only useful answer to either is to open the deals. */}
       {(data.overdue_count > 0 || data.undated_open_count > 0) && (
-        <p className="pipeline-caveats">
+        <div className="pipeline-attention">
+          <span className="pipeline-label">{t.dashboard.home.attention}</span>
           {data.overdue_count > 0 && (
-            <span>
-              {t.dashboard.pipeline.overdue.replace(
-                "{count}", String(data.overdue_count),
-              )}
-            </span>
+            <Link href="/liff/sales/deals">
+              {t.dashboard.pipeline.overdue.replace("{count}", String(data.overdue_count))}
+            </Link>
           )}
           {data.undated_open_count > 0 && (
-            <span>
-              {t.dashboard.pipeline.undated.replace(
-                "{count}", String(data.undated_open_count),
-              )}
-            </span>
+            <Link href="/liff/sales/deals">
+              {t.dashboard.pipeline.undated.replace("{count}", String(data.undated_open_count))}
+            </Link>
           )}
-        </p>
+        </div>
       )}
     </section>
   );

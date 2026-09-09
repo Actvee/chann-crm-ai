@@ -7,6 +7,8 @@ export const ADMIN = {
   brandSub: "Platform Admin",
   nav: {
     label: "เมนูหลัก",
+    collapse: "ย่อเมนู",
+    expand: "ขยายเมนู",
     tenants: "ร้านค้า (tenants)",
     audit: "Audit ข้ามร้าน",
     pdpa: "คำขอ PDPA",

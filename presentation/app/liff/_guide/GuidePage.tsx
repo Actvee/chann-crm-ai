@@ -58,7 +58,6 @@ export default function GuidePage({ liffId, audience }: { liffId: string; audien
       <AppShell
         title={guide?.title ?? t.dashboard.guide.title}
         back={`/liff/${audience}`}
-        nav={false}
         liffId={liffId}
         onReady={() => void onReady()}
         onSdkError={() => {

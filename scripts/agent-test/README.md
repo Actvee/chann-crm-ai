@@ -5,6 +5,12 @@ written for an AI or a person who has never opened this repository, has no
 credentials, and cannot log in to LINE. Everything described here runs on one
 machine, offline, and changes nothing outside this working copy.
 
+Read it alongside **[`docs/SYSTEM_GUIDE.md`](../../docs/SYSTEM_GUIDE.md)** — the
+single master document for the whole product (features per OA, permissions,
+registration rules, and what only *looks* like a bug); the ready-to-paste
+prompt for a testing AI is its section 10, copied here as
+[`PROMPT.md`](PROMPT.md).
+
 ---
 
 ## 1. What the system is

@@ -10020,13 +10020,6 @@ QUOTE_STATUS_SET = {
     "th": "เปลี่ยนสถานะ {code} เป็น {status} แล้ว",
     "en": "{code} is now {status}.",
 }
-QUOTE_STATUS_LABELS = {
-    "draft": {"th": "ร่าง", "en": "draft"},
-    "sent": {"th": "ส่งแล้ว", "en": "sent"},
-    "accepted": {"th": "ลูกค้าตอบรับ", "en": "accepted"},
-    "rejected": {"th": "ยกเลิก", "en": "void"},
-    "expired": {"th": "หมดอายุ", "en": "expired"},
-}
 
 
 async def _handle_quote_status(

@@ -77,6 +77,26 @@ export const en: Dictionary = {
     menuTitle: "Sales menu",
     menuIntro: "Everything here can also be done in chat. This is for filling in several fields at once, or reading a long list.",
     back: "Back to menu",
+    /* The left navigation (owner, 8 Sep 2026). Group names are what turns
+       sixteen sections into four things a person can hold in their head. */
+    nav: {
+      label: "Main menu",
+      open: "Open menu",
+      close: "Close menu",
+      expand: "Expand menu",
+      collapse: "Collapse menu",
+      overview: "Overview",
+      groups: {
+        selling: "Selling",
+        service: "Service",
+        paperwork: "Documents and reports",
+        shop: "Shop admin",
+      },
+    },
+    home: {
+      quickTitle: "Pick up where you left off",
+      attention: "Needs a follow-up",
+    },
     company: "Company",
     search: "Search",
     opening: "Opening…",

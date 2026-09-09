@@ -50,6 +50,9 @@ export function SalesShell({
       statusTone={statusTone}
       wide={wide}
       guideHref={guideHref}
+      // The rail draws only what this person's /me says they may open.
+      permissions={session.permissions}
+      isOwner={session.isOwner}
       notice={<SuspendedNotice memberships={session.memberships} />}
     >
       {session.memberships.length > 1 && (

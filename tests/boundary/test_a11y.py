@@ -84,3 +84,85 @@ class TestPaletteContrast:
         border or an icon, not for words. Text takes accent-ink."""
         css = CSS.read_text(encoding="utf-8")
         assert not re.search(r"^\s*color:\s*var\(--accent\)\s*;", css, re.M)
+
+
+# The left navigation (owner, 8 Sep 2026). What can be asserted without a
+# browser: that the icon-only controls still have names and states, that
+# the touch targets are declared large enough, and that the one thing on
+# the page which moves can be told to stop.
+NAV = ROOT / "presentation" / "app" / "liff" / "_nav.tsx"
+NAV_MODEL = ROOT / "presentation" / "app" / "liff" / "_nav-model.tsx"
+NAV_STATE = ROOT / "presentation" / "lib" / "nav-state.ts"
+ADMIN_NAV = ROOT / "presentation" / "app" / "admin" / "_nav.tsx"
+ADMIN_TOGGLE = ROOT / "presentation" / "app" / "admin" / "_rail-toggle.tsx"
+
+
+def _size(css: str, selector: str, prop: str) -> float:
+    """The px a selector's own rule declares — the last one, which is the
+    one the cascade lands on."""
+    blocks = re.findall(
+        rf"(?:^|[}},])[ \t]*{re.escape(selector)}\s*\{{([^}}]*)\}}", css, re.S | re.M,
+    )
+    values = [
+        float(found.group(1))
+        for block in blocks
+        if (found := re.search(rf"{prop}:\s*([0-9.]+)px", block))
+    ]
+    assert values, f"{selector} declares no {prop} in globals.css"
+    return values[-1]
+
+
+class TestLeftNavigation:
+    def test_collapsed_links_keep_an_accessible_name(self):
+        """Collapsed, the label is off screen; aria-label is all a screen
+        reader has and title is all a pointer has."""
+        rail = NAV.read_text(encoding="utf-8")
+        assert 'aria-label={entry.label}' in rail
+        assert 'title={entry.label}' in rail
+        admin = ADMIN_NAV.read_text(encoding="utf-8")
+        assert "aria-label={item.label}" in admin
+        assert "title={item.label}" in admin
+
+    def test_every_toggle_announces_whether_it_is_open(self):
+        rail = NAV.read_text(encoding="utf-8")
+        # The collapse control on the permanent rail, and the menu button
+        # that opens the drawer on a phone.
+        assert rail.count("aria-expanded=") >= 2
+        assert "aria-controls={railId}" in rail
+        assert "aria-expanded={!collapsed}" in ADMIN_TOGGLE.read_text(encoding="utf-8")
+
+    def test_the_current_page_is_marked_as_current(self):
+        for path in (NAV, ADMIN_NAV):
+            assert 'aria-current={' in path.read_text(encoding="utf-8"), path.name
+
+    def test_navigation_targets_are_at_least_44px(self):
+        css = CSS.read_text(encoding="utf-8")
+        assert _size(css, ".rail-link", "min-height") >= 44
+        assert _size(css, ".rail-btn", "width") >= 44
+        assert _size(css, ".rail-btn", "height") >= 44
+        assert _size(css, ".navtoggle", "width") >= 44
+        assert _size(css, ".navtoggle", "height") >= 44
+        assert _size(css, ".backlink", "height") >= 44
+
+    def test_the_rail_stops_moving_when_asked_to(self):
+        css = CSS.read_text(encoding="utf-8")
+        blocks = re.findall(
+            r"@media \(prefers-reduced-motion: reduce\)\s*\{(.*?)\n\}", css, re.S,
+        )
+        assert any(".rail" in block and "transition: none" in block for block in blocks)
+
+    def test_the_navigation_draws_icons_rather_than_emoji(self):
+        """Skill rule and pro-rules alike: an emoji is whatever the phone
+        decides it is, and cannot take the OA's colour."""
+        emoji = re.compile("[\U0001F300-\U0001FAFF☀-➿]")
+        for path in (NAV, NAV_MODEL, ADMIN_NAV):
+            hits = emoji.findall(path.read_text(encoding="utf-8"))
+            assert not hits, f"{path.name} uses emoji as icons: {hits}"
+
+    def test_a_broken_storage_cannot_break_the_page(self):
+        """localStorage throws outright in some in-app browsers; every
+        read and write of the rail's state is wrapped."""
+        state = NAV_STATE.read_text(encoding="utf-8")
+        for call in re.finditer(r"localStorage\.(getItem|setItem)", state):
+            before = state[:call.start()]
+            assert before.count("try {") > before.count("} catch"), call.group(0)

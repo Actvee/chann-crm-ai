@@ -181,8 +181,9 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
+  /* 44×44, the same target as the menu button beside it. */
+  width: 44px;
+  height: 44px;
   flex: none;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-sm);
@@ -987,20 +988,6 @@ fieldset.group legend {
   color: var(--ink-soft);
 }
 
-/* Caveats read as a footnote, not as an alert: an overdue deal is
-   information, and colouring it like an error would have someone
-   treating a normal pipeline as a problem. */
-.pipeline-caveats {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 14px;
-  margin: 14px 0 0;
-  padding-top: 12px;
-  border-top: 1px solid var(--line);
-  font-size: 12.5px;
-  color: var(--ink-faint);
-}
-
 /* A note that carries information rather than an alarm. Placeholders
    resolving to nothing may well be deliberate, and styling it as an
    error would have people treating a working template as broken. */
@@ -1085,44 +1072,6 @@ fieldset.group legend {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-}
-
-/* ---------------------------------------------------------- section nav
- *
- * One row that scrolls sideways. Wrapping to two rows on a phone would
- * push the page content down by a header's worth every time; a strip
- * that scrolls keeps its cost constant.
- */
-
-.section-nav {
-  display: flex;
-  gap: 4px;
-  padding: 6px 12px;
-  overflow-x: auto;
-  scrollbar-width: none;
-  border-bottom: 1px solid var(--line);
-  background: var(--surface);
-}
-
-.section-nav::-webkit-scrollbar { display: none; }
-
-.section-nav button {
-  flex: 0 0 auto;
-  padding: 7px 12px;
-  border: 0;
-  border-radius: 999px;
-  background: transparent;
-  font: inherit;
-  font-size: 13.5px;
-  color: var(--ink-soft);
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.section-nav button[data-active] {
-  background: var(--accent-soft);
-  color: var(--ink);
-  font-weight: 600;
 }
 
 /* --------------------------------------------------------- list controls */
@@ -1569,7 +1518,7 @@ fieldset.group legend {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-height: 36px;
+  min-height: 44px;
   padding: 0 10px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--line-strong);
@@ -1605,3 +1554,455 @@ fieldset.group legend {
 .report-total td { font-weight: 600; border-top: 2px solid var(--line-strong); }
 .report-big { font-size: 44px; font-weight: 600; margin: 12px 0; font-variant-numeric: tabular-nums; }
 .report-card .card-actions { margin-top: 12px; }
+
+/* ================================================== dashboard navigation
+ *
+ * Owner, 8 Sep 2026: "ตัว Dashboard ใช้ skill ปรับแต่งรื้อใหม่อีกครั้ง
+ * เนื่องจากใช้แล้วดูใช้งานยาก รูปแบบเมนูควรเป็น navigation อยู่ด้านซ้าย
+ * เปิด-ยุบได้" — one left-hand navigation, expanded or collapsed, in place
+ * of the sixteen-tile hub and the sideways-scrolling section strip.
+ *
+ * The rail has one structure and two shapes. On a phone — the LINE in-app
+ * browser, which is where this is actually used — it is an off-canvas
+ * drawer behind a menu button. From 900px up it is furniture: a permanent
+ * column that collapses to icons and remembers which it was.
+ *
+ * The collapsed state lives on <html data-nav>, written by an inline
+ * script before first paint, so the rail is never drawn wide and then
+ * snapped shut on load. React only mirrors it.
+ */
+
+:root {
+  /* The expanded rail. 244px holds the longest Thai section name
+     ("แบบฟอร์มเอกสาร") on one line at 15px without truncating. */
+  --rail-w: 244px;
+  --rail-motion: 180ms;
+}
+
+html[data-nav="collapsed"] {
+  /* 44px target + 12px either side: an icon-only rail that is still a
+     comfortable thumb target rather than a strip of tiny glyphs. */
+  --rail-w: 68px;
+}
+
+/* Keyboard focus must not end up under the sticky top bar (WCAG 2.2
+   "Focus Not Obscured"): reserve its height when the browser scrolls to
+   bring a focused control into view. */
+html {
+  scroll-padding-top: 96px;
+}
+
+.app {
+  min-height: 100dvh;
+}
+
+/* ------------------------------------------------------- phone: drawer */
+
+.rail {
+  position: fixed;
+  z-index: 60;
+  inset: 0 auto 0 0;
+  width: min(82vw, 296px);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 8px calc(16px + env(safe-area-inset-bottom));
+  background: var(--surface);
+  border-right: 1px solid var(--line);
+  overflow-y: auto;
+  /* A scroll that reaches the end of the drawer must not carry on into
+     the page underneath it. */
+  overscroll-behavior: contain;
+  /* visibility, not opacity: a hidden drawer must be out of the tab order
+     and out of the accessibility tree, or Tab walks sixteen links nobody
+     can see. Delayed so it still slides out. */
+  visibility: hidden;
+  transform: translateX(-100%);
+  transition: transform var(--rail-motion) ease, visibility 0s linear var(--rail-motion);
+}
+
+.app[data-drawer="open"] .rail {
+  visibility: visible;
+  transform: none;
+  box-shadow: 0 8px 40px rgba(26, 32, 48, 0.28);
+  transition: transform var(--rail-motion) ease, visibility 0s;
+}
+
+/* Tap-outside-to-dismiss. A real button rather than a div so it carries a
+   role; out of the tab order because Escape and the close button are the
+   keyboard way out and a scrim in the tab ring is just an extra stop. */
+.rail-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  display: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: rgba(20, 24, 34, 0.5);
+  /* A drag on the scrim dismisses rather than scrolls the page behind it;
+     body overflow alone is not enough inside WebKit. */
+  touch-action: none;
+  overscroll-behavior: contain;
+}
+
+.app[data-drawer="open"] .rail-scrim {
+  display: block;
+}
+
+.rail-head {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-height: 48px;
+  padding: 0 2px 4px;
+}
+
+.rail-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  flex: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
+.rail-btn:active {
+  background: var(--surface-sunken);
+}
+
+.rail-btn:focus-visible,
+.rail-link:focus-visible,
+.navtoggle:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.rail-btn-icon {
+  display: block;
+  width: 22px;
+  height: 22px;
+}
+
+.rail-btn-icon svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Collapse belongs to the permanent rail, close to the drawer; each
+   appears only in the shape it means something in. */
+.rail-collapse {
+  display: none;
+}
+
+.rail-group ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Sixteen sections in one list is a wall. Four headings — selling,
+   service, paperwork, shop — are what makes it scannable. */
+.rail-group-label {
+  margin: 14px 10px 4px;
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--ink-soft);
+}
+
+.rail-link {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  text-decoration: none;
+  font-size: 15px;
+  line-height: 1.3;
+}
+
+.rail-icon {
+  display: block;
+  width: 20px;
+  height: 20px;
+  flex: none;
+  color: var(--ink-soft);
+}
+
+.rail-icon svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.rail-link:active {
+  background: var(--surface-sunken);
+}
+
+/* Where you are, said three ways — tint, weight and a rail down the left
+   edge — so it does not rest on colour alone. */
+.rail-link[aria-current="page"] {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-weight: 600;
+  box-shadow: inset 3px 0 0 var(--accent-deep);
+}
+
+.rail-link[aria-current="page"] .rail-icon {
+  color: var(--accent-deep);
+}
+
+.rail-foot {
+  margin-top: auto;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+/* The menu button in the top bar. Phone only: on a wide screen the rail
+   is already on screen, and a button that opens what is open is noise. */
+.navtoggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  flex: none;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.navtoggle:active {
+  background: var(--paper);
+}
+
+.navtoggle .rail-btn-icon svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* The bar now carries a menu button as well as the back link, the title,
+   "วิธีใช้" and the language switch. It wraps to a second row rather than
+   squeezing the title to nothing on a 360px phone. */
+.topbar {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+
+.topbar h1 {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.topbar-tools select {
+  min-height: 44px;
+}
+
+/* -------------------------------------------- tablet and up: the rail */
+
+@media (min-width: 900px) {
+  .app {
+    display: grid;
+    grid-template-columns: var(--rail-w) minmax(0, 1fr);
+    transition: grid-template-columns var(--rail-motion) ease;
+  }
+
+  .rail {
+    position: sticky;
+    inset: 0 auto auto 0;
+    align-self: start;
+    height: 100dvh;
+    width: auto;
+    visibility: visible;
+    transform: none;
+    box-shadow: none;
+    transition: none;
+  }
+
+  .rail-scrim {
+    display: none !important;
+  }
+
+  .rail-close {
+    display: none;
+  }
+
+  .rail-collapse {
+    display: inline-flex;
+  }
+
+  .navtoggle {
+    display: none;
+  }
+
+  html[data-nav="collapsed"] .rail {
+    padding-left: 6px;
+    padding-right: 6px;
+  }
+
+  html[data-nav="collapsed"] .rail-head {
+    justify-content: center;
+  }
+
+  /* Collapsed, the label leaves the screen but not the accessibility
+     tree: every link carries the same text as aria-label and title, so
+     the icon still announces itself and still has a tooltip. */
+  html[data-nav="collapsed"] .rail-label {
+    display: none;
+  }
+
+  html[data-nav="collapsed"] .rail-link {
+    justify-content: center;
+    padding-left: 0;
+    padding-right: 0;
+  }
+
+  html[data-nav="collapsed"] .rail-group-label {
+    position: relative;
+    margin: 10px 8px 6px;
+    border-top: 1px solid var(--line);
+  }
+
+  html[data-nav="collapsed"] .rail-group-label span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+}
+
+/* The rail is the one thing on the page that moves. Someone who has asked
+   the system for less motion gets the same two states, arrived at at
+   once. !important because the open-state rule below is more specific. */
+@media (prefers-reduced-motion: reduce) {
+  .app,
+  .rail,
+  .app[data-drawer="open"] .rail {
+    transition: none !important;
+  }
+}
+
+/* ------------------------------------------------------------ overview
+ *
+ * With the rail always present, a grid of sixteen tiles said the same
+ * thing twice. The hub is now what someone opens the dashboard for: the
+ * pipeline, the deals that need chasing, and the four things they were
+ * going to do next anyway.
+ */
+
+.overview-head {
+  margin: 0 0 10px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.quick-actions {
+  list-style: none;
+  margin: 0 0 20px;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.quick-action {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  height: 100%;
+  min-height: 92px;
+  padding: 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  color: inherit;
+  text-decoration: none;
+}
+
+.quick-action:active {
+  background: var(--accent-soft);
+}
+
+.quick-action:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.quick-action-icon {
+  display: block;
+  width: 22px;
+  height: 22px;
+  color: var(--accent-deep);
+}
+
+.quick-action-icon svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.quick-action-name {
+  font-size: 15.5px;
+  font-weight: 600;
+}
+
+.quick-action-note {
+  font-size: 13px;
+  color: var(--ink-soft);
+  line-height: 1.4;
+}
+
+/* The two numbers the pipeline already knows that are a job rather than a
+   figure: overdue deals and deals with no close date. Links, because the
+   only useful response to either is to open the deal list. */
+.pipeline-attention {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 14px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.pipeline-attention a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 4px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  font-size: 13px;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.pipeline-attention a:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (min-width: 600px) {
+  .quick-actions {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}

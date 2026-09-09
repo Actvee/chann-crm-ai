@@ -126,7 +126,6 @@ export default function SignaturePage({ liffId, audience }: { liffId: string; au
       <AppShell
         title={copy.title}
         back={`/liff/${audience}`}
-        nav={false}
         liffId={liffId}
         onReady={() => void onReady()}
         onSdkError={() => say(t.dashboard.openFailed, "error")}

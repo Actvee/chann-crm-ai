@@ -79,6 +79,26 @@ export const th = {
     menuTitle: "เมนูทีมขาย",
     menuIntro: "ทุกอย่างในนี้สั่งผ่านแชทได้เช่นกัน หน้านี้เหมาะกับงานที่ต้องกรอกหลายช่องหรือดูรายการยาว ๆ",
     back: "กลับไปหน้าเมนู",
+    /* The left navigation (owner, 8 Sep 2026). Group names are what turns
+       sixteen sections into four things a person can hold in their head. */
+    nav: {
+      label: "เมนูหลัก",
+      open: "เปิดเมนู",
+      close: "ปิดเมนู",
+      expand: "ขยายเมนู",
+      collapse: "ย่อเมนู",
+      overview: "ภาพรวม",
+      groups: {
+        selling: "งานขาย",
+        service: "งานบริการ",
+        paperwork: "เอกสารและรายงาน",
+        shop: "จัดการร้าน",
+      },
+    },
+    home: {
+      quickTitle: "เริ่มงานต่อ",
+      attention: "ต้องตามต่อ",
+    },
     company: "บริษัท",
     search: "ค้นหา",
     opening: "กำลังเปิด…",

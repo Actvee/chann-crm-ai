@@ -24,6 +24,19 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           rel="stylesheet"
         />
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+        {/* The left rail's collapsed state, applied before the first paint.
+            Reading it in React instead would draw the rail wide and then
+            snap it shut on every load — the flash the owner would see on
+            every page. Wrapped in try/catch: storage throws outright in
+            some in-app browsers, and an expanded rail is the right thing
+            to fall back to because nothing is hidden in it. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              'try{document.documentElement.dataset.nav=' +
+              'localStorage.getItem("chann.nav.collapsed")==="1"?"collapsed":"expanded"}catch(e){}',
+          }}
+        />
       </head>
       <body>
         <LanguageProvider>{children}</LanguageProvider>

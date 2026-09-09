@@ -50,7 +50,19 @@
   top: 0;
   height: 100vh;
 }
-.pa-brand { display: flex; align-items: center; gap: 10px; text-decoration: none; padding: 4px 6px; }
+.pa-rail-head { display: flex; align-items: center; gap: 8px; }
+.pa-brand { display: flex; align-items: center; gap: 10px; text-decoration: none; padding: 4px 6px; min-width: 0; }
+/* Expand/collapse, on the same preference as the LIFF rail. */
+.pa-rail-toggle {
+  margin-left: auto; flex: none;
+  width: 44px; height: 44px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--pa-line); border-radius: 8px;
+  background: transparent; color: var(--pa-ink-soft); cursor: pointer;
+}
+.pa-rail-toggle:hover { background: var(--pa-muted); color: var(--pa-ink); }
+.pa-rail-toggle svg { width: 20px; height: 20px; }
+.pa-sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .pa-brand-mark {
   width: 34px; height: 34px; border-radius: 9px;
   background: linear-gradient(135deg, var(--pa-accent), #0ea5a3);
@@ -166,11 +178,29 @@
 .pa-login-card form { display: flex; flex-direction: column; gap: 12px; }
 .pa-login-card .pa-field input { min-width: 0; width: 100%; }
 
+/* Collapsed: icons only. The labels stay in the accessibility tree via
+   each link's title/aria-current — see _nav.tsx for the same rule on the
+   LIFF rail. Only above the breakpoint, because below it the rail is
+   already a horizontal strip and has nothing to collapse. */
+@media (min-width: 861px) {
+  html[data-nav="collapsed"] .pa { grid-template-columns: 68px minmax(0, 1fr); }
+  html[data-nav="collapsed"] .pa-rail { padding: 20px 10px; }
+  html[data-nav="collapsed"] .pa-rail-head { justify-content: center; }
+  html[data-nav="collapsed"] .pa-brand-name,
+  html[data-nav="collapsed"] .pa-nav a span,
+  html[data-nav="collapsed"] .pa-rail-foot > span { display: none; }
+  html[data-nav="collapsed"] .pa-brand { display: none; }
+  html[data-nav="collapsed"] .pa-rail-toggle { margin-left: 0; }
+  html[data-nav="collapsed"] .pa-nav a { justify-content: center; padding: 10px 0; }
+  html[data-nav="collapsed"] .pa-rail-foot { align-items: center; }
+}
+
 @media (max-width: 860px) {
   .pa { grid-template-columns: 1fr; }
   .pa-rail { position: static; height: auto; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 12px; border-right: 0; border-bottom: 1px solid var(--pa-line); padding: 12px 16px; }
   .pa-nav { flex-direction: row; flex-wrap: wrap; }
   .pa-rail-foot { margin-top: 0; margin-left: auto; }
+  .pa-rail-toggle { display: none; }
   .pa-main { padding: 20px 16px 48px; }
 }
 @media (prefers-reduced-motion: reduce) {

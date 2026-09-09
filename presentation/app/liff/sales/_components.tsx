@@ -2,13 +2,14 @@
 
 import Link from "next/link";
 import Script from "next/script";
-import { ReactNode, useEffect, useState } from "react";
+import { ReactNode, useEffect } from "react";
 
 import { LanguageSwitcher } from "@/lib/i18n/LanguageSwitcher";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
+import { NavFrame, NavMenuButton } from "../_nav";
 import { LIFF_SDK_SRC } from "./_lib";
 
 /**
@@ -29,6 +30,8 @@ export function AppShell({
   statusTone,
   notice,
   nav = true,
+  permissions,
+  isOwner = false,
   guideHref,
   wide = false,
   children,
@@ -40,10 +43,16 @@ export function AppShell({
   guideHref?: string | null;
   /** Two-pane pages (the chat inbox) get the wider shell. */
   wide?: boolean;
-  /** The Sales section strip. Off for pages a technician or customer
-   *  opens — the strip is Sales' furniture, and on the technician's
-   *  reports page it made the page read as the wrong OA (owner, 3 Sep). */
+  /** The left navigation. On by default and correct for whichever OA the
+   *  path belongs to — the old Sales-only section strip is gone, so a
+   *  technician page no longer has to switch it off to avoid reading as
+   *  the wrong OA (owner, 3 Sep). Off only for a surface with no menu. */
   nav?: boolean;
+  /** What this person may open, from /me. Entries whose page would refuse
+   *  them are not drawn; an unanswered /me (an empty set) shows the lot,
+   *  the same direction fetchPermissions already fails in. */
+  permissions?: Set<string>;
+  isOwner?: boolean;
   liffId: string;
   onReady: () => void;
   onSdkError: () => void;
@@ -107,63 +116,59 @@ export function AppShell({
       {/* Loads the SDK; startup is driven by the poll above rather than
           by onReady, for the reason given there. */}
       <Script src={LIFF_SDK_SRC} strategy="afterInteractive" onError={onSdkError} />
-      <div className="shell" data-wide={wide ? "true" : undefined}>
-        <header className="topbar">
-          {/* Plain anchor rather than next/link: each page
-              initialises LIFF on load, and a full navigation
-              guarantees a clean init instead of relying on the SDK
-              surviving a client-side route change inside the LINE
-              webview — which is what made every tap bounce back to
-              the menu. */}
-          {back && (
-            /* Plain anchor rather than next/link: each page initialises
-               LIFF on load, and a full navigation guarantees a clean init
-               instead of relying on the SDK surviving a client-side route
-               change inside the LINE webview. */
-            <Link className="backlink" href={back} aria-label={t.dashboard.back}>
-              ←
-            </Link>
-          )}
-          <h1>{title}</h1>
-          {/* The switcher lives in the bar so it is reachable from every
-              page, which is what Phase 5 asks for — a language choice that
-              only exists on one screen is not a language choice. */}
-          <div className="topbar-tools">
-            {guide && !onGuidePage && (
-              <a className="guidelink" href={guide}>
-                <span aria-hidden="true">?</span>
-                {t.dashboard.guide.title}
-              </a>
+      {/* The rail sits outside the shell, not inside it: the shell is a
+          640px reading column and the navigation is a sibling of it. */}
+      <NavFrame audience={audience} permissions={permissions} isOwner={isOwner} enabled={nav}>
+        <div className="shell" data-wide={wide ? "true" : undefined}>
+          <header className="topbar">
+            {/* Opens the drawer on a phone; absent once the rail is
+                permanent. First in the bar so the menu is the first thing
+                the tab order and the eye reach. */}
+            <NavMenuButton />
+            {back && (
+              /* The way out of a page inside LINE's in-app browser, which
+                 has no address bar and no back button of its own. Kept
+                 exactly as it was — the rail is somewhere else to go, not
+                 a way back. next/link so the LIFF session survives. */
+              <Link className="backlink" href={back} aria-label={t.dashboard.back}>
+                ←
+              </Link>
             )}
-            <LanguageSwitcher />
+            <h1>{title}</h1>
+            {/* The switcher lives in the bar so it is reachable from every
+                page, which is what Phase 5 asks for — a language choice that
+                only exists on one screen is not a language choice. */}
+            <div className="topbar-tools">
+              {guide && !onGuidePage && (
+                <a className="guidelink" href={guide}>
+                  <span aria-hidden="true">?</span>
+                  {t.dashboard.guide.title}
+                </a>
+              )}
+              <LanguageSwitcher />
+            </div>
+          </header>
+          <div className="page">
+            {status ? (
+              <p className="status" data-tone={statusTone} aria-live="polite">
+                {/* A spinner while starting; plain text once there is something
+                    to say. The LIFF diagnostics that used to live here were
+                    debugging output and read as a fault to anyone who was not
+                    the developer — they belong in the console, which is where
+                    they now are. */}
+                {statusTone === undefined && <span className="spinner" aria-hidden="true" />}
+                {status}
+              </p>
+            ) : (
+              // Kept in the tree even when empty so screen readers keep
+              // watching the same node for updates.
+              <p className="status" aria-live="polite" />
+            )}
+            {notice}
+            {children}
           </div>
-        </header>
-        {/* Section navigation, on every Sales page. Without it, moving
-            from a deal to the quote list meant back to the menu and out
-            again — two taps and a full page for what every CRM does with
-            a tab strip. Scrolls sideways on a phone rather than wrapping,
-            so it stays one row. */}
-        {back && nav && <SectionNav />}
-        <div className="page">
-          {status ? (
-            <p className="status" data-tone={statusTone} aria-live="polite">
-              {/* A spinner while starting; plain text once there is something
-                  to say. The LIFF diagnostics that used to live here were
-                  debugging output and read as a fault to anyone who was not
-                  the developer — they belong in the console, which is where
-                  they now are. */}
-              {statusTone === undefined && <span className="spinner" aria-hidden="true" />}
-              {status}
-            </p>
-          ) : (
-            // Kept in the tree even when empty so screen readers keep
-            // watching the same node for updates.
-            <p className="status" aria-live="polite" />
-          )}
-          {notice}
-        {children}
         </div>
-      </div>
+      </NavFrame>
       {/* liffId is threaded through for pages that need it in a data
           attribute for debugging; unused visually. */}
       <span hidden data-liff-id={liffId} />
@@ -203,51 +208,3 @@ export function Count({ shown, total }: { shown: number; total: number }) {
   );
 }
 
-
-const NAV = [
-  { href: "/liff/sales/chats", key: "chats" },
-  { href: "/liff/sales/customers", key: "customers" },
-  { href: "/liff/sales/deals", key: "deals" },
-  { href: "/liff/sales/quotes", key: "quotes" },
-  { href: "/liff/sales/tickets", key: "tickets" },
-  { href: "/liff/sales/reports", key: "reports" },
-  { href: "/liff/sales/approvals", key: "approvals" },
-  { href: "/liff/sales/products", key: "products" },
-] as const;
-
-/** The strip of sections under the header — where you are, and where else you can go. */
-function SectionNav() {
-  const { t } = useLanguage();
-  const pathname = usePathname();
-  const router = useRouter();
-  const labels: Record<string, string> = {
-    chats: t.dashboard.chats.title,
-    approvals: t.dashboard.approvals.title,
-    customers: t.customer.title,
-    deals: t.deal.title,
-    quotes: t.quote.title,
-    tickets: t.dashboard.tickets.title,
-    reports: t.dashboard.reports.title,
-    products: t.product.title,
-  };
-  return (
-    <nav className="section-nav" aria-label="sections">
-      {NAV.map((item) => {
-        const active = pathname?.startsWith(item.href);
-        return (
-          <button
-            key={item.key}
-            type="button"
-            data-active={active ? "true" : undefined}
-            aria-current={active ? "page" : undefined}
-            // router.push, not an anchor: a full page load loses the
-            // LIFF session (see the note on tiles in SalesMenu).
-            onClick={() => router.push(item.href)}
-          >
-            {labels[item.key]}
-          </button>
-        );
-      })}
-    </nav>
-  );
-}

@@ -37,11 +37,19 @@ const ITEMS = [
 export function AdminNav() {
   const pathname = usePathname() ?? "";
   return (
-    <nav className="pa-nav" aria-label={ADMIN.nav.label}>
+    <nav id="pa-nav" className="pa-nav" aria-label={ADMIN.nav.label}>
       {ITEMS.map((item) => {
         const current = item.href === "/admin" ? pathname === "/admin" || pathname.startsWith("/admin/tenants") : pathname.startsWith(item.href);
         return (
-          <a key={item.href} href={item.href} aria-current={current ? "page" : undefined}>
+          <a
+            key={item.href}
+            href={item.href}
+            aria-current={current ? "page" : undefined}
+            // Collapsed, the label is off screen and this is the only
+            // name the link has — and the tooltip the pointer gets.
+            aria-label={item.label}
+            title={item.label}
+          >
             {item.icon}
             <span>{item.label}</span>
           </a>

@@ -60,7 +60,7 @@ _EN: Repairs: review reports — "pending approvals" · "approve SR-2026-0001" o
 
 พิมพ์: `งานวันนี้`
 
-[IMAGE: sales-crm — แดชบอร์ดขายธีมเขียว: tile ลูกค้า / ดีล / ใบเสนอราคา / งานซ่อม / รอการอนุมัติ / ทีมช่าง]
+[IMAGE: sales-crm — แดชบอร์ดขายธีมเขียว: เมนู navigation ด้านซ้าย จัดกลุ่มเป็น งานขาย / งานบริการ / เอกสารและรายงาน / จัดการร้าน กำลังเปิดหน้ารายชื่อลูกค้า]
 
 _EN: Customers, deals, quotes — "customers" · "create customer …" · "create deal for Somchai" · "issue quote Q-…" · "today" · "remind D-… tomorrow" · "create deal for Arthit worth 250,000, closing end of month" · "delete lead Somchai" (asks first) · a duplicate phone/email is named, with use / update / cancel · "what can I do with leads?" for that area in detail several at once: paste one person per line "first last phone email" (a leading "add customers" or commas also work); a row without a phone is asked for one at a time · on the customers page use the "Add several customers at once" box or "Import CSV" (sample file provided) · typing another command such as "create deal" while a customer is half-added asks whether to switch or continue (a switch is announced, and the half-added customer is still offered for the deal) · lines on a deal, as you would say it: "add product fan 2 at 1500" (no price: the catalogue is checked, else the price is asked and the item remembered — reply "1500") · "add 2 more fans" adds to the quantity, "set fan to 3" sets it, "remove 1 fan" takes off, "remove the fan" deletes the line · every reply states the deal total · "latest deal" / "items on the deal" show the deal in play · "customer wants 2 fans" right after adding a customer offers a deal with that line · "search products fan" searches the catalogue_
 

@@ -61,6 +61,9 @@ LOCAL_TYPES: set[tuple[str, str]] = {
     ("_searchable-picker.tsx", "PickerOption"),
     ("_record.tsx", "FieldSpec"),
     ("MemberManagement.tsx", "Person"),  # one member grouped with every OA row they hold; page state
+    ("_nav-model.tsx", "NavEntry"),  # one left-navigation link: href, icon, permission keys — nothing crosses a tier
+    ("_nav-model.tsx", "NavGroup"),  # a labelled group of those links
+    ("_nav.tsx", "NavContextValue"),  # the rail's open/collapsed state, shared with the top bar's menu button
 }
 
 # (file, TS type) whose fields the Application tier composes rather than

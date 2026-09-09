@@ -43,6 +43,13 @@ Master Spec รวมแล้ว:
 
 ไม่ต้องหา/merge source documents แยกอีก
 
+## System guide (ระบบตามที่สร้างจริง)
+
+`SYSTEM_GUIDE.md` — เอกสารเดียวที่อธิบายระบบทั้งหมดตามที่ทำงานอยู่จริง: สถาปัตยกรรม การลงทะเบียนต่อ OA
+สิทธิ์ ฟีเจอร์ทุกอย่างแยกตาม OA หน้าจอ dashboard งานตามเวลา ข้อจำกัดที่ตั้งใจ วิธีทดสอบทุกช่องทาง
+และ prompt สำหรับ AI ที่จะมาเขียน test case (สำเนาที่ `scripts/agent-test/PROMPT.md`)
+Master Spec คือสิ่งที่ระบบ*ควร*เป็น · SYSTEM_GUIDE คือสิ่งที่ระบบ*เป็นอยู่*
+
 ## Reference / process documents
 
 1. `01_REFERENCE_ARCHITECTURE_INFRASTRUCTURE_BLUEPRINT.md`

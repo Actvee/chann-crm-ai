@@ -3,12 +3,14 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Script from "next/script";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { LanguageSwitcher } from "@/lib/i18n/LanguageSwitcher";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import PipelineSummary from "./PipelineSummary";
+import { mayOpen, navGroups } from "../_nav-model";
+import { NavFrame, NavMenuButton } from "../_nav";
 import { useFailureText } from "./_format";
 import { LIFF_SDK_SRC, completeLiffRedirect, proxyHeaders, whenLiffReady } from "./_lib";
 import { useSalesSession } from "./_session";
@@ -17,32 +19,18 @@ import { ShopSwitcher } from "../_shop-switcher";
 import { SuspendedNotice } from "../_suspended";
 
 /**
- * The Sales dashboard index — the page every other one links back to.
+ * The Sales dashboard index.
  *
- * This project is chat-first, and the LIFF pages that existed before were
- * reachable only by knowing their URL. This is the hub each new phase adds
- * a tile to, so a page shipped later is discoverable without anyone having
- * to remember it exists.
+ * It used to be a grid of sixteen tiles, because the pages had no other
+ * way of being found. They do now — the left rail carries all of them on
+ * every page — so a tile grid here was the same list twice, and the
+ * second copy is what made the dashboard feel like work (owner, 8 Sep:
+ * "ใช้แล้วดูใช้งานยาก").
+ *
+ * What is left is what a shop owner opens the dashboard *for*: the
+ * pipeline, the deals that need chasing today, and the four places the
+ * day actually starts. Everything else is one tap away in the rail.
  */
-
-const SECTIONS = [
-  { href: "/liff/sales/chats", key: "chats" },
-  { href: "/liff/sales/customers", key: "customers" },
-  { href: "/liff/sales/deals", key: "deals" },
-  { href: "/liff/sales/quotes", key: "quotes" },
-    { href: "/liff/sales/tickets", key: "tickets" },
-    { href: "/liff/sales/reports", key: "reports" },
-    { href: "/liff/sales/reports/ai", key: "aiReports" },
-  { href: "/liff/sales/approvals", key: "approvals" },
-  { href: "/liff/sales/warranties", key: "warranties" },
-  { href: "/liff/sales/teams", key: "teams" },
-  { href: "/liff/sales/guide", key: "guide" },
-  { href: "/liff/sales/products", key: "products" },
-  { href: "/liff/sales/templates", key: "templates" },
-  { href: "/liff/sales/company", key: "company" },
-  { href: "/liff/sales/members", key: "members" },
-  { href: "/liff/sales/roles", key: "roles" },
-] as const;
 
 export default function SalesMenu({ liffId }: { liffId: string }) {
   const { t } = useLanguage();
@@ -64,6 +52,13 @@ export default function SalesMenu({ liffId }: { liffId: string }) {
   // Bumped when the shop changes so the pipeline card starts again in
   // the new shop rather than showing the old one's numbers.
   const [shopEpoch, setShopEpoch] = useState(0);
+  // What this person may open, so the rail and the shortcuts below draw
+  // the same set. It comes from the session the page already starts —
+  // no extra call.
+  const [access, setAccess] = useState<{ permissions: Set<string>; isOwner: boolean }>({
+    permissions: new Set(),
+    isOwner: false,
+  });
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -95,24 +90,14 @@ export default function SalesMenu({ liffId }: { liffId: string }) {
       cancelled = true;
     };
   }, [liffId, router]);
-  const titles: Record<string, string> = {
-    chats: t.dashboard.chats.title,
-    customers: t.customer.title,
-    deals: t.deal.title,
-    quotes: t.quote.title,
-    products: t.product.title,
-    company: t.dashboard.companyTitle,
-    members: t.dashboard.members.title,
-    roles: t.role.title,
-    tickets: t.dashboard.tickets.title,
-    reports: t.dashboard.reports.title,
-    aiReports: t.dashboard.aiReports.title,
-    approvals: t.dashboard.approvals.title,
-    templates: t.dashboard.templates.title,
-    warranties: t.dashboard.warranties.title,
-    teams: t.dashboard.teams.title,
-    guide: t.dashboard.guide.title,
-  };
+  // The day's starting points, taken from the rail's own "selling" group
+  // so the two can never disagree about what exists or who may see it.
+  const shortcuts = useMemo(() => {
+    const selling = navGroups(t, "sales").find((group) => group.key === "selling");
+    return (selling?.entries ?? [])
+      .filter((entry) => mayOpen(entry, access.permissions, access.isOwner))
+      .slice(0, 4);
+  }, [t, access]);
 
   if (redirecting) {
     // A blank frame for the instant before the navigation commits. Showing
@@ -121,51 +106,62 @@ export default function SalesMenu({ liffId }: { liffId: string }) {
   }
 
   return (
-    <div className="shell">
+    <NavFrame audience="sales" permissions={access.permissions} isOwner={access.isOwner}>
       {/* The SDK is loaded even though this page needs no session, because
           liff.state has to be read before anything else can happen and the
           SDK sets up the LIFF context the sub-pages then rely on. */}
       <Script src={LIFF_SDK_SRC} strategy="afterInteractive" />
-      <header className="topbar">
-        <div className="topbar-tools" style={{ marginLeft: 0, justifyContent: "space-between" }}>
-          <h1>{t.dashboard.menuTitle}</h1>
-          <a className="guidelink" href="/liff/sales/guide">
-            <span aria-hidden="true">?</span>
-            {t.dashboard.guide.title}
-          </a>
-        </div>
-        <div style={{ marginLeft: "auto" }}>
-          <LanguageSwitcher />
-        </div>
-      </header>
-      <div className="page">
-        <MenuSession liffId={liffId} onShopChanged={() => setShopEpoch((n) => n + 1)} />
-        <p style={{ color: "var(--ink-soft)", fontSize: 14.5, margin: "0 0 16px" }}>
-          {t.dashboard.menuIntro}
-        </p>
+      <div className="shell">
+        <header className="topbar">
+          <NavMenuButton />
+          {/* No back link: this is where back goes. */}
+          <h1>{t.dashboard.nav.overview}</h1>
+          <div className="topbar-tools">
+            <a className="guidelink" href="/liff/sales/guide">
+              <span aria-hidden="true">?</span>
+              {t.dashboard.guide.title}
+            </a>
+            <LanguageSwitcher />
+          </div>
+        </header>
+        <div className="page">
+          <MenuSession
+            liffId={liffId}
+            onShopChanged={() => setShopEpoch((n) => n + 1)}
+            onAccess={setAccess}
+          />
+          <p className="page-intro">{t.dashboard.menuIntro}</p>
 
-        <PipelineSummary key={shopEpoch} liffId={liffId} />
+          <PipelineSummary key={shopEpoch} liffId={liffId} />
 
-        <ul className="tiles">
-          {SECTIONS.map((section) => (
-            <li key={section.key}>
-              {/* Client-side navigation, NOT a plain anchor.
-                  A LIFF session exists only in the page LINE opened through
-                  a LIFF URL. A full page load starts a fresh document with
-                  no LIFF context at all — measured directly:
-                  inClient=true but loggedIn=false — so every sub-page then
-                  failed to authenticate. An earlier change to plain
-                  anchors, made to "guarantee a clean init", is what caused
-                  that. Staying in one document keeps the session. */}
-              <Link className="tile" href={section.href}>
-                <h2>{titles[section.key]}</h2>
-                <p>{t.dashboard.sections[section.key]}</p>
-              </Link>
-            </li>
-          ))}
-        </ul>
+          {shortcuts.length > 0 && (
+            <>
+              <h2 className="overview-head">{t.dashboard.home.quickTitle}</h2>
+              <ul className="quick-actions">
+                {shortcuts.map((entry) => (
+                  <li key={entry.key}>
+                    {/* Client-side navigation, NOT a plain anchor.
+                        A LIFF session exists only in the page LINE opened
+                        through a LIFF URL. A full page load starts a fresh
+                        document with no LIFF context at all — measured
+                        directly: inClient=true but loggedIn=false — so every
+                        sub-page then failed to authenticate. Staying in one
+                        document keeps the session. */}
+                    <Link className="quick-action" href={entry.href}>
+                      <span className="quick-action-icon">{entry.icon}</span>
+                      <span className="quick-action-name">{entry.label}</span>
+                      <span className="quick-action-note">
+                        {t.dashboard.sections[entry.key as keyof typeof t.dashboard.sections]}
+                      </span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
       </div>
-    </div>
+    </NavFrame>
   );
 }
 
@@ -177,7 +173,17 @@ type Transfer = { id: string; status: string; to_chann_uid?: string | null };
  * several (review C5), and the "accept ownership" banner for a member
  * the owner has nominated (E6). Asks once and stays silent otherwise.
  */
-function MenuSession({ liffId, onShopChanged }: { liffId: string; onShopChanged: () => void }) {
+function MenuSession({
+  liffId,
+  onShopChanged,
+  onAccess,
+}: {
+  liffId: string;
+  onShopChanged: () => void;
+  /** Handed up so the rail and the shortcuts can be drawn from the same
+   *  /me this component already asks for, rather than a second call. */
+  onAccess: (access: { permissions: Set<string>; isOwner: boolean }) => void;
+}) {
   const { t } = useLanguage();
   const s = useSalesText();
   const failureText = useFailureText();
@@ -203,6 +209,11 @@ function MenuSession({ liffId, onShopChanged }: { liffId: string; onShopChanged:
     // Once on mount: initialize is stable per liffId.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liffId]);
+
+  useEffect(() => {
+    if (!session.ready) return;
+    onAccess({ permissions: session.permissions, isOwner: session.isOwner });
+  }, [session.ready, session.permissions, session.isOwner, onAccess]);
 
   useEffect(() => {
     if (!session.ready || session.isOwner) {

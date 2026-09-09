@@ -7,6 +7,7 @@ import { ApplicationError, callApplication } from "@/lib/api";
 import "./admin.css";
 import { ADMIN_COOKIE, type AdminProfile } from "./_server";
 import { AdminNav } from "./_nav";
+import { AdminRailToggle } from "./_rail-toggle";
 
 export const metadata = { title: "Chann Platform Admin" };
 
@@ -34,13 +35,18 @@ export default async function AdminLayout({ children }: { children: ReactNode })
       {profile ? (
         <div className="pa">
           <aside className="pa-rail">
-            <a className="pa-brand" href="/admin">
-              <span className="pa-brand-mark" aria-hidden="true">C</span>
-              <span className="pa-brand-name">
-                {ADMIN.brand}
-                <span className="pa-brand-sub">{ADMIN.brandSub}</span>
-              </span>
-            </a>
+            <div className="pa-rail-head">
+              <a className="pa-brand" href="/admin">
+                <span className="pa-brand-mark" aria-hidden="true">C</span>
+                <span className="pa-brand-name">
+                  {ADMIN.brand}
+                  <span className="pa-brand-sub">{ADMIN.brandSub}</span>
+                </span>
+              </a>
+              {/* Expand/collapse, remembered with the same key the LIFF
+                  dashboards use. The layout stays a server component. */}
+              <AdminRailToggle />
+            </div>
             <AdminNav />
             <div className="pa-rail-foot">
               <span>
