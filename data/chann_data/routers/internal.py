@@ -170,6 +170,7 @@ from ..schemas import (
     NoteOut,
     FollowUpOut,
     FollowUpStatusIn,
+    FollowUpUpdateIn,
     ActiveTenantIn,
     ActiveTenantOut,
     WarrantyClaimIn,
@@ -1375,6 +1376,121 @@ def set_follow_up_status(
         )
         session.commit()
         return FollowUpOut.model_validate(row, from_attributes=True)
+    except Exception as exc:
+        session.rollback()
+        raise _phase6_http_error(exc)
+
+
+@router.patch(
+    "/licenses/{license_id}/follow-ups/{follow_up_id}",
+    response_model=FollowUpOut,
+)
+def update_follow_up(
+    license_id: uuid.UUID,
+    follow_up_id: uuid.UUID,
+    payload: FollowUpUpdateIn,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    """Edit a pending appointment in place — day, time, note or owner.
+
+    The row keeps its id, so the reminder sweep, the LINE message that
+    announced it and every audit entry written about it still point at the
+    same appointment. Chat used to postpone by cancelling and re-creating,
+    which broke all three.
+    """
+    scope = TenantScope(license_id=license_id)
+    try:
+        repo = FollowUpRepository(session)
+        # `exclude_unset` is what separates "clear the note" (notes: null)
+        # from "leave the note alone" (no notes key at all). Without it
+        # every PATCH would blank every field the caller did not mention.
+        changes = payload.model_dump(exclude_unset=True)
+
+        before = repo.get(scope, follow_up_id)
+        previous = (
+            {
+                "due_date": str(before.due_date),
+                "due_time": str(before.due_time) if before.due_time else None,
+                "notes": before.notes,
+                "owner_member_id": (
+                    str(before.owner_member_id) if before.owner_member_id else None
+                ),
+            }
+            if before is not None
+            else {}
+        )
+
+        row = repo.update(scope, follow_up_id, changes)
+        AuditRepository(session).write(
+            license_id=license_id,
+            entity_type="follow_up",
+            entity_id=row.id,
+            actor_type="user",
+            actor_id=x_actor_id or None,
+            action="update",
+            field_changes=diff_fields(
+                previous,
+                {
+                    "due_date": str(row.due_date),
+                    "due_time": str(row.due_time) if row.due_time else None,
+                    "notes": row.notes,
+                    "owner_member_id": (
+                        str(row.owner_member_id) if row.owner_member_id else None
+                    ),
+                },
+            ),
+        )
+        session.commit()
+        session.refresh(row)
+        return FollowUpOut.model_validate(row, from_attributes=True)
+    except Exception as exc:
+        session.rollback()
+        raise _phase6_http_error(exc)
+
+
+@router.delete(
+    "/licenses/{license_id}/follow-ups/{follow_up_id}", status_code=204
+)
+def delete_follow_up(
+    license_id: uuid.UUID,
+    follow_up_id: uuid.UUID,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    """Remove an appointment outright.
+
+    Cancelling is still the normal way to call one off — it leaves a record
+    that something was planned. This is for the appointment that should
+    never have existed, and the audit entry carries the whole row because
+    nothing else will remember it.
+    """
+    scope = TenantScope(license_id=license_id)
+    try:
+        removed = FollowUpRepository(session).delete(scope, follow_up_id)
+        AuditRepository(session).write(
+            license_id=license_id,
+            entity_type="follow_up",
+            entity_id=follow_up_id,
+            actor_type="user",
+            actor_id=x_actor_id or None,
+            action="delete",
+            field_changes=diff_fields(
+                {
+                    "entity_type": removed.entity_type,
+                    "due_date": str(removed.due_date),
+                    "due_time": str(removed.due_time) if removed.due_time else None,
+                    "status": removed.status,
+                    "notes": removed.notes,
+                },
+                {
+                    "entity_type": None, "due_date": None, "due_time": None,
+                    "status": None, "notes": None,
+                },
+            ),
+        )
+        session.commit()
+        return None
     except Exception as exc:
         session.rollback()
         raise _phase6_http_error(exc)

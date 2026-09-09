@@ -1,0 +1,109 @@
+# Moving an appointment edits it; it does not book a second one.
+#
+# The owner reported on 9 Sep 2026: "ตอนนี้นัดหมายเหมือนจะแก้ไข หรือลบไม่ได้".
+# There was no route to change a follow-up's date, so chat's "เลื่อนนัด"
+# cancelled the old appointment and created a new one. The reply was right
+# and the record was wrong — the appointment got a new id every time it
+# moved, so the reminder already pushed to LINE named a cancelled row.
+#
+# The observable consequence, and what this scenario pins: after moving,
+# the diary must show ONE appointment at the new time, not two.
+name: appointment-edit-and-delete
+description: an appointment is moved in place, then removed, from chat alone
+backend: any
+actor:
+  oa: sales
+  role: sales
+  language: th
+  permissions: sales
+
+steps:
+  - seed:
+      customers:
+        - ref: somchai
+          first_name: "สมชาย"
+          last_name: "ใจดี"
+          phone: "0812345678"
+
+  - send: "ข้อมูลลูกค้า สมชาย"
+    expect:
+      contains: "สมชาย"
+      is_not: [not_found, generic_error, permission]
+
+  # Booked against the record on screen, no code retyped.
+  - send: "ตั้งนัด C-2026-0001 พรุ่งนี้ บ่าย 2"
+    expect:
+      contains: ["C-2026-0001", "14:00"]
+      is_not: [not_sure, generic_error, permission, not_found]
+
+  - send: "รายการเตือน"
+    expect:
+      contains: "C-2026-0001"
+      is_not: [generic_error, permission]
+      # Owner's rule 4: no raw field key ever reaches a person.
+      not_contains: ["due_time", "due_date", "owner_member_id"]
+
+  # The sentence that started all this (12:08, 2 Sep) — a bare time change,
+  # with the record still only in context.
+  - send: "เปลี่ยนเวลาเป็น 13.00"
+    expect:
+      contains: ["C-2026-0001", "13:00"]
+      is_not: [not_sure, generic_error, permission, not_found]
+
+  # One appointment, at the new time. Two rows here — or the old 14:00 still
+  # listed — is the cancel-then-create bug come back.
+  - send: "รายการเตือน"
+    expect:
+      contains: "13:00"
+      not_contains: ["14:00", "due_time"]
+      is_not: [generic_error, permission]
+
+  - send: "เลื่อนนัด C-2026-0001 เป็นมะรืนนี้"
+    expect:
+      contains: "C-2026-0001"
+      is_not: [not_sure, generic_error, permission, not_found]
+
+  # Moving the day keeps the time it was already at (owner's rule 1: an
+  # unstated time is never re-guessed).
+  - expect:
+      contains: "13:00"
+
+  # A date that has gone is refused, not silently filed in the past.
+  - send: "เลื่อนนัด C-2026-0001 เป็น 1/1/2020"
+    expect:
+      contains: "ผ่านมาแล้ว"
+      is_not: [generic_error, permission]
+
+  # Removing is NOT what ยกเลิกนัด does — cancelling keeps the row, and that
+  # stays the default for every typed ยกเลิก/ลบนัด, which is why this
+  # sentence avoids those words entirely: they are matched deterministically
+  # and would cancel before the model was ever consulted. Only free prose
+  # the model reads as "remove it" reaches the real DELETE.
+  - send:
+      message: "เอารายการติดตามของ C-2026-0001 ออกจากระบบถาวร จองผิดคน"
+      ai:
+        action: delete
+        entity: followup
+        fields:
+          code: "C-2026-0001"
+        missing: []
+    expect:
+      # "ลบนัด..ออกแล้ว", not "ยกเลิกการเตือน..แล้ว" — the two replies are
+      # deliberately different words for deliberately different operations.
+      contains: ["C-2026-0001", "ลบนัด"]
+      not_contains: "ยกเลิก"
+      is_not: [not_sure, generic_error, permission, not_found, not_a_feature]
+
+  - send: "รายการเตือน"
+    expect:
+      not_contains: ["13:00", "due_time"]
+      is_not: [generic_error, permission]
+
+  # Editing takes followup.update. Losing it must read as a clear refusal
+  # that names what to ask for — not a crash and not silence.
+  - send:
+      message: "เปลี่ยนเวลาเป็น 16.00"
+      permissions: [customer.read, followup.read]
+    expect:
+      is_not: [generic_error, not_a_feature]
+      max_chars: 900

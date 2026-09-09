@@ -298,6 +298,21 @@ class FollowUpStatusIn(BaseModel):
     status: Literal["pending", "completed", "cancelled"]
 
 
+class FollowUpUpdateIn(BaseModel):
+    """A partial edit of an appointment — only the fields actually sent change.
+
+    Every field is optional *and* nullable, which makes the two cases look
+    identical in the parsed model. `model_dump(exclude_unset=True)` at the
+    route is what tells them apart: sending `"notes": null` clears the note,
+    not sending `notes` at all leaves it as it was.
+    """
+
+    due_date: date | None = None
+    due_time: time | None = None
+    owner_member_id: uuid.UUID | None = None
+    notes: str | None = None
+
+
 class FollowUpOut(BaseModel):
     id: uuid.UUID
     license_id: uuid.UUID

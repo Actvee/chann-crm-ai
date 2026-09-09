@@ -55,6 +55,24 @@ class FollowUpCreateIn(BaseModel):
     notes: str | None = None
 
 
+class FollowUpUpdateIn(BaseModel):
+    """A partial edit — only the fields the caller actually sent change.
+
+    Reported by the owner (9 Sep): "ตอนนี้นัดหมายเหมือนจะแก้ไข หรือลบไม่ได้".
+    There was no route at all behind the dashboard's appointment rows, so
+    the only way to move one was to cancel it and book a new one, and the
+    appointment lost its id and its history each time.
+
+    Every field is optional and nullable, so the model alone cannot tell
+    "clear the note" from "leave the note alone" — `exclude_unset` at the
+    route does that.
+    """
+
+    due_date: str | None = None
+    due_time: str | None = None
+    notes: str | None = None
+
+
 @router.get("/notifications")
 async def list_notifications(
     unread_only: bool = False,
@@ -139,3 +157,48 @@ async def set_follow_up_status(
         principal.license_id, str(follow_up_id), status_value,
         actor_id=principal.chann_uid,
     )
+
+
+@router.patch("/follow-ups/{follow_up_id}")
+async def update_follow_up(
+    follow_up_id: uuid.UUID,
+    payload: FollowUpUpdateIn,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Move an appointment to a new day/time, or reword its note.
+
+    The row keeps its id, so the LINE reminder that already went out and
+    every audit entry about it still name the same appointment.
+    """
+    principal.require("followup.update")
+    changes = payload.model_dump(exclude_unset=True)
+    if not changes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="nothing to change"
+        )
+    return await client.update_follow_up(
+        principal.license_id, str(follow_up_id), changes,
+        actor_id=principal.chann_uid,
+    )
+
+
+@router.delete("/follow-ups/{follow_up_id}", status_code=204)
+async def delete_follow_up(
+    follow_up_id: uuid.UUID,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Remove an appointment outright.
+
+    Gated on followup.update rather than a followup.delete key: the
+    catalogue has never had one, and deleting is an edit down to nothing —
+    the same reasoning note.delete already runs on. Cancelling remains the
+    normal way to call an appointment off; this is for the one that should
+    never have been booked.
+    """
+    principal.require("followup.update")
+    await client.delete_follow_up(
+        principal.license_id, str(follow_up_id), actor_id=principal.chann_uid,
+    )
+    return None

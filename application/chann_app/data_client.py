@@ -887,6 +887,36 @@ class DataClient:
         )
         return self._unwrap(resp)
 
+    async def update_follow_up(
+        self, license_id: str, follow_up_id: str, changes: dict,
+        actor_id: str | None = None,
+    ) -> dict:
+        """Edit a pending appointment in place, keeping its id.
+
+        Only the keys present in `changes` are sent, because the Data Tier
+        reads an absent key as "leave it" and an explicit null as "clear
+        it". Passing a dict of every field with the untouched ones set to
+        None would blank the note on every postponement.
+        """
+        resp = await self._client.patch(
+            f"{self._base}/internal/v1/licenses/{license_id}"
+            f"/follow-ups/{follow_up_id}",
+            headers=self._headers_for(actor_id),
+            json=changes,
+        )
+        return self._unwrap(resp)
+
+    async def delete_follow_up(
+        self, license_id: str, follow_up_id: str, actor_id: str | None = None,
+    ) -> None:
+        resp = await self._client.delete(
+            f"{self._base}/internal/v1/licenses/{license_id}"
+            f"/follow-ups/{follow_up_id}",
+            headers=self._headers_for(actor_id),
+        )
+        if resp.status_code not in (204, 200):
+            self._unwrap(resp)
+
     # ---------------------------------------------------------- Phase 6.5
 
     async def create_license(

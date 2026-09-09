@@ -264,6 +264,56 @@ async def guide_file(audience: str, format: str = "html"):
     )
 
 
+@router.get("/document-template-samples/{document_type}")
+async def document_template_sample(document_type: str, format: str = "docx"):
+    """A starter Word file a shop can open, edit and upload back.
+
+    The owner's report, 9 Sep 2026: "ไม่มีตัวอย่างที่เป็นไฟล์ให้ดาวน์โหลด
+    ไปดู". Served exactly like `/guides/{audience}/file` above and for
+    the same reasons, which is why it sits beside it rather than behind
+    the LIFF guard or the asset-token path: there is no tenant data in it
+    (it is the manual, in Word), and the LINE in-app browser can only
+    save a file when the URL is one the phone's own browser can open with
+    no header on it. The asset-token route is the other candidate and is
+    the wrong shape — its tokens name one object in the document store,
+    and these files are not stored anywhere.
+
+    Generated per request rather than committed as binaries: a .docx in
+    Git cannot be reviewed in a diff, and it would drift from the
+    placeholder vocabulary the moment a snapshot key changed — which is
+    the exact bug that made `{{company.legal_name}}` print blank for a
+    year. `scripts/dev/make-template-samples.py` writes the same bytes to
+    disk for anyone who wants to look at one locally.
+    """
+    from fastapi.responses import Response
+
+    from .services.documents.samples import (
+        SAMPLE_DOCUMENT_TYPES, build_sample_docx, sample_docx_filename,
+    )
+
+    if document_type not in SAMPLE_DOCUMENT_TYPES:
+        raise HTTPException(
+            status_code=404,
+            detail=f"no sample template for {document_type!r}",
+        )
+    if format != "docx":
+        raise HTTPException(status_code=400, detail="only format=docx is available")
+    content = build_sample_docx(document_type)
+    return Response(
+        content=content,
+        media_type=(
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        ),
+        headers={
+            "Content-Disposition":
+                f'attachment; filename="{sample_docx_filename(document_type)}"',
+            # Deterministic bytes (see samples._package), so a phone that
+            # already has it does not download it twice.
+            "Cache-Control": "public, max-age=3600",
+        },
+    )
+
+
 @router.get("/assets/{token}")
 async def download_asset(token: str):
     """Serve one stored object to whoever holds a valid asset link.

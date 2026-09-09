@@ -1,6 +1,7 @@
 """Phase 2 business API: roles, permissions, settings and owner transfer."""
 from __future__ import annotations
 
+import base64
 import logging
 import re
 import uuid
@@ -23,6 +24,12 @@ from .services.identity import member_channel
 
 router = APIRouter(prefix="/api/v1", tags=["phase2"])
 log = logging.getLogger(__name__)
+
+# The OOXML media type. Spelled once, because a Word file served as
+# application/octet-stream downloads as an unopenable blob on a phone.
+DOCX_CONTENT_TYPE = (
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+)
 
 
 class RoleWriteIn(BaseModel):
@@ -3081,8 +3088,21 @@ async def pipeline_summary(
 
 
 class TemplateUploadIn(BaseModel):
+    """A template as either of the two things a shop actually has.
+
+    `docx_base64` is base64 rather than a multipart upload because the
+    Presentation tier proxies every call through one JSON seam
+    (`presentation/lib/api.ts`); a multipart body would need a second
+    seam, and the file is capped small enough (see docx.MAX_DOCX_BYTES)
+    that the ~33% base64 overhead is not what limits it.
+    """
+
     template_name: str
-    html: str
+    # Exactly one of these. `html` stays required-in-practice for the
+    # HTML path so every existing caller keeps working unchanged.
+    html: str | None = None
+    docx_base64: str | None = None
+    filename: str | None = None
     document_type: str = "quote"
 
 
@@ -3101,20 +3121,55 @@ async def upload_document_template(
 
     The response lists any placeholder that will come out blank, so that
     is discovered here rather than on a quote already sent.
+
+    Word or HTML. The owner, 9 Sep 2026: "ไฟล์ที่ควรอัพเข้าไม่ใช่ html
+    แต่ควรรองรับเป็น word" — nobody in a shop writes HTML, and the
+    quotation they want is already a .docx on their computer. A .docx is
+    converted to the HTML the fill engine understands
+    (`services/documents/docx.py`) and the original bytes are kept, so
+    `source_docx_path` points at the file they actually uploaded and they
+    can download it back. HTML uploads are unchanged.
     """
+    from .services.documents.docx import (
+        DocxConversionError, convert_docx_to_html,
+    )
     from .services.documents.fill import unknown_placeholders
+    from .services.documents.samples import sample_snapshot
     from .services.storage.base import DocumentStoreNotConfigured, get_document_store
 
     _require_same_tenant(principal, license_id)
     principal.require("setting.manage")
 
-    html = payload.html or ""
-    if not html.strip():
-        raise HTTPException(status_code=400, detail="the template is empty")
-    if len(html) > 512_000:
-        # Half a megabyte of HTML is not a quote layout; it is an embedded
-        # image someone should be hosting instead.
-        raise HTTPException(status_code=400, detail="template is too large")
+    source_name = (payload.filename or "").strip()
+    docx_bytes: bytes | None = None
+
+    if payload.docx_base64:
+        try:
+            docx_bytes = base64.b64decode(payload.docx_base64, validate=True)
+        except Exception:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "อ่านไฟล์ที่อัปโหลดไม่สำเร็จ ลองเลือกไฟล์แล้วอัปโหลดใหม่อีกครั้ง "
+                    "(the uploaded file could not be decoded)"
+                ),
+            )
+        try:
+            html = convert_docx_to_html(
+                docx_bytes, filename=source_name or "template.docx",
+            )
+        except DocxConversionError as exc:
+            # 400 with the converter's own sentence: "something went
+            # wrong" on a Word file leaves the shop with nothing to try.
+            raise HTTPException(status_code=400, detail=exc.detail)
+    else:
+        html = payload.html or ""
+        if not html.strip():
+            raise HTTPException(status_code=400, detail="the template is empty")
+        if len(html) > 512_000:
+            # Half a megabyte of HTML is not a quote layout; it is an embedded
+            # image someone should be hosting instead.
+            raise HTTPException(status_code=400, detail="template is too large")
 
     try:
         templates = await client.list_document_templates(
@@ -3136,20 +3191,36 @@ async def upload_document_template(
             )
 
         store = get_document_store()
-        key = (
-            f"{license_id}/templates/{existing['id']}/"
-            f"{uuid.uuid4().hex}.html"
-        )
+        batch = uuid.uuid4().hex
         stored = await store.put(
-            key=key, content=html.encode("utf-8"), content_type="text/html",
+            key=f"{license_id}/templates/{existing['id']}/{batch}.html",
+            content=html.encode("utf-8"), content_type="text/html",
         )
+
+        # The uploaded Word file, kept as it arrived. Not an audit nicety:
+        # the compiled HTML is what renders, so without the original a
+        # shop that wants to change one line of their layout has nothing
+        # to open in Word — they would have to rebuild it from scratch.
+        source_path = "upload://html"
+        intermediate: dict = {"kind": "html_upload"}
+        if docx_bytes is not None:
+            source = await store.put(
+                key=f"{license_id}/templates/{existing['id']}/{batch}.docx",
+                content=docx_bytes, content_type=DOCX_CONTENT_TYPE,
+            )
+            source_path = source.path
+            intermediate = {
+                "kind": "docx_upload",
+                "filename": source_name or "template.docx",
+                "source_bytes": len(docx_bytes),
+            }
 
         version = await client.create_document_template_version(
             license_id,
             str(existing["id"]),
             {
-                "source_docx_path": "upload://html",
-                "intermediate_model": {"kind": "html_upload"},
+                "source_docx_path": source_path,
+                "intermediate_model": intermediate,
                 "mapping_schema": {"kind": "placeholders"},
                 "compiled_template_path": stored.path,
             },
@@ -3168,34 +3239,28 @@ async def upload_document_template(
         # Reported, not rejected: a placeholder that resolves to nothing
         # may be deliberate, and refusing the upload over one would make
         # the feature unusable for a layout with an optional field.
-        "unknown_placeholders": unknown_placeholders(html, _template_sample()),
+        "source_kind": "docx" if docx_bytes is not None else "html",
+        "unknown_placeholders": unknown_placeholders(
+            html, _template_sample(payload.document_type),
+        ),
     }
 
 
-def _template_sample() -> dict:
+def _template_sample(document_type: str = "quote") -> dict:
     """A representative snapshot, for checking placeholders.
 
-    Shaped like build_quote_snapshot's output rather than invented, so
-    "this placeholder resolves" here means it resolves on a real document.
+    Built by the REAL snapshot builders (services/documents/samples.py),
+    not written out here. The hand-written version this replaced had
+    drifted: it offered `company.legal_name` and `item.name`, which are
+    the shapes of the ROWS the builder reads, not of the snapshot it
+    produces (`company.name`, `item.product_name`). So the upload told
+    shops those placeholders were fine and their quotes printed blanks
+    where the company name should be. A sample that is not produced by
+    the real builder cannot answer a question about the real builder.
     """
-    return {
-        "company": {
-            "legal_name": "", "address": "", "phone": "", "email": "",
-            "tax_id": "", "logo_url": "",
-        },
-        "customer": {"name": "", "phone": "", "email": "", "address": ""},
-        "quote": {"quote_id": "", "status": "", "valid_until": ""},
-        "deal": {"deal_id": ""},
-        "line_items": [{
-            "name": "", "qty": "", "unit_price": "", "line_total": "", "notes": "",
-        }],
-        "totals": {
-            "subtotal": "", "discount_applicable": "", "discount_amount": "",
-            "net_total": "", "vat_applicable": "", "vat_rate": "",
-            "vat_rate_percent": "", "vat_amount": "", "grand_total": "",
-        },
-        "issued_at": "",
-    }
+    from .services.documents.samples import sample_snapshot
+
+    return sample_snapshot(document_type)
 
 
 @router.post(
@@ -3217,8 +3282,18 @@ async def publish_document_template(
     _require_same_tenant(principal, license_id)
     principal.require("setting.manage")
     try:
+        # The Data tier addresses a version by its own id — the template
+        # is not in the path. Passing template_id here made this route
+        # raise TypeError on every call, so the publish button on the
+        # templates page has never worked; no test reached it because
+        # nothing published a template end to end until now. The version
+        # still has to belong to this template, so it is looked up
+        # through the template's own list first.
+        versions = await client.list_document_template_versions(license_id, template_id)
+        if not any(str(v.get("id")) == str(version_id) for v in versions):
+            raise HTTPException(status_code=404, detail="template version not found")
         return await client.publish_document_template_version(
-            license_id, template_id, version_id, actor_id=principal.chann_uid,
+            license_id, version_id, actor_id=principal.chann_uid,
         )
     except DataTierError as exc:
         raise _propagate(exc)
@@ -3256,9 +3331,149 @@ async def list_document_template_versions(
     _require_same_tenant(principal, license_id)
     principal.require("setting.manage")
     try:
-        return await client.list_document_template_versions(license_id, template_id)
+        versions = await client.list_document_template_versions(license_id, template_id)
     except DataTierError as exc:
         raise _propagate(exc)
+
+    # A link back to the Word file this version was made from, when there
+    # is one. The compiled HTML is what renders, so without this a shop
+    # that wants to change one line of their layout has nothing to open.
+    from .services.assets import asset_link
+
+    for version in versions:
+        source = str(version.get("source_docx_path") or "")
+        version["source_docx_url"] = (
+            asset_link(
+                source, content_type=DOCX_CONTENT_TYPE,
+                filename=str(
+                    (version.get("intermediate_model") or {}).get("filename")
+                    or "template.docx"
+                ),
+            )
+            if source and not source.startswith("upload://")
+            else None
+        )
+    return versions
+
+
+@router.post(
+    "/licenses/{license_id}/document-templates/{template_id}"
+    "/versions/{version_id}/preview"
+)
+async def preview_document_template(
+    license_id: str,
+    template_id: str,
+    version_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Look at a template version before anyone receives a document made from it.
+
+    The owner's report, 9 Sep 2026: "ตัวอย่างของใบเสนอราคาที่เป็นต้นแบบ
+    กดเปิดดูไม่ได้". There was no way to open a template at all — the
+    only button on a version was publish, so the first time anyone saw a
+    layout rendered was on a quote already sent to a customer.
+
+    HTML, not a PDF. It goes through the same path a real document takes
+    — the stored compiled template, `fill_template`, a snapshot built by
+    the real snapshot builder — so what is shown is what will print. What
+    it does NOT do is call SmartBrowz: a PDF round-trip costs an external
+    request and a credential per look, and the difference between the two
+    is the page geometry, not the content or the values. The reviewer is
+    checking "is my company name in the right place and are the totals
+    filled in", and HTML answers that. `GET /quotes/{id}/pdf` remains the
+    way to see the real PDF of a real quote.
+
+    `setting.manage`, like every other template route. Preview does NOT
+    publish (10.7): a draft becomes `previewed`, and nothing else moves.
+    A version that is already previewed or published renders just the
+    same — you can always look — it simply has no status left to change.
+    """
+    from .services.documents.fill import fill_template, unknown_placeholders
+    from .services.documents.samples import sample_snapshot
+    from .services.storage.base import (
+        DocumentStoreError, DocumentStoreNotConfigured, get_document_store,
+    )
+
+    _require_same_tenant(principal, license_id)
+    principal.require("setting.manage")
+
+    try:
+        templates = await client.list_document_templates(license_id)
+        template = next(
+            (t for t in templates if str(t.get("id")) == str(template_id)), None,
+        )
+        if template is None:
+            raise HTTPException(status_code=404, detail="template not found")
+        versions = await client.list_document_template_versions(license_id, template_id)
+        version = next(
+            (v for v in versions if str(v.get("id")) == str(version_id)), None,
+        )
+        if version is None:
+            # Found through the template's own version list rather than by
+            # id alone, so a version id from another tenant OR from
+            # another template of this tenant is a 404 either way.
+            raise HTTPException(status_code=404, detail="template version not found")
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+    document_type = str(template.get("document_type") or "quote")
+    compiled = str(version.get("compiled_template_path") or "")
+    if not compiled or compiled.startswith("builtin://"):
+        # The built-in layout is not a stored file; it is code. Rendering
+        # it here would mean a second renderer, which is the one thing
+        # this endpoint exists not to be.
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "แบบฟอร์มมาตรฐานของระบบไม่มีไฟล์ให้ดูตัวอย่าง "
+                "(the built-in layout has no uploaded file to preview)"
+            ),
+        )
+
+    try:
+        raw = await get_document_store().get(path=compiled)
+    except DocumentStoreNotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except DocumentStoreError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "หาไฟล์แบบฟอร์มรุ่นนี้ไม่พบ อาจถูกลบไปแล้ว ลองอัปโหลดใหม่ "
+                f"(stored template file is missing: {exc})"
+            ),
+        )
+
+    snapshot = sample_snapshot(document_type)
+    source = raw.decode("utf-8", errors="replace")
+    html = fill_template(source, snapshot)
+
+    # Mark it previewed, and only from draft — mark_previewed refuses any
+    # other status by design, and a reviewer looking at an already
+    # published version must not get an error for looking.
+    status_now = str(version.get("status") or "")
+    if status_now == "draft":
+        try:
+            marked = await client.preview_document_template_version(
+                license_id, version_id, actor_id=principal.chann_uid,
+            )
+            status_now = str(marked.get("status") or status_now)
+        except DataTierError:
+            # Looking must not fail because the bookkeeping did.
+            log.exception("could not mark template version %s previewed", version_id)
+
+    return {
+        "template_id": str(template_id),
+        "version_id": str(version_id),
+        "version": version.get("version"),
+        "status": status_now,
+        "document_type": document_type,
+        "html": html,
+        # The same advisory the upload gives, recomputed against the
+        # version actually stored — an old draft uploaded before a
+        # placeholder was renamed says so here rather than on paper.
+        "unknown_placeholders": unknown_placeholders(source, snapshot),
+    }
 
 
 class QuoteTermsPatchIn(BaseModel):

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { FieldRow } from "../../_field-row";
+import { openExternal } from "../../_shared";
 import { proxyHeaders } from "../_lib";
 import { useSalesSession } from "../_session";
 import { SalesShell } from "../_shell";
@@ -13,7 +14,23 @@ type TemplateVersion = {
   id: string;
   version: number;
   status: string;
+  /** A link back to the Word file this version was made from, when it
+   *  came from one. Null for an HTML upload and for the built-in. */
+  source_docx_url?: string | null;
 };
+
+type Preview = {
+  versionId: string;
+  version: number;
+  html: string;
+  blanks: string[];
+};
+
+/** Word's own media type, plus the extensions, because a phone's file
+ *  picker reports one or the other and rarely both. */
+const DOCX_TYPE =
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+const MAX_UPLOAD_BYTES = 2_000_000;
 
 type Template = {
   id: string;
@@ -44,6 +61,13 @@ export default function DocumentTemplates({ liffId }: { liffId: string }) {
   const [versions, setVersions] = useState<Record<string, TemplateVersion[]>>({});
   const [name, setName] = useState("");
   const [html, setHtml] = useState("");
+  // A Word upload travels as base64 through the one JSON seam this tier
+  // has (lib/api.ts); `docxName` is kept so the server can tell a .doc
+  // from a .docx and name the stored original.
+  const [docx, setDocx] = useState("");
+  const [docxName, setDocxName] = useState("");
+  const [docxBytes, setDocxBytes] = useState(0);
+  const [preview, setPreview] = useState<Preview | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState(t.dashboard.opening);
@@ -91,7 +115,7 @@ export default function DocumentTemplates({ liffId }: { liffId: string }) {
   }, [session.ready, session.token, session.licenseId, session.permissions, load, say, t]);
 
   async function upload() {
-    if (!name.trim() || !html.trim()) {
+    if (!name.trim() || (!html.trim() && !docx)) {
       say(t.dashboard.templates.needsNameAndFile, "error");
       return;
     }
@@ -103,11 +127,24 @@ export default function DocumentTemplates({ liffId }: { liffId: string }) {
         {
           method: "POST",
           headers: proxyHeaders(token, licenseId),
-          body: JSON.stringify({
-            template_name: name.trim(),
-            html,
-            document_type: "quote",
-          }),
+          // One field or the other, never both: the server converts a
+          // .docx itself and keeps the original bytes, so sending HTML
+          // alongside it would mean two answers to "what did they
+          // upload" and no way to tell which one rendered.
+          body: JSON.stringify(
+            docx
+              ? {
+                  template_name: name.trim(),
+                  docx_base64: docx,
+                  filename: docxName,
+                  document_type: "quote",
+                }
+              : {
+                  template_name: name.trim(),
+                  html,
+                  document_type: "quote",
+                },
+          ),
         },
       );
       if (!response.ok) {
@@ -128,6 +165,9 @@ export default function DocumentTemplates({ liffId }: { liffId: string }) {
       // a customer holding a document with a gap in it.
       setWarnings(result.unknown_placeholders ?? []);
       setHtml("");
+      setDocx("");
+      setDocxName("");
+      setDocxBytes(0);
       setName("");
       await load();
       say(t.dashboard.templates.uploaded, "ok");
@@ -182,9 +222,109 @@ export default function DocumentTemplates({ liffId }: { liffId: string }) {
     }
   }
 
+  /** Whatever the shop picked, in the shape the upload wants.
+   *
+   *  A .docx is binary: read as bytes and base64'd here rather than
+   *  `file.text()`, which returns mojibake for a zip and would upload a
+   *  file the server cannot open. Chunked, because spreading a two
+   *  megabyte Uint8Array into String.fromCharCode overflows the stack. */
   async function readFile(file: File) {
-    setHtml(await file.text());
-    if (!name.trim()) setName(file.name.replace(/\.html?$/i, ""));
+    const lower = file.name.toLowerCase();
+    const isDocx = lower.endsWith(".docx") || file.type === DOCX_TYPE;
+    const isHtml = lower.endsWith(".html") || lower.endsWith(".htm");
+    if (!isDocx && !isHtml) {
+      // Named first, because ".doc" is the common case and "unsupported
+      // file" does not tell anyone to save it as .docx.
+      say(t.dashboard.templates.wrongType, "error");
+      return;
+    }
+    if (file.size > MAX_UPLOAD_BYTES) {
+      say(t.dashboard.templates.tooBig, "error");
+      return;
+    }
+    try {
+      if (isDocx) {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        let binary = "";
+        for (let i = 0; i < bytes.length; i += 8192) {
+          binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
+        }
+        setDocx(btoa(binary));
+        setDocxName(file.name);
+        setDocxBytes(file.size);
+        setHtml("");
+      } else {
+        setHtml(await file.text());
+        setDocx("");
+        setDocxName("");
+        setDocxBytes(0);
+      }
+    } catch {
+      say(t.dashboard.templates.readFailed, "error");
+      return;
+    }
+    if (!name.trim()) setName(file.name.replace(/\.(docx|html?)$/i, ""));
+    say("");
+  }
+
+  /** Look at a version rendered, before a customer does.
+   *
+   *  The reply is JSON with the filled HTML in it rather than an HTML
+   *  response, because every call this page makes goes through the
+   *  proxy that parses JSON — and because the blank-placeholder list
+   *  comes back in the same round trip, which is the other half of the
+   *  question "is this template right". */
+  async function openPreview(template: Template, version: TemplateVersion) {
+    setBusy(true);
+    try {
+      const response = await fetch(
+        `/api/phase2/licenses/${licenseId}/document-templates/${template.id}/versions/${version.id}/preview`,
+        { method: "POST", headers: proxyHeaders(token, licenseId) },
+      );
+      if (!response.ok) {
+        const detail = await response.json().catch(() => ({}));
+        say(
+          typeof detail.detail === "string"
+            ? detail.detail
+            : t.dashboard.templates.previewFailed.replace(
+                "{status}",
+                String(response.status),
+              ),
+          "error",
+        );
+        return;
+      }
+      const result = (await response.json()) as {
+        html: string;
+        unknown_placeholders?: string[];
+      };
+      setPreview({
+        versionId: version.id,
+        version: version.version,
+        html: result.html,
+        blanks: result.unknown_placeholders ?? [],
+      });
+      // Previewing moves a draft to "previewed" — reload so the row says
+      // so rather than looking as though nothing happened.
+      await loadVersions(template);
+      say("");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** The preview in the phone's own browser, for printing or sharing.
+   *  A blob URL, because the HTML is already in hand and the preview
+   *  route needs a session header a plain navigation cannot send. */
+  function openPreviewExternally() {
+    if (!preview) return;
+    const url = URL.createObjectURL(
+      new Blob([preview.html], { type: "text/html;charset=utf-8" }),
+    );
+    openExternal(url);
+    // Long enough for the new tab to have fetched it; revoking
+    // immediately races the open and shows a blank page.
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
   }
 
   const canManage = !session.suspended && permissions.has("setting.manage");
@@ -224,7 +364,11 @@ export default function DocumentTemplates({ liffId }: { liffId: string }) {
                 <input
                   id={id}
                   type="file"
-                  accept=".html,.htm,text/html"
+                  // .doc is deliberately absent: the picker offering it
+                  // and the server refusing it is worse than the picker
+                  // not offering it. readFile says what to do instead
+                  // when someone types the name in anyway.
+                  accept={`.docx,${DOCX_TYPE},.html,.htm,text/html`}
                   onChange={(event) => {
                     const file = event.target.files?.[0];
                     if (file) void readFile(file);
@@ -232,6 +376,24 @@ export default function DocumentTemplates({ liffId }: { liffId: string }) {
                 />
               )}
             </FieldRow>
+            <div className="field-row">
+              <dt />
+              <dd style={{ color: "var(--ink-soft)", fontSize: 13 }}>
+                {t.dashboard.templates.fileHint}
+              </dd>
+            </div>
+            {docx && (
+              <div className="field-row">
+                <dt>{t.dashboard.templates.loadedDocx}</dt>
+                <dd>
+                  {docxName}{" "}
+                  {t.dashboard.templates.kilobytes.replace(
+                    "{n}",
+                    String(Math.max(1, Math.round(docxBytes / 1024))),
+                  )}
+                </dd>
+              </div>
+            )}
             {html && (
               <div className="field-row">
                 <dt>{t.dashboard.templates.loaded}</dt>
@@ -244,7 +406,7 @@ export default function DocumentTemplates({ liffId }: { liffId: string }) {
                 className="btn"
                 data-variant="primary"
                 onClick={() => void upload()}
-                disabled={busy || !html}
+                disabled={busy || (!html && !docx)}
               >
                 {busy ? t.dashboard.saving : t.dashboard.templates.upload}
               </button>
@@ -265,6 +427,45 @@ export default function DocumentTemplates({ liffId }: { liffId: string }) {
           </ul>
         </div>
       )}
+
+      {/* Something to start from. The owner, 9 Sep: "ไม่มีตัวอย่างที่เป็น
+          ไฟล์ให้ดาวน์โหลดไปดู" — the placeholder reference below tells
+          you the vocabulary but not what a document made of it looks
+          like, and a shop should not have to build one from an empty
+          page to find out. openExternal, not <a download>: the LINE
+          in-app browser does nothing with a download link. */}
+      <section className="section" style={{ padding: "14px 16px", marginBottom: 16 }}>
+        <div className="section-head">
+          <h2>{t.dashboard.templates.samplesTitle}</h2>
+        </div>
+        <p style={{ color: "var(--ink-soft)", fontSize: 13.5, margin: "0 0 10px" }}>
+          {t.dashboard.templates.samplesHint}
+        </p>
+        <div className="actions">
+          <button
+            type="button"
+            className="btn"
+            data-variant="quiet"
+            onClick={() =>
+              openExternal(`${window.location.origin}/api/template-sample/quote`)
+            }
+          >
+            {t.dashboard.templates.sampleQuote}
+          </button>
+          <button
+            type="button"
+            className="btn"
+            data-variant="quiet"
+            onClick={() =>
+              openExternal(
+                `${window.location.origin}/api/template-sample/service_report`,
+              )
+            }
+          >
+            {t.dashboard.templates.sampleServiceReport}
+          </button>
+        </div>
+      </section>
 
       {/* The reference, on the page. Placeholders are the entire language
           and there is nowhere else someone would think to look. */}
@@ -310,6 +511,30 @@ export default function DocumentTemplates({ liffId }: { liffId: string }) {
                   {(t.dashboard.templates.versionStatus as Record<string, string>)[
                     version.status
                   ] ?? "—"}
+                  {/* On every row, published ones included: "what does
+                      the layout my customers are getting look like" is
+                      the question this page could not answer at all. */}
+                  <button
+                    type="button"
+                    className="btn"
+                    data-variant="quiet"
+                    style={{ marginLeft: 8 }}
+                    onClick={() => void openPreview(template, version)}
+                    disabled={busy}
+                  >
+                    {t.dashboard.templates.preview}
+                  </button>
+                  {version.source_docx_url && (
+                    <button
+                      type="button"
+                      className="btn"
+                      data-variant="quiet"
+                      style={{ marginLeft: 8 }}
+                      onClick={() => openExternal(version.source_docx_url!)}
+                    >
+                      {t.dashboard.templates.sourceDownload}
+                    </button>
+                  )}
                   {canManage && version.status !== "published" && (
                     <button
                       type="button"
@@ -321,6 +546,70 @@ export default function DocumentTemplates({ liffId }: { liffId: string }) {
                     >
                       {t.dashboard.templates.publish}
                     </button>
+                  )}
+                  {preview?.versionId === version.id && (
+                    <div style={{ marginTop: 10 }}>
+                      <div
+                        style={{
+                          display: "flex",
+                          gap: 8,
+                          alignItems: "center",
+                          flexWrap: "wrap",
+                          marginBottom: 6,
+                        }}
+                      >
+                        <strong style={{ fontSize: 13 }}>
+                          {t.dashboard.templates.previewTitle}
+                        </strong>
+                        <button
+                          type="button"
+                          className="btn"
+                          data-variant="quiet"
+                          onClick={openPreviewExternally}
+                        >
+                          {t.dashboard.templates.previewOpen}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn"
+                          data-variant="quiet"
+                          onClick={() => setPreview(null)}
+                        >
+                          {t.dashboard.templates.previewClose}
+                        </button>
+                      </div>
+                      <p style={{ color: "var(--ink-soft)", fontSize: 12.5, margin: "0 0 8px" }}>
+                        {t.dashboard.templates.previewNote}
+                      </p>
+                      {preview.blanks.length > 0 && (
+                        <div className="info-note">
+                          <p>{t.dashboard.templates.blankWarning}</p>
+                          <ul>
+                            {preview.blanks.map((placeholder) => (
+                              <li key={placeholder}>
+                                <code>{`{{${placeholder}}}`}</code>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {/* sandbox with nothing granted: this is a
+                          tenant's own file rendered on our origin, and
+                          the preview must not be able to script, submit
+                          a form, or navigate the page it sits in. */}
+                      <iframe
+                        title={t.dashboard.templates.previewTitle}
+                        sandbox=""
+                        srcDoc={preview.html}
+                        style={{
+                          width: "100%",
+                          height: 460,
+                          border: "1px solid var(--line)",
+                          borderRadius: 8,
+                          background: "#fff",
+                        }}
+                      />
+                    </div>
                   )}
                 </div>
               ))}

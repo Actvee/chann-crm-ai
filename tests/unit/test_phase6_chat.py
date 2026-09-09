@@ -789,6 +789,29 @@ class FakeDataClient:
                 return dict(row)
         raise AssertionError(f"no such follow-up {follow_up_id}")
 
+    async def update_follow_up(self, license_id, follow_up_id, changes, actor_id=None):
+        self.recorded.append(("update_follow_up", license_id, follow_up_id, changes, actor_id))
+        if self._raises:
+            raise self._raises
+        for row in getattr(self, "_follow_ups", []):
+            if row["id"] == follow_up_id:
+                if row["status"] != "pending":
+                    raise AssertionError(f"follow-up {follow_up_id} is {row['status']}")
+                # Only the keys sent — the same rule the Data Tier applies,
+                # so a test cannot pass here and blank a field in production.
+                row.update(changes)
+                return dict(row)
+        raise AssertionError(f"no such follow-up {follow_up_id}")
+
+    async def delete_follow_up(self, license_id, follow_up_id, actor_id=None):
+        self.recorded.append(("delete_follow_up", license_id, follow_up_id, actor_id))
+        if self._raises:
+            raise self._raises
+        rows = getattr(self, "_follow_ups", [])
+        if not any(r["id"] == follow_up_id for r in rows):
+            raise AssertionError(f"no such follow-up {follow_up_id}")
+        self._follow_ups = [r for r in rows if r["id"] != follow_up_id]
+
     async def due_follow_ups(self, license_id, days=1):
         self.recorded.append(("due_follow_ups", license_id, days))
         return list(getattr(self, "_follow_ups", []))
@@ -3979,11 +4002,36 @@ class TestMovingAnAppointment:
         # Only the time changed — the day it was on is kept.
         assert pending[0]["due_date"].endswith("-04")
 
-    async def test_the_old_row_is_cancelled_not_left_behind(self):
+    async def test_the_appointment_keeps_its_id_and_there_is_only_ever_one(self):
+        """Postponing edits the row; it does not mint a new one.
+
+        This used to be cancel-then-create, which left two rows and gave
+        the appointment a new id every time it moved — so the reminder
+        already pushed to LINE pointed at a cancelled row and the
+        appointment's audit trail started again from empty.
+        """
         client, _, _ = await self._with_appointment()
+        before = client._follow_ups[0]["id"]
         await handle_chat_message(client, message="เปลี่ยนเวลาเป็น 13.00", ctx=_ctx())
-        assert sum(1 for r in client._follow_ups if r["status"] == "cancelled") == 1
-        assert len(client._follow_ups) == 2  # old cancelled, new pending
+        assert len(client._follow_ups) == 1
+        assert client._follow_ups[0]["id"] == before
+        assert client._follow_ups[0]["status"] == "pending"
+        assert not [r for r in client.recorded if r[0] == "create_follow_up" and r[2].get("due_time") == "13:00:00"]
+        assert [r for r in client.recorded if r[0] == "update_follow_up"]
+
+    async def test_moving_leaves_the_note_alone(self):
+        """Only the keys that changed are sent.
+
+        A PATCH that echoed every field back would blank the note the
+        moment someone edited it from the dashboard between the read and
+        the write.
+        """
+        client, _, _ = await self._with_appointment()
+        note_before = client._follow_ups[0].get("notes")
+        await handle_chat_message(client, message="เปลี่ยนเวลาเป็น 13.00", ctx=_ctx())
+        sent = [r for r in client.recorded if r[0] == "update_follow_up"][-1][3]
+        assert set(sent) == {"due_date", "due_time"}
+        assert client._follow_ups[0].get("notes") == note_before
 
     async def test_moving_the_day_keeps_the_time(self):
         client, _, _ = await self._with_appointment()
@@ -4009,11 +4057,34 @@ class TestMovingAnAppointment:
         reply = await handle_chat_message(client, message="เลื่อนนัดเป็นพรุ่งนี้", ctx=_ctx())
         assert "ไม่มีนัด" in reply.text and customer["customer_id"] in reply.text
 
-    async def test_moving_needs_both_permissions(self):
+    async def test_moving_needs_followup_update(self):
+        """followup.update alone, now that moving is one PATCH.
+
+        It used to need followup.create as well, because "moving" meant
+        booking a second appointment — so someone allowed to edit but not
+        to create could not postpone one.
+        """
         client = FakeDataClient(permission_keys=["customer.read", "followup.read"])
         reply = await handle_chat_message(client, message="เปลี่ยนเวลาเป็น 13.00", ctx=_ctx())
-        assert not [r for r in client.recorded if r[0] == "create_follow_up"]
+        assert not [r for r in client.recorded if r[0] in ("create_follow_up", "update_follow_up")]
         assert reply.text
+
+    async def test_moving_works_without_permission_to_create(self):
+        client = FakeDataClient(permission_keys=[
+            "customer.read", "followup.create", "followup.read", "followup.update",
+        ])
+        customer = await client.create_customer("L1", {
+            "first_name": "สมบัติ", "last_name": "ราชเทวี", "phone": "0879707586",
+        })
+        code = customer["customer_id"]
+        await handle_chat_message(
+            client, message=f"ตั้งนัด ประชุมกับคุณสมบัติ {code} วันที่ 4", ctx=_ctx(),
+        )
+        # The reminder exists; now take away the right to make another one.
+        client._permission_keys = ["customer.read", "followup.read", "followup.update"]
+        reply = await handle_chat_message(client, message="เปลี่ยนเวลาเป็น 13.00", ctx=_ctx())
+        assert "ไม่มีสิทธิ์" not in reply.text, reply.text
+        assert client._follow_ups[0]["due_time"] == "13:00:00"
 
     async def test_a_new_appointment_can_be_added_with_phoem_nat(self):
         """"เพิ่มนัด เข้าประชุมวันที่ 4 นี้" right after viewing a customer

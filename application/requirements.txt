@@ -11,3 +11,9 @@ google-cloud-storage==2.19.0
 # version requirements-test.txt uses, so what the tests draw is what the
 # container draws.
 Pillow==12.3.0
+# Word (.docx) -> HTML for tenant-uploaded document templates
+# (services/documents/docx.py). Chosen over a general converter because
+# its output vocabulary is limited to text markup: no VBA, no field
+# codes, no embedded objects, nothing that executes. Pinned, so what the
+# tests convert is what the container converts.
+mammoth==1.12.1

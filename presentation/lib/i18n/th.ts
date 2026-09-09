@@ -412,9 +412,14 @@ export const th = {
     related: {
       appointments: "นัดหมาย",
       noAppointments: "ยังไม่มีนัดหมาย",
+      editAppointment: "แก้ไขนัด",
+      deleteAppointment: "ลบนัด",
+      deleteAppointmentConfirm: "ลบนัดวันที่ {when} ออกถาวรใช่ไหม การลบย้อนกลับไม่ได้ ถ้าเพียงต้องการยกเลิกนัดแต่เก็บประวัติไว้ ให้กด \"ยกเลิกนัด\" แทน",
       notes: "บันทึก",
       noNotes: "ยังไม่มีบันทึก",
-      status: { pending: "รอดำเนินการ", done: "เสร็จแล้ว", cancelled: "ยกเลิก" },
+      // `completed` is what the API stores; `done` was the only key here,
+      // so a finished appointment rendered the raw word "completed".
+      status: { pending: "รอดำเนินการ", done: "เสร็จแล้ว", completed: "เสร็จแล้ว", cancelled: "ยกเลิก" },
       addNote: "เพิ่มบันทึก",
       noteBody: "ข้อความ",
       addAppointment: "เพิ่มนัดหมาย",
@@ -482,37 +487,61 @@ export const th = {
     },
     templates: {
       title: "แบบฟอร์มเอกสาร",
-      intro: "อัปโหลดไฟล์ HTML ที่ใช้เป็นแบบใบเสนอราคาของร้านคุณเอง ระบบจะเติมข้อมูลลงในช่องที่กำหนด ไฟล์ที่อัปโหลดจะเป็นฉบับร่างจนกว่าจะกดเผยแพร่",
+      intro: "อัปโหลดไฟล์ Word (.docx) หรือ HTML ที่ใช้เป็นแบบเอกสารของร้านคุณเอง ระบบจะเติมข้อมูลจริงลงในช่องที่กำหนด ไฟล์ที่อัปโหลดจะเป็นฉบับร่าง กด “ดูตัวอย่าง” เพื่อดูผลก่อน แล้วจึงกด “เผยแพร่”",
       upload: "อัปโหลดแบบฟอร์ม",
-      placeholderLegend: `{{company.legal_name}}   ชื่อบริษัท
-{{company.address}}      ที่อยู่
-{{company.phone}}        เบอร์โทร
+      placeholderLegend: `{{company.name}}         ชื่อบริษัทตามหนังสือรับรอง
+{{company.trading_name}} ชื่อร้าน / ชื่อที่ใช้ค้าขาย
+{{company.address}}      ที่อยู่บริษัท
+{{company.phone}}        เบอร์โทรบริษัท
+{{company.email}}        อีเมลบริษัท
 {{company.tax_id}}       เลขประจำตัวผู้เสียภาษี
 
 {{customer.name}}        ชื่อลูกค้า
+{{customer.phone}}       เบอร์โทรลูกค้า
+{{customer.email}}       อีเมลลูกค้า
 {{customer.address}}     ที่อยู่ลูกค้า
 
 {{quote.quote_id}}       เลขที่ใบเสนอราคา
-{{quote.valid_until}}    วันหมดอายุ
+{{quote.valid_until}}    ยืนราคาถึงวันที่
+{{quote.status}}         สถานะใบเสนอราคา
+{{deal.deal_id}}         เลขที่ดีลอ้างอิง
+{{issued_on}}            วันที่ออกเอกสาร
 
 {{#line_items}}
   {{item.index}}         ลำดับ
-  {{item.name}}          ชื่อสินค้า
+  {{item.product_name}}  ชื่อสินค้า / รายการ
   {{item.qty}}           จำนวน
   {{item.unit_price}}    ราคาต่อหน่วย
-  {{item.line_total}}    รวมบรรทัด
+  {{item.line_total}}    รวมเงินบรรทัดนี้
+  {{item.notes}}         หมายเหตุของรายการ
 {{/line_items}}
 
-{{totals.subtotal}}      รวมเป็นเงิน
+{{totals.subtotal}}      รวมเป็นเงิน (ก่อนส่วนลด)
 {{totals.discount_amount}} ส่วนลด
+{{totals.net_total}}     ยอดหลังหักส่วนลด
+{{totals.vat_rate_percent}} อัตราภาษี (%)
 {{totals.vat_amount}}    ภาษีมูลค่าเพิ่ม
-{{totals.grand_total}}   จำนวนเงินรวมทั้งสิ้น`,
+{{totals.grand_total}}   จำนวนเงินรวมทั้งสิ้น
+
+รายงานการซ่อม (Service Report) ใช้ชุดนี้แทน:
+{{report.report_id}} {{report.found_issue}} {{report.work_done}}
+{{report.parts_changed}} {{report.notes}} {{report.status}}
+{{ticket.ticket_number}} {{ticket.customer_name}} {{ticket.customer_phone}}
+{{ticket.service_address}} {{ticket.serial_number}} {{ticket.issue_description}}
+{{ticket.scheduled_date}} {{ticket.scheduled_time}}
+{{technician.name}} {{technician.phone}}`,
       name: "ชื่อแบบฟอร์ม",
       namePlaceholder: "เช่น ใบเสนอราคาแบบมีโลโก้",
-      file: "ไฟล์ HTML",
+      file: "ไฟล์ Word (.docx) หรือ HTML",
+      fileHint: "แนะนำให้ดาวน์โหลดไฟล์ตัวอย่างด้านล่างไปแก้ใน Word แล้วบันทึกเป็น .docx ก่อนอัปโหลด (ไฟล์ .doc แบบเก่าใช้ไม่ได้ ให้บันทึกเป็น .docx ก่อน ขนาดไม่เกิน 2 MB)",
       loaded: "อ่านไฟล์แล้ว",
+      loadedDocx: "ไฟล์ Word",
       characters: "{n} ตัวอักษร",
-      uploaded: "อัปโหลดแล้ว เป็นฉบับร่าง กดเผยแพร่เมื่อพร้อมใช้",
+      kilobytes: "{n} KB",
+      readFailed: "อ่านไฟล์ไม่สำเร็จ ลองเลือกไฟล์ใหม่อีกครั้ง",
+      wrongType: "รองรับเฉพาะไฟล์ Word (.docx) และ HTML (.html) — ไฟล์ .doc แบบเก่าให้เปิดใน Word แล้วบันทึกเป็น .docx ก่อน",
+      tooBig: "ไฟล์ใหญ่เกิน 2 MB ลองย่อรูปในเอกสารหรือลบรูปที่ไม่จำเป็นออก",
+      uploaded: "อัปโหลดแล้ว เป็นฉบับร่าง กด “ดูตัวอย่าง” เพื่อตรวจก่อนเผยแพร่",
       published: "เผยแพร่แล้ว เอกสารใหม่จะใช้แบบนี้",
       publish: "เผยแพร่",
       confirmPublish: "เผยแพร่แบบฟอร์มนี้ ใบเสนอราคาที่ออกใหม่จะใช้แบบนี้ ใช่ไหม",
@@ -522,7 +551,18 @@ export const th = {
       blankWarning: "ช่องเหล่านี้จะออกมาว่างเพราะไม่มีข้อมูลตรงกัน ตรวจสอบก่อนเผยแพร่",
       reference: "ช่องข้อมูลที่ใช้ได้",
       versionsFailed: "โหลดรุ่นไม่สำเร็จ ({status})",
-      versionStatus: { draft: "ร่าง", published: "เผยแพร่แล้ว" },
+      versionStatus: { draft: "ร่าง", previewed: "ดูตัวอย่างแล้ว", published: "เผยแพร่แล้ว", archived: "เลิกใช้แล้ว" },
+      preview: "ดูตัวอย่าง",
+      previewTitle: "ตัวอย่างเอกสาร (ใช้ข้อมูลตัวอย่าง ไม่ใช่ข้อมูลลูกค้าจริง)",
+      previewFailed: "เปิดตัวอย่างไม่สำเร็จ ({status})",
+      previewNote: "นี่คือหน้าตาเอกสารเมื่อเติมข้อมูลแล้ว ตัวเลขและชื่อในตัวอย่างเป็นข้อมูลสมมติ การกดดูตัวอย่างไม่ใช่การเผยแพร่",
+      previewOpen: "เปิดในแท็บใหม่",
+      previewClose: "ปิดตัวอย่าง",
+      samplesTitle: "ไฟล์ตัวอย่างสำหรับเริ่มต้น",
+      samplesHint: "ดาวน์โหลดไปเปิดใน Word แก้หน้าตาได้ตามใจ ขอให้คงข้อความในวงเล็บปีกกาไว้ แล้วบันทึกเป็น .docx อัปโหลดกลับมาที่หน้านี้",
+      sampleQuote: "ตัวอย่างใบเสนอราคา (.docx)",
+      sampleServiceReport: "ตัวอย่างรายงานการซ่อม (.docx)",
+      sourceDownload: "ดาวน์โหลดไฟล์ Word ต้นฉบับ",
     },
     csvImport: {
       titleProducts: "นำเข้ารายการสินค้าจากไฟล์ CSV",

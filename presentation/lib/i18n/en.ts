@@ -410,9 +410,12 @@ export const en: Dictionary = {
     related: {
       appointments: "Appointments",
       noAppointments: "No appointments yet",
+      editAppointment: "Edit appointment",
+      deleteAppointment: "Delete appointment",
+      deleteAppointmentConfirm: "Permanently delete the appointment on {when}? This cannot be undone \u2014 to call it off but keep the record, use \"Cancel appointment\" instead.",
       notes: "Notes",
       noNotes: "No notes yet",
-      status: { pending: "Pending", done: "Done", cancelled: "Cancelled" },
+      status: { pending: "Pending", done: "Done", completed: "Done", cancelled: "Cancelled" },
       addNote: "Add note",
       noteBody: "Text",
       addAppointment: "Add appointment",
@@ -480,37 +483,61 @@ export const en: Dictionary = {
     },
     templates: {
       title: "Document templates",
-      intro: "Upload an HTML file to use as your own quote layout. Values are filled into the placeholders you mark. Uploads stay as drafts until you publish them.",
+      intro: "Upload a Word (.docx) or HTML file to use as your own document layout. Real values are filled into the placeholders you mark. Uploads stay as drafts — preview one, then publish it.",
       upload: "Upload template",
-      placeholderLegend: `{{company.legal_name}}   company name
-{{company.address}}      address
-{{company.phone}}        phone
+      placeholderLegend: `{{company.name}}         registered company name
+{{company.trading_name}} trading name
+{{company.address}}      company address
+{{company.phone}}        company phone
+{{company.email}}        company email
 {{company.tax_id}}       tax ID
 
 {{customer.name}}        customer name
+{{customer.phone}}       customer phone
+{{customer.email}}       customer email
 {{customer.address}}     customer address
 
 {{quote.quote_id}}       quote number
 {{quote.valid_until}}    valid until
+{{quote.status}}         quote status
+{{deal.deal_id}}         related deal number
+{{issued_on}}            issue date
 
 {{#line_items}}
   {{item.index}}         line number
-  {{item.name}}          product name
+  {{item.product_name}}  product / service name
   {{item.qty}}           quantity
   {{item.unit_price}}    unit price
   {{item.line_total}}    line total
+  {{item.notes}}         line note
 {{/line_items}}
 
-{{totals.subtotal}}      subtotal
+{{totals.subtotal}}      subtotal (before discount)
 {{totals.discount_amount}} discount
+{{totals.net_total}}     total after discount
+{{totals.vat_rate_percent}} VAT rate (%)
 {{totals.vat_amount}}    VAT
-{{totals.grand_total}}   grand total`,
+{{totals.grand_total}}   grand total
+
+A service report uses this set instead:
+{{report.report_id}} {{report.found_issue}} {{report.work_done}}
+{{report.parts_changed}} {{report.notes}} {{report.status}}
+{{ticket.ticket_number}} {{ticket.customer_name}} {{ticket.customer_phone}}
+{{ticket.service_address}} {{ticket.serial_number}} {{ticket.issue_description}}
+{{ticket.scheduled_date}} {{ticket.scheduled_time}}
+{{technician.name}} {{technician.phone}}`,
       name: "Template name",
       namePlaceholder: "e.g. Quote with logo",
-      file: "HTML file",
+      file: "Word (.docx) or HTML file",
+      fileHint: "Start from a sample below: edit it in Word, save as .docx, and upload it here. The old .doc format is not supported — save as .docx first. Up to 2 MB.",
       loaded: "File read",
+      loadedDocx: "Word file",
       characters: "{n} characters",
-      uploaded: "Uploaded as a draft — publish it when you are ready",
+      kilobytes: "{n} KB",
+      readFailed: "The file could not be read — choose it again",
+      wrongType: "Only Word (.docx) and HTML (.html) files are supported — open a .doc in Word and save it as .docx first",
+      tooBig: "The file is larger than 2 MB — shrink or remove images in the document",
+      uploaded: "Uploaded as a draft — preview it before publishing",
       published: "Published. New documents will use it.",
       publish: "Publish",
       confirmPublish: "Publish this template? New quotes will use it.",
@@ -520,7 +547,18 @@ export const en: Dictionary = {
       blankWarning: "These placeholders will come out blank. Check them before publishing.",
       reference: "Available placeholders",
       versionsFailed: "Could not load versions ({status})",
-      versionStatus: { draft: "Draft", published: "Published" },
+      versionStatus: { draft: "Draft", previewed: "Previewed", published: "Published", archived: "Archived" },
+      preview: "Preview",
+      previewTitle: "Document preview (sample data, not a real customer)",
+      previewFailed: "Could not open the preview ({status})",
+      previewNote: "This is how the document looks once filled in. The names and numbers are made up. Previewing does not publish.",
+      previewOpen: "Open in a new tab",
+      previewClose: "Close preview",
+      samplesTitle: "Starter files",
+      samplesHint: "Download one, open it in Word, change the layout however you like, keep the text in double braces, save as .docx and upload it back here.",
+      sampleQuote: "Quotation sample (.docx)",
+      sampleServiceReport: "Service report sample (.docx)",
+      sourceDownload: "Download the original Word file",
     },
     csvImport: {
       titleProducts: "Import products from a CSV file",

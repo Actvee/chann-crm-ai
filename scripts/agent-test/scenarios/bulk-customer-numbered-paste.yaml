@@ -1,0 +1,23 @@
+name: bulk-customer-numbered-paste
+description: A heading plus numbered lines adds every customer; it never demands an email.
+backend: fake
+actor:
+  oa: sales
+  role: sales
+  language: th
+  permissions: sales
+steps:
+- send: |-
+    ลูกค้าใหม่
+    1.ธรรสมนัา พรหมวัด 0812224555
+    2.จิตกร มานุสรณ์ 0812345678
+  expect:
+    contains: ["เพิ่มลูกค้าแล้ว"]
+    not_contains: ["อีเมล", "1.ธรรสมนัา"]
+    is_not: [not_sure, generic_error, permission, not_a_feature]
+    max_lines: 15
+- send: รายชื่อลูกค้า
+  expect:
+    contains: ["ธรรสมนัา", "จิตกร"]
+    not_contains: ["1.ธรรสมนัา"]
+    is_not: [not_found, generic_error]

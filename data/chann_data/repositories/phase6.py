@@ -341,6 +341,96 @@ class FollowUpRepository:
         self._s.flush()
         return row
 
+    # Fields an edit is allowed to touch. entity_type/entity_id are
+    # deliberately absent: moving an appointment onto a different customer
+    # is not editing the appointment, it is filing it against someone else,
+    # and every reply, notification and audit row already written about it
+    # would then name the wrong record. Cancel it and make a new one.
+    UPDATABLE_FIELDS = frozenset({"due_date", "due_time", "notes", "owner_member_id"})
+
+    def update(
+        self, scope: TenantScope, follow_up_id: uuid.UUID, changes: dict
+    ) -> FollowUp:
+        """Change an appointment's day, time, note or owner in place.
+
+        Reported by the owner (9 Sep): "ตอนนี้นัดหมายเหมือนจะแก้ไข หรือลบไม่ได้".
+        Until now the only way to move one was to cancel it and create a
+        new row, which chat did — so the appointment changed id every time
+        it was postponed, and its history restarted with it.
+
+        `changes` is a dict because a key that is absent and a key set to
+        None mean different things: clearing a note is `{"notes": None}`,
+        while leaving it alone is not passing the key at all. Keyword
+        arguments cannot express that without a sentinel.
+        """
+        unknown = sorted(set(changes) - self.UPDATABLE_FIELDS)
+        if unknown:
+            raise Phase6Conflict(
+                "cannot change " + ", ".join(unknown) + " on a follow-up"
+            )
+
+        row = self._s.execute(
+            select(FollowUp)
+            .where(
+                FollowUp.id == follow_up_id,
+                FollowUp.license_id == scope.license_id,
+            )
+            .with_for_update()
+        ).scalar_one_or_none()
+        if row is None:
+            raise Phase6NotFound("follow-up not found")
+
+        # Same rule as set_status, for the same reason: a settled follow-up
+        # is something other things have already reported on. Editing the
+        # date of a completed visit would rewrite that history silently.
+        if row.status != "pending":
+            raise Phase6Conflict(
+                f"follow-up is already {row.status} and cannot be edited"
+            )
+
+        if not changes:
+            return row
+
+        # due_date is NOT NULL in the schema, so an explicit None is a
+        # caller trying to clear the day. With a time set that leaves a
+        # clock reading attached to no day at all.
+        if "due_date" in changes and changes["due_date"] is None:
+            wants_time = (
+                changes["due_time"] if "due_time" in changes else row.due_time
+            )
+            if wants_time is not None:
+                raise Phase6Conflict("a follow-up time needs a day")
+            raise Phase6Conflict("a follow-up needs a due date")
+
+        # A past due date is allowed here exactly as it is on create: the
+        # repository has never held that rule, and backdating a visit that
+        # already happened is legitimate. The refusal lives in chat
+        # (REMINDER_DATE_PAST) and in the dashboard's date input, where
+        # there is a person to tell.
+        for field, value in changes.items():
+            setattr(row, field, value)
+        self._s.flush()
+        return row
+
+    def delete(self, scope: TenantScope, follow_up_id: uuid.UUID) -> FollowUp:
+        """Remove a follow-up outright.
+
+        Cancelling is the normal way to stop an appointment — it keeps the
+        row, so the digest and the audit trail still show that something
+        was planned and dropped. This exists for the other case: one filed
+        against the wrong record, or created by mistake, which a person
+        wants gone rather than listed as cancelled forever.
+
+        The row's own fields go into the audit entry at the route, because
+        after this there is nothing left to read them from.
+        """
+        row = self.get(scope, follow_up_id)
+        if row is None:
+            raise Phase6NotFound("follow-up not found")
+        self._s.delete(row)
+        self._s.flush()
+        return row
+
 
 class NoteRepository:
     """Master Spec 6.3 — dated, attributed notes against any entity.

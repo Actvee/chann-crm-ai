@@ -123,6 +123,12 @@ ACTION_PERMISSIONS: dict[tuple[str, str], str] = {
     # Cancelling is an update to the row's status, not its own permission —
     # same reasoning as ("promote", "customer") above.
     ("cancel", "followup"): "followup.update",
+    # Removing the row outright. followup.update, not a followup.delete the
+    # catalogue has never had — the same call note.delete already makes,
+    # and deleting is an edit down to nothing. Registered so "ลบนัดนี้ทิ้ง"
+    # reaches the real DELETE instead of the capability list; the typed
+    # ยกเลิกนัด/ลบนัด triggers still cancel, which keeps the record.
+    ("delete", "followup"): "followup.update",
     ("read", "ticket"): "ticket.read",
     ("create", "ticket"): "ticket.create",
     ("update", "ticket"): "ticket.update",
@@ -1156,6 +1162,18 @@ REMINDER_CANCEL_NONE = {
     "th": "ไม่มีการเตือนที่ค้างอยู่ของ {code}",
     "en": "No pending reminders for {code}.",
 }
+# Removing the row outright, not cancelling it. Reached only when the
+# person explicitly asks for the appointment to be *gone* — a cancelled
+# one still shows in the history, which is what most people mean and what
+# every deterministic ยกเลิก/ลบนัด trigger still does.
+REMINDER_DELETED = {
+    "th": "ลบนัดของ {code} ออกแล้ว {count} รายการ",
+    "en": "Removed {count} appointment(s) for {code}.",
+}
+REMINDER_DELETE_NONE = {
+    "th": "ไม่มีนัดที่ค้างอยู่ของ {code} ให้ลบ",
+    "en": "No pending appointment for {code} to remove.",
+}
 NOTE_UPDATED = {
     "th": "แก้บันทึกล่าสุดของ {code} แล้ว",
     "en": "Updated the latest note on {code}.",
@@ -1853,15 +1871,20 @@ async def _handle_reminder_move(
     handler, the dashboard had no control, and the AI's ("update",
     "followup") intent had a permission key registered but nowhere to go.
 
-    Implemented as cancel-then-create over the endpoints that already
-    exist, rather than a new PATCH route: the Data Tier can set a
-    follow-up's status and create one, and inventing a new verb here is
-    how the ck_audit_log_action constraint silently rolled back whole
-    transactions in Phase 3. The reply names the new day and time, and
-    only what was given changes — a bare time keeps the original date.
+    First shipped as cancel-then-create, because the Data Tier could only
+    set a follow-up's status or create a new one. That gave the right
+    answer and the wrong record: every postponement minted a fresh id, so
+    the reminder already pushed to LINE pointed at a cancelled row and the
+    appointment's audit trail restarted from empty. Since the owner's
+    9 Sep report ("นัดหมายเหมือนจะแก้ไข หรือลบไม่ได้") there is a real
+    PATCH, and this edits in place: same id, same history, one audit entry
+    that names the old day and the new one.
+
+    The reply is unchanged — only what was given changes, and a bare time
+    keeps the original date.
     """
     keys = set(permission_keys)
-    if not {"followup.update", "followup.create"} <= keys:
+    if "followup.update" not in keys:
         return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
 
     license_id = str(license_id)
@@ -1917,20 +1940,18 @@ async def _handle_reminder_move(
         except ValueError:
             new_time = time(9, 0)
 
-    payload = {
-        "entity_type": entity_type,
-        "entity_id": str(entity_id),
-        "due_date": new_date.isoformat(),
-        "due_time": new_time.isoformat(),
-    }
-    if row.get("notes"):
-        payload["notes"] = row["notes"]
+    # Only the day and the time — the note, the owner and the record it
+    # hangs off all stay exactly as they were. Sending the note back would
+    # be harmless today and wrong the moment someone edits it elsewhere.
     try:
-        # New one first: if creating fails, the person still has the old
-        # appointment rather than neither.
-        await client.create_follow_up(license_id, payload, actor_id=actor_id)
-        await client.set_follow_up_status(
-            license_id, str(row.get("id")), "cancelled", actor_id=actor_id,
+        await client.update_follow_up(
+            license_id,
+            str(row.get("id")),
+            {
+                "due_date": new_date.isoformat(),
+                "due_time": new_time.isoformat(),
+            },
+            actor_id=actor_id,
         )
     except Exception:
         log.exception("reminder move failed")
@@ -2015,6 +2036,82 @@ async def _handle_reminder_cancel(
 
     return ChatReply(
         text=_t(REMINDER_CANCELLED, language).format(code=code, count=cancelled),
+        entity_type=entity_type, entity_id=entity_id,
+        quick_replies=[
+            ("ตั้งเตือนใหม่", f"เตือน {code} พรุ่งนี้"),
+            ("รายการเตือน", "รายการเตือน"),
+        ],
+    )
+
+
+async def _handle_reminder_delete(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
+    permission_keys: list[str], language: str, actor_id: str,
+) -> ChatReply:
+    """Remove every pending appointment on one record outright.
+
+    Deliberately NOT what "ยกเลิกนัด" does. Cancelling leaves the row, so
+    the history still shows that something was planned and called off, and
+    that is what almost everyone means. This is the other case — an
+    appointment booked against the wrong record, or by mistake, that the
+    person wants gone. Only the model's explicit delete intent reaches
+    here; every deterministic trigger still cancels.
+
+    Same target resolution and same all-pending-rows rule as the cancel
+    handler, and the reply states the count for the same reason: an
+    over-broad delete has to be visible immediately, and here it cannot be
+    undone.
+    """
+    if "followup.update" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+
+    license_id = str(license_id)
+    try:
+        target = await _resolve_target_or_context(client, ctx, license_id, message)
+    except _TargetNotFound as exc:
+        return ChatReply(
+            text=_t(NOT_FOUND_BY_CODE, language).format(
+                what=_entity_noun(exc.entity_type, language), code=exc.code
+            )
+        )
+    if target is None:
+        return ChatReply(
+            text=_t(REMINDER_CANCEL_NEEDS_TARGET, language),
+            quick_replies=[("รายการเตือน", "รายการเตือน"), ("นัดหมายวันนี้", "นัดหมายวันนี้")],
+        )
+    entity_type, entity_id, code = target
+
+    # Remembered as soon as the target resolves, same as cancelling: the
+    # next sentence is usually about the same record whether or not there
+    # was anything here to remove.
+    await _remember_entity(
+        client, ctx, entity_type=entity_type, entity_id=str(entity_id), code=code,
+    )
+
+    try:
+        rows = await client.list_follow_ups(license_id, status="pending")
+    except Exception:
+        log.exception("reminder delete could not list follow-ups")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    mine = [r for r in rows if str(r.get("entity_id")) == str(entity_id)]
+    if not mine:
+        return ChatReply(text=_t(REMINDER_DELETE_NONE, language).format(code=code))
+
+    removed = 0
+    for row in mine:
+        try:
+            await client.delete_follow_up(
+                license_id, str(row.get("id")), actor_id=actor_id,
+            )
+            removed += 1
+        except Exception:
+            log.exception("could not delete follow-up %s", row.get("id"))
+    if removed == 0:
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    return ChatReply(
+        text=_t(REMINDER_DELETED, language).format(code=code, count=removed),
         entity_type=entity_type, entity_id=entity_id,
         quick_replies=[
             ("ตั้งเตือนใหม่", f"เตือน {code} พรุ่งนี้"),
@@ -9926,6 +10023,18 @@ async def _handle_ai_understood_intent(
             actor_id=ctx.chann_uid,
         )
 
+    if entity == "followup" and action == "delete":
+        # Only the model's explicit "remove it" gets here. Everything the
+        # deterministic triggers catch (ยกเลิกนัด, ลบนัด, cancel reminder)
+        # still cancels, because a cancelled appointment is still a record
+        # that something was planned and dropped.
+        return await _handle_reminder_delete(
+            client, ctx=ctx, license_id=license_id,
+            message=_joined("ลบนัด", code, target),
+            permission_keys=permission_keys, language=language,
+            actor_id=ctx.chann_uid,
+        )
+
     if entity == "followup" and action == "cancel":
         # The handler falls back to "the record we were just looking at"
         # when neither a code nor a name was given, same as creating one.
@@ -12168,7 +12277,10 @@ PHONE_INVALID = {
     },
 }
 # Several customers in one message: one per line (or ";"), each "ชื่อ นามสกุล เบอร์ [อีเมล]".
-BULK_CUSTOMER_TRIGGERS = ("เพิ่มลูกค้าหลายคน", "เพิ่มลูกค้าหลายราย", "เพิ่มลูกค้า", "สร้างลูกค้า", "add customers", "add customer")
+BULK_CUSTOMER_TRIGGERS = (
+    "เพิ่มลูกค้าหลายคน", "เพิ่มลูกค้าหลายราย", "ลูกค้าใหม่หลายคน", "เพิ่มลูกค้าใหม่", "ลูกค้าใหม่",
+    "เพิ่มลูกค้า", "สร้างลูกค้า", "add customers", "add customer", "new customers",
+)
 BULK_CUSTOMER_SUMMARY = {
     "th": "เพิ่มลูกค้าแล้ว {saved} ราย{skipped_line}{failed_line}",
     "en": "Added {saved} customer(s){skipped_line}{failed_line}",
@@ -12314,6 +12426,13 @@ def _prune_missing(missing: list[str], intent: dict, message: str) -> list[str]:
     Asking a person for something already on screen is the fastest way to
     make an assistant feel like a form.
     """
+    if intent.get("entity") == "customer":
+        # A shop needs a name (and its own phone rule decides the rest).
+        # The model sometimes reports email/address/last_name as missing
+        # and the assistant then blocked a perfectly good paste on
+        # "กรุณาระบุอีเมล" (owner, 9 Sep 2026). The create handler asks
+        # for what it actually needs; these are never it.
+        return [m for m in missing if m not in ("email", "address", "notes", "last_name")]
     if intent.get("entity") != "followup":
         return missing
     pruned = [m for m in missing if m != "due_time"]
@@ -17314,6 +17433,16 @@ def _looks_like_name_and_phone(part: str) -> bool:
     return not _is_closed_request(part, "sales")
 
 
+# "1." "2)" "-" "•" "๓." in front of a pasted line. People number a list
+# before they paste it; without this the number joined the first name and
+# the whole line stopped looking like "name … phone" (owner, 9 Sep 2026).
+_BULK_LIST_MARKER_RE = re.compile(r"^\s*(?:[-–—•*]+|[(\[]?[0-9๐-๙]{1,3}[.)\]])\s*(?=[^\s0-9๐-๙])")
+
+
+def _strip_list_marker(line: str) -> str:
+    return _BULK_LIST_MARKER_RE.sub("", line.strip(), count=1).strip()
+
+
 def _bulk_customer_entries(message: str, *, allow_untriggered: bool = False) -> list[dict] | None:
     """Two or more customers in one message, or None. Each entry is the
     words of a line: an email token, a phone-looking token, the rest is the
@@ -17329,7 +17458,8 @@ def _bulk_customer_entries(message: str, *, allow_untriggered: bool = False) -> 
     if trigger is None and not allow_untriggered:
         return None
     body = text[len(trigger):].strip(" :：\n") if trigger else text
-    parts = [p.strip() for p in re.split(r"[\n;；]+", body) if p.strip()]
+    parts = [_strip_list_marker(p) for p in re.split(r"[\n;；]+", body) if p.strip()]
+    parts = [p for p in parts if p]
     if len(parts) < 2:
         phones = list(_BULK_PHONE_RE.finditer(body))
         if len(phones) >= 2:

@@ -8,7 +8,6 @@ import { FieldRow } from "../_field-row";
 import { fullDateTime, shortDate } from "../_list-controls";
 import { proxyHeaders } from "./_lib";
 import { RelatedHeading } from "./_record";
-import { useSalesText } from "./_strings";
 
 type FollowUp = {
   id: string;
@@ -69,7 +68,6 @@ export function RelatedActivity({
   readOnly?: boolean;
 }) {
   const { t, locale } = useLanguage();
-  const s = useSalesText();
   const [followUps, setFollowUps] = useState<FollowUp[] | null>(null);
   const [notes, setNotes] = useState<Note[] | null>(null);
   // Editing state. Appointments could be made and read from this panel
@@ -80,7 +78,12 @@ export function RelatedActivity({
   const [busy, setBusy] = useState<string | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const [form, setForm] = useState<{ date: string; time: string; note: string } | null>(null);
-  const [movingId, setMovingId] = useState<string | null>(null);
+  // The appointment being edited in place. Was `movingId`, and meant
+  // "create a replacement and cancel this one" — which is why a
+  // postponed appointment used to come back with a new id and no
+  // history (owner, 9 Sep: "นัดหมายเหมือนจะแก้ไข หรือลบไม่ได้"). It now
+  // names the row that PATCH will change.
+  const [editingId, setEditingId] = useState<string | null>(null);
   // Notes were read-only here: the panel showing a record's history was
   // the one place you could not add to it, and nothing anywhere could
   // correct a note — the Data Tier has had PATCH/DELETE since Phase 6
@@ -184,43 +187,81 @@ export function RelatedActivity({
     }
   }
 
-  /** Create one, optionally cancelling the row it replaces.
+  /** Save the form — a new appointment, or an edit to an existing one.
    *
-   * Moving an appointment is create-then-cancel over the two endpoints
-   * that exist, matching what chat's "เลื่อนนัด" does — and in that
-   * order, so a failure leaves the old appointment standing rather than
-   * leaving the person with none. The second step is checked (review
-   * C17): an unnoticed failure left two appointments on the record.
+   * Editing used to be create-then-cancel over the only two endpoints
+   * that existed, which worked and was wrong: the appointment changed
+   * id on every postponement, so the reminder already pushed to LINE
+   * pointed at a cancelled row and its audit trail restarted. One PATCH
+   * now does it, which also removes the half-done state where the new
+   * row was created and the old one failed to cancel (review C17).
    */
-  async function saveAppointment(replaces: string | null) {
+  async function saveAppointment(editing: string | null) {
     if (!form?.date) return;
-    setBusy(replaces ?? "new");
+    setBusy(editing ?? "new");
     setFailed(null);
     try {
-      const response = await fetch(`/api/phase2/follow-ups`, {
-        method: "POST",
-        headers: { ...proxyHeaders(token, licenseId), "Content-Type": "application/json" },
-        body: JSON.stringify({
-          entity_type: entityType,
-          entity_id: entityId,
-          due_date: form.date,
-          due_time: form.time ? `${form.time}:00` : null,
-          notes: form.note || null,
-        }),
+      const response = editing
+        ? await fetch(`/api/phase2/follow-ups/${editing}`, {
+            method: "PATCH",
+            headers: { ...proxyHeaders(token, licenseId), "Content-Type": "application/json" },
+            body: JSON.stringify({
+              due_date: form.date,
+              due_time: form.time ? `${form.time}:00` : null,
+              notes: form.note || null,
+            }),
+          })
+        : await fetch(`/api/phase2/follow-ups`, {
+            method: "POST",
+            headers: { ...proxyHeaders(token, licenseId), "Content-Type": "application/json" },
+            body: JSON.stringify({
+              entity_type: entityType,
+              entity_id: entityId,
+              due_date: form.date,
+              due_time: form.time ? `${form.time}:00` : null,
+              notes: form.note || null,
+            }),
+          });
+      if (!response.ok) throw new Error(String(response.status));
+      setForm(null);
+      setEditingId(null);
+      await reload();
+    } catch {
+      setFailed(t.dashboard.related.actionFailed);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /** Remove an appointment outright.
+   *
+   * Deliberately separate from "ยกเลิกนัด" next to it, which sets the
+   * status and keeps the row — that is what calling one off usually
+   * means, and it stays the quiet default. This is for the appointment
+   * booked against the wrong record. The confirm names the day and time
+   * being removed, because the rows all look alike in this list, and it
+   * points back at cancelling for anyone who wanted that instead.
+   */
+  async function removeAppointment(row: FollowUp) {
+    const when =
+      (shortDate(row.due_date, locale) || row.due_date || "") +
+      (row.due_time ? ` ${String(row.due_time).slice(0, 5)}` : "");
+    if (!window.confirm(t.dashboard.related.deleteAppointmentConfirm.replace("{when}", when)))
+      return;
+    setBusy(row.id);
+    setFailed(null);
+    try {
+      const response = await fetch(`/api/phase2/follow-ups/${row.id}`, {
+        method: "DELETE",
+        headers: proxyHeaders(token, licenseId),
       });
       if (!response.ok) throw new Error(String(response.status));
-      let oldKept = false;
-      if (replaces) {
-        const cancelled = await fetch(
-          `/api/phase2/follow-ups/${replaces}/status?status_value=cancelled`,
-          { method: "PATCH", headers: proxyHeaders(token, licenseId) },
-        );
-        oldKept = !cancelled.ok;
+      // The row being edited may be the one just removed.
+      if (editingId === row.id) {
+        setEditingId(null);
+        setForm(null);
       }
-      setForm(null);
-      setMovingId(null);
       await reload();
-      if (oldKept) setFailed(s.related.movedButOldKept);
     } catch {
       setFailed(t.dashboard.related.actionFailed);
     } finally {
@@ -283,7 +324,11 @@ export function RelatedActivity({
       {(canAddAppointment || form !== null) && (
         <section className="section" style={{ margin: "0 0 14px" }}>
           <div className="section-head">
-            <h2>{t.dashboard.related.addAppointment}</h2>
+            <h2>
+              {editingId
+                ? t.dashboard.related.editAppointment
+                : t.dashboard.related.addAppointment}
+            </h2>
             {form === null && canAddAppointment && (
               <button
                 type="button"
@@ -334,7 +379,7 @@ export function RelatedActivity({
                   data-variant="quiet"
                   onClick={() => {
                     setForm(null);
-                    setMovingId(null);
+                    setEditingId(null);
                   }}
                   disabled={busy !== null}
                 >
@@ -344,7 +389,7 @@ export function RelatedActivity({
                   type="button"
                   className="btn"
                   data-variant="primary"
-                  onClick={() => void saveAppointment(movingId)}
+                  onClick={() => void saveAppointment(editingId)}
                   disabled={busy !== null || !form.date}
                 >
                   {busy !== null ? t.dashboard.related.saving : t.dashboard.related.save}
@@ -377,29 +422,29 @@ export function RelatedActivity({
                 )}
               </div>
               {row.notes && <div className="card-meta">{row.notes}</div>}
-              {row.status === "pending" && (canEditAppointment || canAddAppointment) && (
+              {row.status === "pending" && canEditAppointment && (
                 <div className="card-actions">
-                  {/* Moving is create + cancel, so it needs both keys. */}
-                  {canAddAppointment && canEditAppointment && (
-                    <button
-                      type="button"
-                      className="btn"
-                      data-variant="quiet"
-                      onClick={() => {
-                        setMovingId(row.id);
-                        setForm({
-                          date: row.due_date ?? "",
-                          time: String(row.due_time ?? "").slice(0, 5),
-                          note: row.notes ?? "",
-                        });
-                      }}
-                      disabled={busy !== null}
-                    >
-                      {t.dashboard.related.reschedule}
-                    </button>
-                  )}
                   {canEditAppointment && (
                     <>
+                      {/* One PATCH, so followup.update alone is enough —
+                          it used to need followup.create as well, because
+                          "moving" meant booking a second appointment. */}
+                      <button
+                        type="button"
+                        className="btn"
+                        data-variant="quiet"
+                        onClick={() => {
+                          setEditingId(row.id);
+                          setForm({
+                            date: row.due_date ?? "",
+                            time: String(row.due_time ?? "").slice(0, 5),
+                            note: row.notes ?? "",
+                          });
+                        }}
+                        disabled={busy !== null}
+                      >
+                        {t.dashboard.related.editAppointment}
+                      </button>
                       <button
                         type="button"
                         className="btn"
@@ -417,6 +462,15 @@ export function RelatedActivity({
                         disabled={busy !== null}
                       >
                         {t.dashboard.related.cancelAppointment}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn"
+                        data-variant="danger"
+                        onClick={() => void removeAppointment(row)}
+                        disabled={busy !== null}
+                      >
+                        {t.dashboard.related.deleteAppointment}
                       </button>
                     </>
                   )}

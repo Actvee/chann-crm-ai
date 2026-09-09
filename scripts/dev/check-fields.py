@@ -64,6 +64,7 @@ LOCAL_TYPES: set[tuple[str, str]] = {
     ("_nav-model.tsx", "NavEntry"),  # one left-navigation link: href, icon, permission keys — nothing crosses a tier
     ("_nav-model.tsx", "NavGroup"),  # a labelled group of those links
     ("_nav.tsx", "NavContextValue"),  # the rail's open/collapsed state, shared with the top bar's menu button
+    ("DocumentTemplates.tsx", "Preview"),  # the open template preview: which version, its filled HTML and its blank list — page state, discarded on close
 }
 
 # (file, TS type) whose fields the Application tier composes rather than
@@ -93,6 +94,9 @@ COMPOSED_FIELDS = {
     "url", "sha256", "generated_document_id", "output_path", "renderer",  # documents
     "created",  # open chat session
     "summary",  # approval workflow
+    # routers_phase2 adds it to each row of GET document-templates/{id}/versions:
+    # an asset link to the Word file the version was compiled from, or null
+    "source_docx_url",
     "keys",  # picker options, local only
 }
 

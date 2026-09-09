@@ -23,6 +23,7 @@ snapshot is the part that belongs to this codebase.
 """
 from __future__ import annotations
 
+import base64
 import sys
 import uuid
 from decimal import Decimal
@@ -345,7 +346,7 @@ class TestTemplateUploadOverHttp:
             json={
                 "template_name": "แบบมีโลโก้",
                 "html": (
-                    "<h1>{{company.legal_name}}</h1>"
+                    "<h1>{{company.name}}</h1>"
                     "<p>{{customer.name}} {{company.motto}}</p>"
                 ),
             },
@@ -354,6 +355,14 @@ class TestTemplateUploadOverHttp:
         body = response.json()
         assert body["status"] == "draft"
         # Reported before publishing, not discovered by a customer.
+        #
+        # `{{company.legal_name}}` used to be the placeholder here and
+        # used to pass this check. It is not a snapshot key — the builder
+        # READS legal_name off the company row and writes `company.name`
+        # — and the sample the check ran against had the same mistake in
+        # it, so the two agreed with each other and disagreed with the
+        # document. Shops following the page's own legend printed a blank
+        # company name. See services/documents/samples.py.
         assert body["unknown_placeholders"] == ["company.motto"]
 
     def test_an_empty_template_is_refused(self, shop):
@@ -363,3 +372,165 @@ class TestTemplateUploadOverHttp:
             json={"template_name": "ว่าง", "html": "   "},
         )
         assert response.status_code == 400, response.text
+
+    def test_word_upload_preview_publish_and_render_end_to_end(
+        self, shop, monkeypatch,
+    ):
+        """The owner's three complaints, in one pass over both tiers.
+
+        Upload a .docx a shop could really have made, look at it filled
+        in, publish it, and issue a real quote that comes out rendered
+        through THAT template rather than the built-in one.
+
+        SmartBrowz is stubbed — it is a paid external service and the
+        credential is not in this environment — in the same place and
+        the same way `tests/unit/test_quote_issue.py` stubs it: the
+        renderer object, so the HTML that would have been sent is
+        captured and asserted on. Everything below the renderer is real:
+        both tiers over HTTP, the real snapshot builder, the real fill
+        engine, the real template resolution in quote_issue.py.
+        """
+        from chann_app.services import quote_issue
+        from chann_app.services.documents.samples import build_sample_docx
+        from chann_app.services.pdf import base as pdf_base
+        from chann_app.services.storage import base as storage_base
+        from chann_app.services.storage.base import StoredDocument, sha256_hex
+
+        client, license_id = shop
+        stored: dict[str, bytes] = {}
+
+        class _MemoryStore:
+            async def put(self, *, key, content, content_type=None):
+                stored[key] = content
+                # The real StoredDocument, not a stand-in: `sha256` is
+                # what goes into generated_documents as the proof of
+                # which bytes the customer received.
+                return StoredDocument(
+                    path=f"mem://{key}", sha256=sha256_hex(content), size=len(content),
+                )
+
+            async def get(self, *, path):
+                return stored[path.removeprefix("mem://")]
+
+        memory = _MemoryStore()
+        monkeypatch.setattr(storage_base, "get_document_store", lambda: memory)
+
+        rendered: dict[str, str] = {}
+
+        class _Renderer:
+            async def render(self, html, options, idempotency_key=None):
+                rendered["html"] = html
+                return type(
+                    "Result", (),
+                    {"content": b"%PDF-1.4 stub", "renderer": "smartbrowz"},
+                )()
+
+        # quote_issue imports both names at module level, so the module's
+        # own attributes are what have to be replaced — the same two
+        # lines tests/unit/test_quote_issue.py uses.
+        monkeypatch.setattr(pdf_base, "get_renderer", lambda *a, **k: _Renderer())
+        monkeypatch.setattr(quote_issue, "get_renderer", lambda *a, **k: _Renderer())
+        monkeypatch.setattr(quote_issue, "get_document_store", lambda *a, **k: memory)
+
+        # ---- 1. a Word file goes up
+        content = build_sample_docx("quote")
+        response = client.post(
+            _api(license_id, "/document-templates/upload"),
+            json={
+                "template_name": "ใบเสนอราคาจากเวิร์ด",
+                "docx_base64": base64.b64encode(content).decode(),
+                "filename": "quotation.docx",
+                "document_type": "quote",
+            },
+        )
+        assert response.status_code == 201, response.text
+        upload = response.json()
+        assert upload["source_kind"] == "docx"
+        assert upload["status"] == "draft"
+        # A sample built from the real vocabulary leaves nothing blank.
+        assert upload["unknown_placeholders"] == []
+        template_id, version_id = upload["template_id"], upload["version_id"]
+
+        # The Word file itself is kept, and the version list links to it.
+        versions = client.get(
+            _api(license_id, f"/document-templates/{template_id}/versions")
+        ).json()
+        assert versions[0]["source_docx_path"].endswith(".docx")
+        assert stored[versions[0]["source_docx_path"].removeprefix("mem://")] == content
+
+        # ---- 2. it can be looked at, and looking does not publish
+        response = client.post(
+            _api(
+                license_id,
+                f"/document-templates/{template_id}/versions/{version_id}/preview",
+            ),
+        )
+        assert response.status_code == 200, response.text
+        preview = response.json()
+        assert preview["status"] == "previewed"
+        assert "QT-2026-0042" in preview["html"]
+        assert "{{" not in preview["html"]
+        assert preview["unknown_placeholders"] == []
+        # Previewed, not published — the Data tier is the one asserting it.
+        after = client.get(
+            _api(license_id, f"/document-templates/{template_id}/versions")
+        ).json()
+        assert after[0]["status"] == "previewed"
+
+        # ---- 3. publish
+        response = client.post(
+            _api(
+                license_id,
+                f"/document-templates/{template_id}/versions/{version_id}/publish",
+            ),
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "published"
+
+        # ---- 4. a real quote renders through it
+        client.patch(
+            _api(license_id, "/company-profile"),
+            json={
+                "legal_name": "ร้านทดสอบเวิร์ด", "tax_id": "0105500000001",
+                "company_address": "1 ถนนทดสอบ", "company_phone": "021111111",
+            },
+        )
+        customer = client.post(
+            _api(license_id, "/customers"),
+            json={"first_name": "วรรณ", "last_name": "ดี", "phone": "0855555555"},
+        ).json()
+        deal = client.post(
+            _api(license_id, "/deals"), json={"contact_id": customer["id"]},
+        ).json()
+        # The line goes on the deal; creating the quote copies it, which
+        # is the order the rest of this file uses and the only one that
+        # produces a quote with anything on it.
+        client.post(
+            _api(license_id, f"/deals/{deal['id']}/products"),
+            json={"product_name": "พัดลมไอเย็น", "quoted_unit_price": "1200.00", "qty": 3},
+        )
+        response = client.post(
+            _api(license_id, "/quotes"), json={"deal_id": deal["id"]},
+        )
+        assert response.status_code == 201, response.text
+        quote = response.json()
+
+        response = client.post(_api(license_id, f"/quotes/{quote['id']}/issue"))
+        assert response.status_code in (200, 201), response.text
+        document = response.json()
+        assert document["generated_document_id"]
+        assert document["sha256"]
+
+        # What was handed to the renderer is the shop's OWN layout — the
+        # one that came out of the Word file — not the built-in. The two
+        # are told apart by the title the DOCX conversion writes; the
+        # built-in's is "ใบเสนอราคา <number>".
+        assert "<title>เอกสาร</title>" in rendered["html"]
+        assert "ตารางอธิบายช่องข้อมูล" in rendered["html"]
+        # And it is filled with this quote's real values, not the
+        # sample's: a real snapshot, through the real fill engine.
+        assert "ร้านทดสอบเวิร์ด" in rendered["html"]
+        assert "พัดลมไอเย็น" in rendered["html"]
+        assert "3600.00" in rendered["html"]
+        assert "QT-2026-0042" not in rendered["html"]
+        assert "{{" not in rendered["html"]
