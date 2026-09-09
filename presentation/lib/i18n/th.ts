@@ -113,6 +113,9 @@ export const th = {
     itemCount: "{total} รายการ",
     itemCountOf: "{shown} จาก {total} รายการ",
     pipeline: {
+      title: "ภาพรวมการขาย",
+      empty: "ยังไม่มีดีลที่เปิดอยู่ เริ่มสร้างดีลได้จากเมนูดีล",
+      loadFailed: "โหลดภาพรวมการขายไม่สำเร็จ ลองใหม่ได้ เมนูอื่นยังใช้งานได้ตามปกติ",
       openValue: "มูลค่าดีลที่เปิดอยู่ ({count} ดีล)",
       closingThisMonth: "คาดว่าจะปิดได้เดือนนี้",
       overdue: "เลยกำหนดปิด {count} ดีล",

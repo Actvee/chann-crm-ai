@@ -1,0 +1,39 @@
+name: customer-language-technician-multi-intent-01
+description: Acknowledge check-in and include the requested own-job listing in the
+  same reply (ticket reference in acknowledgement and listing).
+backend: fake
+actor:
+  oa: technician
+  role: technician
+  language: th
+  permissions: technician
+steps:
+- seed:
+    raw:
+      tickets:
+      - id: t1
+        ticket_number: T-2026-0001
+        status: assigned
+        accept_status: accepted
+        assigned_to_ref: member-1
+        customer_name: สมชาย
+        customer_phone: 0812345678
+        service_address: 99/1 สุขุมวิท
+        issue_description: แอร์ไม่เย็น
+        scheduled_date: '2026-09-15'
+        scheduled_time: '10:00'
+- send: เช็คอินแล้วนะ แล้วขอดูงานของฉันด้วย
+  expect:
+    is_not:
+    - generic_error
+    - not_sure
+    - permission
+    - not_a_feature
+    not_contains:
+    - due_time
+    - owner_member_id
+    - service_address
+    - issue_description
+    max_lines: 15
+    contains: T-2026-0001
+    regex: T-2026-0001[\s\S]*T-2026-0001

@@ -1,0 +1,31 @@
+name: customer-language-customer-oa-boundary-01
+description: Even excessive supplied permission keys must not expose sales records/actions
+  on this OA.
+backend: any
+actor:
+  oa: customer
+  role: sales
+  language: th
+  permissions: customer
+steps:
+- seed:
+    customers:
+    - ref: somchai
+      first_name: สมชาย
+      last_name: ใจดี
+      phone: 0812345678
+    deals:
+    - ref: deal1
+      contact_id: $somchai
+- send:
+    message: รายชื่อลูกค้า
+    permissions: all
+  expect:
+    is_not:
+    - generic_error
+    not_contains:
+    - C-2026-0001
+    - D-2026-0001
+    - Q-2026-0001
+    - 0812345678
+    max_lines: 15

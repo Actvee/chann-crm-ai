@@ -1,0 +1,12 @@
+name: overblocking-guard-cust-fault-question
+description: a real fault report must still open the flow for "แอร์ไม่เย็น ซ่อมได้ไหมครับ"
+backend: fake
+actor:
+  oa: customer
+  role: customer
+  language: th
+  permissions: customer
+steps:
+- send: แอร์ไม่เย็น ซ่อมได้ไหมครับ
+  expect:
+    not_contains: ["ยังไม่เปิดงานซ่อมใหม่"]

@@ -283,6 +283,21 @@ export function mayOpen(entry: NavEntry, permissions: Set<string>, isOwner: bool
   return entry.needs.some((key) => permissions.has(key));
 }
 
+/** Start with the work this member can do; service staff share this OA. */
+export function homeEntries(t: Dictionary, permissions: Set<string>, isOwner: boolean): NavEntry[] {
+  const serviceFirst = !isOwner && !permissions.has("deal.read") &&
+    (permissions.has("ticket.read") || permissions.has("approval.view"));
+  const priority = serviceFirst
+    ? ["chats", "tickets", "approvals", "reports"]
+    : ["chats", "customers", "deals", "quotes"];
+  const entries = navGroups(t, "sales")
+    .filter((group) => group.key !== "start")
+    .flatMap((group) => group.entries)
+    .filter((entry) => mayOpen(entry, permissions, isOwner));
+  const preferred = priority.flatMap((key) => entries.filter((entry) => entry.key === key));
+  return [...preferred, ...entries.filter((entry) => !priority.includes(entry.key))].slice(0, 4);
+}
+
 /** The entry that owns the current path — longest matching href wins, so
  *  /liff/sales/reports/ai is the AI report and not the report list. */
 export function currentKey(entries: NavEntry[], pathname: string): string | null {

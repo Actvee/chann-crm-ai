@@ -238,7 +238,18 @@ def parse_thai_time(text: str) -> time | None:
     """A clock time from Thai text, or None for a whole-day reminder."""
     if not text:
         return None
-    cleaned = text.strip().lower()
+    cleaned = text.strip().lower().translate(str.maketrans("๐๑๒๓๔๕๖๗๘๙", "0123456789"))
+    # Fold number WORDS only next to clock units, never inside a person's
+    # name, address or date. บ่ายสอง is 14:00, not the vague บ่าย = 13:00.
+    clock_words = {
+        "หนึ่ง": 1, "สอง": 2, "สาม": 3, "สี่": 4, "ห้า": 5, "หก": 6,
+        "เจ็ด": 7, "แปด": 8, "เก้า": 9, "สิบ": 10, "สิบเอ็ด": 11, "สิบสอง": 12,
+    }
+    words = "|".join(sorted(clock_words, key=len, reverse=True))
+    cleaned = re.sub(r"(บ่าย|ตี)\s*(" + words + r")",
+                     lambda m: m[1] + str(clock_words[m[2]]), cleaned)
+    cleaned = re.sub(r"(" + words + r")(?=\s*(?:โมง|ทุ่ม|นาฬิกา))",
+                     lambda m: str(clock_words[m[1]]), cleaned)
 
     # "14:00" / "14.00" / "9:30 น."
     explicit = re.search(r"(\d{1,2})[:.](\d{2})", cleaned)
@@ -261,6 +272,7 @@ def parse_thai_time(text: str) -> time | None:
             return _half(re.escape(afternoon.group(0)), hour + 12)
         if 13 <= hour <= 18:
             return _half(re.escape(afternoon.group(0)), hour)
+        return None
     if re.search(r"บ่ายโมง", cleaned):
         return _half(r"บ่ายโมง", 13)
 

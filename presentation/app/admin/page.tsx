@@ -54,6 +54,8 @@ export default async function AdminTenants({
         </div>
       </div>
 
+      {(q.trim() || status) && <p className="pa-muted">{copy.filteredSummary}</p>}
+
       <form className="pa-filters" method="get" action="/admin">
         <label className="pa-field">
           {copy.search}

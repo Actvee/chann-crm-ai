@@ -229,7 +229,7 @@ class TestEveryShippedScenarioStillPasses:
             for step in scenario["steps"] if not step["ok"]
         ]
         assert not failures, f"{name}\n" + "\n".join(failures)
-        assert result.returncode == 0
+        assert scenario["ok"], f"{name}: scenario did not pass"
 
     def test_at_least_one_scenario_covers_each_oa(self):
         """A channel that only ever exercises the Sales OA would pass this
@@ -291,9 +291,13 @@ class TestNoScenarioCanReachTheOutsideWorld:
 
         # prepare() is what puts the tiers on sys.path, so it has to run
         # before chann_app can be imported at all.
-        bootstrap.prepare()
         from chann_app.config import settings
 
+        # Restore the original settings when the test ends, including changes
+        # made by prepare(); later tests must not inherit a fake API key.
+        monkeypatch.setattr(settings, "openrouter_api_key", settings.openrouter_api_key)
+        monkeypatch.setattr(settings, "openrouter_model", settings.openrouter_model)
+        bootstrap.prepare()
         monkeypatch.setattr(settings, "openrouter_api_key", "sk-a-real-key")
         bootstrap.prepare()
         assert settings.openrouter_api_key == "agent-test-channel"
@@ -313,3 +317,19 @@ class TestNoScenarioCanReachTheOutsideWorld:
             "What this channel cannot test",
         ):
             assert required in readme, required
+
+
+class TestMessageActions:
+    def test_list_card_buttons_count_as_actions(self):
+        from agent_test_runner.assertions import Outcome, check
+        outcome = Outcome(list_card={'rows':[{'action_text':'ข้อมูลลูกค้า C-2026-0001'}]})
+        assert check({'actions_include':['C-2026-0001']}, outcome) == []
+
+    def test_text_without_a_button_does_not_count(self):
+        from agent_test_runner.assertions import Outcome, check
+        outcome = Outcome(text='C-2026-0001', quick_replies=[('C-2026-0001','help')])
+        assert check({'actions_include':['C-2026-0001']}, outcome)
+
+    def test_quick_reply_payload_counts_as_an_action(self):
+        from agent_test_runner.assertions import Outcome, check
+        assert not check({'actions_include':'C-2026-0001'}, Outcome(quick_replies=[('ดู','ข้อมูลลูกค้า C-2026-0001')]))

@@ -37,7 +37,7 @@ BAD_CLASSES: dict[str, tuple[str, ...]] = {
 }
 
 EXPECT_KEYS = {
-    "contains", "not_contains", "regex", "quick_replies_include", "has_image",
+    "contains", "not_contains", "regex", "quick_replies_include", "actions_include", "has_image",
     "intent", "max_lines", "max_chars", "is_not", "used_ai",
     # http-only
     "status", "json_path", "json_contains",

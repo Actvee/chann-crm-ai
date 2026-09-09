@@ -111,6 +111,9 @@ export const en: Dictionary = {
     itemCount: "{total} items",
     itemCountOf: "{shown} of {total}",
     pipeline: {
+      title: "Sales overview",
+      empty: "No open deals yet. Start one from Deals.",
+      loadFailed: "The sales overview could not load. Try again; the other menus are still available.",
       openValue: "Open pipeline ({count} deals)",
       closingThisMonth: "Forecast to close this month",
       overdue: "{count} past their close date",

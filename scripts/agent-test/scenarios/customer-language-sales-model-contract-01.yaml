@@ -1,0 +1,42 @@
+name: customer-language-sales-model-contract-01
+description: Given correct read/customer intent, show customer details. This does
+  not test real LLM parsing.
+backend: any
+actor:
+  oa: sales
+  role: sales
+  language: th
+  permissions: sales
+steps:
+- seed:
+    customers:
+    - ref: somchai
+      first_name: สมชาย
+      last_name: ใจดี
+      phone: 0812345678
+    deals:
+    - ref: deal1
+      contact_id: $somchai
+- send:
+    message: ขอดูข้อมูลของสมชายหน่อยคับ
+    ai:
+      action: read
+      entity: customer
+      fields:
+        target_name: สมชาย
+      missing: []
+  expect:
+    is_not:
+    - generic_error
+    - not_sure
+    - permission
+    - not_a_feature
+    not_contains:
+    - due_time
+    - owner_member_id
+    - service_address
+    - issue_description
+    max_lines: 15
+    contains:
+    - สมชาย
+    - 0812345678

@@ -1,0 +1,12 @@
+name: overblocking-guard-cust-fault-btu
+description: a real fault report must still open the flow for "แอร์ 12000 BTU ไม่เย็นครับ"
+backend: fake
+actor:
+  oa: customer
+  role: customer
+  language: th
+  permissions: customer
+steps:
+- send: แอร์ 12000 BTU ไม่เย็นครับ
+  expect:
+    not_contains: ["ยังไม่เปิดงานซ่อมใหม่"]

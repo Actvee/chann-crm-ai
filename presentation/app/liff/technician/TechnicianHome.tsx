@@ -45,6 +45,7 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
   const [permissions, setPermissions] = useState<Set<string>>(new Set());
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [reports, setReports] = useState<ServiceReport[]>([]);
+  const [reportsFailed, setReportsFailed] = useState(false);
   const [shopName, setShopName] = useState("");
   const [shops, setShops] = useState<Membership[]>([]);
   const [status, setStatus] = useState(t.dashboard.opening);
@@ -93,8 +94,9 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
         );
       }
       setTickets((await response.json()) as Ticket[]);
-      // Reports are the secondary fact on this page; a failure there
-      // shows as an empty list rather than blocking the jobs.
+      // The jobs remain usable when the secondary report request fails.
+      // An HTTP failure is not evidence that the technician has no reports.
+      setReportsFailed(!reportsRes.ok);
       setReports(reportsRes.ok ? ((await reportsRes.json()) as ServiceReport[]) : []);
     },
     [token, licenseId, memberId, t],
@@ -813,7 +815,9 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
               {t.dashboard.technician.allReports}
             </a>
           </div>
-          {recentReports.length === 0 ? (
+          {reportsFailed ? (
+            <p role="status">{t.dashboard.reports.title}: {t.dashboard.loadFailed}</p>
+          ) : recentReports.length === 0 ? (
             <div className="empty">
               <p>{t.dashboard.technician.noReports}</p>
             </div>

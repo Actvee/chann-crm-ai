@@ -1,0 +1,35 @@
+name: customer-language-sales-ambiguous-name-03
+description: Ambiguous name matching two customers must offer both choices, without
+  guessing.
+backend: any
+actor:
+  oa: sales
+  role: sales
+  language: th
+  permissions: sales
+steps:
+- seed:
+    customers:
+    - first_name: สมชาย
+      phone: 0812345678
+    - first_name: สมหญิง
+      phone: 0898765432
+- send: ข้อมูลลูกค้า สม
+  expect:
+    is_not:
+    - generic_error
+    - not_sure
+    - permission
+    - not_a_feature
+    not_contains:
+    - due_time
+    - owner_member_id
+    - service_address
+    - issue_description
+    max_lines: 15
+    contains:
+    - สมชาย
+    - สมหญิง
+    actions_include:
+    - C-2026-0001
+    - C-2026-0002

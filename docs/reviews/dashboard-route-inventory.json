@@ -1,0 +1,290 @@
+[
+  {
+    "route": "/admin/audit",
+    "page": "presentation/app/admin/audit/page.tsx",
+    "components": [],
+    "review": "source inventory; authenticated visual acceptance pending"
+  },
+  {
+    "route": "/admin/login",
+    "page": "presentation/app/admin/login/page.tsx",
+    "components": [],
+    "review": "source inventory; authenticated visual acceptance pending"
+  },
+  {
+    "route": "/admin",
+    "page": "presentation/app/admin/page.tsx",
+    "components": [],
+    "review": "source inventory; authenticated visual acceptance pending"
+  },
+  {
+    "route": "/admin/pdpa",
+    "page": "presentation/app/admin/pdpa/page.tsx",
+    "components": [],
+    "review": "source inventory; authenticated visual acceptance pending"
+  },
+  {
+    "route": "/admin/tenants/[id]",
+    "page": "presentation/app/admin/tenants/[id]/page.tsx",
+    "components": [],
+    "review": "source inventory; authenticated visual acceptance pending"
+  },
+  {
+    "route": "/liff/customer/guide",
+    "page": "presentation/app/liff/customer/guide/page.tsx",
+    "components": [
+      "presentation/app/liff/customer/guide/../../_guide/GuidePage.tsx"
+    ],
+    "review": "source inventory; authenticated visual acceptance pending"
+  },
+  {
+    "route": "/liff/customer",
+    "page": "presentation/app/liff/customer/page.tsx",
+    "components": [
+      "presentation/app/liff/customer/CustomerHome.tsx"
+    ],
+    "review": "source inventory; authenticated visual acceptance pending"
+  },
+  {
+    "route": "/liff/customer/reports",
+    "page": "presentation/app/liff/customer/reports/page.tsx",
+    "components": [
+      "presentation/app/liff/customer/reports/../../technician/reports/ServiceReports.tsx"
+    ],
+    "review": "source inventory; authenticated visual acceptance pending"
+  },
+  {
+    "route": "/liff/customer/signature",
+    "page": "presentation/app/liff/customer/signature/page.tsx",
+    "components": [
+      "presentation/app/liff/customer/signature/../../_signature/SignaturePage.tsx"
+    ],
+    "review": "source inventory; authenticated visual acceptance pending"
+  },
+  {
+    "route": "/liff/customer/tickets",
+    "page": "presentation/app/liff/customer/tickets/page.tsx",
+    "components": [],
+    "review": "source inventory; authenticated visual acceptance pending"
+  },
+  {
+    "route": "/liff/sales/approvals",
+    "page": "presentation/app/liff/sales/approvals/page.tsx",
+    "components": [
+      "presentation/app/liff/sales/approvals/ApprovalQueue.tsx"
+    ],
+    "review": "source inventory; authenticated visual acceptance pending"
+  },
+  {
+    "route": "/liff/sales/approvals/settings",
+    "page": "presentation/app/liff/sales/approvals/settings/page.tsx",
+    "components": [
+      "presentation/app/liff/sales/approvals/settings/ApprovalSettings.tsx"
+    ],
+    "review": "source inventory; authenticated visual acceptance pending"
+  },
+  {
+    "route": "/liff/sales/chats",
+    "page": "presentation/app/liff/sales/chats/page.tsx",
+    "components": [
+      "presentation/app/liff/sales/chats/SalesChats.tsx"
+    ],
+    "review": "source inventory; authenticated visual acceptance pending"
+  },
+  {
+    "route": "/liff/sales/company",
+    "page": "presentation/app/liff/sales/company/page.tsx",
+    "components": [
+      "presentation/app/liff/sales/company/CompanyProfile.tsx"
+    ],
+    "review": "source inventory; authenticated visual acceptance pending"
+  },
+  {
+    "route": "/liff/sales/customers/[id]",
+    "page": "presentation/app/liff/sales/customers/[id]/page.tsx",
+    "components": [
+      "presentation/app/liff/sales/customers/[id]/CustomerDetail.tsx"
+    ],
+    "review": "source inventory; authenticated visual acceptance pending"
+  },
+  {
+    "route": "/liff/sales/customers",
+    "page": "presentation/app/liff/sales/customers/page.tsx",
+    "components": [
+      "presentation/app/liff/sales/customers/CustomerList.tsx"
+    ],
+    "review": "source inventory; authenticated visual acceptance pending"
+  },
+  {
+    "route": "/liff/sales/deals/[id]",
+    "page": "presentation/app/liff/sales/deals/[id]/page.tsx",
+    "components": [
+      "presentation/app/liff/sales/deals/[id]/DealDetail.tsx"
+    ],
+    "review": "source inventory; authenticated visual acceptance pending"
+  },
+  {
+    "route": "/liff/sales/deals",
+    "page": "presentation/app/liff/sales/deals/page.tsx",
+    "components": [
+      "presentation/app/liff/sales/deals/DealList.tsx"
+    ],
+    "review": "source inventory; authenticated visual acceptance pending"
+  },
+  {
+    "route": "/liff/sales/guide",
+    "page": "presentation/app/liff/sales/guide/page.tsx",
+    "components": [
+      "presentation/app/liff/sales/guide/../../_guide/GuidePage.tsx"
+    ],
+    "review": "source inventory; authenticated visual acceptance pending"
+  },
+  {
+    "route": "/liff/sales/members",
+    "page": "presentation/app/liff/sales/members/page.tsx",
+    "components": [
+      "presentation/app/liff/sales/members/MemberManagement.tsx"
+    ],
+    "review": "source inventory; authenticated visual acceptance pending"
+  },
+  {
+    "route": "/liff/sales",
+    "page": "presentation/app/liff/sales/page.tsx",
+    "components": [
+      "presentation/app/liff/sales/SalesMenu.tsx"
+    ],
+    "review": "source inventory; authenticated visual acceptance pending"
+  },
+  {
+    "route": "/liff/sales/products",
+    "page": "presentation/app/liff/sales/products/page.tsx",
+    "components": [
+      "presentation/app/liff/sales/products/ProductList.tsx"
+    ],
+    "review": "source inventory; authenticated visual acceptance pending"
+  },
+  {
+    "route": "/liff/sales/quotes/[id]",
+    "page": "presentation/app/liff/sales/quotes/[id]/page.tsx",
+    "components": [
+      "presentation/app/liff/sales/quotes/[id]/QuoteDetail.tsx"
+    ],
+    "review": "source inventory; authenticated visual acceptance pending"
+  },
+  {
+    "route": "/liff/sales/quotes",
+    "page": "presentation/app/liff/sales/quotes/page.tsx",
+    "components": [
+      "presentation/app/liff/sales/quotes/QuoteList.tsx"
+    ],
+    "review": "source inventory; authenticated visual acceptance pending"
+  },
+  {
+    "route": "/liff/sales/reports/ai",
+    "page": "presentation/app/liff/sales/reports/ai/page.tsx",
+    "components": [
+      "presentation/app/liff/sales/reports/ai/AiReports.tsx"
+    ],
+    "review": "source inventory; authenticated visual acceptance pending"
+  },
+  {
+    "route": "/liff/sales/reports",
+    "page": "presentation/app/liff/sales/reports/page.tsx",
+    "components": [
+      "presentation/app/liff/sales/reports/../../technician/reports/ServiceReports.tsx"
+    ],
+    "review": "source inventory; authenticated visual acceptance pending"
+  },
+  {
+    "route": "/liff/sales/roles",
+    "page": "presentation/app/liff/sales/roles/page.tsx",
+    "components": [
+      "presentation/app/liff/sales/roles/RoleManagement.tsx"
+    ],
+    "review": "source inventory; authenticated visual acceptance pending"
+  },
+  {
+    "route": "/liff/sales/signature",
+    "page": "presentation/app/liff/sales/signature/page.tsx",
+    "components": [
+      "presentation/app/liff/sales/signature/../../_signature/SignaturePage.tsx"
+    ],
+    "review": "source inventory; authenticated visual acceptance pending"
+  },
+  {
+    "route": "/liff/sales/teams",
+    "page": "presentation/app/liff/sales/teams/page.tsx",
+    "components": [
+      "presentation/app/liff/sales/teams/SalesTeams.tsx"
+    ],
+    "review": "source inventory; authenticated visual acceptance pending"
+  },
+  {
+    "route": "/liff/sales/templates",
+    "page": "presentation/app/liff/sales/templates/page.tsx",
+    "components": [
+      "presentation/app/liff/sales/templates/DocumentTemplates.tsx"
+    ],
+    "review": "source inventory; authenticated visual acceptance pending"
+  },
+  {
+    "route": "/liff/sales/tickets",
+    "page": "presentation/app/liff/sales/tickets/page.tsx",
+    "components": [
+      "presentation/app/liff/sales/tickets/SalesTickets.tsx"
+    ],
+    "review": "source inventory; authenticated visual acceptance pending"
+  },
+  {
+    "route": "/liff/sales/warranties",
+    "page": "presentation/app/liff/sales/warranties/page.tsx",
+    "components": [
+      "presentation/app/liff/sales/warranties/SalesWarranties.tsx"
+    ],
+    "review": "source inventory; authenticated visual acceptance pending"
+  },
+  {
+    "route": "/liff/technician/guide",
+    "page": "presentation/app/liff/technician/guide/page.tsx",
+    "components": [
+      "presentation/app/liff/technician/guide/../../_guide/GuidePage.tsx"
+    ],
+    "review": "source inventory; authenticated visual acceptance pending"
+  },
+  {
+    "route": "/liff/technician",
+    "page": "presentation/app/liff/technician/page.tsx",
+    "components": [
+      "presentation/app/liff/technician/TechnicianHome.tsx"
+    ],
+    "review": "source inventory; authenticated visual acceptance pending"
+  },
+  {
+    "route": "/liff/technician/reports",
+    "page": "presentation/app/liff/technician/reports/page.tsx",
+    "components": [
+      "presentation/app/liff/technician/reports/ServiceReports.tsx"
+    ],
+    "review": "source inventory; authenticated visual acceptance pending"
+  },
+  {
+    "route": "/liff/technician/signature",
+    "page": "presentation/app/liff/technician/signature/page.tsx",
+    "components": [
+      "presentation/app/liff/technician/signature/../../_signature/SignaturePage.tsx"
+    ],
+    "review": "source inventory; authenticated visual acceptance pending"
+  },
+  {
+    "route": "/liff/technician/tickets",
+    "page": "presentation/app/liff/technician/tickets/page.tsx",
+    "components": [],
+    "review": "source inventory; authenticated visual acceptance pending"
+  },
+  {
+    "route": "/.",
+    "page": "presentation/app/page.tsx",
+    "components": [],
+    "review": "source inventory; authenticated visual acceptance pending"
+  }
+]

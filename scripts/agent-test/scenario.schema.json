@@ -226,6 +226,10 @@
           "$ref": "#/$defs/stringOrStrings",
           "description": "Matches a quick-reply button's label or the text it sends."
         },
+        "actions_include": {
+          "$ref": "#/$defs/stringOrStrings",
+          "description": "Matches message actions in quick replies or list-card rows; does not prove LINE rendering."
+        },
         "has_image": {
           "type": "boolean",
           "description": "Whether the reply carries image URLs (guides that need a picture do)."

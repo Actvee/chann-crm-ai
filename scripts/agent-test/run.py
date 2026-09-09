@@ -132,6 +132,7 @@ async def run_scenario(scenario, backend, *, keep_going: bool) -> dict:
                 else:
                     record["reply"] = outcome.text
                     record["quick_replies"] = [list(q) for q in outcome.quick_replies]
+                    record["list_card"] = outcome.list_card
                     record["images"] = outcome.images
                     record["intent"] = outcome.intent
                     record["used_ai"] = outcome.used_ai

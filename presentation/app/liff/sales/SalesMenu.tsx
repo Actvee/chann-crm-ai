@@ -9,7 +9,7 @@ import { LanguageSwitcher } from "@/lib/i18n/LanguageSwitcher";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import PipelineSummary from "./PipelineSummary";
-import { mayOpen, navGroups } from "../_nav-model";
+import { homeEntries, mayOpen, navGroups } from "../_nav-model";
 import { NavFrame, NavMenuButton } from "../_nav";
 import { useFailureText } from "./_format";
 import { LIFF_SDK_SRC, completeLiffRedirect, proxyHeaders, whenLiffReady } from "./_lib";
@@ -90,14 +90,10 @@ export default function SalesMenu({ liffId }: { liffId: string }) {
       cancelled = true;
     };
   }, [liffId, router]);
-  // The day's starting points, taken from the rail's own "selling" group
-  // so the two can never disagree about what exists or who may see it.
-  const shortcuts = useMemo(() => {
-    const selling = navGroups(t, "sales").find((group) => group.key === "selling");
-    return (selling?.entries ?? [])
-      .filter((entry) => mayOpen(entry, access.permissions, access.isOwner))
-      .slice(0, 4);
-  }, [t, access]);
+  const shortcuts = useMemo(() => homeEntries(t, access.permissions, access.isOwner), [t, access]);
+  const dealsEntry = navGroups(t, "sales").flatMap((group) => group.entries)
+    .find((entry) => entry.key === "deals")!;
+  const showPipeline = mayOpen(dealsEntry, access.permissions, access.isOwner);
 
   if (redirecting) {
     // A blank frame for the instant before the navigation commits. Showing
@@ -132,7 +128,7 @@ export default function SalesMenu({ liffId }: { liffId: string }) {
           />
           <p className="page-intro">{t.dashboard.menuIntro}</p>
 
-          <PipelineSummary key={shopEpoch} liffId={liffId} />
+          {showPipeline && <PipelineSummary key={shopEpoch} liffId={liffId} />}
 
           {shortcuts.length > 0 && (
             <>

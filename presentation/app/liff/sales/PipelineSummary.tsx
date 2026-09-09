@@ -27,28 +27,31 @@ function money(value: string | number | undefined): string {
  * through to see how their month is going will mostly not look, and a
  * forecast nobody reads is the same as no forecast.
  *
- * Loads on its own and stays quiet when it fails. The menu below it is
- * the page's actual job, and a summary that cannot load must not take
- * the navigation down with it.
+ * Loads independently so a failed summary never blocks the menu. Its
+ * loading, empty and failure states must not look like the same blank.
  */
 export default function PipelineSummary({ liffId }: { liffId: string }) {
   const { t } = useLanguage();
   const [data, setData] = useState<Pipeline | null>(null);
+  const [state, setState] = useState<"loading" | "ready" | "error" | "hidden">("loading");
 
   const load = useCallback(async () => {
+    setState("loading");
     try {
       await whenLiffReady();
       const session = await initLiffSession(liffId);
       const license = session.memberships[0]?.license_id ?? "";
-      if (!session.token || !license) return;
+      if (!session.token || !license) { setState("hidden"); return; }
       const response = await fetch(
         `/api/phase2/licenses/${license}/pipeline`,
         { headers: proxyHeaders(session.token, license) },
       );
-      if (!response.ok) return;
+      if (response.status === 403) { setState("hidden"); return; }
+      if (!response.ok) throw new Error("pipeline unavailable");
       setData((await response.json()) as Pipeline);
+      setState("ready");
     } catch {
-      // Silent: the menu is what this page is for.
+      setState("error");
     }
   }, [liffId]);
 
@@ -56,6 +59,14 @@ export default function PipelineSummary({ liffId }: { liffId: string }) {
     void load();
   }, [load]);
 
+  if (state === "hidden") return null;
+  if (state === "loading") return <p role="status">{t.common.loading}</p>;
+  if (state === "error") return (
+    <section className="pipeline" aria-label={t.dashboard.pipeline.title}>
+      <p role="status">{t.dashboard.pipeline.loadFailed}</p>
+      <button className="btn" type="button" onClick={() => void load()}>{t.common.retry}</button>
+    </section>
+  );
   if (!data) return null;
 
   const open = Number(data.open_value ?? 0);
@@ -63,9 +74,7 @@ export default function PipelineSummary({ liffId }: { liffId: string }) {
   const openCount =
     (data.by_stage?.new?.count ?? 0) + (data.by_stage?.proposed?.count ?? 0);
 
-  // Nothing in the pipeline: the empty state belongs to the menu, not to
-  // a row of zeroes that says the same thing less clearly.
-  if (openCount === 0 && open === 0) return null;
+  if (openCount === 0 && open === 0) return <p role="status">{t.dashboard.pipeline.empty}</p>;
 
   return (
     <section className="pipeline">

@@ -27,6 +27,7 @@ class Outcome:
 
     text: str = ""
     quick_replies: list[tuple[str, str]] = field(default_factory=list)
+    list_card: dict | None = None
     images: list[str] = field(default_factory=list)
     intent: dict | None = None
     used_ai: bool = False
@@ -105,6 +106,14 @@ def check(expect: dict, outcome: Outcome) -> list[str]:
     for needle in _as_list(expect.get("not_contains")):
         if str(needle) in text:
             problems.append(f"the reply contains {needle!r} and should not")
+    for needle in _as_list(expect.get("actions_include")):
+        # List-card actions are message buttons too. Ignoring them falsely
+        # reported that a search result offered no customer choices.
+        choices = [payload for _, payload in outcome.quick_replies]
+        choices += [str(row.get("action_text") or "")
+                    for row in (outcome.list_card or {}).get("rows", [])]
+        if not any(str(needle) in choice for choice in choices):
+            problems.append(f"no message action matching {needle!r}; got {choices}")
     for pattern in _as_list(expect.get("regex")):
         if not re.search(pattern, text, re.MULTILINE):
             problems.append(f"no match for regex {pattern!r} in the reply")

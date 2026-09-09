@@ -1,0 +1,1190 @@
+[
+  {
+    "name": "customer-language-customer-address-interruption-01",
+    "oa": "customer",
+    "expected": "While waiting for an address, do not store greeting/thanks/emoji/refusal/date as address; accept the actual address next. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 4,
+    "messages": 3
+  },
+  {
+    "name": "customer-language-customer-address-interruption-02",
+    "oa": "customer",
+    "expected": "While waiting for an address, do not store greeting/thanks/emoji/refusal/date as address; accept the actual address next. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 4,
+    "messages": 3
+  },
+  {
+    "name": "customer-language-customer-address-interruption-03",
+    "oa": "customer",
+    "expected": "While waiting for an address, do not store greeting/thanks/emoji/refusal/date as address; accept the actual address next. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 4,
+    "messages": 3
+  },
+  {
+    "name": "customer-language-customer-address-interruption-04",
+    "oa": "customer",
+    "expected": "While waiting for an address, do not store greeting/thanks/emoji/refusal/date as address; accept the actual address next. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 4,
+    "messages": 3
+  },
+  {
+    "name": "customer-language-customer-address-interruption-05",
+    "oa": "customer",
+    "expected": "While waiting for an address, do not store greeting/thanks/emoji/refusal/date as address; accept the actual address next. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 4,
+    "messages": 3
+  },
+  {
+    "name": "customer-language-customer-address-interruption-06",
+    "oa": "customer",
+    "expected": "While waiting for an address, do not store greeting/thanks/emoji/refusal/date as address; accept the actual address next. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 4,
+    "messages": 3
+  },
+  {
+    "name": "customer-language-customer-appointment-time-01",
+    "oa": "customer",
+    "expected": "Parse Thai appointment time as 14:00 and retain it in the subsequent ticket listing. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 5,
+    "messages": 4
+  },
+  {
+    "name": "customer-language-customer-appointment-time-02",
+    "oa": "customer",
+    "expected": "Parse Thai appointment time as 14:00 and retain it in the subsequent ticket listing. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 5,
+    "messages": 4
+  },
+  {
+    "name": "customer-language-customer-appointment-time-03",
+    "oa": "customer",
+    "expected": "Parse Thai appointment time as 14:00 and retain it in the subsequent ticket listing. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 5,
+    "messages": 4
+  },
+  {
+    "name": "customer-language-customer-appointment-time-04",
+    "oa": "customer",
+    "expected": "Parse Thai appointment time as 14:00 and retain it in the subsequent ticket listing. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 5,
+    "messages": 4
+  },
+  {
+    "name": "customer-language-customer-appointment-time-05",
+    "oa": "customer",
+    "expected": "Parse Thai appointment time as 14:00 and retain it in the subsequent ticket listing. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 5,
+    "messages": 4
+  },
+  {
+    "name": "customer-language-customer-appointment-time-06",
+    "oa": "customer",
+    "expected": "Parse Thai appointment time as 10:00 and retain it in the subsequent ticket listing. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 5,
+    "messages": 4
+  },
+  {
+    "name": "customer-language-customer-appointment-time-07",
+    "oa": "customer",
+    "expected": "Parse Thai appointment time as 13:30 and retain it in the subsequent ticket listing. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 5,
+    "messages": 4
+  },
+  {
+    "name": "customer-language-customer-appointment-time-08",
+    "oa": "customer",
+    "expected": "Parse Thai appointment time as 14:30 and retain it in the subsequent ticket listing. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 5,
+    "messages": 4
+  },
+  {
+    "name": "customer-language-customer-cancel-pending-01",
+    "oa": "customer",
+    "expected": "Cancellation during address collection must cancel/ask confirmation, never become the address. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-customer-cancel-pending-02",
+    "oa": "customer",
+    "expected": "Cancellation during address collection must cancel/ask confirmation, never become the address. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-customer-cancel-pending-03",
+    "oa": "customer",
+    "expected": "Cancellation during address collection must cancel/ask confirmation, never become the address. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-customer-cancel-pending-04",
+    "oa": "customer",
+    "expected": "Cancellation during address collection must cancel/ask confirmation, never become the address. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-customer-cancel-pending-05",
+    "oa": "customer",
+    "expected": "Cancellation during address collection must cancel/ask confirmation, never become the address. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-customer-fault-01",
+    "oa": "customer",
+    "expected": "Recognize a fault, open one ticket and ask for the service address. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 2,
+    "messages": 1
+  },
+  {
+    "name": "customer-language-customer-fault-02",
+    "oa": "customer",
+    "expected": "Recognize a fault, open one ticket and ask for the service address. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 2,
+    "messages": 1
+  },
+  {
+    "name": "customer-language-customer-fault-03",
+    "oa": "customer",
+    "expected": "Recognize a fault, open one ticket and ask for the service address. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 2,
+    "messages": 1
+  },
+  {
+    "name": "customer-language-customer-fault-04",
+    "oa": "customer",
+    "expected": "Recognize a fault, open one ticket and ask for the service address. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 2,
+    "messages": 1
+  },
+  {
+    "name": "customer-language-customer-fault-05",
+    "oa": "customer",
+    "expected": "Recognize a fault, open one ticket and ask for the service address. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 2,
+    "messages": 1
+  },
+  {
+    "name": "customer-language-customer-fault-06",
+    "oa": "customer",
+    "expected": "Recognize a fault, open one ticket and ask for the service address. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 2,
+    "messages": 1
+  },
+  {
+    "name": "customer-language-customer-fault-07",
+    "oa": "customer",
+    "expected": "Recognize a fault, open one ticket and ask for the service address. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 2,
+    "messages": 1
+  },
+  {
+    "name": "customer-language-customer-fault-08",
+    "oa": "customer",
+    "expected": "Recognize a fault, open one ticket and ask for the service address. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 2,
+    "messages": 1
+  },
+  {
+    "name": "customer-language-customer-fault-09",
+    "oa": "customer",
+    "expected": "Recognize a fault, open one ticket and ask for the service address. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 2,
+    "messages": 1
+  },
+  {
+    "name": "customer-language-customer-fault-10",
+    "oa": "customer",
+    "expected": "Recognize a fault, open one ticket and ask for the service address. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 2,
+    "messages": 1
+  },
+  {
+    "name": "customer-language-customer-fault-11",
+    "oa": "customer",
+    "expected": "Recognize a fault, open one ticket and ask for the service address. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 2,
+    "messages": 1
+  },
+  {
+    "name": "customer-language-customer-fault-12",
+    "oa": "customer",
+    "expected": "Recognize a fault, open one ticket and ask for the service address. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 2,
+    "messages": 1
+  },
+  {
+    "name": "customer-language-customer-fault-13",
+    "oa": "customer",
+    "expected": "Recognize a fault, open one ticket and ask for the service address. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 2,
+    "messages": 1
+  },
+  {
+    "name": "customer-language-customer-fault-14",
+    "oa": "customer",
+    "expected": "Recognize a fault, open one ticket and ask for the service address. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 2,
+    "messages": 1
+  },
+  {
+    "name": "customer-language-customer-fault-15",
+    "oa": "customer",
+    "expected": "Recognize a fault, open one ticket and ask for the service address. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 2,
+    "messages": 1
+  },
+  {
+    "name": "customer-language-customer-fault-16",
+    "oa": "customer",
+    "expected": "Recognize a fault, open one ticket and ask for the service address. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 2,
+    "messages": 1
+  },
+  {
+    "name": "customer-language-customer-oa-boundary-01",
+    "oa": "customer",
+    "expected": "Even excessive supplied permission keys must not expose sales records/actions on this OA.",
+    "backend": "any",
+    "mode": "offline-routed",
+    "steps": 2,
+    "messages": 1
+  },
+  {
+    "name": "customer-language-customer-oa-boundary-02",
+    "oa": "customer",
+    "expected": "Even excessive supplied permission keys must not expose sales records/actions on this OA.",
+    "backend": "any",
+    "mode": "offline-routed",
+    "steps": 2,
+    "messages": 1
+  },
+  {
+    "name": "customer-language-customer-oa-boundary-03",
+    "oa": "customer",
+    "expected": "Even excessive supplied permission keys must not expose sales records/actions on this OA.",
+    "backend": "any",
+    "mode": "offline-routed",
+    "steps": 2,
+    "messages": 1
+  },
+  {
+    "name": "customer-language-customer-price-negation-01",
+    "oa": "customer",
+    "expected": "Answer price/clarify intent without opening a repair ticket. Ticket list must remain empty. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-customer-price-negation-02",
+    "oa": "customer",
+    "expected": "Answer price/clarify intent without opening a repair ticket. Ticket list must remain empty. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-customer-price-negation-03",
+    "oa": "customer",
+    "expected": "Answer price/clarify intent without opening a repair ticket. Ticket list must remain empty. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-customer-price-negation-04",
+    "oa": "customer",
+    "expected": "Answer price/clarify intent without opening a repair ticket. Ticket list must remain empty. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-customer-price-negation-05",
+    "oa": "customer",
+    "expected": "Answer price/clarify intent without opening a repair ticket. Ticket list must remain empty. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-customer-price-negation-06",
+    "oa": "customer",
+    "expected": "Answer price/clarify intent without opening a repair ticket. Ticket list must remain empty. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-customer-price-negation-07",
+    "oa": "customer",
+    "expected": "Answer price/clarify intent without opening a repair ticket. Ticket list must remain empty. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-customer-price-negation-08",
+    "oa": "customer",
+    "expected": "Answer price/clarify intent without opening a repair ticket. Ticket list must remain empty. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-customer-price-negation-09",
+    "oa": "customer",
+    "expected": "Answer price/clarify intent without opening a repair ticket. Ticket list must remain empty. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-customer-price-negation-10",
+    "oa": "customer",
+    "expected": "Answer price/clarify intent without opening a repair ticket. Ticket list must remain empty. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-customer-price-negation-11",
+    "oa": "customer",
+    "expected": "Answer price/clarify intent without opening a repair ticket. Ticket list must remain empty. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-customer-price-negation-12",
+    "oa": "customer",
+    "expected": "Answer price/clarify intent without opening a repair ticket. Ticket list must remain empty. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-customer-reported-negation-01",
+    "oa": "customer",
+    "expected": "Negated/resolved/reported faults must not create a repair ticket; clarify if necessary. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-customer-reported-negation-02",
+    "oa": "customer",
+    "expected": "Negated/resolved/reported faults must not create a repair ticket; clarify if necessary. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-customer-reported-negation-03",
+    "oa": "customer",
+    "expected": "Negated/resolved/reported faults must not create a repair ticket; clarify if necessary. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-customer-reported-negation-04",
+    "oa": "customer",
+    "expected": "Negated/resolved/reported faults must not create a repair ticket; clarify if necessary. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-customer-reported-negation-05",
+    "oa": "customer",
+    "expected": "Negated/resolved/reported faults must not create a repair ticket; clarify if necessary. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-customer-reported-negation-06",
+    "oa": "customer",
+    "expected": "Negated/resolved/reported faults must not create a repair ticket; clarify if necessary. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-regression-clock-01",
+    "oa": "customer",
+    "expected": "Regression clock: assert observable reply and read-back state; offline, synthetic fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 5,
+    "messages": 4
+  },
+  {
+    "name": "customer-language-regression-clock-02",
+    "oa": "customer",
+    "expected": "Regression clock: assert observable reply and read-back state; offline, synthetic fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 5,
+    "messages": 4
+  },
+  {
+    "name": "customer-language-regression-clock-03",
+    "oa": "customer",
+    "expected": "Regression clock: assert observable reply and read-back state; offline, synthetic fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 5,
+    "messages": 4
+  },
+  {
+    "name": "customer-language-regression-clock-04",
+    "oa": "customer",
+    "expected": "Regression clock: assert observable reply and read-back state; offline, synthetic fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 5,
+    "messages": 4
+  },
+  {
+    "name": "customer-language-regression-clock-05",
+    "oa": "customer",
+    "expected": "Regression clock: assert observable reply and read-back state; offline, synthetic fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 5,
+    "messages": 4
+  },
+  {
+    "name": "customer-language-regression-clock-06",
+    "oa": "customer",
+    "expected": "Regression clock: assert observable reply and read-back state; offline, synthetic fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 5,
+    "messages": 4
+  },
+  {
+    "name": "customer-language-regression-clock-07",
+    "oa": "customer",
+    "expected": "Regression clock: assert observable reply and read-back state; offline, synthetic fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 5,
+    "messages": 4
+  },
+  {
+    "name": "customer-language-regression-clock-08",
+    "oa": "customer",
+    "expected": "Regression clock: assert observable reply and read-back state; offline, synthetic fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 5,
+    "messages": 4
+  },
+  {
+    "name": "customer-language-regression-no-checkin-01",
+    "oa": "technician",
+    "expected": "Regression no-checkin: assert observable reply and read-back state; offline, synthetic fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-regression-no-checkin-02",
+    "oa": "technician",
+    "expected": "Regression no-checkin: assert observable reply and read-back state; offline, synthetic fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-regression-no-checkin-03",
+    "oa": "technician",
+    "expected": "Regression no-checkin: assert observable reply and read-back state; offline, synthetic fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-regression-no-checkin-04",
+    "oa": "technician",
+    "expected": "Regression no-checkin: assert observable reply and read-back state; offline, synthetic fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-regression-no-checkin-05",
+    "oa": "technician",
+    "expected": "Regression no-checkin: assert observable reply and read-back state; offline, synthetic fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-regression-no-checkin-06",
+    "oa": "technician",
+    "expected": "Regression no-checkin: assert observable reply and read-back state; offline, synthetic fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-regression-no-checkin-07",
+    "oa": "technician",
+    "expected": "Regression no-checkin: assert observable reply and read-back state; offline, synthetic fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-regression-no-checkin-08",
+    "oa": "technician",
+    "expected": "Regression no-checkin: assert observable reply and read-back state; offline, synthetic fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-regression-no-ticket-01",
+    "oa": "customer",
+    "expected": "Regression no-ticket: assert observable reply and read-back state; offline, synthetic fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-regression-no-ticket-02",
+    "oa": "customer",
+    "expected": "Regression no-ticket: assert observable reply and read-back state; offline, synthetic fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-regression-no-ticket-03",
+    "oa": "customer",
+    "expected": "Regression no-ticket: assert observable reply and read-back state; offline, synthetic fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-regression-no-ticket-04",
+    "oa": "customer",
+    "expected": "Regression no-ticket: assert observable reply and read-back state; offline, synthetic fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-regression-no-ticket-05",
+    "oa": "customer",
+    "expected": "Regression no-ticket: assert observable reply and read-back state; offline, synthetic fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-regression-no-ticket-06",
+    "oa": "customer",
+    "expected": "Regression no-ticket: assert observable reply and read-back state; offline, synthetic fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-regression-no-ticket-07",
+    "oa": "customer",
+    "expected": "Regression no-ticket: assert observable reply and read-back state; offline, synthetic fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-regression-no-ticket-08",
+    "oa": "customer",
+    "expected": "Regression no-ticket: assert observable reply and read-back state; offline, synthetic fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-regression-real-fault-01",
+    "oa": "customer",
+    "expected": "Regression real-fault: assert observable reply and read-back state; offline, synthetic fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 2,
+    "messages": 1
+  },
+  {
+    "name": "customer-language-regression-real-fault-02",
+    "oa": "customer",
+    "expected": "Regression real-fault: assert observable reply and read-back state; offline, synthetic fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 2,
+    "messages": 1
+  },
+  {
+    "name": "customer-language-regression-real-fault-03",
+    "oa": "customer",
+    "expected": "Regression real-fault: assert observable reply and read-back state; offline, synthetic fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 2,
+    "messages": 1
+  },
+  {
+    "name": "customer-language-regression-real-fault-04",
+    "oa": "customer",
+    "expected": "Regression real-fault: assert observable reply and read-back state; offline, synthetic fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 2,
+    "messages": 1
+  },
+  {
+    "name": "customer-language-regression-real-fault-05",
+    "oa": "customer",
+    "expected": "Regression real-fault: assert observable reply and read-back state; offline, synthetic fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 2,
+    "messages": 1
+  },
+  {
+    "name": "customer-language-regression-real-fault-06",
+    "oa": "customer",
+    "expected": "Regression real-fault: assert observable reply and read-back state; offline, synthetic fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 2,
+    "messages": 1
+  },
+  {
+    "name": "customer-language-regression-real-fault-07",
+    "oa": "customer",
+    "expected": "Regression real-fault: assert observable reply and read-back state; offline, synthetic fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 2,
+    "messages": 1
+  },
+  {
+    "name": "customer-language-regression-real-fault-08",
+    "oa": "customer",
+    "expected": "Regression real-fault: assert observable reply and read-back state; offline, synthetic fixture.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 2,
+    "messages": 1
+  },
+  {
+    "name": "customer-language-sales-ambiguous-name-01",
+    "oa": "sales",
+    "expected": "Ambiguous name matching two customers must offer both choices, without guessing.",
+    "backend": "any",
+    "mode": "offline-routed",
+    "steps": 2,
+    "messages": 1
+  },
+  {
+    "name": "customer-language-sales-ambiguous-name-02",
+    "oa": "sales",
+    "expected": "POST-PARSE ONLY: ambiguous customer name must offer both choices. Real-model parsing is evaluated separately.",
+    "backend": "any",
+    "mode": "contains-supplied-intent",
+    "steps": 2,
+    "messages": 1
+  },
+  {
+    "name": "customer-language-sales-ambiguous-name-03",
+    "oa": "sales",
+    "expected": "Ambiguous name matching two customers must offer both choices, without guessing.",
+    "backend": "any",
+    "mode": "offline-routed",
+    "steps": 2,
+    "messages": 1
+  },
+  {
+    "name": "customer-language-sales-ambiguous-name-04",
+    "oa": "sales",
+    "expected": "POST-PARSE ONLY: ambiguous customer name must offer both choices. Real-model parsing is evaluated separately.",
+    "backend": "any",
+    "mode": "contains-supplied-intent",
+    "steps": 2,
+    "messages": 1
+  },
+  {
+    "name": "customer-language-sales-ambiguous-name-05",
+    "oa": "sales",
+    "expected": "POST-PARSE CONTROL ONLY: given a read/customer intent for ambiguous สม, offer both choices. Bare สม parsing remains in model-evaluation corpus; no claim that a bare name is a deterministic command.",
+    "backend": "any",
+    "mode": "contains-supplied-intent",
+    "steps": 2,
+    "messages": 1
+  },
+  {
+    "name": "customer-language-sales-model-contract-01",
+    "oa": "sales",
+    "expected": "Given correct read/customer intent, show customer details. This does not test real LLM parsing.",
+    "backend": "any",
+    "mode": "contains-supplied-intent",
+    "steps": 2,
+    "messages": 1
+  },
+  {
+    "name": "customer-language-sales-model-contract-02",
+    "oa": "sales",
+    "expected": "Given correct read/customer intent, show customer details. This does not test real LLM parsing.",
+    "backend": "any",
+    "mode": "contains-supplied-intent",
+    "steps": 2,
+    "messages": 1
+  },
+  {
+    "name": "customer-language-sales-pending-flow-01",
+    "oa": "sales",
+    "expected": "Explicit stub establishes pending customer creation; protect phone validation, cancellation, read interruption or confirm flow switch. Correct continuation intents are supplied because slot filling is model-driven; this verifies merge/validation, not model parsing.",
+    "backend": "any",
+    "mode": "contains-supplied-intent",
+    "steps": 5,
+    "messages": 4
+  },
+  {
+    "name": "customer-language-sales-pending-flow-02",
+    "oa": "sales",
+    "expected": "Explicit stub establishes pending customer creation; protect phone validation, cancellation, read interruption or confirm flow switch. Correct continuation intents are supplied because slot filling is model-driven; this verifies merge/validation, not model parsing.",
+    "backend": "any",
+    "mode": "contains-supplied-intent",
+    "steps": 5,
+    "messages": 4
+  },
+  {
+    "name": "customer-language-sales-pending-flow-03",
+    "oa": "sales",
+    "expected": "Explicit stub establishes pending customer creation; protect phone validation, cancellation, read interruption or confirm flow switch.",
+    "backend": "any",
+    "mode": "contains-supplied-intent",
+    "steps": 4,
+    "messages": 3
+  },
+  {
+    "name": "customer-language-sales-pending-flow-04",
+    "oa": "sales",
+    "expected": "Explicit stub establishes pending customer creation; protect phone validation, cancellation, read interruption or confirm flow switch.",
+    "backend": "any",
+    "mode": "contains-supplied-intent",
+    "steps": 4,
+    "messages": 3
+  },
+  {
+    "name": "customer-language-sales-pending-flow-05",
+    "oa": "sales",
+    "expected": "Explicit stub establishes pending customer creation; protect phone validation, cancellation, read interruption or confirm flow switch. Correct continuation intents are supplied because slot filling is model-driven; this verifies merge/validation, not model parsing.",
+    "backend": "any",
+    "mode": "contains-supplied-intent",
+    "steps": 5,
+    "messages": 4
+  },
+  {
+    "name": "customer-language-sales-pending-flow-06",
+    "oa": "sales",
+    "expected": "Explicit stub establishes pending customer creation; protect phone validation, cancellation, read interruption or confirm flow switch.",
+    "backend": "any",
+    "mode": "contains-supplied-intent",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-sales-quantity-01",
+    "oa": "sales",
+    "expected": "Starting quantity 2 at 1000 each; after เพิ่มพัดลมอีก 3 ตัว total must be 5,000.00; verify using read-back.",
+    "backend": "any",
+    "mode": "offline-routed",
+    "steps": 5,
+    "messages": 4
+  },
+  {
+    "name": "customer-language-sales-quantity-02",
+    "oa": "sales",
+    "expected": "Starting quantity 2 at 1000 each; after เพิ่มอีก 3 total must be 5,000.00; verify using read-back.",
+    "backend": "any",
+    "mode": "offline-routed",
+    "steps": 5,
+    "messages": 4
+  },
+  {
+    "name": "customer-language-sales-quantity-03",
+    "oa": "sales",
+    "expected": "Starting quantity 2 at 1000 each; after เพิ่มอีก ๓ ตัว total must be 5,000.00; verify using read-back.",
+    "backend": "any",
+    "mode": "offline-routed",
+    "steps": 5,
+    "messages": 4
+  },
+  {
+    "name": "customer-language-sales-quantity-04",
+    "oa": "sales",
+    "expected": "Starting quantity 2 at 1000 each; after บวกพัดลมอีก 3 ตัว total must be 5,000.00; verify using read-back.",
+    "backend": "any",
+    "mode": "offline-routed",
+    "steps": 5,
+    "messages": 4
+  },
+  {
+    "name": "customer-language-sales-quantity-05",
+    "oa": "sales",
+    "expected": "Starting quantity 2 at 1000 each; after แก้พัดลมเป็น 3 ตัว total must be 3,000.00; verify using read-back.",
+    "backend": "any",
+    "mode": "offline-routed",
+    "steps": 5,
+    "messages": 4
+  },
+  {
+    "name": "customer-language-sales-quantity-06",
+    "oa": "sales",
+    "expected": "Starting quantity 2 at 1000 each; after แก้เป็น 3 total must be 3,000.00; verify using read-back.",
+    "backend": "any",
+    "mode": "offline-routed",
+    "steps": 5,
+    "messages": 4
+  },
+  {
+    "name": "customer-language-sales-quantity-07",
+    "oa": "sales",
+    "expected": "Starting quantity 2 at 1000 each; after ลดพัดลม 1 ตัว total must be 1,000.00; verify using read-back.",
+    "backend": "any",
+    "mode": "offline-routed",
+    "steps": 5,
+    "messages": 4
+  },
+  {
+    "name": "customer-language-sales-quantity-08",
+    "oa": "sales",
+    "expected": "Starting quantity 2 at 1000 each; after เพิ่มพัดลมอีก 0 ตัว total must be 2,000.00; verify using read-back.",
+    "backend": "any",
+    "mode": "offline-routed",
+    "steps": 5,
+    "messages": 4
+  },
+  {
+    "name": "customer-language-technician-accept-question-01",
+    "oa": "technician",
+    "expected": "Answer who accepted the job without accepting it for the questioner.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-technician-accept-question-02",
+    "oa": "technician",
+    "expected": "Answer who accepted the job without accepting it for the questioner.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-technician-accept-question-03",
+    "oa": "technician",
+    "expected": "Answer who accepted the job without accepting it for the questioner.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-technician-arrival-variant-01",
+    "oa": "technician",
+    "expected": "Recognize arrival/acceptance variants, including dialect, mixed language, no spaces and Thai digits.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-technician-arrival-variant-02",
+    "oa": "technician",
+    "expected": "Recognize arrival/acceptance variants, including dialect, mixed language, no spaces and Thai digits.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-technician-arrival-variant-03",
+    "oa": "technician",
+    "expected": "Recognize arrival/acceptance variants, including dialect, mixed language, no spaces and Thai digits.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-technician-arrival-variant-04",
+    "oa": "technician",
+    "expected": "Recognize arrival/acceptance variants, including dialect, mixed language, no spaces and Thai digits.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-technician-arrival-variant-05",
+    "oa": "technician",
+    "expected": "Recognize arrival/acceptance variants, including dialect, mixed language, no spaces and Thai digits.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-technician-arrival-variant-06",
+    "oa": "technician",
+    "expected": "Recognize arrival/acceptance variants, including dialect, mixed language, no spaces and Thai digits.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-technician-arrival-variant-07",
+    "oa": "technician",
+    "expected": "Recognize arrival/acceptance variants, including dialect, mixed language, no spaces and Thai digits.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 2,
+    "messages": 1
+  },
+  {
+    "name": "customer-language-technician-arrival-variant-08",
+    "oa": "technician",
+    "expected": "Recognize arrival/acceptance variants, including dialect, mixed language, no spaces and Thai digits.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-technician-multi-intent-01",
+    "oa": "technician",
+    "expected": "Acknowledge check-in and include the requested own-job listing in the same reply (ticket reference in acknowledgement and listing).",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 2,
+    "messages": 1
+  },
+  {
+    "name": "customer-language-technician-negated-checkin-01",
+    "oa": "technician",
+    "expected": "Do not check in for a negation/question/future/reported statement. Read-back status must stay assigned.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-technician-negated-checkin-02",
+    "oa": "technician",
+    "expected": "Do not check in for a negation/question/future/reported statement. Read-back status must stay assigned.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-technician-negated-checkin-03",
+    "oa": "technician",
+    "expected": "Do not check in for a negation/question/future/reported statement. Read-back status must stay assigned.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-technician-negated-checkin-04",
+    "oa": "technician",
+    "expected": "Do not check in for a negation/question/future/reported statement. Read-back status must stay assigned.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-technician-negated-checkin-05",
+    "oa": "technician",
+    "expected": "Do not check in for a negation/question/future/reported statement. Read-back status must stay assigned.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-technician-negated-checkin-06",
+    "oa": "technician",
+    "expected": "Do not check in for a negation/question/future/reported statement. Read-back status must stay assigned.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-technician-negated-checkin-07",
+    "oa": "technician",
+    "expected": "Do not check in for a negation/question/future/reported statement. Read-back status must stay assigned.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-technician-negated-checkin-08",
+    "oa": "technician",
+    "expected": "Do not check in for a negation/question/future/reported statement. Read-back status must stay assigned.",
+    "backend": "fake",
+    "mode": "offline-routed",
+    "steps": 3,
+    "messages": 2
+  },
+  {
+    "name": "customer-language-technician-oa-boundary-01",
+    "oa": "technician",
+    "expected": "Even excessive supplied permission keys must not expose sales records/actions on this OA.",
+    "backend": "any",
+    "mode": "offline-routed",
+    "steps": 2,
+    "messages": 1
+  },
+  {
+    "name": "customer-language-technician-oa-boundary-02",
+    "oa": "technician",
+    "expected": "Even excessive supplied permission keys must not expose sales records/actions on this OA.",
+    "backend": "any",
+    "mode": "offline-routed",
+    "steps": 2,
+    "messages": 1
+  },
+  {
+    "name": "customer-language-technician-oa-boundary-03",
+    "oa": "technician",
+    "expected": "Even excessive supplied permission keys must not expose sales records/actions on this OA.",
+    "backend": "any",
+    "mode": "offline-routed",
+    "steps": 2,
+    "messages": 1
+  }
+]

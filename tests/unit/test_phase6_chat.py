@@ -1039,6 +1039,15 @@ def _ai_configured(monkeypatch):
     monkeypatch.setattr(settings, "openrouter_model", "qwen/qwen3.6-35b-a3b")
 
 
+@pytest.fixture
+async def offline_fallback_ai():
+    """These routing tests may fall through to AI; never use the network."""
+    async with httpx.AsyncClient(transport=_ai(json.dumps({
+        "action": "suggest", "fields": {}, "missing": [], "suggestions": []
+    }))) as client:
+        yield client
+
+
 class TestSlotFilling:
     """6.9 test_slot_filling"""
 
@@ -2923,7 +2932,7 @@ class TestPhase10CompanyProfileChat:
         assert "setting.manage" in reply.text
         assert not [r for r in client.recorded if r[0] == "update_company_profile"]
 
-    async def test_not_offered_outside_sales_oa(self):
+    async def test_not_offered_outside_sales_oa(self, offline_fallback_ai):
         """Company management has no meaning on the Customer or Technician
         channels — the message must fall through to normal handling rather
         than being treated as a company command there."""
@@ -2931,6 +2940,7 @@ class TestPhase10CompanyProfileChat:
         reply = await handle_chat_message(
             client, message="ตั้งเลขผู้เสียภาษี 0105558123456",
             ctx=_ctx(oa="technician"),
+            ai_client=offline_fallback_ai,
         )
         assert not [r for r in client.recorded if r[0] == "update_company_profile"]
         assert "เรียบร้อย" not in reply.text
@@ -3111,10 +3121,11 @@ class TestPhase10ListAndDetailViews:
         assert "สิทธิ์" in reply.text
         assert not [r for r in client.recorded if r[0] == "list_customers"]
 
-    async def test_list_commands_are_sales_oa_only(self):
+    async def test_list_commands_are_sales_oa_only(self, offline_fallback_ai):
         client = FakeDataClient(permission_keys=["customer.read"])
         reply = await handle_chat_message(
             client, message="รายชื่อลูกค้า", ctx=_ctx(oa="technician"),
+            ai_client=offline_fallback_ai,
         )
         assert not [r for r in client.recorded if r[0] == "list_customers"]
 
@@ -5133,7 +5144,7 @@ class TestAddingProductsToADeal:
         assert not [r for r in client.recorded if r[0] == "add_deal_product"]
         assert "สิทธิ์" in reply.text
 
-    async def test_with_no_deal_in_play_it_is_catalogue_creation_instead(self):
+    async def test_with_no_deal_in_play_it_is_catalogue_creation_instead(self, offline_fallback_ai):
         """"เพิ่มสินค้า" means two different things. Someone with no deal
         open is building their catalogue, not quoting — and the two need
         different permissions, so guessing wrong locks people out of one
@@ -5141,6 +5152,7 @@ class TestAddingProductsToADeal:
         client = FakeDataClient(permission_keys=["deal.update"])
         reply = await handle_chat_message(
             client, message="เพิ่มสินค้าแอร์ ราคา 3500 บาท", ctx=_ctx(),
+            ai_client=offline_fallback_ai,
         )
         # Routed away from the line-item path. Where it goes next is the
         # catalogue flow, which parses free text with the AI — not this

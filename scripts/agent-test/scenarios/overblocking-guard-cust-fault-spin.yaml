@@ -1,0 +1,12 @@
+name: overblocking-guard-cust-fault-spin
+description: a real fault report must still open the flow for "เครื่องซักผ้าปั่นไม่ไปครับ"
+backend: fake
+actor:
+  oa: customer
+  role: customer
+  language: th
+  permissions: customer
+steps:
+- send: เครื่องซักผ้าปั่นไม่ไปครับ
+  expect:
+    not_contains: ["ยังไม่เปิดงานซ่อมใหม่"]

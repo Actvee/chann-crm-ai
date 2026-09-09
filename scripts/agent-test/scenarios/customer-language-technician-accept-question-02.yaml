@@ -1,0 +1,42 @@
+name: customer-language-technician-accept-question-02
+description: Answer who accepted the job without accepting it for the questioner.
+backend: fake
+actor:
+  oa: technician
+  role: technician
+  language: th
+  permissions: technician
+steps:
+- seed:
+    raw:
+      tickets:
+      - id: t1
+        ticket_number: T-2026-0001
+        status: assigned
+        accept_status: pending
+        assigned_to_ref: member-1
+        customer_name: สมชาย
+        customer_phone: 0812345678
+        service_address: 99/1 สุขุมวิท
+        issue_description: แอร์ไม่เย็น
+        scheduled_date: '2026-09-15'
+        scheduled_time: '10:00'
+- send: งาน T-2026-0001 ใครรับไปแล้วครับ
+  expect:
+    is_not:
+    - generic_error
+    - permission
+    not_contains:
+    - รับงาน T-2026-0001 แล้ว
+    max_lines: 15
+- send: รับงาน T-2026-0001
+  expect:
+    is_not:
+    - generic_error
+    - not_sure
+    - permission
+    - not_a_feature
+    not_contains:
+    - รับงานนี้แล้ว
+    max_lines: 15
+    contains: T-2026-0001

@@ -1,0 +1,26 @@
+name: overblocking-guard-tech-arrived-dialect
+description: check-in must still happen for "ฮอดแล้วเด้อ"
+backend: fake
+actor:
+  oa: technician
+  role: technician
+  language: th
+  permissions: technician
+steps:
+- seed:
+    raw:
+      tickets:
+      - id: t1
+        ticket_number: T-2026-0001
+        status: assigned
+        accept_status: accepted
+        assigned_to_ref: member-1
+        customer_name: สมชาย
+        customer_phone: '0812345678'
+        service_address: 99/1 สุขุมวิท
+        issue_description: แอร์ไม่เย็น
+        scheduled_date: '2026-09-15'
+        scheduled_time: '10:00'
+- send: ฮอดแล้วเด้อ
+  expect:
+    contains: ["เช็คอิน T-2026-0001 แล้ว"]

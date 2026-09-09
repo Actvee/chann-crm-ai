@@ -519,3 +519,20 @@ scenario, run
 ```
 
 before you report that you are done.
+
+## Customer-language regression and real-model evaluation
+
+`customer-language-*.yaml` covers synthetic language variants with read-back of
+customer/ticket/deal state. An explicit `send.ai` value supplies the parsed intent:
+that step proves downstream handling, not real model comprehension.
+
+The `actions_include` assertion checks quick-reply **message payloads** and
+`list_card.rows[].action_text`. Use it for selectable customer results; a text
+mention or button label alone does not prove the action exists. `--json` now
+retains `list_card` as evidence. `quick_replies_include` retains its old meaning.
+
+See [MODEL_EVALUATION.md](MODEL_EVALUATION.md) for the separate opt-in live-model
+runner, synthetic corpus, call bounds and acceptance limitations. It never changes
+`run.py`'s offline contract. `node scripts/agent-test/check-dashboard-home.cjs`
+checks the shared navigation logic after `npm ci` in `presentation`; it is not a
+browser or screenshot test.

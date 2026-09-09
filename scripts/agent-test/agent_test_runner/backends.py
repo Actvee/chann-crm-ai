@@ -285,6 +285,7 @@ class FakeBackend:
         return Outcome(
             text=reply.text or "",
             quick_replies=[tuple(q) for q in (reply.quick_replies or [])],
+            list_card=reply.list_card,
             images=list(reply.images or []),
             intent=reply.intent,
             used_ai=probe.calls > 0,
@@ -524,6 +525,7 @@ class DbBackend:
         return Outcome(
             text=reply.text or "",
             quick_replies=[tuple(q) for q in (reply.quick_replies or [])],
+            list_card=reply.list_card,
             images=list(reply.images or []),
             intent=reply.intent,
             used_ai=probe.calls > 0,

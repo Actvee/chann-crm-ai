@@ -1,0 +1,57 @@
+name: customer-language-customer-address-interruption-05
+description: While waiting for an address, do not store greeting/thanks/emoji/refusal/date
+  as address; accept the actual address next. Fixed CHN-S-000001 warranty ownership
+  is a fake-backend fixture.
+backend: fake
+actor:
+  oa: customer
+  role: sales
+  language: th
+  permissions: customer
+steps:
+- seed:
+    warranties:
+    - serial_number: ONLY00001
+      product_name: แอร์ทดสอบ
+      customer_chann_uid: CHN-S-000001
+      warranty_end: '2099-01-01'
+- send: แอร์ไม่เย็น
+  expect:
+    is_not:
+    - generic_error
+    - not_sure
+    - permission
+    - not_a_feature
+    not_contains:
+    - due_time
+    - owner_member_id
+    - service_address
+    - issue_description
+    max_lines: 15
+    contains:
+    - T-2026-0001
+    - ที่อยู่
+- send: ยังไม่สะดวกบอกค่ะ
+  expect:
+    is_not:
+    - generic_error
+    - permission
+    not_contains:
+    - บันทึกที่อยู่แล้ว
+    max_lines: 15
+- send: 99/1 ถนนสุขุมวิท แขวงคลองตัน
+  expect:
+    is_not:
+    - generic_error
+    - not_sure
+    - permission
+    - not_a_feature
+    not_contains:
+    - due_time
+    - owner_member_id
+    - service_address
+    - issue_description
+    max_lines: 15
+    contains:
+    - บันทึกที่อยู่
+    - วันไหน

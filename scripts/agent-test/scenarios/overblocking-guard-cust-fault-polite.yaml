@@ -1,0 +1,12 @@
+name: overblocking-guard-cust-fault-polite
+description: a real fault report must still open the flow for "รบกวนส่งช่างมาดูแอร์หน่อยครับ ไม่เย็นเลย"
+backend: fake
+actor:
+  oa: customer
+  role: customer
+  language: th
+  permissions: customer
+steps:
+- send: รบกวนส่งช่างมาดูแอร์หน่อยครับ ไม่เย็นเลย
+  expect:
+    not_contains: ["ยังไม่เปิดงานซ่อมใหม่"]

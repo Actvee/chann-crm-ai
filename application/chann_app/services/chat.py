@@ -3230,7 +3230,7 @@ _ADDRESS_MARKERS = (
     "/", "บ้านเลขที่", "คอนโด", "หมู่บ้าน", "อาคาร", "ชั้น", "ตึก", "road", "soi", "district",
 )
 _FAULT_MARKERS = (
-    "ไม่เย็น", "ไม่ติด", "ไม่แรง", "ไม่ทำงาน", "ไม่หมุน", "ไม่ปั่น", "เสีย", "พัง", "รั่ว", "หยด", "เสียงดัง",
+    "ไม่เย็น", "ไม่ติด", "ไม่แรง", "ไม่ทำงาน", "ไม่หมุน", "ไม่ปั่น", "ปั่นไม่ไป", "เสีย", "พัง", "รั่ว", "หยด", "เสียงดัง",
     "ซ่อม", "ร้อน", "ดับ", "ช็อต", "มีกลิ่น", "not cooling", "broken", "leak",
     # 6 Sep 2026: "ประตูเลื่อนไม่ได้", "น้ำไม่ไหล", "เครื่องค้าง" are faults too.
     "ไม่ได้", "ไม่ออก", "เข้าไม่ได้", "ค้าง", "แตก", "หลุด", "ชำรุด", "ผิดปกติ", "มีปัญหา", "กระตุก", "ไม่ไหล",
@@ -3586,15 +3586,54 @@ def _looks_like_fault(text: str) -> bool:
 
 
 _PRICE_WORDS = (
-    "เท่าไหร่", "เท่าไร", "กี่บาท", "ราคา", "ค่าบริการ", "ค่าซ่อม", "ค่าล้าง", "ค่าใช้จ่าย", "ค่าแรง", "ค่าอะไหล่",
+    "เท่าไหร่", "เท่าไร", "กี่บาท", "จักบาท", "ราคา", "ค่าบริการ", "ค่าซ่อม", "ค่าล้าง", "ค่าใช้จ่าย", "ค่าแรง", "ค่าอะไหล่",
     "ค่าเดินทาง", "ค่าตรวจ", "คิดเงิน", "คิดราคา", "โปรโมชั่น", "how much", "price", "cost", "quote me",
     "ผ่อน", "ผ่อนได้", "installment", "credit card",
     "btu", "มีขาย", "ขายไหม", "มีรุ่น", "รุ่นไหนดี", "แนะนำรุ่น", "cheaper", "discount", "ลดราคา", "ส่วนลด",
 )
 _CANCEL_HINTS = (
     "ไม่เอาแล้ว", "ไม่ต้องมาแล้ว", "ไม่ต้องแล้ว", "ไม่ซ่อมแล้ว", "ซ่อมเองได้แล้ว", "ซ่อมเองแล้ว", "หายแล้ว",
-    "ใช้ได้แล้ว", "ไม่ต้องส่งช่าง", "ไม่ต้องมา", "ยกเลิก", "ไม่เอา", "cancel", "never mind", "nevermind",
+    "ใช้ได้แล้ว", "ไม่ต้องส่งช่าง", "ไม่ต้องมา", "ไม่ทำแล้ว", "ไม่ต้องซ่อมแล้ว", "ยกเลิก", "ไม่เอา", "cancel", "never mind", "nevermind",
 )
+
+
+# A request for a visit, as long as the asking itself is not negated:
+# "ไม่อยากให้มาซ่อม" is still a refusal, "อยากให้ช่างมาดู" never is.
+_REPAIR_ASK_RE = re.compile(
+    r"(?<!ไม่)(?:อยากให้|ช่วยดู|ช่วยส่ง|ช่วยซ่อม|ขอช่าง|ขอให้ช่าง|ส่งช่างมา|ให้ช่างมา|มาดูให้|เข้ามาดู|นัดช่าง)"
+)
+
+
+def _denies_repair_request(text: str) -> bool:
+    """A negated fault or a hypothetical report is not consent to open a job.
+
+    Do not reject every sentence containing ไม่: ไม่เย็น/ไม่ทำงาน are
+    affirmative symptoms. Check the object of the negation instead.
+
+    Two things this must not swallow (owner review, 9 Sep 2026):
+    "แอร์ไม่ได้ซ่อมมานาน อยากให้ช่างมาดู" is a request, not a refusal —
+    the negation is about the past, and the sentence asks for a visit.
+    """
+    compact = _compact(text)
+    if _REPAIR_ASK_RE.search(compact):
+        return False
+    return bool(re.search(
+        # "ไม่ได้ซ่อมมานาน" / "ไม่ได้ล้างมาหลายปี" describe neglect, not refusal.
+        r"(?:ยังไม่|ไม่ได้|ไม่)(?:ได้)?(?:ต้อง)?(?:แจ้งซ่อม|ส่งช่าง|ซ่อม)"
+        r"(?!มานาน|นาน|มาหลาย|หลาย|มาตั้งแต่|มาเป็น)|"
+        r"(?:ยังไม่|ไม่ได้)(?:เสีย|พัง)|ไม่ใช่.{0,16}(?:เสีย|พัง)|"
+        r"(?:ถ้า|หาก).{0,60}(?:ค่อยแจ้ง|ค่อยซ่อม)", compact,
+    ))
+
+
+REPAIR_NOT_REQUESTED = {
+    "th": 'รับทราบครับ ยังไม่เปิดงานซ่อมใหม่ หากต้องการให้ช่างเข้าดู พิมพ์ "แจ้งซ่อม" ได้ครับ',
+    "en": 'Understood. No new repair has been opened. Type "report a fault" when you want a visit.',
+}
+REPORT_ADDRESS_REQUIRED = {
+    "th": "ยังรอที่อยู่ที่จะให้ช่างไปครับ พิมพ์บ้านเลขที่และถนน/ซอยได้เลย",
+    "en": "I still need the service address. Please send the house number and street.",
+}
 _UNAVAILABLE_HINTS = ("ไม่ได้", "ไม่สะดวก", "ไม่ว่าง", "ไม่อยู่", "ติดธุระ", "can't make", "cannot make", "not free")
 _SAME_ADDRESS_PHRASES = (
     "ที่อยู่เดิม", "ที่เดิม", "เหมือนเดิม", "ที่อยู่เดียวกัน", "ที่อยู่เดียวกับครั้งก่อน", "ตามที่อยู่เดิม",
@@ -4313,6 +4352,18 @@ async def _handle_customer_report(
     except Exception:
         pending = None
 
+    # Run before the pending-address/issue handlers: those slots must not
+    # turn a refusal or a price question into an address or a new fault.
+    if _asks_price(text) and not _strongly_address(text):
+        return _customer_fallback(text, language)
+    if _denies_repair_request(text) and not _is_cancel_hint(text):
+        return ChatReply(text=_t(REPAIR_NOT_REQUESTED, language))
+    if pending and pending.get("entity") == "customer_ticket" and _is_cancel_hint(text):
+        return await _handle_customer_amend(
+            client, ctx=ctx, license_id=license_id, message=text,
+            language=language, cancel=True,
+        )
+
     # "แจ้งซ่อม" tapped: the next line is the fault, whatever it looks like
     # — and even while a live conversation is open (review, 6 Sep 2026:
     # the answer to "อาการเสียเป็นอย่างไรครับ" was stored as a chat line).
@@ -4446,6 +4497,13 @@ async def _handle_customer_report(
                 log.exception("could not save a customer's address")
                 return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
             return ChatReply(text=_t(REPORT_ADDRESS_REUSED, language).format(address=previous[:80]))
+
+        if ticket_id and "address" in awaiting and not _strongly_address(text) and (
+            _is_only_a_greeting(text)
+            or (_looks_like_a_date_attempt(text) and not _looks_like_a_question(text))
+            or any(w in _canonical(text) for w in ("ไม่สะดวก", "ยังไม่บอก", "ไม่อยากบอก", "not ready"))
+        ):
+            return ChatReply(text=_t(REPORT_ADDRESS_REQUIRED, language))
 
         if (
             ticket_id and "address" in awaiting
@@ -7902,7 +7960,7 @@ _POLITE_HEAD = (
 # 2026, B2/B4/B9: "เชคอิน", "ฮอดแล้ว", "แอร์บ่เย็น", "sawasdee krub", "ถึงละ").
 _SPELLING_MAP = (
     ("เช็คเอ้าท์", "เช็คเอาท์"), ("เช็คเอ้า", "เช็คเอา"), ("เช็ก", "เช็ค"), ("เชค", "เช็ค"), ("เช๊ค", "เช็ค"), ("เช็คค", "เช็ค"),
-    ("ซ้อม", "ซ่อม"), ("ซอม", "ซ่อม"), ("เย้น", "เย็น"), ("เย๊น", "เย็น"), ("ลุกค้า", "ลูกค้า"), ("ลูกคา", "ลูกค้า"),
+    ("ซ้อม", "ซ่อม"), ("ซอม", "ซ่อม"), ("เย้น", "เย็น"), ("เย๊น", "เย็น"), ("ไม่เยน", "ไม่เย็น"), ("ลุกค้า", "ลูกค้า"), ("ลูกคา", "ลูกค้า"),
     ("ลูกค่า", "ลูกค้า"), ("ดิล", "ดีล"), ("ขอบคุน", "ขอบคุณ"), ("ขอบคุง", "ขอบคุณ"), ("สวัดดี", "สวัสดี"), ("สวัสดร", "สวัสดี"),
     ("หวัดดร", "หวัดดี"), ("ฮอด", "ถึง"), ("แปง", "ซ่อม"), ("ไปป์ไลน์", "pipeline"), ("ไปป์ไลน", "pipeline"), ("ลีด", "lead"),
     ("ทะเบียร", "ทะเบียน"), ("ปะกัน", "ประกัน"), ("ประกัณ", "ประกัน"), ("โน๊ต", "โน้ต"), ("โน้ท", "โน้ต"), ("จ็อบ", "งาน"),
@@ -7934,7 +7992,7 @@ _PRONOUN_INNER_RE = re.compile(r"(?:ทีม|งาน|คิว|รายง�
 # word-final เพ = เสีย, word-final ละ = แล้ว ("แหละ" stays).
 _DIALECT_NOT_RE = re.compile(r"บ่(?![าอนงัิีึืุู])")
 _DIALECT_BROKEN_RE = re.compile(r"(?<=[ก-๙])เพ(?=\s|$)")
-_DIALECT_DONE_RE = re.compile(r"(?<=[ก-๙])(?<!แห)(?<!ที)ละ(?=\s|$)")
+_DIALECT_DONE_RE = re.compile(r"(?<=[ก-๙])(?<!แห)(?<!ที)ละ(?=ครับ|คับ|ค่ะ|คะ|เด้อ|เจ้า|\s|$)")
 # "ลูกค้าาา", "งานนน", "เสร็จแล้วว": a held key, not another word.
 _REPEAT_THAI_RE = re.compile(r"([ก-๙])\1{2,}")
 _REPEAT_FINAL_THAI_RE = re.compile(r"(?<=[ก-๙])([ก-ฮ])\1(?=\s|$)")
@@ -8083,12 +8141,29 @@ def _matches_phrase(message: str, phrases: tuple[str, ...]) -> bool:
     return bool(forms) and any(f == p.replace(" ", "").lower() for f in forms for p in phrases)
 
 
+# "ช่วย…ให้หน่อยได้ไหม", "รบกวน…ที", "ขอ…หน่อย": Thai politeness wraps an
+# order in a question. Only the leading words count — a sentence that merely
+# contains ช่วย later ("ใครช่วยได้บ้าง") is still a question.
+_POLITE_REQUEST_RE = re.compile(r"^(?:ช่วย|รบกวน|กรุณา|ขอความกรุณา|please|pls)")
+
+
 def _command_like(message: str, triggers: tuple[str, ...]) -> bool:
     """A command word at the START of a short message, or anywhere when a
     ticket code is named. "ลูกค้าบอกว่าถึงแล้วค่อยโทร" is a sentence about
     a customer, not a check-in — the old substring match took it as one."""
     compact = _normalise(message)
     if not compact or compact.startswith(("วิธีใช้", "help", "guide", "คู่มือ")):
+        return False
+    # A question does not command — except the polite Thai request, which is
+    # shaped like one: "ช่วยเช็คอินให้หน่อยได้ไหมครับ" is an instruction, and
+    # refusing it sent the technician the guide instead (owner, 9 Sep 2026).
+    if _looks_like_a_question(message) and not _POLITE_REQUEST_RE.match(compact):
+        return False
+    if re.search(
+        r"(?:ยังไม่|ไม่ได้|ไม่ต้อง|อย่า|ห้าม).{0,10}(?:เช็คอิน|checkin|ถึง|ปิดงาน|เสร็จ)|"
+        r"(?:ถ้า|หาก|พรุ่งนี้|ค่อย).{0,24}(?:เช็คอิน|checkin|ถึง|ปิดงาน)|"
+        r"(?:บอกว่า|บอกให้|ถามว่า)", compact,
+    ):
         return False
     words = [t.replace(" ", "").lower() for t in triggers]
     if TICKET_CODE_RE.search(message or ""):
@@ -8684,7 +8759,7 @@ _ITEM_INNER_PHRASES = (
 # Verbs and fillers in front of the name.
 _ITEM_LEAD_WORDS = (
     "เพิ่มสินค้า", "ใส่สินค้า", "ลบสินค้า", "เอาสินค้า", "ตัดสินค้า", "เพิ่มรายการ", "ใส่รายการ", "ลบรายการ", "เอารายการ",
-    "เพิ่มจำนวน", "ลดจำนวน", "เพิ่ม", "ใส่", "เอา", "ลบ", "ตัด", "ลด", "สินค้า", "รายการ", "ที่ชื่อ", "ชื่อ", "ที่เป็น",
+    "เพิ่มจำนวน", "ลดจำนวน", "เพิ่ม", "บวก", "ใส่", "เอา", "ลบ", "ตัด", "ลด", "สินค้า", "รายการ", "ที่ชื่อ", "ชื่อ", "ที่เป็น",
     "add product", "add item", "add the", "add a", "add an", "add", "put in", "put", "insert", "remove product",
     "remove item", "remove the", "remove a", "remove", "delete the", "delete item", "delete", "drop the", "drop",
     "take the", "take", "the", "an", "a",
@@ -8777,11 +8852,11 @@ def _item_unit_word(message: str) -> str:
 _ITEM_HEAD_RE = re.compile(
     r"^(?:ช่วย|รบกวน|ขอ|กรุณา|please)?\s*"
     r"(เพิ่มสินค้า|ใส่สินค้า|เพิ่มรายการ|ใส่รายการ|เพิ่มจำนวน|ลดจำนวน|ลบสินค้า|ลบรายการ|เอาสินค้าออก|ตัดสินค้า|เอาเพิ่ม|เอาออก|"
-    r"เพิ่ม|ใส่|เอา|ลด|ลบ|ตัด|ไปอีก|อีก|add|put|insert|remove|delete|drop|take)",
+    r"เพิ่ม|บวก|ใส่|เอา|ลด|ลบ|ตัด|ไปอีก|อีก|add|put|insert|remove|delete|drop|take)",
     re.I,
 )
 _ITEM_SET_QTY_RE = re.compile(
-    r"^(?:แก้ไข|แก้|เปลี่ยน|ปรับ|ตั้ง|set|change|update)\s*(?:สินค้า|รายการ|จำนวน|the)?\s*(.+?)\s*(?:เป็น|เหลือ|ให้เหลือ|to|=)\s*(\d+)\s*"
+    r"^(?:แก้ไข|แก้|เปลี่ยน|ปรับ|ตั้ง|set|change|update)\s*(?:สินค้า|รายการ|จำนวน|the)?\s*(.*?)\s*(?:เป็น|เหลือ|ให้เหลือ|to|=)\s*(\d+)\s*"
     + r"(?:" + _ITEM_COUNT_UNITS + r")?\s*(?:ครับ|ค่ะ|คะ|นะ)?$",
     re.I,
 )
@@ -8819,7 +8894,7 @@ def _parse_line_item_command(message: str) -> dict | None:
         m = _ITEM_SET_QTY_RE.match(body)
         if m and not any(w in low for w in ("ราคา", "price", "บาท")):
             name = _strip_item_particles(m.group(1))
-            if _item_is_excluded(name):
+            if name and _item_is_excluded(name):
                 return None
             return {"op": "set_qty", "name": name, "qty": int(m.group(2)), "price": None, "more": False,
                     "code": code, "unit": _item_unit_word(body)}
@@ -8851,7 +8926,7 @@ def _parse_line_item_command(message: str) -> dict | None:
             rest = body[: head.end()] + " " + body[head.end() + lead.end():]
     rest = re.sub(r"(?:^|(?<=\s))(?:" + _ITEM_COUNT_UNITS + r")(?=\s|$)", " ", rest, flags=re.I)
 
-    if verb in ("เพิ่มสินค้า", "ใส่สินค้า", "เพิ่มรายการ", "ใส่รายการ", "เพิ่มจำนวน", "เพิ่ม", "ใส่", "เอาเพิ่ม", "ไปอีก", "อีก",
+    if verb in ("เพิ่มสินค้า", "ใส่สินค้า", "เพิ่มรายการ", "ใส่รายการ", "เพิ่มจำนวน", "เพิ่ม", "บวก", "ใส่", "เอาเพิ่ม", "ไปอีก", "อีก",
                 "add", "put", "insert") or (verb == "เอา" and more):
         if verb == "เพิ่มจำนวน" and not more:
             return None
@@ -8862,7 +8937,7 @@ def _parse_line_item_command(message: str) -> dict | None:
             return None
         if not name and qty is None:
             return None
-        return {"op": "add", "name": name or None, "qty": qty or 1, "price": price, "more": more, "code": code, "unit": unit}
+        return {"op": "add", "name": name or None, "qty": 1 if qty is None else qty, "price": price, "more": more, "code": code, "unit": unit}
 
     if verb in ("ลด", "ลดจำนวน"):
         if price is not None or any(w in low for w in ("ราคา", "price", "บาท")):
@@ -9245,7 +9320,12 @@ async def _handle_line_item_command(
     where = _where_label(kind, language)
     code = code or ""
     name = str(cmd.get("name") or "").strip()
-    qty = int(cmd.get("qty") or 1)
+    qty = int(cmd["qty"]) if cmd.get("qty") is not None else 1
+    if op in ("add", "decrement") and qty <= 0:
+        return ChatReply(text=(
+            "จำนวนที่เพิ่มหรือลดต้องมากกว่า 0 ครับ รายการเดิมยังอยู่เท่าเดิม"
+            if language == "th" else "The quantity to add or remove must be greater than 0. The items are unchanged."
+        ))
     unit = str(cmd.get("unit") or "ตัว")
     trigger = {"delete": "ลบสินค้า", "decrement": "ลด", "add": "เพิ่ม", "set_qty": "แก้จำนวน", "bare_qty": "แก้จำนวน"}.get(op, "แก้จำนวน")
 
@@ -13576,12 +13656,23 @@ def _is_continuation(pending: dict | None, intent: dict) -> bool:
         return False            # a different subject entirely
     if (intent.get("action") or "") == "suggest":
         return False            # explicitly asking something else
+    if intent.get("action") and intent["action"] != pending.get("action"):
+        return False
     fields = intent.get("fields") or {}
     if not fields:
         return False
     wanted = set(pending.get("missing") or [])
     # Either it supplies something that was actually asked for, or it supplies
     # values without naming any entity at all — the shape of a bare answer.
+    if entity == pending.get("entity") == "customer" and pending.get("action") == "create":
+        # An address while we ask for a phone is still this customer's
+        # information. A different explicit name starts a new customer.
+        previous = pending.get("fields") or {}
+        if any(fields.get(k) and previous.get(k) and fields[k] != previous[k]
+               for k in ("first_name", "last_name")):
+            return False
+        if set(fields) & {"phone", "email", "address", "notes"}:
+            return True
     return bool(wanted & set(fields)) or not entity
 
 
@@ -16057,7 +16148,9 @@ def _no_handler_reply(intent: dict, language: str, oa: str = "sales") -> ChatRep
     )
 
 
-_SLOT_FILL_ABORT_WORDS = frozenset({"ยกเลิก", "cancel", "ไม่เอาแล้ว", "เลิก", "ยกเลิกก่อน", "ไม่ทำแล้ว", "never mind"})
+_SLOT_FILL_ABORT_WORDS = frozenset(_normalise(w) for w in (
+    "ยกเลิก", "cancel", "ไม่เอาแล้ว", "เลิก", "ยกเลิกก่อน", "ไม่ทำแล้ว", "never mind",
+))
 SLOT_FILL_CANCELLED = {
     "th": "ยกเลิกแล้วครับ ไม่ได้บันทึกอะไร",
     "en": "Cancelled — nothing was saved.",

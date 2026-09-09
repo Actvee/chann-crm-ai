@@ -46,6 +46,7 @@ type ActResult = { report_status?: string; survey_sent?: boolean; document_url?:
 export default function ApprovalQueue({ liffId }: { liffId: string }) {
   const { t } = useLanguage();
   const [rows, setRows] = useState<Pending[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [permissions, setPermissions] = useState<Set<string>>(new Set());
   const [licenseId, setLicenseId] = useState("");
   const [token, setToken] = useState("");
@@ -62,6 +63,7 @@ export default function ApprovalQueue({ liffId }: { liffId: string }) {
 
   const load = useCallback(
     async (currentToken = token, license = licenseId) => {
+      setLoaded(false);
       const response = await fetch(
         `/api/phase2/licenses/${license}/approvals/pending`,
         { headers: proxyHeaders(currentToken, license, "sales") },
@@ -74,6 +76,7 @@ export default function ApprovalQueue({ liffId }: { liffId: string }) {
         );
       }
       setRows((await response.json()) as Pending[]);
+      setLoaded(true);
       say("");
     },
     [licenseId, say, t, token],
@@ -172,11 +175,11 @@ export default function ApprovalQueue({ liffId }: { liffId: string }) {
         </div>
       )}
 
-      {rows.length === 0 ? (
+      {rows.length === 0 ? (loaded && tone !== "error" ? (
         <div className="empty">
           <p>{t.dashboard.approvals.empty}</p>
         </div>
-      ) : (
+      ) : null) : (
         <ul className="list">
           {rows.map((row) => {
             const data = row.report?.report_data ?? {};
