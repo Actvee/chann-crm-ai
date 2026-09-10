@@ -1838,7 +1838,13 @@ async def list_tickets(
         if principal.is_customer:
             # A customer sees their own repairs, never the shop's queue.
             rows = [r for r in rows if str(r.get("customer_chann_uid") or "") == principal.chann_uid]
-        return rows
+        # The machine each job is about, composed here rather than stored
+        # on the ticket: `TicketOut` is the ticket's own row, and a copy of
+        # the product name on it would be a second thing to keep in step
+        # (owner, 10 ก.ย. 2569). One warranty-book read for the whole list.
+        from .services import ticket_machine
+
+        return await ticket_machine.attach_to(client, license_id, rows)
     except DataTierError as exc:
         raise _propagate(exc)
 
@@ -3136,6 +3142,9 @@ async def upload_document_template(
     `source_docx_path` points at the file they actually uploaded and they
     can download it back. HTML uploads are unchanged.
     """
+    from .services.documents.design import (
+        TemplateRejected, frame, sanitise, split_frame,
+    )
     from .services.documents.docx import (
         DocxConversionError, convert_docx_to_html,
     )
@@ -3186,6 +3195,35 @@ async def upload_document_template(
             # Half a megabyte of HTML is not a quote layout; it is an embedded
             # image someone should be hosting instead.
             raise HTTPException(status_code=400, detail="template is too large")
+        # The SAME whitelist rebuild the AI-designed path uses, and for the
+        # same reason: what is stored has to be assembled out of tags and
+        # attributes that were each checked. Review v3, T02: this branch
+        # used to store the body verbatim, so `<script>`, an `onclick=`
+        # handler and an `<iframe>` all went into the document store
+        # unchanged while the AI path next door rejected them. Nothing
+        # about an upload makes a shop's markup more trustworthy than a
+        # model's — it is less so, because a person chose it.
+        # A document this system framed — the chat designer's own draft on
+        # its way to storage, or a stored template downloaded and uploaded
+        # again — is unwrapped first, because the frame legitimately does
+        # the one thing a shop's stylesheet may not (see split_frame).
+        # What was INSIDE it is checked exactly like anything else.
+        framed = split_frame(html)
+        source = (
+            f"<style>{framed[1]}</style>{framed[0]}" if framed is not None else html
+        )
+        try:
+            body, css = sanitise(source)
+        except TemplateRejected as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "แบบฟอร์มนี้มีสิ่งที่ระบบไม่อนุญาตให้เก็บไว้ จึงไม่ได้บันทึกอะไรไว้เลย: "
+                    + " · ".join(exc.reasons)
+                    + " — แบบฟอร์มเก็บได้เฉพาะข้อความ ตาราง และการจัดหน้า"
+                ),
+            )
+        html = frame(body, css)
 
     try:
         templates = await client.list_document_templates(
@@ -3491,6 +3529,7 @@ async def preview_document_template(
     A version that is already previewed or published renders just the
     same — you can always look — it simply has no status left to change.
     """
+    from .services.documents.design import active_content_in
     from .services.documents.fill import fill_template, unknown_placeholders
     from .services.documents.samples import sample_snapshot
     from .services.storage.base import (
@@ -3548,6 +3587,28 @@ async def preview_document_template(
 
     snapshot = sample_snapshot(document_type)
     source = raw.decode("utf-8", errors="replace")
+
+    # Uploads are rebuilt from a whitelist now (review v3, T02), but this
+    # endpoint also serves versions stored BEFORE that was true — the
+    # review asked for the old ones, not only the new. A stored template
+    # holding active content is not handed out: the dashboard renders what
+    # this returns, and one of its buttons opens it in the phone's own
+    # browser. Refusing is better than quietly rewriting someone's layout
+    # behind their back, because the shop needs to know their file is not
+    # the file the system will print.
+    active = active_content_in(source)
+    if active:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "แบบฟอร์มรุ่นนี้มีส่วนที่ระบบไม่อนุญาตให้แสดงหรือพิมพ์ ("
+                + ", ".join(active)
+                + ") จึงยังเปิดดูไม่ได้ กรุณาอัปโหลดไฟล์นี้ใหม่อีกครั้ง "
+                "ระบบจะกรองส่วนนั้นออกให้ตอนอัปโหลด "
+                "(this stored version contains active content and is not "
+                "served; upload it again and it will be filtered)"
+            ),
+        )
     html = fill_template(source, snapshot)
 
     # Mark it previewed, and only from draft — mark_previewed refuses any

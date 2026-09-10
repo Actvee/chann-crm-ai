@@ -7,10 +7,14 @@ executable rather than aspirational.
 """
 from __future__ import annotations
 
+import logging
+
 import httpx
 from urllib.parse import quote
 
 from .config import settings
+
+log = logging.getLogger(__name__)
 
 
 class DataTierError(RuntimeError):
@@ -282,20 +286,70 @@ class DataClient:
         )
         return self._unwrap(resp)
 
-    async def record_webhook_event(self, event_id: str, oa: str) -> bool:
-        """True the first time this LINE event id is seen; False on a
-        redelivery. Errors count as "new" — dropping a real message is
-        worse than a rare duplicate."""
+    async def claim_webhook_event(self, event_id: str, oa: str) -> dict:
+        """Claim a LINE event, and learn what is already known about it.
+
+        Returns `{"state": ..., "reply": ...}` where state is one of:
+
+        * `new` — process it;
+        * `reply_pending` — the business effect already happened and
+          `reply` is the answer still owed; deliver only;
+        * `duplicate` — finished, drop it;
+        * `in_progress` — another attempt holds a live claim, drop it.
+
+        A transport failure is still `new`, for the reason it always was:
+        dropping a real message is worse than a rare duplicate. What has
+        changed (review v3, T01) is that a first delivery which FAILS no
+        longer leaves the event looking finished — see
+        `finish_webhook_event`.
+
+        Reads the state out of the body, and falls back to the status code
+        alone, so a Data tier deployed before this change (201/409 with no
+        `state`) is understood exactly as it was.
+        """
         try:
             resp = await self._client.post(
                 f"{self._base}/internal/v1/webhook-events",
                 headers=self._headers, json={"event_id": event_id, "oa": oa},
             )
         except Exception:  # noqa: BLE001
-            return True
-        if resp.status_code == 409:
-            return False
-        return True
+            return {"state": "new", "reply": None}
+        try:
+            body = resp.json()
+        except Exception:  # noqa: BLE001
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+        detail = body.get("detail") if isinstance(body.get("detail"), dict) else {}
+        state = str(body.get("state") or detail.get("state") or "")
+        if not state:
+            state = "duplicate" if resp.status_code == 409 else "new"
+        reply = body.get("reply")
+        return {"state": state, "reply": reply if isinstance(reply, dict) else None}
+
+    async def record_webhook_event(self, event_id: str, oa: str) -> bool:
+        """The old yes/no form of the claim, kept for callers that only
+        need "is this a repeat?"."""
+        claim = await self.claim_webhook_event(event_id, oa)
+        return claim["state"] == "new"
+
+    async def finish_webhook_event(
+        self, event_id: str, state: str, reply: dict | None = None,
+    ) -> None:
+        """Record what this attempt did: `handled`, `done`, or `failed`.
+
+        Never raises. A lost bookkeeping call leaves the event in the
+        state it was in, which the lease and the next redelivery recover
+        from; letting it fail the request would turn a bookkeeping problem
+        into a person not getting an answer.
+        """
+        try:
+            await self._client.post(
+                f"{self._base}/internal/v1/webhook-events/{event_id}/state",
+                headers=self._headers, json={"state": state, "reply": reply},
+            )
+        except Exception:  # noqa: BLE001
+            log.warning("could not record webhook event state %s=%s", event_id, state)
 
     async def set_customer_owner(self, license_id: str, customer_id: str, owner_member_id: str | None, actor_id: str | None = None) -> dict:
         resp = await self._client.patch(

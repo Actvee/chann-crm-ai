@@ -492,11 +492,47 @@ class DocumentTemplateRepository:
         how a shop says "go back to the system's standard layout". So this
         is a repository rule rather than a partial unique index — a
         constraint could express "at most one true", but not the
-        deactivate-the-siblings write that makes choosing one click.
+        deactivate-the-siblings write that makes choosing one click, and
+        it would refuse the ordinary case of a shop simply HAVING two
+        quote templates: `is_active` defaults to true on creation and
+        nothing wrote it before this method existed, so "several active,
+        most recent wins" is the state most shops are in (see
+        `documents/selection.py`).
+
+        **Why the lock.** Review v3, S01: the read of the siblings and the
+        writes that follow are a read-modify-write with nothing holding
+        the pair together. Two activations of DIFFERENT templates of the
+        same document type, arriving together, each read "no active
+        siblings" and each wrote its own row true — reproduced on real
+        PostgreSQL, both transactions committing, two rows active. The
+        advisory lock is transaction-scoped and keyed on exactly the pair
+        the invariant is about, so the second activation waits, re-reads,
+        sees the first, and turns it off: the outcome is "the last person
+        to choose wins", which is what choosing means.
+
+        An advisory lock rather than `SELECT ... FOR UPDATE`, because in
+        the case that matters there is nothing to lock: two transactions
+        activating different templates when NONE is active yet share no
+        row, which is exactly how the reproduction produced two active
+        templates. The lock is taken on the name of the invariant
+        instead, and the commit or the rollback releases it either way.
+
+        Known limit, stated rather than papered over: this serialises the
+        path that CHOOSES. Creating a template still defaults `is_active`
+        to true, so a shop can still end up with several active without
+        anyone calling this — the pre-existing state `choosable_templates`
+        resolves by taking the most recently created one.
         """
         template = self.get_template(scope, template_id)
         if template is None:
             raise Phase10NotFound("template not found in this tenant")
+        # `serialise` is this module's existing per-tenant advisory lock —
+        # the same mechanism the running numbers use, keyed here on the
+        # pair the invariant is about.
+        serialise(
+            self._s,
+            f"document_templates.active:{scope.license_id}:{template.document_type}",
+        )
         turned_off: list[DocumentTemplate] = []
         if active:
             siblings = self._s.execute(

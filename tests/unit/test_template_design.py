@@ -434,6 +434,109 @@ class TestRefineAndPublish:
         assert [v["status"] for v in client._template_versions] == ["previewed"]
 
 
+class TestTheConversationKeepsItsThread:
+    """Review v3, B08.
+
+    The three decisions were exact vocabularies, so a reply that plainly
+    continued the conversation was read as a new subject: the pending
+    state was cleared, nothing was published, and the chat flow could not
+    go on. The saved draft was never lost — it stayed on the templates
+    page as a DRAFT version — but the only way back to it was the
+    dashboard.
+
+    What must stay true, and is asserted below: publishing still takes a
+    clear confirmation. "Keep the context" must not become "publish on
+    anything vaguely positive"; publishing changes every document the
+    shop issues from then on.
+    """
+
+    async def test_a_confirmation_with_a_polite_particle_publishes(self, store):
+        client = FakeDataClient(permission_keys=SALES_KEYS)
+        await _say(client, "ออกแบบใบเสนอราคา")
+        await _say(client, "ใช้เลยครับ")
+        assert [v["status"] for v in client._template_versions] == ["published"]
+
+    async def test_a_confirmation_spelled_out_publishes(self, store):
+        client = FakeDataClient(permission_keys=SALES_KEYS)
+        await _say(client, "ออกแบบใบเสนอราคา")
+        await _say(client, "ยืนยันใช้แบบนี้")
+        assert [v["status"] for v in client._template_versions] == ["published"]
+
+    async def test_asking_to_look_first_keeps_the_draft_and_publishes_nothing(self, store):
+        client = FakeDataClient(permission_keys=SALES_KEYS)
+        await _say(client, "ออกแบบใบเสนอราคา")
+
+        reply = await _say(client, "ขอดูก่อน")
+        assert [v["status"] for v in client._template_versions] == ["previewed"]
+        assert await client.get_pending_intent("CHN-S-000001", "sales") is not None
+        assert [label for label, _ in reply.quick_replies] == ["ใช้เลย", "แก้เพิ่ม", "ทิ้ง"]
+
+        # ...and the conversation can still be finished afterwards.
+        await _say(client, "ใช้เลย")
+        assert [v["status"] for v in client._template_versions] == ["published"]
+
+    async def test_a_refusal_that_contains_the_word_use_is_still_a_refusal(self, store):
+        """"ไม่ใช้แบบนี้" holds "ใช้แบบนี้" inside it. Reading agreement
+        out of a refusal would be the worst possible way to fail."""
+        client = FakeDataClient(permission_keys=SALES_KEYS)
+        await _say(client, "ออกแบบใบเสนอราคา")
+        reply = await _say(client, "ไม่ใช้แบบนี้")
+        assert "ทิ้งร่างแล้ว" in reply.text
+        assert [v["status"] for v in client._template_versions] == ["previewed"]
+
+    async def test_an_unclear_answer_asks_rather_than_publishing(self, store):
+        client = FakeDataClient(permission_keys=SALES_KEYS)
+        await _say(client, "ออกแบบใบเสนอราคา")
+        reply = await _say(client, "โอเค")
+        assert [v["status"] for v in client._template_versions] == ["previewed"]
+        assert await client.get_pending_intent("CHN-S-000001", "sales") is not None
+        assert "ใช้เลย" in reply.text and "ทิ้ง" in reply.text
+
+    async def test_a_different_subject_still_moves_on(self, store):
+        """The other half of the rule: someone who abandons the design and
+        asks something else must get their answer, not the draft again."""
+        client = FakeDataClient(permission_keys=SALES_KEYS)
+        await _say(client, "ออกแบบใบเสนอราคา")
+        await _say(client, "ลูกค้าทั้งหมดมีใครบ้าง")
+        assert await client.get_pending_intent("CHN-S-000001", "sales") is None
+        assert [v["status"] for v in client._template_versions] == ["previewed"]
+
+
+class TestReadingAnAnswerAboutTheDraft:
+    """The decision table itself, so the boundaries are written down.
+
+    The two that matter most are at the ends: a refusal that CONTAINS a
+    confirmation must stay a refusal, and a sentence that merely mentions
+    templates on its way to a different question must still be a
+    different question — otherwise "keep the context" becomes a trap the
+    person cannot get out of.
+    """
+
+    @pytest.mark.parametrize("message,expected", [
+        ("ใช้เลย", "publish"),
+        ("ใช้เลยครับ", "publish"),
+        ("ยืนยันใช้แบบนี้", "publish"),
+        ("เอาอันนี้เลยครับ", "publish"),
+        ("ทิ้ง", "drop"),
+        ("ไม่ใช้แบบนี้", "drop"),
+        ("ยกเลิกเลยครับ", "drop"),
+        ("ขอดูก่อน", "look"),
+        ("ขอดูตัวอย่างก่อนนะ", "look"),
+        ("แก้เพิ่ม", "refine"),
+        ("ขอแก้หน่อยครับ", "refine"),
+        ("เพิ่มช่องเลขที่ผู้เสียภาษี", "edit"),
+        ("โอเค", "unclear"),
+        ("อันนี้", "unclear"),
+        ("ลูกค้าทั้งหมดมีใครบ้าง", "other"),
+        ("แบบฟอร์มมีกี่แบบ", "other"),
+        ("ขอดูใบเสนอราคาล่าสุด", "other"),
+    ])
+    def test_the_decision(self, message, expected):
+        from chann_app.services.chat import _template_draft_decision
+
+        assert _template_draft_decision(message) == expected
+
+
 class TestTheGates:
     async def test_without_setting_manage_the_flow_never_starts(self, store):
         client = FakeDataClient(permission_keys=NO_SETTING_KEYS)

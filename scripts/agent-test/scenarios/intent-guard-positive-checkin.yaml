@@ -1,0 +1,34 @@
+name: intent-guard-positive-checkin
+description: the other half of the intent guard - "ช่วยเช็คอินให้หน่อยได้ไหมครับ" is
+  an instruction, not an enquiry (owner, 9 Sep 2026), and the plain "เช็คอิน" is too.
+  The job must actually move to in progress.
+backend: fake
+actor:
+  oa: technician
+  role: technician
+  language: th
+  permissions: technician
+steps:
+- seed:
+    raw:
+      tickets:
+      - id: t1
+        ticket_number: T-2026-0001
+        status: assigned
+        accept_status: accepted
+        assigned_to_ref: member-1
+        customer_name: สมชาย
+        customer_phone: '0812345678'
+        service_address: 99/1 สุขุมวิท
+        issue_description: แอร์ไม่เย็น
+        scheduled_date: '2026-09-15'
+        scheduled_time: '10:00'
+- send: ช่วยเช็คอินให้หน่อยได้ไหมครับ
+  expect:
+    contains: เช็คอิน T-2026-0001 แล้ว
+    is_not: [generic_error, not_sure, permission, not_a_feature]
+- send: ข้อมูลงาน T-2026-0001
+  expect:
+    contains: ['T-2026-0001', กำลังทำ]
+    not_contains: [มอบหมายแล้ว]
+    is_not: [generic_error, permission]

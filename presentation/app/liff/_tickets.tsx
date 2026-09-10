@@ -4,6 +4,7 @@ import Link from "next/link";
 import { ReactNode } from "react";
 
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
+import { shortDate } from "./_list-controls";
 
 /**
  * Ticket presentation, shared by the technician and customer dashboards.
@@ -26,6 +27,16 @@ export type Ticket = {
   customer_phone?: string | null;
   service_address?: string | null;
   serial_number?: string | null;
+  /** The registered unit the fault is about — composed by the Application
+   *  tier from the warranty behind `serial_number` (owner, 10 ก.ย. 2569),
+   *  never stored on the ticket row. Absent on every ticket opened before
+   *  the link existed, and on any fault filed without a serial. */
+  product_name?: string | null;
+  warranty_number?: string | null;
+  warranty_end?: string | null;
+  /** "active" | "expired" | "void", derived by the Data tier from the real
+   *  end date on the Bangkok calendar — not recomputed here. */
+  warranty_status?: string | null;
   scheduled_date?: string | null;
   scheduled_time?: string | null;
   assigned_target_type?: string | null;
@@ -55,6 +66,28 @@ export function formatWhen(ticket: Ticket): string {
   return parts.join(" ") || "—";
 }
 
+/** "แอร์ 12000 BTU (S/N SN12345678) · อยู่ในประกันถึง 1 ม.ค. 70", or "" when
+ *  the ticket names no machine. Every ticket opened before the link
+ *  existed keeps a NULL product, so the caller drops the line entirely
+ *  rather than printing a label with nothing after it. */
+export function machineLine(
+  ticket: Ticket,
+  copy: { machine: string; inWarranty: string; outOfWarranty: string },
+  locale?: string,
+): string {
+  const serial = (ticket.serial_number ?? "").trim();
+  const name = (ticket.product_name ?? "").trim();
+  if (!serial && !name) return "";
+  let text = name || serial;
+  if (name && serial) text = `${name} (S/N ${serial})`;
+  if (ticket.warranty_status === "active" && ticket.warranty_end) {
+    text = `${text} · ${copy.inWarranty} ${shortDate(ticket.warranty_end, locale)}`;
+  } else if (ticket.warranty_status === "expired" || ticket.warranty_status === "void") {
+    text = `${text} · ${copy.outOfWarranty}`;
+  }
+  return `${copy.machine}: ${text}`;
+}
+
 export function TicketRow({
   ticket,
   href,
@@ -66,7 +99,10 @@ export function TicketRow({
   statusLabel: string;
   action?: ReactNode;
 }) {
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
+  // Which machine, and whether it is still covered: a technician looking
+  // at their queue should not have to open the job to find out.
+  const machine = machineLine(ticket, t.dashboard.tickets, locale);
   const body = (
     <span className="row-body">
       <span className="card-title">
@@ -76,6 +112,7 @@ export function TicketRow({
         </span>
       </span>
       <span className="card-meta">{ticket.issue_description}</span>
+      {machine && <span className="card-meta">{machine}</span>}
       {ticket.scheduled_date && (
         <span className="card-meta">
           {t.dashboard.tickets.scheduled}: {formatWhen(ticket)}

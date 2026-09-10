@@ -16,23 +16,23 @@ _EN: Set the shop up — "shop info" (the code customers link with) · "invite t
 
 ## 2. บันทึกเครื่องที่ขาย
 
-"ลงทะเบียนสินค้า SN12345678 แอร์ ให้ลูกค้า สมชาย" — ลูกค้าจึงพิมพ์ S/N นี้ผูกเครื่องได้ · "รายการประกัน" ดูทั้งหมด
+"ลงทะเบียนสินค้า SN12345678 แอร์ ให้ลูกค้า สมชาย" — ลูกค้าจึงพิมพ์ S/N นี้ผูกเครื่องได้ · "รายการประกัน" ดูทั้งหมด · เวลาลูกค้าโทรมาแล้วคุณเปิดงานให้ ("เปิดงานให้ สมชาย แอร์ไม่เย็น") ระบบจะผูกงานกับเครื่องที่ลูกค้าคนนั้นลงทะเบียนไว้ให้เอง ถ้ามีหลายเครื่องจะมีปุ่มให้เลือก
 
 พิมพ์: `ลงทะเบียนสินค้า SN12345678 แอร์ ให้ลูกค้า สมชาย`
 
 [IMAGE: sales-units — ตารางเครื่องที่ลงทะเบียน: S/N, สินค้า, สถานะ 'ลูกค้าผูกแล้ว' / 'ยังไม่มีลูกค้าผูก' ธีมเขียว]
 
-_EN: Record sold units — "register product SN12345678 aircon for Somchai" — the customer then attaches it by typing the S/N · "warranties" lists them_
+_EN: Record sold units — "register product SN12345678 aircon for Somchai" — the customer then attaches it by typing the S/N · "warranties" lists them · a job you open for them by phone ("open a job for Somchai, air con not cooling") is linked to their registered unit, with buttons when they have several_
 
 ## 3. งานซ่อม: มอบหมาย
 
-ลูกค้าแจ้งซ่อมแล้วคุณได้ LINE · "รายการงาน" ดูคิว · "มอบหมาย T-2026-0001 ให้ทีม แอร์" (ต้องมีชื่อ เบอร์ ที่อยู่ นัดครบ ระบบบอกถ้าขาด) · หรือทำบนแดชบอร์ด > งานซ่อม
+ลูกค้าแจ้งซ่อมแล้วคุณได้ LINE พร้อมชื่อเครื่องและสถานะประกัน · "รายการงาน" ดูคิว · "มอบหมาย T-2026-0001 ให้ทีม แอร์" (ต้องมีชื่อ เบอร์ ที่อยู่ นัดครบ ระบบบอกถ้าขาด) · ไม่ต้องพิมพ์เลขเต็มก็ได้: "มอบหมาย 0001 ให้ช่าง" หรือ reply ข้อความแจ้งซ่อมนั้นแล้วพิมพ์ "มอบหมายให้ช่าง" ระบบจะถามว่าให้ช่างคนไหนพร้อมปุ่มเลือก · หรือทำบนแดชบอร์ด > งานซ่อม
 
 พิมพ์: `มอบหมาย T-2026-0001 ให้ทีม แอร์`
 
 [IMAGE: sales-dispatch — หน้าจอ 'งานซ่อม' บนแดชบอร์ด การ์ดงาน T-2026-0001 มีช่อง 'มอบหมายให้…' เลือกทีมแอร์ และปุ่มมอบหมายสีเขียว]
 
-_EN: Repairs: dispatch — You hear when a customer reports · "tickets" for the queue · "assign T-2026-0001 to team AC" (name, phone, address, appointment required — it tells you what is missing) · or dashboard > tickets_
+_EN: Repairs: dispatch — You hear when a customer reports, with the machine and its warranty state · "tickets" for the queue · "assign T-2026-0001 to team AC" (name, phone, address, appointment required — it tells you what is missing) · the short number works too, and so does replying to the report and typing "assign to a technician" — it asks which one · or dashboard > tickets_
 
 ## 4. แชทลูกค้า
 

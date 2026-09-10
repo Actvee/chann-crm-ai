@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { FieldRow } from "../../_field-row";
-import { Ticket, formatWhen, ticketStage } from "../../_tickets";
+import { Ticket, formatWhen, machineLine, ticketStage } from "../../_tickets";
 import { dispatchFieldLabels, useFailureText } from "../_format";
 import { proxyHeaders } from "../_lib";
 import { useSalesSession } from "../_session";
@@ -43,7 +43,7 @@ const OPEN_STATUSES = ["open", "assigned", "in_progress"];
  * transaction and the same LINE to the technician.
  */
 export default function SalesTickets({ liffId }: { liffId: string }) {
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
   const s = useSalesText();
   const failureText = useFailureText();
   const copy = t.dashboard.tickets;
@@ -294,6 +294,9 @@ export default function SalesTickets({ liffId }: { liffId: string }) {
                 </span>
               </div>
               <div className="card-meta">{ticket.issue_description}</div>
+              {machineLine(ticket, copy, locale) && (
+                <div className="card-meta">{machineLine(ticket, copy, locale)}</div>
+              )}
               {ticket.customer_name && (
                 <div className="card-meta">
                   {ticket.customer_name}

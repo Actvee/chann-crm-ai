@@ -61,6 +61,39 @@ type InUse = {
 const NO_TEMPLATES: Template[] = [];
 
 /**
+ * A tenant's template inside a page that cannot be affected by it.
+ *
+ * `sandbox=""` grants nothing at all — no scripts, no forms, no
+ * navigation, no same-origin access — which is the same thing the inline
+ * preview on this page already does. The wrapper is ours, the template
+ * is the iframe's, and the two share nothing.
+ *
+ * Only `&` and `"` need escaping to put a whole document inside an
+ * attribute: `&` first so the escape of `"` is not itself re-escaped.
+ * `<` and `>` are attribute-safe and must stay as they are, or the
+ * template would render as its own source.
+ *
+ * The known limit: printing from here prints the wrapper, so a template
+ * taller than the page prints only what fits. The preview is one sample
+ * document, and an isolated preview that prints one page is a better
+ * trade than an unsandboxed one that prints two.
+ */
+function sandboxedPage(html: string): string {
+  const srcdoc = html.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+  return [
+    "<!doctype html><html><head><meta charset=\"utf-8\">",
+    '<meta name="viewport" content="width=device-width, initial-scale=1">',
+    "<title>Preview</title>",
+    "<style>html,body{margin:0;padding:0;height:100%;background:#fff}",
+    "iframe{display:block;border:0;width:100%;height:100%}",
+    "@media print{html,body{height:auto}iframe{height:297mm}}</style>",
+    "</head><body>",
+    `<iframe sandbox="" title="Preview" srcdoc="${srcdoc}"></iframe>`,
+    "</body></html>",
+  ].join("");
+}
+
+/**
  * A shop's own document layouts.
  *
  * Three questions this page has to answer, in order: what can go in the
@@ -419,11 +452,21 @@ export default function DocumentTemplates({ liffId }: { liffId: string }) {
 
   /** The preview in the phone's own browser, for printing or sharing.
    *  A blob URL, because the HTML is already in hand and the preview
-   *  route needs a session header a plain navigation cannot send. */
+   *  route needs a session header a plain navigation cannot send.
+   *
+   *  What is opened is a wrapper page, not the template. Review v3, T02:
+   *  this used to hand the template's own HTML straight to openExternal,
+   *  so the one place a tenant's markup got a top-level browsing context
+   *  was the one place it had no sandbox — while the preview six inches
+   *  above it on this same page was correctly sandboxed. The wrapper puts
+   *  it back inside `sandbox=""`, exactly as the inline preview does, so
+   *  both routes to the same bytes are isolated the same way. */
   function openPreviewExternally() {
     if (!preview) return;
     const url = URL.createObjectURL(
-      new Blob([preview.html], { type: "text/html;charset=utf-8" }),
+      new Blob([sandboxedPage(preview.html)], {
+        type: "text/html;charset=utf-8",
+      }),
     );
     openExternal(url);
     // Long enough for the new tab to have fetched it; revoking

@@ -17,8 +17,10 @@ sys.path.insert(0, str(ROOT / "application"))
 from chann_app.services.thai_datetime import (  # noqa: E402
     format_thai_date,
     format_thai_time,
+    looks_like_a_time_attempt,
     parse_thai_date,
     parse_thai_time,
+    thai_number_words,
     to_gregorian_year,
 )
 
@@ -233,3 +235,84 @@ class TestReviewA11:
         assert parse_thai_date("15 ก.ย. 2569", self.TODAY) == date(2026, 9, 15)
         assert parse_thai_date("15/9/69", self.TODAY) == date(2026, 9, 15)
         assert parse_thai_date("15/09/2569", self.TODAY) == date(2026, 9, 15)
+
+
+class TestTheHoursThatWereReadWrong:
+    """Review v3, B06. Every one of these was stored as a time the person
+    did not say — either shifted by twelve hours or replaced outright by
+    the 09:00 default, with nothing in the reply to show it had happened.
+    """
+
+    DATED = "15 ก.ย. 2569 "  # the shape the appointment prompt is answered in
+
+    def test_midnight_is_not_noon(self):
+        assert parse_thai_time("เที่ยงคืน") == time(0, 0)
+        assert parse_thai_time("เที่ยงคืนครึ่ง") == time(0, 30)
+        assert parse_thai_time(self.DATED + "เที่ยงคืน") == time(0, 0)
+        # The noon it used to be confused with still reads as noon.
+        assert parse_thai_time("เที่ยง") == time(12, 0)
+        assert parse_thai_time("เที่ยงครึ่ง") == time(12, 30)
+
+    def test_a_bare_thum_is_the_first_one(self):
+        assert parse_thai_time("ทุ่มครึ่ง") == time(19, 30)
+        assert parse_thai_time("ทุ่ม") == time(19, 0)
+        assert parse_thai_time(self.DATED + "ทุ่มครึ่ง") == time(19, 30)
+        # Counted evenings are unchanged.
+        assert parse_thai_time("2 ทุ่ม") == time(20, 0)
+        assert parse_thai_time("สามทุ่มครึ่ง") == time(21, 30)
+
+    def test_the_small_hours(self):
+        assert parse_thai_time("ตีสอง") == time(2, 0)
+        assert parse_thai_time("ตี 2") == time(2, 0)
+        assert parse_thai_time("ตีห้าครึ่ง") == time(5, 30)
+        assert parse_thai_time(self.DATED + "ตีสอง") == time(2, 0)
+        # ตี only goes to five; anything else is not a reading to guess at.
+        assert parse_thai_time("ตีสิบสอง") is None
+
+    def test_am_and_pm(self):
+        assert parse_thai_time("2 pm") == time(14, 0)
+        assert parse_thai_time("2:30pm") == time(14, 30)
+        assert parse_thai_time("9am") == time(9, 0)
+        assert parse_thai_time("12:15 am") == time(0, 15)
+        assert parse_thai_time("12 pm") == time(12, 0)
+        assert parse_thai_time(self.DATED + "2 pm") == time(14, 0)
+        assert parse_thai_time(self.DATED + "2:30pm") == time(14, 30)
+
+    def test_nalika_with_a_number_word(self):
+        assert parse_thai_time("สิบสี่นาฬิกา") == time(14, 0)
+        assert parse_thai_time("ยี่สิบสองนาฬิกา") == time(22, 0)
+        assert parse_thai_time("14 นาฬิกา 30 นาที") == time(14, 30)
+        assert parse_thai_time(self.DATED + "สิบสี่นาฬิกา") == time(14, 0)
+
+    def test_the_number_words_go_past_twelve(self):
+        words = thai_number_words(24)
+        assert words["สิบสี่"] == 14
+        assert words["สิบเอ็ด"] == 11
+        assert words["ยี่สิบ"] == 20
+        assert words["ยี่สิบสี่"] == 24
+
+    def test_a_year_in_the_sentence_is_never_the_hour(self):
+        """"2569 ทุ่มครึ่ง" is 19:30 — the 69 is part of the year."""
+        assert parse_thai_time("15 ก.ย. 2569 ทุ่มครึ่ง") == time(19, 30)
+        assert parse_thai_date("15 ก.ย. 2569 ตีสอง", date(2026, 9, 6)) == date(2026, 9, 15)
+
+
+class TestTellingSilenceApartFromAMisreading:
+    """The 09:00 default belongs to a message with no time in it. A time
+    that WAS given and could not be read has to be asked again instead —
+    booking 09:00 over it is the silent wrong answer (review v3, B06)."""
+
+    def test_no_time_at_all_is_not_an_attempt(self):
+        assert looks_like_a_time_attempt("พรุ่งนี้") is False
+        assert looks_like_a_time_attempt("15 ก.ย. 2569") is False
+        assert looks_like_a_time_attempt("99/1 ถนนสุขุมวิท") is False
+        assert looks_like_a_time_attempt("") is False
+
+    def test_an_hour_that_cannot_exist_is_an_attempt(self):
+        for said in ("บ่าย 9", "ตีสิบสอง", "25:00", "10:75", "13 pm"):
+            assert parse_thai_time(said) is None, said
+            assert looks_like_a_time_attempt(said) is True, said
+
+    def test_a_time_that_reads_is_an_attempt_too(self):
+        assert looks_like_a_time_attempt("บ่ายสองครึ่ง") is True
+        assert looks_like_a_time_attempt("15 ก.ย. 2569 ๑๔:๐๐") is True

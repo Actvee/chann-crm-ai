@@ -333,3 +333,32 @@ class TestMessageActions:
     def test_quick_reply_payload_counts_as_an_action(self):
         from agent_test_runner.assertions import Outcome, check
         assert not check({'actions_include':'C-2026-0001'}, Outcome(quick_replies=[('ดู','ข้อมูลลูกค้า C-2026-0001')]))
+
+
+class TestTheDocumentedCommandBootstrapsItself:
+    """A command the docs tell people to run must work on its own.
+
+    Review v3, T05: running this file alone failed
+    `test_the_model_key_is_replaced_not_defaulted` with
+    ModuleNotFoundError, and passed in a full run only because another
+    test file collected earlier had put the tiers on `sys.path`. A gate
+    that is green for a reason unrelated to the code under test is not a
+    gate. `tests/unit/conftest.py` now does the inserts; this proves it
+    from a fresh interpreter with no PYTHONPATH, which is the only way to
+    see the difference.
+    """
+
+    def test_a_single_file_run_needs_no_pythonpath(self):
+        import os
+
+        env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+        result = subprocess.run(
+            [
+                sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+                "tests/unit/test_agent_test_channel.py::"
+                "TestNoScenarioCanReachTheOutsideWorld::"
+                "test_the_model_key_is_replaced_not_defaulted",
+            ],
+            cwd=str(ROOT), env=env, capture_output=True, text=True,
+        )
+        assert result.returncode == 0, result.stdout[-3000:] + result.stderr[-2000:]

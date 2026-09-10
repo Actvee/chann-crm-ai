@@ -49,7 +49,6 @@ ACCEPTED_OMISSIONS: dict[tuple[str, str], str] = {
     ("TicketOut", "created_by"): "internal actor reference; owner_member_id is the field the app uses",
     ("WarrantyOut", "customer_chann_uid"): "the warranty list route builds its own dict and sends it there",
     ("WarrantyOut", "contact_id"): "the warranty list route builds its own dict; the app reads the customer link, not the id",
-    ("WarrantyOut", "product_id"): "the warranty list route builds its own dict with product_name",
     ("WarrantyOut", "pdf_path"): "storage path, never sent to a browser",
     ("WarrantyOut", "generated_document_id"): "issued-document link, read through the documents routes",
 }
@@ -99,6 +98,11 @@ COMPOSED_FIELDS = {
     # an asset link to the Word file the version was compiled from, or null
     "source_docx_url",
     "keys",  # picker options, local only
+    # services/ticket_machine.py adds it to each row of GET tickets: the
+    # cover state of the unit the fault is about, taken from the warranty
+    # behind the ticket's serial. product_name/warranty_number/warranty_end
+    # come from the same place and already exist as WarrantyOut fields.
+    "warranty_status",
 }
 
 problems: list[str] = []

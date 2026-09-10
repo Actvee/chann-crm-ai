@@ -93,6 +93,18 @@ class WebhookEventIn(BaseModel):
     oa: str
 
 
+class WebhookEventStateIn(BaseModel):
+    """What an attempt did with an event it had claimed.
+
+    `handled` carries the answer that still has to be delivered, so a
+    later attempt can send it without running the business handler again
+    (review v3, T01).
+    """
+
+    state: str
+    reply: dict | None = None
+
+
 class PlatformAdminAuthOut(BaseModel):
     admin_id: uuid.UUID
     username: str
@@ -1113,6 +1125,9 @@ class WarrantyOut(BaseModel):
     warranty_number: str
     serial_number: str
     product_name: str | None = None
+    # Sent since 10 ก.ย. 2569 so a fault report can carry the catalogue
+    # row of the unit the customer registered, not just its name.
+    product_id: str | None = None
     warranty_start: str
     warranty_end: str
     status: str

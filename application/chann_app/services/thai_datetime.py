@@ -234,22 +234,117 @@ def _explicit_date(cleaned: str, today: date) -> date | None:
     return None
 
 
+# Thai number words a clock can hold: 0–24, built the way a person says
+# them. The old table stopped at สิบสอง, so "สิบสี่นาฬิกา" folded as สิบ=10
+# and then สี่=4 next to นาฬิกา, and the reading that came out was 04:00 —
+# ten hours from what was said, and never announced (review v3, B06).
+_CLOCK_ONES = ("หนึ่ง", "สอง", "สาม", "สี่", "ห้า", "หก", "เจ็ด", "แปด", "เก้า")
+
+
+def thai_number_words(limit: int) -> dict[str, int]:
+    """{"สิบสี่": 14, …} up to `limit`, spoken the ordinary way.
+
+    Shared with the line-item parser in chat.py, which needs the same
+    table to read "อีกสามตัว" as three: one list of Thai numbers, so a
+    word understood by the clock is understood by a quantity too.
+    """
+    words: dict[str, int] = {"ศูนย์": 0}
+    for value, one in enumerate(_CLOCK_ONES, start=1):
+        words[one] = value
+    for tens in range(1, limit // 10 + 1):
+        stem = "สิบ" if tens == 1 else ("ยี่สิบ" if tens == 2 else _CLOCK_ONES[tens - 1] + "สิบ")
+        if tens * 10 <= limit:
+            words[stem] = tens * 10
+        for unit, one in enumerate(_CLOCK_ONES, start=1):
+            value = tens * 10 + unit
+            if value > limit:
+                break
+            words[stem + ("เอ็ด" if unit == 1 else one)] = value
+    return words
+
+
+_CLOCK_WORDS = thai_number_words(24)
+# Longest first: "สิบสี่" has to win over "สิบ", or one spoken number is
+# folded as two.
+_CLOCK_WORDS_RE = "|".join(sorted(_CLOCK_WORDS, key=len, reverse=True))
+_THAI_DIGITS = str.maketrans("๐๑๒๓๔๕๖๗๘๙", "0123456789")
+
+
+def _fold_clock_words(text: str) -> str:
+    """Number WORDS turned into digits, and only next to a clock unit.
+
+    Never inside a person's name, an address or a date: บ่ายสอง is 14:00,
+    but สมสองใจ is a name and สองพี่น้อง is a place.
+    """
+    folded = re.sub(
+        r"(บ่าย|ตี)\s*(" + _CLOCK_WORDS_RE + r")",
+        lambda m: m[1] + str(_CLOCK_WORDS[m[2]]), text,
+    )
+    return re.sub(
+        r"(" + _CLOCK_WORDS_RE + r")(?=\s*(?:โมง|ทุ่ม|นาฬิกา))",
+        lambda m: str(_CLOCK_WORDS[m[1]]), folded,
+    )
+
+
+def _clock_text(text: str) -> str:
+    """The sentence as the clock rules want to read it."""
+    return _fold_clock_words((text or "").strip().lower().translate(_THAI_DIGITS))
+
+
+# Something in the sentence is meant as a clock reading, whether or not it
+# parses. This is what tells "no time was given" — where the owner's rule
+# says 09:00 — apart from "a time was given and could not be read", where
+# 09:00 is a booking the person never asked for.
+_TIME_CUE_RE = re.compile(
+    r"\d{1,2}\s*[:.]\s*\d{2}"
+    r"|(?<!\d)\d{1,2}\s*(?:น\.|นาฬิกา|โมง|ทุ่ม|a\.?m\.?|p\.?m\.?)(?![a-z])"
+    r"|โมง|ทุ่ม|นาฬิกา|เที่ยง|ตี\s*\d"
+    r"|เช้า|สาย|บ่าย|เย็น|ค่ำ",
+    re.I,
+)
+
+
+def looks_like_a_time_attempt(text: str) -> bool:
+    """Was the person TRYING to state a time, even if it did not parse?
+
+    "บ่าย 9" and "ตีสิบสอง" are attempts with an hour that cannot exist —
+    the right answer is to ask again, not to write 09:00 over them.
+    "พรุ่งนี้" is not an attempt at all, and there the 09:00 default is
+    exactly what the owner asked for.
+    """
+    return bool(_TIME_CUE_RE.search(_clock_text(text)))
+
+
 def parse_thai_time(text: str) -> time | None:
-    """A clock time from Thai text, or None for a whole-day reminder."""
+    """A clock time from Thai text, or None when none could be read.
+
+    None means two different things to a caller and they must be told
+    apart with `looks_like_a_time_attempt`: nothing was said about the
+    time, so the caller's default applies — or something was said and this
+    could not read it, which has to be asked again.
+    """
     if not text:
         return None
-    cleaned = text.strip().lower().translate(str.maketrans("๐๑๒๓๔๕๖๗๘๙", "0123456789"))
-    # Fold number WORDS only next to clock units, never inside a person's
-    # name, address or date. บ่ายสอง is 14:00, not the vague บ่าย = 13:00.
-    clock_words = {
-        "หนึ่ง": 1, "สอง": 2, "สาม": 3, "สี่": 4, "ห้า": 5, "หก": 6,
-        "เจ็ด": 7, "แปด": 8, "เก้า": 9, "สิบ": 10, "สิบเอ็ด": 11, "สิบสอง": 12,
-    }
-    words = "|".join(sorted(clock_words, key=len, reverse=True))
-    cleaned = re.sub(r"(บ่าย|ตี)\s*(" + words + r")",
-                     lambda m: m[1] + str(clock_words[m[2]]), cleaned)
-    cleaned = re.sub(r"(" + words + r")(?=\s*(?:โมง|ทุ่ม|นาฬิกา))",
-                     lambda m: str(clock_words[m[1]]), cleaned)
+    cleaned = _clock_text(text)
+
+    # Midnight. "เที่ยงคืน" contains "เที่ยง", so the vague-word table at the
+    # bottom answered 12:00 — twelve hours out, on the wrong side of the
+    # day, for the one phrasing where being wrong is most obvious to the
+    # person and least visible to us (review v3, B06).
+    if "เที่ยงคืน" in cleaned:
+        return time(0, 30) if re.search(r"เที่ยงคืน\s*ครึ่ง", cleaned) else time(0, 0)
+
+    # "2 pm" / "2:30pm" / "9 a.m." — typed by anyone with an English
+    # keyboard habit. Ahead of the 24-hour reading below, which took
+    # "2:30pm" for 02:30 and booked a visit twelve hours early.
+    ampm = re.search(
+        r"(?<!\d)(\d{1,2})(?:[:.](\d{2}))?\s*(a\.?m\.?|p\.?m\.?)(?![a-z])", cleaned,
+    )
+    if ampm:
+        hour, minute = int(ampm.group(1)), int(ampm.group(2) or 0)
+        if 1 <= hour <= 12 and 0 <= minute <= 59:
+            return time(hour % 12 + (12 if ampm.group(3).startswith("p") else 0), minute)
+        return None
 
     # "14:00" / "14.00" / "9:30 น."
     explicit = re.search(r"(\d{1,2})[:.](\d{2})", cleaned)
@@ -263,9 +358,18 @@ def parse_thai_time(text: str) -> time | None:
     def _half(pattern: str, hour: int) -> time:
         return time(hour, 30 if re.search(pattern + r"\s*(?:โมง)?\s*ครึ่ง", cleaned) else 0)
 
+    # "ตี 2" / "ตีห้าครึ่ง" — the small hours. Nothing here read them at
+    # all, so every one of them fell to the caller's 09:00 (review v3).
+    small_hours = re.search(r"ตี\s*(\d{1,2})(?!\d)", cleaned)
+    if small_hours:
+        hour = int(small_hours.group(1))
+        if 1 <= hour <= 5:
+            return _half(re.escape(small_hours.group(0)), hour)
+        return None
+
     # "บ่าย 2" / "บ่ายสองโมง" style: the vague word plus a number. Handled
     # before the bare vague words so "บ่าย 3" is 15:00, not 13:00.
-    afternoon = re.search(r"บ่าย\s*(\d{1,2})", cleaned)
+    afternoon = re.search(r"บ่าย\s*(\d{1,2})(?!\d)", cleaned)
     if afternoon:
         hour = int(afternoon.group(1))
         if 1 <= hour <= 6:
@@ -276,13 +380,13 @@ def parse_thai_time(text: str) -> time | None:
     if re.search(r"บ่ายโมง", cleaned):
         return _half(r"บ่ายโมง", 13)
 
-    morning = re.search(r"(\d{1,2})\s*โมงเช้า", cleaned)
+    morning = re.search(r"(?<!\d)(\d{1,2})\s*โมงเช้า", cleaned)
     if morning:
         hour = int(morning.group(1))
         if 6 <= hour <= 11:
             return _half(re.escape(morning.group(0)), hour)
 
-    evening_hour = re.search(r"(\d{1,2})\s*โมงเย็น", cleaned)
+    evening_hour = re.search(r"(?<!\d)(\d{1,2})\s*โมงเย็น", cleaned)
     if evening_hour:
         hour = int(evening_hour.group(1))
         if 1 <= hour <= 6:
@@ -290,16 +394,21 @@ def parse_thai_time(text: str) -> time | None:
         if 13 <= hour <= 18:
             return _half(re.escape(evening_hour.group(0)), hour)
 
-    count = re.search(r"(\d{1,2})\s*ทุ่ม", cleaned)
+    count = re.search(r"(?<!\d)(\d{1,2})\s*ทุ่ม", cleaned)
     if count:
         hour = int(count.group(1))
         if 1 <= hour <= 5:
             return _half(re.escape(count.group(0)), hour + 18)
+    elif "ทุ่ม" in cleaned:
+        # A bare "ทุ่ม" is the first one: "ทุ่มครึ่ง" is 19:30. Nothing
+        # matched it without a number in front, so it became 09:00 —
+        # ten and a half hours early (review v3, B06).
+        return _half(r"(?<!\d)ทุ่ม", 19)
 
     # "10 โมง" with no qualifier (review, 6 Sep 2026: it fell to the 09:00
     # default). Spoken Thai: 6–11 โมง is the morning, 1–5 โมง the afternoon
     # (บ่ายโมง … ห้าโมง), and a 24-hour figure is itself.
-    plain = re.search(r"(\d{1,2})\s*โมง", cleaned)
+    plain = re.search(r"(?<!\d)(\d{1,2})\s*โมง", cleaned)
     if plain:
         hour = int(plain.group(1))
         if 1 <= hour <= 5:
@@ -307,8 +416,19 @@ def parse_thai_time(text: str) -> time | None:
         if 6 <= hour <= 23:
             return _half(re.escape(plain.group(0)), hour)
 
+    # "14 นาฬิกา" / "สิบสี่นาฬิกา" / "14 นาฬิกา 30 นาที" — the 24-hour form
+    # spoken aloud.
+    oclock = re.search(r"(?<!\d)(\d{1,2})\s*นาฬิกา(?:\s*(\d{1,2})\s*นาที)?", cleaned)
+    if oclock:
+        hour, minute = int(oclock.group(1)), int(oclock.group(2) or 0)
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            if oclock.group(2) is None:
+                return _half(re.escape(oclock.group(0)), hour)
+            return time(hour, minute)
+        return None
+
     # "14 น." — a bare hour with the Thai hour marker.
-    bare = re.search(r"(\d{1,2})\s*น\.?(?!\d)", cleaned)
+    bare = re.search(r"(?<!\d)(\d{1,2})\s*น\.?(?!\d)", cleaned)
     if bare:
         hour = int(bare.group(1))
         if 0 <= hour <= 23:

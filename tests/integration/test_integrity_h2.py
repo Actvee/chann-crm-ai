@@ -14,6 +14,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -311,6 +312,92 @@ class TestPlatformAndWebhook:
             session.add(LineWebhookEvent(event_id=event_id, oa="customer"))
             with pytest.raises(IntegrityError):
                 session.commit()
+
+
+class TestAWebhookEventCarriesWhatHappenedToIt:
+    """Review v3, T01, on real PostgreSQL.
+
+    `tests/unit/test_review_v3_hardening.py` proves the Application tier's
+    behaviour against a store in memory. This proves the four answers the
+    claim endpoint actually gives, with the real row lock, the real unique
+    violation and the real JSONB column underneath them.
+    """
+
+    def _claim(self, tenant, event_id):
+        from chann_data.routers.internal import record_webhook_event
+        from chann_data.schemas import WebhookEventIn
+
+        with tenant["session"]() as session:
+            try:
+                return record_webhook_event(
+                    WebhookEventIn(event_id=event_id, oa="customer"), session,
+                )
+            except HTTPException as exc:
+                return exc.detail
+
+    def _finish(self, tenant, event_id, state, reply=None):
+        from chann_data.routers.internal import set_webhook_event_state
+        from chann_data.schemas import WebhookEventStateIn
+
+        with tenant["session"]() as session:
+            return set_webhook_event_state(
+                event_id, WebhookEventStateIn(state=state, reply=reply), session,
+            )
+
+    def test_a_failed_attempt_releases_the_event_for_the_next_delivery(self, tenant):
+        event_id = f"evt-{uuid.uuid4().hex}"
+        assert self._claim(tenant, event_id)["state"] == "new"
+        # Still held: a redelivery arriving mid-flight must not run too.
+        assert self._claim(tenant, event_id)["state"] == "in_progress"
+        self._finish(tenant, event_id, "failed")
+        assert self._claim(tenant, event_id)["state"] == "new"
+
+    def test_a_completed_event_is_a_duplicate_forever(self, tenant):
+        event_id = f"evt-{uuid.uuid4().hex}"
+        assert self._claim(tenant, event_id)["state"] == "new"
+        self._finish(tenant, event_id, "done")
+        assert self._claim(tenant, event_id)["state"] == "duplicate"
+
+    def test_an_undelivered_answer_comes_back_with_the_claim(self, tenant):
+        event_id = f"evt-{uuid.uuid4().hex}"
+        self._claim(tenant, event_id)
+        owed = {"oa": "customer", "to": "line-user", "text": "ตอบแล้ว",
+                "messages": [{"type": "text", "text": "ตอบแล้ว"}]}
+        self._finish(tenant, event_id, "handled", owed)
+
+        claim = self._claim(tenant, event_id)
+        assert claim["state"] == "reply_pending"
+        assert claim["reply"]["messages"] == owed["messages"]
+
+        self._finish(tenant, event_id, "done")
+        assert self._claim(tenant, event_id)["state"] == "duplicate"
+
+    def test_a_handled_event_is_never_released(self, tenant):
+        """The business effect already happened. Releasing the row would
+        let a redelivery do it a second time, which is the whole thing
+        the table exists to prevent."""
+        event_id = f"evt-{uuid.uuid4().hex}"
+        self._claim(tenant, event_id)
+        self._finish(tenant, event_id, "handled", {"messages": [{"type": "text", "text": "x"}]})
+        self._finish(tenant, event_id, "failed")
+        assert self._claim(tenant, event_id)["state"] == "reply_pending"
+
+    def test_a_stale_claim_is_taken_over(self, tenant):
+        """A process that died holding the claim must not strand the event."""
+        from datetime import timedelta
+
+        from chann_data.models import LineWebhookEvent
+        from chann_data.routers.internal import WEBHOOK_CLAIM_LEASE_SECONDS
+
+        event_id = f"evt-{uuid.uuid4().hex}"
+        assert self._claim(tenant, event_id)["state"] == "new"
+        with tenant["session"]() as session:
+            row = session.get(LineWebhookEvent, event_id)
+            row.claimed_at = datetime.now(timezone.utc) - timedelta(
+                seconds=WEBHOOK_CLAIM_LEASE_SECONDS + 60,
+            )
+            session.commit()
+        assert self._claim(tenant, event_id)["state"] == "new"
 
 
 class TestRunningNumbers:

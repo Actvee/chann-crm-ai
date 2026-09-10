@@ -100,8 +100,8 @@ GUIDES: dict[str, dict] = {
             {
                 "key": "report", "title": {"th": "แจ้งซ่อม", "en": "Report a fault"},
                 "body": {
-                    "th": "พิมพ์อาการที่เสียมาได้เลย เช่น \"แอร์ไม่เย็น\" ระบบจะเลือกเครื่องให้ (หรือให้กดเลือกถ้ามีหลายเครื่อง) แล้วถามที่อยู่และวันเวลานัด · ส่งรูปอาการมาในแชทได้ ระบบแนบกับงานให้ช่างดู",
-                    "en": "Describe what is wrong, e.g. \"air con not cooling\". The machine is picked for you, then address and appointment are asked.",
+                    "th": "พิมพ์อาการที่เสียมาได้เลย เช่น \"แอร์ไม่เย็น\" ระบบจะเลือกเครื่องให้ (หรือให้กดเลือกถ้ามีหลายเครื่อง) แล้วบอกกลับว่างานนี้ผูกกับเครื่องไหนและยังอยู่ในประกันหรือไม่ จากนั้นถามที่อยู่และวันเวลานัด · ถ้าไม่มีหมายเลขเครื่อง กด \"ไม่มีหมายเลขเครื่อง\" ได้ ระบบจะแจ้งว่างานนี้ยังไม่ได้ผูกกับเครื่องที่ลงทะเบียน · ส่งรูปอาการมาในแชทได้ ระบบแนบกับงานให้ช่างดู",
+                    "en": "Describe what is wrong, e.g. \"air con not cooling\". The machine is picked for you (or you tap which one), the reply names it and says whether it is still under warranty, then address and appointment are asked. With no serial, the job is filed and says so.",
                 },
                 "commands": ["แจ้งซ่อม", "ไม่มีหมายเลขเครื่อง"],
                 "example": "แอร์ไม่เย็น มีน้ำหยด",
@@ -228,8 +228,8 @@ GUIDES: dict[str, dict] = {
             {
                 "key": "units", "title": {"th": "บันทึกเครื่องที่ขาย", "en": "Record sold units"},
                 "body": {
-                    "th": "\"ลงทะเบียนสินค้า SN12345678 แอร์ ให้ลูกค้า สมชาย\" — ลูกค้าจึงพิมพ์ S/N นี้ผูกเครื่องได้ · \"รายการประกัน\" ดูทั้งหมด",
-                    "en": "\"register product SN12345678 aircon for Somchai\" — the customer then attaches it by typing the S/N · \"warranties\" lists them",
+                    "th": "\"ลงทะเบียนสินค้า SN12345678 แอร์ ให้ลูกค้า สมชาย\" — ลูกค้าจึงพิมพ์ S/N นี้ผูกเครื่องได้ · \"รายการประกัน\" ดูทั้งหมด · เวลาลูกค้าโทรมาแล้วคุณเปิดงานให้ (\"เปิดงานให้ สมชาย แอร์ไม่เย็น\") ระบบจะผูกงานกับเครื่องที่ลูกค้าคนนั้นลงทะเบียนไว้ให้เอง ถ้ามีหลายเครื่องจะมีปุ่มให้เลือก",
+                    "en": "\"register product SN12345678 aircon for Somchai\" — the customer then attaches it by typing the S/N · \"warranties\" lists them · a job you open for them by phone (\"open a job for Somchai, air con not cooling\") is linked to their registered unit, with buttons when they have several",
                 },
                 "commands": ["ลงทะเบียนสินค้า", "รายการประกัน"],
                 "example": "ลงทะเบียนสินค้า SN12345678 แอร์ ให้ลูกค้า สมชาย",
@@ -239,8 +239,8 @@ GUIDES: dict[str, dict] = {
             {
                 "key": "dispatch", "title": {"th": "งานซ่อม: มอบหมาย", "en": "Repairs: dispatch"},
                 "body": {
-                    "th": "ลูกค้าแจ้งซ่อมแล้วคุณได้ LINE · \"รายการงาน\" ดูคิว · \"มอบหมาย T-2026-0001 ให้ทีม แอร์\" (ต้องมีชื่อ เบอร์ ที่อยู่ นัดครบ ระบบบอกถ้าขาด) · หรือทำบนแดชบอร์ด > งานซ่อม",
-                    "en": "You hear when a customer reports · \"tickets\" for the queue · \"assign T-2026-0001 to team AC\" (name, phone, address, appointment required — it tells you what is missing) · or dashboard > tickets",
+                    "th": "ลูกค้าแจ้งซ่อมแล้วคุณได้ LINE พร้อมชื่อเครื่องและสถานะประกัน · \"รายการงาน\" ดูคิว · \"มอบหมาย T-2026-0001 ให้ทีม แอร์\" (ต้องมีชื่อ เบอร์ ที่อยู่ นัดครบ ระบบบอกถ้าขาด) · ไม่ต้องพิมพ์เลขเต็มก็ได้: \"มอบหมาย 0001 ให้ช่าง\" หรือ reply ข้อความแจ้งซ่อมนั้นแล้วพิมพ์ \"มอบหมายให้ช่าง\" ระบบจะถามว่าให้ช่างคนไหนพร้อมปุ่มเลือก · หรือทำบนแดชบอร์ด > งานซ่อม",
+                    "en": "You hear when a customer reports, with the machine and its warranty state · \"tickets\" for the queue · \"assign T-2026-0001 to team AC\" (name, phone, address, appointment required — it tells you what is missing) · the short number works too, and so does replying to the report and typing \"assign to a technician\" — it asks which one · or dashboard > tickets",
                 },
                 "commands": ["รายการงาน", "มอบหมาย"],
                 "example": "มอบหมาย T-2026-0001 ให้ทีม แอร์",

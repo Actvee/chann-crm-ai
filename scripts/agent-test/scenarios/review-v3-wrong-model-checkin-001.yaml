@@ -1,0 +1,43 @@
+name: review-v3-wrong-model-checkin-001
+description: wrong-model-checkin; supplied-wrong-intent; synthetic inputs, inspect
+  assertions and state read-back. the model says check_in for a negation — the handler
+  must not act on it
+backend: fake
+actor:
+  oa: technician
+  role: technician
+  language: th
+  permissions: technician
+steps:
+- seed:
+    raw:
+      tickets:
+      - id: t1
+        ticket_number: T-2026-0001
+        status: assigned
+        accept_status: accepted
+        assigned_to_ref: member-1
+        customer_name: สมชาย
+        customer_phone: 0812345678
+        service_address: 99/1 สุขุมวิท
+        issue_description: แอร์ไม่เย็น
+        scheduled_date: '2026-09-15'
+        scheduled_time: '10:00'
+- send:
+    message: ยังไม่ถึงหน้างาน
+    ai:
+      action: check_in
+      entity: service_report
+      fields:
+        code: T-2026-0001
+      missing: []
+  expect:
+    not_contains:
+    - เช็คอิน T-2026-0001 แล้ว
+- send: ข้อมูลงาน T-2026-0001
+  expect:
+    contains:
+    - T-2026-0001
+    - มอบหมายแล้ว
+    not_contains:
+    - กำลังทำ

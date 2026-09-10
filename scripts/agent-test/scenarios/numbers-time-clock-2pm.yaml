@@ -1,0 +1,73 @@
+name: numbers-time-clock-2pm
+description: '"2 pm" is 14:00 (review v3, B06).'
+backend: fake
+actor:
+  oa: customer
+  role: sales
+  language: th
+  permissions: customer
+steps:
+- seed:
+    warranties:
+    - serial_number: ONLY00001
+      product_name: แอร์ทดสอบ
+      customer_chann_uid: CHN-S-000001
+      warranty_end: '2099-01-01'
+- send: แอร์ไม่เย็น
+  expect:
+    is_not:
+    - generic_error
+    - not_sure
+    - permission
+    - not_a_feature
+    not_contains:
+    - due_time
+    - owner_member_id
+    - service_address
+    - issue_description
+    max_lines: 15
+    contains: T-2026-0001
+- send: 99/1 ถนนสุขุมวิท
+  expect:
+    is_not:
+    - generic_error
+    - not_sure
+    - permission
+    - not_a_feature
+    not_contains:
+    - due_time
+    - owner_member_id
+    - service_address
+    - issue_description
+    max_lines: 15
+    contains: วันไหน
+- send: 15 ก.ย. 2569 2 pm
+  expect:
+    is_not:
+    - generic_error
+    - not_sure
+    - permission
+    - not_a_feature
+    not_contains:
+    - due_time
+    - owner_member_id
+    - service_address
+    - issue_description
+    max_lines: 15
+    contains: '14:00'
+- send: งานของฉัน
+  expect:
+    is_not:
+    - generic_error
+    - not_sure
+    - permission
+    - not_a_feature
+    not_contains:
+    - due_time
+    - owner_member_id
+    - service_address
+    - issue_description
+    max_lines: 15
+    contains:
+    - T-2026-0001
+    - '14:00'

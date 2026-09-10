@@ -1,0 +1,34 @@
+name: review-v3-fault-016
+description: fault; offline-rule; synthetic inputs, inspect assertions and state read-back.
+  Recognize a fault, open one ticket and ask for the service address. Fixed CHN-S-000001
+  warranty ownership is a fake-backend fixture.
+backend: fake
+actor:
+  oa: customer
+  role: sales
+  language: th
+  permissions: customer
+steps:
+- seed:
+    warranties:
+    - serial_number: ONLY00001
+      product_name: แอร์ทดสอบ
+      customer_chann_uid: CHN-S-000001
+      warranty_end: '2099-01-01'
+- send: '  แอร์น้ำหยด  '
+  expect:
+    is_not:
+    - generic_error
+    - not_sure
+    - permission
+    - not_a_feature
+    not_contains:
+    - due_time
+    - owner_member_id
+    - service_address
+    - issue_description
+    max_lines: 15
+    contains:
+    - T-2026-0001
+    - ที่อยู่
+    used_ai: false

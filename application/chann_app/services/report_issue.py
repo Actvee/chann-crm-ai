@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 
 from ..data_client import DataClient
 from .assets import image_for_render
+from .documents.design import ActiveContentInTemplate, active_content_in
 from .documents.fill import fill_template
 from .documents.report_html import render_service_report_html
 from .documents.report_snapshot import build_service_report_snapshot
@@ -75,7 +76,23 @@ async def _resolve_template(
             raw = await get_document_store().get(
                 path=str(version.get("compiled_template_path") or "")
             )
-            html = fill_template(raw.decode("utf-8"), snapshot)
+            stored = raw.decode("utf-8")
+            # A version stored before uploads were filtered (review v3,
+            # T02) may hold active content. The tenant's layout is lost
+            # for this document and the built-in one prints instead —
+            # which is what the surrounding fallback already does for a
+            # template that cannot be loaded, and for the same reason:
+            # the shop keeps doing business either way.
+            active = active_content_in(stored)
+            if active:
+                raise ActiveContentInTemplate(", ".join(active))
+            html = fill_template(stored, snapshot)
+        except ActiveContentInTemplate as exc:
+            log.error(
+                "tenant report template %s holds active content (%s); using "
+                "the built-in layout for this document",
+                version.get("id"), exc,
+            )
         except Exception:
             log.exception(
                 "tenant report template %s could not be used; using the built-in",

@@ -306,15 +306,85 @@ _DANGEROUS_CSS = re.compile(
 )
 _DANGEROUS_URL = re.compile(r"javascript\s*:|vbscript\s*:|data\s*:", re.IGNORECASE)
 
+# --- reading CSS the way a renderer reads it -------------------------------
+#
+# Review v3, T03: the three checks above matched literal words, so a
+# stylesheet spelling the same thing with CSS escapes walked past all of
+# them — `u\72l(...)`, `\75rl(...)` and `@\69mport ...` were each accepted.
+# Escapes are ordinary CSS syntax, not a trick a parser might refuse:
+# https://www.w3.org/TR/2008/REC-CSS2-20080411/syndata.html#characters says
+# a backslash followed by 1-6 hex digits (with one optional trailing
+# whitespace character, which is swallowed) stands for that code point, and
+# a backslash followed by anything else stands for that character. A
+# renderer resolves those before it decides what an identifier says; this
+# module has to do the same before it decides whether it likes it.
+#
+# What we do NOT claim: nothing here was rendered and no URL was fetched, so
+# this closes "the filter can be spelled around", not "external fetches are
+# impossible". See the module docstring of the tests for the same wording.
+
+_CSS_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
+# \<1-6 hex><one optional whitespace> | \<newline> (a string continuation)
+# | \<any other single character>
+_CSS_ESCAPE = re.compile(r"\\(?:([0-9a-fA-F]{1,6})[ \t\n\r\f]?|(\r\n|[\n\r\f])|(.))", re.DOTALL)
+
+
+def _canonical_css(css: str) -> str:
+    """The stylesheet as a renderer would read its identifiers.
+
+    Comments go first (they cannot legally split an identifier, and
+    dropping them can only reveal text, never hide it), then every escape
+    is resolved to the character it stands for.
+    """
+    text = _CSS_COMMENT.sub("", css or "")
+
+    def _resolve(match: re.Match) -> str:
+        hex_digits, continuation, literal = match.groups()
+        if hex_digits is not None:
+            code = int(hex_digits, 16)
+            # 0 and anything outside Unicode is U+FFFD per CSS; surrogates
+            # cannot be built in Python and are not worth a special case.
+            if code == 0 or code > 0x10FFFF or 0xD800 <= code <= 0xDFFF:
+                return "�"
+            return chr(code)
+        if continuation is not None:
+            return ""
+        return literal or ""
+
+    return _CSS_ESCAPE.sub(_resolve, text)
+
 
 def _css_problem(css: str, *, where: str) -> str | None:
-    if _CSS_IMPORT.search(css):
-        return f"ดึงไฟล์จากภายนอกด้วย @import ({where})"
-    if _URL_IN_CSS.search(css):
-        return f"ดึงไฟล์จากภายนอกด้วย url(...) ({where})"
-    if _DANGEROUS_CSS.search(css):
-        return f"คำสั่งที่รันโค้ดได้ใน CSS ({where})"
+    """A reason this stylesheet may not be stored, or None.
+
+    Decided on the canonical form AND on the text as written: an escape
+    the canonicaliser got wrong must not become a way through, and a
+    construct that is dangerous as typed is dangerous either way.
+    """
+    canonical = _canonical_css(css)
+    for text in (canonical, css or ""):
+        if _CSS_IMPORT.search(text):
+            return f"ดึงไฟล์จากภายนอกด้วย @import ({where})"
+        if _URL_IN_CSS.search(text):
+            return f"ดึงไฟล์จากภายนอกด้วย url(...) ({where})"
+        if _DANGEROUS_CSS.search(text):
+            return f"คำสั่งที่รันโค้ดได้ใน CSS ({where})"
+    # The belt: an escape sequence is refused on sight rather than only
+    # being seen through. A quotation layout has no use for one, so this
+    # is "allow what a document needs" rather than "guess every spelling
+    # of what it must not have" — which is the failure T03 describes.
+    if canonical != _CSS_COMMENT.sub("", css or ""):
+        return f"รหัสหลบการตรวจใน CSS (escape sequence) ({where})"
     return None
+
+
+# What a link and a picture may be, when the profile allows them at all.
+# Only ever reached on the Word path (see `sanitise`): a .docx that a shop
+# already uses routinely has hyperlinks in the footer and the shop's logo
+# in the header, and mammoth renders the logo as an inline data: image
+# because there is nowhere else for the bytes to go.
+_WORD_LINK_SCHEMES = ("http://", "https://", "mailto:", "tel:")
+_WORD_IMAGE_PREFIX = re.compile(r"^data:image/(?:png|jpe?g|gif|bmp|webp|x-emf|x-wmf);base64,", re.IGNORECASE)
 
 
 class _Sanitiser(HTMLParser):
@@ -325,15 +395,33 @@ class _Sanitiser(HTMLParser):
     checked, so anything the checks did not understand cannot survive by
     being left alone. A regex pass over the original string has the
     opposite property.
+
+    `word` widens the vocabulary — and only the vocabulary — for the .docx
+    ingress: links and inline images are what Word documents are made of,
+    and refusing them would mean refusing the shop's own quotation. The
+    security rules are the same object either way; nothing that executes
+    becomes allowed, and both paths still come out rebuilt rather than
+    edited (review v3, T02: "same policy at every ingress").
     """
 
-    def __init__(self):
+    def __init__(self, *, word: bool = False):
         super().__init__(convert_charrefs=True)
+        self.word = word
+        self.content_tags = _CONTENT_TAGS | ({"a", "img"} if word else frozenset())
+        self.void_tags = _VOID_TAGS | ({"img"} if word else frozenset())
         self.problems: list[str] = []
         self.body: list[str] = []
         self.styles: list[str] = []
         self._open: list[str] = []
         self._in_style = False
+
+    def _refused_tag(self, tag: str) -> str | None:
+        """The reason this tag may not appear, or None if the profile
+        allows it. A tag named in _TAG_REASONS is refused unless this
+        profile puts it back in the content vocabulary."""
+        if tag in self.content_tags:
+            return None
+        return _TAG_REASONS.get(tag)
 
     # -- reporting
 
@@ -345,8 +433,9 @@ class _Sanitiser(HTMLParser):
 
     def handle_starttag(self, tag, attrs):
         tag = tag.lower()
-        if tag in _TAG_REASONS:
-            self._reject(_TAG_REASONS[tag])
+        refused = self._refused_tag(tag)
+        if refused:
+            self._reject(refused)
             return
         if tag == "style":
             self._in_style = True
@@ -358,11 +447,11 @@ class _Sanitiser(HTMLParser):
             return
         if tag in _SKELETON_TAGS:
             return
-        if tag not in _CONTENT_TAGS:
+        if tag not in self.content_tags:
             self._reject(f"แท็กที่ไม่รองรับ (<{tag}>)")
             return
         rendered = self._attrs(tag, attrs)
-        if tag in _VOID_TAGS:
+        if tag in self.void_tags:
             self.body.append(f"<{tag}{rendered}>")
             return
         self._open.append(tag)
@@ -370,12 +459,13 @@ class _Sanitiser(HTMLParser):
 
     def handle_startendtag(self, tag, attrs):
         tag = tag.lower()
-        if tag in _TAG_REASONS:
-            self._reject(_TAG_REASONS[tag])
+        refused = self._refused_tag(tag)
+        if refused:
+            self._reject(refused)
             return
         if tag in _SKELETON_TAGS:
             return
-        if tag not in _CONTENT_TAGS:
+        if tag not in self.content_tags:
             self._reject(f"แท็กที่ไม่รองรับ (<{tag}>)")
             return
         self.body.append(f"<{tag}{self._attrs(tag, attrs)}>")
@@ -385,9 +475,9 @@ class _Sanitiser(HTMLParser):
         if tag == "style":
             self._in_style = False
             return
-        if tag in _SKELETON_TAGS or tag in _VOID_TAGS or tag in _TAG_REASONS:
+        if tag in _SKELETON_TAGS or tag in self.void_tags:
             return
-        if tag not in _CONTENT_TAGS:
+        if tag not in self.content_tags:
             return
         # Close back to the matching open tag. A model that forgets </td>
         # is a formatting slip, not an attack, and the document should
@@ -408,13 +498,33 @@ class _Sanitiser(HTMLParser):
             if name.startswith("on"):
                 self._reject(f"คำสั่งที่ทำงานเองเมื่อเปิดเอกสาร ({name})")
                 continue
+            if self.word and tag == "a" and name == "href":
+                # A hyperlink out of a Word document. Scheme allowlist, not
+                # a denylist of the two bad ones: anything this does not
+                # recognise (javascript:, data:, file:, a scheme invented
+                # tomorrow) simply does not survive the rebuild.
+                if not value.strip().lower().startswith(_WORD_LINK_SCHEMES):
+                    self._reject("ลิงก์ที่ระบบไม่รองรับใน <a href>")
+                    continue
+                out.append(f' href="{escape(value.strip(), quote=True)}"')
+                continue
+            if self.word and tag == "img" and name == "src":
+                # mammoth inlines the picture; a reference OUT of the
+                # document is not a picture Word put there and is refused.
+                if not _WORD_IMAGE_PREFIX.match(value.strip()):
+                    self._reject("รูปภาพที่ดึงมาจากภายนอกเอกสาร (<img src>)")
+                    continue
+                out.append(f' src="{escape(value.strip(), quote=True)}"')
+                continue
             if name in ("src", "srcset", "href", "background", "data", "action",
                         "formaction", "poster", "xlink:href"):
                 self._reject(f"การดึงไฟล์จากภายนอก ({name})")
                 continue
             if name.startswith("data-"):
                 continue
-            if name not in _ALLOWED_ATTRS:
+            if name not in _ALLOWED_ATTRS and not (
+                self.word and tag == "img" and name == "alt"
+            ):
                 continue
             if _DANGEROUS_URL.search(value):
                 self._reject(f"ที่อยู่ที่รันโค้ดได้ ({name})")
@@ -454,17 +564,24 @@ class _Sanitiser(HTMLParser):
             self.body.append(f"</{self._open.pop()}>")
 
 
-def sanitise(raw_html: str) -> tuple[str, str]:
+def sanitise(raw_html: str, *, word: bool = False) -> tuple[str, str]:
     """The draft as (body markup, CSS), or `TemplateRejected` with reasons.
 
     Nothing is repaired into safety. The two outputs are what survived a
     whitelist, and the caller frames them; the input string is discarded.
+
+    Every template ingress goes through here (review v3, T02): the AI
+    design, a shop's uploaded .html, and — with `word=True`, which adds
+    links and inline images and nothing else — the HTML mammoth makes out
+    of a shop's .docx. Before that fix the upload path stored whatever it
+    was given, so a template holding `<script>`, an event handler or an
+    `<iframe>` was accepted and kept unchanged.
     """
     html = (raw_html or "").strip()
     if not html:
         raise TemplateRejected(["AI ไม่ได้ส่งแบบฟอร์มกลับมา"])
 
-    parser = _Sanitiser()
+    parser = _Sanitiser(word=word)
     try:
         parser.feed(html)
         parser.close()
@@ -486,6 +603,102 @@ def sanitise(raw_html: str) -> tuple[str, str]:
     return body, css
 
 
+
+# ------------------------------------------- what is already in the store
+#
+# Review v3, T02 asked for the versions ALREADY stored to be checked, not
+# only the new ones. Those cannot simply be run back through `sanitise`:
+# a stored template is a whole framed document, and the frame this module
+# writes itself carries `@import url(...)` for the Thai font (see
+# `documents/html.py` for why the font is fetched rather than assumed), so
+# the ingress rules would reject our own output.
+#
+# So the read-side guard is narrower and answers exactly the question the
+# review proved mattered — is there ACTIVE CONTENT in this stored file? —
+# rather than re-litigating the whole layout. What it finds, the callers
+# refuse to serve or fall back away from.
+#
+# The limits of the claim, in the review's own terms: this makes stored
+# active content unreachable through the paths below. It is not evidence
+# that any of it ever executed anywhere; nothing was rendered to prove
+# that, and nothing here should be described as having stopped an
+# exploit.
+
+_ACTIVE_TAGS = frozenset({
+    "script", "iframe", "object", "embed", "applet", "frame", "frameset",
+    "form", "input", "button", "base", "link", "svg", "math", "template",
+    "meta",
+})
+
+
+class _ActiveContentScan(HTMLParser):
+    """Reads a stored document and names what executes or loads in it."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.found: list[str] = []
+
+    def _note(self, what: str) -> None:
+        if what not in self.found:
+            self.found.append(what)
+
+    def handle_starttag(self, tag, attrs):
+        tag = tag.lower()
+        if tag == "meta":
+            if any((name or "").lower() == "http-equiv" for name, _ in attrs):
+                self._note("<meta http-equiv>")
+            return
+        if tag in _ACTIVE_TAGS:
+            self._note(f"<{tag}>")
+        for raw_name, raw_value in attrs:
+            name = (raw_name or "").lower()
+            if name.startswith("on"):
+                self._note(f"{name}=")
+            elif _DANGEROUS_URL.search(raw_value or "") and name in (
+                "href", "src", "action", "formaction", "data", "poster",
+                "background", "xlink:href",
+            ):
+                # data: on an <img> in a Word-derived template is the
+                # shop's own logo and is not active content; anywhere
+                # else a code-capable URL is.
+                if not (tag == "img" and name == "src"):
+                    self._note(f"{name}=…")
+
+    handle_startendtag = handle_starttag
+
+    def handle_pi(self, data):
+        self._note("<? … ?>")
+
+    def unknown_decl(self, data):
+        self._note("CDATA")
+
+
+class ActiveContentInTemplate(Exception):
+    """A stored template that will not be rendered or served as it is.
+
+    Raised by the callers, not here, so each one decides what to do: the
+    document paths fall back to the built-in layout, the preview refuses
+    and says why.
+    """
+
+
+def active_content_in(html: str) -> list[str]:
+    """What in this stored template executes or pulls something in.
+
+    Empty means "nothing found by this check" — which is not the same as
+    "safe"; it is the same thing the ingress rebuild guarantees by
+    construction, checked after the fact on files stored before the
+    rebuild existed.
+    """
+    scan = _ActiveContentScan()
+    try:
+        scan.feed(html or "")
+        scan.close()
+    except Exception:  # noqa: BLE001 — unparseable is not servable
+        return ["อ่านไฟล์แบบฟอร์มนี้ไม่ได้"]
+    return scan.found
+
+
 # ------------------------------------------------------------------- frame
 
 def frame(body: str, css: str = "") -> str:
@@ -497,8 +710,13 @@ def frame(body: str, css: str = "") -> str:
     A4 page and the base type come from the same constants the built-in
     template uses, every time, whatever the model returned.
     """
-    shop_css = f"\n  /* --- the shop's own design --- */\n  {css.strip()}" if css.strip() else ""
-    return f"""<!DOCTYPE html>
+    shop_css = f"{_SHOP_CSS_MARKER}{css.strip()}" if css.strip() else ""
+    return f"{_FRAME_HEAD}{shop_css}{_FRAME_MIDDLE}{body}{_FRAME_TAIL}"
+
+
+# The frame, in the three pieces `split_frame` needs to take it apart
+# again. Assembled below into exactly the string `frame` used to return.
+_FRAME_HEAD = f"""<!DOCTYPE html>
 <html lang="th">
 <head>
 <meta charset="utf-8">
@@ -516,13 +734,41 @@ def frame(body: str, css: str = "") -> str:
   table {{ width: 100%; border-collapse: collapse; margin: 10px 0; }}
   table td, table th {{ border: 1px solid #bbb; padding: 6px 8px;
                         vertical-align: top; }}
-  table th {{ background: #f2f2f2; text-align: left; }}{shop_css}
-</style>
-</head>
-<body>
-{body}
-</body>
-</html>"""
+  table th {{ background: #f2f2f2; text-align: left; }}"""
+_SHOP_CSS_MARKER = "\n  /* --- the shop's own design --- */\n  "
+_FRAME_MIDDLE = "\n</style>\n</head>\n<body>\n"
+_FRAME_TAIL = "\n</body>\n</html>"
+
+
+def split_frame(html: str) -> tuple[str, str] | None:
+    """`(body, shop CSS)` if this document is one this module framed, else None.
+
+    Needed because a framed document comes back through the ingress: the
+    chat designer sanitises and frames, then hands the result to the same
+    upload route a person uses, and a shop can download a stored template
+    and upload it again. Re-sanitising the whole document would reject our
+    OWN frame — it fetches the Thai font with `@import url(...)`, which is
+    exactly what a shop's stylesheet is not allowed to do (`documents/html.py`
+    explains why the font cannot be assumed) — so the frame is recognised,
+    removed, and what was inside it is checked on its own.
+
+    Recognition is an exact match against the constant above, so "looks
+    framed" cannot be spelled by hand to buy anything: matching it means
+    the CSS IS ours, byte for byte, and the shop's own CSS and the body
+    are both handed back to the sanitiser regardless.
+    """
+    text = html or ""
+    if not text.startswith(_FRAME_HEAD) or not text.endswith(_FRAME_TAIL):
+        return None
+    rest = text[len(_FRAME_HEAD):-len(_FRAME_TAIL)]
+    css, separator, body = rest.partition(_FRAME_MIDDLE)
+    if not separator:
+        return None
+    if css.startswith(_SHOP_CSS_MARKER):
+        css = css[len(_SHOP_CSS_MARKER):]
+    elif css:
+        return None
+    return body, css
 
 
 # -------------------------------------------------------------- validation

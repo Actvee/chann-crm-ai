@@ -46,13 +46,13 @@ _EN: Register your product (warranty) — Type "register product" then the S/N t
 
 ## 5. แจ้งซ่อม
 
-พิมพ์อาการที่เสียมาได้เลย เช่น "แอร์ไม่เย็น" ระบบจะเลือกเครื่องให้ (หรือให้กดเลือกถ้ามีหลายเครื่อง) แล้วถามที่อยู่และวันเวลานัด · ส่งรูปอาการมาในแชทได้ ระบบแนบกับงานให้ช่างดู
+พิมพ์อาการที่เสียมาได้เลย เช่น "แอร์ไม่เย็น" ระบบจะเลือกเครื่องให้ (หรือให้กดเลือกถ้ามีหลายเครื่อง) แล้วบอกกลับว่างานนี้ผูกกับเครื่องไหนและยังอยู่ในประกันหรือไม่ จากนั้นถามที่อยู่และวันเวลานัด · ถ้าไม่มีหมายเลขเครื่อง กด "ไม่มีหมายเลขเครื่อง" ได้ ระบบจะแจ้งว่างานนี้ยังไม่ได้ผูกกับเครื่องที่ลงทะเบียน · ส่งรูปอาการมาในแชทได้ ระบบแนบกับงานให้ช่างดู
 
 พิมพ์: `แอร์ไม่เย็น มีน้ำหยด`
 
 [IMAGE: customer-report — แชท 3 ฟอง: ลูกค้า 'แอร์ไม่เย็น' → บอท 'รับแจ้งแล้ว เลขงาน T-2026-0001 ขอที่อยู่' → ลูกค้าพิมพ์ที่อยู่ → บอทถามวันนัด]
 
-_EN: Report a fault — Describe what is wrong, e.g. "air con not cooling". The machine is picked for you, then address and appointment are asked._
+_EN: Report a fault — Describe what is wrong, e.g. "air con not cooling". The machine is picked for you (or you tap which one), the reply names it and says whether it is still under warranty, then address and appointment are asked. With no serial, the job is filed and says so._
 
 ## 6. ดูสถานะ / เลื่อนนัด / ยกเลิก
 

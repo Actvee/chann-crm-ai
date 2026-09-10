@@ -1,0 +1,61 @@
+name: review-v3-pending-cancel-012
+description: pending-cancel; intent-safety; synthetic inputs, inspect assertions and
+  state read-back. Explicit stub establishes pending customer creation; protect phone
+  validation, cancellation, read interruption or confirm flow switch.
+backend: any
+actor:
+  oa: sales
+  role: sales
+  language: th
+  permissions: sales
+steps:
+- seed:
+    customers:
+    - first_name: สมชาย
+      phone: 0812345678
+- send:
+    message: มีลูกค้าใหม่ชื่อ สมหญิง รักดี แต่ยังไม่รู้เบอร์
+    ai:
+      action: create
+      entity: customer
+      fields:
+        first_name: สมหญิง
+        last_name: รักดี
+      missing:
+      - phone
+  expect:
+    is_not:
+    - generic_error
+    - not_sure
+    - permission
+    - not_a_feature
+    not_contains:
+    - due_time
+    - owner_member_id
+    - service_address
+    - issue_description
+    max_lines: 15
+    contains: เบอร์
+- send: เดี๋ยวค่อยทำ
+  expect:
+    is_not:
+    - generic_error
+    - permission
+    - not_sure
+    not_contains:
+    - due_time
+    - owner_member_id
+    - service_address
+    - issue_description
+    max_lines: 15
+    used_ai: false
+- send: รายชื่อลูกค้า
+  expect:
+    is_not:
+    - generic_error
+    - not_sure
+    - permission
+    - not_a_feature
+    not_contains:
+    - สมหญิง
+    max_lines: 15

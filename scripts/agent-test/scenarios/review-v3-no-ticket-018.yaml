@@ -1,0 +1,37 @@
+name: review-v3-no-ticket-018
+description: no-ticket; intent-safety; synthetic inputs, inspect assertions and state
+  read-back. Answer price/clarify intent without opening a repair ticket. Ticket list
+  must remain empty. Fixed CHN-S-000001 warranty ownership is a fake-backend fixture.
+backend: fake
+actor:
+  oa: customer
+  role: sales
+  language: th
+  permissions: customer
+steps:
+- seed:
+    warranties:
+    - serial_number: ONLY00001
+      product_name: แอร์ทดสอบ
+      customer_chann_uid: CHN-S-000001
+      warranty_end: '2099-01-01'
+- send: How much is AC cleaning?
+  expect:
+    is_not:
+    - generic_error
+    - not_sure
+    - permission
+    - not_a_feature
+    not_contains:
+    - T-2026-0001
+    - ขอที่อยู่
+    - รับแจ้งแล้ว
+    max_lines: 15
+- send: งานของฉัน
+  expect:
+    is_not:
+    - generic_error
+    - permission
+    not_contains:
+    - T-2026-0001
+    max_lines: 15

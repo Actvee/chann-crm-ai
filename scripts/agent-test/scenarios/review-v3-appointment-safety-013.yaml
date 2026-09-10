@@ -1,0 +1,68 @@
+name: review-v3-appointment-safety-013
+description: appointment-safety; supplied-wrong-intent; synthetic inputs, inspect
+  assertions and state read-back. an appointment is moved in place, then removed,
+  from chat alone
+backend: any
+actor:
+  oa: sales
+  role: sales
+  language: th
+  permissions: sales
+steps:
+- seed:
+    customers:
+    - ref: somchai
+      first_name: สมชาย
+      last_name: ใจดี
+      phone: 0812345678
+- send: ข้อมูลลูกค้า สมชาย
+  expect:
+    contains: สมชาย
+    is_not:
+    - not_found
+    - generic_error
+    - permission
+- send: ตั้งนัด C-2026-0001 พรุ่งนี้ บ่าย 2
+  expect:
+    contains:
+    - C-2026-0001
+    - '14:00'
+    is_not:
+    - not_sure
+    - generic_error
+    - permission
+    - not_found
+- send: รายการเตือน
+  expect:
+    contains: C-2026-0001
+    is_not:
+    - generic_error
+    - permission
+    not_contains:
+    - due_time
+    - due_date
+    - owner_member_id
+- send:
+    message: ยกเลิกนัด C-2026-0001 ไปหรือยัง
+    ai:
+      action: cancel
+      entity: followup
+      fields:
+        code: C-2026-0001
+        due_time: '16:00'
+      missing: []
+  expect:
+    is_not:
+    - generic_error
+    not_contains:
+    - ยกเลิกการเตือน
+    - ลบนัด C-2026-0001 ออกแล้ว
+- send: รายการเตือน
+  expect:
+    contains:
+    - C-2026-0001
+    - '14:00'
+    not_contains:
+    - '16:00'
+    is_not:
+    - generic_error

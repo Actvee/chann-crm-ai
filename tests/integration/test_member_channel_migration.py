@@ -68,7 +68,15 @@ def test_backfill_from_role_and_the_new_unique(migrated_db):
         assert "uq_license_member_channel" in constraints and "ck_license_members_channel" in constraints
         assert "uq_license_member" not in constraints
         head = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert head == "0026_member_channel"
+    # `head` is wherever the chain ends today, not a revision id pinned
+    # here: this test is about what 0026 DID to the rows and the
+    # constraints — asserted above — and pinning the tip meant every
+    # later migration broke it for no reason (it did, on 0027). The Data
+    # tier's own declaration is the one place that has to name the tip,
+    # and `test_phase65_registration.py` is what keeps that honest.
+    from chann_data.main import EXPECTED_MIGRATION_HEAD
+
+    assert head == EXPECTED_MIGRATION_HEAD
 
     # The same person may now hold a second row on the other channel, and
     # still not two on the same one.

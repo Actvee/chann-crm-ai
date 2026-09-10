@@ -1,0 +1,79 @@
+# A customer registers the unit they bought, reports a fault against it,
+# and is told which machine the job is for.
+#
+# Owner, 10 ก.ย. 2569: "เวลาลูกค้าแจ้งเสียควรจะมีผูกกับสินค้าที่ลงทะเบียนเอาไว้".
+# The flow already ASKED which registered unit a fault was about and then
+# threw the answer away — the ticket carried a serial string and no link to
+# the product, so nothing downstream could name the machine or say whether
+# the visit was warranty work.
+#
+# What this guards is the visible half of that: the customer is told which
+# machine the job went against and that it is still covered, and the same
+# two facts come back when they ask about the job later. A ticket that
+# stored the link but never showed it would pass a unit test and fail the
+# person standing in front of the machine.
+name: customer-fault-names-the-machine
+description: a customer registers a unit, reports a fault, and the job names the machine and its cover
+backend: fake
+actor:
+  oa: customer
+  role: sales
+  permissions: customer
+
+steps:
+  # Two units the shop sold this customer — so the fault report has a
+  # genuine choice to make rather than one obvious answer.
+  - seed:
+      warranties:
+        - serial_number: "SN12345678"
+          product_id: "prod-air-12k"
+          product_name: "แอร์ 12000 BTU"
+          warranty_start: "2026-01-01"
+          warranty_end: "2027-01-01"
+        - serial_number: "SN87654321"
+          product_id: "prod-fridge"
+          product_name: "ตู้เย็น 7 คิว"
+          warranty_start: "2026-01-01"
+          warranty_end: "2027-01-01"
+
+  # Registering is claiming a serial the shop recorded (owner rule, 3 ก.ย.).
+  - send: "ลงทะเบียนสินค้า SN12345678"
+    expect:
+      contains: "SN12345678"
+      is_not: [generic_error, permission, not_sure, not_a_feature]
+
+  - send: "ลงทะเบียนสินค้า SN87654321"
+    expect:
+      contains: "SN87654321"
+      is_not: [generic_error, permission, not_sure, not_a_feature]
+
+  # Two registered units: the machine is asked about, never guessed.
+  - send: "แอร์ไม่เย็น มีน้ำหยด"
+    expect:
+      used_ai: false
+      contains: "เครื่องไหน"
+      is_not: [generic_error, permission, not_sure, not_a_feature]
+      not_contains: ["product_id", "serial_number", "warranty_end"]
+
+  # Tapping the air conditioner files the fault against THAT unit, and the
+  # reply says which machine and that the cover is live.
+  - send: "SN12345678"
+    expect:
+      contains: ["แอร์ 12000 BTU", "SN12345678", "อยู่ในประกันถึง"]
+      not_contains: ["ตู้เย็น", "product_id", "warranty_status"]
+      is_not: [generic_error, permission, not_sure, not_a_feature]
+
+  # The customer's own list of jobs still works and still says nothing a
+  # customer should not see.
+  - send: "งานของฉัน"
+    expect:
+      contains: "T-2026-"
+      is_not: [generic_error, permission, not_a_feature]
+
+  # Both units are still the customer's, and both still read as covered —
+  # filing a fault against one does not consume its warranty.
+  - send: "ประกันของฉัน"
+    expect:
+      contains: ["แอร์ 12000 BTU", "ตู้เย็น 7 คิว", "ยังอยู่ในประกัน"]
+      is_not: [generic_error, permission, not_a_feature]
+      max_lines: 12

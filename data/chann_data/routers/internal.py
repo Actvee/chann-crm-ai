@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
@@ -249,6 +249,7 @@ from ..schemas import (
     OwnershipTransferRequestIn,
     PlatformAdminAuthIn,
     WebhookEventIn,
+    WebhookEventStateIn,
     PlatformAdminAuthOut,
     PlatformAdminSessionIn,
     PlatformAdminSessionOut,
@@ -262,19 +263,159 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/internal/v1", dependencies=[Depends(require_internal_secret)])
 
 
+# How long an attempt may hold a claim before another one may take it.
+# Longer than any webhook request should live (the Application tier's own
+# timeouts are well inside it) and shorter than the interval over which
+# LINE keeps redelivering, so a process that died mid-event is picked up
+# by the next redelivery rather than being stuck forever.
+WEBHOOK_CLAIM_LEASE_SECONDS = 90
+
+
 @router.post("/webhook-events", status_code=201)
 def record_webhook_event(payload: WebhookEventIn, session: Session = Depends(get_session)):
-    """201 the first time an event id is seen, 409 after — the application
-    drops LINE's redeliveries on the 409."""
+    """Claim an event for processing, and say what is already known about it.
+
+    Review v3, T01: this used to be a bare "have I seen this id?", written
+    before the message was understood and before the answer was sent, so a
+    redelivery after a FAILED first delivery was dropped as a duplicate —
+    acknowledged 200 with the work not done, or done and never answered.
+
+    The answers, and what the caller does with each:
+
+    * **201 `new`** — the claim is yours. Process the event.
+    * **200 `reply_pending`** — a previous attempt completed the business
+      effect and could not deliver the answer. `reply` is that answer. Do
+      NOT run the handler again; deliver and mark it done.
+    * **409 `duplicate_event`** — finished. Drop it. (Unchanged status
+      code and body, so an older Application tier that only reads the 409
+      behaves exactly as it did.)
+    * **409 `in_progress`** — another attempt is holding a live claim.
+      Drop this copy; the holder owns the outcome, and if it fails it
+      releases the claim for the next redelivery.
+
+    Deliberately NOT done here: moving the dedupe to the end of
+    processing. That would make every retry re-run the handler and write
+    twice, which is the failure this table exists to prevent.
+    """
     from ..models import LineWebhookEvent
 
+    event_id = payload.event_id[:64]
+    now = datetime.now(timezone.utc)
     try:
-        session.add(LineWebhookEvent(event_id=payload.event_id[:64], oa=payload.oa[:16]))
+        session.add(LineWebhookEvent(
+            event_id=event_id, oa=payload.oa[:16],
+            status="processing", claimed_at=now, attempts=1,
+        ))
         session.commit()
     except IntegrityError:
         session.rollback()
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"error": "duplicate_event"})
-    return {"event_id": payload.event_id, "new": True}
+    else:
+        return {"event_id": payload.event_id, "new": True, "state": "new"}
+
+    # The row exists. Lock it so two redeliveries arriving together cannot
+    # both decide the lease has expired.
+    row = session.execute(
+        select(LineWebhookEvent)
+        .where(LineWebhookEvent.event_id == event_id)
+        .with_for_update()
+    ).scalars().first()
+    if row is None:
+        # Deleted between the insert failing and this read: a concurrent
+        # attempt released its claim. Treat it as available again.
+        session.commit()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"error": "in_progress", "state": "in_progress"},
+        )
+
+    if row.status == "handled":
+        row.attempts += 1
+        row.claimed_at = now
+        reply = row.reply
+        session.commit()
+        return {
+            "event_id": payload.event_id, "new": False,
+            "state": "reply_pending", "reply": reply,
+        }
+
+    if row.status == "processing":
+        claimed = row.claimed_at
+        if claimed is not None and claimed.tzinfo is None:
+            claimed = claimed.replace(tzinfo=timezone.utc)
+        expired = (
+            claimed is None
+            or (now - claimed).total_seconds() > WEBHOOK_CLAIM_LEASE_SECONDS
+        )
+        if expired:
+            row.attempts += 1
+            row.claimed_at = now
+            session.commit()
+            return {"event_id": payload.event_id, "new": True, "state": "new"}
+        session.commit()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"error": "in_progress", "state": "in_progress"},
+        )
+
+    session.commit()
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={"error": "duplicate_event", "state": "duplicate"},
+    )
+
+
+@router.post("/webhook-events/{event_id}/state")
+def set_webhook_event_state(
+    event_id: str,
+    payload: WebhookEventStateIn,
+    session: Session = Depends(get_session),
+):
+    """What the attempt holding this event did with it.
+
+    * `handled` — the business effect is complete; `reply` is the answer
+      still owed to the person. Idempotent on an already-done event: a
+      finished event is never dragged back.
+    * `done` — the person has the answer.
+    * `failed` — nothing was completed. The row is deleted, which is what
+      turns LINE's next redelivery into a retry instead of a duplicate.
+      Only ever sent by an attempt that has NOT reached `handled`.
+    """
+    from ..models import LineWebhookEvent
+
+    row = session.execute(
+        select(LineWebhookEvent)
+        .where(LineWebhookEvent.event_id == event_id[:64])
+        .with_for_update()
+    ).scalars().first()
+    if row is None:
+        session.commit()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown event")
+
+    state = payload.state
+    if state == "failed":
+        if row.status == "handled":
+            # The business effect happened. Releasing the row here would
+            # let a redelivery redo it, which is the double write this
+            # whole mechanism exists to prevent.
+            session.commit()
+            return {"event_id": event_id, "state": row.status}
+        session.delete(row)
+        session.commit()
+        return {"event_id": event_id, "state": "released"}
+
+    if state == "handled":
+        if row.status != "done":
+            row.status = "handled"
+            row.reply = payload.reply
+    elif state == "done":
+        row.status = "done"
+        row.reply = None
+    else:
+        session.commit()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="unknown state")
+
+    session.commit()
+    return {"event_id": event_id, "state": row.status}
 
 
 @router.post("/platform-admins/authenticate", response_model=PlatformAdminAuthOut)
@@ -1315,6 +1456,11 @@ def create_follow_up(
 @router.get("/licenses/{license_id}/follow-ups", response_model=list[FollowUpOut])
 def list_follow_ups(
     license_id: uuid.UUID,
+    # The caller sends `status`; this read `status_filter`, so FastAPI left it
+    # None and every query came back unfiltered — a cancelled appointment
+    # stayed in the diary and in the morning digest. The fake client filtered
+    # by status, so only the db-backed run could see it (10 Sep 2026).
+    status: str | None = None,
     status_filter: str | None = None,
     entity_type: str | None = None,
     limit: int = 100,
@@ -1322,7 +1468,7 @@ def list_follow_ups(
 ):
     scope = TenantScope(license_id=license_id)
     rows = FollowUpRepository(session).list_for_license(
-        scope, status=status_filter, entity_type=entity_type, limit=limit
+        scope, status=status or status_filter, entity_type=entity_type, limit=limit
     )
     return [FollowUpOut.model_validate(r, from_attributes=True) for r in rows]
 
@@ -4369,6 +4515,10 @@ def _warranty_out(row) -> dict:
     return {
         "id": str(row.id), "warranty_number": row.warranty_number,
         "serial_number": row.serial_number, "product_name": row.product_name,
+        # The catalogue row, so a fault report can be tied to the product
+        # the customer registered (owner, 10 ก.ย. 2569) — product_name
+        # alone is the name the unit was sold under, not a link.
+        "product_id": str(row.product_id) if row.product_id else None,
         "customer_chann_uid": row.customer_chann_uid,
         "warranty_start": row.warranty_start.isoformat(),
         "warranty_end": row.warranty_end.isoformat(),

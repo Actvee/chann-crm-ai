@@ -1,0 +1,43 @@
+name: intent-guard-positive-appointment
+description: the other half of the intent guard - a POLITE order is still an order.
+  "ช่วยเลื่อนนัด…ได้ไหมครับ" and "รบกวนยกเลิกนัด…ให้ที" are questions in shape and
+  instructions in fact, and both must still change the appointment.
+backend: any
+actor:
+  oa: sales
+  role: sales
+  language: th
+  permissions: sales
+steps:
+- seed:
+    customers:
+    - ref: somchai
+      first_name: สมชาย
+      last_name: ใจดี
+      phone: '0812345678'
+- send: ข้อมูลลูกค้า สมชาย
+  expect:
+    contains: C-2026-0001
+    is_not: [generic_error, not_found, permission]
+- send: ตั้งนัด C-2026-0001 พรุ่งนี้ บ่าย 2
+  expect:
+    contains: ['C-2026-0001', '14:00']
+    is_not: [generic_error, not_sure, permission, not_found]
+- send: ช่วยเลื่อนนัด C-2026-0001 เป็น 16:00 ให้หน่อยได้ไหมครับ
+  expect:
+    is_not: [generic_error, not_sure, permission, not_found]
+    not_contains: ['ยังไม่ได้เลื่อนนัด', due_time]
+- send: รายการเตือน
+  expect:
+    contains: ['C-2026-0001', '16:00']
+    not_contains: ['14:00', due_time]
+    is_not: [generic_error, permission]
+- send: รบกวนยกเลิกนัด C-2026-0001 ให้ที
+  expect:
+    contains: C-2026-0001
+    not_contains: ['ยังไม่ได้ยกเลิกนัด']
+    is_not: [generic_error, not_sure, permission, not_found]
+- send: รายการเตือน
+  expect:
+    not_contains: ['16:00', due_time]
+    is_not: [generic_error, permission]

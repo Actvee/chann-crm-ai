@@ -29,15 +29,20 @@ from .guides import (
     render_help_menu, render_help_step, render_help_text,
 )
 from . import notify as _notify_mod
-from .thai_datetime import DATE_FORMATS, local_today
+from .thai_datetime import DATE_FORMATS, local_today, thai_number_words
 from .photos import PhotoRefused, store_ticket_photo
 from ..line.client import get_message_content
 from .ai.intent import parse_intent, unavailable_reply
 from .identity import ResolvedContext, TenantResolution, member_channel
+# One decision, made before anything writes: does this sentence ask for the
+# action, or does it only mention it? Every mutating path in this module
+# goes through it (review v3, 9-10 Sep 2026 — B01-B04, B07).
+from .intent_guard import ASK, intent_to_act
 from .registration import COMPANY_CODE_RE
 from . import storefront as storefront_service
 from . import live_chat
 from . import pdpa as pdpa_service
+from . import ticket_machine
 
 # Phase 19/E10: the per-person rich menu follows the language. The module
 # lands from another branch; until it merges, switching the language just
@@ -1281,6 +1286,13 @@ async def _code_for_entity(
             # "อนุมัติ" resolves the report the notification was about.
             rows = await client.list_service_reports(license_id)
             key = "report_id"
+        elif entity_type in ("service_ticket", "ticket"):
+            # Owner's transcript, 10 ก.ย. 2569: replying to "แจ้งซ่อมใหม่
+            # T-2026-0004" with "มอบหมายให้ช่าง" was refused for naming no
+            # job — because this returned None for the one entity type the
+            # ticket notifications actually use, so nothing was remembered.
+            rows = await client.list_tickets(license_id)
+            key = "ticket_number"
         else:
             return None
     except Exception:
@@ -1915,7 +1927,10 @@ async def _handle_reminder_move(
     mine.sort(key=lambda r: (str(r.get("due_date") or ""), str(r.get("due_time") or "")))
     row = mine[0]
 
-    from .thai_datetime import format_thai_date, format_thai_time, parse_thai_date, parse_thai_time
+    from .thai_datetime import (
+        format_thai_date, format_thai_time, looks_like_a_time_attempt,
+        parse_thai_date, parse_thai_time,
+    )
 
     today = local_today()
     new_date = parse_thai_date(message, today)
@@ -1935,6 +1950,10 @@ async def _handle_reminder_move(
             ),
         )
     if new_time is None:
+        if looks_like_a_time_attempt(message):
+            # A time was stated and could not be read. Keeping the old one
+            # is as silent as inventing 09:00 would be.
+            return ChatReply(text=_t(TIME_NOT_UNDERSTOOD, language))
         try:
             new_time = time.fromisoformat(str(row.get("due_time") or "09:00:00"))
         except ValueError:
@@ -2148,6 +2167,12 @@ async def _appointment_net(
         return None
     if target is None:
         return None
+    # The net catches sentences the model could not read at all, so it is
+    # the one place an appointment can still be created without any
+    # trigger matching: "ยังไม่ต้องนัดวันศุกร์" carries a date and a
+    # record and must not become one.
+    if _intent_guard_reply(message, action="appointment_create", language=language) is not None:
+        return None
     return await _handle_reminder_create(
         client, ctx=ctx, license_id=license_id, message=message,
         permission_keys=permission_keys, language=language,
@@ -2253,7 +2278,10 @@ async def _handle_reminder_create(  # noqa: PLR0913
     permission_keys: list[str], language: str, actor_id: str,
     target: tuple[str, str, str] | None = None,
 ) -> ChatReply:
-    from .thai_datetime import format_thai_date, format_thai_time, parse_thai_date, parse_thai_time
+    from .thai_datetime import (
+        format_thai_date, format_thai_time, looks_like_a_time_attempt,
+        parse_thai_date, parse_thai_time,
+    )
 
     if "followup.create" not in set(permission_keys):
         return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
@@ -2298,6 +2326,11 @@ async def _handle_reminder_create(  # noqa: PLR0913
             quick_replies=[("พรุ่งนี้", f"เตือน {code} พรุ่งนี้")],
         )
     due_time = parse_thai_time(message)
+    if due_time is None and looks_like_a_time_attempt(message):
+        # A time WAS given and could not be read — "บ่าย 9" is not an hour.
+        # Falling through to the default below would put the reminder at
+        # 09:00 without a word about it (review v3, B06).
+        return ChatReply(text=_t(TIME_NOT_UNDERSTOOD, language))
     if due_time is None:
         # Owner request (2 Sep): an appointment nobody gave a time for
         # still gets one — 09:00, start of the working day — instead of a
@@ -2724,6 +2757,34 @@ async def _claim_for_customer(
             quick_replies=[("ติดต่อร้าน", "ติดต่อร้าน")],
         )
     return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+
+def _by_serial(warranty: dict | None) -> dict[str, dict]:
+    """One warranty as the index `ticket_machine.attach` expects."""
+    serial = str((warranty or {}).get("serial_number") or "").strip().upper()
+    return {serial: warranty} if serial and warranty else {}
+
+
+async def _contact_id_of(client: DataClient, license_id: str, chann_uid: str) -> str:
+    """The shop's contact row for this LINE identity, when it has one.
+
+    A customer who has bought before is already a `customers` row here, and
+    a ticket that points at it shows up in their history instead of
+    starting a second, nameless record of the same person. A customer the
+    shop has never recorded links nothing — the report is still taken
+    (owner rule: never block a fault on paperwork).
+    """
+    if not chann_uid:
+        return ""
+    try:
+        rows = await client.list_customers(str(license_id), customer_chann_uid=chann_uid)
+    except Exception:
+        log.exception("could not look up the contact behind %s", chann_uid)
+        return ""
+    for row in rows or []:
+        if str(row.get("customer_chann_uid") or "") == chann_uid and row.get("id"):
+            return str(row["id"])
+    return ""
 
 
 async def _claim_serial(
@@ -3492,6 +3553,14 @@ CUSTOMER_NEEDS_DATE = {
     "th": "ไม่เข้าใจวันที่ครับ ลองพิมพ์แบบนี้ดู: \"พรุ่งนี้ 10 โมง\" · \"วันศุกร์ บ่าย 2\" · \"15 ก.ย. 14:00\"",
     "en": "Could not read the date. Try: \"tomorrow 10am\" · \"Friday 2pm\" · \"15 Sep 14:00\"",
 }
+# A time the person DID state and this could not read. Silently writing
+# 09:00 over it books an hour they never chose and tells them nothing
+# (review v3, B06); the 09:00 default stays for a message with no time in
+# it at all.
+TIME_NOT_UNDERSTOOD = {
+    "th": "ไม่เข้าใจเวลาที่ระบุครับ ขอเวลาอีกครั้งได้ไหมครับ เช่น \"10 โมง\" · \"บ่าย 2\" · \"ทุ่มครึ่ง\" · \"14:00\"",
+    "en": "I could not read the time you gave. Could you say it again? e.g. \"10am\" · \"2pm\" · \"14:00\"",
+}
 AMEND_ASK_NEW_DATE = {
     "th": "รับทราบครับ สะดวกให้ช่างไปวันไหน เวลาไหนแทนครับ เช่น \"พรุ่งนี้ 10 โมง\" · \"วันศุกร์ บ่าย 2\"",
     "en": "Understood — which day and time would suit instead? e.g. \"tomorrow 10am\" · \"Friday 2pm\"",
@@ -3592,7 +3661,7 @@ def _customer_fallback(text: str, language: str) -> ChatReply:
     clean = (text or "").strip()
     carried = f"คุยกับร้าน {clean}"[:300]
     lowered = _canonical(clean)
-    if any(w in lowered for w in _PRODUCT_WORDS) or _asks_price(clean):
+    if any(w in lowered for w in _PRODUCT_WORDS if w not in _SPEC_WORDS) or _asks_price(clean):
         return ChatReply(
             text=_t(CUSTOMER_PRODUCT_HINT, language),
             quick_replies=[("สินค้าทั้งหมด", "สินค้าทั้งหมด"), ("คุยกับร้าน", carried)],
@@ -3738,11 +3807,25 @@ _SAME_ADDRESS_PHRASES = (
 )
 
 
+# A specification is not a price. "BTU" earns its place in the price
+# vocabulary because "แอร์ 12000 BTU ราคาเท่าไหร่" is shopping — but on its
+# own it only says WHICH machine, and "แอร์ 12000 BTU ไม่เย็น" was answered
+# with the product catalogue in all four of its polite forms (review v3,
+# B07). A fault with a spec in it is still a fault.
+#
+# Only words ALREADY in the price/product vocabulary belong here: this list
+# subtracts from those, it must never add to them. "ตัน" was in the first
+# draft and turned "แขวงคลองตัน" into a price question.
+_SPEC_WORDS = ("btu",)
+
+
 def _asks_price(text: str) -> bool:
     """"ราคาล้างแอร์", "สอบถามค่าบริการล้างแอร์": a question about money,
     which opened a repair job named after it (review, 6 Sep 2026)."""
     lowered = _canonical(text)
-    return any(w in lowered for w in _PRICE_WORDS)
+    if any(w in lowered for w in _PRICE_WORDS if w not in _SPEC_WORDS):
+        return True
+    return any(w in lowered for w in _SPEC_WORDS) and not _looks_like_fault(text)
 
 
 def _is_cancel_hint(text: str) -> bool:
@@ -4307,8 +4390,11 @@ CUSTOMER_REPORT_HINTS = (
 )
 
 REPORT_TAKEN = {
-    "th": "รับแจ้งแล้วครับ เลขงาน {code}\n\"{issue}\"\n\nขอที่อยู่ที่จะให้ช่างไปด้วยครับ",
-    "en": "Logged as {code}.\n\"{issue}\"\n\nWhat address should the technician go to?",
+    # {machine} is the unit the fault is about, or a plain statement that
+    # none is attached — a customer who was just asked which machine is
+    # owed the answer either way (owner, 10 ก.ย. 2569).
+    "th": "รับแจ้งแล้วครับ เลขงาน {code}\n\"{issue}\"{machine}\n\nขอที่อยู่ที่จะให้ช่างไปด้วยครับ",
+    "en": "Logged as {code}.\n\"{issue}\"{machine}\n\nWhat address should the technician go to?",
 }
 REPORT_ADDRESS_SAVED = {
     "th": "บันทึกที่อยู่แล้วครับ\nสะดวกให้ช่างไปวันไหน เวลาไหนครับ",
@@ -4641,7 +4727,8 @@ async def _handle_customer_report(
 
         if ticket_id and "schedule" in awaiting:
             from .thai_datetime import (
-                format_thai_date, format_thai_time, parse_thai_date, parse_thai_time,
+                format_thai_date, format_thai_time, looks_like_a_time_attempt,
+                parse_thai_date, parse_thai_time,
             )
 
             today = local_today()
@@ -4686,8 +4773,15 @@ async def _handle_customer_report(
                 )
             # Owner rule 1: no time given means 09:00, and the reply says
             # so — the shop then sees a real appointment, not a date with
-            # a blank next to it.
-            due_time = parse_thai_time(text) or time(9, 0)
+            # a blank next to it. A time that WAS given and could not be
+            # read is a different thing: ask, rather than book an hour the
+            # customer did not choose (review v3, B06). The schedule prompt
+            # stays open, so saying it again is all they have to do.
+            due_time = parse_thai_time(text)
+            if due_time is None:
+                if looks_like_a_time_attempt(text):
+                    return ChatReply(text=_t(TIME_NOT_UNDERSTOOD, language))
+                due_time = time(9, 0)
             fields: dict = {
                 "scheduled_date": due_date.isoformat(),
                 "scheduled_time": due_time.isoformat(),
@@ -4897,8 +4991,41 @@ async def _handle_customer_report(
                 ),
                 quick_replies=[("ดูสถานะงาน", "งานของฉัน")],
             )
+        # Nothing open, and the question was about a repair: answer about
+        # repairs — "ยังไม่แน่ใจว่าต้องการอะไร" is a shrug at somebody who
+        # asked something perfectly clear ("ซ่อมแอร์ใช้เวลากี่วัน",
+        # "ยังไม่แน่ใจว่าแอร์เสียไหม"; review v3, no-ticket-008/009).
+        guarded = _intent_guard_reply(text, action="ticket_open", language=language)
+        if guarded is not None:
+            return ChatReply(
+                text=guarded.text,
+                quick_replies=[
+                    ("แจ้งซ่อม", "แจ้งซ่อม"),
+                    ("คุยกับร้าน", f"คุยกับร้าน {text.strip()}"[:300]),
+                    ("งานของฉัน", "งานของฉัน"),
+                ],
+            )
         return _customer_fallback(text, language)
 
+    # Only a sentence that ASKS for a repair opens one. "อย่าเพิ่งเปิดงานซ่อม",
+    # "ถ้าแอร์เสียจะมาแจ้งอีกที", "แอร์ซ่อมแล้ว ใช้ได้ปกติ" and "ทดสอบระบบ
+    # คำว่า แอร์เสีย" all contain a fault word and none of them is a
+    # request; all eight opened a real ticket (review v3, B04). Placed
+    # here, at the one point a customer ticket is created, so the
+    # address/appointment questions above still read their own answers —
+    # and before the fallback below, so "ซ่อมแอร์ใช้เวลากี่วัน" is answered
+    # about repairs rather than met with "not sure what you want".
+    #
+    # Not over a sentence _is_service_request_sentence already reads as a
+    # booking: "ช่างว่างมาดูวันเสาร์ไหมครับ" is shaped like a question and
+    # is how people ask for a visit (B5, 6 Sep 2026). That rule is the
+    # narrower one — it wants a request head or "มาดู"/"มาซ่อม" — so where
+    # the two disagree it wins.
+    guarded = None if service_request else _intent_guard_reply(
+        text, action="ticket_open", language=language,
+    )
+    if guarded is not None:
+        return guarded
     # Only a fault or a request for a visit opens a job. Everything else
     # typed here used to become a ticket called, say, "ใช้งานยังไง".
     if not (forced_fault or serial_hint or skip_serial or _looks_like_fault(text) or _looks_like_service_request(text)):
@@ -4952,6 +5079,14 @@ async def _handle_customer_report(
     except Exception:
         profile = None
 
+    # Owner, 10 ก.ย. 2569: the fault is tied to the unit the customer
+    # registered. The serial was already established above; the warranty
+    # behind it carries the catalogue row and the real cover dates, so the
+    # ticket links to the product and the technician is told whether the
+    # visit is warranty work before setting off.
+    warranty = await ticket_machine.warranty_for_serial(client, license_id, serial) if serial else None
+    contact_id = await _contact_id_of(client, license_id, ctx.chann_uid)
+
     try:
         ticket = await client.create_ticket(
             license_id,
@@ -4967,7 +5102,8 @@ async def _handle_customer_report(
                     ) if p
                 ) or ctx.display_name,
                 "customer_phone": (profile or {}).get("phone"),
-                **({"serial_number": serial} if serial else {}),
+                **({"contact_id": contact_id} if contact_id else {}),
+                **ticket_machine.link_fields(warranty, serial),
             },
             actor_id=ctx.chann_uid,
         )
@@ -4989,6 +5125,9 @@ async def _handle_customer_report(
     return ChatReply(
         text=_t(REPORT_TAKEN, language).format(
             code=ticket.get("ticket_number"), issue=text[:80],
+            machine=ticket_machine.machine_suffix(
+                ticket_machine.attach([ticket], _by_serial(warranty))[0], language,
+            ),
         ),
         entity_type="service_ticket", entity_id=str(ticket.get("id") or ""),
     )
@@ -5060,7 +5199,8 @@ async def _handle_customer_amend(
     the date is read from ("พรุ่งนี้ไม่สะดวก ขอเป็นวันเสาร์" names two
     days and only the second is wanted)."""
     from .thai_datetime import (
-        format_thai_date, format_thai_time, parse_thai_date, parse_thai_time,
+        format_thai_date, format_thai_time, looks_like_a_time_attempt,
+        parse_thai_date, parse_thai_time,
     )
 
     try:
@@ -5188,7 +5328,21 @@ async def _handle_customer_amend(
             text=_t(AMEND_PAST_DATE, language).format(date=format_thai_date(due_date)),
         )
     # Owner rule 1: unspecified time is 09:00, and the reply echoes it.
-    due_time = parse_thai_time(source) or time(9, 0)
+    # A time that was given but could not be read is asked again instead:
+    # the prompt is held open so the answer lands back on this job.
+    due_time = parse_thai_time(source)
+    if due_time is None:
+        if looks_like_a_time_attempt(source):
+            try:
+                await client.set_pending_intent(
+                    ctx.chann_uid, ctx.oa, action="report", entity="customer_ticket",
+                    fields={"ticket_id": ticket_id, "code": code, "reschedule": 1},
+                    missing=["schedule"], ttl_seconds=CUSTOMER_TICKET_TTL_S,
+                )
+            except Exception:
+                log.exception("could not hold a reschedule prompt")
+            return ChatReply(text=_t(TIME_NOT_UNDERSTOOD, language))
+        due_time = time(9, 0)
     fields: dict = {
         "scheduled_date": due_date.isoformat(),
         "scheduled_time": due_time.isoformat(),
@@ -5344,17 +5498,24 @@ async def _notify_new_ticket(
     # have not been given the job.
     targets = await _dispatchers(client, license_id, members)
     when = _ticket_when(ticket)
+    # The machine, so whoever dispatches knows what is going out and
+    # whether it is warranty work before they price the visit.
+    ticket = (await ticket_machine.attach_to(client, license_id, [ticket]))[0]
+    machine_th = ticket_machine.machine_line(ticket, "th")
+    machine_en = ticket_machine.machine_line(ticket, "en")
     text = (
         f"แจ้งซ่อมใหม่ {ticket.get('ticket_number')}\n"
         f"{ticket.get('customer_name') or '—'}\n"
         f"{ticket.get('issue_description') or ''}\n"
-        f"ที่อยู่: {ticket.get('service_address') or 'รอลูกค้าแจ้ง'} · นัด: {when or 'รอลูกค้าแจ้ง'}"
+        + (f"{machine_th}\n" if machine_th else "")
+        + f"ที่อยู่: {ticket.get('service_address') or 'รอลูกค้าแจ้ง'} · นัด: {when or 'รอลูกค้าแจ้ง'}"
     )
     text_en = (
         f"New repair request {ticket.get('ticket_number')}\n"
         f"{ticket.get('customer_name') or '—'}\n"
         f"{ticket.get('issue_description') or ''}\n"
-        f"Address: {ticket.get('service_address') or 'pending'} · Appointment: {when or 'pending'}"
+        + (f"{machine_en}\n" if machine_en else "")
+        + f"Address: {ticket.get('service_address') or 'pending'} · Appointment: {when or 'pending'}"
     )
     for member in targets:
         chann_uid = str(member.get("chann_uid") or "")
@@ -6180,6 +6341,15 @@ async def _handle_ticket_detail(
         lines.append(f"{'Address' if en else 'ที่อยู่'}: {ticket['service_address']}")
     if ticket.get("issue_description"):
         lines.append(f"{'Fault' if en else 'อาการ'}: {ticket['issue_description']}")
+    # Which machine, and whether it is still covered — the reason for
+    # linking a fault to a registered unit at all (owner, 10 ก.ย. 2569).
+    # Silent on a ticket with no link: nothing is backfilled, and a label
+    # with nothing after it is worse than no line.
+    machine = ticket_machine.machine_line(
+        (await ticket_machine.attach_to(client, str(license_id), [ticket]))[0], language,
+    )
+    if machine:
+        lines.append(machine)
     when = _ticket_when(ticket)
     if when:
         lines.append(f"{'Scheduled' if en else 'นัด'}: {when}")
@@ -6296,6 +6466,191 @@ async def _handle_ticket_list(
     )
 
 
+# A running number on its own — "ticket 0004", "งาน 4", "มอบหมาย 0004 ให้ช่าง".
+# Bounded at four digits and required to stand alone so a phone number, a
+# price or a date cannot be read as a job (Thai letters are word
+# characters, so the guard is explicit rather than \b).
+_TICKET_RUN_RE = re.compile(
+    r"(?:^|[\s:·])((?:ticket|job|งาน|ใบงาน|เลขงาน|no\.?|#)?\s*(\d{1,4}))(?=$|[\s:·.,!?])",
+    re.IGNORECASE,
+)
+
+TICKET_ASSIGN_WHICH_TICKET = {
+    "th": "มอบหมายงานไหนครับ",
+    "en": "Which job should I assign?",
+}
+TICKET_ASSIGN_WHO = {
+    "th": "งาน {code} มอบหมายให้ช่างคนไหนครับ",
+    "en": "Who should job {code} go to?",
+}
+TICKET_ASSIGN_NO_TECHNICIAN = {
+    "th": "ยังไม่มีช่างในร้านครับ เชิญช่างเข้าร้านก่อน แล้วค่อยมอบหมายงาน {code}",
+    "en": "This shop has no technician yet — invite one, then assign {code}.",
+}
+
+
+def _ticket_run_numbers(message: str, trigger: str = "") -> list[tuple[str, str]]:
+    """(running number as four digits, the text that said it).
+
+    Owner's transcript, 10 ก.ย. 2569: "มอบหมาย ticket 0001 ให้ช่าง" was
+    refused with "ระบุเลขงานด้วย" — the number WAS given, just not in the
+    T-YYYY-NNNN shape nobody reads off a notification.
+
+    The raw text comes back too so the caller can take exactly that out of
+    the message before reading the rest as a person's name: blanking every
+    digit run instead turned "ให้ CHN-TECH-1" into "CHN-TECH".
+    """
+    text = message or ""
+    if trigger:
+        lowered = text.lower()
+        index = lowered.find(trigger.lower())
+        if index >= 0:
+            text = text[index + len(trigger):]
+    text = TICKET_CODE_RE.sub(" ", text)
+    if _looks_like_phone(text):
+        return []
+    return [(m.group(2).zfill(4), m.group(1)) for m in _TICKET_RUN_RE.finditer(text)]
+
+
+async def _ticket_for_assignment(
+    client: DataClient, license_id: str, ctx: ResolvedContext, message: str,
+    trigger: str, tickets: list[dict],
+) -> tuple[dict | None, str, str]:
+    """The job a dispatch command is about: (ticket, code, text-consumed).
+
+    Three ways in, in order of how certain each is, because the owner's
+    10 ก.ย. transcript hit all three and got the same generic refusal:
+
+    1. the full code, `T-2026-0004`, which always wins;
+    2. a running number on its own — "ticket 0004", "งาน 0004" — matched
+       on the number inside the licence's own codes, so 0004 means this
+       shop's fourth job of the year and never another shop's;
+    3. the job the conversation is already about: the last entity ref,
+       which `handle_reply` seeds from the message being replied to. That
+       is how "(quoting แจ้งซ่อมใหม่ T-2026-0004) มอบหมายให้ช่าง" resolves
+       without the person retyping a code they are pointing at.
+
+    (None, "") only when genuinely nothing identifies a job — which is the
+    one case the old refusal was right about.
+    """
+    match = TICKET_CODE_RE.search(message or "")
+    if match:
+        code = match.group(1).upper()
+        return next(
+            (t for t in tickets if str(t.get("ticket_number", "")).upper() == code), None,
+        ), code, ""
+
+    for run, said in _ticket_run_numbers(message, trigger):
+        hits = [
+            t for t in tickets
+            if str(t.get("ticket_number", "")).upper().endswith(f"-{run}")
+        ]
+        if len(hits) == 1:
+            return hits[0], str(hits[0].get("ticket_number") or ""), said
+        if len(hits) > 1:
+            # The same running number in two years. Rather than guess,
+            # fall through: the context below, or the question.
+            break
+
+    try:
+        last = await client.get_last_entity_ref(ctx.chann_uid, ctx.oa)
+    except Exception:
+        log.exception("could not read the conversation's last record")
+        last = None
+    if last and str(last.get("entity_type") or "") in ("ticket", "service_ticket"):
+        entity_id = str(last.get("entity_id") or "")
+        row = next((t for t in tickets if str(t.get("id")) == entity_id), None)
+        if row is not None:
+            return row, str(row.get("ticket_number") or ""), ""
+
+    # Nothing named and nothing in the conversation. The shop has just
+    # been told about a new fault and is answering that — so the jobs
+    # nobody has been given yet are the honest candidates: one is offered
+    # by name, several are offered as buttons, none keeps the refusal.
+    waiting = [
+        t for t in tickets
+        if str(t.get("status") or "") == "open" and not t.get("assigned_to_ref")
+    ]
+    if len(waiting) == 1:
+        return waiting[0], str(waiting[0].get("ticket_number") or ""), ""
+    return None, "", ""
+
+
+def _names_no_technician(target_text: str) -> bool:
+    """"ให้ช่าง" with nobody named — a request to dispatch, not a name.
+
+    The stripper below removes "ให้ช่าง" as a preposition, so what arrives
+    here is usually "" already; a bare "ช่าง"/"technician" that survived
+    means the same thing and must not be looked up as a person's name.
+    """
+    return _normalise(target_text) in {"", "ช่าง", "ชาง", "technician", "tech", "ใคร", "who"}
+
+
+async def _technicians_of(client: DataClient, license_id: str) -> list[dict]:
+    """Active technicians, with the display name a person would type."""
+    try:
+        members = await client.list_members(str(license_id))
+    except Exception:
+        log.exception("could not list members to offer an assignment target")
+        return []
+    out = []
+    for m in members:
+        if str(m.get("status") or "active") != "active":
+            continue
+        role = str(m.get("role") or "").lower()
+        if "technician" not in role and "ช่าง" not in str(m.get("role") or ""):
+            continue
+        try:
+            profile = await client.get_profile(str(m.get("chann_uid") or "")) or {}
+        except Exception:
+            profile = {}
+        name = " ".join(
+            p for p in (profile.get("first_name"), profile.get("last_name")) if p
+        ).strip()
+        out.append({**m, "display_name": name or str(m.get("chann_uid") or "")})
+    return out
+
+
+async def _ask_who_to_assign(
+    client: DataClient, *, license_id: str, code: str, trigger: str, language: str,
+) -> ChatReply:
+    """"ให้ช่างคนไหน" — with the shop's technicians as buttons.
+
+    A shop with one technician is offered that one by name rather than
+    asked an open question with a single possible answer; a shop with none
+    is told so plainly instead of being refused for naming nobody.
+    """
+    technicians = await _technicians_of(client, license_id)
+    if not technicians:
+        teams = []
+        try:
+            teams = await client.list_technician_teams(license_id)
+        except Exception:
+            log.exception("could not list teams to offer an assignment target")
+        if not teams:
+            return ChatReply(
+                text=_t(TICKET_ASSIGN_NO_TECHNICIAN, language).format(code=code),
+                quick_replies=[("ขอรหัสเชิญช่าง", "ขอรหัสเชิญช่าง")],
+            )
+        return ChatReply(
+            text=_t(TICKET_ASSIGN_WHO, language).format(code=code),
+            quick_replies=[
+                (str(t.get("team_name") or "")[:20], f"{trigger} {code} ให้ทีม {t.get('team_name')}")
+                for t in teams[:4]
+            ],
+        )
+    return ChatReply(
+        text=_t(TICKET_ASSIGN_WHO, language).format(code=code),
+        quick_replies=[
+            (
+                str(m.get("display_name") or m.get("chann_uid"))[:20],
+                f"{trigger} {code} ให้ {m.get('chann_uid')}",
+            )
+            for m in technicians[:4]
+        ],
+    )
+
+
 async def _handle_ticket_assign(
     client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
     trigger: str, permission_keys: list[str], language: str,
@@ -6307,10 +6662,50 @@ async def _handle_ticket_assign(
     if "ticket.assign" not in set(permission_keys):
         return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
 
-    match = TICKET_CODE_RE.search(message or "")
-    if not match:
-        return ChatReply(text=_t(TICKET_NEEDS_CODE, language))
-    code = match.group(1).upper()
+    # Three things are being said at once — WHICH job, to WHOM, and that
+    # it should be dispatched — and until 10 ก.ย. 2569 a message missing
+    # either of the first two got the same refusal naming only the first.
+    # They are resolved separately now, so each can be missing on its own
+    # and asked for on its own.
+    license_id = str(license_id)
+    try:
+        tickets = await client.list_tickets(license_id)
+    except Exception:
+        log.exception("ticket assign failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    ticket, code, said = await _ticket_for_assignment(
+        client, license_id, ctx, message, trigger, tickets,
+    )
+    if ticket is None:
+        if code:
+            return ChatReply(
+                text=_t(NOT_FOUND_BY_CODE, language).format(what="งาน", code=code)
+            )
+        waiting = [
+            t for t in tickets
+            if str(t.get("status") or "") == "open" and not t.get("assigned_to_ref")
+        ]
+        if waiting:
+            # Several jobs waiting: which one, as buttons — not a lecture
+            # about a code format (owner's transcript, 10 ก.ย. 2569).
+            return ChatReply(
+                text=_t(TICKET_ASSIGN_WHICH_TICKET, language),
+                quick_replies=[
+                    (
+                        f"{t.get('ticket_number')} {t.get('customer_name') or ''}".strip()[:20],
+                        f"{trigger} {t.get('ticket_number')} ให้ช่าง",
+                    )
+                    for t in waiting[:4]
+                ],
+            )
+        # Nothing named, nothing in the conversation, nothing waiting: the
+        # one case the old blanket refusal was right about.
+        return ChatReply(
+            text=_t(TICKET_NEEDS_CODE, language),
+            quick_replies=[("รายการงาน", "รายการงาน")],
+        )
+    code = str(ticket.get("ticket_number") or code).upper()
 
     # Whatever follows the code, minus the code and the trigger, names the
     # target. Team names are tenant-chosen free text, so this cannot be a
@@ -6322,23 +6717,25 @@ async def _handle_ticket_assign(
     for word in ("ให้ทีม", "ให้ช่าง", "ให้", "แก่", "to team", " to ", "ไปงาน", "ไปทำงาน", "ไปดู", "ไปซ่อม"):
         target_text = target_text.replace(word, " ")
     target_text = re.sub(r"^\s*(?:to|assign|ช่าง|คุณ|พี่)\s+", " ", target_text, flags=re.I)
+    if said:
+        # Exactly the words that named the job, and nothing else: a blanket
+        # digit strip turned "ให้ CHN-TECH-1" into a member nobody is.
+        target_text = target_text.replace(said, " ", 1)
     target_text = " ".join(target_text.split()).strip(" :·-")
     target_text = re.sub(r"(?:ไป|นะ|น่ะ|ครับ|ค่ะ|คะ|หน่อย|ด้วย|เลย|ที)+$", "", target_text).strip()
     target_text = _strip_polite_tail(target_text)
-    if not target_text:
-        return ChatReply(text=_t(TICKET_NEEDS_TARGET, language))
-
-    license_id = str(license_id)
-    try:
-        tickets = await client.list_tickets(license_id)
-        ticket = next(
-            (t for t in tickets if str(t.get("ticket_number", "")).upper() == code), None,
+    # "มอบหมายงานช่าง" — the noun "งาน" belongs to the verb, not to the
+    # target. Stripped only when what is left is the word for a technician
+    # rather than a name, so a team called "งานหลวง" is still itself.
+    if _names_no_technician(re.sub(r"^(?:งาน|ใบงาน|job)\s*", "", target_text, flags=re.I)):
+        # "มอบหมายให้ช่าง" names the job and the intent but nobody in
+        # particular. The shop's technicians are the answer to that, one
+        # tap each — not a refusal telling them to type a code they gave.
+        return await _ask_who_to_assign(
+            client, license_id=license_id, code=code, trigger=trigger, language=language,
         )
-        if ticket is None:
-            return ChatReply(
-                text=_t(NOT_FOUND_BY_CODE, language).format(what="งาน", code=code)
-            )
 
+    try:
         # "อัตโนมัติ" hands the choice to the Phase 11 engine, which is
         # what 12.5 describes: the dispatch gate checks completeness, then
         # the assignment rule decides WHO. Without this the engine existed
@@ -6570,17 +6967,25 @@ async def _notify_assigned_ticket(
         log.exception("could not resolve who to notify for a ticket assignment")
         return
 
+    # The technician is told which machine they are going to, and whether
+    # it is still under warranty, before they set off (owner, 10 ก.ย. 2569)
+    # — that is the operational reason a fault is linked to a unit at all.
+    ticket = (await ticket_machine.attach_to(client, license_id, [ticket]))[0]
+    machine_th = ticket_machine.machine_line(ticket, "th")
+    machine_en = ticket_machine.machine_line(ticket, "en")
     text = (
         f"งานใหม่ {ticket.get('ticket_number')} ({target_label})\n"
         f"{ticket.get('customer_name') or '—'}\n"
         f"{ticket.get('service_address') or '—'}\n"
         f"{ticket.get('issue_description') or ''}"
+        + (f"\n{machine_th}" if machine_th else "")
     )
     text_en = (
         f"New job {ticket.get('ticket_number')} ({target_label})\n"
         f"{ticket.get('customer_name') or '—'}\n"
         f"{ticket.get('service_address') or '—'}\n"
         f"{ticket.get('issue_description') or ''}"
+        + (f"\n{machine_en}" if machine_en else "")
     )
     for member in members:
         chann_uid = str(member.get("chann_uid") or "")
@@ -8065,8 +8470,11 @@ _SPELLING_MAP = (
     ("หวัดดร", "หวัดดี"), ("ฮอด", "ถึง"), ("แปง", "ซ่อม"), ("ไปป์ไลน์", "pipeline"), ("ไปป์ไลน", "pipeline"), ("ลีด", "lead"),
     ("ทะเบียร", "ทะเบียน"), ("ปะกัน", "ประกัน"), ("ประกัณ", "ประกัน"), ("โน๊ต", "โน้ต"), ("โน้ท", "โน้ต"), ("จ็อบ", "งาน"),
 )
-# "มีไรบ้าง" = "มีอะไรบ้าง" — but "อะไรบ้าง" already has it.
-_SLANG_WHAT_RE = re.compile(r"(?<!อะ)(?<!เท่า)(?<!ท่า)ไร(?=บ้าง|มั่ง|ดี|กัน|$|\s)")
+# "มีไรบ้าง" = "มีอะไรบ้าง" — but "อะไรบ้าง" already has it, and neither
+# does "อย่างไร": folding that one turned "เช็คอินต้องทำอย่างไร" into
+# "…อย่างอะไร", which no question marker matched, so the question was
+# obeyed as a command (review v3, B03).
+_SLANG_WHAT_RE = re.compile(r"(?<!อะ)(?<!เท่า)(?<!ท่า)(?<!อย่าง)ไร(?=บ้าง|มั่ง|ดี|กัน|$|\s)")
 # Karaoke Thai and the English a Thai typist reaches for. Whole words only,
 # longest first, so "wan nee" is read before "nee".
 _KARAOKE_MAP = (
@@ -8272,6 +8680,198 @@ def _disclaims_a_job_action(message: str) -> bool:
     road. A guard on only one of the two roads is not a guard.
     """
     return bool(_JOB_DISCLAIMER_RE.search(_normalise(message)))
+
+
+# What the chat says when a sentence names an action without asking for it.
+# One table, so a refusal reads the same wherever it comes from: the verb,
+# the record it would have touched, and the command that WOULD do it — an
+# acknowledgement that teaches, rather than a shrug.
+_GUARD_ACTIONS: dict[str, dict[str, str]] = {
+    "appointment_create": {
+        "th": "ตั้งนัด", "en": "set the appointment",
+        "th_eg": "ตั้งนัด {code} พรุ่งนี้ 14:00", "en_eg": "set an appointment for {code} tomorrow 14:00",
+        "code": "C-2026-0001",
+    },
+    "appointment_move": {
+        "th": "เลื่อนนัด", "en": "move the appointment",
+        "th_eg": "เลื่อนนัด {code} เป็น 16:00", "en_eg": "move the appointment for {code} to 16:00",
+        "code": "C-2026-0001",
+    },
+    "appointment_cancel": {
+        "th": "ยกเลิกนัด", "en": "cancel the appointment",
+        "th_eg": "ยกเลิกนัด {code}", "en_eg": "cancel the appointment for {code}",
+        "code": "C-2026-0001",
+    },
+    "appointment_delete": {
+        "th": "ลบนัด", "en": "remove the appointment",
+        "th_eg": "ลบนัด {code}", "en_eg": "remove the appointment for {code}",
+        "code": "C-2026-0001",
+    },
+    "quote_create": {
+        "th": "สร้างใบเสนอราคา", "en": "create the quotation",
+        "th_eg": "สร้างใบเสนอราคา {code}", "en_eg": "create a quotation for {code}",
+        "code": "D-2026-0001",
+    },
+    "check_in": {
+        "th": "เช็คอิน", "en": "check in",
+        "th_eg": "เช็คอิน {code}", "en_eg": "check in {code}",
+        "code": "T-2026-0001",
+    },
+    "check_out": {
+        "th": "ปิดงาน", "en": "close the job",
+        "th_eg": "ปิดงาน {code}", "en_eg": "close {code}",
+        "code": "T-2026-0001",
+    },
+    "ticket_open": {
+        "th": "เปิดงานซ่อม", "en": "open a repair job",
+        "th_eg": "แจ้งซ่อม", "en_eg": "report a fault",
+        "code": "",
+    },
+    "pending_flow": {
+        "th": "บันทึก", "en": "save this",
+        "th_eg": "เพิ่มลูกค้า สมชาย 0812345678", "en_eg": "add customer Somchai 0812345678",
+        "code": "",
+    },
+    "line_item": {
+        "th": "แก้รายการสินค้า", "en": "change the line items",
+        "th_eg": "เพิ่มพัดลม 3 ตัว", "en_eg": "add 3 fans",
+        "code": "",
+    },
+    # Anything else the model asks to remove. Deliberately vague, because
+    # this is the catch-all for entities with no wording of their own.
+    "record_delete": {
+        "th": "ลบข้อมูลนี้", "en": "delete this record",
+        "th_eg": "ลบ {code}", "en_eg": "delete {code}",
+        "code": "C-2026-0001",
+    },
+}
+
+# The model's reading is not a mandate either: every mutating (entity,
+# action) the AI road can dispatch is named here, so ONE call in
+# _execute_intent covers the whole road rather than each branch of it.
+_AI_GUARDED: dict[tuple[str, str], str] = {
+    ("followup", "create"): "appointment_create",
+    ("followup", "update"): "appointment_move",
+    ("followup", "cancel"): "appointment_cancel",
+    ("followup", "delete"): "appointment_delete",
+    ("quote", "create"): "quote_create",
+    ("quote", "issue"): "quote_create",
+    ("service_report", "check_in"): "check_in",
+    ("service_report", "check_out"): "check_out",
+    ("service_report", "create"): "check_out",
+    ("service_report", "update"): "check_out",
+    ("ticket", "create"): "ticket_open",
+    ("ticket", "close"): "check_out",
+    ("line_item", "create"): "line_item",
+    ("line_item", "update"): "line_item",
+    ("line_item", "delete"): "line_item",
+}
+
+
+def _guard_triggers(action: str) -> tuple[str, ...]:
+    """The handler's OWN trigger tuple for a guarded action.
+
+    A function, not a table, because the trigger constants are declared
+    further down this module with their handlers; read at call time they
+    are simply the same words the dispatcher matched on, which is the
+    point — the guard and the dispatcher must never disagree about what
+    the action is called.
+    """
+    return {
+        "appointment_create": REMINDER_TRIGGERS,
+        "appointment_move": REMINDER_MOVE_TRIGGERS,
+        "appointment_cancel": REMINDER_CANCEL_TRIGGERS + _REMINDER_CANCEL_HEADS,
+        "appointment_delete": REMINDER_CANCEL_TRIGGERS,
+        "quote_create": QUOTE_CREATE_TRIGGERS,
+        "check_in": CHECKIN_TRIGGERS,
+        "check_out": CHECKOUT_TRIGGERS,
+        "line_item": LINE_EDIT_TRIGGERS + LINE_REMOVE_TRIGGERS + DEAL_PRODUCT_ADD_TRIGGERS,
+    }.get(action, ())
+
+
+INTENT_NOT_A_COMMAND = {
+    "th": 'รับทราบครับ ยังไม่ได้{what} ถ้าต้องการให้ทำ พิมพ์คำสั่งตรง ๆ เช่น "{example}"',
+    "en": 'Understood — I did not {what}. Send the command itself when you want it, e.g. "{example}".',
+}
+INTENT_STATUS_ANSWER = {
+    "th": 'ยังไม่ได้{what} ครับ ถ้าต้องการให้ทำ พิมพ์ "{example}"',
+    "en": 'That has not happened — I did not {what}. Send "{example}" when you want it.',
+}
+INTENT_HOW_TO = {
+    "th": 'วิธี{verb}: พิมพ์ "{example}" ครับ — ตอนนี้ยังไม่ได้แก้ข้อมูลอะไร',
+    "en": 'To {verb}: send "{example}". Nothing has been changed.',
+}
+INTENT_CONFIRM = {
+    "th": 'ต้องการ{what} ใช่ไหมครับ? ถ้าใช่ พิมพ์ "{example}"',
+    "en": 'Do you want me to {what}? If so, send "{example}".',
+}
+_GUARD_CODE_RE = re.compile(r"(?<![A-Za-z0-9])((?:SR|[CDQT])-\d{4}-\d{4})(?![0-9])", re.IGNORECASE)
+
+
+def _intent_guard_reply(
+    message: str, *, action: str, language: str,
+    triggers: tuple[str, ...] | None = None, code: str | None = None,
+) -> ChatReply | None:
+    """The answer to give INSTEAD of writing, or None to go ahead.
+
+    The decision itself is `intent_guard.intent_to_act`; this only dresses
+    it. Every path in this module that mutates anything calls this first,
+    which is the whole point — the review of 9-10 Sep 2026 cancelled
+    appointments, issued quotations, checked jobs in and opened repair
+    tickets from sentences that refused, questioned or merely quoted the
+    action, because each handler was left to notice for itself.
+    """
+    verdict = intent_to_act(
+        message, action=action, canonical=_canonical(message),
+        triggers=tuple(_guard_triggers(action) if triggers is None else triggers),
+    )
+    if verdict.acts:
+        return None
+    spec = _GUARD_ACTIONS[action]
+    found = _GUARD_CODE_RE.search(_normalise_message(message) or "")
+    named = (code or (found.group(1).upper() if found else "") or "").strip()
+    verb = spec["th" if language != "en" else "en"]
+    example = spec["th_eg" if language != "en" else "en_eg"].format(code=named or spec["code"])
+    what = f"{verb}ของ {named}" if (named and language != "en") else (
+        f"{verb} for {named}" if named else verb
+    )
+    if verdict.outcome == ASK:
+        table = INTENT_CONFIRM
+    elif verdict.reason == "status":
+        table = INTENT_STATUS_ANSWER
+    elif verdict.reason == "howto":
+        table = INTENT_HOW_TO
+    else:
+        table = INTENT_NOT_A_COMMAND
+    return ChatReply(text=_t(table, language).format(what=what, verb=verb, example=example))
+
+
+async def _guarded_in_context(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
+    action: str, language: str,
+) -> ChatReply | None:
+    """_intent_guard_reply, naming the record in play.
+
+    "ยังไม่เปลี่ยนเวลานัดเป็น 16:00" names no code — the appointment is the
+    one they were just looking at, and a refusal that cannot say which
+    record it is about is half an answer (owner rule 3: never guess, never
+    go quiet). The lookup happens only when the guard has already decided
+    to hold, so an ordinary command pays nothing for it.
+    """
+    reply = _intent_guard_reply(message, action=action, language=language)
+    if reply is None or _GUARD_CODE_RE.search(message or ""):
+        return reply
+    try:
+        ref = await client.get_last_entity_ref(ctx.chann_uid, ctx.oa)
+    except Exception:
+        return reply
+    code = await _code_for_entity(
+        client, str(license_id), str((ref or {}).get("entity_type") or ""),
+        str((ref or {}).get("entity_id") or ""),
+    ) if ref else None
+    if not code:
+        return reply
+    return _intent_guard_reply(message, action=action, language=language, code=code)
 
 
 def _command_like(message: str, triggers: tuple[str, ...]) -> bool:
@@ -8745,7 +9345,42 @@ DEAL_PRODUCT_ADD_TRIGGERS = (
 # "พัดลมตั้งพื้น 18 นิ้ว 2 ตัว" and left the product called
 # "พัดลมตั้งพื้น นิ้ว" — model numbers and sizes live inside product
 # names constantly, so a number alone can never mean a quantity.
-_QTY_RE = re.compile(r"(?:x|×|จำนวน)\s*(\d+)|(\d+)\s*(?:ตัว|ชิ้น|อัน|เครื่อง|ชุด)\b", re.I)
+# The sign and the decimal point are part of the number and are carried
+# through extraction. Dropping them is how "เพิ่มพัดลมอีก -1 ตัว" reached the
+# positive-value guard as a plain 1 and added a fan, and how "อีก 1.5 ตัว"
+# became five (review v3, B05). A minus only counts as one where nothing
+# precedes it: the "-3" in "FAN-3 ตัว" is part of a model name.
+_THAI_DIGIT_MAP = str.maketrans("๐๑๒๓๔๕๖๗๘๙", "0123456789")
+_QTY_RE = re.compile(
+    r"(?:x|×|จำนวน)\s*(-?\d+(?:\.\d+)?)"
+    r"|(?<![\w.])(-?\d+(?:\.\d+)?)\s*(?:ตัว|ชิ้น|อัน|เครื่อง|ชุด)\b",
+    re.I,
+)
+
+
+def _qty_number(text: str | None) -> float | None:
+    """The quantity as written, Thai digits included, or None."""
+    raw = str(text or "").strip().translate(_THAI_DIGIT_MAP)
+    return float(raw) if re.fullmatch(r"-?\d+(?:\.\d+)?", raw) else None
+
+
+def _whole_qty(text: str | None) -> int | None:
+    """A quantity something can actually be counted in: a whole number,
+    zero or above. None for a negative, a fraction, or nonsense — the
+    caller says so rather than rounding it into something plausible."""
+    value = _qty_number(text)
+    if value is None or value < 0 or not value.is_integer():
+        return None
+    return int(value)
+
+
+def _tidy_qty(value: float | None) -> int | float | None:
+    """3.0 back to 3, so a rebuilt sentence says "เป็น 3"."""
+    if value is None:
+        return None
+    return int(value) if float(value).is_integer() else value
+
+
 _PRICE_RE = re.compile(r"(?:ราคา|@|฿)\s*([\d,]+(?:\.\d{1,2})?)\s*(?:บาท|฿|baht)?", re.I)
 
 DEAL_PRODUCT_ADDED = {
@@ -8859,15 +9494,44 @@ _NEW_PRICE_RE = re.compile(r"(?:เหลือ|เป็น|as|to)\s*([\d,]+(?:
 # typed path and the model's reading of the same sentence.
 
 _ITEM_COUNT_UNITS = r"ตัว|ชิ้น|อัน|เครื่อง|ชุด|รายการ|units?|pcs|pieces?|items?"
+# The same table the clock uses, so a number word understood in "บ่ายสอง" is
+# understood in "อีกสามตัว" (review v3: "สาม" was not read as 3 at all).
+_QTY_WORDS = thai_number_words(20)
+_QTY_WORDS_RE = "|".join(sorted(_QTY_WORDS, key=len, reverse=True))
+# Only where the word is unmistakably a count: at the start, after a space,
+# or straight after one of the words that introduce a quantity. A number
+# word buried in a name stays a name — "เก้าอี้" is a chair and "ชุดสามชิ้น"
+# is what a three-piece set is called, not three of something.
+_QTY_WORD_LEAD = r"(?:^|(?<=\s)|(?<=อีก)|(?<=เป็น)|(?<=เหลือ)|(?<=จำนวน))"
+_QTY_WORD_BEFORE_UNIT_RE = re.compile(
+    _QTY_WORD_LEAD + r"(" + _QTY_WORDS_RE + r")(?=\s*(?:" + _ITEM_COUNT_UNITS + r")(?![ก-๙]))",
+    re.I,
+)
+_QTY_WORD_AS_TARGET_RE = re.compile(
+    r"(?:(?<=เป็น)|(?<=เหลือ))\s*(" + _QTY_WORDS_RE + r")(?![ก-๙\w])",
+)
+
+
+def _fold_qty_words(text: str) -> str:
+    """"เพิ่มพัดลมอีกสามตัว" -> "เพิ่มพัดลมอีก3ตัว"; "เป็นสาม" -> "เป็น3"."""
+    folded = _QTY_WORD_BEFORE_UNIT_RE.sub(lambda m: str(_QTY_WORDS[m[1]]), text or "")
+    return _QTY_WORD_AS_TARGET_RE.sub(lambda m: str(_QTY_WORDS[m[1]]), folded)
+
+
 # "อีก 2", "เอาเพิ่ม 2", "2 more": the delta of an increment, with or
 # without a counting word. A size ("อีก 18 นิ้ว") is never a delta.
 _ITEM_MORE_QTY_RE = re.compile(
-    r"(?:อีก|ไปอีก|เพิ่มอีก|เอาเพิ่ม|เพิ่มเติม|another)\s*(?:สัก)?\s*(\d+)(?!\s*(?:นิ้ว|ตัน|ลิตร|btu|วัตต์|แรง))"
-    r"|(\d+)\s*(?:more|extra|additional)\b",
+    r"(?:อีก|ไปอีก|เพิ่มอีก|เอาเพิ่ม|เพิ่มเติม|another)\s*(?:สัก)?\s*(-?\d+(?:\.\d+)?)"
+    r"(?!\s*(?:นิ้ว|ตัน|ลิตร|btu|วัตต์|แรง))"
+    r"|(?<![\w.])(-?\d+(?:\.\d+)?)\s*(?:more|extra|additional)\b",
     re.I,
 )
 _ITEM_MORE_WORDS_RE = re.compile(r"ไปอีก|เพิ่มอีก|เอาเพิ่ม|เพิ่มเติม|อีก|\bmore\b|\bextra\b|\badditional\b|\banother\b", re.I)
-_ITEM_LESS_QTY_RE = re.compile(r"(\d+)\s*(?:less|fewer)\b|(?:by|off)\s*(\d+)\b", re.I)
+_ITEM_LESS_QTY_RE = re.compile(
+    r"(?<![\w.])(-?\d+(?:\.\d+)?)\s*(?:less|fewer)\b"
+    r"|(?:by|off)\s*(-?\d+(?:\.\d+)?)\b",
+    re.I,
+)
 # A number followed by one of these is a SIZE inside the name, never a count.
 _ITEM_SIZE_AFTER_NUMBER_RE = re.compile(r"\d+\s*(?:นิ้ว|ตัน|ลิตร|btu|วัตต์|แรง|ซม|มม|กก|kg|cm|mm|hp)", re.I)
 
@@ -8979,11 +9643,14 @@ _ITEM_HEAD_RE = re.compile(
     re.I,
 )
 _ITEM_SET_QTY_RE = re.compile(
-    r"^(?:แก้ไข|แก้|เปลี่ยน|ปรับ|ตั้ง|set|change|update)\s*(?:สินค้า|รายการ|จำนวน|the)?\s*(.*?)\s*(?:เป็น|เหลือ|ให้เหลือ|to|=)\s*(\d+)\s*"
+    r"^(?:แก้ไข|แก้|เปลี่ยน|ปรับ|ตั้ง|set|change|update)\s*(?:สินค้า|รายการ|จำนวน|the)?\s*(.*?)\s*(?:เป็น|เหลือ|ให้เหลือ|to|=)\s*(-?\d+(?:\.\d+)?)\s*"
     + r"(?:" + _ITEM_COUNT_UNITS + r")?\s*(?:ครับ|ค่ะ|คะ|นะ)?$",
     re.I,
 )
-_ITEM_BARE_QTY_RE = re.compile(r"^(.+?)\s*(\d+)\s*(?:" + _ITEM_COUNT_UNITS + r")\s*(?:ครับ|ค่ะ|คะ|นะ)?$", re.I)
+_ITEM_BARE_QTY_RE = re.compile(
+    r"^(.+?)\s*(?<![\w.])(-?\d+(?:\.\d+)?)\s*(?:" + _ITEM_COUNT_UNITS + r")\s*(?:ครับ|ค่ะ|คะ|นะ)?$",
+    re.I,
+)
 
 
 def _parse_line_item_command(message: str) -> dict | None:
@@ -9000,7 +9667,7 @@ def _parse_line_item_command(message: str) -> dict | None:
     The price-and-quantity triggers ("แก้ราคา", "เปลี่ยนจำนวน") keep their
     own path; a sentence with "อีก" is an increment whatever verb it uses.
     """
-    raw = " ".join((message or "").split())
+    raw = _fold_qty_words(" ".join((message or "").split()))
     if not raw or "\n" in (message or "") or len(raw) > 120:
         return None
     lowered = raw.lower()
@@ -9019,8 +9686,8 @@ def _parse_line_item_command(message: str) -> dict | None:
             name = _strip_item_particles(m.group(1))
             if name and _item_is_excluded(name):
                 return None
-            return {"op": "set_qty", "name": name, "qty": int(m.group(2)), "price": None, "more": False,
-                    "code": code, "unit": _item_unit_word(body)}
+            return {"op": "set_qty", "name": name, "qty": _tidy_qty(_qty_number(m.group(2))),
+                    "price": None, "more": False, "code": code, "unit": _item_unit_word(body)}
 
     price = None
     pm = _PRICE_RE.search(body)
@@ -9039,13 +9706,16 @@ def _parse_line_item_command(message: str) -> dict | None:
     # other order left " ตัว" behind as part of the name.
     qm = _QTY_RE.search(body) or _ITEM_MORE_QTY_RE.search(body)
     if qm:
-        qty = int(qm.group(1) or qm.group(2))
+        qty = _qty_number(qm.group(1) or qm.group(2))
         rest = body.replace(qm.group(0), " ")
     elif head:
         # "add 2 heaters", "remove 1 fan": the count right after the verb.
-        lead = re.match(r"\s*(\d+)\s+(?!\d)(?!(?:นิ้ว|ตัน|ลิตร|btu|วัตต์|แรง|more|extra)\b)", body[head.end():], re.I)
+        lead = re.match(
+            r"\s*(-?\d+(?:\.\d+)?)\s+(?!\d)(?!(?:นิ้ว|ตัน|ลิตร|btu|วัตต์|แรง|more|extra)\b)",
+            body[head.end():], re.I,
+        )
         if lead:
-            qty = int(lead.group(1))
+            qty = _qty_number(lead.group(1))
             rest = body[: head.end()] + " " + body[head.end() + lead.end():]
     rest = re.sub(r"(?:^|(?<=\s))(?:" + _ITEM_COUNT_UNITS + r")(?=\s|$)", " ", rest, flags=re.I)
 
@@ -9060,7 +9730,8 @@ def _parse_line_item_command(message: str) -> dict | None:
             return None
         if not name and qty is None:
             return None
-        return {"op": "add", "name": name or None, "qty": 1 if qty is None else qty, "price": price, "more": more, "code": code, "unit": unit}
+        return {"op": "add", "name": name or None, "qty": 1 if qty is None else _tidy_qty(qty),
+                "price": price, "more": more, "code": code, "unit": unit}
 
     if verb in ("ลด", "ลดจำนวน"):
         if price is not None or any(w in low for w in ("ราคา", "price", "บาท")):
@@ -9070,28 +9741,30 @@ def _parse_line_item_command(message: str) -> dict | None:
         if qty is None:
             lm = _ITEM_LESS_QTY_RE.search(body)
             if lm:
-                qty = int(lm.group(1) or lm.group(2))
+                qty = _qty_number(lm.group(1) or lm.group(2))
                 rest = body.replace(lm.group(0), " ")
         if qty is None:
             return None
         name = _strip_item_particles(rest)
         if name and _item_is_excluded(name):
             return None
-        return {"op": "decrement", "name": name or None, "qty": qty, "price": None, "more": False, "code": code, "unit": unit}
+        return {"op": "decrement", "name": name or None, "qty": _tidy_qty(qty), "price": None,
+                "more": False, "code": code, "unit": unit}
 
     if verb in ("ลบสินค้า", "ลบรายการ", "เอาสินค้าออก", "ตัดสินค้า", "เอาออก", "เอา", "ลบ", "ตัด", "remove", "delete", "drop", "take"):
         has_out = "ออก" in low or "ทิ้ง" in low or bool(re.search(r"\b(?:off|out|away)\b", low))
         if qty is None and verb in ("remove", "take"):
             lm = _ITEM_LESS_QTY_RE.search(body)
             if lm:
-                qty = int(lm.group(1) or lm.group(2))
+                qty = _qty_number(lm.group(1) or lm.group(2))
                 rest = body.replace(lm.group(0), " ")
         if qty is not None and "ทั้งหมด" not in low and not re.search(r"\ball\b", low):
             # "เอาพัดลมออก 1 ตัว", "remove 1 fan": fewer, not gone.
             name = _strip_item_particles(rest)
             if name and _item_is_excluded(name):
                 return None
-            return {"op": "decrement", "name": name or None, "qty": qty, "price": None, "more": False, "code": code, "unit": unit}
+            return {"op": "decrement", "name": name or None, "qty": _tidy_qty(qty), "price": None,
+                    "more": False, "code": code, "unit": unit}
         explicit = verb in ("ลบสินค้า", "ลบรายการ", "เอาสินค้าออก", "ตัดสินค้า", "remove", "delete", "drop")
         if not (explicit or has_out):
             return None
@@ -9115,9 +9788,22 @@ def _parse_line_item_command(message: str) -> dict | None:
         return None
     if re.match(r"^(?:สร้าง|เปิด|ดู|ขอ|มี|create|open|show|view)", name.lower()):
         return None
-    return {"op": "bare_qty", "name": name, "qty": int(m.group(2)), "price": None, "more": False, "code": code, "unit": unit}
+    return {"op": "bare_qty", "name": name, "qty": _tidy_qty(_qty_number(m.group(2))), "price": None,
+            "more": False, "code": code, "unit": unit}
 
 
+# A quantity the person wrote that nothing can be done with. Said plainly,
+# with what the record still holds, because the alternative — reading it as
+# the nearest plausible positive number — changes a document that goes to a
+# customer without anyone being told (review v3, B05).
+LINE_QTY_NOT_POSITIVE = {
+    "th": "จำนวนที่เพิ่มหรือลดต้องมากกว่า 0 ครับ รายการเดิมยังอยู่เท่าเดิม",
+    "en": "The quantity to add or remove must be greater than 0. The items are unchanged.",
+}
+LINE_QTY_NOT_WHOLE = {
+    "th": "จำนวนต้องเป็นจำนวนเต็มครับ เช่น \"2 ตัว\" รายการเดิมยังอยู่เท่าเดิม",
+    "en": "A quantity has to be a whole number, e.g. \"2\". The items are unchanged.",
+}
 LINE_INCREMENTED = {
     "th": "เพิ่ม{name}อีก {delta} {unit}แล้ว ตอนนี้{name}รวมเป็น {qty} × {price} = {total} ใน{where} {code}{record_total}",
     "en": "Added {delta} more {name}. Now {qty} × {price} = {total} on {code}{record_total}",
@@ -9443,12 +10129,18 @@ async def _handle_line_item_command(
     where = _where_label(kind, language)
     code = code or ""
     name = str(cmd.get("name") or "").strip()
-    qty = int(cmd["qty"]) if cmd.get("qty") is not None else 1
+    # The number the person actually wrote reaches the guard now, so the
+    # guard can do its job: "-1" is refused instead of adding one, and
+    # "1.5" instead of quietly becoming 5 (review v3, B05).
+    raw_qty = cmd.get("qty")
+    qty_value = float(raw_qty) if raw_qty is not None else 1.0
+    if not qty_value.is_integer():
+        return ChatReply(text=_t(LINE_QTY_NOT_WHOLE, language))
+    qty = int(qty_value)
     if op in ("add", "decrement") and qty <= 0:
-        return ChatReply(text=(
-            "จำนวนที่เพิ่มหรือลดต้องมากกว่า 0 ครับ รายการเดิมยังอยู่เท่าเดิม"
-            if language == "th" else "The quantity to add or remove must be greater than 0. The items are unchanged."
-        ))
+        return ChatReply(text=_t(LINE_QTY_NOT_POSITIVE, language))
+    if op in ("set_qty", "bare_qty") and qty < 0:
+        return ChatReply(text=_t(LINE_QTY_NOT_POSITIVE, language))
     unit = str(cmd.get("unit") or "ตัว")
     trigger = {"delete": "ลบสินค้า", "decrement": "ลด", "add": "เพิ่ม", "set_qty": "แก้จำนวน", "bare_qty": "แก้จำนวน"}.get(op, "แก้จำนวน")
 
@@ -9672,13 +10364,119 @@ def _match_line(lines: list[dict], name: str) -> dict | None:
 
 
 STAFF_TICKET_CREATED = {
-    "th": "เปิดงานซ่อม {code} ให้ {name} แล้ว\nอาการ: {issue}",
-    "en": "Opened {code} for {name}: {issue}",
+    # {machine} is the registered unit the job is about, or empty when the
+    # customer has none on file (owner, 10 ก.ย. 2569).
+    "th": "เปิดงานซ่อม {code} ให้ {name} แล้ว\nอาการ: {issue}{machine}",
+    "en": "Opened {code} for {name}: {issue}{machine}",
 }
 STAFF_TICKET_NEEDS_ISSUE = {
     "th": "แจ้งซ่อมเรื่องอะไรครับ พิมพ์อาการมาได้เลย",
     "en": "What is the problem?",
 }
+STAFF_TICKET_WHICH_PRODUCT = {
+    # The customer flow's own question, asked of the staff member instead:
+    # one device-choice pattern, not two (REPORT_WHICH_PRODUCT above).
+    "th": "{name} ลงทะเบียนไว้หลายเครื่อง งานนี้เครื่องไหนครับ",
+    "en": "{name} has several registered units — which one is this job about?",
+}
+STAFF_TICKET_NO_MACHINE_CHOICE = {
+    "th": "ไม่ระบุเครื่อง",
+    "en": "No machine",
+}
+STAFF_TICKET_DEVICE_TTL_S = 900
+
+
+async def _registered_units_of(
+    client: DataClient, license_id: str, customer: dict,
+) -> list[dict]:
+    """The machines this contact has registered with the shop.
+
+    Matched through the LINE identity on the contact row, because that is
+    what a warranty records when a customer claims a unit. A contact who
+    has never linked LINE has no claimed units, which is a real answer,
+    not an error — the job is opened without a machine.
+    """
+    uid = str((customer or {}).get("customer_chann_uid") or "").strip()
+    if not uid:
+        return []
+    try:
+        rows = await client.list_warranties(str(license_id), customer_chann_uid=uid)
+    except Exception:
+        log.exception("could not read the registered units of %s", uid)
+        return []
+    return [
+        w for w in (rows or [])
+        if str(w.get("status") or "") != "void" and w.get("serial_number")
+    ]
+
+
+async def _ask_staff_which_device(
+    client: DataClient, *, ctx: ResolvedContext, customer: dict, fields: dict,
+    registered: list[dict], language: str,
+) -> ChatReply:
+    """Which of the customer's machines, as buttons.
+
+    The customer flow's device choice (REPORT_WHICH_PRODUCT), asked of the
+    staff member: same shape, same escape hatch, same "one tap sends the
+    serial back". The half-finished request is held so the tap finishes
+    the ORIGINAL sentence rather than being re-parsed as a bare serial.
+    """
+    candidates = registered[:4]
+    try:
+        await client.set_pending_intent(
+            ctx.chann_uid, ctx.oa,
+            action="create", entity="staff_ticket_device",
+            fields={
+                "resume_fields": dict(fields),
+                "serials": [str(w.get("serial_number") or "") for w in candidates],
+            },
+            missing=["serial"], ttl_seconds=STAFF_TICKET_DEVICE_TTL_S,
+        )
+    except Exception:
+        log.exception("could not hold a staff ticket while asking which machine")
+    no_machine = _t(STAFF_TICKET_NO_MACHINE_CHOICE, language)
+    return ChatReply(
+        text=_t(STAFF_TICKET_WHICH_PRODUCT, language).format(name=_display_name(customer)),
+        quick_replies=[
+            (
+                f"{w.get('product_name') or ''} {w.get('serial_number')}".strip()[:20],
+                str(w.get("serial_number") or ""),
+            )
+            for w in candidates
+        ] + [(no_machine, no_machine)],
+    )
+
+
+async def _resolve_staff_ticket_device(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
+    pending: dict, permission_keys: list[str], language: str,
+) -> ChatReply | None:
+    """Consumes the answer to "which machine?" on the staff path.
+
+    Returns None when the reply is neither one of the offered serials nor
+    the way out, so an unrelated command is still an unrelated command —
+    the same rule the line-item and template prompts follow.
+    """
+    held = pending.get("fields") or {}
+    resume = dict(held.get("resume_fields") or {})
+    serials = [str(x).upper() for x in (held.get("serials") or [])]
+    text = (message or "").strip()
+    upper = text.upper()
+
+    if upper in serials:
+        resume["serial_number"] = text
+    elif _matches_phrase(text, NO_SERIAL_PHRASES) or _normalise(text) == _normalise(
+        _t(STAFF_TICKET_NO_MACHINE_CHOICE, language)
+    ):
+        resume["no_machine"] = True
+    else:
+        return None
+
+    await _drop_pending_quietly(client, ctx)
+    return await _handle_staff_ticket_create(
+        client, ctx=ctx, license_id=license_id, fields=resume,
+        permission_keys=permission_keys, language=language,
+    )
 
 
 async def _handle_staff_ticket_create(
@@ -9722,18 +10520,40 @@ async def _handle_staff_ticket_create(
     if customer is None:
         return ChatReply(text=_t(DEAL_NEEDS_TARGET_NAME, language))
 
+    # Owner, 10 ก.ย. 2569: a job opened by hand is about a registered unit
+    # just as much as one the customer reported themselves. One unit is
+    # linked and named; several are asked about rather than guessed at
+    # (rule 3 — never guess between candidates, never go silent); none
+    # leaves the flow exactly as it was.
+    serial = str(fields.get("serial_number") or "").strip()
+    if not serial and not fields.get("no_machine"):
+        registered = await _registered_units_of(client, license_id, customer)
+        if len(registered) == 1:
+            serial = str(registered[0].get("serial_number") or "")
+        elif len(registered) > 1:
+            return await _ask_staff_which_device(
+                client, ctx=ctx, customer=customer, fields=fields,
+                registered=registered, language=language,
+            )
+
+    warranty = await ticket_machine.warranty_for_serial(client, license_id, serial) if serial else None
+
     try:
         ticket = await client.create_ticket(
             license_id,
             {
                 "issue_description": issue,
                 "owner_member_id": await _member_id_of(client, license_id, ctx),
-                "customer_id": str(customer.get("id") or ""),
+                # contact_id, not customer_id: TicketIn has no customer_id
+                # field, so the link to the customer this job is for was
+                # being dropped by pydantic without a word.
+                "contact_id": str(customer.get("id") or ""),
                 "customer_name": _display_name(customer),
                 "customer_phone": customer.get("phone"),
                 "service_address": fields.get("service_address") or customer.get("address"),
                 "scheduled_date": fields.get("scheduled_date"),
                 "scheduled_time": fields.get("scheduled_time"),
+                **ticket_machine.link_fields(warranty, serial),
             },
             actor_id=ctx.chann_uid,
         )
@@ -9745,9 +10565,13 @@ async def _handle_staff_ticket_create(
     await _remember_entity(
         client, ctx, entity_type="ticket", entity_id=str(ticket["id"]), code=code,
     )
+    machine_line = ticket_machine.machine_line(
+        ticket_machine.attach([ticket], _by_serial(warranty))[0], language,
+    )
     return ChatReply(
         text=_t(STAFF_TICKET_CREATED, language).format(
             code=code, name=_display_name(customer), issue=issue,
+            machine=f"\n{machine_line}" if machine_line else "",
         ),
         entity_type="ticket", entity_id=str(ticket["id"]),
         quick_replies=[
@@ -10404,6 +11228,8 @@ async def _handle_line_edit(
     index = lowered.find(trigger.lower())
     text = message[index + len(trigger):] if index >= 0 else message
     text = re.sub(r"\b[QD]-\d{4}-\d{4}\b", " ", text, flags=re.I)
+    # "เปลี่ยนจำนวนเป็นสาม" says three as plainly as "เป็น 3" does.
+    text = _fold_qty_words(text)
 
     new_price = None
     new_qty = None
@@ -10412,12 +11238,17 @@ async def _handle_line_edit(
         new_price = price_match.group(1).replace(",", "")
         text = text.replace(price_match.group(0), " ")
     elif price_match and "จำนวน" in trigger:
-        new_qty = int(float(price_match.group(1).replace(",", "")))
+        new_qty = _whole_qty(price_match.group(1).replace(",", ""))
+        if new_qty is None:
+            return ChatReply(text=_t(LINE_QTY_NOT_WHOLE, language))
         text = text.replace(price_match.group(0), " ")
     else:
         qty_match = _QTY_RE.search(text)
         if qty_match and "จำนวน" in trigger:
-            new_qty = max(1, int(qty_match.group(1) or qty_match.group(2)))
+            counted = _whole_qty(qty_match.group(1) or qty_match.group(2))
+            if counted is None:
+                return ChatReply(text=_t(LINE_QTY_NOT_WHOLE, language))
+            new_qty = max(1, counted)
             text = text.replace(qty_match.group(0), " ")
 
     for word in ("ใน", "ของ", "ออกจาก", "จาก", "on", "from"):
@@ -10612,7 +11443,11 @@ async def _handle_deal_product_add(
         price = price_match.group(1).replace(",", "")
         text = text.replace(price_match.group(0), " ")
     if qty_match:
-        qty = max(1, int(qty_match.group(1) or qty_match.group(2)))
+        counted = _whole_qty(qty_match.group(1) or qty_match.group(2))
+        if counted is None:
+            # "-1 ตัว" / "1.5 ตัว": said, not silently rounded into one.
+            return ChatReply(text=_t(LINE_QTY_NOT_WHOLE, language))
+        qty = max(1, counted)
         text = text.replace(qty_match.group(0), " ")
 
     name = _strip_item_particles(" ".join(text.split()).strip(" :·-,"))
@@ -10855,7 +11690,10 @@ async def _add_line_from_text(
         name = name.replace(price_match.group(0), " ")
     qty_match = _QTY_RE.search(name)
     if qty_match:
-        qty = max(1, int(qty_match.group(1) or qty_match.group(2)))
+        counted = _whole_qty(qty_match.group(1) or qty_match.group(2))
+        if counted is None:
+            return ChatReply(text=_t(LINE_QTY_NOT_WHOLE, language))
+        qty = max(1, counted)
         name = name.replace(qty_match.group(0), " ")
     name = " ".join(name.split()).strip(" :·-,")
     if not name:
@@ -14255,7 +15093,10 @@ async def _handle_technician_situation(
     client: DataClient, *, ctx: ResolvedContext, license_id, message: str, kind: str,
     permission_keys: list[str], language: str,
 ) -> ChatReply:
-    from .thai_datetime import format_thai_date, format_thai_time, parse_thai_date, parse_thai_time
+    from .thai_datetime import (
+        format_thai_date, format_thai_time, looks_like_a_time_attempt,
+        parse_thai_date, parse_thai_time,
+    )
 
     if "ticket.update" not in set(permission_keys):
         return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
@@ -14295,7 +15136,11 @@ async def _handle_technician_situation(
     new_date = parse_thai_date(dated, today) if kind in ("reschedule", "not_home", "cannot_finish", "need_parts") else None
     explicit_move = kind == "reschedule" or "เลื่อน" in _canonical(message) or "มาต่อ" in _canonical(message) or "กลับมา" in _canonical(message)
     if new_date is not None and (new_date > today or (explicit_move and new_date >= today)):
-        new_time = parse_thai_time(message) or time(9, 0)
+        new_time = parse_thai_time(message)
+        if new_time is None:
+            if looks_like_a_time_attempt(message):
+                return ChatReply(text=_t(TIME_NOT_UNDERSTOOD, language))
+            new_time = time(9, 0)
         try:
             await client.update_ticket(
                 license_id, ticket_id,
@@ -14905,6 +15750,16 @@ async def _route_chat_message(
             )
             if resolved is not None:
                 return resolved
+        if early_pending is not None and early_pending.get("entity") == "staff_ticket_device":
+            # A tap on one of the customer's machines finishes the job the
+            # staff member started; anything else is a new request.
+            resolved = await _resolve_staff_ticket_device(
+                client, ctx=ctx, license_id=license_id, message=message, pending=early_pending,
+                permission_keys=permission_keys, language=language,
+            )
+            if resolved is not None:
+                return resolved
+            early_pending = None
         if early_pending is not None and early_pending.get("entity") == "line_item_add":
             # "1500" / "ใช่" / "เป็นสินค้ารายการใหม่" after "add it as a new
             # line?" — anything else is a new request and the question is dropped.
@@ -15249,11 +16104,21 @@ async def _route_chat_message(
             _command_like(message, CHECKOUT_LOOSE_TRIGGERS)
             and (ctx.oa == "technician" or TICKET_CODE_RE.search(message or ""))
         ):
+            guarded = _intent_guard_reply(message, action="check_out", language=language)
+            if guarded is not None:
+                return guarded
             return await _handle_check_out(
                 client, ctx=ctx, license_id=license_id, message=message,
                 permission_keys=permission_keys, language=language,
             )
         if _command_like(message, CHECKIN_TRIGGERS):
+            # "ไม่ถึงหน้างาน" and "เช็คอินต้องทำอย่างไร" both look like a
+            # check-in to the trigger table and neither is one (review v3,
+            # B03). _command_like already refuses the plainest of these;
+            # this is the level above its phrase list.
+            guarded = _intent_guard_reply(message, action="check_in", language=language)
+            if guarded is not None:
+                return guarded
             return await _handle_check_in(
                 client, ctx=ctx, license_id=license_id, message=message,
                 permission_keys=permission_keys, language=language,
@@ -15566,6 +16431,13 @@ async def _route_chat_message(
         # create trigger, and a bare "เปลี่ยนเวลาเป็น 13.00" matches nothing
         # else at all.
         if _is_reminder_move_command(message):
+            # "ยังไม่เปลี่ยนเวลานัดเป็น 16:00" moved it (review v3, B01).
+            guarded = await _guarded_in_context(
+                client, ctx=ctx, license_id=license_id, message=message,
+                action="appointment_move", language=language,
+            )
+            if guarded is not None:
+                return guarded
             return await _handle_reminder_move(
                 client, ctx=ctx, license_id=license_id, message=message,
                 permission_keys=permission_keys, language=language,
@@ -15575,6 +16447,14 @@ async def _route_chat_message(
         # a record and contains the create verb, so the create matcher would
         # otherwise claim it and answer "ไม่เข้าใจวันที่".
         if _is_reminder_cancel_command(message):
+            # "ไม่ต้องยกเลิกนัด C-2026-0001", "อย่าลบนัด C-2026-0001" and
+            # "ลบนัดไปแล้วหรือยัง" all cancelled it (review v3, B01).
+            guarded = await _guarded_in_context(
+                client, ctx=ctx, license_id=license_id, message=message,
+                action="appointment_cancel", language=language,
+            )
+            if guarded is not None:
+                return guarded
             return await _handle_reminder_cancel(
                 client, ctx=ctx, license_id=license_id, message=message,
                 permission_keys=permission_keys, language=language,
@@ -15588,6 +16468,9 @@ async def _route_chat_message(
         #
         # A reminder command STARTS with its verb or names a record code.
         if _is_reminder_command(message):
+            guarded = _intent_guard_reply(message, action="appointment_create", language=language)
+            if guarded is not None:
+                return guarded
             return await _handle_reminder_create(
                 client, ctx=ctx, license_id=license_id, message=message,
                 permission_keys=permission_keys, language=language,
@@ -15630,6 +16513,12 @@ async def _route_chat_message(
         # about a line after all, and the readings below still get it.
         line_cmd = _parse_line_item_command(message)
         if line_cmd is not None:
+            # "ไม่ต้องเพิ่มพัดลมอีก 3 ตัว" and "เพิ่มพัดลมอีก 3 ตัวได้เท่าไหร่"
+            # parse as perfectly good line commands; neither asks for one
+            # (review v3, quantity-014/015/016).
+            guarded = _intent_guard_reply(message, action="line_item", language=language)
+            if guarded is not None:
+                return guarded
             handled = await _handle_line_item_command(
                 client, ctx=ctx, license_id=license_id, cmd=line_cmd, message=message,
                 permission_keys=permission_keys, language=language,
@@ -15701,6 +16590,15 @@ async def _route_chat_message(
             )
 
         if any(t in message.lower() for t in QUOTE_CREATE_TRIGGERS):
+            # A substring match on the trigger, which is why all twelve of
+            # "ยังไม่สร้างใบเสนอราคา D-2026-0001", "…ไปหรือยัง" and
+            # "แค่ถามวิธี…" issued a real Q-2026-0001 (review v3, B02).
+            guarded = await _guarded_in_context(
+                client, ctx=ctx, license_id=license_id, message=message,
+                action="quote_create", language=language,
+            )
+            if guarded is not None:
+                return guarded
             return await _handle_quote_create_direct(
                 client, ctx=ctx, license_id=license_id, message=message,
                 permission_keys=permission_keys, language=language,
@@ -16033,7 +16931,14 @@ async def _route_chat_message(
         # done, the message is whatever it is.
         await _drop_pending_quietly(client, ctx)
         pending_intent = None
-    if pending_intent is not None and pending_intent.get("missing") and _normalise(message) in _SLOT_FILL_ABORT_WORDS:
+    if pending_intent is not None and pending_intent.get("missing") and (
+        _normalise(message) in _SLOT_FILL_ABORT_WORDS
+        # Not only the six words the abort list happens to hold: "หยุดก่อน",
+        # "พักไว้ก่อน", "เดี๋ยวค่อยทำ" and "ยังไม่เพิ่มลูกค้านะ" are the same
+        # request and went to the model, which answered "not sure"
+        # (review v3, pending-cancel 008-012).
+        or _intent_guard_reply(message, action="pending_flow", language=language) is not None
+    ):
         # "ยกเลิก" while a question is open: closed, deterministic, no
         # model (review, 6 Sep 2026).
         await _drop_pending_quietly(client, ctx)
@@ -16199,6 +17104,19 @@ async def _execute_intent(
             intent=intent,
             quick_reply_url=_guide_button(ctx.oa, language),
         )
+
+    # The model read an action into the sentence; the sentence still has to
+    # have asked for it. One call, here, rather than in each branch below:
+    # the review supplied action=check_in for "ทำไมต้องเช็คอิน" and
+    # action=create/quote for "ยังไม่สร้างใบเสนอราคา D-2026-0001", and both
+    # were performed (review v3, B02/B03).
+    guarded_as = _AI_GUARDED.get((str(req_entity or ""), req_action)) or (
+        "record_delete" if req_action in ("delete", "cancel") else None
+    )
+    if guarded_as is not None:
+        guarded = _intent_guard_reply(message, action=guarded_as, language=language)
+        if guarded is not None:
+            return guarded
 
     # Domain execution. Phase 9 adds real customer/deal CRUD; everything
     # else still falls through to the stub below until its own phase lands.
@@ -16461,6 +17379,9 @@ SLOT_FILL_CANCELLED = {
 }
 _DETERMINISTIC_FLOWS = frozenset({
     "service_report", "customer_ticket", "pending_customer_message", "ticket_reject", "customer_contact",
+    # "which of this customer's machines is the job about" — answered by a
+    # tap carrying a serial, resumed by hand above.
+    "staff_ticket_device",
     # A draft template waiting for "ใช้เลย" / "แก้เพิ่ม" / "ทิ้ง" is answered
     # by a word, resumed by hand above, and holds the draft HTML — none of
     # which is the model's to complete or to clear.
@@ -17922,6 +18843,107 @@ _TEMPLATE_DROP_WORDS = frozenset({
     "ทิ้ง", "ทิ้งเลย", "ไม่เอา", "ไม่ใช้", "ยกเลิก", "ลบทิ้ง",
     "discard", "drop it", "no",
 })
+# --- reading an answer that is about the draft ---------------------------
+#
+# Review v3, B08: the three sets above were matched for EQUALITY, so
+# "ใช้เลยครับ" (the same word with a polite particle), "ยืนยันใช้แบบนี้"
+# (the same word with the confirmation spelled out) and "ขอดูก่อน" (asking
+# to look before deciding) all fell through to "this is a new subject",
+# cleared the pending state and published nothing. The saved draft was
+# still on the templates page, but the conversation could not continue it.
+#
+# So the decision below is made on CONTAINMENT for the phrases long enough
+# to carry their own meaning, and equality is kept for the short English
+# tokens where containment would fire on any sentence that happens to hold
+# them ("no" inside "notebook"). Refusal is checked before agreement, so
+# "ไม่ใช้แบบนี้" is a refusal and not a confirmation of "ใช้แบบนี้".
+#
+# Scope: this reads a reply to a question this flow just asked, with a
+# draft on the table. It is not, and must not become, a general
+# mutation-intent decision for chat.py — that belongs to the router.
+_TEMPLATE_DROP_CONTAINS = (
+    "ไม่เอา", "ไม่ใช้", "ยกเลิก", "ลบทิ้ง", "ทิ้งเลย", "ทิ้ง",
+    "discard", "drop it",
+)
+_TEMPLATE_YES_CONTAINS = (
+    "ใช่เลย", "ใช้เลย", "ใช้อันนี้", "เอาอันนี้", "ใช้แบบนี้", "เอาแบบนี้",
+    "ใช้ตัวนี้", "เอาตัวนี้", "ยืนยันใช้", "ตกลงใช้", "เผยแพร่",
+    "publish", "use it", "use this",
+)
+# "Let me look first" — a decision deferred, not a decision made. The
+# phrases are deliberately specific: a bare "ขอดู" is how people ask for
+# every list in the system, and would steal messages that are not about
+# this draft at all.
+_TEMPLATE_LOOK_CONTAINS = (
+    "ขอดูก่อน", "ดูก่อน", "ขอดูตัวอย่าง", "ดูตัวอย่าง", "ขอคิดดู", "คิดดูก่อน",
+    "ขอเวลาคิด", "ยังไม่ตัดสินใจ", "let me look", "let me see", "preview",
+)
+_TEMPLATE_REFINE_CONTAINS = (
+    "แก้เพิ่ม", "แก้อีก", "ขอแก้", "แก้ไข", "ปรับเพิ่ม", "แก้หน่อย", "refine",
+    "change it",
+)
+# Plainly about the draft, without saying what to do with it. Asked back
+# rather than thrown away.
+#
+# Every one of these POINTS at the draft rather than naming the subject:
+# "แบบฟอร์มนี้", not "แบบฟอร์ม". The general noun is deliberately absent —
+# "แบบฟอร์มมีกี่แบบ" is a question about the shop's templates, and reading
+# it as an answer to "what shall I do with this draft?" would trap the
+# person in the question they were trying to leave.
+_TEMPLATE_SUBJECT_CONTAINS = (
+    "ร่างนี้", "ร่างเมื่อกี้", "แบบฟอร์มนี้", "เทมเพลตนี้",
+    "แบบนี้", "อันนี้", "ตัวนี้", "this draft", "this one",
+)
+# ...and only in a short reply. A deictic fragment IS the whole message
+# when someone is answering a question; a sentence that merely contains
+# "แบบนี้" on its way somewhere else is somewhere else.
+_TEMPLATE_SUBJECT_MAX_CHARS = 24
+_TEMPLATE_SUBJECT_EXACT = frozenset({
+    "โอเค", "โอเคครับ", "โอเคค่ะ", "ได้", "ได้ครับ", "ได้ค่ะ", "ok", "okay",
+    "อืม", "เอ่อ", "แล้วไง", "ยังไง", "ไง",
+})
+
+
+def _template_draft_decision(message: str) -> str:
+    """What a reply with a draft on the table is asking for.
+
+    One of: `drop`, `look`, `publish`, `refine`, `edit`, `unclear`, or
+    `other` — and only `other` gives the message back to the router as a
+    new subject.
+    """
+    text = (message or "").strip().lower()
+    norm = _normalise(message)
+    if not text:
+        return "other"
+
+    def says(phrases) -> bool:
+        return any(phrase in text or phrase in norm for phrase in phrases)
+
+    # Equality for the sets as they were, so nothing that worked before
+    # stops working, then containment for the phrases.
+    if norm in _TEMPLATE_DROP_WORDS or text in _TEMPLATE_DROP_WORDS:
+        return "drop"
+    if says(_TEMPLATE_DROP_CONTAINS):
+        return "drop"
+    if says(_TEMPLATE_LOOK_CONTAINS):
+        return "look"
+    if norm in _TEMPLATE_YES_WORDS or text in _TEMPLATE_YES_WORDS:
+        return "publish"
+    if says(_TEMPLATE_YES_CONTAINS):
+        return "publish"
+    if norm in _TEMPLATE_REFINE_WORDS or text in _TEMPLATE_REFINE_WORDS:
+        return "refine"
+    if says(_TEMPLATE_REFINE_CONTAINS):
+        return "refine"
+    if any(text.startswith(lead) for lead in _TEMPLATE_EDIT_LEAD):
+        return "edit"
+    if norm in _TEMPLATE_SUBJECT_EXACT or text in _TEMPLATE_SUBJECT_EXACT:
+        return "unclear"
+    if len(text) <= _TEMPLATE_SUBJECT_MAX_CHARS and says(_TEMPLATE_SUBJECT_CONTAINS):
+        return "unclear"
+    return "other"
+
+
 # An edit said straight out, without pressing "แก้เพิ่ม" first. Recognised so
 # the draft is not thrown away by someone who simply answered the question
 # they were actually being asked.
@@ -18049,6 +19071,35 @@ TEMPLATE_SAVE_FAILED = {
 TEMPLATE_PUBLISH_FAILED = {
     "th": "เผยแพร่ไม่สำเร็จครับ ร่างยังอยู่ ลองกด \"ใช้เลย\" อีกครั้งได้",
     "en": "Publishing failed. The draft is still there — tap \"ใช้เลย\" again.",
+}
+TEMPLATE_LOOK_FIRST = {
+    "th": (
+        "ได้เลยครับ ดูให้เต็มที่ ร่าง{label} ยังอยู่ ยังไม่ได้เอาไปใช้จริง\n"
+        "{docx}\n\n"
+        "ดูเสร็จแล้ว พอใจกด \"ใช้เลย\" · อยากแก้กด \"แก้เพิ่ม\" · ไม่เอากด \"ทิ้ง\""
+    ),
+    "en": (
+        "Of course — take your time. The draft {label} is still here and "
+        "still not in use.\n{docx}\n\n"
+        "When you have looked: \"ใช้เลย\" to publish · \"แก้เพิ่ม\" to change "
+        "it · \"ทิ้ง\" to drop it"
+    ),
+}
+TEMPLATE_WHICH_ONE = {
+    "th": (
+        "ร่าง{label} ยังรออยู่ครับ ยังไม่ได้เอาไปใช้จริง "
+        "จะให้ทำอะไรกับร่างนี้ดี\n\n"
+        "• \"ใช้เลย\" — เอาไปใช้กับ{label}ทุกใบตั้งแต่นี้ไป\n"
+        "• \"แก้เพิ่ม\" — บอกได้ว่าอยากแก้ตรงไหน\n"
+        "• \"ทิ้ง\" — ไม่เอาร่างนี้"
+    ),
+    "en": (
+        "The draft {label} is still waiting and still not in use. What "
+        "would you like to do with it?\n\n"
+        "• \"ใช้เลย\" — use it for every {label} from now on\n"
+        "• \"แก้เพิ่ม\" — tell me what to change\n"
+        "• \"ทิ้ง\" — drop it"
+    ),
 }
 TEMPLATE_DRAFT_GONE = {
     "th": "ร่างแบบฟอร์มหมดอายุแล้วครับ พิมพ์ \"ออกแบบใบเสนอราคา\" เพื่อเริ่มใหม่ได้เลย",
@@ -18256,6 +19307,10 @@ async def _template_draft_reply(
                 "template_id": template_id, "version_id": version_id,
                 "document_type": document_type, "html": html,
                 "description": description, "name": name,
+                # Kept so a reply that is plainly about the draft — "ขอดูก่อน"
+                # — can hand the same two links back without redrafting
+                # anything (review v3, B08).
+                "preview_url": preview_url or "", "docx_url": docx_url or "",
             },
             missing=[], ttl_seconds=TEMPLATE_DESIGN_TTL_S,
         )
@@ -18400,18 +19455,40 @@ async def _resolve_template_design(
             permission_keys=permission_keys, language=language, ai_client=ai_client,
         )
 
-    # A draft is on the table: publish it, change it, or drop it.
-    if norm in _TEMPLATE_DROP_WORDS or stripped in _TEMPLATE_DROP_WORDS:
+    # A draft is on the table: publish it, change it, look at it again,
+    # say what was meant, or move on (review v3, B08 — see
+    # `_template_draft_decision` for why this is no longer three exact
+    # vocabularies).
+    decision = _template_draft_decision(message)
+
+    if decision == "drop":
         return await _discard_template_draft(client, ctx=ctx, label=label, language=language)
 
-    if norm in _TEMPLATE_YES_WORDS or stripped in _TEMPLATE_YES_WORDS:
+    if decision == "publish":
         return await _publish_template_draft(
             client, ctx=ctx, license_id=license_id, pending=pending,
             permission_keys=permission_keys, language=language,
         )
 
-    wants_edit = norm in _TEMPLATE_REFINE_WORDS or stripped in _TEMPLATE_REFINE_WORDS
-    if wants_edit:
+    if decision == "look":
+        # "ขอดูก่อน" — a decision deferred, not made. The draft stays, the
+        # clock is restarted so reading it does not cost the person their
+        # place, and the same links come back.
+        await _hold_template_draft(client, ctx=ctx, pending=pending)
+        docx_url = str(fields.get("docx_url") or "")
+        return ChatReply(
+            text=_t(TEMPLATE_LOOK_FIRST, language).format(
+                label=label,
+                docx=(
+                    f"ไฟล์ Word: {docx_url}" if docx_url and language != "en"
+                    else (f"Word file: {docx_url}" if docx_url else "")
+                ),
+            ).strip(),
+            quick_replies=_TEMPLATE_DECIDE_BUTTONS,
+            quick_reply_url=_template_preview_button(fields, language),
+        )
+
+    if decision == "refine":
         try:
             await client.set_pending_intent(
                 ctx.chann_uid, ctx.oa, action="design", entity="template_refine",
@@ -18424,7 +19501,7 @@ async def _resolve_template_design(
     # An edit said outright ("เพิ่มช่องเลขที่ผู้เสียภาษี") without pressing the
     # button first. Treated as the edit it plainly is — throwing the draft
     # away here would punish someone for answering the question directly.
-    if any(stripped.startswith(lead) for lead in _TEMPLATE_EDIT_LEAD):
+    if decision == "edit":
         if "setting.manage" not in set(permission_keys):
             await _drop_pending_quietly(client, ctx)
             return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
@@ -18436,11 +19513,53 @@ async def _resolve_template_design(
             permission_keys=permission_keys, language=language, ai_client=ai_client,
         )
 
+    if decision == "unclear":
+        # Plainly about the draft, without saying what to do with it.
+        # Asked back rather than acted on: publishing changes every
+        # document the shop issues from now on, and "โอเค" is not consent
+        # to that. The draft is kept so the answer can continue it.
+        await _hold_template_draft(client, ctx=ctx, pending=pending)
+        return ChatReply(
+            text=_t(TEMPLATE_WHICH_ONE, language).format(label=label),
+            quick_replies=_TEMPLATE_DECIDE_BUTTONS,
+            quick_reply_url=_template_preview_button(fields, language),
+        )
+
     # Anything else is a different request. The draft is left unpublished
     # (it is a DRAFT version on the templates page, not litter) and the
     # router goes on.
     await _drop_pending_quietly(client, ctx)
     return None
+
+
+def _template_preview_button(fields: dict, language: str):
+    """The "see the document" button, when the draft has a preview link."""
+    preview_url = str(fields.get("preview_url") or "")
+    if not preview_url:
+        return _dashboard_button("templates", language)
+    return (
+        ("ดูตัวอย่างเอกสาร" if language != "en" else "See the document"),
+        preview_url,
+    )
+
+
+async def _hold_template_draft(
+    client: DataClient, *, ctx: ResolvedContext, pending: dict,
+) -> None:
+    """Keep the draft on the table, with its clock restarted.
+
+    Re-setting rather than leaving it alone is deliberate: a person who
+    goes away to read the preview and comes back must not find the draft
+    expired because reading it took longer than what was left of the TTL.
+    """
+    try:
+        await client.set_pending_intent(
+            ctx.chann_uid, ctx.oa, action="design", entity="template_design",
+            fields=pending.get("fields") or {}, missing=[],
+            ttl_seconds=TEMPLATE_DESIGN_TTL_S,
+        )
+    except Exception:
+        log.exception("could not keep a designed template on the table")
 
 
 async def _discard_template_draft(

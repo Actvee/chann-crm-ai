@@ -445,3 +445,55 @@ class TestTheAuditTrail:
             ), {"eid": created["id"]}).first()
         assert row is not None, "a deleted appointment left no trace"
         assert "นัดผิดคน" in str(row[1])
+
+
+class TestACancelledAppointmentLeavesTheDiary:
+    """The Data tier read `status_filter` while every caller sends `status`,
+    so FastAPI left it None and the filter never applied: a cancelled
+    appointment kept showing in the diary and in the 08:00 digest. The fake
+    client filtered by status, so only a db-backed run could see it
+    (10 Sep 2026)."""
+
+    def test_status_is_the_parameter_callers_send(self, api, tenant):
+        client, headers = api
+        license_id = tenant["license_id"]
+        created = client.post(
+            f"/internal/v1/licenses/{license_id}/follow-ups",
+            json={
+                "entity_type": "customer",
+                "entity_id": tenant["customer_id"],
+                "due_date": "2026-12-31",
+                "notes": "ตรวจเครื่องประจำปี",
+            },
+            headers=headers,
+        )
+        assert created.status_code == 201, created.text
+        follow_up_id = created.json()["id"]
+
+        pending = client.get(
+            f"/internal/v1/licenses/{license_id}/follow-ups", params={"status": "pending"}, headers=headers
+        )
+        assert pending.status_code == 200
+        # The tenant is module-scoped, so other rows may exist; what matters
+        # is this one's presence before and absence after.
+        assert follow_up_id in [r["id"] for r in pending.json()]
+
+        settled = client.patch(
+            f"/internal/v1/licenses/{license_id}/follow-ups/{follow_up_id}/status",
+            json={"status": "cancelled"},
+            headers=headers,
+        )
+        assert settled.status_code == 200, settled.text
+
+        after = client.get(
+            f"/internal/v1/licenses/{license_id}/follow-ups", params={"status": "pending"}, headers=headers
+        )
+        assert after.status_code == 200
+        assert follow_up_id not in [r["id"] for r in after.json()], (
+            "a cancelled appointment must leave the diary"
+        )
+
+        cancelled = client.get(
+            f"/internal/v1/licenses/{license_id}/follow-ups", params={"status": "cancelled"}, headers=headers
+        )
+        assert follow_up_id in [r["id"] for r in cancelled.json()]

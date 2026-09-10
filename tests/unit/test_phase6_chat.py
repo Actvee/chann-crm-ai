@@ -419,7 +419,10 @@ class FakeDataClient:
             ),
         }
 
-    async def list_warranties(self, license_id, serial_number=None, customer_chann_uid=None):
+    async def list_warranties(self, license_id, serial_number=None, customer_chann_uid=None, limit=None):
+        # `limit` mirrors the real client: the ticket list reads the whole
+        # warranty book in one call, and a fake that refused the keyword
+        # hid that from every test (tier-seam rule, CLAUDE.md §-1).
         rows = list(getattr(self, "_warranties", []))
         if serial_number:
             rows = [
@@ -1092,6 +1095,11 @@ def _one_product(chann_uid="CHN-S-000001"):
     report tests start where a real customer starts: registered."""
     return [{
         "id": "w-1", "serial_number": "ONLY00001", "product_name": "แอร์",
+        # product_id and the real dates, because a fault report links to
+        # the product the customer registered and says whether the unit is
+        # still covered (owner, 10 ก.ย. 2569).
+        "product_id": "prod-air-1", "warranty_start": "2026-01-01",
+        "warranty_end": "2027-01-01",
         "status": "active", "customer_chann_uid": chann_uid,
     }]
 

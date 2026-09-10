@@ -442,9 +442,16 @@ class TestUploadingAWordFile:
         assert version["intermediate_model"]["filename"] == "quotation.docx"
         assert store.objects[version["source_docx_path"].removeprefix("gs://test-bucket/")] == content
 
-    def test_an_html_upload_is_unchanged(self, store):
-        """The rule for this whole change: additive. An HTML template
-        that worked before still works, byte for byte."""
+    def test_an_html_upload_keeps_its_content_and_gains_the_frame(self, store):
+        """An HTML template that worked before still works.
+
+        No longer "byte for byte": review v3, T02 — this branch stored
+        whatever it was handed, so the whitelist rebuild the AI-designed
+        path uses now runs here too, and what comes out is the same
+        content inside the standard printable frame. The layout, the
+        placeholders and the text are the shop's; the frame is the one
+        every other template already gets.
+        """
         client = _Client()
         http = _app(client)
         response = http.post(_url("/upload"), json={
@@ -455,8 +462,11 @@ class TestUploadingAWordFile:
         version = client.versions[-1]
         assert version["source_docx_path"] == "upload://html"
         assert version["intermediate_model"] == {"kind": "html_upload"}
-        stored = store.objects[version["compiled_template_path"].removeprefix("gs://test-bucket/")]
-        assert stored == b"<h1>{{company.name}}</h1>"
+        stored = store.objects[
+            version["compiled_template_path"].removeprefix("gs://test-bucket/")
+        ].decode("utf-8")
+        assert "<h1>{{company.name}}</h1>" in stored
+        assert stored.startswith("<!DOCTYPE html>")
 
     def test_a_doc_is_refused_with_the_advice_to_save_as_docx(self, store):
         http = _app(_Client())

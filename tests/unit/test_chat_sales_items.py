@@ -348,6 +348,75 @@ class TestSettingAndReducingALine:
         assert reply.text == "แก้ พัดลม เป็น 1 × 2,000.00 = 2,000.00 ในดีล D-2026-0001 แล้ว · ยอดรวมดีล 10,000.00"
 
 
+class TestAQuantityThatCannotBeCounted:
+    """Review v3, B05. The minus sign and the decimal point were dropped
+    while the number was being pulled out of the sentence, so the guard
+    that refuses a quantity of nothing never saw one: "อีก -1 ตัว" added a
+    fan and "อีก 1.5 ตัว" added five. Every case here reads the line back.
+    """
+
+    async def test_a_negative_delta_is_refused_and_the_line_is_untouched(self):
+        client = _sales()
+        await _customer_and_deal(client, lines=[("พัดลม", 2, "1000.00")])
+        for message in ("เพิ่มพัดลมอีก -1 ตัว", "ลดพัดลม -1 ตัว"):
+            reply = await say(client, message)
+            assert reply.text == "จำนวนที่เพิ่มหรือลดต้องมากกว่า 0 ครับ รายการเดิมยังอยู่เท่าเดิม", message
+            assert _lines(client)[0]["qty"] == 2, message
+
+    async def test_half_a_fan_is_refused_and_the_line_is_untouched(self):
+        client = _sales()
+        await _customer_and_deal(client, lines=[("พัดลม", 2, "1000.00")])
+        reply = await say(client, "เพิ่มพัดลมอีก 1.5 ตัว")
+        assert reply.text == 'จำนวนต้องเป็นจำนวนเต็มครับ เช่น "2 ตัว" รายการเดิมยังอยู่เท่าเดิม'
+        assert _lines(client)[0]["qty"] == 2
+
+    async def test_zero_is_still_refused(self):
+        client = _sales()
+        await _customer_and_deal(client, lines=[("พัดลม", 2, "1000.00")])
+        reply = await say(client, "เพิ่มพัดลมอีก 0 ตัว")
+        assert reply.text == "จำนวนที่เพิ่มหรือลดต้องมากกว่า 0 ครับ รายการเดิมยังอยู่เท่าเดิม"
+        assert _lines(client)[0]["qty"] == 2
+
+    async def test_a_size_in_the_name_is_never_the_count(self):
+        """The rule the sign fix must not undo: 18 นิ้ว is what the fan is."""
+        client = _sales()
+        await _customer_and_deal(client, lines=[("พัดลม 18 นิ้ว", 2, "1000.00")])
+        reply = await say(client, "เพิ่มพัดลม 18 นิ้ว อีก 1 ตัว")
+        assert "รวมเป็น 3 ×" in reply.text
+        assert _lines(client)[0]["qty"] == 3
+
+
+class TestQuantitiesSaidInWords:
+    """"สาม" counts the same as "3" — the clock has read Thai number words
+    next to its own units for a while, and a quantity now does too, but
+    only where the word is unmistakably a count (review v3, quantity-004
+    and 007)."""
+
+    async def test_a_number_word_before_a_counting_word(self):
+        client = _sales()
+        await _customer_and_deal(client, lines=[("พัดลม", 2, "1000.00")])
+        reply = await say(client, "เพิ่มพัดลมอีกสามตัว")
+        assert "รวมเป็น 5 ×" in reply.text
+        assert _lines(client)[0]["qty"] == 5
+
+    async def test_a_number_word_as_the_new_quantity(self):
+        client = _sales()
+        await _customer_and_deal(client, lines=[("พัดลม", 2, "1000.00")])
+        reply = await say(client, "เปลี่ยนจำนวนเป็นสาม")
+        assert "เป็น 3 ×" in reply.text
+        assert _lines(client)[0]["qty"] == 3
+
+    async def test_a_number_word_inside_a_name_is_left_alone(self):
+        """"ชุดสามชิ้น" is what a three-piece set is called, not three of
+        something — so the fold only applies at the start of a word, after
+        a space, or straight after อีก / เป็น / เหลือ / จำนวน."""
+        client = _sales()
+        await _customer_and_deal(client, lines=[("ชุดสามชิ้น", 2, "1000.00")])
+        reply = await say(client, "เพิ่มชุดสามชิ้นอีก 1 ตัว")
+        assert "รวมเป็น 3 ×" in reply.text
+        assert _lines(client)[0]["qty"] == 3
+
+
 class TestDeletingALine:
     @pytest.mark.parametrize("message", [
         "D-2026-0001 ลบสินค้าพัดลมออก", "ลบสินค้าพัดลมออก", "เอาพัดลมออก", "ลบพัดลมออกจากดีล", "ตัดพัดลมออก",

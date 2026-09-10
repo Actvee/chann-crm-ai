@@ -35,6 +35,42 @@ MAX_DOCX_BYTES = 2_000_000
 # renders.
 MAX_COMPILED_CHARS = 512_000
 
+# --- what the file is allowed to become once it is opened ------------------
+#
+# Review v3, T04: the size check above is on the COMPRESSED bytes, and the
+# only thing that touched the members afterwards was `testzip()`, which
+# reads every one of them to verify a CRC and enforces no size at all. A
+# file under 20 KB that expands to 8 MiB was accepted. These three bounds
+# are what a real Word document has to fit inside, checked before the
+# expansion is allowed to happen rather than after.
+#
+# Chosen against what a .docx actually contains: images are stored already
+# compressed (a JPEG in a zip does not shrink), and the part that does
+# inflate is XML, which lands around 10-20x. A quotation with a letterhead
+# is a few hundred KB uncompressed; 24 MB is far above anything a shop
+# uploads and still bounds the memory one request can ask for.
+MAX_DOCX_UNCOMPRESSED_BYTES = 24_000_000
+
+# 120x is several times the ratio real Word XML reaches, and stops the case
+# the probe demonstrates: a 20 KB file that expands to 8 MiB is over 400x.
+# Together with the cap above, one upload can never expand past
+# min(24 MB, 120 x the bytes it actually sent).
+MAX_DOCX_INFLATION_RATIO = 120
+
+# A Word file has tens of parts — document.xml, styles, rels, one per image.
+# Thousands of members is a zip someone built, not a document Word saved.
+MAX_DOCX_MEMBERS = 2_000
+
+# ...and a floor under the ratio, so the ratio can never refuse a small
+# document for being efficiently compressed. Nothing that expands to less
+# than this is rejected for expanding at all.
+MIN_DOCX_EXPANSION_ALLOWANCE = 2_000_000
+
+# Read in pieces so the budget can be enforced part-way through a member,
+# not only between members: a single entry declaring 1 KB and delivering
+# 500 MB must be stopped while it is still streaming.
+_INFLATE_CHUNK = 64 * 1024
+
 # An OLE2 compound file. Both the old binary .doc AND a password-protected
 # .docx look like this — a real .docx is a zip ("PK"). The two are told
 # apart by the filename, because the bytes genuinely cannot tell you.
@@ -136,18 +172,12 @@ def check_docx_bytes(data: bytes, *, filename: str = "") -> None:
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
             names = set(archive.namelist())
-            broken = archive.testzip()
+            _check_expansion_budget(archive, compressed_bytes=len(data))
     except zipfile.BadZipFile:
         raise _reject(
             "ไฟล์เสียหาย เปิดไม่ได้ ลองเปิดใน Word แล้วบันทึกเป็น .docx ใหม่",
             "the file is corrupt and cannot be opened — open it in Word "
             "and save it as .docx again",
-        )
-    if broken is not None:
-        raise _reject(
-            "ไฟล์เสียหาย (ข้อมูลภายในไม่ครบ) ลองบันทึกจาก Word ใหม่อีกครั้ง",
-            "the file is corrupt (a part of it failed its checksum) — "
-            "save it from Word again",
         )
     if "word/document.xml" not in names:
         # A .xlsx or a .zip renamed to .docx: also a PK zip, also opens,
@@ -158,6 +188,84 @@ def check_docx_bytes(data: bytes, *, filename: str = "") -> None:
             "this is a zip but not a Word document (no document body "
             "inside) — check that you uploaded the right file",
         )
+
+
+def _too_big_to_open(budget: int) -> DocxConversionError:
+    return _reject(
+        "ไฟล์นี้เล็กตอนอยู่ในเครื่อง แต่ข้อมูลข้างในขยายใหญ่เกินที่ระบบเปิดได้ "
+        f"(เกิน {budget // (1024 * 1024)} MB หลังคลายไฟล์) "
+        "ถ้าเป็นเอกสาร Word ปกติ ลองเปิดใน Word แล้วบันทึกเป็น .docx ใหม่อีกครั้ง",
+        "this file is small on disk but expands past what the system will "
+        f"open ({budget // (1024 * 1024)} MB uncompressed) — if it is an "
+        "ordinary Word document, open it in Word and save it as .docx again",
+    )
+
+
+def _check_expansion_budget(archive: zipfile.ZipFile, *, compressed_bytes: int) -> None:
+    """How large this file is allowed to become, enforced while it expands.
+
+    Three passes, cheapest first, so an obvious bomb costs nothing:
+
+    1. the member count, from the central directory;
+    2. the DECLARED uncompressed sizes, also from the central directory —
+       no decompression at all, so a file that admits it is 500 MB is
+       refused before a single byte is inflated;
+    3. the real bytes, read in chunks with a running total. The declared
+       size is a claim in a header the uploader wrote, so it is a fast
+       rejection and never a permission; only this pass is trusted.
+
+    The read doubles as the corruption check `testzip()` used to do: the
+    zip module verifies each member's CRC as it reaches the end of it and
+    raises BadZipFile, which the caller turns into the same "the file is
+    corrupt" sentence as before.
+    """
+    members = archive.infolist()
+    if len(members) > MAX_DOCX_MEMBERS:
+        raise _reject(
+            f"ไฟล์นี้มีส่วนประกอบข้างในมากผิดปกติ ({len(members)} ชิ้น) "
+            "ตรวจสอบว่าอัปโหลดไฟล์ Word ถูกไฟล์",
+            f"this archive has an implausible number of parts in it "
+            f"({len(members)}) — check that you uploaded the right file",
+        )
+
+    budget = min(
+        MAX_DOCX_UNCOMPRESSED_BYTES,
+        max(
+            max(compressed_bytes, 1) * MAX_DOCX_INFLATION_RATIO,
+            MIN_DOCX_EXPANSION_ALLOWANCE,
+        ),
+    )
+
+    declared = sum(max(int(info.file_size or 0), 0) for info in members)
+    if declared > budget:
+        raise _too_big_to_open(budget)
+
+    remaining = budget
+    for info in members:
+        if info.is_dir():
+            continue
+        try:
+            with archive.open(info) as member:
+                while True:
+                    # One byte more than what is left: reading it is what
+                    # proves the budget was passed, and the read stops
+                    # there rather than materialising the rest of the
+                    # member.
+                    chunk = member.read(min(_INFLATE_CHUNK, remaining + 1))
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+                    if remaining < 0:
+                        raise _too_big_to_open(budget)
+        except zipfile.BadZipFile:
+            # A member that fails its CRC, which is what testzip() used to
+            # report. Kept as its own sentence: "a part of it is damaged"
+            # tells the shop something different from "it will not open".
+            raise _reject(
+                "ไฟล์เสียหาย (ข้อมูลภายในไม่ครบ) ลองบันทึกจาก Word ใหม่อีกครั้ง",
+                "the file is corrupt (a part of it failed its checksum) — "
+                "save it from Word again",
+            )
 
 
 def convert_docx_to_html(data: bytes, *, filename: str = "") -> str:
@@ -189,6 +297,29 @@ def convert_docx_to_html(data: bytes, *, filename: str = "") -> str:
             "เอกสารนี้ไม่มีข้อความอยู่เลย ตรวจสอบว่าอัปโหลดไฟล์ถูกไฟล์",
             "this document has no text in it — check that you uploaded "
             "the right file",
+        )
+
+    # The same whitelist rebuild every other template ingress goes
+    # through (review v3, T02), on the Word vocabulary: links and inline
+    # images are kept because that is what a shop's real quotation
+    # contains, and everything else has to survive the rebuild the way
+    # the AI-designed path's markup does. This module used to say
+    # sanitising was unnecessary here because "mammoth's output vocabulary
+    # is already limited to text markup" — which is true and was never
+    # checked. Checking it costs one pass and removes an assumption from
+    # the security story.
+    from .design import TemplateRejected, sanitise
+
+    try:
+        body, _css = sanitise(body, word=True)
+    except TemplateRejected as exc:
+        raise _reject(
+            "ไฟล์ Word นี้มีสิ่งที่ระบบไม่อนุญาตให้เก็บไว้ในแบบฟอร์ม: "
+            + " · ".join(exc.reasons)
+            + " — ลองลบส่วนนั้นออกจากเอกสารแล้วอัปโหลดใหม่",
+            "this Word file contains things a template is not allowed to "
+            "hold (" + "; ".join(exc.reasons) + ") — remove them and "
+            "upload it again",
         )
 
     html = polish_converted_html(body)
@@ -229,10 +360,13 @@ def polish_converted_html(body: str) -> str:
        fetched rather than assumed for the reason `html.py` gives: a
        renderer without one produces boxes, and the failure is silent.
 
-    Deliberately NOT done here: sanitising. mammoth's output vocabulary is
-    already limited to text markup, and `fill_template` escapes every
-    value it substitutes, so nothing tenant-supplied becomes executable
-    by passing through this function.
+    Deliberately NOT done here: sanitising. It happens one step earlier,
+    in `convert_docx_to_html`, on mammoth's output before any of the three
+    repairs above touch it — the whitelist rebuild every template ingress
+    shares (review v3, T02). This function used to carry a note saying
+    sanitising was unnecessary because "mammoth's output vocabulary is
+    already limited to text markup". That was true and it was never
+    checked, which is a different thing from being enforced.
     """
     html = _rejoin_split_placeholders(body)
     html = _hoist_row_markers(html)

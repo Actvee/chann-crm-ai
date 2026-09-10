@@ -91,9 +91,26 @@ class PlatformAdmin(TimestampMixin, Base):
 
 
 class LineWebhookEvent(Base):
-    """One row per LINE webhook event id, so a redelivered event (LINE
-    retries when a reply takes too long) does not file a second ticket
-    or a second note (review, 6 Sep 2026)."""
+    """What happened to one LINE webhook event, not merely that it arrived.
+
+    One row per webhook event id, so a redelivered event (LINE retries
+    when a reply takes too long) does not file a second ticket or a second
+    note (review, 6 Sep 2026) — and, since review v3 T01, so that a
+    redelivery of an event whose FIRST delivery failed can finish the job
+    instead of being thanked for nothing.
+
+    The three states are the two halves of the work, separately:
+
+    * `processing` — claimed, under a lease. A crash that never releases
+      the claim is picked up again once the lease is stale.
+    * `handled` — the business effect is complete and must not happen a
+      second time; `reply` holds the answer that has not reached the
+      person yet.
+    * `done` — both halves finished.
+
+    An attempt that fails deletes its own row, which is what makes the
+    next redelivery a retry rather than a duplicate.
+    """
 
     __tablename__ = "line_webhook_events"
 
@@ -102,6 +119,16 @@ class LineWebhookEvent(Base):
     received_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(),
     )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="processing", server_default="done",
+    )
+    claimed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
+    attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1",
+    )
+    reply: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
 
 class License(TimestampMixin, Base):
