@@ -9112,6 +9112,11 @@ _GUARD_ACTIONS: dict[str, dict[str, str]] = {
         "th_eg": "ใช้เลย", "en_eg": "use it",
         "code": "",
     },
+    "record_write": {
+        "th": "แก้ข้อมูลนี้", "en": "change this record",
+        "th_eg": "สร้างลูกค้า สมชาย ใจดี 0812345678", "en_eg": "add customer John Doe 0812345678",
+        "code": "",
+    },
     "ticket_cancel": {
         "th": "ยกเลิกงาน", "en": "cancel the job",
         "th_eg": "ยกเลิกงาน {code}", "en_eg": "cancel job {code}",
@@ -9154,6 +9159,15 @@ _GUARD_ACTIONS: dict[str, dict[str, str]] = {
     },
 }
 
+# Everything the model can ask for that changes something. Used to decide
+# whether an (entity, action) with no specific guard still needs the
+# generic one — the answer is yes for every verb in here.
+_MUTATING_ACTIONS = frozenset({
+    "create", "update", "delete", "archive", "cancel", "close", "issue",
+    "approve", "reject", "check_in", "check_out", "claim", "assign",
+    "promote", "convert", "publish", "send",
+})
+
 # The model's reading is not a mandate either: every mutating (entity,
 # action) the AI road can dispatch is named here, so ONE call in
 # _execute_intent covers the whole road rather than each branch of it.
@@ -9182,6 +9196,32 @@ _AI_GUARDED: dict[tuple[str, str], str] = {
     ("note", "create"): "note_write",
     ("note", "update"): "note_write",
     ("note", "delete"): "note_write",
+    # The rest of the mutating pairs, mapped to the vocabulary that already
+    # describes them, so the refusal names the actual thing rather than the
+    # generic "แก้ข้อมูลนี้". Anything still not listed falls to
+    # `record_write` / `record_delete` in _execute_intent — guarded, just
+    # less specific (10 ก.ย. 2569).
+    ("customer", "create"): "customer_bulk",
+    ("customer", "update"): "customer_bulk",
+    ("customer", "archive"): "record_delete",
+    ("customer", "promote"): "deal_create",
+    ("deal", "create"): "deal_create",
+    ("deal", "update"): "deal_stage",
+    ("deal", "archive"): "record_delete",
+    ("quote", "update"): "quote_terms",
+    ("team", "create"): "team_manage",
+    ("team", "update"): "team_manage",
+    ("team", "delete"): "team_manage",
+    ("warranty", "create"): "warranty_register",
+    ("warranty", "update"): "warranty_register",
+    ("setting", "update"): "shop_setting",
+    ("approval", "approve"): "approval_act",
+    ("approval", "reject"): "approval_act",
+    ("approval", "update"): "approval_act",
+    ("ticket", "claim"): "job_claim",
+    ("ticket", "reject"): "job_reject",
+    ("ticket", "assign"): "job_assign",
+    ("service_report", "issue"): "document_issue",
 }
 
 
@@ -9270,6 +9310,7 @@ _GUARD_CODE_RE = re.compile(r"(?<![A-Za-z0-9])((?:SR|[CDQT])-\d{4}-\d{4})(?![0-9
 def _intent_guard_reply(
     message: str, *, action: str, language: str,
     triggers: tuple[str, ...] | None = None, code: str | None = None,
+    proposed: bool = False,
 ) -> ChatReply | None:
     """The answer to give INSTEAD of writing, or None to go ahead.
 
@@ -9283,6 +9324,7 @@ def _intent_guard_reply(
     verdict = intent_to_act(
         message, action=action, canonical=_canonical(message),
         triggers=tuple(_guard_triggers(action) if triggers is None else triggers),
+        proposed=proposed,
     )
     if verdict.acts:
         return None
@@ -13874,6 +13916,26 @@ def _prune_missing(missing: list[str], intent: dict, message: str) -> list[str]:
     return pruned
 
 
+def _slot_fill_still_open(pending: dict, language: str = "th") -> ChatReply:
+    """Where the half-finished flow stands, as an answer to a question
+    asked in the middle of it. Names what is held and what is still
+    wanted, so "ต้องกรอกอะไรบ้าง" gets a real answer and the flow keeps
+    its place."""
+    fields = {k: v for k, v in (pending.get("fields") or {}).items() if v not in (None, "")}
+    have = ", ".join(
+        f"{MISSING_FIELD_LABELS.get(k, {}).get(language) or k} {v}" for k, v in fields.items()
+    ) or _t(SLOT_FILL_NOTHING_YET, language)
+    missing = [m for m in (pending.get("missing") or [])]
+    wanted = ", ".join(
+        MISSING_FIELD_LABELS.get(m, {}).get(language) or _t(ASK_MISSING_REST, language)
+        for m in missing
+    ) or _t(ASK_MISSING_REST, language)
+    return ChatReply(
+        text=_t(SLOT_FILL_STILL_OPEN, language).format(have=have, missing=wanted),
+        intent=pending,
+    )
+
+
 def ask_for_missing(missing: list[str], language: str = "th") -> str:
     """Spec 6.4 — ask only for what is actually absent.
 
@@ -17766,18 +17828,29 @@ async def _route_chat_message(
         # done, the message is whatever it is.
         await _drop_pending_quietly(client, ctx)
         pending_intent = None
-    if pending_intent is not None and pending_intent.get("missing") and (
-        _normalise(message) in _SLOT_FILL_ABORT_WORDS
+    if pending_intent is not None and pending_intent.get("missing"):
         # Not only the six words the abort list happens to hold: "หยุดก่อน",
         # "พักไว้ก่อน", "เดี๋ยวค่อยทำ" and "ยังไม่เพิ่มลูกค้านะ" are the same
         # request and went to the model, which answered "not sure"
         # (review v3, pending-cancel 008-012).
-        or _intent_guard_reply(message, action="pending_flow", language=language) is not None
-    ):
-        # "ยกเลิก" while a question is open: closed, deterministic, no
-        # model (review, 6 Sep 2026).
-        await _drop_pending_quietly(client, ctx)
-        return ChatReply(text=_t(SLOT_FILL_CANCELLED, language))
+        #
+        # But only the reasons that MEAN abandonment. Accepting every HOLD
+        # meant a question mid-flow — "ต้องกรอกอะไรบ้าง", "กรอกยังไง",
+        # "เพิ่มไปหรือยัง" — destroyed the half-filled record and answered
+        # "ยกเลิกแล้วครับ", a cancellation the person never asked for.
+        _abort_word = _normalise(message) in _SLOT_FILL_ABORT_WORDS
+        _verdict = intent_to_act(
+            message, action="pending_flow", canonical=_canonical(message),
+        )
+        if _abort_word or _verdict.reason in _ABANDONING_REASONS:
+            # "ยกเลิก" while a question is open: closed, deterministic, no
+            # model (review, 6 Sep 2026).
+            await _drop_pending_quietly(client, ctx)
+            return ChatReply(text=_t(SLOT_FILL_CANCELLED, language))
+        if _verdict.reason in ("question", "howto", "status"):
+            # Answer it, keep the flow, and say where we are. The pending
+            # is deliberately left untouched.
+            return _slot_fill_still_open(pending_intent, language)
     if pending_intent is None and _is_small_talk(message):
         return ChatReply(text=_t(SMALL_TALK_REPLY, language))
 
@@ -17964,11 +18037,25 @@ async def _execute_intent(
     # the review supplied action=check_in for "ทำไมต้องเช็คอิน" and
     # action=create/quote for "ยังไม่สร้างใบเสนอราคา D-2026-0001", and both
     # were performed (review v3, B02/B03).
-    guarded_as = _AI_GUARDED.get((str(req_entity or ""), req_action)) or (
-        "record_delete" if req_action in ("delete", "cancel") else None
-    )
+    #
+    # Guarded by DEFAULT. The lookup used to return None for a pair nobody
+    # had listed, and None meant "go ahead" — so 30 of the 48 mutating
+    # (entity, action) pairs the model can dispatch had no shape check at
+    # all, `("customer","create")` among them. Measured 10 ก.ย. 2569:
+    # "ไม่ต้องเพิ่มลูกค้า สมชาย ใจดี 0812345678" and "…ยังไงครับ" each wrote
+    # a real customer row. Now a specific vocabulary is used when one
+    # exists and a generic one otherwise, so adding a handler cannot
+    # silently add an unguarded road (owner, requirement 5).
+    guarded_as = _AI_GUARDED.get((str(req_entity or ""), req_action))
+    if guarded_as is None and req_action in _MUTATING_ACTIONS:
+        guarded_as = "record_delete" if req_action in ("delete", "cancel") else "record_write"
     if guarded_as is not None:
-        guarded = _intent_guard_reply(message, action=guarded_as, language=language)
+        # proposed=True: the model claimed this action, possibly from a
+        # word the guard's table has never seen. A refusal it cannot bind
+        # to the action is then a reason to ask, not a licence to write.
+        guarded = _intent_guard_reply(
+            message, action=guarded_as, language=language, proposed=True,
+        )
         if guarded is not None:
             return guarded
 
@@ -18231,6 +18318,21 @@ SLOT_FILL_CANCELLED = {
     "th": "ยกเลิกแล้วครับ ไม่ได้บันทึกอะไร",
     "en": "Cancelled — nothing was saved.",
 }
+# The reasons that actually mean "drop what we were doing". The guard has
+# seven, and the slot-fill abort used to accept ALL of them: asking
+# "ต้องกรอกอะไรบ้าง" in the middle of adding a customer threw the
+# half-filled record away and announced a cancellation nobody asked for
+# (owner, 10 ก.ย. 2569 — "การถามแทรกต้องไม่ล้างงานค้าง"). A question is
+# not an abandonment; it is a person trying to answer you.
+_ABANDONING_REASONS = frozenset({"abandoned", "negated", "later"})
+# What to say when the interruption is a question. Answering it and then
+# picking the flow back up is the whole point — the reply names what is
+# already held, so "ต้องกรอกอะไรบ้าง" is answered rather than deflected.
+SLOT_FILL_STILL_OPEN = {
+    "th": "ตอนนี้กรอกไว้แล้ว: {have}\nยังขาด: {missing}\nพิมพ์ต่อได้เลยครับ (หรือ \"ยกเลิก\" ถ้าไม่ทำแล้ว)",
+    "en": "So far: {have}\nStill needed: {missing}\nJust carry on — or send \"cancel\" to stop.",
+}
+SLOT_FILL_NOTHING_YET = {"th": "ยังไม่มีข้อมูล", "en": "nothing yet"}
 _DETERMINISTIC_FLOWS = frozenset({
     "service_report", "customer_ticket", "pending_customer_message", "ticket_reject", "customer_contact",
     # "which of this customer's machines is the job about" — answered by a

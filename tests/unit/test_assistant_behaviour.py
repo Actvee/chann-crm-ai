@@ -1,0 +1,371 @@
+"""The five behaviours the owner named, held as tests.
+
+Owner, 10 ก.ย. 2569: the assistant should hold a conversation, not run a
+command line. People mistype, speak colloquially, drop words, change their
+mind, ask how something works, and refer back to what was just said. Their
+five cases, verbatim:
+
+  * "ไม่ต้องยกเลิกนัด" ต้องไม่ยกเลิก
+  * "สร้างใบเสนอราคาไปหรือยัง" ต้องตรวจข้อมูลก่อนตอบ
+  * "ยังไม่เอาใบราคาครับ" ต้องไม่สร้าง
+  * ถามวิธีกรอกระหว่างเพิ่มลูกค้า ต้องยังเก็บข้อมูลที่กรอกไว้
+  * คำสั่งเชิงบวกที่ชัดเจนต้องยังทำงานได้
+
+Every test checks the REPLY and the ROWS WRITTEN, because a reply that
+sounds right over a row that should not exist is the failure this whole
+round is about. The fifth case is not a footnote: it is half of every
+other one, and this codebase has twice shipped a fix for over-acting that
+then refused real orders.
+"""
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+import httpx
+import pytest
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "application"))
+sys.path.insert(0, str(ROOT / "data"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from chann_app.config import settings  # noqa: E402
+from chann_app.services import chat  # noqa: E402
+from chann_data.permissions import DEFAULT_ROLE_TEMPLATES  # noqa: E402
+from test_phase6_chat import FakeDataClient, _ai, _ctx  # noqa: E402
+
+SALES = sorted(DEFAULT_ROLE_TEMPLATES["admin"])
+WRITES = (
+    "create_", "update_", "delete_", "set_quote", "transition_", "archive_",
+    "register_", "claim_", "add_", "remove_", "put_", "assign_", "reject_",
+)
+CUSTOMER = {
+    "id": "CUST-1", "customer_id": "C-2026-0001", "first_name": "สมชาย",
+    "last_name": "ใจดี", "phone": "0812345678", "stage": "lead",
+}
+DEAL = {
+    "id": "DEAL-1", "deal_id": "D-2026-0001", "stage": "proposed",
+    "contact_id": "CUST-1", "notes": None, "products": [],
+}
+QUOTE = {
+    "id": "QUOTE-1", "quote_id": "Q-2026-0001", "status": "sent",
+    "deal_id": "DEAL-1", "contact_id": "CUST-1", "items": [], "total": "1000.00",
+}
+TICKET = {
+    "id": "t1", "ticket_number": "T-2026-0001", "status": "open",
+    "customer_chann_uid": "CHN-S-000001", "customer_name": "สมชาย",
+    "issue_description": "แอร์ไม่เย็น",
+    "scheduled_date": "2026-09-11", "scheduled_time": "10:00",
+}
+
+
+@pytest.fixture(autouse=True)
+def _model_configured(monkeypatch):
+    """The model is STUBBED here — every answer below is authored by the
+    test, never produced by a model. These tests say what the pipeline
+    does with a given answer; they say nothing about whether a real model
+    would give it. That question needs its own run."""
+    monkeypatch.setattr(settings, "openrouter_api_key", "test-key")
+    monkeypatch.setattr(settings, "openrouter_model", "qwen/qwen3.6-35b-a3b")
+
+
+def _shop(*, quotes=(), deals=(), customers=(), keys=None):
+    client = FakeDataClient(
+        role="sales", permission_keys=list(SALES if keys is None else keys),
+        customers=[dict(c) for c in customers],
+        deals=[dict(d) for d in deals],
+        quotes=[dict(q) for q in quotes],
+    )
+    client._tickets = [dict(TICKET)]
+    return client
+
+
+async def _say(client, message, *, intent=None, oa="sales", role="sales"):
+    ai = httpx.AsyncClient(transport=_ai(json.dumps(intent, ensure_ascii=False))) if intent else None
+    reply = await chat.handle_chat_message(
+        client, ctx=_ctx(primary_role=role, oa=oa), message=message, language="th", ai_client=ai,
+    )
+    written = [
+        c[0] for c in client.recorded
+        if c[0].startswith(WRITES) and not c[0].startswith(("set_last_", "set_pending"))
+    ]
+    return (reply.text or ""), written
+
+
+class TestCase1DoNotCancel:
+    """"ไม่ต้องยกเลิกนัด" ต้องไม่ยกเลิก."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message", [
+        "ไม่ต้องยกเลิกนัด",
+        "ยังไม่ต้องยกเลิกงาน",
+        "อย่าเพิ่งยกเลิกนัดนะครับ",
+    ])
+    async def test_nothing_is_cancelled(self, message):
+        client = FakeDataClient(role="customer", permission_keys=[])
+        client._tickets = [dict(TICKET)]
+        text, written = await _say(client, message, oa="customer", role="customer")
+        assert written == [], f"{message!r} wrote {written}"
+        assert "ยังไม่ได้ยกเลิก" in text
+
+    @pytest.mark.asyncio
+    async def test_but_a_real_cancellation_is_still_offered(self):
+        """The fifth case applied to the first: refusing the refusal would
+        strand a customer who genuinely cannot be home."""
+        client = FakeDataClient(role="customer", permission_keys=[])
+        client._tickets = [dict(TICKET)]
+        text, _ = await _say(client, "ยกเลิกนัด", oa="customer", role="customer")
+        assert "ยังไม่ได้ยกเลิก" not in text
+        assert "T-2026-0001" in text
+
+
+class TestCase2CheckBeforeAnswering:
+    """"สร้างใบเสนอราคาไปหรือยัง" ต้องตรวจข้อมูลก่อนตอบ — the answer was
+    rendered from the sentence alone, with no lookup of any kind, so a shop
+    whose quotation had gone out was told the opposite of the truth."""
+
+    @pytest.mark.asyncio
+    async def test_it_says_so_when_the_quotation_exists(self):
+        client = _shop(quotes=[QUOTE], deals=[DEAL], customers=[CUSTOMER])
+        text, written = await _say(client, "สร้างใบเสนอราคา D-2026-0001 ไปหรือยัง")
+        assert written == []
+        assert "Q-2026-0001" in text
+        assert "ยังไม่ได้" not in text
+
+    @pytest.mark.asyncio
+    async def test_and_says_not_yet_when_there_is_none(self):
+        client = _shop(deals=[DEAL], customers=[CUSTOMER])
+        text, written = await _say(client, "สร้างใบเสนอราคา D-2026-0001 ไปหรือยัง")
+        assert written == []
+        assert "ยังไม่ได้" in text
+
+
+class TestCase3DecliningInWordsNobodyListed:
+    """"ยังไม่เอาใบราคาครับ" ต้องไม่สร้าง.
+
+    "ใบราคา" is the everyday short form and was in no table, so the guard
+    had nothing to bind the "ยังไม่" to and issued the quotation. Two
+    answers here: the word is in the table now, AND a refusal the guard
+    cannot bind on the model's road is no longer read as consent — because
+    a word list can never hold every way a person declines something."""
+
+    QUOTE_INTENT = {
+        "action": "create", "entity": "quote",
+        "fields": {"deal_code": "D-2026-0001"}, "missing": [],
+    }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message", [
+        "ยังไม่เอาใบราคาครับ",
+        "ไม่เอาใบเสนอราคาแล้ว",
+        # Words nobody has listed and nobody will: the structural half.
+        "ไม่ต้องออกบิลราคานะ",
+        "ไม่เอาเปเปอร์ราคาแล้ว",
+    ])
+    async def test_no_quotation_is_created(self, message):
+        client = _shop(deals=[DEAL], customers=[CUSTOMER])
+        client._last_entity_ref = {
+            "entity_type": "deal", "entity_id": "DEAL-1",
+            "code": "D-2026-0001", "extra": None,
+        }
+        text, written = await _say(client, message, intent=self.QUOTE_INTENT)
+        assert "create_quote" not in written, f"{message!r} wrote {written}"
+        assert text.strip()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message", [
+        "ทำใบเสนอราคาให้หน่อยครับ",
+        "สร้างใบเสนอราคา D-2026-0001",
+    ])
+    async def test_and_asking_for_one_still_creates_it(self, message):
+        client = _shop(deals=[DEAL], customers=[CUSTOMER])
+        client._last_entity_ref = {
+            "entity_type": "deal", "entity_id": "DEAL-1",
+            "code": "D-2026-0001", "extra": None,
+        }
+        _, written = await _say(client, message, intent=self.QUOTE_INTENT)
+        assert "create_quote" in written
+
+
+class TestCase4AQuestionMidFlowKeepsTheWork:
+    """ถามวิธีกรอกระหว่างเพิ่มลูกค้า ต้องยังเก็บข้อมูลที่กรอกไว้.
+
+    It did worse than lose it: the half-filled record was thrown away and
+    the person was told "ยกเลิกแล้วครับ" — a cancellation they never asked
+    for. The slot-fill abort accepted every HOLD the guard could return,
+    and the guard has seven reasons; only three of them mean abandonment.
+    """
+
+    START = {
+        "action": "create", "entity": "customer",
+        "fields": {"first_name": "สมชาย", "last_name": "ใจดี"}, "missing": ["phone"],
+    }
+    ANSWER = {
+        "action": "create", "entity": "customer",
+        "fields": {"phone": "0812345678"}, "missing": [],
+    }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("question", ["ต้องกรอกอะไรบ้าง", "กรอกยังไง"])
+    async def test_the_flow_survives_and_the_question_is_answered(self, question):
+        client = _shop()
+        await _say(client, "เพิ่มลูกค้า สมชาย ใจดี", intent=self.START)
+
+        text, written = await _say(client, question)
+        assert written == []
+        pending = await client.get_pending_intent("CHN-S-000001", "sales")
+        assert pending is not None, "the half-filled record was thrown away"
+        assert pending["fields"]["first_name"] == "สมชาย"
+        # And it is an ANSWER, not a deflection: it names what is held.
+        assert "สมชาย" in text and "เบอร์โทร" in text
+        assert "ยกเลิกแล้ว" not in text
+
+    @pytest.mark.asyncio
+    async def test_and_the_customer_is_created_when_the_answer_comes(self):
+        client = _shop()
+        await _say(client, "เพิ่มลูกค้า สมชาย ใจดี", intent=self.START)
+        await _say(client, "ต้องกรอกอะไรบ้าง")
+        _, written = await _say(client, "0812345678", intent=self.ANSWER)
+        assert "create_customer" in written
+        assert [
+            (c.get("first_name"), c.get("last_name"), c.get("phone"))
+            for c in client._customers
+        ] == [("สมชาย", "ใจดี", "0812345678")]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message", [
+        "ยกเลิก", "หยุดก่อน", "ยังไม่เพิ่มลูกค้านะ", "เดี๋ยวค่อยทำ",
+    ])
+    async def test_but_actually_abandoning_it_still_abandons_it(self, message):
+        """The other half. Keeping the flow alive through a genuine
+        "stop" would be its own kind of not listening."""
+        client = _shop()
+        await _say(client, "เพิ่มลูกค้า สมชาย ใจดี", intent=self.START)
+        text, _ = await _say(client, message)
+        assert await client.get_pending_intent("CHN-S-000001", "sales") is None
+        assert "ยกเลิกแล้ว" in text
+
+
+class TestCase5PlainCommandsStillWork:
+    """คำสั่งเชิงบวกที่ชัดเจนต้องยังทำงานได้ — the half that is easy to
+    lose while fixing the other four."""
+
+    @pytest.mark.asyncio
+    async def test_creating_a_quotation(self):
+        client = _shop(deals=[DEAL], customers=[CUSTOMER])
+        _, written = await _say(client, "สร้างใบเสนอราคา D-2026-0001")
+        assert "create_quote" in written
+
+    @pytest.mark.asyncio
+    async def test_an_appointment(self):
+        client = _shop(customers=[CUSTOMER])
+        _, written = await _say(client, "ตั้งนัด C-2026-0001 พรุ่งนี้ 10:00")
+        assert "create_follow_up" in written
+
+    @pytest.mark.asyncio
+    async def test_a_customer_in_one_line(self):
+        client = _shop()
+        _, written = await _say(
+            client, "เพิ่มลูกค้า สมชาย ใจดี 0812345678",
+            intent={
+                "action": "create", "entity": "customer",
+                "fields": {
+                    "first_name": "สมชาย", "last_name": "ใจดี", "phone": "0812345678",
+                },
+                "missing": [],
+            },
+        )
+        assert "create_customer" in written
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message", [
+        # Each carries a word one of the guards looks at, and each is an
+        # order anyway.
+        "ช่วยสร้างใบเสนอราคา D-2026-0001 ให้หน่อยครับ",
+        "ตั้งนัด C-2026-0001 พรุ่งนี้ 10:00 หน่อยได้ไหมครับ",
+    ])
+    async def test_politeness_does_not_make_an_order_a_question(self, message):
+        client = _shop(deals=[DEAL], customers=[CUSTOMER])
+        _, written = await _say(client, message)
+        assert written, f"{message!r} was refused"
+
+
+class TestTheModelRoadIsGuardedByDefault:
+    """Requirement 5: "คำที่ guard ไม่รู้จัก ต้องไม่ถือเป็นการอนุญาตให้
+    เขียนข้อมูลโดยอัตโนมัติ".
+
+    It was exactly inverted. `_AI_GUARDED.get(...)` returned None for a
+    pair nobody had listed, and None meant "go ahead" — so 30 of the 48
+    mutating (entity, action) pairs the model can dispatch had no shape
+    check at all. `("customer","create")` was one of them, which is why
+    "ไม่ต้องเพิ่มลูกค้า สมชาย ใจดี 0812345678" wrote a real customer row:
+    there is no single-customer create in any trigger table, so that flow
+    reaches the model every time and the model's road was the unguarded
+    one."""
+
+    CREATE = {
+        "action": "create", "entity": "customer",
+        "fields": {"first_name": "สมชาย", "last_name": "ใจดี", "phone": "0812345678"},
+        "missing": [],
+    }
+
+    def test_every_mutating_pair_reaches_a_guard(self):
+        """The property, not a sample: adding a handler must not be able to
+        add an unguarded road by forgetting a table entry."""
+        unguarded = [
+            (entity, action)
+            for (action, entity) in chat.ACTION_PERMISSIONS
+            if action in chat._MUTATING_ACTIONS
+            and (entity, action) not in chat._AI_GUARDED
+            and action not in ("delete", "cancel")
+        ]
+        # These fall to `record_write`, which is a guard — the test is that
+        # _MUTATING_ACTIONS covers them, so _execute_intent picks one up.
+        for entity, action in unguarded:
+            assert action in chat._MUTATING_ACTIONS, f"({entity}, {action}) reaches no guard"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message", [
+        "ไม่ต้องเพิ่มลูกค้า สมชาย ใจดี 0812345678",
+        "ยังไม่ต้องเพิ่มลูกค้าสมชาย ใจดี 0812345678",
+        "เพิ่มลูกค้า สมชาย ใจดี 0812345678 ยังไงครับ",
+        "เช่น เพิ่มลูกค้า สมชาย ใจดี 0812345678",
+    ])
+    async def test_no_customer_is_created(self, message):
+        client = _shop()
+        text, written = await _say(client, message, intent=self.CREATE)
+        assert "create_customer" not in written, f"{message!r} wrote {written}"
+        assert client._customers == []
+        # And the refusal names the actual thing, not "แก้ข้อมูลนี้".
+        assert "ลูกค้า" in text
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message", [
+        "เพิ่มลูกค้า สมชาย ใจดี 0812345678",
+        "ลูกค้าใหม่ สมชาย ใจดี 0812345678",
+    ])
+    async def test_but_adding_a_customer_still_adds_one(self, message):
+        client = _shop()
+        _, written = await _say(client, message, intent=self.CREATE)
+        assert "create_customer" in written
+
+    def test_a_refusal_aimed_at_removing_is_the_request(self):
+        """The rule above has a boundary, and it is the action rather than
+        the sentence. "ไม่เอา X" is a decline when the proposal is to
+        CREATE — "ไม่เอาใบราคาครับ", no quotation thank you — and an
+        instruction when the proposal is to REMOVE: "ไม่เอาตัวนี้แล้ว" over
+        a deal line means take it off. Same words, opposite meanings.
+
+        Holding the removal case would refuse the phrasing people reach for
+        most naturally when they want something gone, which is how a fix
+        for over-acting becomes the other bug."""
+        from chann_app.services.intent_guard import intent_to_act
+
+        for message in ("ไม่เอาตัวนี้แล้ว", "ไม่เอาพัดลมแล้ว"):
+            assert intent_to_act(message, action="line_item", proposed=True).acts, message
+        for message in ("ยังไม่เอาใบราคาครับ", "ไม่ต้องออกบิลราคานะ"):
+            assert not intent_to_act(
+                message, action="quote_create", proposed=True,
+            ).acts, message

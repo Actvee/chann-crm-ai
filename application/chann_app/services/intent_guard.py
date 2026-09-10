@@ -93,7 +93,15 @@ ACTION_WORDS: dict[str, tuple[str, ...]] = {
     "appointment_delete": ("ลบนัด", "ลบเตือน", "เอานัดออก", "ลบ", "delete", "นัด", "เตือน"),
     "quote_create": (
         "สร้างใบเสนอราคา", "ออกใบเสนอราคา", "ทำใบเสนอราคา", "เปิดใบเสนอราคา", "ขอใบเสนอราคา",
-        "ใบเสนอราคา", "quote", "quotation",
+        "ใบเสนอราคา",
+        # What people actually type. "ยังไม่เอาใบราคาครับ" created the
+        # quotation because none of the words above appear in it, so the
+        # guard had nothing to bind the "ยังไม่" to (owner, 10 ก.ย. 2569).
+        # The structural answer is `unnamed_action` below; these are here
+        # because a list that matches how people speak is worth having
+        # anyway.
+        "ใบราคา", "ใบเสนอ", "ใบquote", "เสนอราคา",
+        "quote", "quotation",
     ),
     "check_in": ("เช็คอิน", "เช็กอิน", "ถึงหน้างาน", "ถึงแล้ว", "ถึงไซต์", "ถึง", "checkin", "check in", "arrived"),
     "check_out": ("เช็คเอาท์", "เช็คเอาต์", "ปิดงาน", "จบงาน", "ส่งรายงาน", "checkout", "check out", "เสร็จ"),
@@ -198,6 +206,19 @@ ACTION_WORDS: dict[str, tuple[str, ...]] = {
     "template_publish": (
         "เผยแพร่", "ใช้เลย", "ใช้แบบนี้", "ใช้อันนี้", "เอาแบบนี้", "ตกลงใช้", "ยืนยันใช้",
         "publish", "use it",
+    ),
+    # The default for any mutating action with no wording of its own. It
+    # holds the verbs a person uses to ask for a change of ANY kind, so
+    # the words a refusal negates can be found even when the entity is one
+    # nobody wrote a vocabulary for. Its job is not to be precise — it is
+    # to make "guarded" the default on the model's road instead of
+    # something each new handler has to remember to ask for
+    # (owner, 10 ก.ย. 2569, requirement 5).
+    "record_write": (
+        "สร้าง", "เพิ่ม", "ทำ", "เปิด", "บันทึก", "แก้", "แก้ไข", "เปลี่ยน", "อัปเดต", "ตั้ง",
+        "ลบ", "ยกเลิก", "เอาออก", "นำออก", "ปิด", "ส่ง", "ออก", "มอบหมาย", "รับ", "อนุมัติ",
+        "create", "add", "update", "change", "edit", "set", "delete", "remove", "cancel",
+        "close", "issue", "send", "assign", "approve", "reject",
     ),
     "ticket_cancel": ("ยกเลิกงาน", "ยกเลิกนัด", "ยกเลิก", "cancel job", "cancel"),
     "chat_open": ("คุยกับร้าน", "แชทกับร้าน", "คุยกับเจ้าหน้าที่", "คุยกับพนักงาน", "คุยกับแอดมิน", "talk to the shop", "live chat"),
@@ -473,12 +494,34 @@ def _only_inside_quotes(canonical: str, words: Sequence[str]) -> bool:
     return seen
 
 
+# A refusal somewhere in the sentence, with no claim about WHAT is being
+# refused. Deliberately narrow: only the forms that cannot be anything but
+# a decline. A bare "ไม่" is excluded — it is half of "ไม่เย็น".
+_REFUSAL_RE = re.compile(
+    r"(?:ยังไม่ต้อง|ไม่ต้อง|ยังไม่เอา|ไม่เอาแล้ว|ไม่เอา|อย่าเพิ่ง|อย่า|ยังไม่อยาก|ไม่อยาก|"
+    r"ยกเลิกก่อน|ไม่ทำแล้ว|dontwant|donot|dont)"
+)
+
+
+def _carries_a_refusal(compact: str) -> bool:
+    return bool(_REFUSAL_RE.search(compact))
+
+
+# Guard actions whose whole purpose is to take something away. A refusal
+# aimed at one of these is the request, not a refusal of it.
+_REMOVING_ACTIONS = frozenset({
+    "record_delete", "line_item", "appointment_cancel", "appointment_delete",
+    "ticket_cancel", "job_reject",
+})
+
+
 def intent_to_act(
     message: str,
     *,
     action: str,
     triggers: Sequence[str] = (),
     canonical: str | None = None,
+    proposed: bool = False,
 ) -> Verdict:
     """Does this sentence ask for `action` to be performed?
 
@@ -560,6 +603,30 @@ def intent_to_act(
     # it, "ถ้า" and "ไม่" are about something else entirely, and holding
     # on them would refuse ordinary work.
     if at is None:
+        # …with one exception, and it only applies where the caller says
+        # the action was PROPOSED rather than matched. On the rule road the
+        # action is named by definition — the trigger matched — so `at is
+        # None` genuinely means the negation is about something else. On
+        # the model's road the model claimed the action from a sentence it
+        # may have read through a word this table has never seen, and
+        # "ยังไม่เอาใบราคาครับ" is exactly that: a refusal the guard could
+        # not bind, so it acted and issued the quotation.
+        #
+        # A word list can never hold every way a person declines something.
+        # This does not try to: when a sentence carries a refusal and the
+        # action it refuses cannot be located, the honest answer is that we
+        # do not know what was meant — and not knowing is never a licence
+        # to write (owner, 10 ก.ย. 2569).
+        #
+        # …and only when the action ADDS something. "ไม่เอา X" is a decline
+        # when the proposal is to create ("ไม่เอาใบราคาครับ" — no quotation,
+        # thank you) and an INSTRUCTION when the proposal is to remove
+        # ("ไม่เอาตัวนี้แล้ว" over a deal line — take it off). Same words,
+        # opposite meanings, and what separates them is the action, not the
+        # sentence. Holding the removal case would refuse the one phrasing
+        # people reach for most naturally when they want something gone.
+        if proposed and action not in _REMOVING_ACTIONS and _carries_a_refusal(compact):
+            return Verdict(ASK, "unnamed_action")
         return _ACTS
 
     if not imperative and _negated(compact, words, triggers or ()):

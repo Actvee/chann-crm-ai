@@ -108,8 +108,12 @@ for action in sorted(wording - action_words):
 
 # 3. Vocabulary nobody calls is a promise the product does not keep.
 for action in sorted(action_words - called):
-    if action in ("record_delete", "pending_flow"):
-        continue  # dispatched by table lookup (_AI_GUARDED / the delete fallback)
+    if action in ("record_delete", "record_write", "pending_flow"):
+        # Dispatched by table lookup rather than a literal at the call:
+        # _AI_GUARDED for the named pairs, and record_write/record_delete
+        # as the generic default for a mutating pair nobody listed — which
+        # is what makes "guarded" the default on the model's road.
+        continue
     if action in supplies_triggers:
         continue
     problems.append(f"{action} has vocabulary but no call site — nothing is guarded by it")
