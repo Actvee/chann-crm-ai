@@ -1,0 +1,73 @@
+# The owner's review of the message path, 10 ก.ย. 2569.
+#
+# Measured on 351 labelled messages through the real handlers: 47 failed,
+# and 28 of those were a rule matching and deciding before the model was
+# ever consulted. 23 of the 47 wrote to the database. In the technician
+# channel every single write — 41 of them — happened with the model never
+# asked. So this is not a model problem and a better model cannot fix it.
+#
+# The shape this scenario holds: a sentence that DECLINES, ASKS HOW, or
+# NARRATES an action must change nothing, and the plain command right next
+# to it must still work. Both halves matter — twice this codebase has
+# shipped a fix for over-acting that then refused real orders.
+name: a-sentence-is-not-a-command
+description: declining, asking how, and narrating leave the data alone; the command next to it still works
+backend: fake
+actor: {oa: sales, role: sales, language: th, permissions: all}
+steps:
+# ---------------------------------------------------------------- invite
+# An invite code is a credential that lets a stranger join the shop.
+- send: เพิ่มช่างยังไง
+  expect:
+    not_contains: ["รหัสเชิญช่าง:"]
+    contains: ["วิธี"]
+    is_not: [not_sure, generic_error, permission]
+- send: ลูกค้าถามว่าเพิ่มช่างยังไง
+  expect: {not_contains: ["รหัสเชิญช่าง:"], is_not: [not_sure, generic_error]}
+- send: ไม่ต้องเชิญช่างแล้ว
+  expect: {not_contains: ["รหัสเชิญช่าง:"], is_not: [not_sure, generic_error]}
+# …and the command itself is untouched.
+- send: ขอรหัสเชิญช่าง
+  expect: {contains: ["รหัสเชิญช่าง:"], is_not: [not_sure, generic_error, permission]}
+
+# ------------------------------------------------------------------ team
+# This one created a team literally named "ยังไง".
+- send: สร้างทีมช่างยังไง
+  expect: {not_contains: ["สร้างทีม ยังไง"], is_not: [generic_error, permission]}
+- send: สร้างทีมช่าง แอร์
+  expect: {contains: ["แอร์"], is_not: [not_sure, generic_error, permission]}
+
+# ------------------------------------------------------------- warranty
+- send: ไม่ต้องลงทะเบียน SN12345678
+  expect: {not_contains: ["ลงทะเบียนรับประกันแล้ว"], is_not: [generic_error, permission]}
+- send: ลงทะเบียน SN12345678
+  expect: {contains: ["ลงทะเบียนรับประกันแล้ว"], is_not: [not_sure, generic_error]}
+
+# ------------------------------------------------------- company details
+# These are printed on documents the customer receives.
+- send: ตั้งที่อยู่บริษัทยังไง
+  expect: {not_contains: ["บันทึกที่อยู่บริษัทเรียบร้อย"], is_not: [generic_error]}
+- send: ตั้งที่อยู่บริษัท 99/1 ถนนสุขุมวิท
+  expect: {contains: ["บันทึกที่อยู่บริษัทเรียบร้อย"], is_not: [not_sure, generic_error]}
+
+# ------------------------------------------------------------ shop-wide
+# A how-to question used to flip a setting for the whole shop.
+- send: ตั้งค่าลบ lead อัตโนมัติ 90 วัน ได้ยังไงครับ
+  expect: {not_contains: ["เปิด · ลบอัตโนมัติหลัง"], is_not: [generic_error]}
+- send: ตั้งค่าลบ lead อัตโนมัติ 90 วัน
+  expect: {contains: ["90"], is_not: [not_sure, generic_error, permission]}
+
+# ---------------------------------------------------------- bulk paste
+- send: |-
+    ไม่ต้องเพิ่มลูกค้า สมชาย ใจดี 0812345678; สมหญิง รักดี 0898765432
+  expect: {not_contains: ["เพิ่มลูกค้าแล้ว"], is_not: [generic_error, permission]}
+- send: |-
+    เพิ่มลูกค้า สมชาย ใจดี 0812345678; สมหญิง รักดี 0898765432
+  expect: {contains: ["2"], is_not: [not_sure, generic_error, permission]}
+
+# ------------------------------------------- the opposite mistake, twice
+# Each of these contains a word the guard looks at and is an order anyway.
+- send: ปิดดีล D-2026-0001 ไม่สำเร็จ
+  expect: {is_not: [not_sure, generic_error]}
+- send: ช่วยขอรหัสเชิญช่างให้หน่อยได้ไหมครับ
+  expect: {contains: ["รหัสเชิญช่าง:"], is_not: [not_sure, generic_error, permission]}

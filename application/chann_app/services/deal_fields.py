@@ -143,6 +143,26 @@ def has_date_cue(text: str) -> bool:
     return bool(_DATE_CUE_RE.search((text or "").lower()))
 
 
+# An amount spelled out in words rather than digits — "หนึ่งแสนบาท",
+# "ห้าหมื่น", "สองล้านกว่า". parse_amount reads digits only, so these come
+# back with no candidates at all, and the model IS the thing that can read
+# them. What must never happen is the opposite case: a sentence with no
+# amount in it anywhere, where the model helpfully supplies a figure and it
+# is written to the deal as if the salesperson had said it.
+_SPELLED_AMOUNT_WORDS = (
+    "ล้าน", "แสน", "หมื่น", "พัน", "ร้อย", "สิบ",
+    "หนึ่ง", "สอง", "สาม", "สี่", "ห้า", "หก", "เจ็ด", "แปด", "เก้า", "ครึ่ง",
+    "hundred", "thousand", "million", "half",
+)
+
+
+def has_spelled_amount(text: str) -> bool:
+    """The message names a number in words, so a value the model read out of
+    it is worth believing even though no digit appears."""
+    lowered = (text or "").lower()
+    return any(word in lowered for word in _SPELLED_AMOUNT_WORDS)
+
+
 def _phone_like(value) -> bool:
     digits = re.sub(r"\D", "", str(value or ""))
     return len(digits) in (9, 10) and digits.startswith("0")
@@ -169,7 +189,16 @@ def extract_deal_fields(message: str, ai_fields: dict | None, today: date) -> di
         if parsed is not None and not _phone_like(ai_amount) and parsed > 0:
             # Accept the model's value only when it agrees with something in
             # the message — the message is the ground truth.
-            if not candidates or parsed in candidates:
+            #
+            # "not candidates" used to be part of that condition, which meant
+            # the check was skipped in precisely the case it exists for: a
+            # sentence with no number in it at all. "เปิดดีลให้สมชาย ใจดี"
+            # plus a model that answered amount=500000 wrote 500,000.00 to
+            # the deal, and nobody typed it (owner's review of the message
+            # path, 10 ก.ย. 2569). A figure with no digits behind it is now
+            # believed only when the sentence spells one out in words, which
+            # is the one thing parse_amount cannot read and the model can.
+            if parsed in candidates or (not candidates and has_spelled_amount(message)):
                 amount = parsed
     if amount is None and len(candidates) > 1:
         ambiguous.append("amount")

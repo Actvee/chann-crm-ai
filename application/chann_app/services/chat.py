@@ -255,6 +255,20 @@ TECHNICIAN_INVITE_REPLY = {
     "th": "รหัสเชิญช่าง: {code}\nให้ช่างพิมพ์รหัสนี้ผ่านช่องทาง Technician เพื่อเข้าร่วมบริษัทนี้ (ใช้ได้ครั้งเดียว หมดอายุใน 7 วัน)",
     "en": "Technician invite code: {code}\nHave the technician type this code on the Technician OA to join this company (one-time use, expires in 7 days).",
 }
+SALES_INVITE_REPLY = {
+    "th": "รหัสเชิญทีมขาย/CS: {code}\nให้เขาพิมพ์รหัสนี้ผ่านช่องทาง ฝ่ายขาย/แอดมิน เพื่อเข้าร่วมบริษัทนี้ (ใช้ได้ครั้งเดียว หมดอายุใน 7 วัน)\nเข้าร่วมแล้วเปลี่ยนบทบาทได้ที่ หน้าจอ > สมาชิกในร้าน",
+    "en": "Sales/CS invite code: {code}\nHave them type this code on the Sales/Admin OA to join this company (one-time use, expires in 7 days).\nTheir role can be changed afterwards under home > Members.",
+}
+INVITE_REPLY_BY_ROLE = {
+    "technician": TECHNICIAN_INVITE_REPLY,
+    "member": SALES_INVITE_REPLY,
+    "cs": SALES_INVITE_REPLY,
+    "admin": SALES_INVITE_REPLY,
+}
+INVITE_WHICH_KIND = {
+    "th": "ได้ครับ — รหัสเชิญมี 2 แบบ จะเอาแบบไหนครับ\n• ช่าง — ลงทะเบียนใน LINE ช่าง\n• ทีมขาย/CS — ลงทะเบียนใน LINE ฝ่ายขาย/แอดมิน",
+    "en": "Sure — there are two kinds of invite code. Which one?\n• Technician — registers on the Technician OA\n• Sales/CS — registers on the Sales/Admin OA",
+}
 
 TECHNICIAN_INVITE_DENIED = {
     "th": "การออกรหัสเชิญช่างต้องมีสิทธิ์จัดการสมาชิก",
@@ -262,24 +276,94 @@ TECHNICIAN_INVITE_DENIED = {
 }
 
 
+# The other half of the same feature. A shop has two kinds of people to
+# invite — a technician, who registers on the Technician OA, and a
+# salesperson or CS, who registers on the Sales OA — and the Data tier has
+# supported both since the beginning: create_invite takes a role, and
+# channel_for_role turns it into the OA the code may be redeemed on
+# (data/chann_data/permissions.py:214). Chat only ever offered the
+# technician one.
+SALES_INVITE_TRIGGERS = (
+    "ขอรหัสเชิญเซลส์", "ขอรหัสเชิญพนักงาน", "ขอรหัสเชิญทีมขาย", "ขอรหัสเชิญแอดมิน", "ขอรหัสเชิญ cs",
+    "สร้างรหัสเชิญเซลส์", "สร้างรหัสเชิญพนักงาน", "สร้างรหัสเชิญทีมขาย",
+    "เชิญเซลส์", "เชิญพนักงาน", "เชิญทีมขาย", "เชิญแอดมิน",
+    "เพิ่มเซลส์", "เพิ่มพนักงาน", "เพิ่มทีมขาย", "เพิ่มแอดมิน", "เพิ่ม cs",
+    "รหัสเชิญเซลส์", "รหัสเชิญพนักงาน", "รหัสเชิญทีมขาย", "รหัสให้เซลส์", "รหัสให้พนักงาน",
+    "พนักงานใหม่", "เซลส์ใหม่",
+    "invite sales", "add sales", "sales invite code", "invite code for sales",
+    "invite admin", "add admin", "invite cs", "add cs", "new salesperson",
+)
+
+# And the bare form, which is what a person actually types. The owner's
+# report, 10 ก.ย. 2569: "ขอรหัสเชิญช่าง แบบนี้ได้ แต่พอพิม ขอรหัสเชิญ AI
+# กลับไม่เข้าใจ ทั้งๆที่มีอยู่ 2 แบบ … ควรจะเข้าใจและถามว่าจะเอาตัวไหน".
+# The guide had been telling people to type it for a year
+# (services/guides.py:308 — "ทีมขาย/CS ใช้รหัสเชิญของ LINE ทีมขาย"), so the
+# product documented a command the code did not know. Two kinds means ask
+# which, not fail: an assistant that knows what you meant and needs one
+# more word should say which word.
+INVITE_AMBIGUOUS_TRIGGERS = (
+    "ขอรหัสเชิญ", "สร้างรหัสเชิญ", "รหัสเชิญ", "ขอโค้ดเชิญ", "โค้ดเชิญ",
+    "เชิญคนเข้าร้าน", "เชิญสมาชิก", "เพิ่มสมาชิก", "เพิ่มคนเข้าร้าน", "ชวนคนเข้าร้าน",
+    "invite code", "invite someone", "add member", "invite member",
+)
+
+
 def _is_technician_invite_request(message: str) -> bool:
     text = (message or "").strip().lower()
     return any(trigger.lower() in text for trigger in TECHNICIAN_INVITE_TRIGGERS)
+
+
+def _is_sales_invite_request(message: str) -> bool:
+    text = (message or "").strip().lower()
+    return any(trigger.lower() in text for trigger in SALES_INVITE_TRIGGERS)
+
+
+def _is_ambiguous_invite_request(message: str) -> bool:
+    """A request for an invite code that does not say for whom. Checked
+    AFTER the two specific tables — "ขอรหัสเชิญช่าง" contains "ขอรหัสเชิญ",
+    so the order is the whole correctness argument here."""
+    text = (message or "").strip().lower()
+    if _is_technician_invite_request(text) or _is_sales_invite_request(text):
+        return False
+    return any(trigger.lower() in text for trigger in INVITE_AMBIGUOUS_TRIGGERS)
 
 
 async def _handle_technician_invite_request(
     client: DataClient, *, ctx: ResolvedContext, permission_keys: list[str],
     language: str,
 ) -> ChatReply:
+    return await _handle_invite_request(
+        client, ctx=ctx, permission_keys=permission_keys, language=language, role="technician",
+    )
+
+
+async def _handle_invite_request(
+    client: DataClient, *, ctx: ResolvedContext, permission_keys: list[str],
+    language: str, role: str,
+) -> ChatReply:
     if "member.manage" not in set(permission_keys):
         return ChatReply(text=_t(TECHNICIAN_INVITE_DENIED, language))
     invite = await client.create_invite(
         str(ctx.license_id),
-        {"role": "technician", "max_uses": 1, "expires_in_days": 7},
+        {"role": role, "max_uses": 1, "expires_in_days": 7},
         actor_id=ctx.chann_uid,
     )
+    # A lookup, not a comparison: the boundary test forbids application
+    # policy from branching on a role string, and it is right to — role
+    # labels are tenant data. This is only which sentence to print, so the
+    # table says so plainly and the invite's own role stays the key.
+    reply = INVITE_REPLY_BY_ROLE.get(role, SALES_INVITE_REPLY)
+    return ChatReply(text=_t(reply, language).format(code=invite["invite_code"]))
+
+
+def _ask_which_invite(language: str) -> ChatReply:
     return ChatReply(
-        text=_t(TECHNICIAN_INVITE_REPLY, language).format(code=invite["invite_code"]),
+        text=_t(INVITE_WHICH_KIND, language),
+        quick_replies=[
+            ("ช่าง", "ขอรหัสเชิญช่าง"),
+            ("ทีมขาย/CS", "ขอรหัสเชิญทีมขาย"),
+        ],
     )
 
 
@@ -699,11 +783,28 @@ async def _maybe_handle_teams(
             quick_reply_url=_dashboard_button("teams", language),
         )
 
-    create = next((t for t in TEAM_CREATE_TRIGGERS if lowered.startswith(t.strip()) and len(lowered) > len(t.strip())), None)
+    # The trailing space in "สร้างทีม " is deliberate — it is what stops
+    # "สร้างทีมขาย" ("create a sales team", which is not a feature) from
+    # being read as "สร้างทีม" + the name "ขาย". `.strip()` threw that
+    # space away and the shop got a TECHNICIAN team called ขาย
+    # (10 ก.ย. 2569). Matched as written, so a trigger that ends in a space
+    # requires the separator and one that does not still matches tightly.
+    create = next(
+        (t for t in TEAM_CREATE_TRIGGERS
+         if lowered.startswith(t.lower()) and len(lowered) > len(t)),
+        None,
+    )
     if create is not None or lowered in ("สร้างทีมช่าง", "ตั้งทีมช่าง"):
+        # "สร้างทีมช่างยังไง" — how do I create a technician team? — took
+        # everything after the trigger as the name and created a team
+        # called "ยังไง" (10 ก.ย. 2569). A team named out of a question is
+        # a row somebody has to find and delete.
+        guarded = _intent_guard_reply(message, action="team_manage", language=language)
+        if guarded is not None:
+            return guarded
         if "team.manage" not in held:
             return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
-        name = text[len(create.strip()):].strip(" :") if create else ""
+        name = text[len(create):].strip(" :") if create else ""
         if not name:
             return ChatReply(text=_t(TEAM_TEXT["need_name"], language))
         try:
@@ -1058,7 +1159,11 @@ async def _handle_company_profile_command(
 # are covered, and finds out when the customer has already gone quiet.
 
 NOTE_TRIGGERS = (
-    "บันทึกว่า", "จดว่า", "โน้ตว่า", "note", "จดไว้ว่า", "จดไว้หน่อยว่า", "จดไว้ด้วยว่า", "บันทึกไว้ว่า", "บันทึกไว้หน่อยว่า",
+    # "note" alone matched inside "notes C-2026-0001" and wrote a note whose
+    # body was the leftover "s" (10 ก.ย. 2569). The separator is what makes
+    # it a command with an argument — "note ลูกค้าจะโทรกลับ" still works,
+    # "notes …" and "notebook" no longer do.
+    "บันทึกว่า", "จดว่า", "โน้ตว่า", "note ", "note:", "note that", "จดไว้ว่า", "จดไว้หน่อยว่า", "จดไว้ด้วยว่า", "บันทึกไว้ว่า", "บันทึกไว้หน่อยว่า",
     "โน้ตไว้ว่า", "โน้ต:", "โน้ต :", "จด:", "บันทึก:", "memo:", "จดหน่อยว่า", "ช่วยจดว่า", "ช่วยบันทึกว่า",
 )
 NOTE_LIST_TRIGGERS = ("ดูบันทึก", "บันทึกของ", "ประวัติ")
@@ -4819,9 +4924,33 @@ async def _handle_customer_report(
     # arrives — which costs the shop a visit and the customer their day.
     # Negation first: "ไม่เอาแล้วค่ะ ซ่อมเองได้แล้ว" is a cancel, not a
     # repair called that (review, 6 Sep 2026).
-    if _matches_phrase(message, CUSTOMER_CANCEL_PHRASES) or any(
+    explicit_cancel = _matches_phrase(message, CUSTOMER_CANCEL_PHRASES) or any(
         w in text.lower() for w in CUSTOMER_CANCEL_TRIGGERS
-    ) or (_is_cancel_hint(text) and not _looks_like_a_question(text) and not forced_fault):
+    )
+    if explicit_cancel:
+        # Only the explicit-trigger half. The _is_cancel_hint clause below
+        # exists BECAUSE a customer often cancels by negating something
+        # ("ไม่เอาแล้วค่ะ ซ่อมเองได้แล้ว"), and reading that as a refusal
+        # would refuse the cancellation itself — so it stays outside the
+        # guard, exactly as the note above says.
+        held_cancel = _intent_guard_reply(
+            message, action="ticket_cancel", language=language,
+            triggers=CUSTOMER_CANCEL_TRIGGERS + CUSTOMER_CANCEL_PHRASES,
+        )
+        if held_cancel is not None:
+            # A hold means "this is not the cancel branch" — it does not
+            # mean the message has been answered. "ไม่ได้จะยกเลิกงาน ขอแค่
+            # เลื่อนเป็นวันอาทิตย์" says both halves out loud: not a
+            # cancellation, and a reschedule. Returning the refusal here
+            # threw the second half away. Fall through and let the branches
+            # below have it; the refusal is only the answer when nothing
+            # else claims the sentence.
+            if not (_is_reschedule_request(text) or _says_unavailable(text)):
+                return held_cancel
+            explicit_cancel = False
+    if explicit_cancel or (
+        _is_cancel_hint(text) and not _looks_like_a_question(text) and not forced_fault
+    ):
         return await _handle_customer_amend(
             client, ctx=ctx, license_id=license_id, message=text,
             language=language, cancel=True,
@@ -8900,6 +9029,114 @@ _GUARD_ACTIONS: dict[str, dict[str, str]] = {
         "th_eg": "ลบ {code}", "en_eg": "delete {code}",
         "code": "C-2026-0001",
     },
+    # The deterministic branches, added 10 ก.ย. 2569 — see the note on
+    # ACTION_WORDS in intent_guard.py for what each of these was doing to
+    # the database before it had a guard.
+    "quote_status": {
+        "th": "เปลี่ยนสถานะใบเสนอราคา", "en": "change the quotation's status",
+        "th_eg": "ตอบรับใบเสนอราคา {code}", "en_eg": "accept quotation {code}",
+        "code": "Q-2026-0001",
+    },
+    "quote_terms": {
+        "th": "แก้ส่วนลด", "en": "change the discount",
+        "th_eg": "ใบเสนอราคา {code} ส่วนลด 10%", "en_eg": "quotation {code} discount 10%",
+        "code": "Q-2026-0001",
+    },
+    "deal_create": {
+        "th": "สร้างดีล", "en": "create the deal",
+        "th_eg": "เปิดดีลให้ {code}", "en_eg": "open a deal for {code}",
+        "code": "C-2026-0001",
+    },
+    "deal_stage": {
+        "th": "เปลี่ยนสถานะดีล", "en": "change the deal's stage",
+        "th_eg": "ปิดดีล {code} สำเร็จ", "en_eg": "close deal {code} as won",
+        "code": "D-2026-0001",
+    },
+    "note_write": {
+        "th": "บันทึกข้อความนี้", "en": "save this note",
+        "th_eg": "บันทึกว่า {code} สนใจรุ่นใหม่", "en_eg": "note that {code} is interested",
+        "code": "C-2026-0001",
+    },
+    "invite_create": {
+        "th": "ออกรหัสเชิญ", "en": "issue an invite code",
+        "th_eg": "ขอรหัสเชิญช่าง", "en_eg": "technician invite code",
+        "code": "",
+    },
+    "team_manage": {
+        "th": "แก้ทีมช่าง", "en": "change the technician team",
+        "th_eg": "สร้างทีมช่าง แอร์", "en_eg": "create technician team A/C",
+        "code": "",
+    },
+    "warranty_register": {
+        "th": "ลงทะเบียนสินค้า", "en": "register the product",
+        "th_eg": "ลงทะเบียน SN12345678", "en_eg": "register SN12345678",
+        "code": "",
+    },
+    "company_update": {
+        "th": "แก้ข้อมูลบริษัท", "en": "change the company details",
+        "th_eg": "ข้อมูลบริษัท ชื่อ บริษัท ก จำกัด", "en_eg": "company name Acme Co Ltd",
+        "code": "",
+    },
+    "customer_bulk": {
+        "th": "เพิ่มลูกค้า", "en": "add the customers",
+        "th_eg": "เพิ่มลูกค้า สมชาย ใจดี 0812345678", "en_eg": "add customer John Doe 0812345678",
+        "code": "",
+    },
+    "approval_act": {
+        "th": "ตัดสินรายงานนี้", "en": "act on this report",
+        "th_eg": "อนุมัติ {code}", "en_eg": "approve {code}",
+        "code": "SR-2026-0001",
+    },
+    "document_issue": {
+        "th": "ออกเอกสาร", "en": "issue the document",
+        "th_eg": "ออกเอกสาร {code}", "en_eg": "issue document {code}",
+        "code": "Q-2026-0001",
+    },
+    "template_publish": {
+        "th": "เผยแพร่แบบฟอร์มนี้", "en": "publish this template",
+        "th_eg": "ใช้เลย", "en_eg": "use it",
+        "code": "",
+    },
+    "ticket_cancel": {
+        "th": "ยกเลิกงาน", "en": "cancel the job",
+        "th_eg": "ยกเลิกงาน {code}", "en_eg": "cancel job {code}",
+        "code": "T-2026-0001",
+    },
+    "shop_setting": {
+        "th": "เปลี่ยนการตั้งค่าร้าน", "en": "change the shop setting",
+        "th_eg": "ตั้งค่าลบ lead อัตโนมัติ 90 วัน", "en_eg": "auto-archive leads after 90 days",
+        "code": "",
+    },
+    "profile_update": {
+        "th": "แก้ข้อมูลของคุณ", "en": "change your details",
+        "th_eg": "เบอร์ 0812345678", "en_eg": "phone 0812345678",
+        "code": "",
+    },
+    "chat_open": {
+        "th": "เปิดการสนทนากับร้าน", "en": "open a conversation with the shop",
+        "th_eg": "คุยกับร้าน", "en_eg": "talk to the shop",
+        "code": "",
+    },
+    "job_claim": {
+        "th": "รับงาน", "en": "take the job",
+        "th_eg": "รับงาน {code}", "en_eg": "claim {code}",
+        "code": "T-2026-0001",
+    },
+    "job_reject": {
+        "th": "ปฏิเสธงาน", "en": "decline the job",
+        "th_eg": "ปฏิเสธงาน {code} ติดงานอื่น", "en_eg": "decline job {code} — booked elsewhere",
+        "code": "T-2026-0001",
+    },
+    "job_assign": {
+        "th": "มอบหมายงาน", "en": "assign the job",
+        "th_eg": "มอบหมาย {code} ให้ทีมแอร์", "en_eg": "assign {code} to the A/C team",
+        "code": "T-2026-0001",
+    },
+    "job_situation": {
+        "th": "บันทึกเรื่องนี้ในงาน", "en": "record this on the job",
+        "th_eg": "ขอเลื่อนนัด {code} พรุ่งนี้ 10 โมง", "en_eg": "reschedule {code} to tomorrow 10:00",
+        "code": "T-2026-0001",
+    },
 }
 
 # The model's reading is not a mandate either: every mutating (entity,
@@ -8942,6 +9179,18 @@ def _guard_triggers(action: str) -> tuple[str, ...]:
         "check_in": CHECKIN_TRIGGERS,
         "check_out": CHECKOUT_TRIGGERS,
         "line_item": LINE_EDIT_TRIGGERS + LINE_REMOVE_TRIGGERS + DEAL_PRODUCT_ADD_TRIGGERS,
+        "quote_status": QUOTE_VOID_TRIGGERS + QUOTE_ACCEPT_TRIGGERS,
+        "quote_terms": QUOTE_DISCOUNT_TRIGGERS,
+        "deal_create": DEAL_CREATE_TRIGGERS + DEAL_CREATE_BARE_TRIGGERS,
+        "note_write": NOTE_TRIGGERS,
+        "invite_create": TECHNICIAN_INVITE_TRIGGERS + SALES_INVITE_TRIGGERS + INVITE_AMBIGUOUS_TRIGGERS,
+        "customer_bulk": BULK_CUSTOMER_TRIGGERS,
+        "job_claim": TICKET_CLAIM_TRIGGERS,
+        "job_reject": TICKET_REJECT_TRIGGERS,
+        "job_assign": TICKET_ASSIGN_TRIGGERS,
+        # deal_stage, team_manage, warranty_register and company_update
+        # match on their own tables inline rather than a named constant;
+        # ACTION_WORDS carries their vocabulary.
     }.get(action, ())
 
 
@@ -8953,6 +9202,31 @@ INTENT_STATUS_ANSWER = {
     "th": 'ยังไม่ได้{what} ครับ ถ้าต้องการให้ทำ พิมพ์ "{example}"',
     "en": 'That has not happened — I did not {what}. Send "{example}" when you want it.',
 }
+# …and the same question when the answer is yes. "สร้างใบเสนอราคาไปหรือยัง"
+# was answered "ยังไม่ได้สร้างใบเสนอราคา" without any lookup at all, so a
+# shop with the quotation already issued was told the opposite of the truth
+# (owner: "สร้างใบเสนอราคาไปหรือยัง ต้องเช็คสถานะ ไม่ใช่สร้าง", 10 ก.ย.
+# 2569). Not creating it was right; not checking was not.
+INTENT_STATUS_DONE = {
+    "th": "{done}ครับ",
+    "en": "Yes — {done}.",
+}
+STATUS_DONE_TEXT = {
+    "quote_create": {
+        "th": "ใบเสนอราคา {code} ออกไปแล้ว", "en": "quotation {code} has been issued",
+    },
+    "deal_create": {
+        "th": "ดีล {code} เปิดไว้แล้ว", "en": "deal {code} is already open",
+    },
+}
+# Only these two, deliberately. A status question can only be answered
+# where the guard is reached through _guarded_in_context, which has the
+# client; the appointment and warranty branches call the synchronous
+# _intent_guard_reply and cannot look anything up. Listing them here would
+# be the same defect this change is fixing — a capability the product
+# claims and does not have — so they stay out until their call sites are
+# async. Their "ยังไม่ได้…" answer is unchanged and still honest about not
+# having been done by THIS message.
 INTENT_HOW_TO = {
     "th": 'วิธี{verb}: พิมพ์ "{example}" ครับ — ตอนนี้ยังไม่ได้แก้ข้อมูลอะไร',
     "en": 'To {verb}: send "{example}". Nothing has been changed.',
@@ -9002,6 +9276,59 @@ def _intent_guard_reply(
     return ChatReply(text=_t(table, language).format(what=what, verb=verb, example=example))
 
 
+async def _status_answer(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
+    action: str, language: str,
+) -> ChatReply | None:
+    """Has this already been done? — answered from the database.
+
+    Returns a "yes, here it is" reply, or None to let the caller say "not
+    yet" (which is then true, because we looked). Any failure returns
+    None: a status question is not worth an error, and "ยังไม่ได้" is the
+    safe half of the answer.
+    """
+    code = ""
+    found = _GUARD_CODE_RE.search(_normalise_message(message) or "")
+    if found:
+        code = found.group(1).upper()
+    try:
+        if action == "quote_create":
+            quotes = await client.list_quotes(str(license_id))
+            # A quotation for the deal named, or for the deal just discussed.
+            deal_code = code if code.startswith("D-") else ""
+            if not deal_code:
+                ref = await client.get_last_entity_ref(ctx.chann_uid, ctx.oa)
+                if ref and str(ref.get("entity_type")) == "deal":
+                    deal_code = str(await _code_for_entity(
+                        client, str(license_id), "deal", str(ref.get("entity_id") or ""),
+                    ) or "")
+            if code.startswith("Q-"):
+                hit = next((q for q in quotes if str(q.get("quote_id")) == code), None)
+            elif deal_code:
+                deals = await client.list_deals(str(license_id))
+                deal = next((d for d in deals if str(d.get("deal_id")) == deal_code), None)
+                hit = next(
+                    (q for q in quotes if deal and str(q.get("deal_id")) == str(deal.get("id"))),
+                    None,
+                ) if deal else None
+            else:
+                hit = None
+            shown = str((hit or {}).get("quote_id") or "")
+        elif action == "deal_create":
+            deals = await client.list_deals(str(license_id))
+            hit = next((d for d in deals if str(d.get("deal_id")) == code), None) if code.startswith("D-") else None
+            shown = str((hit or {}).get("deal_id") or "")
+        else:
+            return None
+    except Exception:
+        log.exception("could not answer a status question for %s", action)
+        return None
+    if not hit:
+        return None
+    done = _t(STATUS_DONE_TEXT[action], language).format(code=shown or code or "-")
+    return ChatReply(text=_t(INTENT_STATUS_DONE, language).format(done=done))
+
+
 async def _guarded_in_context(
     client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
     action: str, language: str,
@@ -9015,7 +9342,24 @@ async def _guarded_in_context(
     to hold, so an ordinary command pays nothing for it.
     """
     reply = _intent_guard_reply(message, action=action, language=language)
-    if reply is None or _GUARD_CODE_RE.search(message or ""):
+    if reply is None:
+        return None
+    # "…ไปหรือยัง" is a question about the world, not an order. Answering it
+    # from the sentence alone means asserting "ยังไม่ได้" about a record
+    # nobody looked at. Look, when the question is that shape and the
+    # action is one we can look up.
+    verdict = intent_to_act(
+        message, action=action, canonical=_canonical(message),
+        triggers=tuple(_guard_triggers(action)),
+    )
+    if verdict.reason == "status" and action in STATUS_DONE_TEXT:
+        answered = await _status_answer(
+            client, ctx=ctx, license_id=license_id, message=message,
+            action=action, language=language,
+        )
+        if answered is not None:
+            return answered
+    if _GUARD_CODE_RE.search(message or ""):
         return reply
     try:
         ref = await client.get_last_entity_ref(ctx.chann_uid, ctx.oa)
@@ -10674,7 +11018,7 @@ async def _handle_staff_ticket_create(
         if last_ref:
             customer = {"id": last_ref["customer_id"], "first_name": last_ref["name"]}
     if customer is None:
-        return ChatReply(text=_t(DEAL_NEEDS_TARGET_NAME, language))
+        return ChatReply(text=_t(TICKET_NEEDS_TARGET_NAME, language))
 
     # Owner, 10 ก.ย. 2569: a job opened by hand is about a registered unit
     # just as much as one the customer reported themselves. One unit is
@@ -12907,6 +13251,12 @@ ASK_MISSING = {
     "th": "กรุณาระบุ{fields}",
     "en": "Please provide {fields}",
 }
+# What to say instead of a field name the build never saw — the model is
+# free to invent one, and a raw key is not a sentence.
+ASK_MISSING_REST = {
+    "th": "รายละเอียดที่เหลือ",
+    "en": "the remaining details",
+}
 
 SUGGEST_HEADER = {
     "th": (
@@ -13433,6 +13783,33 @@ MISSING_FIELD_LABELS = {
     "due_date": {"th": "วันที่ต้องการให้เตือน", "en": "the reminder date"},
     "due_time": {"th": "เวลา", "en": "the time"},
     "notes": {"th": "รายละเอียด", "en": "the details"},
+    # The rest of what a flow can still be waiting for. Every one of these
+    # was reachable and printed as its raw key — "กรุณาระบุteam_name" — the
+    # same defect as the two above, three years of it, because the table is
+    # kept by hand and nothing checked it. scripts/dev/check-ask-labels.py
+    # now fails the build when a field that can reach ask_for_missing has no
+    # label here (owner's review of the message path, 10 ก.ย. 2569).
+    "team_name": {"th": "ชื่อทีม", "en": "the team name"},
+    "name": {"th": "ชื่อ", "en": "the name"},
+    "title": {"th": "ชื่อเรื่อง", "en": "the title"},
+    "customer_ref": {"th": "ชื่อหรือรหัสลูกค้า", "en": "the customer's name or code"},
+    "deal_code": {"th": "รหัสดีล", "en": "the deal code"},
+    "entity_code": {"th": "รหัสรายการ", "en": "the record code"},
+    "quantity": {"th": "จำนวน", "en": "the quantity"},
+    "price": {"th": "ราคา", "en": "the price"},
+    "role": {"th": "บทบาท", "en": "the role"},
+    "reason": {"th": "เหตุผล", "en": "the reason"},
+    "serial": {"th": "หมายเลขเครื่อง", "en": "the serial number"},
+    "issue": {"th": "อาการที่พบ", "en": "what is wrong"},
+    "schedule": {"th": "วันและเวลาที่สะดวก", "en": "a convenient date and time"},
+    "company": {"th": "ชื่อบริษัทหรือร้าน", "en": "the company or shop name"},
+    "document_type": {"th": "ชนิดเอกสาร", "en": "the document type"},
+    "instruction": {"th": "สิ่งที่ต้องการให้ทำ", "en": "what you want done"},
+    "message": {"th": "ข้อความ", "en": "the message"},
+    "body": {"th": "เนื้อหา", "en": "the content"},
+    "choice": {"th": "ตัวเลือกที่ต้องการ", "en": "which one you want"},
+    "currency": {"th": "สกุลเงิน", "en": "the currency"},
+    "note": {"th": "รายละเอียด", "en": "the details"},
 }
 
 
@@ -13474,13 +13851,20 @@ def ask_for_missing(missing: list[str], language: str = "th") -> str:
     Reported live: an unrecognised field name (e.g. "last_name" straight
     from the AI's own JSON) was shown to the user verbatim —
     "กรุณาระบุlast_name, phone" — because this only ever joined the raw
-    keys. Translates anything in MISSING_FIELD_LABELS; anything genuinely
-    unknown still falls back to the raw key rather than hiding it, since a
-    silently-dropped missing field would be worse than an ugly one.
+    keys. Everything the system itself can ask for is in
+    MISSING_FIELD_LABELS, and check-ask-labels.py keeps it that way.
+
+    The model, though, can put any string it likes in `missing`, and that
+    string is not a field name the build could have checked. Rather than
+    print `กรุณาระบุcustomer_tax_identification` at a person, an unknown
+    key is folded into one plain request for the rest — the field is still
+    asked for, in words, and nothing is silently dropped.
     """
-    labels = ", ".join(
-        MISSING_FIELD_LABELS.get(m, {}).get(language) or str(m) for m in missing
-    )
+    known = [MISSING_FIELD_LABELS[m][language] for m in missing if m in MISSING_FIELD_LABELS]
+    unknown = [m for m in missing if m not in MISSING_FIELD_LABELS]
+    if unknown:
+        known.append(_t(ASK_MISSING_REST, language))
+    labels = ", ".join(known) or _t(ASK_MISSING_REST, language)
     return _t(ASK_MISSING, language).format(fields=labels)
 
 
@@ -14135,6 +14519,15 @@ DEAL_CREATED = {
 DEAL_NEEDS_TARGET_NAME = {
     "th": "กรุณาระบุชื่อลูกค้าที่จะสร้างดีลด้วย",
     "en": "Please say which customer this deal is for.",
+}
+# The same question in the job flow. _handle_staff_ticket_create used the
+# deal wording, so someone opening a repair job by hand was asked which
+# customer the DEAL was for — a word from a different part of the product,
+# in the middle of a different task (owner's review of the message path,
+# 10 ก.ย. 2569).
+TICKET_NEEDS_TARGET_NAME = {
+    "th": "กรุณาระบุชื่อลูกค้าที่จะเปิดงานซ่อมให้ด้วยครับ",
+    "en": "Please say which customer this job is for.",
 }
 
 
@@ -15431,7 +15824,8 @@ def _is_new_command(message: str, oa: str) -> bool:
             _parse_after_trigger(message, DEAL_CREATE_TRIGGERS) is not None or any(t in lowered for t in DEAL_CREATE_BARE_TRIGGERS)
             or _is_reminder_command(message) or _is_reminder_cancel_command(message) or _is_reminder_move_command(message)
             or any(t in lowered for t in QUOTE_CREATE_TRIGGERS) or any(lowered.startswith(t) for t in NOTE_TRIGGERS)
-            or _is_technician_invite_request(message) or _lead_delete_target(message) is not None
+            or _is_technician_invite_request(message) or _is_sales_invite_request(message)
+            or _is_ambiguous_invite_request(message) or _lead_delete_target(message) is not None
         )
     return False
 
@@ -15949,10 +16343,34 @@ async def _route_chat_message(
     # invite-code paths for the same pattern) — checked before the AI
     # parser, and before the pending-intent load below, since it is
     # unrelated to any in-progress slot-filling.
+    if ctx.oa == "sales" and (
+        _is_technician_invite_request(message) or _is_sales_invite_request(message)
+        or _is_ambiguous_invite_request(message)
+    ):
+        # Measured on the real handler, 10 ก.ย. 2569: "ช่างใหม่จะเข้าร้าน
+        # ยังไง" — a question about HOW — issued a real, single-use invite
+        # code, and so did "ไม่ต้องเชิญช่างแล้ว" and "ลูกค้าถามว่าเพิ่มช่าง
+        # ยังไง". An invite code is not a harmless read: it is a credential
+        # that lets a stranger join the shop. One guard in front of all
+        # three shapes, before any of them decides which role to issue.
+        held = _intent_guard_reply(message, action="invite_create", language=language)
+        if held is not None:
+            return held
     if ctx.oa == "sales" and _is_technician_invite_request(message):
-        return await _handle_technician_invite_request(
+        return await _handle_invite_request(
             client, ctx=ctx, permission_keys=permission_keys, language=language,
+            role="technician",
         )
+    if ctx.oa == "sales" and _is_sales_invite_request(message):
+        # "member" is the salesperson template; the reply says the role can
+        # be changed afterwards rather than asking for it now — one question
+        # to issue a code, not two.
+        return await _handle_invite_request(
+            client, ctx=ctx, permission_keys=permission_keys, language=language,
+            role="member",
+        )
+    if ctx.oa == "sales" and _is_ambiguous_invite_request(message):
+        return _ask_which_invite(language)
 
     # "ออกแบบใบเสนอราคา" — the AI drafting a document template (owner,
     # 9 Sep 2026). Before the quote and report phrases below, which share
@@ -16018,6 +16436,21 @@ async def _route_chat_message(
                 client, ctx=ctx, license_id=license_id,
                 permission_keys=permission_keys, language=language,
             )
+        # Approving issues the customer's PDF and fires the satisfaction
+        # survey, so this pair is guarded in front of BOTH branches — and
+        # the ordering below cannot be trusted to separate them: the reject
+        # trigger "ไม่อนุมัติ" is not a substring of "ไม่ต้องอนุมัติ", so a
+        # refusal fell through to the approve test and approved the report.
+        if any(
+            t in message.lower()
+            for t in (APPROVAL_REJECT_TRIGGERS + APPROVAL_APPROVE_TRIGGERS)
+        ):
+            held_approval = _intent_guard_reply(
+                message, action="approval_act", language=language,
+                triggers=APPROVAL_REJECT_TRIGGERS + APPROVAL_APPROVE_TRIGGERS,
+            )
+            if held_approval is not None:
+                return held_approval
         reject_trigger = next(
             (t for t in APPROVAL_REJECT_TRIGGERS if t in message.lower()), None,
         )
@@ -16130,6 +16563,15 @@ async def _route_chat_message(
                 actor_id=ctx.chann_uid, allow_reissue="ใหม่" in (message or "") or "again" in (message or "").lower(),
             )
         if any(t in (message or "").lower() for t in REPORT_PDF_TRIGGERS):
+            # With no code in the sentence this handler picks the person's
+            # only approved report and issues it, so "ออกรายงานยังไง" — a
+            # bare how-do-I — sent a customer their PDF (10 ก.ย. 2569).
+            held_report = _intent_guard_reply(
+                message, action="document_issue", language=language,
+                triggers=REPORT_PDF_TRIGGERS + REPORT_PDF_REISSUE,
+            )
+            if held_report is not None:
+                return held_report
             return await _handle_report_pdf(
                 client, ctx=ctx, license_id=license_id, message=message,
                 permission_keys=permission_keys, language=language,
@@ -16145,6 +16587,16 @@ async def _route_chat_message(
         # one at a time, before the single-customer prompt sees the text.
         bulk_entries = _bulk_customer_entries(message, allow_untriggered=ctx.oa == "sales")
         if bulk_entries:
+            # "ไม่ต้องเพิ่มลูกค้า สมชาย …; สมหญิง …" created both rows, and
+            # "เพิ่มลูกค้าหลายคนยังไง เช่น สมชาย … " — someone asking how the
+            # paste format works, with an example — created the example
+            # (10 ก.ย. 2569). The vocabulary for this was written when the
+            # guard was built and the call site was never added.
+            held_bulk = _intent_guard_reply(
+                message, action="customer_bulk", language=language,
+            )
+            if held_bulk is not None:
+                return held_bulk
             return await _handle_bulk_customer_add(
                 client, ctx=ctx, license_id=license_id, entries=bulk_entries,
                 permission_keys=permission_keys, language=language,
@@ -16248,6 +16700,18 @@ async def _route_chat_message(
         if ctx.oa == "technician":
             situation = _technician_situation(message)
             if situation is not None and not _command_like(message, CHECKOUT_TRIGGERS) and not _is_menu_tile(message, ctx.oa):
+                # This branch files a note on the job AND pushes it to the
+                # dispatch team, so a misread is seen by other people.
+                # "ยังไม่ต้องสั่งอะไหล่" was filed as "ต้องสั่งอะไหล่" — the
+                # opposite of what was said — and "ขอเลื่อนนัดยังไง", asking
+                # HOW to reschedule, was filed as a request to reschedule
+                # (10 ก.ย. 2569).
+                held_situation = _intent_guard_reply(
+                    message, action="job_situation", language=language,
+                    triggers=tuple(w for _kind, words in _SITUATION_WORDS for w in words),
+                )
+                if held_situation is not None:
+                    return held_situation
                 return await _handle_technician_situation(
                     client, ctx=ctx, license_id=license_id, message=message, kind=situation,
                     permission_keys=permission_keys, language=language,
@@ -16299,6 +16763,24 @@ async def _route_chat_message(
                 client, ctx=ctx, license_id=license_id, message=message,
                 permission_keys=permission_keys, language=language,
             )
+        # Claim, reject and assign all write, and none of them consulted a
+        # guard: _disclaims_a_job_action is reached from _command_like
+        # (check-in/check-out) but not from _action_command, which is what
+        # these three use. Each gets its own action name so the refusal can
+        # say which job word it read.
+        for _job_action, _job_triggers in (
+            ("job_reject", TICKET_REJECT_TRIGGERS),
+            ("job_claim", TICKET_CLAIM_TRIGGERS),
+            ("job_assign", TICKET_ASSIGN_TRIGGERS),
+        ):
+            if _action_command(message, _job_triggers):
+                held_job = _intent_guard_reply(
+                    message, action=_job_action, language=language,
+                )
+                if held_job is not None:
+                    return held_job
+                break
+
         if _action_command(message, TICKET_REJECT_TRIGGERS):
             return await _handle_ticket_reject(
                 client, ctx=ctx, license_id=license_id, message=message,
@@ -16406,6 +16888,18 @@ async def _route_chat_message(
             return await _storefront_browse_reply(client, ctx=ctx, language=language)
         chat_first = _chat_start_text(message)
         if chat_first is not None:
+            # Guarded only in the BARE form. _chat_start_text already
+            # requires the phrase to open the message, so anything after it
+            # is the customer's first line to the shop — "คุยกับร้าน ราคา
+            # แอร์ 12000 BTU เท่าไหร่" is a question FOR the shop, not a
+            # question about whether to open a conversation, and holding it
+            # would be the other mistake this codebase has made twice.
+            held_chat = _intent_guard_reply(
+                message, action="chat_open", language=language,
+                triggers=CUSTOMER_CHAT_PHRASES,
+            ) if not chat_first else None
+            if held_chat is not None:
+                return held_chat
             return await _handle_customer_chat_start(
                 client, ctx=ctx, license_id=license_id, first_message=chat_first, language=language,
             )
@@ -16417,6 +16911,20 @@ async def _route_chat_message(
             # "ขอคุยกับคนจริงๆ", "แอดมินอยู่ไหม", "บริการแย่มาก": a person at
             # the shop, now — with the complaint as the first line so
             # nobody has to type it twice (review, 6 Sep 2026, B7).
+            #
+            # Guarded on the asking-for-a-person half only. Opening a
+            # conversation pushes a notification to every agent, and
+            # "ไม่ต้องคุยกับร้าน" and "คุยกับร้านยังไง" each summoned the
+            # whole sales team (10 ก.ย. 2569). A COMPLAINT is never held:
+            # an unhappy customer reaches a person whatever shape the
+            # sentence takes, which is the point of this branch.
+            if not _is_complaint(message):
+                held_chat = _intent_guard_reply(
+                    message, action="chat_open", language=language,
+                    triggers=CUSTOMER_CHAT_PHRASES,
+                )
+                if held_chat is not None:
+                    return held_chat
             return await _handle_customer_chat_start(
                 client, ctx=ctx, license_id=license_id,
                 first_message=(message or "").strip() if _is_complaint(message) else "", language=language,
@@ -16486,6 +16994,18 @@ async def _route_chat_message(
             if own is not None:
                 await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
         if own is not None:
+            # "เบอร์ 0812345678 ใช่ไหม" — someone checking what we have on
+            # file — stored the phone as "0812345678 ใช่ไหม", question
+            # particle and all (10 ก.ย. 2569). A sentence that asks is not
+            # a sentence that sets. The pending-answer path above is left
+            # alone: a bare value answering a question we just asked is an
+            # answer, not a question of its own.
+            held_own = _intent_guard_reply(
+                message, action="profile_update", language=language,
+                triggers=_PROFILE_EDIT_HINTS,
+            ) if _profile_field_edit(message) is not None else None
+            if held_own is not None:
+                return held_own
             return await _handle_profile_intent(
                 client, intent={"action": "update", "entity": "profile", "fields": own},
                 ctx=ctx, language=language,
@@ -16541,6 +17061,25 @@ async def _route_chat_message(
             )
         # Editing and deleting come before listing and creating: every one
         # of their triggers contains "บันทึก", which both of those match.
+        #
+        # And all three write, so all three are guarded here, once, in front
+        # of the branch that picks between them. Measured on the real
+        # handlers (10 ก.ย. 2569): "ไม่ต้องบันทึกว่า C-2026-0001 ลูกค้าขอ
+        # ส่วนลด" saved the note, "อย่าเพิ่งลบบันทึกนั้น" deleted the
+        # customer's latest note — resolving the target from context, with
+        # no code in the sentence at all — and "แก้บันทึกยังไง", a question
+        # about HOW, overwrote that note with the body "ยังไง". Listing is
+        # left outside the guard: reading is not a mutation.
+        if any(
+            t in message.lower()
+            for t in (NOTE_DELETE_TRIGGERS + NOTE_EDIT_TRIGGERS + NOTE_TRIGGERS)
+        ) and not any(t in message.lower() for t in NOTE_LIST_TRIGGERS):
+            held_note = await _guarded_in_context(
+                client, ctx=ctx, license_id=license_id, message=message,
+                action="note_write", language=language,
+            )
+            if held_note is not None:
+                return held_note
         if any(t in message.lower() for t in NOTE_DELETE_TRIGGERS):
             return await _handle_note_edit(
                 client, ctx=ctx, license_id=license_id, message=message,
@@ -16687,6 +17226,22 @@ async def _route_chat_message(
                 client, license_id=license_id, permission_keys=permission_keys,
                 language=language, query=product_query,
             )
+        # The three trigger-table line branches below — remove, edit and
+        # product-add — all write, and none of them was guarded; only the
+        # _parse_line_item_command path above was. Measured on the real
+        # handlers (10 ก.ย. 2569): "ไม่ต้องลบสินค้าพัดลม" removed the line,
+        # "ไม่ต้องแก้ราคาพัดลมเหลือ 1400" changed the price, and "เมื่อวาน
+        # เพิ่มสินค้า ทีวี 40 นิ้ว ราคา 4000 ไปแล้ว" — someone narrating
+        # what they did yesterday — added a NEW line whose product name
+        # literally contained "ไปแล้ว". One check in front of all three.
+        if any(
+            t in message.lower()
+            for t in (LINE_REMOVE_TRIGGERS + LINE_EDIT_TRIGGERS + DEAL_PRODUCT_ADD_TRIGGERS)
+        ):
+            held_line = _intent_guard_reply(message, action="line_item", language=language)
+            if held_line is not None:
+                return held_line
+
         remove_trigger = next(
             (t for t in LINE_REMOVE_TRIGGERS if t in message.lower()), None,
         )
@@ -16697,11 +17252,28 @@ async def _route_chat_message(
                 language=language, remove=True,
             )
         if any(t in message.lower() for t in QUOTE_VOID_TRIGGERS):
+            # "ไม่ต้องยกเลิกใบเสนอราคา Q-2026-0001" rejected the quotation
+            # until this guard was here (10 ก.ย. 2569).
+            held = await _guarded_in_context(
+                client, ctx=ctx, license_id=license_id, message=message,
+                action="quote_status", language=language,
+            )
+            if held is not None:
+                return held
             return await _handle_quote_status(
                 client, ctx=ctx, license_id=license_id, message=message, target="rejected",
                 permission_keys=permission_keys, language=language,
             )
         if any(t in message.lower() for t in QUOTE_ACCEPT_TRIGGERS):
+            # And the one that got it backwards: "ลูกค้ายังไม่ตอบรับใบเสนอ
+            # ราคา Q-2026-0001" — the customer has NOT accepted — set the
+            # quotation to accepted.
+            held = await _guarded_in_context(
+                client, ctx=ctx, license_id=license_id, message=message,
+                action="quote_status", language=language,
+            )
+            if held is not None:
+                return held
             return await _handle_quote_status(
                 client, ctx=ctx, license_id=license_id, message=message, target="accepted",
                 permission_keys=permission_keys, language=language,
@@ -16711,6 +17283,12 @@ async def _route_chat_message(
             or ("ลดราคา" in message.lower() and "%" in message)
             or _is_whole_quote_discount(message)
         ):
+            held = await _guarded_in_context(
+                client, ctx=ctx, license_id=license_id, message=message,
+                action="quote_terms", language=language,
+            )
+            if held is not None:
+                return held
             return await _handle_quote_discount(
                 client, ctx=ctx, license_id=license_id, message=message,
                 permission_keys=permission_keys, language=language,
@@ -16759,6 +17337,20 @@ async def _route_chat_message(
                 client, ctx=ctx, license_id=license_id, message=message,
                 permission_keys=permission_keys, language=language,
             )
+
+        # "ไม่ต้องสร้างดีลให้ สมชาย ใจดี" created the deal (10 ก.ย. 2569).
+        # In front of BOTH deal-create shapes below — the named one and the
+        # bare one that reads the name from context — because a refusal
+        # that only covers one of them is not a refusal.
+        if _parse_after_trigger(message, DEAL_CREATE_TRIGGERS) is not None or any(
+            t in message.lower() for t in DEAL_CREATE_BARE_TRIGGERS
+        ):
+            held = await _guarded_in_context(
+                client, ctx=ctx, license_id=license_id, message=message,
+                action="deal_create", language=language,
+            )
+            if held is not None:
+                return held
 
         create_for = _parse_after_trigger(message, DEAL_CREATE_TRIGGERS)
         if create_for is not None and not _deal_name_only(_strip_polite_tail(create_for)):
@@ -16903,6 +17495,17 @@ async def _route_chat_message(
                 permission_keys=permission_keys, language=language,
                 actor_id=ctx.chann_uid, allow_reissue=True,
             )
+        # Issuing a document builds and sends a PDF to the customer.
+        # "ไม่ต้องออกเอกสาร Q-2026-0001", "เช่น พิมพ์ว่า ออกเอกสาร …" and
+        # "ออกรายงานยังไง" (which picked the person's only approved report
+        # and issued it) all produced one (10 ก.ย. 2569).
+        if any(t in message.lower() for t in QUOTE_ISSUE_TRIGGERS + REPORT_PDF_TRIGGERS + REPORT_PDF_REISSUE):
+            held_doc = _intent_guard_reply(
+                message, action="document_issue", language=language,
+                triggers=QUOTE_ISSUE_TRIGGERS + REPORT_PDF_TRIGGERS + REPORT_PDF_REISSUE,
+            )
+            if held_doc is not None:
+                return held_doc
         issue_code = _parse_after_trigger(message, QUOTE_ISSUE_TRIGGERS)
         if issue_code is not None:
             return await _handle_quote_issue(
@@ -16943,6 +17546,10 @@ async def _route_chat_message(
     if ctx.oa == "sales" and (any(t in (message or "").lower() for t in SERIAL_REGISTER_TRIGGERS) or (
         _is_register_request(message) and _names_a_serial(message)
     )):
+        # "ไม่ต้องลงทะเบียน SN12345678" registered it (10 ก.ย. 2569).
+        held_reg = _intent_guard_reply(message, action="warranty_register", language=language)
+        if held_reg is not None:
+            return held_reg
         return await _handle_warranty_register(
             client, ctx=ctx, license_id=license_id, message=message, language=language,
             permission_keys=permission_keys,
@@ -16968,6 +17575,19 @@ async def _route_chat_message(
         _parse_company_profile_commands(message) if ctx.oa == "sales" else []
     )
     if company_updates:
+        # These values are printed on documents the customer receives, so a
+        # tax ID set from "ตั้งที่อยู่บริษัทยังไง" is worse than most: the
+        # how-to form wrote the question itself into the record.
+        held_company = _intent_guard_reply(
+            message, action="company_update", language=language,
+            # The handler's own words, so the guard and the parser agree on
+            # what the action is called: ACTION_WORDS carries the generic
+            # phrasings, but the commands people actually type are
+            # "ตั้งเลขผู้เสียภาษี …", "ตั้งที่อยู่บริษัท …", one per field.
+            triggers=tuple(t for triggers, _f in COMPANY_FIELD_TRIGGERS for t in triggers),
+        )
+        if held_company is not None:
+            return held_company
         return await _handle_company_profile_command(
             client, license_id=license_id, updates=company_updates,
             permission_keys=permission_keys, language=language, actor_id=ctx.chann_uid,
@@ -17009,6 +17629,16 @@ async def _route_chat_message(
                     log.exception("could not resolve the deal behind the last quote")
     if deal_stage_cmd is not None:
         deal_code, target_stage = deal_stage_cmd
+        # "ยังไม่ต้องปิดดีล D-2026-0001 สำเร็จ" closed the deal as won, and
+        # "ลูกค้าบอกว่าปิดดีล D-2026-0001 สำเร็จแล้วเหรอ" — a question about
+        # what someone else said — closed it too (10 ก.ย. 2569). The stage
+        # keywords are the triggers here; ACTION_WORDS["deal_stage"] carries
+        # them, since this branch matches on a parser rather than a table.
+        held = _intent_guard_reply(
+            message, action="deal_stage", language=language, code=deal_code,
+        )
+        if held is not None:
+            return held
         if "deal.update" not in set(permission_keys):
             catalog = await client.permission_catalog()
             return ChatReply(text=suggest_what_you_can_do(
@@ -17194,6 +17824,25 @@ async def _execute_intent(
 ) -> ChatReply:
     """The model's reading, gated and dispatched — the tail of the router,
     separate so a switch notice can be put in front of whatever it says."""
+    # One canonical verb from here down. The model answers with whichever
+    # synonym the sentence used — "เพิ่มลูกค้าสมชาย" comes back as
+    # action="add", "แก้ชื่อลูกค้า" as "edit", "ดูรายการรออนุมัติ" as
+    # "view" — and ACTION_ALIASES existed to absorb that. But it was applied
+    # at the permission gate ONLY, so the aliases passed the gate and then
+    # met handlers that compare the verb directly: `add` + a complete name
+    # and phone reached _handle_customer_intent, matched no branch, and fell
+    # out of the bottom as "ในแชทยังทำรายการนี้ไม่ได้" — the model had read
+    # the sentence correctly and one string comparison threw it away, with
+    # nothing written and nothing logged (owner's review of the message
+    # path, 10 ก.ย. 2569). Two more tables are keyed on canonical verbs and
+    # were being missed the same way: _AI_GUARDED, so "ไม่ต้องนัด" read as
+    # action="add" skipped the negation guard entirely, and READ_ACTIONS.
+    # The comment on READ_ACTIONS above calls this exact bug out; it is
+    # fixed here at the one place every model answer passes through, rather
+    # than by another hand-kept list that can drift again.
+    raw_action = str(intent.get("action") or "").strip().lower()
+    if raw_action:
+        intent = {**intent, "action": ACTION_ALIASES.get(raw_action, raw_action)}
     if intent.get("action") == "suggest" and ctx.oa == "customer":
         # A customer holds no permission keys; "you have no permissions,
         # ask your admin" is the wrong sentence for them.
@@ -18029,6 +18678,18 @@ async def _maybe_lead_cleanup_setting(
         return None
     if "setting.manage" not in set(permission_keys):
         return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    if set_match or off:
+        # The number is pulled with a bare re.search, which happily ignores
+        # a trailing question — so "ตั้งค่าลบ lead อัตโนมัติ 90 วัน ได้ยังไง
+        # ครับ", asking HOW, switched the whole shop to auto-archiving
+        # leads after 90 days (10 ก.ย. 2569). Viewing is left unguarded:
+        # reading the setting changes nothing.
+        held_setting = _intent_guard_reply(
+            message, action="shop_setting", language=language,
+            triggers=tuple(LEAD_CLEANUP_SET_PHRASES) + tuple(LEAD_CLEANUP_OFF_PHRASES),
+        )
+        if held_setting is not None:
+            return held_setting
     if set_match:
         digits = re.search(r"(\d{1,4})", text[len(set_match):])
         days = int(digits.group(1)) if digits else 0
@@ -19621,6 +20282,18 @@ async def _resolve_template_design(
         return await _discard_template_draft(client, ctx=ctx, label=label, language=language)
 
     if decision == "publish":
+        # Publishing changes every document the shop issues from here on,
+        # and the decision is made by CONTAINMENT over "เผยแพร่"/"ใช้เลย" —
+        # so "ยังไม่ต้องเผยแพร่", "อย่าเพิ่งเผยแพร่", "เผยแพร่ยังไง" and
+        # "ลูกค้าบอกว่าจะใช้แบบนี้" all published it (10 ก.ย. 2569). The
+        # drop list only checks refusals spelled ไม่เอา/ไม่ใช้/ยกเลิก/ทิ้ง,
+        # which "ไม่ต้องใช้" is not.
+        held_publish = _intent_guard_reply(
+            message, action="template_publish", language=language,
+            triggers=tuple(_TEMPLATE_YES_CONTAINS) + tuple(_TEMPLATE_YES_WORDS),
+        )
+        if held_publish is not None:
+            return held_publish
         return await _publish_template_draft(
             client, ctx=ctx, license_id=license_id, pending=pending,
             permission_keys=permission_keys, language=language,

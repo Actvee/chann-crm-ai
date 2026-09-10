@@ -273,7 +273,13 @@ SPEC = {
     "s.approve": [A(h=["_handle_approval_act|approve=True"])],
     "s.reject": [A(h=["_handle_approval_act|approve=False"])],
     "s.shop_info": [A(h=["_handle_shop_info"])],
-    "s.invite": [A(h=["_handle_technician_invite_request"])],
+    # _handle_technician_invite_request now delegates to _handle_invite_request,
+    # which issues the sales-side code too (10 ก.ย. 2569).
+    "s.invite": [A(h=["_handle_invite_request", "_handle_technician_invite_request"])],
+    # "ช่างใหม่จะเข้าร้านยังไง" is a question about HOW, and it used to
+    # answer by issuing a real invite code. It now explains and writes
+    # nothing.
+    "s.invite_howto": [A(text=["ขอรหัสเชิญช่าง"], noai=True)],
     "s.company_view": [A(h=["_handle_company_profile_view"])],
     "s.company_update": [A(h=["_handle_company_profile_command"])],
     "s.settings": [A(h=["_help_reply", "_handle_company_profile_view", "_handle_shop_info"], partial=True)],

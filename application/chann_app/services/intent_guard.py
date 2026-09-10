@@ -117,6 +117,94 @@ ACTION_WORDS: dict[str, tuple[str, ...]] = {
     # The catch-all for a removal the model asked for on an entity with no
     # wording of its own.
     "record_delete": ("ลบ", "ยกเลิก", "เอาออก", "นำออก", "delete", "remove", "cancel"),
+
+    # ------------------------------------------------------------------
+    # The rule branches that write. Until 10 ก.ย. 2569 the guard was wired
+    # to twelve call sites and the whole AI road, which left roughly twenty
+    # deterministic branches writing to the database with no shape check at
+    # all. Measured on the real handlers, with the records present:
+    #   "ไม่ต้องยกเลิกใบเสนอราคา Q-2026-0001"      -> the quote was rejected
+    #   "ลูกค้ายังไม่ตอบรับใบเสนอราคา Q-2026-0001" -> the quote was ACCEPTED
+    #   "ยังไม่ต้องปิดดีล D-2026-0001 สำเร็จ"       -> the deal was closed won
+    #   "ไม่ต้องสร้างดีลให้ สมชาย ใจดี"             -> the deal was created
+    #   "ไม่ต้องเชิญช่างแล้ว" / "เพิ่มช่างยังไง"    -> an invite code was issued
+    # The middle one is the clearest statement of the problem: the sentence
+    # says the customer has NOT accepted, and the record was set to
+    # accepted. These entries give each of those branches its own words.
+    "quote_status": (
+        "ยกเลิกใบเสนอราคา", "ปฏิเสธใบเสนอราคา", "ตอบรับใบเสนอราคา", "รับใบเสนอราคา",
+        "ตอบรับ", "ปฏิเสธ", "ยกเลิก", "accept", "reject", "void", "ใบเสนอราคา",
+    ),
+    "quote_terms": ("ส่วนลด", "ลดราคา", "discount", "แก้ส่วนลด", "ให้ส่วนลด"),
+    "deal_create": ("เปิดดีล", "สร้างดีล", "ดีลใหม่", "เพิ่มดีล", "ทำดีล", "open deal", "new deal", "ดีล"),
+    "deal_stage": (
+        "ปิดดีล", "ปิดการขาย", "ปิดสำเร็จ", "ปิดไม่สำเร็จ", "เปลี่ยนสถานะ", "อัปเดตดีล",
+        "เสนอราคาแล้ว", "ตกลงซื้อ", "ลูกค้าไม่เอา", "won", "lost", "ดีล",
+    ),
+    "note_write": ("บันทึก", "โน้ต", "จดไว้", "note", "เพิ่มบันทึก", "แก้บันทึก", "ลบบันทึก"),
+    "invite_create": (
+        "ขอรหัสเชิญ", "สร้างรหัสเชิญ", "รหัสเชิญ", "เชิญช่าง", "เชิญเซลส์", "เชิญพนักงาน",
+        "เพิ่มช่าง", "เพิ่มพนักงาน", "เพิ่มสมาชิก", "เชิญ", "invite",
+    ),
+    "team_manage": ("สร้างทีม", "ลบทีม", "เพิ่มเข้าทีม", "เอาออกจากทีม", "ทีมช่าง", "ทีม", "team"),
+    "warranty_register": ("ลงทะเบียน", "ผูกสินค้า", "ลงทะเบียนสินค้า", "register", "รับประกัน"),
+    "company_update": ("แก้ข้อมูลบริษัท", "เปลี่ยนข้อมูลบริษัท", "ตั้งค่าบริษัท", "ข้อมูลบริษัท"),
+    "customer_bulk": ("เพิ่มลูกค้า", "ลูกค้าใหม่", "ลงลูกค้า", "add customers", "new customers"),
+    # The job decisions. _disclaims_a_job_action covered only the check-in
+    # and check-out vocabulary, and only from _command_like; claim, reject
+    # and assign go through _action_command, which never consulted it.
+    # Measured 10 ก.ย. 2569: "ไม่ต้องรับงาน T-2026-0001" took the job,
+    # "ลูกค้าบอกว่าช่างรับงาน T-2026-0001 แล้ว" took it for the CS person
+    # who was quoting the technician, and "ถ้าฝนตกจะปฏิเสธงาน T-2026-0001"
+    # rejected it AND filed "ถ้าฝนตกจะ" as the reason the shop reads.
+    "job_claim": ("รับงาน", "ขอรับงาน", "รับ", "claim", "take the job"),
+    "job_reject": (
+        "ปฏิเสธงาน", "ไม่รับงาน", "รับงานไม่ได้", "ไม่สะดวกรับงาน", "ขอไม่รับ", "ปฏิเสธ",
+        "decline", "reject job",
+    ),
+    "job_assign": ("มอบหมาย", "จ่ายงาน", "ส่งงานให้", "โยนงานให้", "จัดช่างให้", "assign"),
+    # What a technician says about the job they are on, which is filed as a
+    # note and pushed to the dispatch team: "ยังไม่ต้องสั่งอะไหล่" was filed
+    # as "ต้องสั่งอะไหล่" — the opposite — and "ขอเลื่อนนัดยังไง", asking
+    # HOW to reschedule, was filed as a request to reschedule.
+    # Shop-wide settings, the customer's own profile, and opening a live
+    # chat with the shop. Each writes, none was guarded. "ตั้งค่าลบ lead
+    # อัตโนมัติ 90 วัน ได้ยังไงครับ" — asking HOW — switched the shop to
+    # auto-archiving leads after 90 days; "เบอร์ 0812345678 ใช่ไหม" stored
+    # the phone as "0812345678 ใช่ไหม", question particle and all; and
+    # "ไม่ต้องคุยกับร้าน" opened a conversation and told every agent.
+    "shop_setting": ("ตั้งค่า", "เปิดใช้", "ปิดใช้", "เปลี่ยนค่า", "setting", "turn on", "turn off"),
+    "profile_update": ("ชื่อ", "เบอร์", "อีเมล", "ที่อยู่", "เปลี่ยนชื่อ", "เปลี่ยนเบอร์", "แก้ชื่อ", "แก้เบอร์"),
+    # A customer calling off the visit. The trigger test is a bare
+    # substring, so "ไม่ต้องยกเลิกนัด" — the owner's own example — matched
+    # on "ยกเลิกนัด" and offered to cancel the job (10 ก.ย. 2569).
+    # Approving or rejecting a service report. The most dangerous pair in
+    # the product: approving issues the customer's PDF and fires the
+    # satisfaction survey, and the two triggers are near-anagrams of each
+    # other. "ไม่ต้องอนุมัติ SR-2026-0001" — a refusal — APPROVED the
+    # report, because APPROVAL_REJECT_TRIGGERS holds "ไม่อนุมัติ", which is
+    # not a substring of "ไม่ต้องอนุมัติ", so the reject test missed and the
+    # approve test's bare "อนุมัติ" hit (10 ก.ย. 2569).
+    "approval_act": (
+        "อนุมัติ", "ไม่อนุมัติ", "ตีกลับ", "ผ่าน", "ไม่ผ่าน", "ให้ผ่าน", "ให้แก้ใหม่",
+        "approve", "reject", "ส่งกลับไปแก้",
+    ),
+    # Issuing a document, and publishing a template. Publishing changes
+    # every document the shop issues from that moment on.
+    "document_issue": (
+        "ออกเอกสาร", "ออกรายงาน", "ออกใบเสนอราคา", "ขอไฟล์", "ขอ pdf", "ส่งเอกสาร",
+        "ส่งใบเสนอราคา", "pdf", "เอกสาร",
+    ),
+    "template_publish": (
+        "เผยแพร่", "ใช้เลย", "ใช้แบบนี้", "ใช้อันนี้", "เอาแบบนี้", "ตกลงใช้", "ยืนยันใช้",
+        "publish", "use it",
+    ),
+    "ticket_cancel": ("ยกเลิกงาน", "ยกเลิกนัด", "ยกเลิก", "cancel job", "cancel"),
+    "chat_open": ("คุยกับร้าน", "แชทกับร้าน", "คุยกับเจ้าหน้าที่", "คุยกับพนักงาน", "คุยกับแอดมิน", "talk to the shop", "live chat"),
+    "job_situation": (
+        "สั่งอะไหล่", "เลื่อนนัด", "ขอเลื่อน", "ลูกค้าไม่อยู่", "เข้าไม่ได้", "ของไม่พอ",
+        "ต้องสั่ง", "รอของ", "ซ่อมไม่ได้",
+    ),
 }
 
 
@@ -165,6 +253,25 @@ _LATER_RE = re.compile(
 )
 _LATER_TAIL_RE = re.compile(r"(?:ค่อย(?:ทำ|ว่ากัน|แจ้ง|บอก|มา)|ไว้ก่อน|เอาไว้ก่อน|รอก่อน|เดี๋ยวก่อน)")
 
+# The speaker narrating something they ALREADY did. Deliberately narrow:
+# it needs BOTH a past-time head and a completion marker, because each on
+# its own is ordinary command language. "…แล้ว" alone is how a real order
+# is given ("ปิดดีล D-2026-0001 สำเร็จแล้ว" marks it won), and a past-time
+# head alone can precede a genuine request ("เมื่อวานนัดไว้ ช่วยเลื่อนเป็น
+# พรุ่งนี้"). Together they are a report: "เมื่อวานเพิ่มสินค้า ทีวี 40 นิ้ว
+# ราคา 4000 ไปแล้ว" added a second line item whose product name literally
+# contained "ไปแล้ว" (10 ก.ย. 2569).
+_PAST_HEAD_RE = re.compile(
+    r"^(?:เมื่อวานนี้|เมื่อวานซืน|เมื่อวาน|เมื่อเช้านี้|เมื่อเช้า|เมื่อกี้นี้|เมื่อกี้|เมื่อคืน|"
+    r"อาทิตย์ที่แล้ว|สัปดาห์ที่แล้ว|เดือนที่แล้ว|ตอนเช้า|ตอนบ่าย|yesterday|earlier|lastweek)"
+)
+_DONE_TAIL_RE = re.compile(r"(?:ไปแล้ว|เรียบร้อยแล้ว|ไปเรียบร้อย|เสร็จแล้ว|alreadydid|alreadyadded)")
+
+
+def _narrates_the_past(compact: str) -> bool:
+    return bool(_PAST_HEAD_RE.match(compact) and _DONE_TAIL_RE.search(compact))
+
+
 # Somebody else's words, reported.
 _REPORTED_RE = re.compile(
     r"(?:ลูกค้า|ช่าง|เขา|แอดมิน|หัวหน้า|ทีม|เพื่อน|น้อง|พี่|เจ้าของ|customer|the tech)?"
@@ -176,6 +283,19 @@ _EXAMPLE_RE = re.compile(
     r"คำว่า|พิมพ์ว่า|เขียนว่า|ส่งคำว่า|ยกตัวอย่าง|เป็นตัวอย่าง|ตัวอย่างเช่น|ตัวอย่าง|ลองพิมพ์|ลองดูว่า|"
     r"forexample|justtesting|testmessage|sampletext"
 )
+# A bare "เช่น" only when the sentence OPENS with it. "ตัวอย่างเช่น เตือน
+# C-2026-0001 พรุ่งนี้" was held and "เช่น เตือน C-2026-0001 พรุ่งนี้" set
+# the appointment — the same sentence, one word shorter (10 ก.ย. 2569).
+# Anchored on purpose: เช่น appears mid-sentence in ordinary speech
+# ("สินค้าเช่นแอร์ตู้เย็น") and in this system's OWN replies, which quote
+# the command to use as 'เช่น "ตั้งนัด …"', so matching it anywhere would
+# refuse real orders. At the front of a message it is always illustration.
+# Applies to every action at once, which is why it lives here rather than
+# in one handler.
+# "like" is deliberately absent: "like add a fan" is how people give a
+# real order in casual English, and refusing it would be the other
+# mistake.
+_EXAMPLE_HEAD_RE = re.compile(r"^(?:เช่น|อย่างเช่น|เหมือนเช่น|eg\.?|e\.g\.?)")
 # "ทดสอบ" only when the sentence opens with it: "แอร์ทดสอบ" is a product.
 _TEST_HEAD_RE = re.compile(r"^(?:ขอ)?ทดสอบ")
 _QUOTED_RE = re.compile(r"[\"“”'‘’«]([^\"“”'‘’«»]{2,60})[\"“”'‘’»]")
@@ -211,7 +331,12 @@ _STATUS_TAIL = ("หรือยัง", "รึยัง", "ยัง", "ใช
 
 # "ทำไมต้อง…", "…ต้องทำอย่างไร", "แค่ถามวิธี…": asking about the action.
 _HOWTO_RE = re.compile(
-    r"ทำไม|ทำอย่างไร|ทำยังไง|อย่างไร|อย่างอะไร|ยังไง|วิธี|ต้องทำอะไร|ต้องทำยังไง|จะเกิดอะไรขึ้น|"
+    # "ทำไม" is "why", but it is also the first four characters of
+    # "ทำไม่จบ" / "ทำไม่เสร็จ" — "did not finish". The lookahead keeps the
+    # question word and drops the accident: mai-ek (่) after ไม never
+    # begins "why" (10 ก.ย. 2569, from a technician's status report being
+    # read as a how-to question).
+    r"ทำไม(?![่็])|ทำอย่างไร|ทำยังไง|อย่างไร|อย่างอะไร|ยังไง|วิธี|ต้องทำอะไร|ต้องทำยังไง|จะเกิดอะไรขึ้น|"
     r"แค่ถาม|ขอถาม|ขอทราบ|สอบถาม|อยากทราบ|อยากรู้|เผื่อถาม|howdoi|howto|howcani|whathappens"
 )
 
@@ -252,7 +377,30 @@ def _first_action_at(compact: str, words: Sequence[str]) -> int | None:
     return min(hits) if hits else None
 
 
-def _negated(compact: str, words: Sequence[str]) -> bool:
+def _negated(compact: str, words: Sequence[str], triggers: Sequence[str] = ()) -> bool:
+    # A ไม that is PART of one of the handler's own triggers is not a
+    # negation of the command — it IS the command. The shop rejects a
+    # report with "SR-2026-0001 ไม่ผ่าน" and a technician declines with
+    # "รับงานไม่ได้"; both live in their handler's trigger tuple, and
+    # reading their ไม่ as a refusal refuses the refusal (10 ก.ย. 2569).
+    # The existing `imperative` escape only covers a trigger at the FRONT,
+    # which "SR-2026-0001 ไม่ผ่าน" is not.
+    spans: list[tuple[int, int]] = []
+    for trigger in triggers or ():
+        needle = (trigger or "").replace(" ", "").lower()
+        if not needle or not any(n in needle for n in _NEGATIONS):
+            continue
+        start = 0
+        while True:
+            at = compact.find(needle, start)
+            if at < 0:
+                break
+            spans.append((at, at + len(needle)))
+            start = at + 1
+
+    def _inside_a_trigger(position: int) -> bool:
+        return any(lo <= position < hi for lo, hi in spans)
+
     for neg in _NEGATIONS:
         start = 0
         while True:
@@ -260,6 +408,8 @@ def _negated(compact: str, words: Sequence[str]) -> bool:
             if at < 0:
                 break
             start = at + 1
+            if _inside_a_trigger(at):
+                continue
             rest = compact[at + len(neg):]
             if _NEGLECT_RE.match(rest):
                 continue
@@ -310,6 +460,18 @@ def intent_to_act(
     in; otherwise chat's canonical form is used, so every matcher in the
     system reads the same text.
     """
+    if action not in ACTION_WORDS and not triggers:
+        # An action with no words of its own and no trigger tuple has
+        # nothing to find, so `at` is None below and the sentence ACTS —
+        # the guard fails OPEN, silently, and the call site reads as if it
+        # were protected. That is how twenty-odd writing branches ended up
+        # unguarded while a table said otherwise (measured 10 ก.ย. 2569).
+        # Loud here, and scripts/dev/check-guard-actions.py fails the build
+        # before it can ship.
+        raise KeyError(
+            f"intent_guard: unknown action {action!r} and no triggers given — "
+            "add it to ACTION_WORDS, or pass the handler's own trigger tuple"
+        )
     if canonical is None:
         from .chat import _canonical  # lazy: chat imports this module
 
@@ -333,12 +495,28 @@ def intent_to_act(
     )
 
     # The exchange itself is being dropped: "หยุดก่อน", "เดี๋ยวค่อยทำ".
-    if _ABANDON_RE.match(compact) or _LATER_ONLY_RE.match(compact):
+    #
+    # Unless the abandon word IS the action. A customer cancelling a visit
+    # types "ยกเลิกค่ะ", and "ยกเลิก" is both this handler's trigger and an
+    # abandonment word — reading it as "never mind" refuses the very thing
+    # being asked for. Same reasoning as the imperative exemption for
+    # negations below: the handler's own trigger, at the front, is the
+    # command however it is spelled.
+    if not imperative and (_ABANDON_RE.match(compact) or _LATER_ONLY_RE.match(compact)):
         return Verdict(HOLD, "abandoned")
 
     # Quoting, testing, illustrating.
-    if _TEST_HEAD_RE.match(canon) or _EXAMPLE_RE.search(compact) or _only_inside_quotes(canon, words):
+    if (
+        _TEST_HEAD_RE.match(canon)
+        or _EXAMPLE_RE.search(compact)
+        or _EXAMPLE_HEAD_RE.match(compact)
+        or _only_inside_quotes(canon, words)
+    ):
         return Verdict(HOLD, "example")
+
+    # The speaker themselves, telling us what they already did.
+    if _narrates_the_past(compact):
+        return Verdict(HOLD, "reported")
 
     # Somebody else did it, or said they did.
     reported = _REPORTED_RE.search(compact)
@@ -355,7 +533,7 @@ def intent_to_act(
     if at is None:
         return _ACTS
 
-    if not imperative and _negated(compact, words):
+    if not imperative and _negated(compact, words, triggers or ()):
         return Verdict(HOLD, "negated")
 
     conditional = min(

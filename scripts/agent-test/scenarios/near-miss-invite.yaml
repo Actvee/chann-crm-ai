@@ -1,0 +1,42 @@
+# Owner, 10 ก.ย. 2569: "ขอรหัสเชิญช่าง แบบนี้ได้ แต่พอพิม ขอรหัสเชิญ AI กลับ
+# ไม่เข้าใจ ทั้งๆที่มีอยู่ 2 แบบคือเชิญช่างกับ sale ควรจะเข้าใจและถามว่าจะเอา
+# ตัวไหน อันนี้เป็นแค่ตัวอย่างให้ดูกรณีอื่นๆด้วย".
+#
+# The shape to hold on to: a request the system understands but that is one
+# word short of being actionable is answered with THAT word, not with the
+# generic "type it in the right format".
+name: near-miss-invite
+description: a request for an invite code that does not say for whom asks which, and issues nothing
+backend: fake
+actor: {oa: sales, role: sales, language: th, permissions: all}
+steps:
+# The form that already worked, unchanged.
+- send: ขอรหัสเชิญช่าง
+  expect:
+    contains: ["รหัสเชิญช่าง:"]
+    is_not: [not_sure, generic_error, permission, not_a_feature]
+
+# The owner's case. It understands, and asks the one thing it needs.
+- send: ขอรหัสเชิญ
+  expect:
+    contains: ["2 แบบ"]
+    not_contains: ["รหัสเชิญช่าง:", "รหัสเชิญทีมขาย/CS:"]
+    quick_replies_include: ["ช่าง", "ทีมขาย/CS"]
+    is_not: [not_sure, generic_error, permission, not_a_feature]
+
+# The button it just offered must be answerable.
+- send: ขอรหัสเชิญทีมขาย
+  expect:
+    contains: ["รหัสเชิญทีมขาย/CS:"]
+    is_not: [not_sure, generic_error, permission, not_a_feature]
+
+# Said another way, by someone who does not know the word "รหัสเชิญ".
+- send: เพิ่มพนักงาน
+  expect:
+    contains: ["รหัสเชิญทีมขาย/CS:"]
+    is_not: [not_sure, generic_error, permission]
+
+- send: เพิ่มสมาชิก
+  expect:
+    contains: ["2 แบบ"]
+    is_not: [not_sure, generic_error, permission]

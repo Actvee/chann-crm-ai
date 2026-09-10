@@ -589,7 +589,7 @@ SALES = [
     _e("ขอรหัสร้านให้ลูกค้าหน่อย", "s.shop_info", "polite_prefix particle"),
     _e("ขอรหัสเชิญช่างหน่อย", "s.invite", "polite_prefix particle"),
     _e("เพิ่มช่างใหม่ครับ", "s.invite", "particle"),
-    _e("ช่างใหม่จะเข้าร้านยังไง", "s.invite", "question"),
+    _e("ช่างใหม่จะเข้าร้านยังไง", "s.invite_howto", "question"),
     _e("เชิญช่าง", "s.invite", "bare"),
     _e("invite technician", "s.invite", "english"),
     _e("ข้อมูลบริษัทค่ะ", "s.company_view", "particle"),
