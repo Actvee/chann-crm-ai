@@ -1341,6 +1341,85 @@ def _find_entity_code(message: str) -> tuple[str, str] | None:
     return CODE_PREFIX_TO_ENTITY[code[0]], code
 
 
+# Codes the model may name, and what each prefix actually is. T- and SR-
+# are not in CODE_PREFIX_TO_ENTITY because that map serves the sales
+# lookup; here we need every prefix a person can type.
+_ALL_CODE_PREFIXES = {
+    "C": "customer", "D": "deal", "Q": "quote", "T": "ticket", "SR": "service_report",
+}
+_ANY_CODE_RE = re.compile(r"(?<![A-Za-z0-9])((?:SR|[CDQT])-\d{4}-\d{4})(?![0-9])", re.IGNORECASE)
+# Field values the system defines. A model may only choose from these; a
+# word it made up is dropped rather than acted on.
+_CLOSED_VALUES: dict[str, frozenset[str]] = {
+    "status": frozenset({
+        "open", "assigned", "in_progress", "completed", "cancelled",
+        "draft", "submitted", "approved", "rejected",
+        "new", "contacted", "proposed", "won", "lost",
+        "sent", "accepted", "expired",
+    }),
+    "stage": frozenset({"lead", "new", "contacted", "proposed", "won", "lost"}),
+}
+CODE_IS_ANOTHER_ENTITY = {
+    "th": "{code} เป็นรหัส{kind} ไม่ใช่{claimed}ครับ ถ้าต้องการทำกับ{kind} พิมพ์คำสั่งของ{kind}ได้เลย",
+    "en": "{code} is a {kind} code, not a {claimed}. Use the {kind} command for it.",
+}
+_CODE_KIND_LABEL = {
+    "customer": {"th": "ลูกค้า", "en": "customer"},
+    "deal": {"th": "ดีล", "en": "deal"},
+    "quote": {"th": "ใบเสนอราคา", "en": "quotation"},
+    "ticket": {"th": "งานซ่อม", "en": "job"},
+    "service_report": {"th": "รายงานการซ่อม", "en": "service report"},
+}
+
+
+def _entity_code_mismatch(intent: dict) -> ChatReply | None:
+    """The model named a record code that belongs to a different entity.
+
+    Not a guess: the prefix says what the code IS. Refusing here is the
+    difference between "that is a deal code" and quietly writing a note on
+    a job the person never mentioned.
+    """
+    entity = str(intent.get("entity") or "")
+    if entity not in _CODE_KIND_LABEL:
+        return None
+    fields = intent.get("fields") or {}
+    for key in ("code", "entity_code", "target_code", "ticket_code", "deal_code", "quote_code"):
+        raw = str(fields.get(key) or "").strip()
+        if not raw:
+            continue
+        found = _ANY_CODE_RE.search(raw)
+        if not found:
+            continue
+        prefix = found.group(1).upper().split("-")[0]
+        kind = _ALL_CODE_PREFIXES.get(prefix)
+        if kind and kind != entity:
+            language = "th"
+            return ChatReply(text=_t(CODE_IS_ANOTHER_ENTITY, language).format(
+                code=found.group(1).upper(),
+                kind=_t(_CODE_KIND_LABEL[kind], language),
+                claimed=_t(_CODE_KIND_LABEL[entity], language),
+            ), intent=intent)
+    return None
+
+
+def _drop_invented_values(intent: dict) -> None:
+    """Remove field values that are not values this system defines.
+
+    A closed field has a fixed set of values. The model answering
+    status="เลื่อนนัด" has not chosen one of them; it has written a phrase.
+    Dropping it lets the handler ask, which is what should have happened.
+    """
+    fields = intent.get("fields")
+    if not isinstance(fields, dict):
+        return
+    for key, allowed in _CLOSED_VALUES.items():
+        value = fields.get(key)
+        if value is None:
+            continue
+        if str(value).strip().lower() not in allowed:
+            fields.pop(key, None)
+
+
 async def _resolve_entity(client: DataClient, license_id: str, entity_type: str, code: str):
     """The row a code refers to, or None. Tenant-scoped by every underlying
     list call, so a code from another tenant simply does not resolve."""
@@ -18093,6 +18172,26 @@ async def _execute_intent(
             client, license_id=license_id,
             permission_keys=permission_keys, language=language,
         )
+    # The model's FIELDS are checked too, not only its verb. Two ways it
+    # got a write it should not have (measured 10 ก.ย. 2569):
+    #
+    #   "ปิดดีล D-2026-0001 สำเร็จ" on the technician OA came back as
+    #   entity=ticket with code="D-2026-0001" — a DEAL code on a job — and
+    #   the handler filed a note against a ticket instead. The technician
+    #   prompt has no deal vocabulary (by design), so the model reached for
+    #   the nearest entity it was allowed to name.
+    #
+    #   "ไม่ได้ไปนะครับวันนี้ ลูกค้าเลื่อนเอง" came back as entity=ticket
+    #   with status="เลื่อนนัด" — not a status this system has — and the
+    #   handler read it as a reschedule, moved the appointment and told the
+    #   CUSTOMER we had moved it.
+    #
+    # A value the model invented is not a value. Both are refused here,
+    # before dispatch, and the reply says which record type the code is.
+    mismatch = _entity_code_mismatch(intent)
+    if mismatch is not None:
+        return mismatch
+    _drop_invented_values(intent)
     if intent.get("entity") in ("ticket", "service_report", "followup", "warranty", "approval"):
         # "approval" was handled inside _handle_ai_understood_intent and
         # never dispatched TO it: "มีอะไรรอผมตรวจบ้าง" and "อนุมัติ

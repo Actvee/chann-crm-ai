@@ -473,3 +473,83 @@ class TestAChannelIsABoundary:
         assert "customer.create" in SALES
         assert not chat._oa_allows("technician", "customer.create")
         assert chat._oa_allows("sales", "customer.create")
+
+
+class TestTheModelsFieldsAreCheckedToo:
+    """Requirement 5, the half that is not about the verb: "โค้ดยังคงตรวจ
+    schema สิทธิ์ เป้าหมาย สถานะ และกฎธุรกิจก่อนทำจริง".
+
+    Both of these came out of a real-model run, not from imagination.
+    gemini-3.1-flash-lite, asked to read a technician's messages:
+
+      "ปิดดีล D-2026-0001 สำเร็จ"
+        -> {"entity":"ticket", "fields":{"code":"D-2026-0001", ...}}
+        a DEAL code on a JOB. The technician prompt carries no deal
+        vocabulary by design, so the model reached for the nearest entity
+        it was allowed to name.
+
+      "ไม่ได้ไปนะครับวันนี้ ลูกค้าเลื่อนเอง"
+        -> {"entity":"ticket", "fields":{"status":"เลื่อนนัด"}}
+        not a status this system has — a phrase where a value belongs.
+
+    A model will always be able to produce a value that does not exist.
+    Checking is the code's job, and it is cheap: the prefix says what a
+    code IS, and a closed field has a fixed set of values."""
+
+    TECH = sorted(DEFAULT_ROLE_TEMPLATES["technician"])
+    TICKET_ROW = {
+        "id": "t1", "ticket_number": "T-2026-0001", "status": "assigned",
+        "accept_status": "accepted", "assigned_to_ref": "member-1",
+        "customer_name": "สมชาย", "service_address": "99/1",
+        "issue_description": "แอร์ไม่เย็น",
+        "scheduled_date": "2026-09-11", "scheduled_time": "10:00",
+    }
+
+    @classmethod
+    async def _tech(cls, message, intent):
+        client = FakeDataClient(role="technician", permission_keys=cls.TECH)
+        client._tickets = [dict(cls.TICKET_ROW)]
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(intent, ensure_ascii=False)))
+        reply = await chat.handle_chat_message(
+            client, ctx=_ctx(primary_role="technician", oa="technician"),
+            message=message, language="th", ai_client=ai,
+        )
+        written = [c[0] for c in client.recorded if c[0].startswith(("create_", "update_"))]
+        return (reply.text or ""), written
+
+    @pytest.mark.asyncio
+    async def test_a_deal_code_is_not_a_job(self):
+        text, written = await self._tech(
+            "ปิดดีล D-2026-0001 สำเร็จ",
+            {"action": "update", "entity": "ticket",
+             "fields": {"status": "closed", "code": "D-2026-0001"}, "missing": []},
+        )
+        assert written == []
+        # And it says which record type that code is, rather than going quiet.
+        assert "D-2026-0001" in text and "ดีล" in text
+
+    @pytest.mark.asyncio
+    async def test_a_status_the_system_does_not_have_is_not_a_status(self):
+        text, written = await self._tech(
+            "ไม่ได้ไปนะครับวันนี้ ลูกค้าเลื่อนเอง",
+            {"action": "update", "entity": "ticket",
+             "fields": {"status": "เลื่อนนัด"}, "missing": []},
+        )
+        assert "update_ticket" not in written
+
+    def test_a_real_value_survives(self):
+        """The check drops what does not exist, never what does."""
+        intent = {"entity": "ticket", "fields": {"status": "completed"}}
+        chat._drop_invented_values(intent)
+        assert intent["fields"]["status"] == "completed"
+        intent = {"entity": "deal", "fields": {"stage": "won"}}
+        chat._drop_invented_values(intent)
+        assert intent["fields"]["stage"] == "won"
+
+    def test_a_matching_code_is_not_a_mismatch(self):
+        assert chat._entity_code_mismatch(
+            {"entity": "ticket", "action": "update", "fields": {"code": "T-2026-0001"}}
+        ) is None
+        assert chat._entity_code_mismatch(
+            {"entity": "deal", "action": "update", "fields": {"code": "D-2026-0001"}}
+        ) is None
