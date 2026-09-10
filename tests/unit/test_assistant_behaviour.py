@@ -553,3 +553,107 @@ class TestTheModelsFieldsAreCheckedToo:
         assert chat._entity_code_mismatch(
             {"entity": "deal", "action": "update", "fields": {"code": "D-2026-0001"}}
         ) is None
+
+
+class TestOneQuestionForWhatTheModelAlreadySaid:
+    """Acceptance item 6: "เพิ่มลูกค้าสมชาย" takes exactly one question.
+
+    It used to take two. The model reported missing=["last_name","phone"];
+    `_prune_missing` deleted last_name from that report, so the assistant
+    asked only for the phone, and the create handler — which has always
+    required a surname — asked for it after the phone arrived. Two
+    exchanges for what the model had answered in one, and the two checks
+    disagreed in writing: the prune's comment claimed the handler never
+    needed last_name, on the line above the handler requiring it.
+
+    Both now read `capabilities.CUSTOMER_CREATE`. These tests fail if
+    either side grows its own opinion again.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_first_name_alone_is_asked_once_for_both_fields(self):
+        client = _shop()
+        text, written = await _say(client, "เพิ่มลูกค้า สมชาย", intent={
+            "action": "create", "entity": "customer",
+            "fields": {"first_name": "สมชาย"}, "missing": ["last_name", "phone"],
+        })
+        assert written == [], f"a half-known customer was written: {written}"
+        assert "นามสกุล" in text and "เบอร์โทร" in text, text
+
+    @pytest.mark.asyncio
+    async def test_and_the_answer_finishes_it_without_a_second_question(self):
+        client = _shop()
+        await _say(client, "เพิ่มลูกค้า สมชาย", intent={
+            "action": "create", "entity": "customer",
+            "fields": {"first_name": "สมชาย"}, "missing": ["last_name", "phone"],
+        })
+        text, written = await _say(client, "ใจดี 0812345678", intent={
+            "action": "create", "entity": "customer",
+            "fields": {"last_name": "ใจดี", "phone": "0812345678"}, "missing": [],
+        })
+        assert "create_customer" in written, f"the answer did not finish it: {written} / {text}"
+        assert "กรุณาระบุ" not in text, text
+
+    @pytest.mark.asyncio
+    async def test_the_whole_thing_in_one_line_still_writes(self):
+        """The fifth case: a clear order must not pay for this fix."""
+        client = _shop()
+        text, written = await _say(client, "เพิ่มลูกค้า สมชาย ใจดี 0812345678", intent={
+            "action": "create", "entity": "customer",
+            "fields": {"first_name": "สมชาย", "last_name": "ใจดี", "phone": "0812345678"},
+            "missing": [],
+        })
+        assert "create_customer" in written, f"{text} / {written}"
+
+    @pytest.mark.asyncio
+    async def test_email_is_still_never_asked_for(self):
+        """The 9 ก.ย. complaint: a good paste blocked on "กรุณาระบุอีเมล"."""
+        client = _shop()
+        text, written = await _say(client, "เพิ่มลูกค้า สมชาย ใจดี 0812345678", intent={
+            "action": "create", "entity": "customer",
+            "fields": {"first_name": "สมชาย", "last_name": "ใจดี", "phone": "0812345678"},
+            "missing": ["email", "address", "notes"],
+        })
+        assert "create_customer" in written, f"{text} / {written}"
+        assert "อีเมล" not in text, text
+
+    @pytest.mark.asyncio
+    async def test_the_draft_offer_names_every_field_it_still_needs(self):
+        """`_offer_draft_customer_deal` hid the surname too: it said
+        "ขาดเบอร์โทร" over a record that also had no surname, then stored
+        that same short list as the create's missing fields."""
+        client = _shop()
+        reply = await chat._offer_draft_customer_deal(
+            client, ctx=_ctx(primary_role="sales", oa="sales"),
+            draft={"entity": "customer", "action": "create",
+                   "fields": {"first_name": "สมชาย"}, "missing": ["last_name", "phone"]},
+            deal_fields={"amount": 5000}, language="th",
+        )
+        assert "นามสกุล" in (reply.text or "") and "เบอร์โทร" in (reply.text or ""), reply.text
+        pending = await client.get_pending_intent("CHN-S-000001", "sales")
+        assert (pending.get("fields") or {}).get("missing") == ["last_name", "phone"]
+
+
+class TestTheRegistryIsTheOnlyDefinition:
+    """Requirement 4: prompt and code read one definition."""
+
+    def test_a_required_field_is_never_also_never_needed(self):
+        from chann_app.services.capabilities import REGISTRY
+
+        for cap in REGISTRY.values():
+            overlap = set(cap.required) & set(cap.never_needed)
+            assert not overlap, f"{cap.entity}.{cap.action}: {sorted(overlap)}"
+
+    def test_the_prompt_asks_for_what_the_registry_requires(self):
+        """The model is told the same rule the handler enforces."""
+        from chann_app.services.ai.intent import INTENT_SYSTEM_PROMPT
+        from chann_app.services.capabilities import CUSTOMER_CREATE
+
+        for field_name in CUSTOMER_CREATE.required:
+            assert field_name in INTENT_SYSTEM_PROMPT, field_name
+        assert "BOTH required" in INTENT_SYSTEM_PROMPT
+
+    def test_the_bulk_exception_is_declared_not_accidental(self):
+        from chann_app.services.capabilities import CUSTOMER_CREATE
+
+        assert "customer_bulk" in CUSTOMER_CREATE.exceptions

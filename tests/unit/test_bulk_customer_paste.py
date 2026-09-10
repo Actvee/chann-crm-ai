@@ -70,15 +70,41 @@ class TestListMarkers:
 
 
 class TestNeverDemandAnOptionalField:
+    """What the owner actually hit was an email demand.
+
+    address and notes belong with it: nothing in this codebase needs them
+    to make a customer. `last_name` was swept in with them and should not
+    have been — the create handler has always required a surname, so
+    hiding the model's report of it only moved the question one turn
+    later ("กรุณาระบุเบอร์โทร", then "กรุณาระบุนามสกุล" after the phone
+    arrived). Both sides now read capabilities.CUSTOMER_CREATE, which
+    says last_name and phone are required and email/address/notes are
+    never asked for (10 ก.ย. 2569).
+    """
+
     def test_email_is_not_asked_for(self):
         intent = {"action": "create", "entity": "customer", "fields": {"first_name": "สมชาย"}}
         assert chat._prune_missing(["email", "phone"], intent, "ลูกค้าใหม่ สมชาย") == ["phone"]
 
-    def test_address_notes_and_last_name_are_not_asked_for(self):
+    def test_address_and_notes_are_not_asked_for(self):
         intent = {"action": "create", "entity": "customer", "fields": {}}
         assert chat._prune_missing(
-            ["address", "notes", "last_name", "first_name"], intent, "ลูกค้าใหม่"
+            ["address", "notes", "first_name"], intent, "ลูกค้าใหม่"
         ) == ["first_name"]
+
+    def test_last_name_survives_because_the_handler_requires_it(self):
+        from chann_app.services.capabilities import CUSTOMER_CREATE
+
+        intent = {"action": "create", "entity": "customer", "fields": {}}
+        assert chat._prune_missing(
+            ["address", "last_name", "phone"], intent, "ลูกค้าใหม่"
+        ) == ["last_name", "phone"]
+        assert set(CUSTOMER_CREATE.required) == {"last_name", "phone"}
+
+    def test_a_pasted_line_with_one_name_is_still_created(self):
+        """The declared exception: a paste is not held to the surname rule."""
+        entries = chat._bulk_customer_entries("ลูกค้าใหม่\n1. สมชาย 0811111111\n2. สมหญิง 0822222222")
+        assert names(entries) == [("สมชาย", None, "0811111111"), ("สมหญิง", None, "0822222222")]
 
     def test_other_entities_are_untouched(self):
         intent = {"action": "create", "entity": "quote", "fields": {}}

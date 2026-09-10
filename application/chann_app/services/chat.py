@@ -37,6 +37,7 @@ from .identity import ResolvedContext, TenantResolution, member_channel
 # One decision, made before anything writes: does this sentence ask for the
 # action, or does it only mention it? Every mutating path in this module
 # goes through it (review v3, 9-10 Sep 2026 — B01-B04, B07).
+from .capabilities import CUSTOMER_CREATE, capability
 from .intent_guard import ASK, intent_to_act
 from .registration import COMPANY_CODE_RE
 from . import storefront as storefront_service
@@ -13980,13 +13981,16 @@ def _prune_missing(missing: list[str], intent: dict, message: str) -> list[str]:
     Asking a person for something already on screen is the fastest way to
     make an assistant feel like a form.
     """
+    known = capability(str(intent.get("entity") or ""), str(intent.get("action") or ""))
+    if known is not None:
+        # The registry decides, so this cannot drift from what the handler
+        # asks for. It used to drop last_name as well as email/address —
+        # and the create handler then asked for the surname a turn later,
+        # two questions for what the model had already answered in one
+        # (10 ก.ย. 2569).
+        return known.prune_missing(missing)
     if intent.get("entity") == "customer":
-        # A shop needs a name (and its own phone rule decides the rest).
-        # The model sometimes reports email/address/last_name as missing
-        # and the assistant then blocked a perfectly good paste on
-        # "กรุณาระบุอีเมล" (owner, 9 Sep 2026). The create handler asks
-        # for what it actually needs; these are never it.
-        return [m for m in missing if m not in ("email", "address", "notes", "last_name")]
+        return [m for m in missing if m not in ("email", "address", "notes")]
     if intent.get("entity") != "followup":
         return missing
     pruned = [m for m in missing if m != "due_time"]
@@ -14873,7 +14877,7 @@ async def _handle_customer_intent(
                 missing=["phone"], ttl_seconds=PENDING_INTENT_TTL_S,
             )
             return _phone_reply(problem, str(fields.get("phone")), language)
-        still_missing = [f for f in ("last_name", "phone") if not editable.get(f)]
+        still_missing = [f for f in CUSTOMER_CREATE.required if not editable.get(f)]
         if still_missing:
             await client.set_pending_intent(
                 ctx.chann_uid, ctx.oa,
@@ -19355,7 +19359,12 @@ def _missing_label(missing: list[str], language: str) -> str:
 async def _offer_draft_customer_deal(
     client: DataClient, *, ctx: ResolvedContext, draft: dict, deal_fields: dict, language: str,
 ) -> ChatReply:
-    missing = [m for m in (draft.get("missing") or []) if m != "last_name"] or list(draft.get("missing") or [])
+    # Everything the half-made customer still needs — last_name included.
+    # It used to be filtered out here, so the offer said "ขาดเบอร์โทร"
+    # while the record was also missing a surname, and the create handler
+    # then asked for the surname after the phone arrived. One list, one
+    # question (10 ก.ย. 2569).
+    missing = list(draft.get("missing") or [])
     held = {k: (str(v) if not isinstance(v, (str, int, float)) else v) for k, v in (deal_fields or {}).items()}
     await client.set_pending_intent(
         ctx.chann_uid, ctx.oa, action="resolve", entity="draft_customer_deal_confirm",
