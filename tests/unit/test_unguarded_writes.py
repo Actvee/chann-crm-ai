@@ -762,3 +762,99 @@ class TestAHoldIsNotAnAnswer:
         text, writes = await self._customer("ไม่ต้องยกเลิกนัด")
         assert writes == []
         assert "ยังไม่ได้ยกเลิกงาน" in text
+
+
+class TestTheDoorsTheFirstPassLeftOpen:
+    """Found by re-running the sweep adversarially against the fixed code.
+    Five leaks survived, in three families — and two of them escaped
+    through the first pass's own exclusions rather than through a gap."""
+
+    @staticmethod
+    async def _note(message):
+        client = FakeDataClient(
+            role="sales", permission_keys=KEYS, customers=[dict(c) for c in CUSTOMERS],
+        )
+        client._notes = [{
+            "id": "NOTE-1", "entity_type": "customer", "entity_id": "CUST-1", "body": "เดิม",
+        }]
+        reply = await chat.handle_chat_message(
+            client, ctx=_ctx(primary_role="sales", oa="sales"), message=message, language="th",
+        )
+        writes = [c[0] for c in client.recorded if c[0].endswith("_note")]
+        return (reply.text or ""), writes, client
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message", [
+        # "บันทึกของ" is a LIST trigger, and the first pass skipped the
+        # guard for anything that matched one — so an edit or a delete
+        # phrased with "ของ" walked straight through. The how-to form
+        # overwrote the note with the body "ของ  ยังไง".
+        "แก้บันทึกของ C-2026-0001 ยังไง",
+        "ไม่ต้องลบบันทึกของ C-2026-0001",
+        "อย่าเพิ่งลบบันทึกของลูกค้ารายนี้",
+    ])
+    async def test_a_list_word_in_the_sentence_is_not_a_way_past(self, message):
+        _, writes, client = await self._note(message)
+        assert writes == [], f"{message!r} wrote {writes}"
+        assert client._notes[0]["body"] == "เดิม"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message,call", [
+        ("แก้บันทึกของ C-2026-0001 เป็น ลูกค้าขอส่วนลด 10%", "update_note"),
+        ("ลบบันทึกของ C-2026-0001", "delete_note"),
+        ("บันทึกว่า C-2026-0001 สนใจรุ่นใหม่", "create_note"),
+    ])
+    async def test_the_same_words_as_a_command_still_work(self, message, call):
+        _, writes, _ = await self._note(message)
+        assert call in writes
+
+    @pytest.mark.asyncio
+    async def test_reading_notes_is_still_not_guarded(self):
+        text, writes, _ = await self._note("ดูบันทึกของ C-2026-0001")
+        assert writes == []
+        assert "ยังไม่ได้บันทึก" not in text
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message", [
+        "ไม่ต้องลงทะเบียน ONLY00001",
+        "ลงทะเบียนยังไง ONLY00001",
+    ])
+    async def test_a_customer_waving_off_registration_registers_nothing(self, message):
+        """Both OAs arrive at one function and only the SALES half was
+        guarded. A customer declining the registration prompt the welcome
+        message pushes at them claimed the unit."""
+        client = FakeDataClient(role="customer", permission_keys=[])
+        client._warranties = [{
+            "id": "w-1", "serial_number": "ONLY00001", "product_name": "แอร์",
+            "product_id": "prod-1", "warranty_end": "2027-01-01",
+            "status": "active", "customer_chann_uid": None,
+        }]
+        reply = await chat.handle_chat_message(
+            client, ctx=_ctx(primary_role="customer", oa="customer"),
+            message=message, language="th",
+        )
+        assert "claim_warranty" not in [c[0] for c in client.recorded]
+        assert (reply.text or "").strip()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message", ["ลงทะเบียน ONLY00001", "ONLY00001"])
+    async def test_a_customer_who_means_it_still_registers(self, message):
+        client = FakeDataClient(role="customer", permission_keys=[])
+        client._warranties = [{
+            "id": "w-1", "serial_number": "ONLY00001", "product_name": "แอร์",
+            "product_id": "prod-1", "warranty_end": "2027-01-01",
+            "status": "active", "customer_chann_uid": None,
+        }]
+        await chat.handle_chat_message(
+            client, ctx=_ctx(primary_role="customer", oa="customer"),
+            message=message, language="th",
+        )
+        assert "claim_warranty" in [c[0] for c in client.recorded]
+
+    def test_the_model_road_can_reach_notes_and_is_guarded_there(self):
+        """The model can answer update/delete on entity=note for a sentence
+        with no note word in it. The generic record_delete fallback LOOKED
+        like cover and was inert: with no note word to find, intent_to_act
+        had nothing to negate and returned ACT."""
+        for action in ("create", "update", "delete"):
+            assert chat._AI_GUARDED[("note", action)] == "note_write"

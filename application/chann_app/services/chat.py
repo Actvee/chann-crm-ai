@@ -2728,6 +2728,21 @@ async def _handle_warranty_register(
         return ChatReply(text=_t(WARRANTY_NEEDS_SERIAL, language))
     serial = match.group(1).upper()
 
+    # Guarded here rather than at the call sites, because both OAs arrive
+    # through this one function and the customer half was missed:
+    # "ไม่ต้องลงทะเบียน ONLY00001" — a customer waving off the prompt the
+    # welcome message pushes at them — claimed the unit, and so did
+    # "ลงทะเบียนยังไง ONLY00001" and "ลงทะเบียน ONLY00001 ไปหรือยัง"
+    # (adversarial sweep, 10 ก.ย. 2569). Registration is a one-shot act;
+    # unlike a reminder there is no standing state that "ไม่ต้อง" could be
+    # ordering the cancellation of.
+    held_warranty = _intent_guard_reply(
+        message, action="warranty_register", language=language,
+        triggers=SERIAL_REGISTER_TRIGGERS + SERIAL_REGISTER_HEAD_TRIGGERS,
+    )
+    if held_warranty is not None:
+        return held_warranty
+
     license_id = str(license_id)
     if ctx.oa == "customer":
         return await _claim_for_customer(
@@ -9158,6 +9173,15 @@ _AI_GUARDED: dict[tuple[str, str], str] = {
     ("line_item", "create"): "line_item",
     ("line_item", "update"): "line_item",
     ("line_item", "delete"): "line_item",
+    # The note road, which the model can reach with no trigger word in the
+    # sentence at all: "ยังไม่ต้องแก้ที่จดไว้เมื่อกี้" and "ยังไม่ต้องเอาที่
+    # จดไว้เมื่อกี้ออก" came back as update/delete on entity=note and were
+    # carried out (adversarial sweep, 10 ก.ย. 2569). The generic
+    # record_delete fallback LOOKED like cover and was inert: with no note
+    # word to find, intent_to_act had nothing to negate and returned ACT.
+    ("note", "create"): "note_write",
+    ("note", "update"): "note_write",
+    ("note", "delete"): "note_write",
 }
 
 
@@ -17070,10 +17094,21 @@ async def _route_chat_message(
         # no code in the sentence at all — and "แก้บันทึกยังไง", a question
         # about HOW, overwrote that note with the body "ยังไง". Listing is
         # left outside the guard: reading is not a mutation.
-        if any(
-            t in message.lower()
-            for t in (NOTE_DELETE_TRIGGERS + NOTE_EDIT_TRIGGERS + NOTE_TRIGGERS)
-        ) and not any(t in message.lower() for t in NOTE_LIST_TRIGGERS):
+        # Mirrors the dispatch order below exactly — delete, then edit, then
+        # list, then create — because anything else leaves a door open.
+        # Excluding every message that matched a LIST trigger was that
+        # door: "บันทึกของ" is a list trigger, so "แก้บันทึกของ C-2026-0001
+        # ยังไง" skipped the guard and overwrote the note with the body
+        # "ของ  ยังไง", and "ไม่ต้องลบบันทึกของ C-2026-0001" deleted it
+        # (found by the adversarial sweep, 10 ก.ย. 2569).
+        _note_lowered = message.lower()
+        _writes_a_note = any(
+            t in _note_lowered for t in (NOTE_DELETE_TRIGGERS + NOTE_EDIT_TRIGGERS)
+        ) or (
+            any(t in _note_lowered for t in NOTE_TRIGGERS)
+            and not any(t in _note_lowered for t in NOTE_LIST_TRIGGERS)
+        )
+        if _writes_a_note:
             held_note = await _guarded_in_context(
                 client, ctx=ctx, license_id=license_id, message=message,
                 action="note_write", language=language,
