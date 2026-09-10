@@ -432,3 +432,44 @@ class TestThePromptCarriesOnlyWhatTheOACanDo:
             permission_keys=[], language="th", oa="something-new",
         )
         assert len(prompt) >= len(INTENT_SYSTEM_PROMPT) - 200
+
+
+class TestAChannelIsABoundary:
+    """Requirement 2 again, from the other side: "โดยรักษาการแยกสิทธิ์แต่ละ
+    OA/ร้าน".
+
+    Holding the permission key is not enough. OA_ALLOWED_PERMISSION_KEYS
+    says a technician's LINE offers no customer capability at all — and the
+    owner of a shop holds every key on every channel, so the key check
+    alone lets an owner create customer rows from the technician OA. Every
+    other write on this road passes _oa_allows; the bulk paste and its
+    phone resolver were the two that did not."""
+
+    PASTE = "เพิ่มลูกค้า สมชาย ใจดี 0812345678; สมหญิง ดี 0898765432"
+
+    @staticmethod
+    async def _paste(oa):
+        role = "technician" if oa == "technician" else "sales"
+        client = FakeDataClient(role=role, permission_keys=SALES)
+        reply = await chat.handle_chat_message(
+            client, ctx=_ctx(primary_role=role, oa=oa),
+            message=TestAChannelIsABoundary.PASTE, language="th",
+        )
+        return (reply.text or ""), [c[0] for c in client.recorded if c[0] == "create_customer"]
+
+    @pytest.mark.asyncio
+    async def test_the_technician_channel_creates_no_customers(self):
+        _, written = await self._paste("technician")
+        assert written == []
+
+    @pytest.mark.asyncio
+    async def test_and_the_sales_channel_still_does(self):
+        _, written = await self._paste("sales")
+        assert len(written) == 2
+
+    def test_the_key_and_the_channel_disagree_by_design(self):
+        """The premise, so this test fails loudly if the tables change:
+        an admin holds customer.create, and the technician OA forbids it."""
+        assert "customer.create" in SALES
+        assert not chat._oa_allows("technician", "customer.create")
+        assert chat._oa_allows("sales", "customer.create")

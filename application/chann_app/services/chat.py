@@ -19591,7 +19591,14 @@ async def _handle_bulk_customer_add(
     code), or refused with the reason — never a half-done batch."""
     from .phone import phone_problem
 
-    if "customer.create" not in set(permission_keys):
+    # The permission key AND the channel. Holding the key is not enough:
+    # OA_ALLOWED_PERMISSION_KEYS says a technician's LINE offers no
+    # customer capability at all, and the owner of a shop holds every key
+    # on every channel — so an owner pasting a list into the TECHNICIAN OA
+    # created real customer rows there (measured 10 ก.ย. 2569). Every other
+    # write on the AI road passes _oa_allows; this one and the phone
+    # resolver below were the two that did not.
+    if "customer.create" not in set(permission_keys) or not _oa_allows(ctx.oa, "customer.create"):
         return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
     license_id = str(license_id)
     saved: list[str] = []
@@ -19699,6 +19706,10 @@ async def _resolve_bulk_customer_phone(
     """The answer to "บรรทัด 2 (สมหญิง) ยังไม่มีเบอร์": a phone, "ข้าม", or
     "ยกเลิก". Anything else is not an answer — the rows are dropped and
     None lets the message be what it is."""
+    if not _oa_allows(ctx.oa, "customer.create"):
+        # Same gate as _handle_bulk_customer_add: the pending row set was
+        # stored on one channel and must not be finished on another.
+        return None
     fields = dict(pending.get("fields") or {})
     rows = list(fields.get("rows") or [])
     saved = list(fields.get("saved") or [])
