@@ -261,15 +261,24 @@ _LATER_TAIL_RE = re.compile(r"(?:ค่อย(?:ทำ|ว่ากัน|แจ
 # พรุ่งนี้"). Together they are a report: "เมื่อวานเพิ่มสินค้า ทีวี 40 นิ้ว
 # ราคา 4000 ไปแล้ว" added a second line item whose product name literally
 # contained "ไปแล้ว" (10 ก.ย. 2569).
-_PAST_HEAD_RE = re.compile(
-    r"^(?:เมื่อวานนี้|เมื่อวานซืน|เมื่อวาน|เมื่อเช้านี้|เมื่อเช้า|เมื่อกี้นี้|เมื่อกี้|เมื่อคืน|"
-    r"อาทิตย์ที่แล้ว|สัปดาห์ที่แล้ว|เดือนที่แล้ว|ตอนเช้า|ตอนบ่าย|yesterday|earlier|lastweek)"
+# Anywhere in the sentence, not only at the front: Thai puts the time
+# reference at either end with equal ease, and "เผยแพร่ไปแล้วเมื่อวาน" is
+# the same report as "เมื่อวานเผยแพร่ไปแล้ว" (adversarial sweep,
+# 10 ก.ย. 2569). It is the PAIR that makes it a report — a completion
+# marker on its own is ordinary command language ("ปิดดีล D-… สำเร็จแล้ว"
+# is an order and carries no past-time word), and a past-time word on its
+# own can precede a real request ("เมื่อวานนัดไว้ ช่วยเลื่อนเป็นพรุ่งนี้"
+# has no completion marker).
+_PAST_WORD_RE = re.compile(
+    r"(?:เมื่อวานนี้|เมื่อวานซืน|เมื่อวาน|เมื่อเช้านี้|เมื่อเช้า|เมื่อกี้นี้|เมื่อกี้|เมื่อคืน|"
+    r"อาทิตย์ที่แล้ว|สัปดาห์ที่แล้ว|เดือนที่แล้ว|ตอนเช้า|ตอนบ่าย|ตอนนั้น|คราวก่อน|รอบที่แล้ว|"
+    r"yesterday|earlier|lastweek|lasttime)"
 )
 _DONE_TAIL_RE = re.compile(r"(?:ไปแล้ว|เรียบร้อยแล้ว|ไปเรียบร้อย|เสร็จแล้ว|alreadydid|alreadyadded)")
 
 
 def _narrates_the_past(compact: str) -> bool:
-    return bool(_PAST_HEAD_RE.match(compact) and _DONE_TAIL_RE.search(compact))
+    return bool(_PAST_WORD_RE.search(compact) and _DONE_TAIL_RE.search(compact))
 
 
 # Somebody else's words, reported.
@@ -357,11 +366,31 @@ def _compact(canonical: str) -> str:
     return _PUNCT_RE.sub("", canonical or "")
 
 
+# Politeness at the END of an order, which Thai uses at least as often as
+# at the front: "ลบบันทึกของ C-2026-0001 ให้หน่อยได้ไหมครับ". หน่อย is the
+# marker — it softens a REQUEST and has no place in a question about
+# whether something is possible. "ยกเลิกได้ไหม" (can this be cancelled?)
+# carries no หน่อย and stays genuinely ambiguous, which is what the ASK
+# verdict below is for.
+_POLITE_TAIL_RE = re.compile(r"(?:หน่อย|ให้ที|ให้ด้วย|ทีนะ|ทีครับ|ทีค่ะ|please)")
+
+
 def _polite_order(canon: str, compact: str) -> bool:
     """A polite request opens the sentence, or one of its clauses."""
     return bool(_REQUEST_HEAD_RE.match(compact)) or any(
         _REQUEST_HEAD_RE.match(part) for part in (canon or "").split()
     )
+
+
+def _polite_tail_order(compact: str, imperative: bool) -> bool:
+    """The command comes first and the politeness after it.
+
+    Only when the sentence OPENS with the handler's own trigger — that is
+    what makes it an order with a soft ending rather than a question that
+    happens to name the action (10 ก.ย. 2569: the guard turned a real
+    "ลบบันทึก … ให้หน่อยได้ไหมครับ" into a confirm prompt).
+    """
+    return imperative and bool(_POLITE_TAIL_RE.search(compact))
 
 
 def _words_for(action: str, triggers: Sequence[str]) -> list[str]:
@@ -556,6 +585,8 @@ def intent_to_act(
     # Thai politeness is shaped like a question; a leading ช่วย/รบกวน/ขอ is
     # still an order. It never outranks anything above it.
     if _polite_order(canon, compact):
+        return _ACTS
+    if _polite_tail_order(compact, imperative):
         return _ACTS
     if _MAYBE_RE.search(compact):
         # "นัด C-2026-0001 ยกเลิกได้ไหม" is an order and a question in equal

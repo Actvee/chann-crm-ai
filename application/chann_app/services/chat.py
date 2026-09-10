@@ -9206,7 +9206,12 @@ def _guard_triggers(action: str) -> tuple[str, ...]:
         "quote_status": QUOTE_VOID_TRIGGERS + QUOTE_ACCEPT_TRIGGERS,
         "quote_terms": QUOTE_DISCOUNT_TRIGGERS,
         "deal_create": DEAL_CREATE_TRIGGERS + DEAL_CREATE_BARE_TRIGGERS,
-        "note_write": NOTE_TRIGGERS,
+        # All three, because one action name covers create, edit and delete
+        # — and the guard reads "does the sentence OPEN with this handler's
+        # own word" to tell an order from a question. With only the create
+        # triggers here, "ลบบันทึกของ C-2026-0001 ให้หน่อยได้ไหมครับ" did
+        # not look imperative and was answered with a confirm prompt.
+        "note_write": NOTE_TRIGGERS + NOTE_EDIT_TRIGGERS + NOTE_DELETE_TRIGGERS,
         "invite_create": TECHNICIAN_INVITE_TRIGGERS + SALES_INVITE_TRIGGERS + INVITE_AMBIGUOUS_TRIGGERS,
         "customer_bulk": BULK_CUSTOMER_TRIGGERS,
         "job_claim": TICKET_CLAIM_TRIGGERS,
@@ -17521,6 +17526,26 @@ async def _route_chat_message(
                 permission_keys=permission_keys, language=language, ctx=ctx,
             )
 
+        # Issuing a document builds and sends a PDF to the customer.
+        # "ไม่ต้องออกเอกสาร Q-2026-0001", "เช่น พิมพ์ว่า ออกเอกสาร …" and
+        # "ออกรายงานยังไง" (which picked the person's only approved report
+        # and issued it) all produced one (10 ก.ย. 2569).
+        #
+        # In front of the RE-ISSUE branch as well, not after it: that
+        # branch is deliberately first, because "ออกเอกสารใหม่" contains
+        # "ออกเอกสาร" — so a guard placed below it never saw
+        # "ไม่ต้องออกเอกสารใหม่ Q-2026-0001", which re-issued the document.
+        _DOC_TRIGGERS = (
+            QUOTE_ISSUE_TRIGGERS + QUOTE_REISSUE_PHRASES
+            + REPORT_PDF_TRIGGERS + REPORT_PDF_REISSUE
+        )
+        if any(t in message.lower() for t in _DOC_TRIGGERS):
+            held_doc = _intent_guard_reply(
+                message, action="document_issue", language=language,
+                triggers=_DOC_TRIGGERS,
+            )
+            if held_doc is not None:
+                return held_doc
         # Re-issue checked first: "ออกเอกสารใหม่" contains "ออกเอกสาร", the
         # same substring trap as ไม่สำเร็จ/สำเร็จ in Phase 9.
         reissue_code = _parse_after_trigger(message, QUOTE_REISSUE_PHRASES)
@@ -17530,17 +17555,6 @@ async def _route_chat_message(
                 permission_keys=permission_keys, language=language,
                 actor_id=ctx.chann_uid, allow_reissue=True,
             )
-        # Issuing a document builds and sends a PDF to the customer.
-        # "ไม่ต้องออกเอกสาร Q-2026-0001", "เช่น พิมพ์ว่า ออกเอกสาร …" and
-        # "ออกรายงานยังไง" (which picked the person's only approved report
-        # and issued it) all produced one (10 ก.ย. 2569).
-        if any(t in message.lower() for t in QUOTE_ISSUE_TRIGGERS + REPORT_PDF_TRIGGERS + REPORT_PDF_REISSUE):
-            held_doc = _intent_guard_reply(
-                message, action="document_issue", language=language,
-                triggers=QUOTE_ISSUE_TRIGGERS + REPORT_PDF_TRIGGERS + REPORT_PDF_REISSUE,
-            )
-            if held_doc is not None:
-                return held_doc
         issue_code = _parse_after_trigger(message, QUOTE_ISSUE_TRIGGERS)
         if issue_code is not None:
             return await _handle_quote_issue(

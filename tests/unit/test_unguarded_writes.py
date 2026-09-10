@@ -858,3 +858,115 @@ class TestTheDoorsTheFirstPassLeftOpen:
         had nothing to negate and returned ACT."""
         for action in ("create", "update", "delete"):
             assert chat._AI_GUARDED[("note", action)] == "note_write"
+
+
+class TestDocumentsAndTemplates:
+    """A third adversarial pass, over the code the second one fixed. Four
+    more, all in the family whose writes are seen by the customer: issuing
+    a document sends them a PDF, and publishing a template changes every
+    document the shop issues from then on."""
+
+    def test_the_past_is_narrated_at_either_end_of_the_sentence(self):
+        """Thai puts the time reference at either end with equal ease.
+        "เมื่อวานเผยแพร่ไปแล้ว" was held and "เผยแพร่ไปแล้วเมื่อวาน" — the
+        same report, reordered — published the template."""
+        from chann_app.services.intent_guard import intent_to_act
+
+        triggers = tuple(chat._TEMPLATE_YES_CONTAINS) + tuple(chat._TEMPLATE_YES_WORDS)
+        for message in ("เผยแพร่ไปแล้วเมื่อวาน", "เมื่อวานเผยแพร่ไปแล้ว", "ตอนนั้นใช้เลยไปแล้ว"):
+            assert not intent_to_act(
+                message, action="template_publish", triggers=triggers,
+            ).acts, message
+        for message in ("ใช้เลย", "เผยแพร่", "ใช้แบบนี้"):
+            assert intent_to_act(
+                message, action="template_publish", triggers=triggers,
+            ).acts, message
+
+    def test_a_completion_marker_alone_is_still_a_command(self):
+        """It is the PAIR that makes a report. "ปิดดีล D-… สำเร็จแล้ว" is an
+        order and carries no past-time word; "เมื่อวานนัดไว้ ช่วยเลื่อน…"
+        carries one and no completion marker."""
+        from chann_app.services.intent_guard import intent_to_act
+
+        assert intent_to_act("ปิดดีล D-2026-0001 สำเร็จแล้ว", action="deal_stage").acts
+        assert intent_to_act(
+            "เมื่อวานนัดไว้ ช่วยเลื่อนนัด C-2026-0001 เป็นพรุ่งนี้", action="appointment_move",
+        ).acts
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message", [
+        # The re-issue branch is deliberately FIRST, because "ออกเอกสารใหม่"
+        # contains "ออกเอกสาร" — so a guard placed below it never saw this.
+        "ไม่ต้องออกเอกสารใหม่ Q-2026-0001",
+        "ไม่ต้องออกเอกสาร Q-2026-0001",
+    ])
+    async def test_no_pdf_is_built_and_sent(self, message):
+        client = FakeDataClient(role="sales", permission_keys=KEYS, quotes=[{
+            "id": "QUOTE-1", "quote_id": "Q-2026-0001", "status": "sent",
+            "deal_id": "DEAL-1", "contact_id": "CUST-1", "items": [], "total": "1000.00",
+        }])
+        await chat.handle_chat_message(
+            client, ctx=_ctx(primary_role="sales", oa="sales"), message=message, language="th",
+        )
+        assert not [c[0] for c in client.recorded if "document" in c[0]]
+
+
+class TestPolitenessAtTheEndOfAnOrder:
+    """Thai puts politeness after the command at least as often as before
+    it. The guard only looked at the front, so "ลบบันทึกของ C-2026-0001
+    ให้หน่อยได้ไหมครับ" — an ordinary request — was answered with a confirm
+    prompt instead of being carried out.
+
+    Caught by the sweep's own must_keep_working list rather than by any
+    test here, which is the argument for that list existing."""
+
+    @staticmethod
+    async def _say(message):
+        client = FakeDataClient(
+            role="sales", permission_keys=KEYS, customers=[dict(c) for c in CUSTOMERS],
+        )
+        client._notes = [{
+            "id": "NOTE-1", "entity_type": "customer", "entity_id": "CUST-1",
+            "body": "ลูกค้าขอส่วนลด",
+        }]
+        # One of these names no customer and resolves the target from the
+        # record last discussed, so the context has to be there — otherwise
+        # the handler rightly asks which customer and the test would be
+        # measuring the fixture, not the guard.
+        client._last_entity_ref = {
+            "entity_type": "customer", "entity_id": "CUST-1",
+            "code": "C-2026-0001", "extra": None,
+        }
+        reply = await chat.handle_chat_message(
+            client, ctx=_ctx(primary_role="sales", oa="sales"), message=message, language="th",
+        )
+        return (reply.text or ""), [c[0] for c in client.recorded if c[0].endswith("_note")]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message,call", [
+        ("ลบบันทึกของ C-2026-0001 ให้หน่อยได้ไหมครับ", "delete_note"),
+        ("ลบบันทึกของลูกค้ารายนี้หน่อยครับ", "delete_note"),
+        ("ช่วยแก้บันทึกของ C-2026-0001 เป็น ลูกค้าไม่เอารุ่นนี้แล้ว หน่อยครับ", "update_note"),
+    ])
+    async def test_a_soft_ending_does_not_make_an_order_a_question(self, message, call):
+        text, writes = await self._say(message)
+        assert call in writes, f"{message!r} was turned into a question: {text[:60]}"
+
+    def test_but_a_real_capability_question_is_still_a_question(self):
+        """"ยกเลิกได้ไหม" carries no หน่อย and is genuinely both — asking is
+        the right answer there, and stays the right answer."""
+        from chann_app.services.intent_guard import intent_to_act
+
+        verdict = intent_to_act(
+            "ยกเลิกนัด C-2026-0001 ได้ไหม", action="appointment_cancel",
+            triggers=chat.REMINDER_CANCEL_TRIGGERS,
+        )
+        assert verdict.asks
+
+    def test_an_example_with_a_soft_ending_is_still_an_example(self):
+        from chann_app.services.intent_guard import intent_to_act
+
+        triggers = chat.NOTE_DELETE_TRIGGERS + chat.NOTE_EDIT_TRIGGERS + chat.NOTE_TRIGGERS
+        assert not intent_to_act(
+            "เช่น ลบบันทึกของ C-2026-0001 หน่อย", action="note_write", triggers=triggers,
+        ).acts
