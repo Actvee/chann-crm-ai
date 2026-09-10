@@ -28,6 +28,12 @@ TYPE_TO_OA = {
     # "it was approved" (review E14, 6 Sep 2026).
     "approval_approved": "technician",
     "approval_rejected": "technician",
+    # The two things a customer is told about their own job and may need
+    # to point back at later, so they are rows and not just pushes: the
+    # work being finished at check-out, and that being withdrawn when the
+    # shop sends the report back (owner, 10 Sep 2026).
+    "ticket_completed": "customer",
+    "ticket_reopened": "customer",
     # Phase 17.5.4: the tenant owner hears about the trial deadline.
     "trial_expiring": "sales",
     "trial_expired": "sales",

@@ -1,0 +1,121 @@
+# The owner's report, 10 Sep 2026: "พองาน ticket เสร็จแล้วไม่มีแจ้งไปหาลูกค้า".
+#
+# One job, all the way: the customer files the fault from their own screen,
+# a technician takes it in chat, arrives, and closes it with the report —
+# and the last step reads the customer's own notification bell back out of
+# PostgreSQL to prove they were told, and told WHAT WAS DONE.
+#
+# db backend, deliberately. `notifications.target_chann_uid` is a foreign
+# key and `entity_id` is a UUID column; a notice addressed to a customer the
+# fake client is happy with can still be refused by the real tier and lost
+# in silence (that is review E1 word for word, for a different notice).
+#
+# One LINE account is the same person on every OA here (migration 0026), so
+# the bell the last step reads is the same identity the ticket was filed by.
+name: customer-hears-the-job-is-finished
+description: a customer reports a fault, the technician finishes it, and the customer is told
+backend: db
+actor:
+  oa: technician
+  role: technician
+
+steps:
+  # A technician who is really registered on the Technician OA.
+  - seed:
+      invites:
+        - ref: tech_code
+          role: technician
+      redeem:
+        - invite: "$tech_code.invite_code"
+          oa: technician
+
+  # The customer reports the fault from the customer screen. Filed as the
+  # customer, so the ticket carries their LINE identity — which is what the
+  # completion notice is addressed to later.
+  - http:
+      method: POST
+      path: "/api/v1/licenses/{license_id}/tickets"
+      as:
+        oa: customer
+        role: customer
+        is_owner: false
+        permissions: customer
+      json:
+        issue_description: "แอร์ไม่เย็น มีน้ำหยด"
+        customer_name: "สมหญิง ใจดี"
+        customer_phone: "0812345678"
+        service_address: "99/1 ถนนสุขุมวิท"
+        scheduled_date: "2026-09-11"
+        scheduled_time: "10:00"
+    expect:
+      status: 201
+      json_contains: "T-2026-0001"
+
+  # Nothing has told anyone the job is finished — it has only just been
+  # reported. (The shop's own "new fault" notice is there; on this backend
+  # one LINE account is every persona, so it lands in the same bell.)
+  - http:
+      method: GET
+      path: "/api/v1/notifications"
+      as:
+        oa: customer
+        role: customer
+        is_owner: false
+        permissions: customer
+    expect:
+      status: 200
+      not_contains: ["ticket_completed", "ช่างทำเสร็จแล้ว"]
+
+  - send: "งานที่เปิดรับ"
+    expect:
+      contains: "T-2026-0001"
+      is_not: [not_found, permission, generic_error]
+
+  - send: "รับงาน"
+    expect:
+      contains: "T-2026-0001"
+      is_not: [not_found, permission, generic_error, not_sure]
+
+  - send: "ถึงแล้ว"
+    expect:
+      is_not: [not_found, permission, generic_error, not_sure]
+
+  # Closing is a short conversation, not one long command.
+  - send: "ปิดงาน"
+    expect:
+      is_not: [generic_error, permission, not_a_feature]
+
+  - send: "คอมเพรสเซอร์รั่ว"
+    expect:
+      is_not: [generic_error, permission]
+
+  - send: "เปลี่ยนคอมเพรสเซอร์และเติมน้ำยา"
+    expect:
+      is_not: [generic_error, permission]
+
+  - send: "ไม่มี"
+    expect:
+      contains: "SR-2026-0001"
+      is_not: [generic_error, permission]
+
+  # The point of the whole scenario: the customer's own bell, read back
+  # through the real route over real HTTP.
+  - http:
+      method: GET
+      path: "/api/v1/notifications"
+      as:
+        oa: customer
+        role: customer
+        is_owner: false
+        permissions: customer
+    expect:
+      status: 200
+      json_contains:
+        - "ticket_completed"
+        - "T-2026-0001"
+        - "ช่างทำเสร็จแล้ว"
+        - "เปลี่ยนคอมเพรสเซอร์และเติมน้ำยา"
+        - "the technician has finished the work"
+      # Not approved yet, so no rating request and no PDF at this point.
+      json_path:
+        "0.entity_type": "service_ticket"

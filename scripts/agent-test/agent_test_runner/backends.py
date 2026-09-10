@@ -436,6 +436,7 @@ class DbBackend:
         from chann_app import data_client as dc
         from chann_app.main import app as application_app
         from chann_app.routers_admin import get_data_client
+        from chann_app.routers_phase6 import get_data_client as phase6_data_client
 
         transport = httpx.ASGITransport(app=data_app)
 
@@ -448,7 +449,11 @@ class DbBackend:
                 )
 
         self.client = _WiredClient()
-        application_app.dependency_overrides[get_data_client] = lambda: self.client
+        # Two routers declare a get_data_client of their own; an override is
+        # keyed by the function object, so missing one leaves those routes
+        # dialling the real Data tier and failing with a ConnectError.
+        for dependency in (get_data_client, phase6_data_client):
+            application_app.dependency_overrides[dependency] = lambda: self.client
         self._app_app = application_app
         self.reset({})
 
@@ -574,7 +579,15 @@ class DbBackend:
 
     async def http(self, *, method, path, body, params, principal, refs
                    ) -> tuple[Outcome, list[str]]:
-        from chann_app.routers_phase2 import get_tenant_principal
+        # Each router declares its OWN get_tenant_principal, and
+        # dependency_overrides is keyed by the function object — so
+        # overriding only phase 2's left every route in the others
+        # (notifications, follow-ups) unreachable from a scenario: they
+        # resolved a real LIFF token and answered 401. Overriding each one
+        # is what makes "read the notification back" something a scenario
+        # can say (10 Sep 2026).
+        from chann_app.routers_phase2 import get_tenant_principal as phase2_principal
+        from chann_app.routers_phase6 import get_tenant_principal as phase6_principal
         from chann_app.services.authorization import TenantPrincipal
 
         principal = principal or {}
@@ -589,7 +602,8 @@ class DbBackend:
             permission_keys=frozenset(keys),
             audience=oa,
         )
-        self._app_app.dependency_overrides[get_tenant_principal] = lambda: who
+        for dependency in (phase2_principal, phase6_principal):
+            self._app_app.dependency_overrides[dependency] = lambda: who
         url = _resolve(path, refs).replace("{license_id}", self.license_id)
         transport = httpx.ASGITransport(app=self._app_app)
         async with httpx.AsyncClient(transport=transport,

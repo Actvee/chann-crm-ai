@@ -104,6 +104,8 @@ class FakeDataClient:
             "company_email": None,
             "vat_rate": None,
         }
+        self._chat_sessions: list[dict] = []
+        self._chat_messages: list[dict] = []
         self.recorded: list[tuple] = []
 
     @staticmethod
@@ -1078,9 +1080,156 @@ class FakeDataClient:
         self.recorded.append(("storefront_browse", limit))
         return list(self._storefront_results)
 
+    # ------------------------------------------------------------ Phase 15
+    # The live conversation between a customer and the shop. Until now the
+    # fake answered `list_chat_sessions` with [] and knew nothing else, so
+    # every "คุยกับร้าน" in the phrasing corpus died inside start_session
+    # with AttributeError and was answered with CHAT_OPEN_FAILED — the
+    # whole feature was untested and a regression in it was invisible
+    # (found by the completion-notice deploy, 10 ก.ย. 2569). These follow
+    # ChatSessionRepository in data/chann_data/repositories/phase15.py:
+    # the same reopen rule, the same SLA clock, the same refusals.
+
+    def _live_session_for(self, license_id, chann_uid):
+        for row in reversed(self._chat_sessions):
+            if (str(row["license_id"]) == str(license_id)
+                    and str(row["customer_chann_uid"]) == str(chann_uid)
+                    and row["status"] in ("open", "assigned")):
+                return row
+        return None
+
+    async def open_chat_session(self, license_id, *, customer_chann_uid, product_id=None,
+                                sla_minutes=30, timeout_minutes=60, actor_id=None):
+        self.recorded.append(("open_chat_session", license_id, customer_chann_uid, product_id))
+        live = self._live_session_for(license_id, customer_chann_uid)
+        if live is not None:
+            if product_id and not live.get("product_id"):
+                live["product_id"] = product_id
+            return {**live, "_created": False}
+        previous = None
+        for row in reversed(self._chat_sessions):
+            if (str(row["license_id"]) == str(license_id)
+                    and str(row["customer_chann_uid"]) == str(customer_chann_uid)):
+                previous = row
+                break
+        if previous is not None:
+            # Coming back continues the thread they had, and reopening
+            # counts as created: the agents are told again. No SLA clock
+            # until the customer actually says something.
+            previous["status"] = "open" if not previous.get("assigned_to") else "assigned"
+            previous["closed_at"] = None
+            previous["sla_deadline"] = None
+            if product_id:
+                previous["product_id"] = product_id
+            return {**previous, "_created": True}
+        row = {
+            "id": f"CHAT-{len(self._chat_sessions) + 1}",
+            "license_id": str(license_id),
+            "customer_chann_uid": str(customer_chann_uid),
+            "customer_name": None,
+            "status": "open",
+            "product_id": product_id,
+            "assigned_to": None,
+            "closed_at": None,
+            "sla_deadline": "set",
+        }
+        self._chat_sessions.append(row)
+        return {**row, "_created": True}
+
     async def list_chat_sessions(self, license_id, status=None, customer_chann_uid=None, limit=100):
-        # Phase 15: no conversation running unless a test's fake says so.
-        return []
+        rows = [r for r in self._chat_sessions if str(r["license_id"]) == str(license_id)]
+        if status == "live":
+            rows = [r for r in rows if r["status"] in ("open", "assigned")]
+        elif status:
+            rows = [r for r in rows if r["status"] == status]
+        if customer_chann_uid:
+            rows = [r for r in rows if str(r["customer_chann_uid"]) == str(customer_chann_uid)]
+        return [dict(r) for r in list(reversed(rows))[:limit]]
+
+    async def get_chat_session(self, license_id, session_id):
+        for row in self._chat_sessions:
+            if str(row["id"]) == str(session_id) and str(row["license_id"]) == str(license_id):
+                return dict(row)
+        return None
+
+    def _require_chat_session(self, license_id, session_id):
+        from chann_app.data_client import DataTierError
+
+        for row in self._chat_sessions:
+            if str(row["id"]) == str(session_id) and str(row["license_id"]) == str(license_id):
+                return row
+        raise DataTierError(404, "chat session not found in this tenant")
+
+    async def list_chat_messages(self, license_id, session_id, since=None, limit=200):
+        return [
+            dict(m) for m in self._chat_messages
+            if str(m["session_id"]) == str(session_id) and str(m["license_id"]) == str(license_id)
+        ][:limit]
+
+    async def add_chat_message(self, license_id, session_id, *, sender_type, content,
+                               sender_chann_uid=None, content_en=None,
+                               sla_minutes=30, timeout_minutes=60):
+        from chann_app.data_client import DataTierError
+
+        self.recorded.append(("add_chat_message", license_id, session_id, sender_type, content))
+        if sender_type not in ("customer", "agent", "ai", "system"):
+            raise DataTierError(409, f"unknown sender type: {sender_type!r}")
+        content = (content or "").strip()
+        if not content:
+            raise DataTierError(409, "empty message")
+        session = self._require_chat_session(license_id, session_id)
+        # The customer speaks only into a live conversation; the shop may
+        # answer a parked one — that answer is what invites them back.
+        if sender_type == "customer" and session["status"] not in ("open", "assigned"):
+            raise DataTierError(409, "conversation is closed")
+        message = {
+            "id": f"CHATMSG-{len(self._chat_messages) + 1}",
+            "session_id": str(session_id), "license_id": str(license_id),
+            "sender_type": sender_type, "sender_chann_uid": sender_chann_uid,
+            "content": content, "content_en": content_en, "is_read": False,
+        }
+        self._chat_messages.append(message)
+        if session["status"] in ("open", "assigned"):
+            if sender_type == "customer":
+                if session.get("sla_deadline") is None:
+                    session["sla_deadline"] = "set"
+            elif sender_type == "agent":
+                session["sla_deadline"] = None
+                if session["status"] == "open":
+                    session["status"] = "assigned"
+        return dict(message)
+
+    async def assign_chat_session(self, license_id, session_id, member_id, actor_id=None):
+        from chann_app.data_client import DataTierError
+
+        self.recorded.append(("assign_chat_session", license_id, session_id, member_id))
+        session = self._require_chat_session(license_id, session_id)
+        if session["status"] not in ("open", "assigned"):
+            raise DataTierError(409, "conversation is closed")
+        session["assigned_to"] = str(member_id)
+        session["status"] = "assigned"
+        return dict(session)
+
+    async def close_chat_session(self, license_id, session_id, actor_id=None, status="closed"):
+        self.recorded.append(("close_chat_session", license_id, session_id, status))
+        session = self._require_chat_session(license_id, session_id)
+        if session["status"] in ("open", "assigned"):
+            session["status"] = status
+            session["closed_at"] = "now"
+            session["sla_deadline"] = None
+        return dict(session)
+
+    async def mark_chat_read(self, license_id, session_id, reader="agent"):
+        self._require_chat_session(license_id, session_id)
+        senders = ("customer",) if reader == "agent" else ("agent", "ai", "system")
+        read = 0
+        for m in self._chat_messages:
+            if (str(m["session_id"]) == str(session_id)
+                    and str(m["license_id"]) == str(license_id)
+                    and m["sender_type"] in senders and not m["is_read"]):
+                m["is_read"] = True
+                read += 1
+        return {"read": read}
 
     async def storefront_record_interest(self, *, chann_uid, license_id, product_name):
         self.recorded.append(

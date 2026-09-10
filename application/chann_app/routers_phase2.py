@@ -2070,13 +2070,18 @@ async def check_out_ticket(
             photo_url=None,  # photos arrive through the upload route, never as a caller-named path
             actor_id=principal.chann_uid,
         )
-        # Phase 14-B: the same hook chat calls — open the approval steps
-        # and tell the first approver now. Best-effort: the check-out is
-        # committed, and a LINE failure must not turn it into a 500.
+        # Literally the same hook chat calls — open the approval steps,
+        # tell the first approver, and tell the CUSTOMER their job is
+        # finished. Calling `on_report_submitted` here instead meant this
+        # screen and chat each carried their own idea of what follows a
+        # check-out, and the customer notice would have had to be written
+        # twice. Best-effort: the check-out is committed, and a LINE
+        # failure must not turn it into a 500.
         try:
-            await approval_service.on_report_submitted(client, license_id=license_id, report=report)
+            from .services.chat import after_check_out
+            await after_check_out(client, license_id, report)
         except Exception:  # noqa: BLE001
-            log.exception("approval steps could not be opened for %s", report.get("report_id"))
+            log.exception("the follow-up to check-out %s could not be completed", report.get("report_id"))
         return report
     except DataTierError as exc:
         raise _propagate(exc)

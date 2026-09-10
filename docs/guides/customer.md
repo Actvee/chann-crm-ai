@@ -66,13 +66,13 @@ _EN: Status, reschedule, cancel — "my jobs" / "repair status" · reschedule: "
 
 ## 7. หลังซ่อมเสร็จ
 
-เมื่อร้านตรวจงานผ่าน คุณจะได้ปุ่มให้คะแนน 1–3 กดได้เลย และดูประวัติทั้งหมดได้ที่ "เปิดหน้าจอลูกค้า" ในเมนู
+พอช่างปิดงาน คุณจะได้ข้อความทันทีว่างานเลขไหนเสร็จแล้วและช่างทำอะไรไปบ้าง (ยังไม่ต้องรอร้านตรวจ) · จากนั้นเมื่อร้านตรวจงานผ่าน คุณจะได้ปุ่มให้คะแนน 1–3 กดได้เลย · ถ้าร้านตรวจแล้วขอให้ช่างกลับไปดูอีกครั้ง ระบบจะแจ้งคุณด้วย · ดูประวัติทั้งหมดได้ที่ "เปิดหน้าจอลูกค้า" ในเมนู
 
 พิมพ์: `ข้อมูลของฉัน`
 
 [IMAGE: customer-after — ข้อความจากร้าน 'งาน T-… เสร็จแล้ว ช่วยให้คะแนน' พร้อมปุ่ม 1 ไม่ดี / 2 พอใช้ / 3 ดีเยี่ยม สีส้ม]
 
-_EN: After the repair — When the shop approves the work you get 1–3 rating buttons. Everything is on the home screen (menu → Open the dashboard)._
+_EN: After the repair — The moment the technician closes the job you are told which job is finished and what was done — you do not wait for the shop's review. When the shop then approves it you get 1–3 rating buttons; if the shop sends the technician back instead, you are told that too. Everything is on the home screen (menu → Open the dashboard)._
 
 ## 8. ข้อมูลส่วนตัว (PDPA)
 

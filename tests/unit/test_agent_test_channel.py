@@ -172,8 +172,14 @@ class TestListingAndSelecting:
         assert "no scenario named" in result.stderr
 
     def test_a_db_only_scenario_is_skipped_not_failed_on_the_fake_backend(self, full_run):
+        # Every scenario that says `backend: db`, and nothing else. Both of
+        # these are about something the fake Data client cannot have: real
+        # per-OA membership rows, and a real `notifications` table with its
+        # foreign key and UUID column.
         _, report = full_run
-        assert {s["name"] for s in report["skipped"]} == {"per-oa-registration"}
+        assert {s["name"] for s in report["skipped"]} == {
+            "per-oa-registration", "customer-hears-the-job-is-finished",
+        }
         assert report["ok"] is True
 
 

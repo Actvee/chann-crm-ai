@@ -1,0 +1,54 @@
+# Live chat (phase 15) had no scenario at all, on either backend. The fake
+# client knew only `list_chat_sessions` and answered []; every "คุยกับร้าน"
+# in the phrasing corpus therefore died inside live_chat.start_session with
+# AttributeError, was caught, and came back as CHAT_OPEN_FAILED — five of
+# the eleven "not as expected" phrasings were this one hole, and a real
+# regression in the feature would have looked exactly the same
+# (found by the completion-notice deploy, 10 ก.ย. 2569).
+#
+# The round trip a customer actually makes: open it, be told the shop's
+# answering time, say something into it, ask for it again (must resume,
+# not open a second one), end it, and end it twice.
+name: customer-talks-to-the-shop
+description: a customer opens a conversation with the shop, speaks into it, resumes it, and ends it
+backend: fake
+actor: {oa: customer, role: customer, language: th, permissions: customer}
+steps:
+- send: คุยกับร้าน
+  expect:
+    contains: ["เปิดการสนทนากับ"]
+    not_contains: ["เปิดการสนทนากับร้านไม่ได้"]
+    is_not: [not_sure, generic_error, permission, not_a_feature]
+
+# The point of the feature, and the one that costs data if it breaks:
+# while the conversation is running, free text is a LINE IN IT, not a new
+# repair job. A fault report opened behind the customer's back is exactly
+# the unintended write this suite exists to catch.
+- send: แอร์ไม่เย็นเลยครับ
+  expect:
+    not_contains: ["แจ้งซ่อม", "T-2026-", "เปิดงานซ่อม"]
+    is_not: [not_sure, generic_error, permission]
+
+# Already talking: the same conversation, not a second one.
+- send: ขอคุยกับพนักงาน
+  expect:
+    contains: ["คุณกำลังคุยกับ"]
+    is_not: [not_sure, generic_error, permission]
+
+- send: จบการสนทนา
+  expect:
+    contains: ["จบการสนทนาแล้ว"]
+    is_not: [not_sure, generic_error, permission]
+
+# Nothing open now — and the shop is not told a second time.
+- send: จบการสนทนา
+  expect:
+    contains: ["ไม่มีการสนทนาที่เปิดอยู่"]
+    is_not: [generic_error, permission]
+
+# Coming back reopens the thread they had (owner, 4 ก.ย.) — "เปิด", not
+# "กำลังคุยอยู่แล้ว", because the previous one was closed.
+- send: คุยกับร้าน
+  expect:
+    contains: ["เปิดการสนทนากับ"]
+    is_not: [not_sure, generic_error, permission]

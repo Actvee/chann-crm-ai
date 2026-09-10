@@ -5450,6 +5450,162 @@ async def _notify_customer(client: DataClient, ticket: dict, text: str, text_en:
         log.warning("could not tell the customer about ticket %s", (ticket or {}).get("ticket_number"))
 
 
+# ------------------------------------------------- the job is finished (owner, 10 Sep 2026)
+#
+# "พองาน ticket เสร็จแล้วไม่มีแจ้งไปหาลูกค้า" — the customer heard nothing when
+# the work on their job was done. The only message that ever said so was the
+# satisfaction survey, which goes out when the LAST approval step passes: so a
+# customer waited days while a report sat in a queue, heard nothing at all if
+# the report was sent back, and heard nothing ever if the shop never approved.
+#
+# These two moments differ from "the technician is on the way" in a way that
+# decides how they are sent: they are things a customer may need to point back
+# at later, so the row is written FIRST and the LINE push is attempted second
+# (notify.py's rule) — a LINE outage must not erase the fact that the shop
+# said the job was finished. The running commentary of a visit keeps using
+# `_notify_customer` above, which pushes and keeps no row.
+
+TICKET_COMPLETED_TYPE = "ticket_completed"
+TICKET_REOPENED_TYPE = "ticket_reopened"
+
+# No PDF link here on purpose: at this moment the report is `submitted`, not
+# approved, and a document the shop has not checked yet is not the customer's
+# to hold (13.5 issues it on approval).
+TICKET_COMPLETED_CUSTOMER = {
+    "th": "งาน {code} ช่างทำเสร็จแล้วครับ{work}\nทางร้านกำลังตรวจรายงาน เสร็จแล้วจะส่งแบบประเมินให้ครับ",
+    "en": "Job {code} — the technician has finished the work.{work}\nThe shop is checking the report and will send you a short rating request.",
+}
+TICKET_COMPLETED_WORK_LINE = {
+    "th": "\nสิ่งที่ทำ: {work}",
+    "en": "\nWhat was done: {work}",
+}
+# Told "finished", then not finished after all. Saying nothing would leave the
+# customer holding a promise the shop has withdrawn — and they may need to be
+# at home again. What the shop rejected is between the shop and its
+# technician; what the customer needs is that the visit is not over.
+TICKET_REOPENED_CUSTOMER = {
+    "th": "งาน {code} ที่แจ้งว่าเสร็จแล้ว ทางร้านตรวจงานแล้วขอให้ช่างกลับไปดูอีกครั้งครับ ทางร้านจะติดต่อนัดหมายกับคุณอีกที ขออภัยในความไม่สะดวก",
+    "en": "Job {code}, which we told you was finished, is going back to the technician after the shop's review. The shop will contact you about the next visit. Sorry for the inconvenience.",
+}
+
+
+async def _notify_customer_recorded(
+    client: DataClient, license_id, ticket: dict, *, type: str, text: str, text_en: str,
+) -> dict | None:
+    """Record, then push, on the customer OA — never raises.
+
+    A walk-in ticket has no customer identity at all, and `notifications`
+    keys on one: nothing is written and nothing is raised, because a shop
+    must still be able to finish a job for someone who never used LINE.
+    """
+    uid = str((ticket or {}).get("customer_chann_uid") or "")
+    if not uid:
+        return None
+    try:
+        line_uid = await client.line_target_of(uid)
+        # send_notification reads the RECIPIENT's language preference
+        # because message_en is supplied (principle 7), pushes on the
+        # customer OA, and swallows a LINE failure with the row kept.
+        return await send_notification(
+            client,
+            license_id=str(license_id),
+            target_chann_uid=uid,
+            target_line_user_id=line_uid,
+            type=type,
+            message=text,
+            message_en=text_en,
+            entity_type="service_ticket",
+            entity_id=str((ticket or {}).get("id") or ""),
+            oa="customer",
+        )
+    except Exception:  # noqa: BLE001
+        log.exception(
+            "could not tell the customer %s about ticket %s",
+            type, (ticket or {}).get("ticket_number"),
+        )
+        return None
+
+
+async def _ticket_of_report(client: DataClient, license_id, report: dict) -> dict:
+    ticket_id = str((report or {}).get("ticket_id") or "")
+    if not ticket_id:
+        return {}
+    try:
+        return await client.get_ticket(str(license_id), ticket_id) or {}
+    except Exception:  # noqa: BLE001
+        log.exception("could not load the ticket behind report %s", (report or {}).get("report_id"))
+        return {}
+
+
+async def announce_job_finished(
+    client: DataClient, license_id, report: dict, ticket: dict | None = None,
+) -> dict | None:
+    """The customer hears that the work on their job is done.
+
+    Sent at the moment the ticket becomes `completed` — the technician's
+    check-out — not when an approval step passes later. The summary comes
+    from the report's own `work_done` (the "แก้:" answer the technician
+    already typed); nothing new is invented and no field was added.
+
+    Sent exactly once per completion because check-out is the one
+    transition that produces it: the Data Tier refuses a second check-out
+    of a completed ticket (`phase13.check_out`), so there is no second
+    event to send a second message for.
+    """
+    ticket = ticket if ticket is not None else await _ticket_of_report(client, license_id, report)
+    code = str((ticket or {}).get("ticket_number") or "")
+    if not code:
+        return None
+    work = str(((report or {}).get("report_data") or {}).get("work_done") or "").strip()
+    return await _notify_customer_recorded(
+        client, license_id, ticket, type=TICKET_COMPLETED_TYPE,
+        text=TICKET_COMPLETED_CUSTOMER["th"].format(
+            code=code,
+            work=TICKET_COMPLETED_WORK_LINE["th"].format(work=work[:160]) if work else "",
+        ),
+        text_en=TICKET_COMPLETED_CUSTOMER["en"].format(
+            code=code,
+            work=TICKET_COMPLETED_WORK_LINE["en"].format(work=work[:160]) if work else "",
+        ),
+    )
+
+
+async def announce_job_reopened(
+    client: DataClient, license_id, report: dict, ticket: dict | None = None,
+) -> dict | None:
+    """The "finished" we sent is withdrawn: the report was sent back and
+    the Data Tier put the ticket back to `in_progress` (phase14.act)."""
+    ticket = ticket if ticket is not None else await _ticket_of_report(client, license_id, report)
+    code = str((ticket or {}).get("ticket_number") or "")
+    if not code:
+        return None
+    return await _notify_customer_recorded(
+        client, license_id, ticket, type=TICKET_REOPENED_TYPE,
+        text=TICKET_REOPENED_CUSTOMER["th"].format(code=code),
+        text_en=TICKET_REOPENED_CUSTOMER["en"].format(code=code),
+    )
+
+
+async def after_check_out(client: DataClient, license_id, report: dict, language: str = "th") -> None:
+    """Everything that follows a committed check-out, for BOTH surfaces.
+
+    Chat and the technician home screen each closed a visit their own way
+    and each remembered their own follow-up work; the customer notice
+    would have had to be added twice and could drift. One hook, called
+    from both, is what keeps them the same (Master Spec 14.6's rule for
+    the approval executor, applied to check-out).
+
+    Each part is guarded separately: the check-out is already committed,
+    and a technician standing in a customer's house must not be told their
+    work failed because a message could not be composed.
+    """
+    await _after_report_submitted(client, license_id, report, language)
+    try:
+        await announce_job_finished(client, license_id, report)
+    except Exception:  # noqa: BLE001
+        log.exception("could not tell the customer about check-out %s", (report or {}).get("report_id"))
+
+
 async def _dispatchers(client: DataClient, license_id: str, members: list[dict]) -> list[dict]:
     """The people who dispatch: anyone holding ticket.assign — by
     permission, not by role name (spec §4). Owners and admins remain the
@@ -5876,7 +6032,7 @@ async def _handle_check_out(
             log.exception("check-out failed")
             await _drop_pending_quietly(client, ctx)
             return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
-        await _after_report_submitted(client, license_id, result, language)
+        await after_check_out(client, license_id, result, language)
         return ChatReply(
             text=_t(CHECKOUT_DONE, language).format(
                 code=code, report=result.get("report_id") or "",
@@ -5948,7 +6104,7 @@ async def _handle_check_out(
         log.exception("check-out failed")
         return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
 
-    await _after_report_submitted(client, license_id, result, language)
+    await after_check_out(client, license_id, result, language)
     return ChatReply(
         text=_t(CHECKOUT_DONE, language).format(
             code=code, report=result.get("report_id") or "",

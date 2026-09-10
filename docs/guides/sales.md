@@ -46,13 +46,13 @@ _EN: Customer chats — A customer who taps "talk to the shop" appears under hom
 
 ## 5. งานซ่อม: ตรวจรายงาน
 
-ช่างปิดงานแล้วคุณได้ LINE · "รายการรออนุมัติ" · "อนุมัติ SR-2026-0001" หรือ "ตีกลับ SR-… เหตุผล" · ผ่านครบ → ลูกค้าได้แบบประเมิน + PDF รายงานออกอัตโนมัติ · ตั้งขั้นตอน: "ตั้งการอนุมัติ"
+ช่างปิดงานแล้วคุณได้ LINE · "รายการรออนุมัติ" · "อนุมัติ SR-2026-0001" หรือ "ตีกลับ SR-… เหตุผล" · ผ่านครบ → ลูกค้าได้แบบประเมิน + PDF รายงานออกอัตโนมัติ · ตั้งขั้นตอน: "ตั้งการอนุมัติ" · **ลูกค้ารู้ตั้งแต่ช่างปิดงานแล้วว่างานเสร็จและช่างทำอะไรไป** (ยังไม่ได้ส่ง PDF ให้) ถ้าคุณตีกลับ ระบบจะบอกลูกค้าว่าต้องให้ช่างกลับไปดูอีกครั้ง — เหตุผลที่คุณพิมพ์ส่งถึงช่างเท่านั้น
 
 พิมพ์: `อนุมัติ SR-2026-0001`
 
 [IMAGE: sales-approve — การ์ดรายงาน SR-2026-0001: ปัญหาที่พบ / สิ่งที่แก้ไข พร้อมปุ่ม 'อนุมัติ' สีเขียว และ 'ตีกลับ' สีเทา]
 
-_EN: Repairs: review reports — "pending approvals" · "approve SR-2026-0001" or "reject SR-… reason" · all steps passed → the customer gets the survey and the PDF is produced · "approval policy" to change the flow_
+_EN: Repairs: review reports — "pending approvals" · "approve SR-2026-0001" or "reject SR-… reason" · all steps passed → the customer gets the survey and the PDF is produced · "approval policy" to change the flow · the customer already heard, at check-out, that the job was finished and what was done (no PDF yet); rejecting tells them the technician is coming back, and your reason goes only to the technician_
 
 ## 6. ลูกค้า ดีล ใบเสนอราคา
 

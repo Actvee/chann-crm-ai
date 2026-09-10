@@ -39,9 +39,14 @@ REJECTED_TO_SUBMITTER = {
     "th": "รายงาน {report} ถูกตีกลับ{reason}\nแก้แล้วปิดงานส่งใหม่ได้เลย",
     "en": "Report {report} was rejected{reason}. Fix it and check out again.",
 }
+# A request to rate, not a second announcement. Until 10 Sep 2026 this
+# opened with "เสร็จเรียบร้อยแล้ว" because it was the ONLY thing the customer
+# ever heard about the job being finished. The completion notice now says
+# that at check-out (chat.announce_job_finished), so repeating it here days
+# later would read as a second, contradictory "it is done".
 SURVEY_PROMPT = {
-    "th": "งาน {ticket} เสร็จเรียบร้อยแล้วครับ\nช่วยประเมินความพึงพอใจหน่อยครับ (กดเลือกได้เลย)",
-    "en": "Job {ticket} is complete. How was it? (tap to answer)",
+    "th": "ขอรบกวนให้คะแนนงาน {ticket} หน่อยครับ (กดเลือกได้เลย)",
+    "en": "Please rate job {ticket}. (tap to answer)",
 }
 
 
@@ -188,6 +193,20 @@ async def act(
     result["document_url"] = None
     if status == "rejected":
         await _notify_submitter(client, license_id, report, reason, language)
+        # The Data Tier put the ticket back to `in_progress` in the same
+        # transaction (phase14.act), which un-does the "your job is
+        # finished" the customer was sent at check-out. Leaving that
+        # standing would be the shop's word withdrawn without a word: the
+        # customer may need to be at home again, and the rating request
+        # they were promised is not coming yet. The reason the approver
+        # typed is NOT passed on — that is between the shop and its
+        # technician.
+        try:
+            from .chat import announce_job_reopened
+
+            await announce_job_reopened(client, license_id, report)
+        except Exception:  # noqa: BLE001 — the rejection stands
+            log.exception("could not tell the customer that %s reopened", report.get("report_id"))
     elif status == "approved":
         # 13.4/13.5: the report becomes paper now — with this approver's
         # signature line on it. Best effort: a render or storage failure

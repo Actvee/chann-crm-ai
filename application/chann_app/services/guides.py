@@ -122,8 +122,8 @@ GUIDES: dict[str, dict] = {
             {
                 "key": "after", "title": {"th": "หลังซ่อมเสร็จ", "en": "After the repair"},
                 "body": {
-                    "th": "เมื่อร้านตรวจงานผ่าน คุณจะได้ปุ่มให้คะแนน 1–3 กดได้เลย และดูประวัติทั้งหมดได้ที่ \"เปิดหน้าจอลูกค้า\" ในเมนู",
-                    "en": "When the shop approves the work you get 1–3 rating buttons. Everything is on the home screen (menu → Open the dashboard).",
+                    "th": "พอช่างปิดงาน คุณจะได้ข้อความทันทีว่างานเลขไหนเสร็จแล้วและช่างทำอะไรไปบ้าง (ยังไม่ต้องรอร้านตรวจ) · จากนั้นเมื่อร้านตรวจงานผ่าน คุณจะได้ปุ่มให้คะแนน 1–3 กดได้เลย · ถ้าร้านตรวจแล้วขอให้ช่างกลับไปดูอีกครั้ง ระบบจะแจ้งคุณด้วย · ดูประวัติทั้งหมดได้ที่ \"เปิดหน้าจอลูกค้า\" ในเมนู",
+                    "en": "The moment the technician closes the job you are told which job is finished and what was done — you do not wait for the shop's review. When the shop then approves it you get 1–3 rating buttons; if the shop sends the technician back instead, you are told that too. Everything is on the home screen (menu → Open the dashboard).",
                 },
                 "commands": ["ประวัติการซื้อ", "ติดต่อร้าน", "ข้อมูลของฉัน", "เปลี่ยนภาษาเป็นอังกฤษ", "รูปแบบวันที่", "วิธีใช้"],
                 "example": "ข้อมูลของฉัน",
@@ -186,7 +186,7 @@ GUIDES: dict[str, dict] = {
             {
                 "key": "finish", "title": {"th": "ปิดงาน + รายงาน", "en": "Finish + report"},
                 "body": {
-                    "th": "พิมพ์ \"ปิดงาน\" แล้วตอบ 3 อย่าง: ปัญหาที่พบ / สิ่งที่แก้ไข / อะไหล่ที่เปลี่ยน (พิมพ์ \"ไม่มี\" ได้) ระบบส่งให้ CS ตรวจทันที",
+                    "th": "พิมพ์ \"ปิดงาน\" แล้วตอบ 3 อย่าง: ปัญหาที่พบ / สิ่งที่แก้ไข / อะไหล่ที่เปลี่ยน (พิมพ์ \"ไม่มี\" ได้) ระบบส่งให้ CS ตรวจทันที **และแจ้งลูกค้าทันทีว่างานเสร็จแล้ว พร้อมสรุป \"สิ่งที่แก้ไข\" ที่คุณพิมพ์** จึงควรเขียนให้ลูกค้าอ่านรู้เรื่อง",
                     "en": "Type \"finish\" and answer three things: what you found / what you did / parts (or \"none\"). CS is asked to review at once.",
                 },
                 "commands": ["ปิดงาน", "รายงานของฉัน"],
@@ -261,8 +261,8 @@ GUIDES: dict[str, dict] = {
             {
                 "key": "approve", "title": {"th": "งานซ่อม: ตรวจรายงาน", "en": "Repairs: review reports"},
                 "body": {
-                    "th": "ช่างปิดงานแล้วคุณได้ LINE · \"รายการรออนุมัติ\" · \"อนุมัติ SR-2026-0001\" หรือ \"ตีกลับ SR-… เหตุผล\" · ผ่านครบ → ลูกค้าได้แบบประเมิน + PDF รายงานออกอัตโนมัติ · ตั้งขั้นตอน: \"ตั้งการอนุมัติ\"",
-                    "en": "\"pending approvals\" · \"approve SR-2026-0001\" or \"reject SR-… reason\" · all steps passed → the customer gets the survey and the PDF is produced · \"approval policy\" to change the flow",
+                    "th": "ช่างปิดงานแล้วคุณได้ LINE · \"รายการรออนุมัติ\" · \"อนุมัติ SR-2026-0001\" หรือ \"ตีกลับ SR-… เหตุผล\" · ผ่านครบ → ลูกค้าได้แบบประเมิน + PDF รายงานออกอัตโนมัติ · ตั้งขั้นตอน: \"ตั้งการอนุมัติ\" · **ลูกค้ารู้ตั้งแต่ช่างปิดงานแล้วว่างานเสร็จและช่างทำอะไรไป** (ยังไม่ได้ส่ง PDF ให้) ถ้าคุณตีกลับ ระบบจะบอกลูกค้าว่าต้องให้ช่างกลับไปดูอีกครั้ง — เหตุผลที่คุณพิมพ์ส่งถึงช่างเท่านั้น",
+                    "en": "\"pending approvals\" · \"approve SR-2026-0001\" or \"reject SR-… reason\" · all steps passed → the customer gets the survey and the PDF is produced · \"approval policy\" to change the flow · the customer already heard, at check-out, that the job was finished and what was done (no PDF yet); rejecting tells them the technician is coming back, and your reason goes only to the technician",
                 },
                 "commands": ["รายการรออนุมัติ", "อนุมัติ", "ตีกลับ", "ตั้งการอนุมัติ", "ออกรายงาน"],
                 "example": "อนุมัติ SR-2026-0001",
