@@ -1403,12 +1403,33 @@ def _entity_code_mismatch(intent: dict) -> ChatReply | None:
     return None
 
 
+#: A Thai mobile or landline as a person types it, with or without the
+#: country code and with the separators people actually use.
+_LOOKS_LIKE_A_PHONE_RE = re.compile(r"^(?:\+?66|0)\d{8,9}$")
+#: Fields that carry money. A value here reaches a total, a quote and a
+#: customer's screen, so it is checked before it is believed.
+_MONEY_FIELDS = ("amount", "quoted_unit_price", "unit_price", "price", "discount", "total")
+#: Fields that carry a count of things.
+_COUNT_FIELDS = ("qty", "quantity")
+
+
+def _reads_as_a_phone(raw: str) -> bool:
+    return bool(_LOOKS_LIKE_A_PHONE_RE.match(re.sub(r"[ \-().]", "", raw)))
+
+
 def _drop_invented_values(intent: dict) -> None:
     """Remove field values that are not values this system defines.
 
     A closed field has a fixed set of values. The model answering
     status="เลื่อนนัด" has not chosen one of them; it has written a phrase.
     Dropping it lets the handler ask, which is what should have happened.
+
+    Money and counts are checked the same way, for the same reason. Asked
+    for a price and given a phone number, the model returned
+    quoted_unit_price="0812345678" — and the line was rewritten to
+    812,345,678.00 baht, taking the deal total with it. A phone is never a
+    price, and neither is a word; dropping the value makes the handler ask
+    which it should have done.
     """
     fields = intent.get("fields")
     if not isinstance(fields, dict):
@@ -1418,6 +1439,28 @@ def _drop_invented_values(intent: dict) -> None:
         if value is None:
             continue
         if str(value).strip().lower() not in allowed:
+            fields.pop(key, None)
+    for key in _MONEY_FIELDS:
+        raw = fields.get(key)
+        if raw is None or isinstance(raw, bool):
+            continue
+        text = str(raw).strip()
+        if _reads_as_a_phone(text):
+            fields.pop(key, None)
+            continue
+        try:
+            if Decimal(text.replace(",", "")) <= 0:
+                raise InvalidOperation
+        except (InvalidOperation, ValueError, ArithmeticError):
+            fields.pop(key, None)
+    for key in _COUNT_FIELDS:
+        raw = fields.get(key)
+        if raw is None or isinstance(raw, bool):
+            continue
+        try:
+            if int(str(raw).strip().replace(",", "")) <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
             fields.pop(key, None)
 
 
@@ -2010,6 +2053,19 @@ def _mentions_a_datetime(message: str) -> bool:
     return parse_thai_date(message, today) is not None or parse_thai_time(message) is not None
 
 
+def _reads_as_a_date(message: str) -> bool:
+    """A DAY, not merely a day or an hour.
+
+    _mentions_a_datetime is true for a bare "บ่าย 2", which dropped the
+    "which day?" question from the model's report and then met a handler
+    that cannot read a date out of it — the ask disappeared and the flow
+    stalled. Answering the day is what closes that question.
+    """
+    from .thai_datetime import parse_thai_date
+
+    return parse_thai_date(message or "", local_today()) is not None
+
+
 def _is_reminder_command(message: str) -> bool:
     """Is this message a reminder instruction, rather than a sentence
     that happens to contain the word?"""
@@ -2022,6 +2078,30 @@ def _is_reminder_command(message: str) -> bool:
     # Or names a record and mentions the verb anywhere: "D-2026-0001 เตือนพรุ่งนี้".
     has_code = re.search(r"(?<![A-Za-z0-9])[CDQT]-\d{4}-\d{4}(?![0-9])", message or "", re.I) is not None
     return has_code and any(t in lowered for t in REMINDER_TRIGGERS)
+
+
+def _is_typed_reminder_command(message: str) -> bool:
+    """The reminder shapes that answer themselves.
+
+    Two, and only two: a record code with the verb — which is what this
+    system's own buttons carry, and the guard's own example "ตั้งนัด
+    C-2026-0001 พรุ่งนี้ 14:00" — or a sentence carrying a day the parser
+    can read, which is the one-shot command _handle_reminder_create can
+    actually satisfy.
+
+    Everything else this matcher used to claim dead-ended: "ตั้งนัดสมชาย"
+    resolved the person, found no date, answered REMINDER_NEEDS_DATE and
+    set NO pending intent, so the next turn had nothing to continue. That
+    is a sentence to be read, so it goes to the model, which asks for the
+    day and merges the answer.
+    """
+    from .thai_datetime import parse_thai_date
+
+    if not _is_reminder_command(message):
+        return False
+    if re.search(r"(?<![A-Za-z0-9])[CDQT]-\d{4}-\d{4}(?![0-9])", message or "", re.I):
+        return True
+    return parse_thai_date(message or "", local_today()) is not None
 
 
 def _is_reminder_cancel_command(message: str) -> bool:
@@ -9724,6 +9804,16 @@ def _is_help_request(message: str, oa: str = "") -> bool:
     names_entity = any(w in compact for w in _ENTITY_WORDS)
     # "วันนี้มีอะไรบ้าง" is about the day, not the system.
     names_day = any(w in compact for w in ("วันนี้", "พรุ่งนี้", "สัปดาห์นี้", "อาทิตย์นี้", "today", "tomorrow"))
+    # "ช่วยเพิ่มลูกค้า สมชาย ใจดี 0812345678 ให้หน่อยครับ" — a complete
+    # order, politely worded — was answered with the nine-topic guide.
+    # HELP_CONTAINS carries "ช่วยหน่อย", which normalises to "ช่วย", and
+    # the substring rule below then claimed every short sentence
+    # containing it (10 ก.ย. 2569). A polite prefix in front of a create
+    # verb is a command; the manual is not an answer to it.
+    if _POLITE_REQUEST_RE.match(compact) and _is_create_command(
+        _POLITE_REQUEST_RE.sub("", compact, count=1), oa
+    ):
+        return False
     for key in HELP_CONTAINS:
         k = _normalise(key)
         if key in _HELP_GENERIC and (names_entity or names_day):
@@ -12161,8 +12251,34 @@ async def _handle_deal_product_add(
 
 QUOTE_CREATE_TRIGGERS = (
     "สร้างใบเสนอราคา", "ออกใบเสนอราคา", "ทำใบเสนอราคา", "create quote", "ขอใบเสนอราคา", "เปิดใบเสนอราคา",
-    "สร้าง quote", "ทำ quote", "ออก quote", "quotation", "new quote", "make a quote", "create quotation", "ใบเสนอราคาสำหรับ",
-)
+    "สร้าง quote", "ทำ quote", "ออก quote", "quotation", "new quote", "make a quote", "create quotation",
+)  # "ใบเสนอราคาสำหรับ" removed: a noun phrase, not an order.
+
+
+def _is_typed_quote_create(message: str) -> bool:
+    """A create-quote ORDER, not a sentence containing the noun.
+
+    The branch used to fire on the words appearing anywhere, so
+    "ลูกค้าขอใบเสนอราคา" — reporting what a customer asked for — issued a
+    real Q- row, and "ลูกค้าอยากได้ใบเสนอราคาสำหรับพัดลม 2 ตัว" issued one
+    with the deal's line destroyed and nothing put back (10 ก.ย. 2569).
+
+    It stays deterministic for the two shapes that answer themselves: a
+    D- code (every button carries one) or a sentence that OPENS with the
+    verb, politeness allowed in front. Anything else is a sentence to be
+    read, and the model decides.
+    """
+    text = message or ""
+    if not any(t in text.lower() for t in QUOTE_CREATE_TRIGGERS):
+        return False
+    if re.search(r"(?<![A-Za-z0-9])D-\d{4}-\d{4}(?![0-9])", text, re.I):
+        return True
+    compact = _normalise(text)
+    heads = [compact]
+    if _POLITE_REQUEST_RE.match(compact):
+        # "ช่วยออกใบเสนอราคาให้หน่อย" is the same order, said politely.
+        heads.append(_POLITE_REQUEST_RE.sub("", compact, count=1))
+    return any(h.startswith(t.lower().replace(" ", "")) for h in heads for t in QUOTE_CREATE_TRIGGERS)
 
 DEAL_ALREADY_OPEN = {
     "th": "ลูกค้ารายนี้มีดีล {code} เปิดอยู่แล้ว\nปิดดีลเดิมก่อน (ปิดสำเร็จหรือปิดไม่สำเร็จ) แล้วค่อยเปิดใหม่",
@@ -12186,7 +12302,7 @@ QUOTE_DEAL_EMPTY = {
 
 async def _handle_quote_create_direct(
     client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
-    permission_keys: list[str], language: str,
+    permission_keys: list[str], language: str, deal_code: str | None = None,
 ) -> ChatReply:
     """Create a quote from a named deal, or from the deal just discussed.
 
@@ -12200,14 +12316,17 @@ async def _handle_quote_create_direct(
         return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
 
     license_id = str(license_id)
-    deal_code = None
-    match = re.search(r"(?<![A-Za-z0-9])(D-\d{4}-\d{4})(?![0-9])", message or "", re.IGNORECASE)
-    if match:
-        deal_code = match.group(1).upper()
-    else:
-        last_ref = await client.get_last_entity_ref(ctx.chann_uid, ctx.oa)
-        if last_ref and last_ref.get("entity_type") == "deal":
-            deal_code = str(last_ref.get("code") or "")
+    # A caller may already have the deal — the model road passes what it
+    # read. Otherwise the code in the sentence, otherwise the deal this
+    # conversation is already on.
+    if not deal_code:
+        match = re.search(r"(?<![A-Za-z0-9])(D-\d{4}-\d{4})(?![0-9])", message or "", re.IGNORECASE)
+        if match:
+            deal_code = match.group(1).upper()
+        else:
+            last_ref = await client.get_last_entity_ref(ctx.chann_uid, ctx.oa)
+            if last_ref and last_ref.get("entity_type") == "deal":
+                deal_code = str(last_ref.get("code") or "")
 
     if not deal_code:
         return ChatReply(text=_t(QUOTE_NEEDS_DEAL, language))
@@ -12273,21 +12392,31 @@ async def _handle_quote_create_direct(
     # point of copying them.
     override = _trailing_product_for_quote(message)
     if override:
+        # The replacement goes on FIRST. Clearing before knowing the new
+        # line could be added left the quotation empty whenever the
+        # product was not in the catalogue — "ใบเสนอราคาสำหรับพัดลม 2 ตัว"
+        # produced a quote with the deal's line deleted and nothing put
+        # back, and a reply saying the product does not exist
+        # (10 ก.ย. 2569).
         try:
-            existing = await client.list_quote_products(license_id, str(row["id"]))
-            for line in existing:
-                await client.remove_quote_product(
-                    license_id, str(row["id"]), str(line["id"]),
-                    actor_id=ctx.chann_uid,
-                )
+            copied = [str(line["id"]) for line in
+                      await client.list_quote_products(license_id, str(row["id"]))]
         except Exception:
-            log.exception("could not clear copied lines before an override")
-            existing = []
-
+            log.exception("could not read the copied lines")
+            copied = []
         added = await _add_line_from_text(
             client, ctx=ctx, license_id=license_id, quote_id=str(row["id"]),
             text=override, language=language,
         )
+        if added is None:
+            # The replacement is on. Now, and only now, the copied lines go.
+            for line_id in copied:
+                try:
+                    await client.remove_quote_product(
+                        license_id, str(row["id"]), line_id, actor_id=ctx.chann_uid,
+                    )
+                except Exception:
+                    log.exception("could not remove a copied line after an override")
         if added is not None:
             # The add failed or needs a choice; its reply explains why, and
             # the quote exists either way so it is named here too.
@@ -13964,6 +14093,11 @@ MISSING_FIELD_LABELS = {
 }
 
 
+#: Which reader answers a field the model reported as missing. One entry
+#: per name in a Capability.parser_supplies; check-fields keeps them paired.
+_PARSER_SEES = {"due_date": lambda message: _reads_as_a_date(message)}
+
+
 def _prune_missing(missing: list[str], intent: dict, message: str) -> list[str]:
     """Drop anything we can answer ourselves before asking a person.
 
@@ -13982,20 +14116,17 @@ def _prune_missing(missing: list[str], intent: dict, message: str) -> list[str]:
     make an assistant feel like a form.
     """
     known = capability(str(intent.get("entity") or ""), str(intent.get("action") or ""))
-    if known is not None:
-        # The registry decides, so this cannot drift from what the handler
-        # asks for. It used to drop last_name as well as email/address —
-        # and the create handler then asked for the surname a turn later,
-        # two questions for what the model had already answered in one
-        # (10 ก.ย. 2569).
-        return known.prune_missing(missing)
-    if intent.get("entity") == "customer":
-        return [m for m in missing if m not in ("email", "address", "notes")]
-    if intent.get("entity") != "followup":
+    if known is None:
         return missing
-    pruned = [m for m in missing if m != "due_time"]
-    if "due_date" in pruned and _mentions_a_datetime(message):
-        pruned = [m for m in pruned if m != "due_date"]
+    # The registry decides, so this cannot drift from what the handler asks
+    # for. It used to drop last_name as well as email/address — and the
+    # create handler then asked for the surname a turn later, two questions
+    # for what the model had already answered in one (10 ก.ย. 2569).
+    pruned = known.prune_missing(missing)
+    # What the parser can see beats what the model thinks it is missing.
+    for field_name in known.parser_supplies:
+        if field_name in pruned and _PARSER_SEES[field_name](message):
+            pruned = [m for m in pruned if m != field_name]
     return pruned
 
 
@@ -15420,34 +15551,16 @@ async def _handle_quote_intent(
     if action != "create":
         return _no_handler_reply(intent, language, ctx.oa)
 
-    deal_code = (fields.get("deal_code") or "").strip().upper()
-    if not deal_code:
-        return ChatReply(text=_t(QUOTE_NEEDS_DEAL_CODE, language), intent=intent)
-
-    deals = await client.list_deals(license_id)
-    match = next((d for d in deals if d["deal_id"].upper() == deal_code), None)
-    if match is None:
-        return ChatReply(
-            text=_t(QUOTE_DEAL_NOT_FOUND, language).format(deal_id=deal_code), intent=intent,
-        )
-
-    try:
-        row = await client.create_quote(
-            license_id, {"deal_id": match["id"], "owner_member_id": await _member_id_of(client, license_id, ctx)},
-            actor_id=ctx.chann_uid,
-        )
-    except Exception as exc:  # noqa: BLE001
-        if _is_not_found(exc):
-            return ChatReply(
-                text=_t(QUOTE_DEAL_NOT_FOUND, language).format(deal_id=deal_code), intent=intent,
-            )
-        raise
-    await _remember_entity(
-        client, ctx, entity_type="quote", entity_id=row["id"], code=row["quote_id"],
-    )
-    return ChatReply(
-        text=_t(QUOTE_CREATED, language).format(quote_id=row["quote_id"], deal_id=deal_code),
-        entity_type="quote", entity_id=row["id"], intent=intent,
+    # One creation path. The model's job is to recognise the request; what
+    # happens next — the deal in context when no code was said, the
+    # duplicate, the empty deal, the download button — belongs to the
+    # handler the buttons already reach. This road used to be a second,
+    # weaker copy: it demanded a deal_code with no context fallback, and
+    # re-raised a data error that was not a not-found.
+    return await _handle_quote_create_direct(
+        client, ctx=ctx, license_id=license_id, message=message,
+        permission_keys=held, language=language,
+        deal_code=str(fields.get("deal_code") or fields.get("code") or "").strip().upper() or None,
     )
 
 # How long an unanswered question stays open. Long enough that a user can
@@ -15486,6 +15599,13 @@ def _is_continuation(pending: dict | None, intent: dict) -> bool:
                for k in ("first_name", "last_name")):
             return False
         if set(fields) & {"phone", "email", "address", "notes"}:
+            return True
+    if entity == pending.get("entity") == "followup" and pending.get("action") == "create":
+        # A reminder's day and its hour are one answer. "บ่าย 2" against a
+        # pending "which day?" is this appointment, not a new one — read as
+        # a switch it answered "เปลี่ยนจากตั้งนัดเป็นตั้งนัดแล้วครับ" and
+        # dropped the name already collected.
+        if set(fields) & {"due_date", "due_time", "notes"}:
             return True
     return bool(wanted & set(fields)) or not entity
 
@@ -17163,6 +17283,16 @@ async def _route_chat_message(
     # customer to create, and on the sales OA "ชื่อ …" alone names nobody else.
     if ctx.oa in ("sales", "technician"):
         own = _profile_field_edit(message)
+        if own is not None and ctx.oa == "sales" and _looks_like_name_and_phone(message):
+            # "ชื่อ สมชาย ใจดี เบอร์ 0812345678" is somebody being added,
+            # not a salesperson editing their own record: nobody sets
+            # their own name and their own number in one unlabelled
+            # breath, and this one parsed the phone INTO the surname
+            # ("ใจดี เบอร์ 0812345678") before answering that the profile
+            # cannot be edited (10 ก.ย. 2569). The reading goes to the
+            # model; the self-edit form without a phone is untouched, and
+            # so is the technician OA.
+            own = None
         if own is None and early_pending is not None and early_pending.get("entity") == "profile_edit":
             own = _bare_profile_value(message, list(early_pending.get("missing") or []))
             if own is not None:
@@ -17348,9 +17478,14 @@ async def _route_chat_message(
         #
         # A reminder command STARTS with its verb or names a record code.
         if _is_reminder_command(message):
+            # Same rule as the quote branch: the vocabulary may decline,
+            # only a sentence the handler can finish may act. Narrowing
+            # the dispatch alone would have cost "ไม่ต้องตั้งนัด" its
+            # "ยังไม่ได้ตั้งนัด" answer.
             guarded = _intent_guard_reply(message, action="appointment_create", language=language)
             if guarded is not None:
                 return guarded
+        if _is_typed_reminder_command(message):
             return await _handle_reminder_create(
                 client, ctx=ctx, license_id=license_id, message=message,
                 permission_keys=permission_keys, language=language,
@@ -17509,19 +17644,30 @@ async def _route_chat_message(
             )
 
         if any(t in message.lower() for t in QUOTE_CREATE_TRIGGERS):
-            # A substring match on the trigger, which is why all twelve of
-            # "ยังไม่สร้างใบเสนอราคา D-2026-0001", "…ไปหรือยัง" and
-            # "แค่ถามวิธี…" issued a real Q-2026-0001 (review v3, B02).
+            # The words may still SAY NO. They may no longer say yes.
+            #
+            # This branch used to dispatch on the words appearing anywhere,
+            # which is why "ยังไม่สร้างใบเสนอราคา D-2026-0001",
+            # "…ไปหรือยัง" and "แค่ถามวิธี…" all issued a real Q-2026-0001
+            # (review v3, B02). Narrowing the dispatch to _is_typed_quote_create
+            # fixed that — and took the refusal with it: "ไว้ก่อนนะ เดี๋ยวมา
+            # ทำใบเสนอราคา" went from "รับทราบครับ ยังไม่ได้สร้าง…" to
+            # "ยังไม่แน่ใจว่าต้องการอะไร" (measured 10 ก.ย. 2569).
+            #
+            # So the guard keeps the whole vocabulary and the dispatch keeps
+            # the narrow one. A word can only ever decline here; acting takes
+            # a sentence that reads as an order.
             guarded = await _guarded_in_context(
                 client, ctx=ctx, license_id=license_id, message=message,
                 action="quote_create", language=language,
             )
             if guarded is not None:
                 return guarded
-            return await _handle_quote_create_direct(
-                client, ctx=ctx, license_id=license_id, message=message,
-                permission_keys=permission_keys, language=language,
-            )
+            if _is_typed_quote_create(message):
+                return await _handle_quote_create_direct(
+                    client, ctx=ctx, license_id=license_id, message=message,
+                    permission_keys=permission_keys, language=language,
+                )
 
         # "ไม่ต้องสร้างดีลให้ สมชาย ใจดี" created the deal (10 ก.ย. 2569).
         # In front of BOTH deal-create shapes below — the named one and the
@@ -17651,8 +17797,14 @@ async def _route_chat_message(
             )
 
         search_term = _parse_after_trigger(message, CUSTOMER_SEARCH_TRIGGERS)
-        if search_term is None:
+        if search_term is None and not _looks_like_name_and_phone(message):
             # "ลูกค้าชื่อสมชาย", "เบอร์สมชาย", "สมชาย เบอร์อะไร", "ค้นหา สมชาย"
+            #
+            # But a term carrying a full name AND a phone number is not a
+            # lookup — nobody searches by handing over both. That shape
+            # answered "ไม่พบลูกค้าที่ตรงกับ สมชาย ใจดี เบอร์ 0812345678"
+            # to somebody adding a customer (10 ก.ย. 2569). The explicit
+            # "ค้นหาลูกค้า …" arm above still wins.
             search_term = _customer_lookup_term(message)
         if search_term is not None:
             search_term = _strip_polite_tail(re.sub(r"^(?:ที่ชื่อ|ชื่อว่า|ชื่อ|ที่)\s*", "", search_term).strip())

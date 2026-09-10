@@ -657,3 +657,282 @@ class TestTheRegistryIsTheOnlyDefinition:
         from chann_app.services.capabilities import CUSTOMER_CREATE
 
         assert "customer_bulk" in CUSTOMER_CREATE.exceptions
+
+    def test_a_reminders_time_is_never_asked_for(self):
+        """The 12:03 loop (2 ก.ย. 2569), now stated in the registry."""
+        from chann_app.services.capabilities import FOLLOWUP_CREATE
+
+        assert "due_time" in FOLLOWUP_CREATE.never_needed
+        assert chat._prune_missing(
+            ["due_time", "due_date"], {"entity": "followup", "action": "create"},
+            "นัดคุณสมบัติหน่อย",
+        ) == ["due_date"]
+
+    def test_a_date_in_the_sentence_beats_the_models_report(self):
+        assert chat._prune_missing(
+            ["due_date"], {"entity": "followup", "action": "create"},
+            "อยากนัดดู demo สินค้าวันที่ 7",
+        ) == []
+
+    def test_every_parser_supplied_field_has_a_reader(self):
+        """A field the registry says the parser answers must have one."""
+        from chann_app.services.capabilities import REGISTRY
+
+        for cap in REGISTRY.values():
+            for field_name in cap.parser_supplies:
+                assert field_name in chat._PARSER_SEES, f"{cap.entity}.{cap.action}: {field_name}"
+
+    def test_a_quote_is_always_made_from_an_existing_deal(self):
+        from chann_app.services.capabilities import QUOTE_CREATE
+
+        assert QUOTE_CREATE.required == ("deal_code",)
+
+
+class TestTheSentenceIsReadBeforeAnActionIsChosen:
+    """Requirement 1: free text the person typed is READ with context
+    before an action is chosen; a keyword that matches a word must not
+    decide on its own. These are the branches that used to decide.
+
+    Every case here was reproduced against the real handlers first.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message", [
+        "ช่วยเพิ่มลูกค้า สมชาย ใจดี 0812345678 ให้หน่อยครับ",
+        "ช่วยสร้างลูกค้า สมชาย ใจดี 0812345678",
+        "รบกวนเพิ่มลูกค้า สมชาย ใจดี 0812345678",
+    ])
+    async def test_a_polite_order_is_an_order_not_a_request_for_the_manual(self, message):
+        """HELP_CONTAINS carries "ช่วยหน่อย", which normalises to "ช่วย",
+        and the substring rule claimed every short sentence containing
+        it — so a complete add-customer command got the nine-topic guide."""
+        client = _shop()
+        text, written = await _say(client, message, intent={
+            "action": "create", "entity": "customer",
+            "fields": {"first_name": "สมชาย", "last_name": "ใจดี", "phone": "0812345678"},
+            "missing": [],
+        })
+        assert "create_customer" in written, f"{text} / {written}"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message", ["ช่วยหน่อยครับ", "ช่วยด้วย", "ช่วยที", "ใช้ยังไง"])
+    async def test_and_asking_for_help_still_gets_help(self, message):
+        client = _shop()
+        text, written = await _say(client, message)
+        assert written == []
+        assert "วิธีใช้" in text or "ทำอะไรได้บ้าง" in text or "พิมพ์" in text, text
+
+    @pytest.mark.asyncio
+    async def test_a_name_and_a_phone_is_not_someone_editing_their_own_profile(self):
+        """"ชื่อ สมชาย ใจดี เบอร์ 0812345678" answered PROFILE_NOT_ELIGIBLE,
+        having parsed the phone into the surname."""
+        client = _shop()
+        text, written = await _say(client, "ชื่อ สมชาย ใจดี เบอร์ 0812345678", intent={
+            "action": "create", "entity": "customer",
+            "fields": {"first_name": "สมชาย", "last_name": "ใจดี", "phone": "0812345678"},
+            "missing": [],
+        })
+        assert "create_customer" in written, f"{text} / {written}"
+
+    @pytest.mark.asyncio
+    async def test_a_name_and_a_phone_is_not_a_search_term_either(self):
+        """It answered "ไม่พบลูกค้าที่ตรงกับ สมชาย ใจดี เบอร์ …"."""
+        client = _shop()
+        text, written = await _say(client, "ลูกค้าชื่อสมชาย ใจดี เบอร์ 0812345678", intent={
+            "action": "create", "entity": "customer",
+            "fields": {"first_name": "สมชาย", "last_name": "ใจดี", "phone": "0812345678"},
+            "missing": [],
+        })
+        assert "create_customer" in written, f"{text} / {written}"
+
+    @pytest.mark.asyncio
+    async def test_but_a_real_lookup_is_still_a_lookup(self):
+        client = _shop(customers=[CUSTOMER])
+        text, written = await _say(client, "ลูกค้าชื่อสมชาย")
+        assert written == [], f"a lookup wrote {written}"
+        assert "สมชาย" in text
+
+
+class TestAnAppointmentCanTakeTwoTurns:
+    """"ตั้งนัดสมชาย" used to dead-end: the rule resolved the person, found
+    no date, answered "กรุณาระบุวันที่" and set NO pending intent, so the
+    next turn had nothing to continue. Only sentences the one-shot handler
+    can actually satisfy stay on the rule road now."""
+
+    @pytest.mark.asyncio
+    async def test_the_day_is_asked_for_and_the_hour_from_the_turn_before_survives(self):
+        client = _shop(customers=[CUSTOMER])
+        text, _ = await _say(client, "ตั้งนัดสมชาย", intent={
+            "action": "create", "entity": "followup",
+            "fields": {"target_name": "สมชาย"}, "missing": ["due_date"],
+        })
+        assert "วันที่" in text, text
+        text, written = await _say(client, "บ่าย 2", intent={
+            "action": "create", "entity": "followup",
+            "fields": {"due_time": "บ่าย 2"}, "missing": ["due_date"],
+        })
+        assert written == [], f"a reminder with no day was written: {written}"
+        assert "เปลี่ยน" not in text, f"answering the question read as a flow switch: {text}"
+        text, written = await _say(client, "พรุ่งนี้", intent={
+            "action": "create", "entity": "followup",
+            "fields": {"due_date": "พรุ่งนี้"}, "missing": [],
+        })
+        assert "create_follow_up" in written, f"{text} / {written}"
+        assert "14:00" in text, f"the time from two turns ago was lost: {text}"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message", [
+        "เตือน C-2026-0001 พรุ่งนี้ 10 โมง",
+        "นัดสมชายพรุ่งนี้บ่าย 2",
+    ])
+    async def test_a_dated_command_still_answers_itself(self, message):
+        """The fifth case: the deterministic road keeps every shape it can
+        actually finish, with no model call."""
+        client = _shop(customers=[CUSTOMER])
+        text, written = await _say(client, message)
+        assert "create_follow_up" in written, f"{text} / {written}"
+
+
+class TestAQuoteIsMadeOnlyWhenOneWasAskedFor:
+    """The branch fired on the words appearing anywhere in the sentence."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message", [
+        "ลูกค้าขอใบเสนอราคา",
+        "ลูกค้าอยากได้ใบเสนอราคาสำหรับพัดลม 2 ตัว",
+        "ใบเสนอราคาสำหรับสมชาย",
+    ])
+    async def test_reporting_what_a_customer_asked_for_is_not_an_order(self, message):
+        client = _shop(customers=[CUSTOMER], deals=[DEAL])
+        text, written = await _say(client, message, intent={
+            "action": "suggest", "entity": "", "fields": {}, "missing": [],
+        })
+        assert "create_quote" not in written, f"{message!r} issued a quote: {written}"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message", [
+        "สร้างใบเสนอราคาจากดีล D-2026-0001",
+        "ช่วยออกใบเสนอราคาให้หน่อย",
+    ])
+    async def test_but_an_order_still_makes_one(self, message):
+        client = _shop(customers=[CUSTOMER], deals=[DEAL])
+        await client.set_last_entity_ref(
+            "CHN-S-000001", "sales", entity_type="deal", entity_id="DEAL-1", code="D-2026-0001",
+        )
+        text, written = await _say(client, message)
+        assert "create_quote" in written, f"{text} / {written}"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message", [
+        "ปิดสำเร็จ D-2026-0001",
+        "ข้อมูลดีล D-2026-0001",
+        "ยังไม่ต้องปิดดีล D-2026-0001",
+    ])
+    async def test_a_deal_command_is_not_stolen_by_the_quote_branch(self, message):
+        client = _shop(customers=[CUSTOMER], deals=[DEAL])
+        text, written = await _say(client, message)
+        assert "create_quote" not in written, f"{message!r} -> {written}"
+
+
+class TestAValueTheModelReturnsIsAProposalNotAFact:
+    """Requirement 5. Asked for a price and given a phone number, the
+    model returned quoted_unit_price="0812345678" — and the line was
+    rewritten to 812,345,678.00 baht, taking the deal total with it."""
+
+    @staticmethod
+    async def _line(fields, message):
+        client = _shop(customers=[CUSTOMER], deals=[{
+            **DEAL, "products": [{"id": "L1", "product_name": "พัดลม",
+                                  "quoted_unit_price": "1200", "qty": 1}],
+        }])
+        await client.set_last_entity_ref(
+            "CHN-S-000001", "sales", entity_type="deal", entity_id="DEAL-1", code="D-2026-0001",
+        )
+        return await _say(client, message, intent={
+            "action": "update", "entity": "line_item", "fields": fields, "missing": [],
+        })
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("price", ["0812345678", "+66812345678", "081-234-5678"])
+    async def test_a_phone_number_is_never_a_price(self, price):
+        text, written = await self._line({"target_name": "พัดลม", "quoted_unit_price": price}, price)
+        assert written == [], f"{price!r} was written as a price: {written}"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("price", ["1500", "1,250.50"])
+    async def test_but_a_price_is_still_a_price(self, price):
+        text, written = await self._line(
+            {"target_name": "พัดลม", "quoted_unit_price": price}, f"แก้ราคาพัดลมเป็น {price}",
+        )
+        assert "update_deal_product" in written, f"{text} / {written}"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("value", ["ไม่ทราบ", "-5", "0"])
+    async def test_a_word_or_a_nothing_is_not_a_price(self, value):
+        _, written = await self._line({"target_name": "พัดลม", "quoted_unit_price": value}, value)
+        assert written == [], f"{value!r} was written as a price: {written}"
+
+    def test_a_count_must_be_a_positive_whole_number(self):
+        for bad in ("ไม่รู้", "-2", "0", "สองตัว"):
+            intent = {"fields": {"qty": bad}}
+            chat._drop_invented_values(intent)
+            assert intent["fields"] == {}, bad
+        intent = {"fields": {"qty": "3"}}
+        chat._drop_invented_values(intent)
+        assert intent["fields"] == {"qty": "3"}
+
+
+class TestAWordMayDeclineButMayNotAct:
+    """Narrowing a trigger to stop it ACTING must not also stop it
+    REFUSING. Measured on the corpus (10 ก.ย. 2569): once the quote
+    branch dispatched only on a sentence that opens with the verb,
+    "ไว้ก่อนนะ เดี๋ยวมาทำใบเสนอราคา" fell through to the model and came
+    back "ยังไม่แน่ใจว่าต้องการอะไรครับ" — where it used to answer
+    "รับทราบครับ ยังไม่ได้สร้างใบเสนอราคา…". Nothing was written either
+    way; the person was simply no longer told.
+
+    So the guard keeps the whole vocabulary and the dispatch keeps the
+    narrow one.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message", [
+        "ไว้ก่อนนะ เดี๋ยวมาทำใบเสนอราคา",
+        "ยังไม่ต้องสร้างใบเสนอราคา",
+    ])
+    async def test_declining_a_quote_is_still_answered_in_words(self, message):
+        client = _shop(customers=[CUSTOMER], deals=[DEAL])
+        await client.set_last_entity_ref(
+            "CHN-S-000001", "sales", entity_type="deal", entity_id="DEAL-1", code="D-2026-0001",
+        )
+        text, written = await _say(client, message, intent={
+            "action": "suggest", "entity": "", "fields": {}, "missing": [],
+        })
+        assert "create_quote" not in written, f"{message!r} -> {written}"
+        assert "ยังไม่ได้สร้าง" in text, text
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message", [
+        "ยังไม่เอาใบเสนอราคาครับ",   # the owner's own case 3, verbatim shape
+        "ไม่ต้องตั้งนัด",
+        "ยังไม่ต้องนัดนะครับ",
+        "ไม่ต้องตั้งนัดพรุ่งนี้",
+    ])
+    async def test_a_refusal_the_vocabulary_does_not_recognise_still_writes_nothing(self, message):
+        """A KNOWN GAP, pinned at its real height.
+
+        None of these carries a trigger word — "ใบเสนอราคา" alone is not a
+        create trigger, and "ไม่ต้องตั้งนัด" does not open with the verb —
+        so no guard sees them (a reminder trigger has to OPEN the
+        sentence) and the reply is the generic "ยังไม่แน่ใจ
+        ว่าต้องการอะไรครับ". Measured identical on the code before this
+        round, so it is not a regression; it is where the words run out.
+
+        What matters and is pinned: nothing is written. Answering these
+        properly belongs to the model road, not to a longer word list.
+        """
+        client = _shop(customers=[CUSTOMER], deals=[DEAL])
+        _, written = await _say(client, message, intent={
+            "action": "suggest", "entity": "", "fields": {}, "missing": [],
+        })
+        assert written == [], f"{message!r} wrote {written}"

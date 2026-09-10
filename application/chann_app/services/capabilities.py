@@ -31,6 +31,9 @@ class Capability:
     #: needs. Anything here is dropped from the model's `missing` list; a
     #: field in `required` must never appear here.
     never_needed: tuple[str, ...] = ()
+    #: Fields this codebase reads out of the sentence itself. The model may
+    #: report one as missing while the parser can see it; the parser wins.
+    parser_supplies: tuple[str, ...] = ()
     #: A named, deliberate departure from `required`, with the reason.
     exceptions: dict[str, str] = field(default_factory=dict)
 
@@ -56,13 +59,56 @@ CUSTOMER_CREATE = Capability(
     },
 )
 
+FOLLOWUP_CREATE = Capability(
+    action="create",
+    entity="followup",
+    # A reminder that cannot ring is not a reminder. The date is required,
+    # but the parser reads it out of the sentence — see parser_supplies.
+    required=("due_date",),
+    optional=("target_name", "code", "due_time", "notes"),
+    # The 12:03 loop (2 ก.ย. 2569): the model reported missing=["due_time"]
+    # over a complete request, the assistant demanded a raw key, and
+    # answering "9.00" produced the same demand again. A reminder's time
+    # defaults to 09:00 and is echoed in the confirmation.
+    never_needed=("due_time",),
+    parser_supplies=("due_date",),
+    exceptions={
+        "target": (
+            "Which record the reminder is about is resolved from a code in "
+            "the sentence, a customer name, or the record already in "
+            "context — not from one field, so it is not listed as required."
+        ),
+    },
+)
+
+QUOTE_CREATE = Capability(
+    action="create",
+    entity="quote",
+    # A quote is always made FROM an existing deal, never invented, and its
+    # own code is generated afterwards — never asked for and never accepted
+    # from the model (_handle_quote_intent).
+    required=("deal_code",),
+    optional=(),
+)
+
 REGISTRY: dict[tuple[str, str], Capability] = {
-    (c.entity, c.action): c for c in (CUSTOMER_CREATE,)
+    (c.entity, c.action): c for c in (CUSTOMER_CREATE, FOLLOWUP_CREATE, QUOTE_CREATE)
 }
 
 
 def capability(entity: str, action: str) -> Capability | None:
-    return REGISTRY.get((str(entity or ""), str(action or "")))
+    """The row for this request, or the entity's create row.
+
+    A model that reports missing fields without naming an action is
+    describing a record being made, and the field rules ("a reminder's
+    time defaults to 09:00", "nothing here needs an email") hold for an
+    edit of that record too. Falling back keeps the pruning as wide as it
+    was before the registry existed.
+    """
+    exact = REGISTRY.get((str(entity or ""), str(action or "")))
+    if exact is not None:
+        return exact
+    return REGISTRY.get((str(entity or ""), "create"))
 
 
 for _c in REGISTRY.values():  # a required field can never be "never needed"
