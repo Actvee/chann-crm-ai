@@ -1,0 +1,6129 @@
+[
+ {
+  "id": "s-owner-neg-cancel",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ไม่ต้องยกเลิกนัด C-2026-0001"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "refusal",
+   "negation",
+   "code",
+   "appointment",
+   "owner-example"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "The owner's first example. 'ไม่ต้อง' refuses the cancellation; FU-1 must stay pending. Nothing may be written. The right reply acknowledges that nothing was cancelled and names the command that would ('ยกเลิกนัด C-2026-0001')."
+ },
+ {
+  "id": "s-owner-neg-cancel-ctrl",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ยกเลิกนัด C-2026-0001"
+  ],
+  "expect": {
+   "mutations": [
+    "set_follow_up_status"
+   ]
+  },
+  "shape": [
+   "control",
+   "command",
+   "code",
+   "appointment"
+  ],
+  "must_write": [
+   "set_follow_up_status"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Control for s-owner-neg-cancel: the plain order MUST cancel FU-1 (set_follow_up_status). Without this pair the refusal case proves nothing."
+ },
+ {
+  "id": "s-owner-status-quote",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "สร้างใบเสนอราคาไปหรือยัง"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "status",
+   "question",
+   "quote",
+   "owner-example"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "The owner's second example. A status question must check, never create. No quotation exists in the scene, so the honest answer is 'ยังไม่มีใบเสนอราคา' plus the command that would make one. No write."
+ },
+ {
+  "id": "s-owner-status-quote-code",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "สร้างใบเสนอราคา D-2026-0001 ไปหรือยัง"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "status",
+   "question",
+   "quote",
+   "code",
+   "owner-example"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Same question with the deal named: answer that D-2026-0001 has no quotation yet. No write."
+ },
+ {
+  "id": "s-owner-quote-ctrl",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "สร้างใบเสนอราคา D-2026-0001"
+  ],
+  "expect": {
+   "mutations": [
+    "create_quote"
+   ]
+  },
+  "shape": [
+   "control",
+   "command",
+   "quote",
+   "code"
+  ],
+  "must_write": [
+   "create_quote"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Control: the plain order MUST create the quotation (create_quote from DEAL-1)."
+ },
+ {
+  "id": "s-owner-symptom-bare",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "แอร์ไม่เย็น"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "symptom",
+   "negation-lookalike",
+   "ask",
+   "owner-example"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": "ลูกค้าคนไหน / ให้เปิดงานซ่อมไหม (ขอชื่อลูกค้าและที่อยู่)",
+  "why": "The owner's third example, typed by a salesperson. 'ไม่เย็น' is a symptom, not a refusal, and must not be refused for containing ไม่ — nor silently dropped. Nothing is written because no customer or address is named."
+ },
+ {
+  "id": "s-owner-symptom-ctrl",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   {
+    "text": "ลูกค้าโทรมาแจ้งแอร์ไม่เย็น สมชาย 0812345678 บ้าน 99/1",
+    "ai": {
+     "action": "create",
+     "entity": "ticket",
+     "fields": {
+      "target_name": "สมชาย",
+      "issue_description": "แอร์ไม่เย็น",
+      "service_address": "99/1",
+      "phone": "0812345678"
+     },
+     "missing": []
+    }
+   }
+  ],
+  "expect": {
+   "mutations": [
+    "create_ticket"
+   ]
+  },
+  "shape": [
+   "control",
+   "fault",
+   "ticket"
+  ],
+  "must_write": [
+   "create_ticket"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Control for the symptom cases: a fault WITH a customer, a phone and an address must open a repair job (create_ticket)."
+ },
+ {
+  "id": "s-owner-invite-bare",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ขอรหัสเชิญ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "ambiguous",
+   "ask",
+   "invite",
+   "owner-example"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": "เชิญใครเข้าร้าน — ช่าง หรือ พนักงานขาย?",
+  "why": "The owner's fourth example. 'ขอรหัสเชิญ' names no role. With no context the right answer asks who is being invited; it must not silently mint a technician invite, and must not answer 'you cannot do that' when member.manage is held."
+ },
+ {
+  "id": "s-owner-invite-tech-ctrl",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ขอรหัสเชิญช่าง"
+  ],
+  "expect": {
+   "mutations": [
+    "create_invite"
+   ]
+  },
+  "shape": [
+   "control",
+   "invite",
+   "command"
+  ],
+  "must_write": [
+   "create_invite"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Control: the role is named, member.manage is held, so an invite code MUST be issued (create_invite)."
+ },
+ {
+  "id": "s-owner-invite-noperm",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales_no_member_manage",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ขอรหัสเชิญช่าง"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "invite",
+   "permission",
+   "refusal"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Same words without member.manage: refuse and name the permission. No invite may be created."
+ },
+ {
+  "id": "s-owner-invite-context",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "รายชื่อช่าง",
+   "ขอรหัสเชิญ"
+  ],
+  "expect": {},
+  "shape": [
+   "context",
+   "invite",
+   "multi-turn",
+   "ask-or-act"
+  ],
+  "must_write": [],
+  "may_write": [
+   "create_invite"
+  ],
+  "must_ask": "เชิญช่างใช่ไหมครับ?",
+  "why": "The owner's 'use context or ask' case as a conversation: the previous turn was about technicians, so a technician invite is the reading the context supports. Either issue it (create_invite) or ask which role — but never invite the wrong kind of person silently."
+ },
+ {
+  "id": "s-owner-midflow-switch-ask",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   {
+    "text": "เพิ่มลูกค้าใหม่ ชื่อ สมหญิง",
+    "ai": {
+     "action": "create",
+     "entity": "customer",
+     "fields": {
+      "first_name": "สมหญิง"
+     },
+     "missing": [
+      "last_name",
+      "phone"
+     ]
+    }
+   },
+   {
+    "text": "เอาเป็นสร้างใบเสนอราคา D-2026-0001 แทน",
+    "ai": {
+     "action": "create",
+     "entity": "quote",
+     "fields": {
+      "deal_code": "D-2026-0001"
+     },
+     "missing": []
+    }
+   }
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "mind-change",
+   "flow-switch",
+   "multi-turn",
+   "owner-example"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": "กำลังเพิ่มลูกค้า สมหญิง อยู่ — จะยกเลิกแล้วสร้างใบเสนอราคาแทนไหม",
+  "why": "The owner's fifth example. Changing task mid-flow must SAY so and deal with the half-finished customer: confirm the switch and state that สมหญิง was not saved. Nothing may be written on either turn — not the customer, not the quotation, until the person confirms."
+ },
+ {
+  "id": "s-owner-midflow-switch-confirm",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   {
+    "text": "เพิ่มลูกค้าใหม่ ชื่อ สมหญิง",
+    "ai": {
+     "action": "create",
+     "entity": "customer",
+     "fields": {
+      "first_name": "สมหญิง"
+     },
+     "missing": [
+      "last_name",
+      "phone"
+     ]
+    }
+   },
+   {
+    "text": "เอาเป็นสร้างใบเสนอราคา D-2026-0001 แทน",
+    "ai": {
+     "action": "create",
+     "entity": "quote",
+     "fields": {
+      "deal_code": "D-2026-0001"
+     },
+     "missing": []
+    }
+   },
+   {
+    "text": "ใช่ ทำใบเสนอราคาเลย",
+    "ai": {
+     "action": "create",
+     "entity": "quote",
+     "fields": {
+      "deal_code": "D-2026-0001"
+     },
+     "missing": []
+    }
+   }
+  ],
+  "expect": {
+   "mutations": [
+    "create_quote"
+   ]
+  },
+  "shape": [
+   "mind-change",
+   "flow-switch",
+   "multi-turn",
+   "control"
+  ],
+  "must_write": [
+   "create_quote"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "The same switch, confirmed. Now the quotation is created and the customer flow is dropped: create_quote is the ONLY write allowed — สมหญิง must not be saved half-finished."
+ },
+ {
+  "id": "s-neg-appt-delete",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "อย่าลบนัด C-2026-0001"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "refusal",
+   "negation",
+   "appointment",
+   "code"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A refusal to delete. FU-1 must stay pending; no write."
+ },
+ {
+  "id": "s-neg-appt-move",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ยังไม่ต้องเลื่อนนัด C-2026-0001 เป็นบ่ายสาม"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "refusal",
+   "negation",
+   "appointment",
+   "code",
+   "time"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "'ยังไม่ต้อง' defers the move. FU-1 keeps 10:00; no write."
+ },
+ {
+  "id": "s-neg-deal-create",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ไม่ต้องสร้างดีลให้สมชาย"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "refusal",
+   "negation",
+   "deal"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A refusal aimed at deal creation, which has no intent guard on its rule road. No deal may be created."
+ },
+ {
+  "id": "s-neg-quote-create",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "อย่าเพิ่งสร้างใบเสนอราคา D-2026-0001"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "refusal",
+   "negation",
+   "quote",
+   "code"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "'อย่าเพิ่ง' postpones. No quotation may be created."
+ },
+ {
+  "id": "s-neg-quote-accept",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ลูกค้ายังไม่ตกลงใบเสนอราคา Q-2026-0001"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "refusal",
+   "negation",
+   "quote",
+   "code",
+   "status-report"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Reports that the customer has NOT accepted. 'ลูกค้าตกลง' is the acceptance trigger, so this sentence contains its own opposite. Q-2026-0001 must stay draft; no set_quote_status.",
+  "fixture": {
+   "preset": "sales",
+   "_quotes": [
+    {
+     "id": "QUOTE-1",
+     "license_id": "lic-1",
+     "quote_id": "Q-2026-0001",
+     "deal_id": "DEAL-1",
+     "status": "draft",
+     "generated_document_id": null,
+     "owner_member_id": null
+    }
+   ],
+   "_quote_lines": [
+    {
+     "id": "ql-1",
+     "quote_id": "QUOTE-1",
+     "product_name": "พัดลม 18 นิ้ว",
+     "quoted_unit_price": "1500.00",
+     "qty": 2
+    }
+   ]
+  }
+ },
+ {
+  "id": "s-neg-quote-void",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ยังไม่ต้องยกเลิกใบเสนอราคา Q-2026-0001"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "refusal",
+   "negation",
+   "quote",
+   "code"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A refusal aimed at voiding a quotation (unguarded rule road). Q-2026-0001 must stay draft.",
+  "fixture": {
+   "preset": "sales",
+   "_quotes": [
+    {
+     "id": "QUOTE-1",
+     "license_id": "lic-1",
+     "quote_id": "Q-2026-0001",
+     "deal_id": "DEAL-1",
+     "status": "draft",
+     "generated_document_id": null,
+     "owner_member_id": null
+    }
+   ],
+   "_quote_lines": [
+    {
+     "id": "ql-1",
+     "quote_id": "QUOTE-1",
+     "product_name": "พัดลม 18 นิ้ว",
+     "quoted_unit_price": "1500.00",
+     "qty": 2
+    }
+   ]
+  }
+ },
+ {
+  "id": "s-neg-quote-discount",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "อย่าเพิ่งให้ส่วนลด 10% กับ Q-2026-0001"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "refusal",
+   "negation",
+   "quote",
+   "discount",
+   "code"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A refusal aimed at a discount (unguarded rule road). No set_quote_terms.",
+  "fixture": {
+   "preset": "sales",
+   "_quotes": [
+    {
+     "id": "QUOTE-1",
+     "license_id": "lic-1",
+     "quote_id": "Q-2026-0001",
+     "deal_id": "DEAL-1",
+     "status": "draft",
+     "generated_document_id": null,
+     "owner_member_id": null
+    }
+   ],
+   "_quote_lines": [
+    {
+     "id": "ql-1",
+     "quote_id": "QUOTE-1",
+     "product_name": "พัดลม 18 นิ้ว",
+     "quoted_unit_price": "1500.00",
+     "qty": 2
+    }
+   ]
+  }
+ },
+ {
+  "id": "s-neg-line-remove",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ไม่ต้องลบสินค้าพัดลมออกจากดีล D-2026-0001"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "refusal",
+   "negation",
+   "line-item",
+   "code"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A refusal aimed at removing a deal line (unguarded rule road). The fan line must survive.",
+  "fixture": {
+   "preset": "sales",
+   "_deals": [
+    {
+     "id": "DEAL-1",
+     "deal_id": "D-2026-0001",
+     "contact_id": "CUST-1",
+     "stage": "new",
+     "owner_member_id": null,
+     "notes": null,
+     "products": [
+      {
+       "id": "dp-1",
+       "product_name": "พัดลม 18 นิ้ว",
+       "qty": 2,
+       "quoted_unit_price": "1500.00"
+      }
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "id": "s-neg-line-price",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ข้อมูลดีล D-2026-0001",
+   "ยังไม่ต้องลดราคาพัดลมเป็น 1200"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "refusal",
+   "negation",
+   "line-item",
+   "price",
+   "multi-turn"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A refusal aimed at a price change on the line. No update_deal_product.",
+  "fixture": {
+   "preset": "sales",
+   "_deals": [
+    {
+     "id": "DEAL-1",
+     "deal_id": "D-2026-0001",
+     "contact_id": "CUST-1",
+     "stage": "new",
+     "owner_member_id": null,
+     "notes": null,
+     "products": [
+      {
+       "id": "dp-1",
+       "product_name": "พัดลม 18 นิ้ว",
+       "qty": 2,
+       "quoted_unit_price": "1500.00"
+      }
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "id": "s-neg-deal-stage",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ยังไม่ต้องปิดดีล D-2026-0001"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "refusal",
+   "negation",
+   "deal",
+   "stage",
+   "code"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A refusal aimed at the deal stage (unguarded rule road). D-2026-0001 must stay at stage new."
+ },
+ {
+  "id": "s-neg-note-create",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ข้อมูลลูกค้า สมชาย",
+   "อย่าเพิ่งบันทึกว่าสมชายขอเลื่อน"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "refusal",
+   "negation",
+   "note",
+   "multi-turn"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A refusal aimed at note creation (unguarded rule road). No create_note."
+ },
+ {
+  "id": "s-neg-note-delete",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": [
+   "customer.create",
+   "customer.read",
+   "customer.update",
+   "customer.archive",
+   "deal.create",
+   "deal.read",
+   "deal.update",
+   "quote.create",
+   "quote.read",
+   "quote.update",
+   "product.manage",
+   "followup.create",
+   "followup.read",
+   "followup.update",
+   "note.create",
+   "note.read",
+   "note.update",
+   "ticket.read",
+   "ticket.create",
+   "ticket.update",
+   "ticket.assign",
+   "service_report.read",
+   "warranty.read",
+   "warranty.create",
+   "team.manage",
+   "member.manage",
+   "setting.manage",
+   "approval.view",
+   "approval.approve",
+   "approval.reject",
+   "approval.manage",
+   "view_reports"
+  ],
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ไม่ต้องลบบันทึกของสมชาย"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "refusal",
+   "negation",
+   "note"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A refusal aimed at note deletion. NOTE-1 must survive. note.update is granted explicitly so the case tests the refusal, not a permission wall.",
+  "fixture": {
+   "preset": "sales",
+   "_notes": [
+    {
+     "id": "NOTE-1",
+     "license_id": "lic-1",
+     "entity_type": "customer",
+     "entity_id": "CUST-1",
+     "body": "ลูกค้าขอส่วนลด",
+     "author_chann_uid": "CHN-S-000001"
+    }
+   ]
+  }
+ },
+ {
+  "id": "s-neg-close-date",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ยังไม่ได้ตั้งวันปิดดีล D-2026-0001 นะ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "refusal",
+   "negation",
+   "deal",
+   "date",
+   "code"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "States that the close date has NOT been set. No update_deal."
+ },
+ {
+  "id": "s-neg-customer-create",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   {
+    "text": "อย่าเพิ่งเพิ่มลูกค้า สมหญิง รักดี 0898765432",
+    "ai": {
+     "action": "create",
+     "entity": "customer",
+     "fields": {
+      "first_name": "สมหญิง",
+      "last_name": "รักดี",
+      "phone": "0898765432"
+     },
+     "missing": []
+    }
+   }
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "refusal",
+   "negation",
+   "customer",
+   "supplied-wrong-intent"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "The model is handed the create reading on purpose: the refusal in the sentence must still stop the write on the road AFTER the model. No create_customer."
+ },
+ {
+  "id": "s-neg-ticket-assign",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ยังไม่ต้องมอบหมาย T-2026-0001 ให้สมศักดิ์"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "refusal",
+   "negation",
+   "ticket",
+   "code"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A refusal aimed at assignment (unguarded rule road). T-2026-0001 must stay unassigned."
+ },
+ {
+  "id": "s-neg-company-profile",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ไม่ต้องแก้ที่อยู่บริษัทเป็น 99 ถ.สุขุมวิท"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "refusal",
+   "negation",
+   "setting"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A refusal aimed at the company profile (unguarded rule road). No update_company_profile."
+ },
+ {
+  "id": "s-neg-team-create",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "อย่าเพิ่งสร้างทีมช่าง แอร์"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "refusal",
+   "negation",
+   "team"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A refusal aimed at team creation (unguarded rule road). No team may be created."
+ },
+ {
+  "id": "s-neg-warranty",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ยังไม่ต้องลงทะเบียนประกัน SN99999999 ให้สมชาย"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "refusal",
+   "negation",
+   "warranty",
+   "serial"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A refusal aimed at warranty registration (unguarded rule road). No register_warranty."
+ },
+ {
+  "id": "s-neg-idiom-cancel-DOES-write",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ไม่ต้องเตือนเรื่องสมชายแล้ว"
+  ],
+  "expect": {},
+  "shape": [
+   "idiom",
+   "negation-shaped",
+   "appointment",
+   "ask-or-act"
+  ],
+  "must_write": [],
+  "may_write": [
+   "set_follow_up_status"
+  ],
+  "must_ask": "ยกเลิกนัดของ C-2026-0001 (คุณสมชาย) ใช่ไหมครับ",
+  "why": "The counter-case, and it matters as much as the rest of G2: in Thai this IS how a reminder is cancelled. The sentence opens with the handler's own trigger 'ไม่ต้องเตือน', so it is an order, not a refusal. FU-1 MUST be cancelled. A fix that blocks every ไม่ would break this."
+ },
+ {
+  "id": "s-status-appt-cancel",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ยกเลิกนัด C-2026-0001 ไปหรือยัง"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "status",
+   "question",
+   "appointment",
+   "code"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Asks whether the cancellation happened. Answer: it has not; FU-1 is still pending for 12 ก.ย. 10:00. No write."
+ },
+ {
+  "id": "s-status-appt-delete",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ลบนัดไปแล้วหรือยัง"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "status",
+   "question",
+   "appointment",
+   "no-code"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Same question with no code: the appointment in play is FU-1. Answer the status and name the record. No write."
+ },
+ {
+  "id": "s-status-appt-alive",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "นัด C-2026-0001 ยังอยู่ใช่ไหม"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "status",
+   "question",
+   "appointment",
+   "code"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Asks whether the appointment survives. Answer yes with the date. No write."
+ },
+ {
+  "id": "s-status-deal-created",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "สร้างดีลให้สมชายไปหรือยัง"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "status",
+   "question",
+   "deal"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Asks whether the deal exists. It does — D-2026-0001. Answer that, do not create a second one."
+ },
+ {
+  "id": "s-status-line-added",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ข้อมูลดีล D-2026-0001",
+   "เพิ่มพัดลมเข้าดีลแล้วรึยัง"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "status",
+   "question",
+   "line-item",
+   "multi-turn"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A status question about a line, asked after looking at the deal. The fan line already exists; answer that. No add_deal_product.",
+  "fixture": {
+   "preset": "sales",
+   "_deals": [
+    {
+     "id": "DEAL-1",
+     "deal_id": "D-2026-0001",
+     "contact_id": "CUST-1",
+     "stage": "new",
+     "owner_member_id": null,
+     "notes": null,
+     "products": [
+      {
+       "id": "dp-1",
+       "product_name": "พัดลม 18 นิ้ว",
+       "qty": 2,
+       "quoted_unit_price": "1500.00"
+      }
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "id": "s-status-quote-sent",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ส่งใบเสนอราคาให้ลูกค้าไปแล้วรึเปล่า"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "status",
+   "question",
+   "quote"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Asks whether the quotation was sent. Nothing to send; answer that. No document may be generated and no quote may be created."
+ },
+ {
+  "id": "s-status-assigned",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "มอบหมาย T-2026-0001 ให้สมศักดิ์ไปแล้วยัง"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "status",
+   "question",
+   "ticket",
+   "code"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Asks whether the job was assigned. It has not been; answer that. No assign_ticket."
+ },
+ {
+  "id": "s-status-note",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "บันทึกเรื่องสมชายไว้หรือยัง"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "status",
+   "question",
+   "note"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Asks whether a note exists. One does; read it back. No create_note.",
+  "fixture": {
+   "preset": "sales",
+   "_notes": [
+    {
+     "id": "NOTE-1",
+     "license_id": "lic-1",
+     "entity_type": "customer",
+     "entity_id": "CUST-1",
+     "body": "ลูกค้าขอส่วนลด",
+     "author_chann_uid": "CHN-S-000001"
+    }
+   ]
+  }
+ },
+ {
+  "id": "s-status-deal-closed",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ปิดดีล D-2026-0001 ไปแล้วหรือยัง"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "status",
+   "question",
+   "deal",
+   "stage",
+   "code"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Asks about the stage. It is 'new'; answer that. No transition_deal_stage — this sentence contains 'ปิดดีล', the win trigger."
+ },
+ {
+  "id": "s-status-warranty",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ลงทะเบียนประกัน SN12345678 ไปแล้วหรือยัง"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "status",
+   "question",
+   "warranty",
+   "serial"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Asks whether the serial is registered. Look it up and answer. No register_warranty."
+ },
+ {
+  "id": "s-howto-quote",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "สร้างใบเสนอราคายังไง"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "howto",
+   "question",
+   "quote"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A how-to question. Reply with the command to type. No write."
+ },
+ {
+  "id": "s-howto-appt-move",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ถ้าจะเลื่อนนัดต้องพิมพ์อะไร"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "howto",
+   "conditional",
+   "question",
+   "appointment"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A how-to question wrapped in a conditional. Teach the wording. No write."
+ },
+ {
+  "id": "s-howto-customer-add",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "เพิ่มลูกค้ายังไงครับ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "howto",
+   "question",
+   "customer",
+   "ask"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": "ชื่อ-นามสกุลและเบอร์ของลูกค้าคืออะไรครับ (หรืออธิบายวิธีพิมพ์คำสั่ง)",
+  "why": "Ambiguous between 'teach me' and 'do it': it names no name and no phone, so the only safe answers are the how-to or the question 'ชื่อและเบอร์อะไรครับ'. No customer may be created either way."
+ },
+ {
+  "id": "s-howto-line-remove",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ลบสินค้าออกจากดีลทำยังไง"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "howto",
+   "question",
+   "line-item"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A how-to question that contains 'ลบสินค้า', the removal trigger. Teach, do not remove.",
+  "fixture": {
+   "preset": "sales",
+   "_deals": [
+    {
+     "id": "DEAL-1",
+     "deal_id": "D-2026-0001",
+     "contact_id": "CUST-1",
+     "stage": "new",
+     "owner_member_id": null,
+     "notes": null,
+     "products": [
+      {
+       "id": "dp-1",
+       "product_name": "พัดลม 18 นิ้ว",
+       "qty": 2,
+       "quoted_unit_price": "1500.00"
+      }
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "id": "s-howto-deal-close",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "อยากรู้ว่าปิดดีลยังไง"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "howto",
+   "question",
+   "deal",
+   "stage"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A how-to question containing the win trigger 'ปิดดีล'. Teach. No transition_deal_stage."
+ },
+ {
+  "id": "s-howto-quote-en",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "en",
+  "seed": 1,
+  "messages": [
+   "how do I create a quote?"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "howto",
+   "question",
+   "english",
+   "quote"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "The same how-to in English. Teach, in English. No write."
+ },
+ {
+  "id": "s-howto-invite",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "วิธีเชิญช่างเข้าร้าน"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "howto",
+   "question",
+   "invite"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A how-to question that contains 'เชิญช่าง', the invite trigger. Explain the steps. No invite code may be minted by a question."
+ },
+ {
+  "id": "s-howto-appt-polite",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ขอถามวิธีตั้งนัดหน่อยครับ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "howto",
+   "question",
+   "polite",
+   "appointment"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A polite how-to. 'ขอ' opens it, but 'ขอถามวิธี' is an enquiry, not an order. Teach. No create_follow_up."
+ },
+ {
+  "id": "s-hypo-quote-price",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ถ้าสร้างใบเสนอราคา D-2026-0001 ตอนนี้ ลูกค้าจะเห็นราคาเท่าไหร่"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "hypothetical",
+   "conditional",
+   "quote",
+   "code"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A hypothetical asking for a number. Answer with the deal total. No create_quote.",
+  "fixture": {
+   "preset": "sales",
+   "_deals": [
+    {
+     "id": "DEAL-1",
+     "deal_id": "D-2026-0001",
+     "contact_id": "CUST-1",
+     "stage": "new",
+     "owner_member_id": null,
+     "notes": null,
+     "products": [
+      {
+       "id": "dp-1",
+       "product_name": "พัดลม 18 นิ้ว",
+       "qty": 2,
+       "quoted_unit_price": "1500.00"
+      }
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "id": "s-hypo-quote-accept",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "สมมติว่าลูกค้าตกลงใบเสนอราคา จะต้องทำอะไรต่อ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "hypothetical",
+   "quote"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A hypothetical containing the acceptance trigger 'ลูกค้าตกลง'. Explain the next step. Q-2026-0001 must stay draft.",
+  "fixture": {
+   "preset": "sales",
+   "_quotes": [
+    {
+     "id": "QUOTE-1",
+     "license_id": "lic-1",
+     "quote_id": "Q-2026-0001",
+     "deal_id": "DEAL-1",
+     "status": "draft",
+     "generated_document_id": null,
+     "owner_member_id": null
+    }
+   ],
+   "_quote_lines": [
+    {
+     "id": "ql-1",
+     "quote_id": "QUOTE-1",
+     "product_name": "พัดลม 18 นิ้ว",
+     "quoted_unit_price": "1500.00",
+     "qty": 2
+    }
+   ]
+  }
+ },
+ {
+  "id": "s-hypo-line-more",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ข้อมูลดีล D-2026-0001",
+   "ถ้าเพิ่มพัดลมอีก 3 ตัวจะเท่าไหร่"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "hypothetical",
+   "line-item",
+   "multi-turn",
+   "arithmetic"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A price question in the shape of an addition, asked in context. Answer the arithmetic (2+3 fans = 7,500). No add_deal_product, no update_deal_product.",
+  "fixture": {
+   "preset": "sales",
+   "_deals": [
+    {
+     "id": "DEAL-1",
+     "deal_id": "D-2026-0001",
+     "contact_id": "CUST-1",
+     "stage": "new",
+     "owner_member_id": null,
+     "notes": null,
+     "products": [
+      {
+       "id": "dp-1",
+       "product_name": "พัดลม 18 นิ้ว",
+       "qty": 2,
+       "quoted_unit_price": "1500.00"
+      }
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "id": "s-hypo-later-cancel",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "พรุ่งนี้ค่อยยกเลิกนัด C-2026-0001"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "deferral",
+   "later",
+   "appointment",
+   "code"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A deferral: do it tomorrow, not now. FU-1 stays pending today. No write. Offering to set a reminder is a good reply; doing the cancellation is not."
+ },
+ {
+  "id": "s-hypo-later-deal",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "เดี๋ยวค่อยสร้างดีลให้สมชาย"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "deferral",
+   "later",
+   "deal"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A deferral aimed at deal creation. No create_deal."
+ },
+ {
+  "id": "s-hypo-what-if-lost",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ถ้าปิดดีลไม่สำเร็จจะเกิดอะไรขึ้น"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "hypothetical",
+   "question",
+   "deal",
+   "stage"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A question about consequences that contains the 'lost' stage words. Explain. D-2026-0001 must stay at stage new."
+ },
+ {
+  "id": "s-hypo-pause",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ไว้ก่อนนะ เดี๋ยวมาทำใบเสนอราคา"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "deferral",
+   "abandon",
+   "quote"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "'ไว้ก่อน' abandons the exchange. No quotation. Acknowledge and stop."
+ },
+ {
+  "id": "s-typo-code-short",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ยกเลิกนัด C-2026-001"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "typo",
+   "code",
+   "ask",
+   "appointment"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": "ไม่พบรหัส C-2026-001 — หมายถึง C-2026-0001 (นัดของคุณสมชาย) ใช่ไหมครับ",
+  "why": "A mistyped code (three digits, not four). The right answer names the mismatch and asks — cancelling the only pending appointment on a guess is not acceptable, and neither is a bare 'ไม่พบ'."
+ },
+ {
+  "id": "s-typo-cancel-by-name",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ยกเลิกนัดสมชาย"
+  ],
+  "expect": {},
+  "shape": [
+   "name-reference",
+   "appointment",
+   "ask-or-act"
+  ],
+  "must_write": [],
+  "may_write": [
+   "set_follow_up_status"
+  ],
+  "must_ask": "ยกเลิกนัดของ C-2026-0001 (คุณสมชาย) ใช่ไหมครับ",
+  "why": "The appointment named by person instead of code. FU-1 belongs to สมชาย and is the only pending one, so it MUST be cancelled."
+ },
+ {
+  "id": "s-typo-appt-create",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ตั้งนัดสมชายพรุ้งนี้ 10 โมง"
+  ],
+  "expect": {
+   "mutations": [
+    "create_follow_up"
+   ]
+  },
+  "shape": [
+   "typo",
+   "appointment",
+   "control"
+  ],
+  "must_write": [
+   "create_follow_up"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "'พรุ้งนี้' is a common misspelling of พรุ่งนี้. The appointment MUST still be created for 2026-09-11 10:00."
+ },
+ {
+  "id": "s-typo-appt-dropped-tone",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ตังนัด C-2026-0001 พรุ่งนี้บ่าย 2"
+  ],
+  "expect": {
+   "mutations": [
+    "create_follow_up"
+   ]
+  },
+  "shape": [
+   "typo",
+   "dropped-char",
+   "appointment",
+   "control"
+  ],
+  "must_write": [
+   "create_follow_up"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "'ตังนัด' drops the tone mark from ตั้งนัด. The appointment MUST still be created for 2026-09-11 14:00."
+ },
+ {
+  "id": "s-typo-line-add",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ข้อมูลดีล D-2026-0001",
+   {
+    "text": "เพิมแอร์ 12000 BTU 2 เครื่อง",
+    "ai": {
+     "action": "update",
+     "entity": "line_item",
+     "fields": {
+      "target_name": "แอร์ 12000 BTU",
+      "qty": "2"
+     },
+     "missing": []
+    }
+   }
+  ],
+  "expect": {},
+  "shape": [
+   "typo",
+   "dropped-char",
+   "line-item",
+   "multi-turn",
+   "ask-or-act"
+  ],
+  "must_write": [],
+  "may_write": [
+   "add_deal_product"
+  ],
+  "must_ask": "เพิ่ม แอร์ 12000 BTU (15,900.00) เข้าดีล D-2026-0001 จำนวน 2 เครื่อง ใช่ไหมครับ",
+  "why": "'เพิม' drops the tone mark from เพิ่ม, so the rule parser misses and the model is asked (which is fine). Adding the line is the right outcome; asking 'new line?' is acceptable too — but the price should come from the catalogue (AC12 = 15,900), not be asked for as if the shop did not sell it."
+ },
+ {
+  "id": "s-typo-customer-list",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ขอดูลูกคา"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "typo",
+   "dropped-char",
+   "read",
+   "customer"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "'ลูกคา' drops the tone mark. Still a request for the customer list. A read only."
+ },
+ {
+  "id": "s-typo-customer-list-2",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "รายชือลูกค้า"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "typo",
+   "dropped-char",
+   "read",
+   "customer"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "'รายชือ' drops the tone mark from รายชื่อ. Still the customer list. A read only."
+ },
+ {
+  "id": "s-typo-repeat-chars",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ข้อมูลดีล D-2026-0001",
+   "ดีลล่าสุดดด"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "typo",
+   "repeated-char",
+   "context",
+   "multi-turn",
+   "read"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Repeated final characters, the way people type when tired. Still 'the deal we were just looking at' — answer with D-2026-0001. A read only."
+ },
+ {
+  "id": "s-drop-words-deal",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ขอดู deal ของสมชายหน่อยคับ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "colloquial",
+   "mixed-english",
+   "typo",
+   "read",
+   "deal"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "English noun inside a Thai sentence, 'คับ' for ครับ. A read of สมชาย's deals."
+ },
+ {
+  "id": "s-spaced-customer-create",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   {
+    "text": "เพิ่ม ลูกค้า สมหญิง รักดี 0898765432",
+    "ai": {
+     "action": "create",
+     "entity": "customer",
+     "fields": {
+      "first_name": "สมหญิง",
+      "last_name": "รักดี",
+      "phone": "0898765432"
+     },
+     "missing": []
+    }
+   }
+  ],
+  "expect": {
+   "mutations": [
+    "create_customer"
+   ]
+  },
+  "shape": [
+   "spacing",
+   "customer",
+   "control"
+  ],
+  "must_write": [
+   "create_customer"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Voice-to-text spacing inside the trigger word. The customer MUST still be created."
+ },
+ {
+  "id": "s-thai-numerals",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ตั้งนัด C-2026-0001 พรุ่งนี้ ๑๐ โมง"
+  ],
+  "expect": {
+   "mutations": [
+    "create_follow_up"
+   ]
+  },
+  "shape": [
+   "thai-numerals",
+   "appointment",
+   "control"
+  ],
+  "must_write": [
+   "create_follow_up"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Thai numerals for the time. Normalisation turns ๑๐ into 10; the appointment MUST be created for 2026-09-11 10:00."
+ },
+ {
+  "id": "s-colloq-deal-create",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "เปิดดีลให้สมชายที มูลค่าสัก 50000"
+  ],
+  "expect": {
+   "mutations": [
+    "create_deal"
+   ]
+  },
+  "shape": [
+   "colloquial",
+   "deal",
+   "control"
+  ],
+  "must_write": [
+   "create_deal"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Colloquial: 'ที' for หน่อย, 'สัก' hedging the amount. A deal MUST be created for สมชาย at 50,000."
+ },
+ {
+  "id": "s-colloq-work-today",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "วันนี้มีไรต้องทำมั่ง"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "colloquial",
+   "read",
+   "work"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Colloquial contractions ('ไร' for อะไร, 'มั่ง' for บ้าง). A read of today's work."
+ },
+ {
+  "id": "s-colloq-rude-help",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ใช้ไงวะเนี่ย"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "colloquial",
+   "rude",
+   "help"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Blunt, impatient help request. Answer with the guide, do not take offence and do not write anything."
+ },
+ {
+  "id": "s-en-cancel-ctrl",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "en",
+  "seed": 1,
+  "messages": [
+   "cancel appointment C-2026-0001"
+  ],
+  "expect": {
+   "mutations": [
+    "set_follow_up_status"
+   ]
+  },
+  "shape": [
+   "english",
+   "control",
+   "appointment",
+   "code"
+  ],
+  "must_write": [
+   "set_follow_up_status"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "English control: the plain order MUST cancel FU-1."
+ },
+ {
+  "id": "s-en-neg-cancel",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "en",
+  "seed": 1,
+  "messages": [
+   "don't cancel the appointment C-2026-0001"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "english",
+   "refusal",
+   "negation",
+   "appointment",
+   "code"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "English refusal. FU-1 must stay pending; no write; answer in English."
+ },
+ {
+  "id": "s-en-status-quote",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "en",
+  "seed": 1,
+  "messages": [
+   "did I already create the quote for D-2026-0001?"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "english",
+   "status",
+   "question",
+   "quote",
+   "code"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "English status question. Answer 'not yet'. No create_quote."
+ },
+ {
+  "id": "s-en-list-customers",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "en",
+  "seed": 1,
+  "messages": [
+   "list customers pls"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "english",
+   "read",
+   "customer"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "English read. No write."
+ },
+ {
+  "id": "s-en-quote-ctrl",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "en",
+  "seed": 1,
+  "messages": [
+   "create quote for D-2026-0001"
+  ],
+  "expect": {
+   "mutations": [
+    "create_quote"
+   ]
+  },
+  "shape": [
+   "english",
+   "control",
+   "quote",
+   "code"
+  ],
+  "must_write": [
+   "create_quote"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "English control: the quotation MUST be created."
+ },
+ {
+  "id": "s-mixed-line-add",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ข้อมูลดีล D-2026-0001",
+   "add แอร์ 12000 BTU x2"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "shape": [
+   "mixed-english",
+   "line-item",
+   "multi-turn",
+   "control"
+  ],
+  "must_write": [
+   "add_deal_product"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "English verb, Thai product, an 'x2' quantity. The catalogue line MUST be added."
+ },
+ {
+  "id": "s-mixed-neg-line",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ข้อมูลดีล D-2026-0001",
+   "no need to add the fan"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "mixed-english",
+   "refusal",
+   "line-item",
+   "multi-turn"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "English refusal about a line item, typed on a Thai account. No write.",
+  "fixture": {
+   "preset": "sales",
+   "_deals": [
+    {
+     "id": "DEAL-1",
+     "deal_id": "D-2026-0001",
+     "contact_id": "CUST-1",
+     "stage": "new",
+     "owner_member_id": null,
+     "notes": null,
+     "products": [
+      {
+       "id": "dp-1",
+       "product_name": "พัดลม 18 นิ้ว",
+       "qty": 2,
+       "quoted_unit_price": "1500.00"
+      }
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "id": "s-en-howto-invite",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "en",
+  "seed": 1,
+  "messages": [
+   "how can I invite a technician?"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "english",
+   "howto",
+   "question",
+   "invite"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "English how-to containing the invite words. Teach. No create_invite."
+ },
+ {
+  "id": "s-corr-customer-phone",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   {
+    "text": "เพิ่มลูกค้า สมหญิง รักดี 0898765432",
+    "ai": {
+     "action": "create",
+     "entity": "customer",
+     "fields": {
+      "first_name": "สมหญิง",
+      "last_name": "รักดี",
+      "phone": "0898765432"
+     },
+     "missing": []
+    }
+   },
+   {
+    "text": "ผิด เบอร์ 0899999999 ต่างหาก",
+    "ai": {
+     "action": "update",
+     "entity": "customer",
+     "fields": {
+      "target_name": "สมหญิง",
+      "phone": "0899999999"
+     },
+     "missing": []
+    }
+   }
+  ],
+  "expect": {
+   "mutations": [
+    "create_customer",
+    "update_customer"
+   ]
+  },
+  "shape": [
+   "correction",
+   "customer",
+   "multi-turn",
+   "control"
+  ],
+  "must_write": [
+   "create_customer",
+   "update_customer"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A correction of the record just created. The customer is created on turn 1 and her phone updated on turn 2 — create_customer then update_customer, and no second customer row."
+ },
+ {
+  "id": "s-corr-appt-time",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ตั้งนัด C-2026-0001 พรุ่งนี้ 10 โมง",
+   "ไม่ใช่ 10 โมง เป็นบ่าย 2"
+  ],
+  "expect": {
+   "mutations": [
+    "create_follow_up",
+    "update_follow_up"
+   ]
+  },
+  "shape": [
+   "correction",
+   "appointment",
+   "multi-turn",
+   "control"
+  ],
+  "must_write": [
+   "create_follow_up",
+   "update_follow_up"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A correction of the time just set. The appointment created on turn 1 must be MOVED, not duplicated: create_follow_up then update_follow_up."
+ },
+ {
+  "id": "s-corr-deal-amount",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   {
+    "text": "สร้างดีลให้สมชาย 50000",
+    "ai": {
+     "action": "create",
+     "entity": "deal",
+     "fields": {
+      "target_name": "สมชาย",
+      "amount": "50000"
+     },
+     "missing": []
+    }
+   },
+   {
+    "text": "ไม่ใช่ 50000 เป็น 60000",
+    "ai": {
+     "action": "update",
+     "entity": "deal",
+     "fields": {
+      "deal_code": "D-2026-0002",
+      "amount": "60000"
+     },
+     "missing": []
+    }
+   }
+  ],
+  "expect": {
+   "mutations": [
+    "create_deal"
+   ]
+  },
+  "shape": [
+   "correction",
+   "deal",
+   "multi-turn",
+   "documented-limitation"
+  ],
+  "must_write": [
+   "create_deal"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A correction of a deal's value. ('update','deal') has no chat handler BY DESIGN (SYSTEM_GUIDE §8) — so the right answer on turn 2 is the honest 'not in chat, here is the deal page', naming the deal. create_deal is the only write."
+ },
+ {
+  "id": "s-corr-line-qty",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ข้อมูลดีล D-2026-0001",
+   "แก้พัดลมเป็น 3 ตัว"
+  ],
+  "expect": {
+   "mutations": [
+    "update_deal_product"
+   ]
+  },
+  "shape": [
+   "correction",
+   "line-item",
+   "multi-turn",
+   "control"
+  ],
+  "must_write": [
+   "update_deal_product"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A correction of a quantity on the line just discussed. update_deal_product on dp-1, qty 3 — not a new line.",
+  "fixture": {
+   "preset": "sales",
+   "_deals": [
+    {
+     "id": "DEAL-1",
+     "deal_id": "D-2026-0001",
+     "contact_id": "CUST-1",
+     "stage": "new",
+     "owner_member_id": null,
+     "notes": null,
+     "products": [
+      {
+       "id": "dp-1",
+       "product_name": "พัดลม 18 นิ้ว",
+       "qty": 2,
+       "quoted_unit_price": "1500.00"
+      }
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "id": "s-corr-undo-cancel",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ยกเลิกนัด C-2026-0001",
+   "เอ๊ะ ผิด ขอคืนได้ไหม"
+  ],
+  "expect": {
+   "mutations": [
+    "set_follow_up_status"
+   ]
+  },
+  "shape": [
+   "correction",
+   "undo",
+   "multi-turn",
+   "appointment"
+  ],
+  "must_write": [
+   "set_follow_up_status"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Regret after a real cancellation. There is no undo: the honest answer says the appointment was cancelled and offers to set a new one. Turn 2 must add NO further write (no silent re-create)."
+ },
+ {
+  "id": "s-corr-wrong-technician",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "มอบหมาย T-2026-0001 ให้สมศักดิ์",
+   {
+    "text": "ไม่ใช่สมศักดิ์ ให้ช่างอีกคน",
+    "ai": {
+     "action": "assign",
+     "entity": "ticket",
+     "fields": {
+      "code": "T-2026-0001"
+     },
+     "missing": [
+      "target_name"
+     ]
+    }
+   }
+  ],
+  "expect": {},
+  "shape": [
+   "correction",
+   "ticket",
+   "multi-turn",
+   "ask"
+  ],
+  "must_write": [
+   "assign_ticket"
+  ],
+  "may_write": [],
+  "must_ask": "ช่างคนไหนครับ — ตอนนี้ร้านมีช่างคนเดียวคือ สมศักดิ์",
+  "why": "A correction naming nobody. Only one technician exists in the shop, so the right answer says so and asks who — it must not reassign to a guess. Turn 2 adds no write."
+ },
+ {
+  "id": "s-corr-wrong-customer",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ข้อมูลลูกค้า สมชาย",
+   "ไม่ใช่คนนี้ สมหญิงต่างหาก"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "correction",
+   "customer",
+   "multi-turn",
+   "read"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": "ไม่พบลูกค้าชื่อ สมหญิง — ต้องการเพิ่มเป็นลูกค้าใหม่ไหมครับ",
+  "why": "A correction of which customer is meant. สมหญิง does not exist; say so and offer to add her. No write."
+ },
+ {
+  "id": "s-corr-wrong-deal",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "สร้างใบเสนอราคา D-2026-0001",
+   "ผิดดีล ขอ D-2026-0002"
+  ],
+  "expect": {
+   "mutations": [
+    "create_quote"
+   ]
+  },
+  "shape": [
+   "correction",
+   "quote",
+   "multi-turn",
+   "not-found"
+  ],
+  "must_write": [
+   "create_quote"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A correction naming a deal that does not exist. Turn 1 legitimately creates the quotation; turn 2 must answer 'ไม่พบ D-2026-0002' and create nothing more."
+ },
+ {
+  "id": "s-corr-note-edit",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": [
+   "customer.create",
+   "customer.read",
+   "customer.update",
+   "customer.archive",
+   "deal.create",
+   "deal.read",
+   "deal.update",
+   "quote.create",
+   "quote.read",
+   "quote.update",
+   "product.manage",
+   "followup.create",
+   "followup.read",
+   "followup.update",
+   "note.create",
+   "note.read",
+   "note.update",
+   "ticket.read",
+   "ticket.create",
+   "ticket.update",
+   "ticket.assign",
+   "service_report.read",
+   "warranty.read",
+   "warranty.create",
+   "team.manage",
+   "member.manage",
+   "setting.manage",
+   "approval.view",
+   "approval.approve",
+   "approval.reject",
+   "approval.manage",
+   "view_reports"
+  ],
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ข้อมูลลูกค้า สมชาย",
+   "บันทึกว่าสมชายขอส่วนลด",
+   "แก้บันทึกเป็น ลูกค้าขอลด 10%"
+  ],
+  "expect": {
+   "mutations": [
+    "create_note",
+    "update_note"
+   ]
+  },
+  "shape": [
+   "correction",
+   "note",
+   "multi-turn",
+   "control"
+  ],
+  "must_write": [
+   "create_note",
+   "update_note"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A correction of the note just written: create_note then update_note on the same note, not two notes."
+ },
+ {
+  "id": "s-corr-slot-name",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   {
+    "text": "เพิ่มลูกค้า สมหญิง",
+    "ai": {
+     "action": "create",
+     "entity": "customer",
+     "fields": {
+      "first_name": "สมหญิง"
+     },
+     "missing": [
+      "last_name",
+      "phone"
+     ]
+    }
+   },
+   {
+    "text": "อ๋อ นามสกุล รักดี ไม่ใช่ชื่อเปล่า ๆ",
+    "ai": {
+     "action": "create",
+     "entity": "customer",
+     "fields": {
+      "first_name": "สมหญิง",
+      "last_name": "รักดี"
+     },
+     "missing": [
+      "phone"
+     ]
+    }
+   }
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "correction",
+   "slot-fill",
+   "multi-turn"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": "เบอร์โทรของคุณสมหญิง รักดี คืออะไรครับ",
+  "why": "A correction INSIDE a half-finished flow. The surname is filled in and the phone is still missing, so the chat must ask for the phone and write nothing yet."
+ },
+ {
+  "id": "s-ref-phone",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ข้อมูลลูกค้า C-2026-0001",
+   "เบอร์อะไรนะ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "reference",
+   "multi-turn",
+   "read",
+   "customer"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A follow-up question with no subject. It means สมชาย's phone: answer 0812345678. A read only."
+ },
+ {
+  "id": "s-ref-deal-lines",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ข้อมูลดีล D-2026-0001",
+   "มีสินค้าอะไรบ้าง"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "reference",
+   "multi-turn",
+   "read",
+   "deal",
+   "line-item"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "'Which products?' about the deal just shown. Answer with the fan line. A read only.",
+  "fixture": {
+   "preset": "sales",
+   "_deals": [
+    {
+     "id": "DEAL-1",
+     "deal_id": "D-2026-0001",
+     "contact_id": "CUST-1",
+     "stage": "new",
+     "owner_member_id": null,
+     "notes": null,
+     "products": [
+      {
+       "id": "dp-1",
+       "product_name": "พัดลม 18 นิ้ว",
+       "qty": 2,
+       "quoted_unit_price": "1500.00"
+      }
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "id": "s-ref-first-of-list",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "รายชื่อลูกค้า",
+   "คนแรกชื่ออะไร"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "reference",
+   "multi-turn",
+   "read",
+   "customer"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A question about the list just printed. Answer สมชาย ใจดี. A read only."
+ },
+ {
+  "id": "s-ref-appt-for-him",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ข้อมูลลูกค้า สมชาย",
+   "ตั้งนัดพรุ่งนี้ 10 โมงให้เขาหน่อย"
+  ],
+  "expect": {
+   "mutations": [
+    "create_follow_up"
+   ]
+  },
+  "shape": [
+   "reference",
+   "pronoun",
+   "multi-turn",
+   "control",
+   "appointment"
+  ],
+  "must_write": [
+   "create_follow_up"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "'เขา' is the customer just looked at. The appointment MUST be created against CUST-1 for 2026-09-11 10:00."
+ },
+ {
+  "id": "s-ref-quote-this-deal",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ข้อมูลดีล D-2026-0001",
+   "สร้างใบเสนอราคาให้ดีลนี้"
+  ],
+  "expect": {
+   "mutations": [
+    "create_quote"
+   ]
+  },
+  "shape": [
+   "reference",
+   "multi-turn",
+   "control",
+   "quote"
+  ],
+  "must_write": [
+   "create_quote"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "'ดีลนี้' is the deal just shown. The quotation MUST be created from DEAL-1."
+ },
+ {
+  "id": "s-ref-cancel-the-one",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "รายการเตือน",
+   "ยกเลิกอันนั้น"
+  ],
+  "expect": {},
+  "shape": [
+   "reference",
+   "multi-turn",
+   "appointment",
+   "ask-or-act"
+  ],
+  "must_write": [],
+  "may_write": [
+   "set_follow_up_status"
+  ],
+  "must_ask": "ยกเลิกนัดของ C-2026-0001 (12 ก.ย. 10:00) ใช่ไหมครับ",
+  "why": "'อันนั้น' after a list with exactly one pending appointment. Cancelling FU-1 is right; if the implementation prefers to confirm first, the confirmation must name C-2026-0001 and write nothing until answered."
+ },
+ {
+  "id": "s-ref-his-deals",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ข้อมูลลูกค้า สมชาย",
+   "เขามีดีลอะไรบ้าง"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "reference",
+   "pronoun",
+   "multi-turn",
+   "read",
+   "deal"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "'เขา' again, this time asking for deals. Answer with D-2026-0001. A read only."
+ },
+ {
+  "id": "s-ref-this-deal-won",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ข้อมูลดีล D-2026-0001",
+   "อันนี้ปิดสำเร็จแล้ว"
+  ],
+  "expect": {
+   "mutations": [
+    "transition_deal_stage"
+   ]
+  },
+  "shape": [
+   "reference",
+   "multi-turn",
+   "control",
+   "deal",
+   "stage"
+  ],
+  "must_write": [
+   "transition_deal_stage"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "'อันนี้' plus a win. The stage MUST move to won (transition_deal_stage)."
+ },
+ {
+  "id": "s-ref-note-on-him",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ข้อมูลลูกค้า สมชาย",
+   "จดไว้ว่าเขาขอผ่อน"
+  ],
+  "expect": {
+   "mutations": [
+    "create_note"
+   ]
+  },
+  "shape": [
+   "reference",
+   "multi-turn",
+   "control",
+   "note"
+  ],
+  "must_write": [
+   "create_note"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A note about the customer in context. create_note against CUST-1."
+ },
+ {
+  "id": "s-ref-deal-value",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ข้อมูลดีล D-2026-0001",
+   "ดีลนี้มูลค่าเท่าไหร่"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "reference",
+   "multi-turn",
+   "read",
+   "deal"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A value question about the deal in context. Answer 3,000.00 from the lines. A read only.",
+  "fixture": {
+   "preset": "sales",
+   "_deals": [
+    {
+     "id": "DEAL-1",
+     "deal_id": "D-2026-0001",
+     "contact_id": "CUST-1",
+     "stage": "new",
+     "owner_member_id": null,
+     "notes": null,
+     "products": [
+      {
+       "id": "dp-1",
+       "product_name": "พัดลม 18 นิ้ว",
+       "qty": 2,
+       "quoted_unit_price": "1500.00"
+      }
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "id": "s-ref-quoted-earlier",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ข้อมูลลูกค้า สมชาย",
+   "งานวันนี้",
+   "กลับไปที่ลูกค้าคนเมื่อกี้ ขอเบอร์หน่อย"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "reference",
+   "multi-turn",
+   "read",
+   "customer",
+   "long-range"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A reference back across an intervening turn. The 'คนเมื่อกี้' is still สมชาย. A read only."
+ },
+ {
+  "id": "s-switch-to-read",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   {
+    "text": "เพิ่มลูกค้าใหม่",
+    "ai": {
+     "action": "create",
+     "entity": "customer",
+     "fields": {},
+     "missing": [
+      "first_name",
+      "last_name",
+      "phone"
+     ]
+    }
+   },
+   {
+    "text": "ขอดูรายชื่อลูกค้าแทน",
+    "ai": {
+     "action": "read",
+     "entity": "customer",
+     "fields": {},
+     "missing": []
+    }
+   }
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "mind-change",
+   "flow-switch",
+   "multi-turn",
+   "read"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": "กำลังเพิ่มลูกค้าอยู่ — จะยกเลิกแล้วดูรายชื่อแทนไหมครับ",
+  "why": "A read asked in the middle of a create flow. The chat must say what happens to the half-finished customer (dropped, or held) and then answer the read. No customer may be saved."
+ },
+ {
+  "id": "s-switch-to-deal-read",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   {
+    "text": "เพิ่มลูกค้าใหม่",
+    "ai": {
+     "action": "create",
+     "entity": "customer",
+     "fields": {},
+     "missing": [
+      "first_name",
+      "last_name",
+      "phone"
+     ]
+    }
+   },
+   {
+    "text": "เดี๋ยวก่อน ขอดูดีลก่อน",
+    "ai": {
+     "action": "read",
+     "entity": "deal",
+     "fields": {},
+     "missing": []
+    }
+   }
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "mind-change",
+   "flow-switch",
+   "multi-turn",
+   "read"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "'เดี๋ยวก่อน' interrupts the flow with a different read. Same rule: say what happened to the flow, write nothing."
+ },
+ {
+  "id": "s-switch-abort-yokelik",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   {
+    "text": "เพิ่มลูกค้าใหม่",
+    "ai": {
+     "action": "create",
+     "entity": "customer",
+     "fields": {},
+     "missing": [
+      "first_name",
+      "last_name",
+      "phone"
+     ]
+    }
+   },
+   "ยกเลิก"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "mind-change",
+   "abort",
+   "multi-turn"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A bare 'ยกเลิก' while a create flow is waiting. Drop the flow and say nothing was saved. It must NOT be read as cancelling the appointment FU-1."
+ },
+ {
+  "id": "s-switch-abort-maiao",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   {
+    "text": "เพิ่มลูกค้าใหม่",
+    "ai": {
+     "action": "create",
+     "entity": "customer",
+     "fields": {},
+     "missing": [
+      "first_name",
+      "last_name",
+      "phone"
+     ]
+    }
+   },
+   "ไม่เอาแล้ว"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "mind-change",
+   "abort",
+   "colloquial",
+   "multi-turn"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A colloquial abort. Drop the flow, say nothing was saved, write nothing."
+ },
+ {
+  "id": "s-switch-answers-slot",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   {
+    "text": "เพิ่มลูกค้า สมหญิง",
+    "ai": {
+     "action": "create",
+     "entity": "customer",
+     "fields": {
+      "first_name": "สมหญิง"
+     },
+     "missing": [
+      "last_name",
+      "phone"
+     ]
+    }
+   },
+   {
+    "text": "รักดี",
+    "ai": {
+     "action": "create",
+     "entity": "customer",
+     "fields": {
+      "first_name": "สมหญิง",
+      "last_name": "รักดี"
+     },
+     "missing": [
+      "phone"
+     ]
+    }
+   }
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "slot-fill",
+   "multi-turn"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": "เบอร์โทรของคุณสมหญิง รักดี คืออะไรครับ",
+  "why": "A bare surname answering the question. It is a slot answer, not a new command; the flow continues and still needs the phone. No write yet."
+ },
+ {
+  "id": "s-switch-completes",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   {
+    "text": "เพิ่มลูกค้า สมหญิง รักดี",
+    "ai": {
+     "action": "create",
+     "entity": "customer",
+     "fields": {
+      "first_name": "สมหญิง",
+      "last_name": "รักดี"
+     },
+     "missing": [
+      "phone"
+     ]
+    }
+   },
+   {
+    "text": "0898765432",
+    "ai": {
+     "action": "create",
+     "entity": "customer",
+     "fields": {
+      "first_name": "สมหญิง",
+      "last_name": "รักดี",
+      "phone": "0898765432"
+     },
+     "missing": []
+    }
+   }
+  ],
+  "expect": {
+   "mutations": [
+    "create_customer"
+   ]
+  },
+  "shape": [
+   "slot-fill",
+   "multi-turn",
+   "control"
+  ],
+  "must_write": [
+   "create_customer"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Control for the slot-fill cases: a bare phone number finishes the flow and the customer MUST be created."
+ },
+ {
+  "id": "s-switch-to-deal-create",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   {
+    "text": "เพิ่มลูกค้า สมหญิง",
+    "ai": {
+     "action": "create",
+     "entity": "customer",
+     "fields": {
+      "first_name": "สมหญิง"
+     },
+     "missing": [
+      "last_name",
+      "phone"
+     ]
+    }
+   },
+   {
+    "text": "เอาเป็นเปิดดีลให้สมชายแทน",
+    "ai": {
+     "action": "create",
+     "entity": "deal",
+     "fields": {
+      "target_name": "สมชาย"
+     },
+     "missing": []
+    }
+   }
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "mind-change",
+   "flow-switch",
+   "multi-turn",
+   "write"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": "กำลังเพิ่มลูกค้า สมหญิง อยู่ — จะยกเลิกแล้วเปิดดีลให้สมชายแทนไหม",
+  "why": "A different WRITE asked mid-flow. The documented behaviour is to confirm the switch first; nothing may be written on turn 2 until the person says yes."
+ },
+ {
+  "id": "s-switch-then-confirm",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   {
+    "text": "เพิ่มลูกค้า สมหญิง",
+    "ai": {
+     "action": "create",
+     "entity": "customer",
+     "fields": {
+      "first_name": "สมหญิง"
+     },
+     "missing": [
+      "last_name",
+      "phone"
+     ]
+    }
+   },
+   {
+    "text": "ตั้งนัดสมชายพรุ่งนี้ 10 โมง",
+    "ai": {
+     "action": "create",
+     "entity": "followup",
+     "fields": {
+      "target_name": "สมชาย",
+      "due_date": "พรุ่งนี้",
+      "due_time": "10:00"
+     },
+     "missing": []
+    }
+   },
+   "ใช่ ตั้งนัดเลย"
+  ],
+  "expect": {
+   "mutations": [
+    "create_follow_up"
+   ]
+  },
+  "shape": [
+   "mind-change",
+   "flow-switch",
+   "multi-turn",
+   "control"
+  ],
+  "must_write": [
+   "create_follow_up"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "The switch confirmed on turn 3. Now the appointment MUST be created and the customer flow dropped: create_follow_up is the only write."
+ },
+ {
+  "id": "s-switch-pause",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   {
+    "text": "เพิ่มลูกค้า สมหญิง",
+    "ai": {
+     "action": "create",
+     "entity": "customer",
+     "fields": {
+      "first_name": "สมหญิง"
+     },
+     "missing": [
+      "last_name",
+      "phone"
+     ]
+    }
+   },
+   "พักไว้ก่อน"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "mind-change",
+   "abort",
+   "multi-turn"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "'พักไว้ก่อน' pauses. Say the flow was dropped and nothing was saved. No write."
+ },
+ {
+  "id": "s-switch-what-did-you-ask",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   {
+    "text": "เพิ่มลูกค้า สมหญิง",
+    "ai": {
+     "action": "create",
+     "entity": "customer",
+     "fields": {
+      "first_name": "สมหญิง"
+     },
+     "missing": [
+      "last_name",
+      "phone"
+     ]
+    }
+   },
+   "เมื่อกี้ถามอะไรนะ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "reference",
+   "mind-change",
+   "multi-turn",
+   "ask"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": "กำลังถามนามสกุลและเบอร์ของคุณสมหญิงอยู่ครับ",
+  "why": "A question ABOUT the pending question. Repeat what is being asked and keep the flow alive. No write, and the flow must not be dropped as if abandoned."
+ },
+ {
+  "id": "s-switch-line-abort",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ข้อมูลดีล D-2026-0001",
+   "เพิ่มพัดลม 18 นิ้ว 2 ตัว",
+   "ไม่เอาแล้ว"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "mind-change",
+   "abort",
+   "line-item",
+   "multi-turn"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A line-item flow asked a question (new product or existing?) and the person backed out. Drop it; nothing may be added to the deal."
+ },
+ {
+  "id": "s-switch-quote-then-stop",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "สร้างใบเสนอราคา D-2026-0001",
+   "เอ๊ะ ขอเปลี่ยนใจ ยังไม่ต้องส่งให้ลูกค้า"
+  ],
+  "expect": {
+   "mutations": [
+    "create_quote"
+   ]
+  },
+  "shape": [
+   "mind-change",
+   "multi-turn",
+   "quote"
+  ],
+  "must_write": [
+   "create_quote"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Turn 1 legitimately creates the quotation. Turn 2 changes its mind about SENDING it — no document may be generated and the quotation's status must not change. create_quote is the only write."
+ },
+ {
+  "id": "s-ask-bare-cancel",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ยกเลิก"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "ambiguous",
+   "ask",
+   "bare"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": "ต้องการยกเลิกอะไรครับ (นัด / ใบเสนอราคา / รายการที่กำลังทำอยู่)",
+  "why": "A bare 'ยกเลิก' with NOTHING pending. It must not cancel FU-1 on a guess; ask what should be cancelled."
+ },
+ {
+  "id": "s-ask-assign-no-code",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "มอบหมายงานให้สมศักดิ์"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "ambiguous",
+   "ask",
+   "ticket"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": "งานไหนครับ — ตอนนี้ที่ยังไม่ได้มอบหมายคือ T-2026-0001",
+  "why": "An assignment with no job named. Ask which job, or list the open ones. No assign_ticket on a guess."
+ },
+ {
+  "id": "s-ask-line-no-deal",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "เพิ่มพัดลม 3 ตัว"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "ambiguous",
+   "ask",
+   "line-item"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": "เพิ่มเข้าดีลหรือใบเสนอราคาไหนครับ",
+  "why": "A line item with no deal or quotation in context. Ask which record. No write."
+ },
+ {
+  "id": "s-ask-appt-no-target",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ตั้งนัดพรุ่งนี้ 10 โมง"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "ambiguous",
+   "ask",
+   "appointment"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": "นัดกับลูกค้าคนไหนครับ",
+  "why": "An appointment with a time but no person. Ask who. No create_follow_up against a guessed customer."
+ },
+ {
+  "id": "s-ask-delete-customer",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ลบลูกค้า"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "ambiguous",
+   "ask",
+   "customer",
+   "destructive"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": "ลบลูกค้าคนไหนครับ",
+  "why": "A deletion with no target. Ask which customer. Nothing may be archived."
+ },
+ {
+  "id": "s-ask-discount-no-quote",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ส่วนลด 10%"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "ambiguous",
+   "ask",
+   "quote"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": "ให้ส่วนลดกับใบเสนอราคาไหนครับ",
+  "why": "A discount with no quotation in context. Ask which quotation. No set_quote_terms."
+ },
+ {
+  "id": "s-ask-close-deal-bare",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ปิดดีล"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "ambiguous",
+   "ask",
+   "deal",
+   "stage"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": "ปิดดีลไหน และปิดสำเร็จหรือไม่สำเร็จครับ",
+  "why": "'ปิดดีล' with no code and no outcome. Ask which deal and whether it was won or lost. No transition_deal_stage."
+ },
+ {
+  "id": "s-ask-bare-code-request",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ขอรหัส"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "ambiguous",
+   "ask",
+   "invite"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": "ขอรหัสอะไรครับ — รหัสร้าน หรือ รหัสเชิญช่าง",
+  "why": "'ขอรหัส' could be the shop code or an invite code. Ask which. No invite may be minted."
+ },
+ {
+  "id": "s-reported-cancel",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ลูกค้าบอกว่าจะยกเลิกนัด"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "reported-speech",
+   "appointment"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Reported speech about a future intention. Nothing may be cancelled. A good reply offers to cancel or to note it."
+ },
+ {
+  "id": "s-reported-lost",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "เมื่อวานลูกค้าโทรมาบอกว่าปิดดีลไม่ได้"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "reported-speech",
+   "deal",
+   "stage"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Reported speech containing the lost-stage words. The stage must not move on somebody else's report of a phone call."
+ },
+ {
+  "id": "s-example-quoted",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ทดสอบระบบ คำว่า \"ยกเลิกนัด C-2026-0001\""
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "example",
+   "test-message",
+   "appointment",
+   "code"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "The action is quoted as an example inside a test message. Nothing may happen."
+ },
+ {
+  "id": "s-offtopic-weather",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "อากาศวันนี้เป็นไง"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "offtopic",
+   "small-talk"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Off topic. Decline politely and point at what the chat does do. No write."
+ },
+ {
+  "id": "s-smalltalk-thanks",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ขอบคุณครับผม"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "small-talk"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Small talk. A short human reply. No write."
+ },
+ {
+  "id": "s-smalltalk-emoji",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "👍🙏"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "small-talk",
+   "emoji"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Emoji only. Acknowledge. No write."
+ },
+ {
+  "id": "s-gibberish",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "asdfgh"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "gibberish",
+   "documented-baseline"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Gibberish. Saying 'not sure' is the right answer (SYSTEM_GUIDE §8 baseline). No write."
+ },
+ {
+  "id": "s-ai-down",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   {
+    "text": "สมชายอยากได้แอร์สองตัว นัดดูของพรุ่งนี้บ่าย",
+    "ai": {
+     "__status__": 500
+    }
+   }
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "model-unavailable",
+   "failure"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "The model is down on a sentence only the model could read. The chat must say it cannot understand right now and write NOTHING — no rule may write in its place."
+ },
+ {
+  "id": "s-perm-no-quote",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": [
+   "customer.read",
+   "deal.read",
+   "quote.read",
+   "followup.read",
+   "note.read",
+   "ticket.read",
+   "view_reports"
+  ],
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "สร้างใบเสนอราคา D-2026-0001"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "permission",
+   "refusal",
+   "quote",
+   "code"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "The same order without quote.create. Refuse and name what is missing. No create_quote."
+ },
+ {
+  "id": "s-runon-buried-order",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   {
+    "text": "สวัสดีครับพอดีเมื่อกี้คุยกับคุณสมชายเขาบอกว่าจะเข้ามาดูแอร์ที่ร้านพรุ่งนี้ตอนบ่ายสองช่วยตั้งนัดไว้ให้หน่อยนะครับ",
+    "ai": {
+     "action": "create",
+     "entity": "followup",
+     "fields": {
+      "target_name": "สมชาย",
+      "due_date": "พรุ่งนี้",
+      "due_time": "14:00",
+      "notes": "เข้ามาดูแอร์ที่ร้าน"
+     },
+     "missing": []
+    }
+   }
+  ],
+  "expect": {
+   "mutations": [
+    "create_follow_up"
+   ]
+  },
+  "shape": [
+   "runon",
+   "buried",
+   "reported-speech",
+   "control",
+   "appointment"
+  ],
+  "must_write": [
+   "create_follow_up"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A voice-to-text run-on with the order buried at the end. The appointment MUST be created for 2026-09-11 14:00 — the greeting and the reported speech at the front must not swallow the request."
+ },
+ {
+  "id": "s-multi-intent",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ขอดูลูกค้าแล้วก็ตั้งนัดสมชายพรุ่งนี้ 10 โมงด้วย"
+  ],
+  "expect": {},
+  "shape": [
+   "multi-intent",
+   "appointment",
+   "ask-or-act"
+  ],
+  "must_write": [],
+  "may_write": [
+   "create_follow_up"
+  ],
+  "must_ask": "ให้ตั้งนัดสมชายพรุ่งนี้ 10 โมงด้วยไหมครับ",
+  "why": "Two requests in one line: a read and a write. Both should be honoured (or the second confirmed), and the appointment MUST end up created."
+ },
+ {
+  "id": "s-multi-intent-neg",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ขอดูลูกค้า แต่ยังไม่ต้องตั้งนัดนะ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "multi-intent",
+   "refusal",
+   "negation",
+   "appointment"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Two clauses where the second REFUSES. Show the customers; create no appointment."
+ },
+ {
+  "id": "s-capability-question",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ผมทำอะไรกับดีลได้บ้างครับ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "capability",
+   "question",
+   "read"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A capability question. List what this person's permissions allow. No write."
+ },
+ {
+  "id": "s-no-handler-member",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   {
+    "text": "อยากเปลี่ยนบทบาทของสมศักดิ์เป็นแอดมิน",
+    "ai": {
+     "action": "update",
+     "entity": "member",
+     "fields": {
+      "target_name": "สมศักดิ์",
+      "role": "admin"
+     },
+     "missing": []
+    }
+   }
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "documented-limitation",
+   "no-handler",
+   "member"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "('update','member') has no chat handler BY DESIGN (SYSTEM_GUIDE §8). The right answer says so and names the members page, with a button. No write. This is not a defect — it is here so the next phase does not count it as one."
+ },
+ {
+  "id": "s-product-price-question",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "แอร์ 12000 BTU ราคาเท่าไหร่"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "question",
+   "read",
+   "product"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A catalogue price question. Answer 15,900.00 from AC12. A read only."
+ },
+ {
+  "id": "s-report-question",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "เดือนนี้ขายได้เท่าไหร่"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "question",
+   "read",
+   "report"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A numbers question. Answer with the summary. No write."
+ },
+ {
+  "id": "s-hesitant-create",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   {
+    "text": "อยากเพิ่มลูกค้าใหม่แต่ยังไม่มีเบอร์เลย ทำได้ไหม",
+    "ai": {
+     "action": "create",
+     "entity": "customer",
+     "fields": {},
+     "missing": [
+      "first_name",
+      "last_name",
+      "phone"
+     ]
+    }
+   },
+   "ชื่อ สมหญิง รักดี"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "hesitant",
+   "question",
+   "multi-turn",
+   "slot-fill"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": "เบอร์โทรของคุณสมหญิง รักดี คืออะไรครับ (ถ้ายังไม่มี บอกทีหลังได้)",
+  "why": "A hesitant, thinking-aloud opening — a question about whether it is possible, then the name. Turn 1 must answer the question and not write; turn 2 fills the name and the phone is still missing, so still no write."
+ },
+ {
+  "id": "s-vague-followup-request",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ข้อมูลลูกค้า สมชาย",
+   "ช่วยตามเรื่องนี้ให้หน่อย"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "ambiguous",
+   "ask",
+   "multi-turn",
+   "appointment"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": "ให้เตือนวันไหนครับ",
+  "why": "A vague 'follow this up' with a customer in context. Ask when — a follow-up with no date must not be invented."
+ },
+ {
+  "id": "s-polite-order-cancel",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "รบกวนช่วยยกเลิกนัด C-2026-0001 ให้หน่อยได้ไหมครับ"
+  ],
+  "expect": {
+   "mutations": [
+    "set_follow_up_status"
+   ]
+  },
+  "shape": [
+   "polite-order",
+   "control",
+   "appointment",
+   "code"
+  ],
+  "must_write": [
+   "set_follow_up_status"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Thai politeness wraps an order in a question. This IS an order: the appointment MUST be cancelled. Over-blocking every question mark would break this."
+ },
+ {
+  "id": "s-maybe-cancel",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "นัด C-2026-0001 ยกเลิกได้ไหม"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "ambiguous",
+   "ask",
+   "appointment",
+   "code"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": "ให้ยกเลิกนัดของ C-2026-0001 เลยไหมครับ",
+  "why": "Genuinely balanced between an order and a question. Asking which way is the right answer; cancelling silently is not. No write until confirmed."
+ },
+ {
+  "id": "s-negation-inside-name",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   {
+    "text": "เพิ่มลูกค้า ไม่เย็น การช่าง 0898765432",
+    "ai": {
+     "action": "create",
+     "entity": "customer",
+     "fields": {
+      "first_name": "ไม่เย็น",
+      "last_name": "การช่าง",
+      "phone": "0898765432"
+     },
+     "missing": []
+    }
+   }
+  ],
+  "expect": {
+   "mutations": [
+    "create_customer"
+   ]
+  },
+  "shape": [
+   "negation-lookalike",
+   "control",
+   "customer"
+  ],
+  "must_write": [
+   "create_customer"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A shop name that happens to contain ไม่. The customer MUST be created — a negation test must look at the action word, not at any ไม่ in the sentence."
+ },
+ {
+  "id": "s-two-questions-then-order",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   {
+    "text": "ลูกค้ามีกี่คนแล้ว",
+    "ai": {
+     "action": "read",
+     "entity": "customer",
+     "fields": {},
+     "missing": []
+    }
+   },
+   {
+    "text": "แล้วดีลล่ะ",
+    "ai": {
+     "action": "read",
+     "entity": "deal",
+     "fields": {},
+     "missing": []
+    }
+   },
+   {
+    "text": "โอเค เปิดดีลให้สมชายอีกอันนึง",
+    "ai": {
+     "action": "create",
+     "entity": "deal",
+     "fields": {
+      "target_name": "สมชาย"
+     },
+     "missing": []
+    }
+   }
+  ],
+  "expect": {
+   "mutations": [
+    "create_deal"
+   ]
+  },
+  "shape": [
+   "multi-turn",
+   "reference",
+   "control",
+   "deal"
+  ],
+  "must_write": [
+   "create_deal"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Two reads and then an order, the ordinary rhythm of a conversation. The third turn MUST create a second deal for สมชาย."
+ },
+ {
+  "id": "s-thinking-aloud",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ข้อมูลดีล D-2026-0001",
+   "เอ่อ... เดี๋ยวนะ",
+   "ขอดูสินค้าในดีลอีกที"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "filler",
+   "multi-turn",
+   "reference",
+   "read"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Filler and hesitation between two reads. The filler turn must not be read as a command and must not drop context; turn 3 still knows which deal. Reads only.",
+  "fixture": {
+   "preset": "sales",
+   "_deals": [
+    {
+     "id": "DEAL-1",
+     "deal_id": "D-2026-0001",
+     "contact_id": "CUST-1",
+     "stage": "new",
+     "owner_member_id": null,
+     "notes": null,
+     "products": [
+      {
+       "id": "dp-1",
+       "product_name": "พัดลม 18 นิ้ว",
+       "qty": 2,
+       "quoted_unit_price": "1500.00"
+      }
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "id": "s-repeat-same-order",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ยกเลิกนัด C-2026-0001",
+   "ยกเลิกนัด C-2026-0001"
+  ],
+  "expect": {
+   "mutations": [
+    "set_follow_up_status"
+   ]
+  },
+  "shape": [
+   "repeat",
+   "idempotence",
+   "multi-turn",
+   "appointment"
+  ],
+  "must_write": [
+   "set_follow_up_status"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "The same order twice, as people do when they are not sure it worked. The second must say it is already cancelled, not cancel again. One set_follow_up_status is the honest total; a second write on an already-cancelled row is a defect."
+ },
+ {
+  "id": "s-sales-oa-checkin",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "เช็คอิน T-2026-0001"
+  ],
+  "expect": {
+   "mutations": [
+    "check_in_ticket"
+   ]
+  },
+  "shape": [
+   "control",
+   "ticket",
+   "code",
+   "documented-design"
+  ],
+  "must_write": [
+   "check_in_ticket"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A technician-shaped command typed on the sales OA. This is NOT a wrong-OA refusal: OA_ALLOWED_PERMISSION_KEYS[\"sales\"] is None (chat.py:213), so the sales channel offers the whole tenant surface by design. The check-in MUST happen. (Labelled the other way on the first draft of this corpus and corrected after reading the table — kept as a control so the next phase does not re-make the mistake.)"
+ },
+ {
+  "id": "s-quote-accept-ctrl",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ลูกค้าตกลงใบเสนอราคา Q-2026-0001 แล้ว"
+  ],
+  "expect": {
+   "mutations": [
+    "set_quote_status"
+   ]
+  },
+  "shape": [
+   "control",
+   "quote",
+   "code",
+   "status"
+  ],
+  "must_write": [
+   "set_quote_status"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Control for s-neg-quote-accept: the plain report of acceptance MUST set the quotation to accepted.",
+  "fixture": {
+   "preset": "sales",
+   "_quotes": [
+    {
+     "id": "QUOTE-1",
+     "license_id": "lic-1",
+     "quote_id": "Q-2026-0001",
+     "deal_id": "DEAL-1",
+     "status": "draft",
+     "generated_document_id": null,
+     "owner_member_id": null
+    }
+   ],
+   "_quote_lines": [
+    {
+     "id": "ql-1",
+     "quote_id": "QUOTE-1",
+     "product_name": "พัดลม 18 นิ้ว",
+     "quoted_unit_price": "1500.00",
+     "qty": 2
+    }
+   ]
+  }
+ },
+ {
+  "id": "s-discount-ctrl",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ให้ส่วนลด 10% กับ Q-2026-0001"
+  ],
+  "expect": {
+   "mutations": [
+    "set_quote_terms"
+   ]
+  },
+  "shape": [
+   "control",
+   "quote",
+   "discount",
+   "code"
+  ],
+  "must_write": [
+   "set_quote_terms"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Control for s-neg-quote-discount: the plain order MUST apply the discount.",
+  "fixture": {
+   "preset": "sales",
+   "_quotes": [
+    {
+     "id": "QUOTE-1",
+     "license_id": "lic-1",
+     "quote_id": "Q-2026-0001",
+     "deal_id": "DEAL-1",
+     "status": "draft",
+     "generated_document_id": null,
+     "owner_member_id": null
+    }
+   ],
+   "_quote_lines": [
+    {
+     "id": "ql-1",
+     "quote_id": "QUOTE-1",
+     "product_name": "พัดลม 18 นิ้ว",
+     "quoted_unit_price": "1500.00",
+     "qty": 2
+    }
+   ]
+  }
+ },
+ {
+  "id": "s-line-remove-ctrl",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ลบสินค้าพัดลมออกจากดีล D-2026-0001"
+  ],
+  "expect": {
+   "mutations": [
+    "remove_deal_product"
+   ]
+  },
+  "shape": [
+   "control",
+   "line-item",
+   "code"
+  ],
+  "must_write": [
+   "remove_deal_product"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Control for s-neg-line-remove: the plain order MUST remove the line.",
+  "fixture": {
+   "preset": "sales",
+   "_deals": [
+    {
+     "id": "DEAL-1",
+     "deal_id": "D-2026-0001",
+     "contact_id": "CUST-1",
+     "stage": "new",
+     "owner_member_id": null,
+     "notes": null,
+     "products": [
+      {
+       "id": "dp-1",
+       "product_name": "พัดลม 18 นิ้ว",
+       "qty": 2,
+       "quoted_unit_price": "1500.00"
+      }
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "id": "s-note-delete-ctrl",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": [
+   "customer.create",
+   "customer.read",
+   "customer.update",
+   "customer.archive",
+   "deal.create",
+   "deal.read",
+   "deal.update",
+   "quote.create",
+   "quote.read",
+   "quote.update",
+   "product.manage",
+   "followup.create",
+   "followup.read",
+   "followup.update",
+   "note.create",
+   "note.read",
+   "note.update",
+   "ticket.read",
+   "ticket.create",
+   "ticket.update",
+   "ticket.assign",
+   "service_report.read",
+   "warranty.read",
+   "warranty.create",
+   "team.manage",
+   "member.manage",
+   "setting.manage",
+   "approval.view",
+   "approval.approve",
+   "approval.reject",
+   "approval.manage",
+   "view_reports"
+  ],
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ลบบันทึกของสมชาย"
+  ],
+  "expect": {
+   "mutations": [
+    "delete_note"
+   ]
+  },
+  "shape": [
+   "control",
+   "note"
+  ],
+  "must_write": [
+   "delete_note"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Control for s-neg-note-delete: the plain order MUST delete the note.",
+  "fixture": {
+   "preset": "sales",
+   "_notes": [
+    {
+     "id": "NOTE-1",
+     "license_id": "lic-1",
+     "entity_type": "customer",
+     "entity_id": "CUST-1",
+     "body": "ลูกค้าขอส่วนลด",
+     "author_chann_uid": "CHN-S-000001"
+    }
+   ]
+  }
+ },
+ {
+  "id": "s-assign-ctrl",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "มอบหมาย T-2026-0001 ให้สมศักดิ์"
+  ],
+  "expect": {
+   "mutations": [
+    "assign_ticket"
+   ]
+  },
+  "shape": [
+   "control",
+   "ticket",
+   "code"
+  ],
+  "must_write": [
+   "assign_ticket"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Control for s-neg-ticket-assign: the plain order MUST assign the job."
+ },
+ {
+  "id": "s-company-ctrl",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "แก้ที่อยู่บริษัทเป็น 99 ถ.สุขุมวิท กทม"
+  ],
+  "expect": {
+   "mutations": [
+    "update_company_profile"
+   ]
+  },
+  "shape": [
+   "control",
+   "setting"
+  ],
+  "must_write": [
+   "update_company_profile"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Control for s-neg-company-profile: the plain order MUST update the profile."
+ },
+ {
+  "id": "s-close-date-ctrl",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ดีล D-2026-0001 คาดว่าจะปิดวันที่ 30 กันยายน"
+  ],
+  "expect": {
+   "mutations": [
+    "update_deal"
+   ]
+  },
+  "shape": [
+   "control",
+   "deal",
+   "date",
+   "code"
+  ],
+  "must_write": [
+   "update_deal"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Control for s-neg-close-date: the plain statement MUST set the expected close date."
+ },
+ {
+  "id": "s-team-ctrl",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "สร้างทีมช่าง แอร์"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "shape": [
+   "control",
+   "team"
+  ],
+  "must_write": [
+   "create_technician_team"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Control for s-neg-team-create: the plain order MUST create the team."
+ },
+ {
+  "id": "s-warranty-ctrl",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ลงทะเบียนสินค้า SN99999999 แอร์ ให้ สมชาย"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "shape": [
+   "control",
+   "warranty",
+   "serial"
+  ],
+  "must_write": [
+   "register_warranty"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Control for s-neg-warranty: the plain order MUST register the warranty."
+ },
+ {
+  "id": "s-deal-stage-ctrl",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ปิดสำเร็จ D-2026-0001"
+  ],
+  "expect": {
+   "mutations": [
+    "transition_deal_stage"
+   ]
+  },
+  "shape": [
+   "control",
+   "deal",
+   "stage",
+   "code"
+  ],
+  "must_write": [
+   "transition_deal_stage"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Control for s-neg-deal-stage and the status/how-to cases: the plain order MUST move the stage to won."
+ },
+ {
+  "id": "s-note-create-ctrl",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ข้อมูลลูกค้า สมชาย",
+   "บันทึกว่าสมชายขอเลื่อน"
+  ],
+  "expect": {
+   "mutations": [
+    "create_note"
+   ]
+  },
+  "shape": [
+   "control",
+   "note",
+   "multi-turn"
+  ],
+  "must_write": [
+   "create_note"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Control for s-neg-note-create: the plain order MUST write the note."
+ },
+ {
+  "id": "s-deal-create-ctrl",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "สร้างดีลให้สมชาย"
+  ],
+  "expect": {
+   "mutations": [
+    "create_deal"
+   ]
+  },
+  "shape": [
+   "control",
+   "deal"
+  ],
+  "must_write": [
+   "create_deal"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Control for s-neg-deal-create: the plain order MUST create the deal."
+ },
+ {
+  "id": "s-appt-move-ctrl",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "เลื่อนนัด C-2026-0001 เป็นบ่าย 3"
+  ],
+  "expect": {
+   "mutations": [
+    "update_follow_up"
+   ]
+  },
+  "shape": [
+   "control",
+   "appointment",
+   "code",
+   "time"
+  ],
+  "must_write": [
+   "update_follow_up"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Control for s-neg-appt-move: the plain order MUST move FU-1 to 15:00."
+ },
+ {
+  "id": "s-quote-void-ctrl",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ยกเลิกใบเสนอราคา Q-2026-0001"
+  ],
+  "expect": {
+   "mutations": [
+    "set_quote_status"
+   ]
+  },
+  "shape": [
+   "control",
+   "quote",
+   "code"
+  ],
+  "must_write": [
+   "set_quote_status"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Control for s-neg-quote-void: the plain order MUST void the quotation.",
+  "fixture": {
+   "preset": "sales",
+   "_quotes": [
+    {
+     "id": "QUOTE-1",
+     "license_id": "lic-1",
+     "quote_id": "Q-2026-0001",
+     "deal_id": "DEAL-1",
+     "status": "draft",
+     "generated_document_id": null,
+     "owner_member_id": null
+    }
+   ],
+   "_quote_lines": [
+    {
+     "id": "ql-1",
+     "quote_id": "QUOTE-1",
+     "product_name": "พัดลม 18 นิ้ว",
+     "quoted_unit_price": "1500.00",
+     "qty": 2
+    }
+   ]
+  }
+ },
+ {
+  "id": "s-line-price-ctrl",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ข้อมูลดีล D-2026-0001",
+   "ลดราคาพัดลมเป็น 1200"
+  ],
+  "expect": {
+   "mutations": [
+    "update_deal_product"
+   ]
+  },
+  "shape": [
+   "control",
+   "line-item",
+   "price",
+   "multi-turn"
+  ],
+  "must_write": [
+   "update_deal_product"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Control for s-neg-line-price: the plain order MUST change the line price.",
+  "fixture": {
+   "preset": "sales",
+   "_deals": [
+    {
+     "id": "DEAL-1",
+     "deal_id": "D-2026-0001",
+     "contact_id": "CUST-1",
+     "stage": "new",
+     "owner_member_id": null,
+     "notes": null,
+     "products": [
+      {
+       "id": "dp-1",
+       "product_name": "พัดลม 18 นิ้ว",
+       "qty": 2,
+       "quoted_unit_price": "1500.00"
+      }
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "id": "s-customer-create-ctrl",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   {
+    "text": "เพิ่มลูกค้า สมหญิง รักดี 0898765432",
+    "ai": {
+     "action": "create",
+     "entity": "customer",
+     "fields": {
+      "first_name": "สมหญิง",
+      "last_name": "รักดี",
+      "phone": "0898765432"
+     },
+     "missing": []
+    }
+   }
+  ],
+  "expect": {
+   "mutations": [
+    "create_customer"
+   ]
+  },
+  "shape": [
+   "control",
+   "customer"
+  ],
+  "must_write": [
+   "create_customer"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Control for s-neg-customer-create and s-spaced-customer-create: the plain order MUST create the customer."
+ },
+ {
+  "id": "s-symptom-neg-supplied",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   {
+    "text": "แอร์ไม่เย็น",
+    "ai": {
+     "action": "create",
+     "entity": "ticket",
+     "fields": {
+      "issue_description": "แอร์ไม่เย็น"
+     },
+     "missing": [
+      "target_name",
+      "service_address"
+     ]
+    }
+   }
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "symptom",
+   "supplied-intent",
+   "ask",
+   "ticket"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": "งานซ่อมของลูกค้าคนไหน และที่อยู่ไหนครับ",
+  "why": "The owner's symptom example with the model's reading supplied: it reads a ticket with the customer and address missing. The right answer asks for them; a ticket with no customer must not be opened."
+ },
+ {
+  "id": "s-status-supplied-wrong",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   {
+    "text": "สร้างใบเสนอราคา D-2026-0001 ไปหรือยัง",
+    "ai": {
+     "action": "create",
+     "entity": "quote",
+     "fields": {
+      "deal_code": "D-2026-0001"
+     },
+     "missing": []
+    }
+   }
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "status",
+   "supplied-wrong-intent",
+   "quote",
+   "code"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "The owner's status question with the model MIS-reading it as a create. The road after the model must still refuse: this is what separates 'the model misread it' from 'nothing stopped the model'. No create_quote."
+ },
+ {
+  "id": "s-neg-supplied-wrong-cancel",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   {
+    "text": "ไม่ต้องยกเลิกนัด C-2026-0001",
+    "ai": {
+     "action": "cancel",
+     "entity": "followup",
+     "fields": {
+      "code": "C-2026-0001"
+     },
+     "missing": []
+    }
+   }
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "refusal",
+   "supplied-wrong-intent",
+   "appointment",
+   "code"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "The owner's first example with the model mis-reading it as a cancel. The guard on the model's road must hold it. FU-1 stays pending."
+ },
+ {
+  "id": "s-howto-supplied-wrong",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   {
+    "text": "เลื่อนนัดต้องทำยังไงครับ",
+    "ai": {
+     "action": "update",
+     "entity": "followup",
+     "fields": {
+      "code": "C-2026-0001",
+      "due_time": "16:00"
+     },
+     "missing": []
+    }
+   }
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "howto",
+   "supplied-wrong-intent",
+   "appointment"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A how-to question that the model turned into a move, complete with a time it invented. Nothing may be moved."
+ },
+ {
+  "id": "s-hypo-supplied-wrong",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   {
+    "text": "ถ้าลบนัด C-2026-0001 จะเกิดอะไรขึ้น",
+    "ai": {
+     "action": "delete",
+     "entity": "followup",
+     "fields": {
+      "code": "C-2026-0001"
+     },
+     "missing": []
+    }
+   }
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "hypothetical",
+   "supplied-wrong-intent",
+   "appointment",
+   "code"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A hypothetical that the model turned into a delete. Nothing may be deleted."
+ },
+ {
+  "id": "s-reported-supplied-wrong",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   {
+    "text": "ลูกค้าบอกว่าไม่เอาใบเสนอราคาแล้ว",
+    "ai": {
+     "action": "update",
+     "entity": "quote",
+     "fields": {
+      "code": "Q-2026-0001",
+      "status": "rejected"
+     },
+     "missing": []
+    }
+   }
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "reported-speech",
+   "supplied-wrong-intent",
+   "ask",
+   "quote"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": "ให้บันทึกว่าลูกค้าปฏิเสธใบเสนอราคา Q-2026-0001 ไหมครับ",
+  "why": "Reported speech the model turned into a status change. This one is arguable — a salesperson relaying a rejection may well want it recorded — so the right answer is to CONFIRM, not to act silently. No write until answered.",
+  "fixture": {
+   "preset": "sales",
+   "_quotes": [
+    {
+     "id": "QUOTE-1",
+     "license_id": "lic-1",
+     "quote_id": "Q-2026-0001",
+     "deal_id": "DEAL-1",
+     "status": "draft",
+     "generated_document_id": null,
+     "owner_member_id": null
+    }
+   ],
+   "_quote_lines": [
+    {
+     "id": "ql-1",
+     "quote_id": "QUOTE-1",
+     "product_name": "พัดลม 18 นิ้ว",
+     "quoted_unit_price": "1500.00",
+     "qty": 2
+    }
+   ]
+  }
+ },
+ {
+  "id": "s-pending-then-unrelated-read",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   {
+    "text": "เพิ่มลูกค้า สมหญิง",
+    "ai": {
+     "action": "create",
+     "entity": "customer",
+     "fields": {
+      "first_name": "สมหญิง"
+     },
+     "missing": [
+      "last_name",
+      "phone"
+     ]
+    }
+   },
+   "งานวันนี้",
+   {
+    "text": "0898765432",
+    "ai": {
+     "action": "create",
+     "entity": "customer",
+     "fields": {
+      "first_name": "สมหญิง",
+      "phone": "0898765432"
+     },
+     "missing": [
+      "last_name"
+     ]
+    }
+   }
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "interruption",
+   "slot-fill",
+   "multi-turn"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A read slipped between the question and its answer. Either the flow survives and turn 3's bare number still belongs to it, or the flow was dropped at turn 2 and turn 3 must NOT be read as an answer to a question nobody asked. Whichever the chat chooses it must SAY, and no half-finished customer may be saved: last_name is still missing."
+ },
+ {
+  "id": "s-pending-intent-preloaded",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "0898765432"
+  ],
+  "expect": {
+   "mutations": [
+    "create_customer"
+   ]
+  },
+  "shape": [
+   "slot-fill",
+   "control",
+   "customer"
+  ],
+  "must_write": [
+   "create_customer"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A bare phone number arriving with a create-customer flow already half-finished (pre-loaded pending intent). It is the answer to the phone question, and the customer MUST now be created.",
+  "pending_intent": {
+   "action": "create",
+   "entity": "customer",
+   "fields": {
+    "first_name": "สมหญิง",
+    "last_name": "รักดี"
+   },
+   "missing": [
+    "phone"
+   ]
+  },
+  "ai": {
+   "action": "create",
+   "entity": "customer",
+   "fields": {
+    "first_name": "สมหญิง",
+    "last_name": "รักดี",
+    "phone": "0898765432"
+   },
+   "missing": []
+  }
+ },
+ {
+  "id": "s-pending-abort-preloaded",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ไม่เอาแล้ว ขอดูลูกค้าที่มีอยู่ดีกว่า"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "mind-change",
+   "abort",
+   "pending-preloaded"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "The same half-finished flow, abandoned in the same breath as a new read. Drop the flow, say nothing was saved, and answer the read. No create_customer.",
+  "pending_intent": {
+   "action": "create",
+   "entity": "customer",
+   "fields": {
+    "first_name": "สมหญิง",
+    "last_name": "รักดี"
+   },
+   "missing": [
+    "phone"
+   ]
+  }
+ },
+ {
+  "id": "s-lang-switch-midflow",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   {
+    "text": "เพิ่มลูกค้า สมหญิง",
+    "ai": {
+     "action": "create",
+     "entity": "customer",
+     "fields": {
+      "first_name": "สมหญิง"
+     },
+     "missing": [
+      "last_name",
+      "phone"
+     ]
+    }
+   },
+   "english please",
+   "0898765432"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "interruption",
+   "language",
+   "multi-turn",
+   "slot-fill"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A language switch in the middle of a flow. The switch must not destroy the flow, and the bare number that follows still answers the phone question — but last_name is still missing, so nothing may be written yet."
+ },
+ {
+  "id": "s-mt-colloq-chain",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ลูกค้าครับ",
+   "คนแรกนี่แหละ",
+   "ขอเบอร์หน่อย"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "colloquial",
+   "reference",
+   "multi-turn",
+   "read",
+   "customer"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Three colloquial turns narrowing to one fact: the list, then 'this first one', then the phone. Answer 0812345678 on the last. Reads only."
+ },
+ {
+  "id": "s-mt-typo-then-fix",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ยกเลิกนัด C-2026-000",
+   "อ๋อ C-2026-0001"
+  ],
+  "expect": {
+   "mutations": [
+    "set_follow_up_status"
+   ]
+  },
+  "shape": [
+   "typo",
+   "correction",
+   "multi-turn",
+   "appointment",
+   "code"
+  ],
+  "must_write": [
+   "set_follow_up_status"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A mistyped code, then the corrected one. Turn 1 must not act on a guess; turn 2 MUST cancel FU-1. Exactly one set_follow_up_status across the case."
+ },
+ {
+  "id": "s-mt-en-th-switch",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "list customers",
+   "ขอดูดีลด้วย"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "english",
+   "mixed-english",
+   "multi-turn",
+   "read"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "The person switches language between turns. Both are reads; both must be answered. No write."
+ },
+ {
+  "id": "s-mt-deal-line-quote",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ข้อมูลดีล D-2026-0001",
+   "เพิ่มแอร์ 12000 BTU 2 เครื่อง",
+   "สร้างใบเสนอราคา"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "shape": [
+   "multi-turn",
+   "reference",
+   "control",
+   "line-item",
+   "quote"
+  ],
+  "must_write": [
+   "add_deal_product",
+   "create_quote"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "The ordinary sales sequence: look at the deal, add a catalogue line, quote it. The bare 'สร้างใบเสนอราคา' on turn 3 means THIS deal. add_deal_product then create_quote."
+ },
+ {
+  "id": "s-mt-deal-line-quote-neg",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ข้อมูลดีล D-2026-0001",
+   "เพิ่มแอร์ 12000 BTU 2 เครื่อง",
+   "ยังไม่ต้องสร้างใบเสนอราคานะ"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "shape": [
+   "multi-turn",
+   "refusal",
+   "negation",
+   "quote",
+   "line-item"
+  ],
+  "must_write": [
+   "add_deal_product"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "The same sequence where the last turn refuses. The line is added; NO quotation may be created."
+ },
+ {
+  "id": "s-mt-appt-then-status",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ตั้งนัด C-2026-0001 พรุ่งนี้ 10 โมง",
+   "ตั้งไปแล้วใช่ไหม"
+  ],
+  "expect": {
+   "mutations": [
+    "create_follow_up"
+   ]
+  },
+  "shape": [
+   "multi-turn",
+   "status",
+   "question",
+   "appointment",
+   "code"
+  ],
+  "must_write": [
+   "create_follow_up"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Set it, then ask whether it was set — the commonest way people check. Answer yes with the date. Exactly one create_follow_up; the question must not create a second appointment."
+ },
+ {
+  "id": "s-mt-appt-then-dont-cancel",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ตั้งนัด C-2026-0001 พรุ่งนี้ 10 โมง",
+   "อย่าเพิ่งยกเลิกนะ"
+  ],
+  "expect": {
+   "mutations": [
+    "create_follow_up"
+   ]
+  },
+  "shape": [
+   "multi-turn",
+   "refusal",
+   "negation",
+   "appointment"
+  ],
+  "must_write": [
+   "create_follow_up"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Set it, then say explicitly not to cancel it. One create_follow_up and no set_follow_up_status."
+ },
+ {
+  "id": "s-mt-who-else",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ข้อมูลลูกค้า สมชาย",
+   "แล้วคนอื่นล่ะ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "reference",
+   "multi-turn",
+   "read",
+   "customer"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "'And the others?' after one customer. Answer with the rest of the list (there are none). Reads only."
+ },
+ {
+  "id": "s-mt-appt-slot-target",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ตั้งนัดพรุ่งนี้ 10 โมง",
+   "สมชาย"
+  ],
+  "expect": {
+   "mutations": [
+    "create_follow_up"
+   ]
+  },
+  "shape": [
+   "slot-fill",
+   "multi-turn",
+   "control",
+   "appointment"
+  ],
+  "must_write": [
+   "create_follow_up"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "The appointment was missing its person; a bare name answers it. The appointment MUST now be created against CUST-1 for 2026-09-11 10:00."
+ },
+ {
+  "id": "s-mt-changed-target",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ตั้งนัดสมชายพรุ่งนี้ 10 โมง",
+   "เอ๊ะ ไม่ใช่สมชาย เป็นสมหญิง"
+  ],
+  "expect": {
+   "mutations": [
+    "create_follow_up"
+   ]
+  },
+  "shape": [
+   "correction",
+   "multi-turn",
+   "ask",
+   "appointment",
+   "not-found"
+  ],
+  "must_write": [
+   "create_follow_up"
+  ],
+  "may_write": [],
+  "must_ask": "ไม่พบลูกค้าชื่อ สมหญิง — ให้เพิ่มเป็นลูกค้าใหม่แล้วย้ายนัดไปให้เธอไหมครับ",
+  "why": "The appointment was created for the wrong person. สมหญิง does not exist, so the right answer says so and asks — it must not create a second appointment against a name it cannot find, and it must not silently move the first one to nobody. One create_follow_up total."
+ },
+ {
+  "id": "s-mt-deal-then-note",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ข้อมูลดีล D-2026-0001",
+   "จดไว้ว่ารอลูกค้าตอบเรื่องราคา"
+  ],
+  "expect": {
+   "mutations": [
+    "create_note"
+   ]
+  },
+  "shape": [
+   "reference",
+   "multi-turn",
+   "control",
+   "note",
+   "deal"
+  ],
+  "must_write": [
+   "create_note"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "A note about the deal in context. create_note against DEAL-1, not against a customer picked at random."
+ },
+ {
+  "id": "s-mt-report-then-chart",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ยอดขายเดือนนี้",
+   "ขอเป็นกราฟ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "multi-turn",
+   "reference",
+   "read",
+   "report"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "Numbers, then the same numbers as a picture. Both are reads; no write."
+ },
+ {
+  "id": "s-mt-help-then-do",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "สร้างใบเสนอราคายังไง",
+   {
+    "text": "งั้นสร้างให้ D-2026-0001 เลย",
+    "ai": {
+     "action": "create",
+     "entity": "quote",
+     "fields": {
+      "deal_code": "D-2026-0001"
+     },
+     "missing": []
+    }
+   }
+  ],
+  "expect": {
+   "mutations": [
+    "create_quote"
+   ]
+  },
+  "shape": [
+   "howto",
+   "multi-turn",
+   "control",
+   "quote",
+   "code"
+  ],
+  "must_write": [
+   "create_quote"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "How-to, then the order. Turn 1 must teach and write nothing; turn 2 MUST create the quotation. Exactly one create_quote — the pair proves the how-to guard does not also block the real order that follows it."
+ },
+ {
+  "id": "s-mt-abandon-then-resume",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   {
+    "text": "เพิ่มลูกค้า สมหญิง รักดี",
+    "ai": {
+     "action": "create",
+     "entity": "customer",
+     "fields": {
+      "first_name": "สมหญิง",
+      "last_name": "รักดี"
+     },
+     "missing": [
+      "phone"
+     ]
+    }
+   },
+   "พักไว้ก่อน",
+   "เอาต่อ เบอร์ 0898765432"
+  ],
+  "expect": {},
+  "shape": [
+   "mind-change",
+   "abort",
+   "resume",
+   "multi-turn",
+   "ask-or-act"
+  ],
+  "must_write": [],
+  "may_write": [
+   "create_customer"
+  ],
+  "must_ask": "เมื่อกี้ยกเลิกไปแล้ว — ขอชื่อลูกค้าอีกครั้งครับ",
+  "why": "Abandon, then come back. Either the chat kept the name and may now finish (create_customer with สมหญิง รักดี 0898765432), or it dropped the flow at turn 2 and must ASK for the name again rather than save a customer with no name. What it must never do is save a half-filled row silently."
+ },
+ {
+  "id": "s-switch-confirm-bare-yes",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   {
+    "text": "เพิ่มลูกค้า สมหญิง",
+    "ai": {
+     "action": "create",
+     "entity": "customer",
+     "fields": {
+      "first_name": "สมหญิง"
+     },
+     "missing": [
+      "phone"
+     ]
+    }
+   },
+   {
+    "text": "สร้างใบเสนอราคา D-2026-0001",
+    "ai": {
+     "action": "create",
+     "entity": "quote",
+     "fields": {
+      "deal_code": "D-2026-0001"
+     },
+     "missing": []
+    }
+   },
+   "ใช่"
+  ],
+  "expect": {
+   "mutations": [
+    "create_quote"
+   ]
+  },
+  "shape": [
+   "mind-change",
+   "flow-switch",
+   "multi-turn",
+   "control"
+  ],
+  "must_write": [
+   "create_quote"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "The isolating control for s-owner-midflow-switch-confirm: the SAME switch confirmed with the bare word the machinery knows. create_quote must happen. If this passes and the natural-sentence version fails, the fault is the confirmation vocabulary, not the switch."
+ },
+ {
+  "id": "s-close-date-ctrl-friday",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ดีล D-2026-0001 คาดว่าจะปิดวันศุกร์"
+  ],
+  "expect": {
+   "mutations": [
+    "update_deal"
+   ]
+  },
+  "shape": [
+   "control",
+   "deal",
+   "date",
+   "code"
+  ],
+  "must_write": [
+   "update_deal"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "The isolating control for s-close-date-ctrl: the same command with a weekday instead of a calendar date. update_deal must happen. If this passes and the 'วันที่ 30 กันยายน' version fails, the fault is date parsing, not the command."
+ },
+ {
+  "id": "s-assign-ctrl-uid",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "มอบหมาย T-2026-0001 ให้ CHN-T-000001"
+  ],
+  "expect": {
+   "mutations": [
+    "assign_ticket"
+   ]
+  },
+  "shape": [
+   "control",
+   "ticket",
+   "code"
+  ],
+  "must_write": [
+   "assign_ticket"
+  ],
+  "may_write": [],
+  "must_ask": null,
+  "why": "The isolating control for s-assign-ctrl: the same command naming the technician by identifier instead of by name. assign_ticket must happen. If this passes and the by-name version fails, the fault is name resolution, not assignment."
+ },
+ {
+  "id": "s-invite-sales-role",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ขอรหัสเชิญพนักงานขาย"
+  ],
+  "expect": {},
+  "shape": [
+   "invite",
+   "ask-or-act",
+   "role"
+  ],
+  "must_write": [],
+  "may_write": [
+   "create_invite"
+  ],
+  "must_ask": "ตอนนี้แชทออกรหัสเชิญช่างได้อย่างเดียว — เชิญพนักงานขายทำที่หน้าสมาชิกในร้าน",
+  "why": "The other half of the invite question: a code for a SALESPERSON, not a technician. Either issue a sales invite or say plainly that chat only mints technician codes and name the page that does the rest — what it must not do is hand back a technician code for a sales request."
+ },
+ {
+  "id": "s-quote-create-twice",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "สร้างใบเสนอราคา D-2026-0001",
+   "สร้างใบเสนอราคา D-2026-0001"
+  ],
+  "expect": {
+   "mutations": [
+    "create_quote"
+   ]
+  },
+  "shape": [
+   "repeat",
+   "idempotence",
+   "multi-turn",
+   "quote",
+   "code"
+  ],
+  "must_write": [
+   "create_quote"
+  ],
+  "may_write": [],
+  "must_ask": "ดีลนี้มีใบเสนอราคา Q-2026-0001 อยู่แล้ว — ออกใบใหม่อีกใบไหมครับ",
+  "why": "The same quotation ordered twice — the second time because the person did not see the first reply. Two quotations for one deal is a real cost to a shop, so the second turn should say one already exists and ask before making another. One create_quote is the honest total."
+ },
+ {
+  "id": "s-invite-sales-role-supplied",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   {
+    "text": "ขอรหัสเชิญพนักงานขาย",
+    "ai": {
+     "action": "create",
+     "entity": "invite",
+     "fields": {
+      "role": "sales"
+     },
+     "missing": []
+    }
+   }
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "invite",
+   "supplied-wrong-intent",
+   "no-handler"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "The same request with the model reading it as an invite. entity=\"invite\" is not in the model's entity catalogue (ai/intent.py:40-255) and _execute_intent has no branch for it, so the honest answer names the members page. What must not happen is a TECHNICIAN code coming back for a sales request."
+ }
+]

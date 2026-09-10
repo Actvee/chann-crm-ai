@@ -1,0 +1,2985 @@
+[
+ {
+  "id": "tech-arrive-01",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "เช็คอิน T-2026-0001"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "the plain command, with the code. CONTROL: if this does not write, every negative arriving case below proves nothing.",
+  "label": {
+   "shape": "arriving",
+   "should_write": "yes",
+   "right_write": "check_in_ticket on T-2026-0001",
+   "forbidden_write": "",
+   "turns": 1,
+   "cause_if_wrong": "E if it fails"
+  },
+  "shape": [
+   "arriving"
+  ],
+  "must_write": [
+   "check_in_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "tech-arrive-02",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ถึงหน้างานแล้วครับ",
+   "งานนี้อาการอะไรนะครับ"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "colloquial arrival with no code, then a question that refers back to it. One accepted job is in play, so 'which job' is answerable from context.",
+  "label": {
+   "shape": "arriving",
+   "should_write": "yes",
+   "right_write": "check_in_ticket on the one accepted job",
+   "forbidden_write": "",
+   "turns": 2,
+   "cause_if_wrong": "D if it asks which job when only one is possible"
+  },
+  "shape": [
+   "arriving",
+   "multi-turn"
+  ],
+  "must_write": [
+   "check_in_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "tech-arrive-03",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ถึงแล้วครับ"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "the terse register — two words and a particle.",
+  "label": {
+   "shape": "arriving",
+   "should_write": "yes",
+   "right_write": "check_in_ticket",
+   "forbidden_write": "",
+   "turns": 1,
+   "cause_if_wrong": "D if no handler resolves the job from context"
+  },
+  "shape": [
+   "arriving"
+  ],
+  "must_write": [
+   "check_in_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "tech-arrive-04",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "เช็กอิน T-2026-0001"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "the other accepted Thai spelling (เช็กอิน, no ค). In CHECKIN_TRIGGERS (chat.py:5545), so this is a coverage control for the typo case below.",
+  "label": {
+   "shape": "arriving",
+   "should_write": "yes",
+   "right_write": "check_in_ticket",
+   "forbidden_write": "",
+   "turns": 1,
+   "cause_if_wrong": "A/E"
+  },
+  "shape": [
+   "arriving"
+  ],
+  "must_write": [
+   "check_in_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "tech-arrive-05",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "เชคอิน T-2026-0001",
+   "เช็คอิน T-2026-0001"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "a real typo: เชคอิน (no ็) is NOT in CHECKIN_TRIGGERS. Turn 2 is the same person retyping it correctly. The model is left at its default 'suggest', so anything that happens on turn 1 was decided by a rule.",
+  "label": {
+   "shape": "arriving",
+   "should_write": "yes",
+   "right_write": "check_in_ticket on turn 1",
+   "forbidden_write": "",
+   "turns": 2,
+   "cause_if_wrong": "A if turn 1 is refused by the table and never reaches the model; C only if the model is consulted and misreads it"
+  },
+  "shape": [
+   "arriving",
+   "multi-turn"
+  ],
+  "must_write": [
+   "check_in_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "tech-arrive-06",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "อยู่หน้าบ้านลูกค้าแล้วครับ"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "arrival said as a location, not a command.",
+  "label": {
+   "shape": "arriving",
+   "should_write": "yes",
+   "right_write": "check_in_ticket",
+   "forbidden_write": "",
+   "turns": 1,
+   "cause_if_wrong": "D"
+  },
+  "shape": [
+   "arriving"
+  ],
+  "must_write": [
+   "check_in_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "tech-arrive-07",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ช่วยเช็คอินให้หน่อยได้ไหมครับ",
+   "ขอบคุณครับ"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "the polite Thai request is shaped like a question. _command_like (chat.py:8877) refuses questions unless _POLITE_REQUEST_RE matches — the owner reported this exact sentence being answered with the guide.",
+  "label": {
+   "shape": "arriving",
+   "should_write": "yes",
+   "right_write": "check_in_ticket on turn 1",
+   "forbidden_write": "",
+   "turns": 2,
+   "cause_if_wrong": "A if the guide comes back instead"
+  },
+  "shape": [
+   "arriving",
+   "multi-turn"
+  ],
+  "must_write": [
+   "check_in_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "tech-arrive-08",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "เริ่มงานแล้วนะครับ"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "'starting work' is how many technicians say arrival.",
+  "label": {
+   "shape": "arriving",
+   "should_write": "yes",
+   "right_write": "check_in_ticket",
+   "forbidden_write": "",
+   "turns": 1,
+   "cause_if_wrong": "D"
+  },
+  "shape": [
+   "arriving"
+  ],
+  "must_write": [
+   "check_in_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "tech-arrive-09",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "en",
+  "seed": 1,
+  "messages": [
+   "on site now"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "the English register.",
+  "label": {
+   "shape": "arriving",
+   "should_write": "yes",
+   "right_write": "check_in_ticket",
+   "forbidden_write": "",
+   "turns": 1,
+   "cause_if_wrong": "D"
+  },
+  "shape": [
+   "arriving"
+  ],
+  "must_write": [
+   "check_in_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "tech-arrive-10",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ถึงแล้ว",
+   "T-2026-0001"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "terse arrival, then the code on its own line. The second turn must be read as the answer to whatever the first turn asked, not as a bare code lookup.",
+  "label": {
+   "shape": "arriving",
+   "should_write": "yes",
+   "right_write": "check_in_ticket on T-2026-0001",
+   "forbidden_write": "",
+   "turns": 2,
+   "cause_if_wrong": "D if turn 2 is answered as a ticket-detail read and the check-in is lost"
+  },
+  "shape": [
+   "arriving",
+   "multi-turn"
+  ],
+  "must_write": [
+   "check_in_ticket"
+  ],
+  "must_ask": "which job, if the code cannot be resolved from context"
+ },
+ {
+  "id": "tech-arrive-11",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "งานของฉัน",
+   "ถึงหน้างานแล้ว"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "reads the list, then arrives. The check-in must attach to the job that was just on screen.",
+  "label": {
+   "shape": "arriving",
+   "should_write": "yes",
+   "right_write": "check_in_ticket on the job just listed",
+   "forbidden_write": "",
+   "turns": 2,
+   "cause_if_wrong": "D"
+  },
+  "shape": [
+   "arriving",
+   "multi-turn"
+  ],
+  "must_write": [
+   "check_in_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "tech-arrive-12",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ผมมาถึงตั้งแต่ 9 โมงแล้วครับ ลืมเช็คอิน"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "a late check-in explained in a full sentence. Contains both มาถึง and เช็คอิน.",
+  "label": {
+   "shape": "arriving",
+   "should_write": "yes",
+   "right_write": "check_in_ticket",
+   "forbidden_write": "",
+   "turns": 1,
+   "cause_if_wrong": "E if the time in the sentence is ignored or the sentence is refused"
+  },
+  "shape": [
+   "arriving"
+  ],
+  "must_write": [
+   "check_in_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "tech-arrive-13",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ถึงหน้างานแล้ว",
+   "ลูกค้าให้รอสักครู่ครับ"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "turn 2 is chatter about waiting. It must not be read as a new job step.",
+  "label": {
+   "shape": "arriving",
+   "should_write": "yes",
+   "right_write": "exactly one check_in_ticket, on turn 1",
+   "forbidden_write": "a second check-in, or a status change, on turn 2",
+   "turns": 2,
+   "cause_if_wrong": "A if 'รอ' fires a rule"
+  },
+  "shape": [
+   "arriving",
+   "multi-turn",
+   "has-forbidden-write"
+  ],
+  "must_write": [
+   "check_in_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "tech-arrive-14",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ถึงงาน T-2026-0002 แล้วครับ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "T-2026-0002 is public and unclaimed by this technician. Arriving at a job you have not taken should ask to claim it first, not silently check in. UNCERTAIN: the right product answer may be 'claim then check in' in one step — either way a silent check-in on someone else's job is wrong.",
+  "label": {
+   "shape": "arriving",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "check_in_ticket on T-2026-0002",
+   "turns": 1,
+   "cause_if_wrong": "E"
+  },
+  "shape": [
+   "arriving",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": "whether to claim T-2026-0002 first — it is not this technician's job"
+ },
+ {
+  "id": "tech-notyet-01",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ยังไม่ถึงหน้างานครับ",
+   "รถติดอยู่แถวพระราม 9"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "the owner's negation shape on the technician OA. Turn 1 must write NOTHING; turn 2 explains why and, by the product's own design (chat.py:16092 runs before check-out), earns a note. The failure to look for is a check-in.",
+  "label": {
+   "shape": "not-yet-arriving",
+   "should_write": "yes",
+   "right_write": "a 'late' note on turn 2 (รถติด is a _SITUATION_WORDS late word) + tell dispatch",
+   "forbidden_write": "check_in_ticket on either turn",
+   "turns": 2,
+   "cause_if_wrong": "A if a trigger table matches ถึงหน้างาน inside a negation; C if the model is consulted and returns check_in"
+  },
+  "shape": [
+   "not-yet-arriving",
+   "not",
+   "yet",
+   "arriving",
+   "multi-turn",
+   "has-forbidden-write"
+  ],
+  "must_write": [
+   "create_note"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "tech-notyet-02",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ยังไม่ได้เช็คอินเลย"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "stating that the step has NOT happened. _JOB_DISCLAIMER_RE (chat.py:8658) is meant to catch this.",
+  "label": {
+   "shape": "not-yet-arriving",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "check_in_ticket",
+   "turns": 1,
+   "cause_if_wrong": "A"
+  },
+  "shape": [
+   "not-yet-arriving",
+   "not",
+   "yet",
+   "arriving",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "tech-notyet-03",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "อีก 10 นาทีถึงครับ",
+   "ฝากบอกลูกค้าด้วยนะครับ"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "'10 minutes away' is progress, not arrival. _SITUATION_WORDS (chat.py:15010) lists อีก 10 นาที under on_my_way.",
+  "label": {
+   "shape": "not-yet-arriving",
+   "should_write": "yes",
+   "right_write": "create_note (situation on_my_way) + a dispatcher/customer notification",
+   "forbidden_write": "check_in_ticket",
+   "turns": 2,
+   "cause_if_wrong": "A if it checks in anyway"
+  },
+  "shape": [
+   "not-yet-arriving",
+   "not",
+   "yet",
+   "arriving",
+   "multi-turn",
+   "has-forbidden-write"
+  ],
+  "must_write": [
+   "create_note"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "tech-notyet-04",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "กำลังเดินทางไป T-2026-0001 ครับ"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "on the way, with the code named.",
+  "label": {
+   "shape": "not-yet-arriving",
+   "should_write": "yes",
+   "right_write": "create_note (on_my_way) on T-2026-0001",
+   "forbidden_write": "check_in_ticket",
+   "turns": 1,
+   "cause_if_wrong": "A"
+  },
+  "shape": [
+   "not-yet-arriving",
+   "not",
+   "yet",
+   "arriving",
+   "has-forbidden-write"
+  ],
+  "must_write": [
+   "create_note"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "tech-notyet-05",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "รถติดมาก จะถึงช้ากว่านัดประมาณครึ่งชั่วโมง"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "running late. The customer, not only dispatch, should hear this.",
+  "label": {
+   "shape": "not-yet-arriving",
+   "should_write": "yes",
+   "right_write": "create_note (late) + tell the customer",
+   "forbidden_write": "check_in_ticket",
+   "turns": 1,
+   "cause_if_wrong": "D if nothing tells the customer"
+  },
+  "shape": [
+   "not-yet-arriving",
+   "not",
+   "yet",
+   "arriving",
+   "has-forbidden-write"
+  ],
+  "must_write": [
+   "create_note"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "tech-notyet-06",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "กำลังไปครับ",
+   "ถึงแล้ว"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "the ordinary two-step: en route, then arrived. Both must be distinguished.",
+  "label": {
+   "shape": "not-yet-arriving",
+   "should_write": "yes",
+   "right_write": "a note on turn 1, then check_in_ticket on turn 2",
+   "forbidden_write": "",
+   "turns": 2,
+   "cause_if_wrong": "A/D if turn 1 already checks in"
+  },
+  "shape": [
+   "not-yet-arriving",
+   "not",
+   "yet",
+   "arriving",
+   "multi-turn"
+  ],
+  "must_write": [
+   "check_in_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "tech-notyet-07",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "พรุ่งนี้ค่อยไปครับ วันนี้ไม่ทัน"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "a plan for tomorrow. A reschedule note would be acceptable; a job step is not. Note ไม่ทัน is close to the cannot_finish word ทำไม่ทัน but not equal.",
+  "label": {
+   "shape": "not-yet-arriving",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "check_in_ticket, check_out_ticket",
+   "turns": 1,
+   "cause_if_wrong": "A if a partial word match fires"
+  },
+  "shape": [
+   "not-yet-arriving",
+   "not",
+   "yet",
+   "arriving",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": "whether to move the appointment to tomorrow"
+ },
+ {
+  "id": "tech-notyet-08",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ยังไม่ถึง แต่ใกล้แล้วครับ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "negation and progress in one breath — ใกล้ถึง is an on_my_way word and ยังไม่ถึง is a disclaimer. Which rule wins decides the outcome.",
+  "label": {
+   "shape": "not-yet-arriving",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "check_in_ticket",
+   "turns": 1,
+   "cause_if_wrong": "A"
+  },
+  "shape": [
+   "not-yet-arriving",
+   "not",
+   "yet",
+   "arriving",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "tech-notyet-09",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ไม่ได้ไปนะครับวันนี้ ลูกค้าเลื่อนเอง"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "did not go at all, because the customer moved it. A reschedule note is acceptable; a check-in is not. Contains เลื่อน, a reschedule situation word.",
+  "label": {
+   "shape": "not-yet-arriving",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "check_in_ticket",
+   "turns": 1,
+   "cause_if_wrong": "A"
+  },
+  "shape": [
+   "not-yet-arriving",
+   "not",
+   "yet",
+   "arriving",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "tech-notyet-10",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ยังไม่ถึงหน้างานครับ",
+   "โอเค ถึงแล้ว เช็คอิน T-2026-0001"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "refusal then, minutes later, the real thing. Proves the guard is a guard and not a blanket refusal of the word เช็คอิน.",
+  "label": {
+   "shape": "not-yet-arriving",
+   "should_write": "yes",
+   "right_write": "check_in_ticket on turn 2 only",
+   "forbidden_write": "any write on turn 1",
+   "turns": 2,
+   "cause_if_wrong": "A if turn 2 is still refused because turn 1 set something"
+  },
+  "shape": [
+   "not-yet-arriving",
+   "not",
+   "yet",
+   "arriving",
+   "multi-turn",
+   "has-forbidden-write"
+  ],
+  "must_write": [
+   "check_in_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "tech-howto-01",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "เช็คอินยังไงครับ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "asking how, not doing it. _command_like refuses questions, so this should fall through to help — but 'ยังไง' is not in HELP_TRIGGERS (chat.py:13357); 'ใช้ยังไง' is.",
+  "label": {
+   "shape": "asking-how-it-works",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "check_in_ticket",
+   "turns": 1,
+   "cause_if_wrong": "D if it reaches the model and no help handler answers"
+  },
+  "shape": [
+   "asking-how-it-works",
+   "asking",
+   "how",
+   "it",
+   "works",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "tech-howto-02",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "วิธีใช้เช็คอิน"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "_command_like explicitly bails on a message starting with วิธีใช้ (chat.py:8881) — a coverage control for the case above.",
+  "label": {
+   "shape": "asking-how-it-works",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "check_in_ticket",
+   "turns": 1,
+   "cause_if_wrong": "A if it still checks in"
+  },
+  "shape": [
+   "asking-how-it-works",
+   "asking",
+   "how",
+   "it",
+   "works",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "tech-howto-03",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ต้องเช็คอินก่อนเริ่มงานไหมครับ",
+   "โอเคครับ เช็คอิน T-2026-0001"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "the owner's 'ask how something works, then do it' shape. Turn 1 contains both เช็คอิน and เริ่มงาน — two triggers — inside a question.",
+  "label": {
+   "shape": "asking-how-it-works",
+   "should_write": "yes",
+   "right_write": "check_in_ticket on turn 2 only",
+   "forbidden_write": "any write on turn 1",
+   "turns": 2,
+   "cause_if_wrong": "A if turn 1 writes"
+  },
+  "shape": [
+   "asking-how-it-works",
+   "asking",
+   "how",
+   "it",
+   "works",
+   "multi-turn",
+   "has-forbidden-write"
+  ],
+  "must_write": [
+   "check_in_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "tech-howto-04",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ถ้าลืมเช็คอินต้องทำยังไง"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "a hypothetical. _JOB_DISCLAIMER_RE covers ถ้า…เช็คอิน.",
+  "label": {
+   "shape": "asking-how-it-works",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "check_in_ticket",
+   "turns": 1,
+   "cause_if_wrong": "A"
+  },
+  "shape": [
+   "asking-how-it-works",
+   "asking",
+   "how",
+   "it",
+   "works",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "tech-howto-05",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ปิดงานต้องใส่อะไรบ้าง"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "asking what a close-out needs. Starts with ปิดงาน, a CHECKOUT trigger, but is a question.",
+  "label": {
+   "shape": "asking-how-it-works",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "check_out_ticket",
+   "turns": 1,
+   "cause_if_wrong": "A if a checkout draft is opened"
+  },
+  "shape": [
+   "asking-how-it-works",
+   "asking",
+   "how",
+   "it",
+   "works",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "tech-howto-06",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "เช็คอินยังไง",
+   "แล้วปิดงานล่ะ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "a follow-up that only makes sense against the previous answer — 'and closing?' with the verb elided.",
+  "label": {
+   "shape": "asking-how-it-works",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "check_in_ticket, check_out_ticket",
+   "turns": 2,
+   "cause_if_wrong": "B if the second turn reaches the model with no memory of the first"
+  },
+  "shape": [
+   "asking-how-it-works",
+   "asking",
+   "how",
+   "it",
+   "works",
+   "multi-turn",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "tech-howto-07",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "วิธีใช้",
+   "1"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "the guide, then a menu digit. The digit must be read as a menu step, not as a quantity or a ticket.",
+  "label": {
+   "shape": "asking-how-it-works",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "",
+   "turns": 2,
+   "cause_if_wrong": "D"
+  },
+  "shape": [
+   "asking-how-it-works",
+   "asking",
+   "how",
+   "it",
+   "works",
+   "multi-turn"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "tech-relay-01",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ลูกค้าบอกว่าถึงแล้วค่อยโทร"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "the sentence _command_like's own docstring names (chat.py:8878): a sentence ABOUT a customer, not a check-in.",
+  "label": {
+   "shape": "relaying-someone-else",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "check_in_ticket",
+   "turns": 1,
+   "cause_if_wrong": "A"
+  },
+  "shape": [
+   "relaying-someone-else",
+   "relaying",
+   "someone",
+   "else",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "tech-relay-02",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ลูกค้าบอกว่าปิดงานได้เลยครับ",
+   "แต่ผมยังไม่ได้ทำเสร็จนะ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "the customer authorising a close is not the technician closing it, and turn 2 says the work is not done.",
+  "label": {
+   "shape": "relaying-someone-else",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "check_out_ticket",
+   "turns": 2,
+   "cause_if_wrong": "A"
+  },
+  "shape": [
+   "relaying-someone-else",
+   "relaying",
+   "someone",
+   "else",
+   "multi-turn",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "tech-relay-03",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "แอดมินบอกให้เช็คอินก่อนเข้างาน"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "reported instruction, not an instruction. บอกให้ is in _JOB_DISCLAIMER_RE.",
+  "label": {
+   "shape": "relaying-someone-else",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "check_in_ticket",
+   "turns": 1,
+   "cause_if_wrong": "A"
+  },
+  "shape": [
+   "relaying-someone-else",
+   "relaying",
+   "someone",
+   "else",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "tech-relay-04",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ช่างบีบอกว่าเขารับงาน T-2026-0002 แล้ว"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "someone else's claim, reported. Must not claim the job for the speaker.",
+  "label": {
+   "shape": "relaying-someone-else",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "claim_ticket for the caller",
+   "turns": 1,
+   "cause_if_wrong": "A/E"
+  },
+  "shape": [
+   "relaying-someone-else",
+   "relaying",
+   "someone",
+   "else",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "tech-relay-05",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ลูกค้าถามว่าช่างจะมากี่โมง",
+   "งาน T-2026-0001 นะครับ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "a question relayed from the customer; the right answer is the appointment time. ถามว่า is in _JOB_DISCLAIMER_RE, so the guard must not turn this into a flat refusal either — refusing to answer is also a failure here.",
+  "label": {
+   "shape": "relaying-someone-else",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "",
+   "turns": 2,
+   "cause_if_wrong": "D if the guard refuses instead of answering"
+  },
+  "shape": [
+   "relaying-someone-else",
+   "relaying",
+   "someone",
+   "else",
+   "multi-turn"
+  ],
+  "must_write": [],
+  "must_ask": "nothing — answer the relayed question with the appointment time"
+ },
+ {
+  "id": "tech-relay-06",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ลูกค้าบอกว่าถึงแล้วค่อยโทร",
+   "ผมถึงแล้วนะครับ"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "relay, then the technician's own arrival. The guard must not leak into the next message.",
+  "label": {
+   "shape": "relaying-someone-else",
+   "should_write": "yes",
+   "right_write": "check_in_ticket on turn 2 only",
+   "forbidden_write": "any write on turn 1",
+   "turns": 2,
+   "cause_if_wrong": "A if turn 2 is refused"
+  },
+  "shape": [
+   "relaying-someone-else",
+   "relaying",
+   "someone",
+   "else",
+   "multi-turn",
+   "has-forbidden-write"
+  ],
+  "must_write": [
+   "check_in_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "tech-relay-07",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "หัวหน้าบอกว่างานนี้ให้ผมรับ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "'the boss says I should take it' is not 'I take it'. รับ is a BARE_ACCEPT word (chat.py:5993).",
+  "label": {
+   "shape": "relaying-someone-else",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "claim_ticket",
+   "turns": 1,
+   "cause_if_wrong": "A"
+  },
+  "shape": [
+   "relaying-someone-else",
+   "relaying",
+   "someone",
+   "else",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "tech-finish-01",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ปิดงาน T-2026-0001 พบ: คอมเพรสเซอร์เสีย แก้: เปลี่ยนคอมใหม่"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "the documented close-out shape. CONTROL for every negative close case.",
+  "label": {
+   "shape": "finishing",
+   "should_write": "yes",
+   "right_write": "check_out_ticket with findings and fix",
+   "forbidden_write": "",
+   "turns": 1,
+   "cause_if_wrong": "E if it fails"
+  },
+  "fixture": {
+   "preset": "technician",
+   "_tickets": [
+    {
+     "id": "t1",
+     "ticket_number": "T-2026-0001",
+     "status": "in_progress",
+     "accept_status": "accepted",
+     "assigned_to_ref": "member-1",
+     "customer_name": "สมชาย",
+     "customer_phone": "0812345678",
+     "service_address": "99/1 สุขุมวิท",
+     "issue_description": "แอร์ไม่เย็น",
+     "scheduled_date": "2026-09-08",
+     "scheduled_time": "10:00"
+    },
+    {
+     "id": "t2",
+     "ticket_number": "T-2026-0002",
+     "status": "open",
+     "accept_status": "pending",
+     "visibility": "public",
+     "customer_name": "สมหญิง",
+     "service_address": "12 ลาดพร้าว",
+     "issue_description": "ตู้เย็นไม่เย็น",
+     "scheduled_date": "2026-09-09",
+     "scheduled_time": "13:00"
+    }
+   ]
+  },
+  "shape": [
+   "finishing"
+  ],
+  "must_write": [
+   "check_out_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "tech-finish-02",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ปิดงาน T-2026-0001",
+   "พบ: น้ำยาแอร์รั่ว แก้: เติมน้ำยาและอุดรอยรั่ว",
+   "เติมน้ำยา R32 และอุดรอยรั่วแล้วครับ",
+   "ไม่มี"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "the ordinary close: the command, then the report. Turn 2 already contains BOTH halves (พบ… แก้…); turns 3-4 exist because the engine asks for the fix and the parts separately — watch whether it asks for what turn 2 gave it.",
+  "label": {
+   "shape": "finishing",
+   "should_write": "yes",
+   "right_write": "check_out_ticket by the last turn",
+   "forbidden_write": "",
+   "turns": 4,
+   "cause_if_wrong": "E if turn 2's แก้ half is discarded and re-asked"
+  },
+  "fixture": {
+   "preset": "technician",
+   "_tickets": [
+    {
+     "id": "t1",
+     "ticket_number": "T-2026-0001",
+     "status": "in_progress",
+     "accept_status": "accepted",
+     "assigned_to_ref": "member-1",
+     "customer_name": "สมชาย",
+     "customer_phone": "0812345678",
+     "service_address": "99/1 สุขุมวิท",
+     "issue_description": "แอร์ไม่เย็น",
+     "scheduled_date": "2026-09-08",
+     "scheduled_time": "10:00"
+    },
+    {
+     "id": "t2",
+     "ticket_number": "T-2026-0002",
+     "status": "open",
+     "accept_status": "pending",
+     "visibility": "public",
+     "customer_name": "สมหญิง",
+     "service_address": "12 ลาดพร้าว",
+     "issue_description": "ตู้เย็นไม่เย็น",
+     "scheduled_date": "2026-09-09",
+     "scheduled_time": "13:00"
+    }
+   ]
+  },
+  "shape": [
+   "finishing",
+   "multi-turn"
+  ],
+  "must_write": [
+   "check_out_ticket"
+  ],
+  "must_ask": "what was found and what was fixed (turn 1)"
+ },
+ {
+  "id": "tech-finish-03",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "เสร็จแล้วครับ",
+   "T-2026-0001"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "CHECKOUT_LOOSE_TRIGGERS (chat.py:5558) count as a close only on the technician OA. Turn 2 supplies the code.",
+  "label": {
+   "shape": "finishing",
+   "should_write": "yes",
+   "right_write": "check_out_ticket on T-2026-0001",
+   "forbidden_write": "",
+   "turns": 2,
+   "cause_if_wrong": "D"
+  },
+  "fixture": {
+   "preset": "technician",
+   "_tickets": [
+    {
+     "id": "t1",
+     "ticket_number": "T-2026-0001",
+     "status": "in_progress",
+     "accept_status": "accepted",
+     "assigned_to_ref": "member-1",
+     "customer_name": "สมชาย",
+     "customer_phone": "0812345678",
+     "service_address": "99/1 สุขุมวิท",
+     "issue_description": "แอร์ไม่เย็น",
+     "scheduled_date": "2026-09-08",
+     "scheduled_time": "10:00"
+    },
+    {
+     "id": "t2",
+     "ticket_number": "T-2026-0002",
+     "status": "open",
+     "accept_status": "pending",
+     "visibility": "public",
+     "customer_name": "สมหญิง",
+     "service_address": "12 ลาดพร้าว",
+     "issue_description": "ตู้เย็นไม่เย็น",
+     "scheduled_date": "2026-09-09",
+     "scheduled_time": "13:00"
+    }
+   ]
+  },
+  "shape": [
+   "finishing",
+   "multi-turn"
+  ],
+  "must_write": [
+   "check_out_ticket"
+  ],
+  "must_ask": "which job (turn 1)"
+ },
+ {
+  "id": "tech-finish-04",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "งานเสร็จเรียบร้อยครับ ล้างแอร์ให้แล้ว",
+   "ล้างแอร์ตามรอบ ไม่มีอะไรเสีย",
+   "ล้างคอยล์และไส้กรอง",
+   "ไม่มี"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "finishing with the work described in the same breath. Turns 2-4 answer the three questions the engine asks; the point of the case is that turn 1 already said what was done.",
+  "label": {
+   "shape": "finishing",
+   "should_write": "yes",
+   "right_write": "check_out_ticket by the last turn, with ล้างแอร์ as the work done",
+   "forbidden_write": "",
+   "turns": 4,
+   "cause_if_wrong": "E if it asks for a report it was just given"
+  },
+  "fixture": {
+   "preset": "technician",
+   "_tickets": [
+    {
+     "id": "t1",
+     "ticket_number": "T-2026-0001",
+     "status": "in_progress",
+     "accept_status": "accepted",
+     "assigned_to_ref": "member-1",
+     "customer_name": "สมชาย",
+     "customer_phone": "0812345678",
+     "service_address": "99/1 สุขุมวิท",
+     "issue_description": "แอร์ไม่เย็น",
+     "scheduled_date": "2026-09-08",
+     "scheduled_time": "10:00"
+    },
+    {
+     "id": "t2",
+     "ticket_number": "T-2026-0002",
+     "status": "open",
+     "accept_status": "pending",
+     "visibility": "public",
+     "customer_name": "สมหญิง",
+     "service_address": "12 ลาดพร้าว",
+     "issue_description": "ตู้เย็นไม่เย็น",
+     "scheduled_date": "2026-09-09",
+     "scheduled_time": "13:00"
+    }
+   ]
+  },
+  "shape": [
+   "finishing",
+   "multi-turn"
+  ],
+  "must_write": [
+   "check_out_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "tech-finish-05",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ซ่อมเสร็จแล้ว เปลี่ยนคาปาซิเตอร์ให้",
+   "คาปาซิเตอร์เสีย",
+   "เปลี่ยนคาปาซิเตอร์ใหม่",
+   "คาปาซิเตอร์ 35uF"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "same shape as finish-04, different vocabulary: the part is named in turn 1 and asked for again in turn 4.",
+  "label": {
+   "shape": "finishing",
+   "should_write": "yes",
+   "right_write": "check_out_ticket by the last turn",
+   "forbidden_write": "",
+   "turns": 4,
+   "cause_if_wrong": "E"
+  },
+  "fixture": {
+   "preset": "technician",
+   "_tickets": [
+    {
+     "id": "t1",
+     "ticket_number": "T-2026-0001",
+     "status": "in_progress",
+     "accept_status": "accepted",
+     "assigned_to_ref": "member-1",
+     "customer_name": "สมชาย",
+     "customer_phone": "0812345678",
+     "service_address": "99/1 สุขุมวิท",
+     "issue_description": "แอร์ไม่เย็น",
+     "scheduled_date": "2026-09-08",
+     "scheduled_time": "10:00"
+    },
+    {
+     "id": "t2",
+     "ticket_number": "T-2026-0002",
+     "status": "open",
+     "accept_status": "pending",
+     "visibility": "public",
+     "customer_name": "สมหญิง",
+     "service_address": "12 ลาดพร้าว",
+     "issue_description": "ตู้เย็นไม่เย็น",
+     "scheduled_date": "2026-09-09",
+     "scheduled_time": "13:00"
+    }
+   ]
+  },
+  "shape": [
+   "finishing",
+   "multi-turn"
+  ],
+  "must_write": [
+   "check_out_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "tech-finish-06",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ปิดจ๊อบ T-2026-0001",
+   "คอมเพรสเซอร์เสีย",
+   "เปลี่ยนคอมใหม่",
+   "ไม่มี"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "the slang spelling (in CHECKOUT_TRIGGERS), then the three answers the engine asks for. The clean control for the whole close-out flow.",
+  "label": {
+   "shape": "finishing",
+   "should_write": "yes",
+   "right_write": "check_out_ticket by the last turn",
+   "forbidden_write": "",
+   "turns": 4,
+   "cause_if_wrong": "A/E"
+  },
+  "fixture": {
+   "preset": "technician",
+   "_tickets": [
+    {
+     "id": "t1",
+     "ticket_number": "T-2026-0001",
+     "status": "in_progress",
+     "accept_status": "accepted",
+     "assigned_to_ref": "member-1",
+     "customer_name": "สมชาย",
+     "customer_phone": "0812345678",
+     "service_address": "99/1 สุขุมวิท",
+     "issue_description": "แอร์ไม่เย็น",
+     "scheduled_date": "2026-09-08",
+     "scheduled_time": "10:00"
+    },
+    {
+     "id": "t2",
+     "ticket_number": "T-2026-0002",
+     "status": "open",
+     "accept_status": "pending",
+     "visibility": "public",
+     "customer_name": "สมหญิง",
+     "service_address": "12 ลาดพร้าว",
+     "issue_description": "ตู้เย็นไม่เย็น",
+     "scheduled_date": "2026-09-09",
+     "scheduled_time": "13:00"
+    }
+   ]
+  },
+  "shape": [
+   "finishing",
+   "multi-turn"
+  ],
+  "must_write": [
+   "check_out_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "tech-finish-07",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "en",
+  "seed": 1,
+  "messages": [
+   "done",
+   "T-2026-0001 fixed the compressor",
+   "replaced the compressor",
+   "none"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "the English register, through the same three questions.",
+  "label": {
+   "shape": "finishing",
+   "should_write": "yes",
+   "right_write": "check_out_ticket by the last turn",
+   "forbidden_write": "",
+   "turns": 4,
+   "cause_if_wrong": "D"
+  },
+  "fixture": {
+   "preset": "technician",
+   "_tickets": [
+    {
+     "id": "t1",
+     "ticket_number": "T-2026-0001",
+     "status": "in_progress",
+     "accept_status": "accepted",
+     "assigned_to_ref": "member-1",
+     "customer_name": "สมชาย",
+     "customer_phone": "0812345678",
+     "service_address": "99/1 สุขุมวิท",
+     "issue_description": "แอร์ไม่เย็น",
+     "scheduled_date": "2026-09-08",
+     "scheduled_time": "10:00"
+    },
+    {
+     "id": "t2",
+     "ticket_number": "T-2026-0002",
+     "status": "open",
+     "accept_status": "pending",
+     "visibility": "public",
+     "customer_name": "สมหญิง",
+     "service_address": "12 ลาดพร้าว",
+     "issue_description": "ตู้เย็นไม่เย็น",
+     "scheduled_date": "2026-09-09",
+     "scheduled_time": "13:00"
+    }
+   ]
+  },
+  "shape": [
+   "finishing",
+   "multi-turn"
+  ],
+  "must_write": [
+   "check_out_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "tech-finish-08",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ปิดงานไม่ได้ครับ ลูกค้าขอเลื่อน"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "CANNOT close, and says why. The negation comes AFTER the verb — _JOB_DISCLAIMER_RE (chat.py:8658) only matches a negation BEFORE ปิดงาน, while _command_like sees ปิดงาน at the start of the message.",
+  "label": {
+   "shape": "finishing",
+   "should_write": "yes",
+   "right_write": "a reschedule note / ask for the new date (ขอเลื่อน is a _SITUATION_WORDS reschedule word)",
+   "forbidden_write": "check_out_ticket",
+   "turns": 1,
+   "cause_if_wrong": "A if it closes the job"
+  },
+  "fixture": {
+   "preset": "technician",
+   "_tickets": [
+    {
+     "id": "t1",
+     "ticket_number": "T-2026-0001",
+     "status": "in_progress",
+     "accept_status": "accepted",
+     "assigned_to_ref": "member-1",
+     "customer_name": "สมชาย",
+     "customer_phone": "0812345678",
+     "service_address": "99/1 สุขุมวิท",
+     "issue_description": "แอร์ไม่เย็น",
+     "scheduled_date": "2026-09-08",
+     "scheduled_time": "10:00"
+    },
+    {
+     "id": "t2",
+     "ticket_number": "T-2026-0002",
+     "status": "open",
+     "accept_status": "pending",
+     "visibility": "public",
+     "customer_name": "สมหญิง",
+     "service_address": "12 ลาดพร้าว",
+     "issue_description": "ตู้เย็นไม่เย็น",
+     "scheduled_date": "2026-09-09",
+     "scheduled_time": "13:00"
+    }
+   ]
+  },
+  "shape": [
+   "finishing",
+   "has-forbidden-write"
+  ],
+  "must_write": [
+   "create_note"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "tech-finish-09",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ยังไม่เสร็จครับ"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "not finished. ยังไม่เสร็จ is a cannot_finish word AND เสร็จ is a loose checkout trigger (chat.py:5558); the situation branch (16092) is checked first, so the designed outcome is a note. Watch for two things: a close-out, and a note that asserts more than the person said (\"cannot finish today\" from \"not done yet\").",
+  "label": {
+   "shape": "finishing",
+   "should_write": "yes",
+   "right_write": "a progress note (ยังไม่เสร็จ is a _SITUATION_WORDS cannot_finish word)",
+   "forbidden_write": "check_out_ticket",
+   "turns": 1,
+   "cause_if_wrong": "A if it closes the job"
+  },
+  "fixture": {
+   "preset": "technician",
+   "_tickets": [
+    {
+     "id": "t1",
+     "ticket_number": "T-2026-0001",
+     "status": "in_progress",
+     "accept_status": "accepted",
+     "assigned_to_ref": "member-1",
+     "customer_name": "สมชาย",
+     "customer_phone": "0812345678",
+     "service_address": "99/1 สุขุมวิท",
+     "issue_description": "แอร์ไม่เย็น",
+     "scheduled_date": "2026-09-08",
+     "scheduled_time": "10:00"
+    },
+    {
+     "id": "t2",
+     "ticket_number": "T-2026-0002",
+     "status": "open",
+     "accept_status": "pending",
+     "visibility": "public",
+     "customer_name": "สมหญิง",
+     "service_address": "12 ลาดพร้าว",
+     "issue_description": "ตู้เย็นไม่เย็น",
+     "scheduled_date": "2026-09-09",
+     "scheduled_time": "13:00"
+    }
+   ]
+  },
+  "shape": [
+   "finishing",
+   "has-forbidden-write"
+  ],
+  "must_write": [
+   "create_note"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "tech-finish-10",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ปิดงานไปหรือยังครับ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "the owner's 'สร้างใบเสนอราคาไปหรือยัง' shape, transplanted: a question about status must report status, never perform the action.",
+  "label": {
+   "shape": "finishing",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "check_out_ticket",
+   "turns": 1,
+   "cause_if_wrong": "A"
+  },
+  "fixture": {
+   "preset": "technician",
+   "_tickets": [
+    {
+     "id": "t1",
+     "ticket_number": "T-2026-0001",
+     "status": "in_progress",
+     "accept_status": "accepted",
+     "assigned_to_ref": "member-1",
+     "customer_name": "สมชาย",
+     "customer_phone": "0812345678",
+     "service_address": "99/1 สุขุมวิท",
+     "issue_description": "แอร์ไม่เย็น",
+     "scheduled_date": "2026-09-08",
+     "scheduled_time": "10:00"
+    },
+    {
+     "id": "t2",
+     "ticket_number": "T-2026-0002",
+     "status": "open",
+     "accept_status": "pending",
+     "visibility": "public",
+     "customer_name": "สมหญิง",
+     "service_address": "12 ลาดพร้าว",
+     "issue_description": "ตู้เย็นไม่เย็น",
+     "scheduled_date": "2026-09-09",
+     "scheduled_time": "13:00"
+    }
+   ]
+  },
+  "shape": [
+   "finishing",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "tech-finish-11",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "เสร็จแล้ว",
+   "เดี๋ยวก่อน ยังไม่เสร็จ ขอแก้ก่อน"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "changing their mind mid-close. The half-finished report must be dropped and SAID to be dropped — the owner asked for exactly this.",
+  "label": {
+   "shape": "finishing",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "a committed check_out_ticket",
+   "turns": 2,
+   "cause_if_wrong": "E if the draft silently survives or the close commits anyway"
+  },
+  "fixture": {
+   "preset": "technician",
+   "_tickets": [
+    {
+     "id": "t1",
+     "ticket_number": "T-2026-0001",
+     "status": "in_progress",
+     "accept_status": "accepted",
+     "assigned_to_ref": "member-1",
+     "customer_name": "สมชาย",
+     "customer_phone": "0812345678",
+     "service_address": "99/1 สุขุมวิท",
+     "issue_description": "แอร์ไม่เย็น",
+     "scheduled_date": "2026-09-08",
+     "scheduled_time": "10:00"
+    },
+    {
+     "id": "t2",
+     "ticket_number": "T-2026-0002",
+     "status": "open",
+     "accept_status": "pending",
+     "visibility": "public",
+     "customer_name": "สมหญิง",
+     "service_address": "12 ลาดพร้าว",
+     "issue_description": "ตู้เย็นไม่เย็น",
+     "scheduled_date": "2026-09-09",
+     "scheduled_time": "13:00"
+    }
+   ]
+  },
+  "shape": [
+   "finishing",
+   "multi-turn",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "tech-finish-12",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ปิดงาน T-2026-0001",
+   "ที่อยู่ลูกค้าอะไรนะครับ",
+   "พบ: คอมเสีย แก้: เปลี่ยนคอมใหม่"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "an interruption inside a flow: a question, then the answer to the original question. Turn 2 must be answered without losing the close-out.",
+  "label": {
+   "shape": "finishing",
+   "should_write": "yes",
+   "right_write": "check_out_ticket after turn 3",
+   "forbidden_write": "",
+   "turns": 3,
+   "cause_if_wrong": "E if turn 2 is stored as the findings, D if the flow is lost"
+  },
+  "fixture": {
+   "preset": "technician",
+   "_tickets": [
+    {
+     "id": "t1",
+     "ticket_number": "T-2026-0001",
+     "status": "in_progress",
+     "accept_status": "accepted",
+     "assigned_to_ref": "member-1",
+     "customer_name": "สมชาย",
+     "customer_phone": "0812345678",
+     "service_address": "99/1 สุขุมวิท",
+     "issue_description": "แอร์ไม่เย็น",
+     "scheduled_date": "2026-09-08",
+     "scheduled_time": "10:00"
+    },
+    {
+     "id": "t2",
+     "ticket_number": "T-2026-0002",
+     "status": "open",
+     "accept_status": "pending",
+     "visibility": "public",
+     "customer_name": "สมหญิง",
+     "service_address": "12 ลาดพร้าว",
+     "issue_description": "ตู้เย็นไม่เย็น",
+     "scheduled_date": "2026-09-09",
+     "scheduled_time": "13:00"
+    }
+   ]
+  },
+  "shape": [
+   "finishing",
+   "multi-turn"
+  ],
+  "must_write": [
+   "check_out_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "tech-stuck-01",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "วันนี้ทำไม่จบครับ ต้องมาต่อพรุ่งนี้"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "the job stays open and someone must know. Both halves matter.",
+  "label": {
+   "shape": "cannot-finish",
+   "should_write": "yes",
+   "right_write": "create_note (cannot_finish) + tell dispatch",
+   "forbidden_write": "check_out_ticket",
+   "turns": 1,
+   "cause_if_wrong": "D if nothing is recorded"
+  },
+  "shape": [
+   "cannot-finish",
+   "cannot",
+   "finish",
+   "has-forbidden-write"
+  ],
+  "must_write": [
+   "create_note"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "tech-stuck-02",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ต้องสั่งอะไหล่ก่อน รออะไหล่ประมาณ 3 วัน",
+   "แจ้งลูกค้าให้ด้วยนะครับ"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "parts. Turn 2 asks explicitly for the customer to be told.",
+  "label": {
+   "shape": "cannot-finish",
+   "should_write": "yes",
+   "right_write": "create_note (need_parts) + notify",
+   "forbidden_write": "check_out_ticket",
+   "turns": 2,
+   "cause_if_wrong": "D if the second turn has no handler"
+  },
+  "shape": [
+   "cannot-finish",
+   "cannot",
+   "finish",
+   "multi-turn",
+   "has-forbidden-write"
+  ],
+  "must_write": [
+   "create_note"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "tech-stuck-03",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ลูกค้าไม่อยู่บ้าน โทรไม่ติดเลยครับ"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "nobody home. Three ไม่ in one sentence and none of them is a refusal of a job step.",
+  "label": {
+   "shape": "cannot-finish",
+   "should_write": "yes",
+   "right_write": "create_note (not_home) + tell dispatch",
+   "forbidden_write": "check_in_ticket, check_out_ticket",
+   "turns": 1,
+   "cause_if_wrong": "A if a ไม่-rule refuses it"
+  },
+  "shape": [
+   "cannot-finish",
+   "cannot",
+   "finish",
+   "has-forbidden-write"
+  ],
+  "must_write": [
+   "create_note"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "tech-stuck-04",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "งานใหญ่กว่าที่คิด ขอมาใหม่อีกรอบ"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "a second visit needed, said without any of the obvious keywords except มาใหม่อีกรอบ.",
+  "label": {
+   "shape": "cannot-finish",
+   "should_write": "yes",
+   "right_write": "create_note (cannot_finish)",
+   "forbidden_write": "check_out_ticket",
+   "turns": 1,
+   "cause_if_wrong": "D"
+  },
+  "shape": [
+   "cannot-finish",
+   "cannot",
+   "finish",
+   "has-forbidden-write"
+  ],
+  "must_write": [
+   "create_note"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "tech-stuck-05",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ขอเลื่อนนัด T-2026-0001 เป็นพรุ่งนี้ 10 โมง"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "a reschedule with a new date in the same sentence — it should not ask for the date it was given.",
+  "label": {
+   "shape": "cannot-finish",
+   "should_write": "yes",
+   "right_write": "move the appointment on T-2026-0001 + tell the customer",
+   "forbidden_write": "",
+   "turns": 1,
+   "cause_if_wrong": "E if it asks again"
+  },
+  "shape": [
+   "cannot-finish",
+   "cannot",
+   "finish"
+  ],
+  "must_write": [
+   "update_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "tech-stuck-06",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ขอเลื่อนงานครับ",
+   "พรุ่งนี้บ่าย 2"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "reschedule without a date, then the date. Turn 1 must ask, turn 2 must be read as its answer.",
+  "label": {
+   "shape": "cannot-finish",
+   "should_write": "yes",
+   "right_write": "move the appointment after turn 2",
+   "forbidden_write": "a move on turn 1",
+   "turns": 2,
+   "cause_if_wrong": "D"
+  },
+  "shape": [
+   "cannot-finish",
+   "cannot",
+   "finish",
+   "multi-turn",
+   "has-forbidden-write"
+  ],
+  "must_write": [
+   "update_ticket"
+  ],
+  "must_ask": "which day and time to move to (turn 1)"
+ },
+ {
+  "id": "tech-stuck-07",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "อะไหล่ไม่มีในรถ ต้องกลับไปเอาที่ร้านแล้วค่อยกลับมาต่อ"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "the rambling register — one long sentence, no command word, ค่อยกลับมา sitting next to the ถ้า/ค่อย disclaimer vocabulary.",
+  "label": {
+   "shape": "cannot-finish",
+   "should_write": "yes",
+   "right_write": "create_note (need_parts / cannot_finish)",
+   "forbidden_write": "check_out_ticket",
+   "turns": 1,
+   "cause_if_wrong": "A if the disclaimer regex swallows it and nothing is recorded"
+  },
+  "shape": [
+   "cannot-finish",
+   "cannot",
+   "finish",
+   "has-forbidden-write"
+  ],
+  "must_write": [
+   "create_note"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "tech-stuck-08",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ทำไม่ทันวันนี้ พรุ่งนี้มาต่อได้ไหมครับ"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "a statement and a question in one message. Answering only one of the two is a half-failure worth recording.",
+  "label": {
+   "shape": "cannot-finish",
+   "should_write": "yes",
+   "right_write": "create_note (cannot_finish) and answer the question",
+   "forbidden_write": "check_out_ticket",
+   "turns": 1,
+   "cause_if_wrong": "D"
+  },
+  "shape": [
+   "cannot-finish",
+   "cannot",
+   "finish",
+   "has-forbidden-write"
+  ],
+  "must_write": [
+   "create_note"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "tech-stuck-09",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ลูกค้าไม่อยู่บ้าน",
+   "จะให้ทำยังไงต่อดีครับ"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "the follow-up has no subject at all — it only means anything against turn 1.",
+  "label": {
+   "shape": "cannot-finish",
+   "should_write": "yes",
+   "right_write": "create_note (not_home) on turn 1; turn 2 answered from that context",
+   "forbidden_write": "",
+   "turns": 2,
+   "cause_if_wrong": "B if turn 2 reaches the model with no history"
+  },
+  "shape": [
+   "cannot-finish",
+   "cannot",
+   "finish",
+   "multi-turn"
+  ],
+  "must_write": [
+   "create_note"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "tech-stuck-10",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ไม่ต้องสั่งอะไหล่นะครับ มีในรถแล้ว"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "a negated parts request. สั่งอะไหล่ and ต้องสั่ง are both need_parts words and _technician_situation (chat.py:15061) is a bare substring test with no negation check at all.",
+  "label": {
+   "shape": "cannot-finish",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "create_note (need_parts), any parts request",
+   "turns": 1,
+   "cause_if_wrong": "A"
+  },
+  "shape": [
+   "cannot-finish",
+   "cannot",
+   "finish",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "tech-ask-01",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "งานของฉัน"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "the rich-menu tile. A read.",
+  "label": {
+   "shape": "asking-about-a-job",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "",
+   "turns": 1,
+   "cause_if_wrong": "E if anything is written"
+  },
+  "shape": [
+   "asking-about-a-job",
+   "asking",
+   "about",
+   "job"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "tech-ask-02",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "วันนี้มีงานอะไรบ้าง",
+   "อันแรกที่ไหนครับ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "the list, then an ordinal reference to an item in it. 'อันแรก' names nothing the model can resolve on its own.",
+  "label": {
+   "shape": "asking-about-a-job",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "",
+   "turns": 2,
+   "cause_if_wrong": "B if the second turn is sent to the model without the list"
+  },
+  "shape": [
+   "asking-about-a-job",
+   "asking",
+   "about",
+   "job",
+   "multi-turn"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "tech-ask-03",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ที่อยู่ลูกค้า"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "a bare noun. _asks_about_current_job (chat.py:450) lists this exact string.",
+  "label": {
+   "shape": "asking-about-a-job",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "",
+   "turns": 1,
+   "cause_if_wrong": "D"
+  },
+  "shape": [
+   "asking-about-a-job",
+   "asking",
+   "about",
+   "job"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "tech-ask-04",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "เบอร์ลูกค้าอะไรครับ",
+   "แล้วที่อยู่ล่ะ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "two questions about the job in hand, the second elliptical.",
+  "label": {
+   "shape": "asking-about-a-job",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "",
+   "turns": 2,
+   "cause_if_wrong": "B"
+  },
+  "shape": [
+   "asking-about-a-job",
+   "asking",
+   "about",
+   "job",
+   "multi-turn"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "tech-ask-05",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "T-2026-0001"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "a bare ticket code. A read of that job.",
+  "label": {
+   "shape": "asking-about-a-job",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "",
+   "turns": 1,
+   "cause_if_wrong": "D"
+  },
+  "shape": [
+   "asking-about-a-job",
+   "asking",
+   "about",
+   "job"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "tech-ask-06",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "T-2026-0001",
+   "อาการอะไรนะ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "code, then 'what's the symptom again' — the owner's 'refer back to what was just said'.",
+  "label": {
+   "shape": "asking-about-a-job",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "",
+   "turns": 2,
+   "cause_if_wrong": "B"
+  },
+  "shape": [
+   "asking-about-a-job",
+   "asking",
+   "about",
+   "job",
+   "multi-turn"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "tech-ask-07",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "มีงานว่างไหมครับ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "open jobs. In TICKET_OPEN_PHRASES (chat.py:6026).",
+  "label": {
+   "shape": "asking-about-a-job",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "",
+   "turns": 1,
+   "cause_if_wrong": "D"
+  },
+  "shape": [
+   "asking-about-a-job",
+   "asking",
+   "about",
+   "job"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "tech-ask-08",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "งาน T-2026-0002 นัดกี่โมง"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "a question about a job that is not this technician's — a read is still fine.",
+  "label": {
+   "shape": "asking-about-a-job",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "",
+   "turns": 1,
+   "cause_if_wrong": "E if reading someone else's public job is refused"
+  },
+  "shape": [
+   "asking-about-a-job",
+   "asking",
+   "about",
+   "job"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "tech-ask-09",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "เช็คประกัน SN12345678"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "warranty lookup; the technician has warranty.read.",
+  "label": {
+   "shape": "asking-about-a-job",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "",
+   "turns": 1,
+   "cause_if_wrong": "D"
+  },
+  "shape": [
+   "asking-about-a-job",
+   "asking",
+   "about",
+   "job"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "tech-ask-10",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "งานของฉัน",
+   "ไปยังไงครับ แผนที่"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "the list then 'how do I get there' — แผนที่ is a bare noun in _asks_about_current_job's list, but ไปยังไง is not.",
+  "label": {
+   "shape": "asking-about-a-job",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "",
+   "turns": 2,
+   "cause_if_wrong": "D"
+  },
+  "shape": [
+   "asking-about-a-job",
+   "asking",
+   "about",
+   "job",
+   "multi-turn"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "tech-cannot-01",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "สร้างใบเสนอราคาให้ลูกค้าหน่อยครับ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "the model is SCRIPTED to read this correctly as quote/create. The technician holds no quote.create key, so the only right outcome is a clear refusal. Separates the gate (D/E) from the reading (C).",
+  "label": {
+   "shape": "not-permitted",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "create_quote",
+   "turns": 1,
+   "cause_if_wrong": "E if it writes; D if the refusal is unintelligible"
+  },
+  "ai": {
+   "action": "create",
+   "entity": "quote",
+   "fields": {},
+   "missing": []
+  },
+  "shape": [
+   "not-permitted",
+   "not",
+   "permitted",
+   "scripted-model",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "tech-cannot-02",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "เพิ่มลูกค้าใหม่ชื่อสมหญิง เบอร์ 0891112222"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "same test, different entity, and with real field values so a leak would be visible in the fixture.",
+  "label": {
+   "shape": "not-permitted",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "create_customer",
+   "turns": 1,
+   "cause_if_wrong": "E"
+  },
+  "ai": {
+   "action": "create",
+   "entity": "customer",
+   "fields": {
+    "first_name": "สมหญิง",
+    "phone": "0891112222"
+   },
+   "missing": []
+  },
+  "shape": [
+   "not-permitted",
+   "not",
+   "permitted",
+   "scripted-model",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "tech-cannot-03",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ขอรหัสเชิญ",
+   "ให้ช่างใหม่ครับ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "the owner's own example, on the OA where it must fail. _is_technician_invite_request (chat.py:265) fires at 15796 BEFORE any permission check; the handler then checks member.manage, which a technician lacks. Turn 2 answers 'who for' — the question the owner said should be asked.",
+  "label": {
+   "shape": "not-permitted",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "create_invite",
+   "turns": 2,
+   "cause_if_wrong": "A if turn 1 acts on the trigger table; D if turn 2 has no handler"
+  },
+  "shape": [
+   "not-permitted",
+   "not",
+   "permitted",
+   "multi-turn",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": "who the invite is for — the owner's 'ask who is being invited'"
+ },
+ {
+  "id": "tech-cannot-04",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "มอบหมายงาน T-2026-0002 ให้ช่างบี",
+   "ทำไมทำไม่ได้ครับ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "ticket.assign is not in the technician preset. Turn 2 asks why — a refusal that cannot explain itself is still a failure.",
+  "label": {
+   "shape": "not-permitted",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "assign_ticket",
+   "turns": 2,
+   "cause_if_wrong": "E"
+  },
+  "shape": [
+   "not-permitted",
+   "not",
+   "permitted",
+   "multi-turn",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "tech-cannot-05",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ปิดดีล D-2026-0001 สำเร็จ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "a deal stage command typed on the technician OA. _parse_deal_stage_command runs at 16825 with an inline permission check — before the model.",
+  "label": {
+   "shape": "not-permitted",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "update_deal",
+   "turns": 1,
+   "cause_if_wrong": "A/E"
+  },
+  "shape": [
+   "not-permitted",
+   "not",
+   "permitted",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "tech-cannot-06",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ขอดูยอดขายเดือนนี้"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "no view_reports key. A read, so nothing can be written — the failure mode here is an answer that leaks numbers, or an unhelpful refusal.",
+  "label": {
+   "shape": "not-permitted",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "",
+   "turns": 1,
+   "cause_if_wrong": "E"
+  },
+  "shape": [
+   "not-permitted",
+   "not",
+   "permitted"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "tech-cannot-07",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ลบงาน T-2026-0002 ทิ้งเลย"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "deletion is not a technician's to do. The word ลบ should reach the record_delete guard (_AI_GUARDED, chat.py:8749).",
+  "label": {
+   "shape": "not-permitted",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "any ticket delete or status write",
+   "turns": 1,
+   "cause_if_wrong": "E"
+  },
+  "shape": [
+   "not-permitted",
+   "not",
+   "permitted",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "tech-cannot-08",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ยกเลิกงาน T-2026-0001 ให้หน่อย"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "cancelling a job is dispatch's decision. UNCERTAIN whether the product intends a technician to be able to; if it does, this becomes a 'yes' — but a silent cancel with no confirmation is wrong either way.",
+  "label": {
+   "shape": "not-permitted",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "set_ticket_status(cancelled)",
+   "turns": 1,
+   "cause_if_wrong": "E"
+  },
+  "shape": [
+   "not-permitted",
+   "not",
+   "permitted",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "tech-cannot-09",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "สร้างใบเสนอราคาให้ลูกค้าหน่อย",
+   "งั้นขอดูงานของฉันแทน"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "refused, then the person pivots to something they CAN do. The refusal must not leave a pending flow that swallows turn 2.",
+  "label": {
+   "shape": "not-permitted",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "",
+   "turns": 2,
+   "cause_if_wrong": "E if turn 2 is captured by turn 1's leftovers"
+  },
+  "ai": [
+   {
+    "action": "create",
+    "entity": "quote",
+    "fields": {},
+    "missing": []
+   },
+   {
+    "action": "read",
+    "entity": "ticket",
+    "fields": {},
+    "missing": []
+   }
+  ],
+  "shape": [
+   "not-permitted",
+   "not",
+   "permitted",
+   "multi-turn",
+   "scripted-model"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "tech-cannot-10",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "อนุมัติรายงาน SR-2026-0001"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "approval.approve is not in the technician preset, and a technician approving their own report is the exact thing approvals exist to prevent.",
+  "label": {
+   "shape": "not-permitted",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "act_on_approval_step",
+   "turns": 1,
+   "cause_if_wrong": "E"
+  },
+  "shape": [
+   "not-permitted",
+   "not",
+   "permitted",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ }
+]

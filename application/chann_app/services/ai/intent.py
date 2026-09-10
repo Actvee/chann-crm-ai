@@ -8,6 +8,7 @@ not an authorization boundary, and Principle #10's gate stays where it is.
 """
 from __future__ import annotations
 
+import re
 import json
 import logging
 
@@ -204,9 +205,13 @@ does not exist anywhere else the model can check against):
     notes. Examples: "เตือนผมโทรหาคุณจุใจพรุ่งนี้เช้า", "อีกสามวันติดตาม
     ดีลนี้หน่อย", "ตั้งนัดวันที่ 6 ที่จะถึง", "ลูกค้าอยากดูสินค้าวันที่ 6
     ตอน 9 โมงเช้า", "นัดลูกค้ามาดูของวันศุกร์บ่าย".
-  action="cancel": the reminder is no longer needed. fields may include
-    code or target_name. Examples: "ไม่ต้องเตือนดีลนี้แล้ว", "เอาการเตือน
+  action="cancel": the reminder is no longer needed — the person is asking
+    for an EXISTING reminder to be taken away, which is a request even
+    though it is worded as a negation. fields may include code or
+    target_name. Examples: "ไม่ต้องเตือนดีลนี้แล้ว", "เอาการเตือน
     ของ C-2026-0001 ออกให้หน่อย".
+    Contrast: "ไม่ต้องตั้งนัด" declines a NEW reminder and is not a cancel;
+    answer action="suggest" for that.
 
 - entity="warranty" — a product's warranty registration, found by serial
   number.
@@ -247,6 +252,32 @@ does not exist anywhere else the model can check against):
   change a named field (a phone number, a stage, a price) — those stay
   entity="customer"/"deal"/etc. with action="update". note is for
   free-text observations with no field structure at all.
+
+WHAT THE SENTENCE IS DOING, not only what it is about
+- Every example above is a sentence ASKING for something. A sentence that
+  mentions the same words without asking is not the same thing, and the
+  difference decides whether a record changes.
+- These are NOT requests to act. Answer action="suggest" for them:
+    * declining          "ไม่ต้องสร้างใบเสนอราคา", "ยังไม่เอาใบราคาครับ",
+                         "อย่าเพิ่งลบบันทึกนั้น"
+    * asking how         "เพิ่มลูกค้ายังไง", "ขอเลื่อนนัดยังไง"
+    * asking whether     "สร้างใบเสนอราคาไปหรือยัง", "ปิดดีลไปแล้วหรือยัง"
+    * conditional        "ถ้าลูกค้าตกลงค่อยเปิดดีล"
+    * later              "เดี๋ยวค่อยทำ", "ไว้ก่อน"
+    * reporting speech   "ลูกค้าบอกว่าจะยกเลิก", "ช่างบอกว่ารับงานแล้ว"
+    * narrating the past "เมื่อวานเพิ่มลูกค้าไปแล้ว"
+    * giving an example  "เช่น เพิ่มลูกค้า สมชาย ใจดี"
+- But a negation is sometimes the command itself, and these ARE requests:
+    "ไม่อนุมัติ SR-2026-0001" (reject it), "รับงานไม่ได้" (decline the job),
+    "ปิดดีล D-2026-0001 ไม่สำเร็จ" (close it as lost), "ไม่เอาตัวนี้แล้ว"
+    over a line item (remove it), "ไม่ต้องเตือนเรื่องสมชายแล้ว" (cancel the
+    reminder). The test is what the person wants to HAPPEN: if the sentence
+    asks for a change — including a removal — it is a request.
+- A symptom is not a negated action: "แอร์ไม่เย็น" reports a fault and IS a
+  repair request.
+- When both readings are genuinely open, answer action="suggest" rather
+  than guessing. The code will ask. Guessing wrong writes a row nobody
+  asked for, and that costs more than one extra question.
 """
 
 # Appended only when the previous turn left a question hanging. Spec 6.4
@@ -273,6 +304,50 @@ different action/entity ONLY if the user has clearly changed the subject.
 LANGUAGE_NAMES = {"th": "Thai", "en": "English"}
 
 
+# Where each entity's block starts in INTENT_SYSTEM_PROMPT. Used to send
+# an OA only the capabilities it actually has.
+_ENTITY_BLOCK_RE = re.compile(r'^- entity="([a-z_]+)"', re.MULTILINE)
+
+
+def _entity_blocks(prompt: str) -> tuple[str, dict[str, str], str]:
+    """(everything before the first entity block, {entity: its block},
+    everything after the last one)."""
+    marks = list(_ENTITY_BLOCK_RE.finditer(prompt))
+    if not marks:
+        return prompt, {}, ""
+    head = prompt[: marks[0].start()]
+    blocks: dict[str, str] = {}
+    for i, m in enumerate(marks):
+        end = marks[i + 1].start() if i + 1 < len(marks) else len(prompt)
+        blocks[m.group(1)] = prompt[m.start():end]
+    # The tail is whatever follows the last block that is not part of it:
+    # the closing guidance. It is kept whole and always sent.
+    tail_at = prompt.rfind("\nWHAT THE SENTENCE IS DOING")
+    if tail_at > marks[-1].start():
+        blocks[marks[-1].group(1)] = prompt[marks[-1].start():tail_at]
+        return head, blocks, prompt[tail_at:]
+    return head, blocks, ""
+
+
+def entities_for(oa: str) -> set[str] | None:
+    """The entities this OA can actually reach, or None for "everything".
+
+    Derived from the same two tables the permission gate uses, so the
+    prompt cannot drift from what the code will allow. This is the
+    isolation the owner asked to keep: a technician is not shown the deal,
+    quote or customer vocabulary at all, and cannot propose an action the
+    gate would refuse a moment later.
+    """
+    from ..chat import ACTION_PERMISSIONS, OA_ALLOWED_PERMISSION_KEYS
+
+    allowed = OA_ALLOWED_PERMISSION_KEYS.get(oa)
+    if allowed is None:
+        return None
+    reachable = {e for (_a, e), key in ACTION_PERMISSIONS.items() if key in allowed}
+    # Always available whatever the OA: they are not permissioned actions.
+    return reachable | {"profile", "report"}
+
+
 def build_prompt(
     *,
     chann_uid: str,
@@ -281,10 +356,19 @@ def build_prompt(
     permission_keys: list[str] | frozenset[str],
     language: str = "th",
     pending: dict | None = None,
+    oa: str = "",
 ) -> str:
     keys = sorted(permission_keys)
     lang = (language or DEFAULT_LOCALE).lower()
-    prompt = INTENT_SYSTEM_PROMPT.format(
+    template = INTENT_SYSTEM_PROMPT
+    wanted = entities_for(oa) if oa else None
+    if wanted is not None:
+        head, blocks, tail = _entity_blocks(template)
+        if blocks:
+            kept = [b for name, b in blocks.items() if name in wanted]
+            if kept:
+                template = head + "".join(kept) + tail
+    prompt = template.format(
         chann_uid=chann_uid,
         role=role,
         license_id=license_id,
@@ -358,6 +442,7 @@ async def parse_intent(
     language: str = "th",
     client=None,
     pending: dict | None = None,
+    oa: str = "",
 ) -> dict:
     """Parse one user message. Raises AIUnavailable; never returns a half-result."""
     system_prompt = build_prompt(
@@ -367,6 +452,7 @@ async def parse_intent(
         permission_keys=permission_keys,
         language=language,
         pending=pending,
+        oa=oa,
     )
     raw = await complete(
         system_prompt=system_prompt,

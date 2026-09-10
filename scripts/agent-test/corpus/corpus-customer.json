@@ -1,0 +1,2610 @@
+[
+ {
+  "id": "cust-fault-01",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "แอร์ไม่เย็น"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "THE OWNER'S EXAMPLE. A symptom containing ไม่ must be read as a fault and never refused for the ไม่. Whether the ticket lands on turn 1 or after an address question, the conversation must end in a job.",
+  "label": {
+   "shape": "fault-terse",
+   "should_write": "yes",
+   "right_write": "create_ticket (at once, or after an address question)",
+   "forbidden_write": "",
+   "turns": 1,
+   "cause_if_wrong": "A if a ไม่-rule refuses it before any handler"
+  },
+  "shape": [
+   "fault-terse",
+   "fault",
+   "terse",
+   "owner-example"
+  ],
+  "must_write": [
+   "create_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "cust-fault-02",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "แอร์เสีย"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "two words, no politeness, no detail.",
+  "label": {
+   "shape": "fault-terse",
+   "should_write": "yes",
+   "right_write": "create_ticket",
+   "forbidden_write": "",
+   "turns": 1,
+   "cause_if_wrong": "D"
+  },
+  "shape": [
+   "fault-terse",
+   "fault",
+   "terse"
+  ],
+  "must_write": [
+   "create_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "cust-fault-03",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "เสีย"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "one word. Which machine, what is wrong — neither is known. The right answer is a question, not a job called 'เสีย'.",
+  "label": {
+   "shape": "fault-terse",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "create_ticket with issue='เสีย'",
+   "turns": 1,
+   "cause_if_wrong": "E if a ticket is opened from a single word"
+  },
+  "shape": [
+   "fault-terse",
+   "fault",
+   "terse",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": "which machine and what is wrong"
+ },
+ {
+  "id": "cust-fault-04",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "แอร์มีน้ำหยดลงมาครับ",
+   "บ้านเลขที่ 45 ซอยลาดพร้าว 15 ครับ"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "a plain symptom with no fault keyword like เสีย, then the address.",
+  "label": {
+   "shape": "fault-plain",
+   "should_write": "yes",
+   "right_write": "create_ticket with that address",
+   "forbidden_write": "",
+   "turns": 2,
+   "cause_if_wrong": "D"
+  },
+  "shape": [
+   "fault-plain",
+   "fault",
+   "plain",
+   "multi-turn"
+  ],
+  "must_write": [
+   "create_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "cust-fault-05",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ตู้เย็นไม่เย็นเลยครับ ตั้งแต่เมื่อวาน"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "the one registered product is an air-con, but the fault is about a fridge. Auto-attaching the only serial would file it against the wrong machine.",
+  "label": {
+   "shape": "fault-plain",
+   "should_write": "yes",
+   "right_write": "create_ticket about the fridge, not the registered air-con",
+   "forbidden_write": "",
+   "turns": 1,
+   "cause_if_wrong": "E if the serial is attached without asking"
+  },
+  "shape": [
+   "fault-plain",
+   "fault",
+   "plain"
+  ],
+  "must_write": [
+   "create_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "cust-fault-06",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "เครื่องซักผ้าปั่นไม่ออก มีเสียงดังด้วย"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "two symptoms in one sentence.",
+  "label": {
+   "shape": "fault-plain",
+   "should_write": "yes",
+   "right_write": "create_ticket",
+   "forbidden_write": "",
+   "turns": 1,
+   "cause_if_wrong": "D"
+  },
+  "shape": [
+   "fault-plain",
+   "fault",
+   "plain"
+  ],
+  "must_write": [
+   "create_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "cust-fault-07",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "คือเมื่อวานตอนเย็นแอร์ห้องนอนมันเริ่มมีเสียงดังแปลก ๆ แล้วเช้านี้ก็ไม่เย็นเลยค่ะ ลูกก็นอนไม่หลับ รบกวนส่งช่างมาดูหน่อยได้ไหมคะ"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "the rambling register the owner named — story, complaint-ish tone, and a request, all in one message. Four ไม่ in it, none a refusal.",
+  "label": {
+   "shape": "fault-rambling",
+   "should_write": "yes",
+   "right_write": "create_ticket, with the symptom (not the whole paragraph) as the issue",
+   "forbidden_write": "",
+   "turns": 1,
+   "cause_if_wrong": "A if length or a ไม่ makes a rule refuse it"
+  },
+  "shape": [
+   "fault-rambling",
+   "fault",
+   "rambling"
+  ],
+  "must_write": [
+   "create_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "cust-fault-08",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "แอร์ไม่เย็น ช่วยส่งช่างมาดูหน่อยครับ"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "symptom plus an explicit request for a visit (_REPAIR_ASK_RE, chat.py:3767).",
+  "label": {
+   "shape": "fault-request",
+   "should_write": "yes",
+   "right_write": "create_ticket",
+   "forbidden_write": "",
+   "turns": 1,
+   "cause_if_wrong": "D"
+  },
+  "shape": [
+   "fault-request",
+   "fault",
+   "request"
+  ],
+  "must_write": [
+   "create_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "cust-fault-09",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "en",
+  "seed": 1,
+  "messages": [
+   "ac not cooling, please send someone"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "the English register.",
+  "label": {
+   "shape": "fault-english",
+   "should_write": "yes",
+   "right_write": "create_ticket",
+   "forbidden_write": "",
+   "turns": 1,
+   "cause_if_wrong": "D"
+  },
+  "shape": [
+   "fault-english",
+   "fault",
+   "english"
+  ],
+  "must_write": [
+   "create_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "cust-fault-10",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "แอร์ 12000 BTU ไม่เย็น"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "BTU is in the price vocabulary via _SPEC_WORDS (chat.py:3820). A specification tells you WHICH machine; it does not make a fault a shopping question. Regression case from review v3 B07.",
+  "label": {
+   "shape": "fault-spec",
+   "should_write": "yes",
+   "right_write": "create_ticket",
+   "forbidden_write": "a product-catalogue answer",
+   "turns": 1,
+   "cause_if_wrong": "A if _asks_price wins"
+  },
+  "shape": [
+   "fault-spec",
+   "fault",
+   "spec",
+   "has-forbidden-write"
+  ],
+  "must_write": [
+   "create_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "cust-fault-11",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "แอร์ไม่เย็นครับ 🥵"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "an emoji in the message must not change the reading.",
+  "label": {
+   "shape": "fault-terse",
+   "should_write": "yes",
+   "right_write": "create_ticket",
+   "forbidden_write": "",
+   "turns": 1,
+   "cause_if_wrong": "A/C"
+  },
+  "shape": [
+   "fault-terse",
+   "fault",
+   "terse"
+  ],
+  "must_write": [
+   "create_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "cust-fault-12",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "แอ์ไม่เย็น"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "a real Thai typo (แอ์, missing ร). The owner's first sentence of the brief is 'real people mistype'. Model left at default suggest, so a correct outcome here would have to come from a rule.",
+  "label": {
+   "shape": "fault-typo",
+   "should_write": "yes",
+   "right_write": "create_ticket",
+   "forbidden_write": "",
+   "turns": 1,
+   "cause_if_wrong": "A if the fault table misses it and nothing else catches it; C only if the model is reached and misreads"
+  },
+  "shape": [
+   "fault-typo",
+   "fault",
+   "typo"
+  ],
+  "must_write": [
+   "create_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "cust-fault-13",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "แอร์ไม่ค่อยเย็น เย็นบ้างไม่เย็นบ้าง"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "a hedged, intermittent symptom — the shape people actually use before they are sure it is broken.",
+  "label": {
+   "shape": "fault-hedged",
+   "should_write": "yes",
+   "right_write": "create_ticket",
+   "forbidden_write": "",
+   "turns": 1,
+   "cause_if_wrong": "D"
+  },
+  "shape": [
+   "fault-hedged",
+   "fault",
+   "hedged"
+  ],
+  "must_write": [
+   "create_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "cust-fault-14",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "น้ำหยดจากแอร์ลงมาโดนทีวี ตอนนี้ปิดแอร์ไว้แล้วครับ"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "a fault plus a mitigation. 'ปิดแอร์ไว้แล้ว' contains ปิด…แล้ว, which reads like a closure word in other contexts.",
+  "label": {
+   "shape": "fault-rambling",
+   "should_write": "yes",
+   "right_write": "create_ticket",
+   "forbidden_write": "",
+   "turns": 1,
+   "cause_if_wrong": "A"
+  },
+  "shape": [
+   "fault-rambling",
+   "fault",
+   "rambling"
+  ],
+  "must_write": [
+   "create_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "cust-fault-15",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "แจ้งซ่อม",
+   "แอร์ไม่เย็น"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "the rich-menu tile, then the fault. CUSTOMER_REPORT_BARE (chat.py:3318) sets up a pending slot whose next line is the fault whatever it looks like.",
+  "label": {
+   "shape": "fault-multiturn",
+   "should_write": "yes",
+   "right_write": "create_ticket after turn 2",
+   "forbidden_write": "",
+   "turns": 2,
+   "cause_if_wrong": "D if turn 2 is not read as the answer"
+  },
+  "shape": [
+   "fault-multiturn",
+   "fault",
+   "multiturn",
+   "multi-turn"
+  ],
+  "must_write": [
+   "create_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "cust-fault-16",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "แอร์ไม่เย็น",
+   "บ้านเลขที่ 99/1 ซอยสุขุมวิท 31 คลองเตย"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "the ordinary two-step: fault, then address. The address must land in the address field, not as a second fault.",
+  "label": {
+   "shape": "fault-multiturn",
+   "should_write": "yes",
+   "right_write": "create_ticket with that service address",
+   "forbidden_write": "",
+   "turns": 2,
+   "cause_if_wrong": "E"
+  },
+  "shape": [
+   "fault-multiturn",
+   "fault",
+   "multiturn",
+   "multi-turn"
+  ],
+  "must_write": [
+   "create_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "cust-fault-17",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "แอร์ไม่เย็น",
+   "ที่อยู่เดิมครับ"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "'same address as before' — _SAME_ADDRESS_PHRASES (chat.py:3805). The person expects the shop to remember.",
+  "label": {
+   "shape": "fault-multiturn",
+   "should_write": "yes",
+   "right_write": "create_ticket reusing the known address",
+   "forbidden_write": "",
+   "turns": 2,
+   "cause_if_wrong": "D if it insists on the full address again"
+  },
+  "shape": [
+   "fault-multiturn",
+   "fault",
+   "multiturn",
+   "multi-turn"
+  ],
+  "must_write": [
+   "create_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "cust-fault-18",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "แอร์ไม่เย็น",
+   "แล้วก็เครื่องซักผ้าเสียด้วยครับ"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "a second fault arriving while the first is still being taken down. Changing or extending the task mid-flow is exactly what the owner asked about.",
+  "label": {
+   "shape": "fault-multiturn",
+   "should_write": "yes",
+   "right_write": "a create_ticket for the second machine, or one ticket naming both — after asking which",
+   "forbidden_write": "silently appending the second machine as the first job's address",
+   "turns": 2,
+   "cause_if_wrong": "E"
+  },
+  "shape": [
+   "fault-multiturn",
+   "fault",
+   "multiturn",
+   "multi-turn",
+   "has-forbidden-write"
+  ],
+  "must_write": [
+   "create_ticket"
+  ],
+  "must_ask": "whether the second machine is a second job or the same one"
+ },
+ {
+  "id": "cust-neg-01",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ไม่ต้องส่งช่างมานะครับ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "a refusal of a visit. _denies_repair_request (chat.py:3773).",
+  "label": {
+   "shape": "negation",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "create_ticket",
+   "turns": 1,
+   "cause_if_wrong": "A/E"
+  },
+  "shape": [
+   "negation",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "cust-neg-02",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ยังไม่ต้องแจ้งซ่อมนะ ขอดูอาการอีกวัน"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "not yet — with a reason.",
+  "label": {
+   "shape": "negation",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "create_ticket",
+   "turns": 1,
+   "cause_if_wrong": "A/E"
+  },
+  "shape": [
+   "negation",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "cust-neg-03",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ถ้าแอร์เสียอีกจะมาแจ้งอีกทีนะครับ",
+   "ตอนนี้ยังใช้ได้ปกติครับ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "a conditional about the future, then confirmation that nothing is wrong. Turn 1 contains แอร์เสีย and แจ้ง; turn 2 contains ยัง and ปกติ.",
+  "label": {
+   "shape": "hypothetical",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "create_ticket",
+   "turns": 2,
+   "cause_if_wrong": "A/E"
+  },
+  "shape": [
+   "hypothetical",
+   "multi-turn",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "cust-neg-04",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "แอร์ซ่อมแล้ว ใช้ได้ปกติแล้วครับ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "reporting that it is FIXED. Contains ซ่อม. Review v3 B04 lists this as one of eight sentences that opened a real ticket.",
+  "label": {
+   "shape": "negation",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "create_ticket",
+   "turns": 1,
+   "cause_if_wrong": "A/E"
+  },
+  "shape": [
+   "negation",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "cust-neg-05",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "แอร์ไม่ได้เสียนะครับ แค่ถามเฉย ๆ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "explicitly not broken.",
+  "label": {
+   "shape": "negation",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "create_ticket",
+   "turns": 1,
+   "cause_if_wrong": "A/E"
+  },
+  "shape": [
+   "negation",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "cust-neg-06",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ทดสอบระบบ คำว่า แอร์เสีย"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "a quoted phrase, not a report.",
+  "label": {
+   "shape": "hypothetical",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "create_ticket",
+   "turns": 1,
+   "cause_if_wrong": "A/E"
+  },
+  "shape": [
+   "hypothetical",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "cust-neg-07",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "แอร์ไม่ได้ล้างมานานแล้ว อยากให้ช่างมาดูหน่อยครับ"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "THE INVERSE TRAP. The negation is about the past (not cleaned for ages) and the sentence asks for a visit. _denies_repair_request must NOT swallow it (the (?!มานาน) lookahead at chat.py:3789 exists for this).",
+  "label": {
+   "shape": "negation-that-is-a-request",
+   "should_write": "yes",
+   "right_write": "create_ticket",
+   "forbidden_write": "",
+   "turns": 1,
+   "cause_if_wrong": "A if the refusal rule wins"
+  },
+  "shape": [
+   "negation-that-is-a-request",
+   "negation",
+   "request"
+  ],
+  "must_write": [
+   "create_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "cust-neg-08",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "อย่าเพิ่งเปิดงานซ่อมนะครับ ขอเช็คก่อน"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "an explicit instruction not to open one.",
+  "label": {
+   "shape": "negation",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "create_ticket",
+   "turns": 1,
+   "cause_if_wrong": "A/E"
+  },
+  "shape": [
+   "negation",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "cust-neg-09",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "แอร์เย็นดีครับ ขอบคุณ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "the opposite of a fault, using the fault noun.",
+  "label": {
+   "shape": "negation",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "create_ticket",
+   "turns": 1,
+   "cause_if_wrong": "A/E"
+  },
+  "shape": [
+   "negation",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "cust-neg-10",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "แอร์ไม่เย็น",
+   "เดี๋ยวนะครับ ลองปิดเปิดใหม่แล้วเย็นแล้ว ไม่ต้องส่งช่างแล้วครับ"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "changing their mind mid-report. The owner asked that a change of task say so and deal with the half-finished record. Either no ticket, or a ticket that is cancelled and SAID to be cancelled.",
+  "label": {
+   "shape": "negation-multiturn",
+   "should_write": "yes",
+   "right_write": "create_ticket on turn 1, then set_ticket_status(cancelled) on turn 2",
+   "forbidden_write": "a ticket left open after turn 2 with nothing said about it",
+   "turns": 2,
+   "cause_if_wrong": "E if a ticket is left open with nothing said"
+  },
+  "shape": [
+   "negation-multiturn",
+   "negation",
+   "multiturn",
+   "multi-turn",
+   "has-forbidden-write"
+  ],
+  "must_write": [
+   "create_ticket",
+   "set_ticket_status"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "cust-price-01",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ล้างแอร์ราคาเท่าไหร่ครับ",
+   "แล้วถ้าซ่อมด้วยล่ะครับ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "a price question (review 6 Sep 2026: this opened a repair job), then an elliptical follow-up with no noun — 'and if it is repaired too?'.",
+  "label": {
+   "shape": "price",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "create_ticket named after the question",
+   "turns": 2,
+   "cause_if_wrong": "E on turn 1; B on turn 2 if it is sent to the model with no history"
+  },
+  "shape": [
+   "price",
+   "multi-turn",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "cust-price-02",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ค่าบริการเท่าไหร่ครับ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "the bare service-charge question.",
+  "label": {
+   "shape": "price",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "create_ticket",
+   "turns": 1,
+   "cause_if_wrong": "E"
+  },
+  "shape": [
+   "price",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "cust-price-03",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ซ่อมแอร์แพงไหมครับ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "'แพง' is NOT in _PRICE_WORDS (chat.py:3754) and ซ่อมแอร์ reads as a repair. A price question in vocabulary the price table does not know.",
+  "label": {
+   "shape": "price",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "create_ticket",
+   "turns": 1,
+   "cause_if_wrong": "A if it opens a job"
+  },
+  "shape": [
+   "price",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "cust-price-04",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "มีแอร์ 12000 BTU ขายไหมครับ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "shopping, not a fault. Storefront territory.",
+  "label": {
+   "shape": "price",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "create_ticket",
+   "turns": 1,
+   "cause_if_wrong": "E"
+  },
+  "shape": [
+   "price",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "cust-price-05",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ล้างแอร์เท่าไหร่ครับ",
+   "งั้นขอจองวันเสาร์เลยครับ"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "a price question that turns into a booking. Turn 2 has no fault word at all and only means something against turn 1.",
+  "label": {
+   "shape": "price-multiturn",
+   "should_write": "yes",
+   "right_write": "a booking / create_ticket for a cleaning visit",
+   "forbidden_write": "",
+   "turns": 2,
+   "cause_if_wrong": "B if turn 2 reaches the model with no memory; D if nothing books"
+  },
+  "shape": [
+   "price-multiturn",
+   "price",
+   "multiturn",
+   "multi-turn"
+  ],
+  "must_write": [
+   "create_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "cust-price-06",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "แอร์ไม่เย็น",
+   "ค่าซ่อมประมาณเท่าไหร่ครับ"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "a price question asked INSIDE the report flow, where the bot is waiting for an address. _handle_customer_report checks _asks_price before the pending slots (chat.py:4542) — this is the case that check exists for. Labelled no-write because the ticket should not be completed off this turn.",
+  "label": {
+   "shape": "price-multiturn",
+   "should_write": "yes",
+   "right_write": "create_ticket from turn 1",
+   "forbidden_write": "storing 'ค่าซ่อมประมาณเท่าไหร่' as the address or as a second fault",
+   "turns": 2,
+   "cause_if_wrong": "E"
+  },
+  "shape": [
+   "price-multiturn",
+   "price",
+   "multiturn",
+   "multi-turn",
+   "has-forbidden-write"
+  ],
+  "must_write": [
+   "create_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "cust-cancel-01",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ยกเลิกงาน T-2026-0001",
+   "ยืนยันยกเลิก"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "the explicit cancellation, with the code, then the confirmation the engine asks for. CONTROL for the negated cancels below.",
+  "label": {
+   "shape": "cancelling",
+   "should_write": "yes",
+   "right_write": "cancel T-2026-0001 (set_ticket_status) after the confirmation",
+   "forbidden_write": "",
+   "turns": 2,
+   "cause_if_wrong": "E if it fails"
+  },
+  "shape": [
+   "cancelling",
+   "multi-turn"
+  ],
+  "must_write": [
+   "set_ticket_status"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "cust-cancel-02",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ไม่เอาแล้วครับ ไม่ต้องมาแล้ว",
+   "ยืนยันยกเลิก"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "a cancellation in ordinary words, no code. One job is open, so it is resolvable. Both phrases are in _CANCEL_HINTS (chat.py:3760).",
+  "label": {
+   "shape": "cancelling",
+   "should_write": "yes",
+   "right_write": "cancel the one open job",
+   "forbidden_write": "create_ticket",
+   "turns": 2,
+   "cause_if_wrong": "D"
+  },
+  "shape": [
+   "cancelling",
+   "multi-turn",
+   "has-forbidden-write"
+  ],
+  "must_write": [
+   "set_ticket_status"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "cust-cancel-03",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "หายแล้วครับ ใช้ได้ปกติ ไม่ต้องมาแล้ว",
+   "ยืนยันยกเลิก"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "the fault fixed itself. หายแล้ว and ไม่ต้องมาแล้ว are both cancel hints.",
+  "label": {
+   "shape": "cancelling",
+   "should_write": "yes",
+   "right_write": "cancel the open job",
+   "forbidden_write": "create_ticket",
+   "turns": 2,
+   "cause_if_wrong": "D"
+  },
+  "shape": [
+   "cancelling",
+   "multi-turn",
+   "has-forbidden-write"
+  ],
+  "must_write": [
+   "set_ticket_status"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "cust-cancel-04",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ยกเลิก"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "one word. With one open job it is arguably resolvable, but a bare 'cancel' should confirm what it is about to cancel. UNCERTAIN: if the product decides one-job-means-obvious, this flips to yes — but a silent cancel is wrong.",
+  "label": {
+   "shape": "cancelling",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "cancelling anything without saying what",
+   "turns": 1,
+   "cause_if_wrong": "E"
+  },
+  "shape": [
+   "cancelling",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": "which job is being cancelled, and confirm before cancelling"
+ },
+ {
+  "id": "cust-cancel-05",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ไม่ต้องยกเลิกนะครับ ให้ช่างมาตามนัดเลย",
+   "นัดวันเสาร์ยังอยู่ใช่ไหมครับ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "THE OWNER'S EXAMPLE on the customer OA. ยกเลิก is in CUSTOMER_CANCEL_PHRASES (chat.py:5140) and _is_cancel_hint has no negation test at all (chat.py:3831).",
+  "label": {
+   "shape": "negated-cancel",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "cancelling T-2026-0001",
+   "turns": 2,
+   "cause_if_wrong": "A"
+  },
+  "shape": [
+   "negated-cancel",
+   "negated",
+   "cancel",
+   "multi-turn",
+   "owner-example",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "cust-cancel-06",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ยกเลิกไม่ได้ใช่ไหมครับ ถ้าจะยกเลิกต้องทำยังไง"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "a QUESTION about cancelling, twice over. The owner's 'ไปหรือยัง' shape applied to a destructive verb.",
+  "label": {
+   "shape": "negated-cancel",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "cancelling anything",
+   "turns": 1,
+   "cause_if_wrong": "A"
+  },
+  "shape": [
+   "negated-cancel",
+   "negated",
+   "cancel",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "cust-cancel-07",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ยกเลิกนัดวันเสาร์ แต่ยังอยากให้ซ่อมนะครับ ขอเป็นวันอาทิตย์",
+   "ไม่ใช่ครับ ไม่ได้จะยกเลิกงาน ขอแค่เลื่อนเป็นวันอาทิตย์"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "the word is 'cancel' and the meaning is 'reschedule'. Turn 2 is what a person types when the bot offers to cancel instead. Getting this wrong destroys the job the customer still wants.",
+  "label": {
+   "shape": "cancel-vs-reschedule",
+   "should_write": "yes",
+   "right_write": "MOVE the appointment to Sunday (update_ticket)",
+   "forbidden_write": "cancelling the job outright (set_ticket_status)",
+   "turns": 2,
+   "cause_if_wrong": "A if CUSTOMER_CANCEL_TRIGGERS matches ยกเลิกนัด and returns first"
+  },
+  "shape": [
+   "cancel-vs-reschedule",
+   "cancel",
+   "vs",
+   "reschedule",
+   "multi-turn",
+   "has-forbidden-write"
+  ],
+  "must_write": [
+   "update_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "cust-cancel-08",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ไม่เอาแล้วครับ",
+   "อ๋อ ไม่ใช่ ผมหมายถึงไม่เอารุ่นนั้น งานซ่อมยังเอาอยู่นะครับ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "a cancellation the person immediately corrects. If turn 1 cancelled, turn 2 must restore it or say plainly that it cannot.",
+  "label": {
+   "shape": "cancelling-multiturn",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "a cancellation that survives turn 2",
+   "turns": 2,
+   "cause_if_wrong": "E"
+  },
+  "shape": [
+   "cancelling-multiturn",
+   "cancelling",
+   "multiturn",
+   "multi-turn",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "cust-resched-01",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ขอเลื่อนนัดเป็นวันเสาร์บ่าย 2 ครับ"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "a reschedule with the new time in the same sentence.",
+  "label": {
+   "shape": "rescheduling",
+   "should_write": "yes",
+   "right_write": "move the appointment on T-2026-0001",
+   "forbidden_write": "",
+   "turns": 1,
+   "cause_if_wrong": "D"
+  },
+  "shape": [
+   "rescheduling"
+  ],
+  "must_write": [
+   "update_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "cust-resched-02",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "วันศุกร์ไม่สะดวกครับ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "says the date does not suit but names no new one — the right answer is to ask which day. _says_unavailable (chat.py:3836).",
+  "label": {
+   "shape": "rescheduling",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "create_ticket named 'ไม่สะดวก', cancelling the job",
+   "turns": 1,
+   "cause_if_wrong": "E"
+  },
+  "shape": [
+   "rescheduling",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": "which day does suit"
+ },
+ {
+  "id": "cust-resched-03",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ขอเลื่อนนัดหน่อยครับ",
+   "วันอาทิตย์บ่าย 2"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "reschedule, then the date. Turn 2 is bare — it means nothing without turn 1.",
+  "label": {
+   "shape": "rescheduling-multiturn",
+   "should_write": "yes",
+   "right_write": "move the appointment after turn 2",
+   "forbidden_write": "a move on turn 1",
+   "turns": 2,
+   "cause_if_wrong": "B/D"
+  },
+  "shape": [
+   "rescheduling-multiturn",
+   "rescheduling",
+   "multiturn",
+   "multi-turn",
+   "has-forbidden-write"
+  ],
+  "must_write": [
+   "update_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "cust-resched-04",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ช่างมาพรุ่งนี้ไม่ได้นะครับ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "ambiguous on purpose: the customer may mean 'the technician cannot come' or 'do not come tomorrow'. Either way it is about the appointment, and the safe answer is a question.",
+  "label": {
+   "shape": "rescheduling",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "create_ticket, cancelling",
+   "turns": 1,
+   "cause_if_wrong": "E"
+  },
+  "shape": [
+   "rescheduling",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": "whether they want to move the visit, and to when"
+ },
+ {
+  "id": "cust-resched-05",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "เลื่อนได้ไหมครับ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "asking whether rescheduling is possible. A question, not an instruction.",
+  "label": {
+   "shape": "rescheduling",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "moving the appointment to nothing",
+   "turns": 1,
+   "cause_if_wrong": "A"
+  },
+  "shape": [
+   "rescheduling",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": "which day to move to"
+ },
+ {
+  "id": "cust-resched-06",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ประตูเลื่อนไม่ได้ครับ"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "เลื่อน here is a sliding door. _is_reschedule_request (chat.py:3481) only matches เลื่อน at the START of a form — this case tests that.",
+  "label": {
+   "shape": "reschedule-word-that-is-a-fault",
+   "should_write": "yes",
+   "right_write": "create_ticket about the sliding door",
+   "forbidden_write": "treating it as a reschedule",
+   "turns": 1,
+   "cause_if_wrong": "A if it is read as a reschedule"
+  },
+  "shape": [
+   "reschedule-word-that-is-a-fault",
+   "reschedule",
+   "word",
+   "fault",
+   "has-forbidden-write"
+  ],
+  "must_write": [
+   "create_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "cust-resched-07",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "พรุ่งนี้ไม่สะดวกค่ะ",
+   "ขอเป็นวันอาทิตย์เช้าแทนนะคะ"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "the two-message reschedule people actually type — refusal first, new date second, with ขอเป็น leading it (_NEW_DATE_LEADS, chat.py:3492).",
+  "label": {
+   "shape": "rescheduling-multiturn",
+   "should_write": "yes",
+   "right_write": "move the appointment to Sunday morning",
+   "forbidden_write": "",
+   "turns": 2,
+   "cause_if_wrong": "B/D"
+  },
+  "shape": [
+   "rescheduling-multiturn",
+   "rescheduling",
+   "multiturn",
+   "multi-turn"
+  ],
+  "must_write": [
+   "update_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "cust-status-01",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "งานของฉัน"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "the tile. A read.",
+  "label": {
+   "shape": "status",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "",
+   "turns": 1,
+   "cause_if_wrong": "E if anything is written"
+  },
+  "shape": [
+   "status"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "cust-status-02",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "สถานะงานเป็นยังไงบ้างครับ",
+   "ช่างคนเดิมไหมครับ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "status asked in a sentence, then a question about the technician that only resolves against the answer.",
+  "label": {
+   "shape": "status",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "",
+   "turns": 2,
+   "cause_if_wrong": "B"
+  },
+  "shape": [
+   "status",
+   "multi-turn"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "cust-status-03",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ช่างจะมากี่โมงครับ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "the appointment time. One open job, so it is answerable.",
+  "label": {
+   "shape": "status",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "",
+   "turns": 1,
+   "cause_if_wrong": "D"
+  },
+  "shape": [
+   "status"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "cust-status-04",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ถึงไหนแล้วครับ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "'where has it got to' — no job word, no fault word, entirely context.",
+  "label": {
+   "shape": "status",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "create_ticket named 'ถึงไหนแล้ว'",
+   "turns": 1,
+   "cause_if_wrong": "D"
+  },
+  "shape": [
+   "status",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "cust-status-05",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "งานของฉัน",
+   "ช่างชื่ออะไรครับ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "the list, then a question about a field of the job just shown.",
+  "label": {
+   "shape": "status-multiturn",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "",
+   "turns": 2,
+   "cause_if_wrong": "B"
+  },
+  "shape": [
+   "status-multiturn",
+   "status",
+   "multiturn",
+   "multi-turn"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "cust-status-06",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "แจ้งไปเมื่อวานยังไม่มีใครติดต่อกลับเลยครับ",
+   "ยังรออยู่นะครับ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "chasing an existing job. Contains ยังไม่ and ติดต่อ — 'ไม่มีใครติดต่อ' is in _COMPLAINT_WORDS (chat.py:3206), so this may route to a person, which is acceptable; opening a second ticket is not.",
+  "label": {
+   "shape": "status-multiturn",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "create_ticket (a duplicate of the job they are chasing)",
+   "turns": 2,
+   "cause_if_wrong": "E",
+   "caveat": "FakeDataClient has no add_chat_message/close_chat_session/chat_settings, so live_chat.start_session raises and _handle_customer_chat_start returns CHAT_OPEN_FAILED (chat.py:2895). Judge the ROUTING here, not the reply text."
+  },
+  "shape": [
+   "status-multiturn",
+   "status",
+   "multiturn",
+   "multi-turn",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "cust-status-07",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ใบเสร็จออกหรือยังครับ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "the owner's 'ไปหรือยัง' shape on the customer OA: a question about whether something has been issued must never issue it.",
+  "label": {
+   "shape": "status",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "creating any document",
+   "turns": 1,
+   "cause_if_wrong": "A/E"
+  },
+  "shape": [
+   "status",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "cust-complain-01",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "บริการแย่มาก รอมาสามวันแล้วครับ"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "a complaint routes to a human with the complaint already typed in (chat.py:16262). The write here is the chat message, not a job.",
+  "label": {
+   "shape": "complaining",
+   "should_write": "yes",
+   "right_write": "open a conversation with a person, carrying this text as the first line",
+   "forbidden_write": "create_ticket named 'บริการแย่มาก'",
+   "turns": 1,
+   "cause_if_wrong": "E",
+   "caveat": "FakeDataClient has no add_chat_message/close_chat_session/chat_settings, so live_chat.start_session raises and _handle_customer_chat_start returns CHAT_OPEN_FAILED (chat.py:2895). Judge the ROUTING here, not the reply text."
+  },
+  "shape": [
+   "complaining",
+   "has-forbidden-write"
+  ],
+  "must_write": [
+   "open_chat_session"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "cust-complain-02",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ไม่พอใจมากครับ"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "a complaint with no detail at all.",
+  "label": {
+   "shape": "complaining",
+   "should_write": "yes",
+   "right_write": "hand off to a person",
+   "forbidden_write": "create_ticket",
+   "turns": 1,
+   "cause_if_wrong": "E",
+   "caveat": "FakeDataClient has no add_chat_message/close_chat_session/chat_settings, so live_chat.start_session raises and _handle_customer_chat_start returns CHAT_OPEN_FAILED (chat.py:2895). Judge the ROUTING here, not the reply text."
+  },
+  "shape": [
+   "complaining",
+   "has-forbidden-write"
+  ],
+  "must_write": [
+   "open_chat_session"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "cust-complain-03",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ขอคุยกับคนจริง ๆ ครับ"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "_wants_a_human (chat.py:3213).",
+  "label": {
+   "shape": "wants-a-human",
+   "should_write": "yes",
+   "right_write": "hand off to a person",
+   "forbidden_write": "create_ticket",
+   "turns": 1,
+   "cause_if_wrong": "E",
+   "caveat": "FakeDataClient has no add_chat_message/close_chat_session/chat_settings, so live_chat.start_session raises and _handle_customer_chat_start returns CHAT_OPEN_FAILED (chat.py:2895). Judge the ROUTING here, not the reply text."
+  },
+  "shape": [
+   "wants-a-human",
+   "wants",
+   "human",
+   "has-forbidden-write"
+  ],
+  "must_write": [
+   "open_chat_session"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "cust-complain-04",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ช่างมาแล้วแต่ซ่อมไม่หายครับ",
+   "แอร์ยังไม่เย็นเหมือนเดิม"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "a complaint that is ALSO a fault report about a job already done. The hardest of the customer shapes: both readings are defensible, silently picking one without saying so is not.",
+  "label": {
+   "shape": "complaining-multiturn",
+   "should_write": "yes",
+   "right_write": "reopen / follow up the existing job, or open a person conversation",
+   "forbidden_write": "a brand-new unrelated ticket with no link to T-2026-0001",
+   "turns": 2,
+   "cause_if_wrong": "E"
+  },
+  "shape": [
+   "complaining-multiturn",
+   "complaining",
+   "multiturn",
+   "multi-turn",
+   "has-forbidden-write"
+  ],
+  "must_write": [
+   "open_chat_session"
+  ],
+  "must_ask": "nothing that delays the hand-off; the person sees the text"
+ },
+ {
+  "id": "cust-complain-05",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "จะร้องเรียนแล้วนะครับ"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "an explicit threat to complain. ร้องเรียน is a complaint word.",
+  "label": {
+   "shape": "complaining",
+   "should_write": "yes",
+   "right_write": "hand off to a person",
+   "forbidden_write": "create_ticket",
+   "turns": 1,
+   "cause_if_wrong": "E",
+   "caveat": "FakeDataClient has no add_chat_message/close_chat_session/chat_settings, so live_chat.start_session raises and _handle_customer_chat_start returns CHAT_OPEN_FAILED (chat.py:2895). Judge the ROUTING here, not the reply text."
+  },
+  "shape": [
+   "complaining",
+   "has-forbidden-write"
+  ],
+  "must_write": [
+   "open_chat_session"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "cust-thanks-01",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ขอบคุณครับ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "small talk. _is_small_talk (chat.py:9018) is checked early in the customer block.",
+  "label": {
+   "shape": "thanking",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "create_ticket, opening a chat session",
+   "turns": 1,
+   "cause_if_wrong": "E"
+  },
+  "shape": [
+   "thanking",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "cust-thanks-02",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ขอบคุณมากครับ ช่างทำงานดีมาก"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "praise. Contains ช่าง and มาก, neighbours of the complaint vocabulary.",
+  "label": {
+   "shape": "thanking",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "create_ticket",
+   "turns": 1,
+   "cause_if_wrong": "A if it is read as a complaint"
+  },
+  "shape": [
+   "thanking",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "cust-thanks-03",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "สวัสดีครับ",
+   "แอร์ไม่เย็นครับ"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "greeting first, business second — the commonest opening in a LINE chat. The greeting must not consume the conversation.",
+  "label": {
+   "shape": "small-talk-multiturn",
+   "should_write": "yes",
+   "right_write": "create_ticket after turn 2",
+   "forbidden_write": "",
+   "turns": 2,
+   "cause_if_wrong": "D"
+  },
+  "shape": [
+   "small-talk-multiturn",
+   "small",
+   "talk",
+   "multiturn",
+   "multi-turn"
+  ],
+  "must_write": [
+   "create_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "cust-serial-01",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "SN12345678",
+   "ประกันเหลืออีกนานไหมครับ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "a bare serial (_is_bare_serial, chat.py:3930 → a warranty lookup), then a question about what was just looked up.",
+  "label": {
+   "shape": "sending-a-serial",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "create_ticket, register_warranty",
+   "turns": 2,
+   "cause_if_wrong": "B"
+  },
+  "shape": [
+   "sending-a-serial",
+   "sending",
+   "serial",
+   "multi-turn",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "cust-serial-02",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ลงทะเบียนสินค้า SN87654321"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "SERIAL_REGISTER_TRIGGERS (chat.py:2531). A serial the fixture does not have, so a real registration is visible in the state diff.",
+  "label": {
+   "shape": "sending-a-serial",
+   "should_write": "yes",
+   "right_write": "register_warranty for SN87654321",
+   "forbidden_write": "",
+   "turns": 1,
+   "cause_if_wrong": "E"
+  },
+  "shape": [
+   "sending-a-serial",
+   "sending",
+   "serial"
+  ],
+  "must_write": [
+   "register_warranty"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "cust-serial-03",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "เช็คประกัน SN12345678"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "checking, not registering. SERIAL_LOOKUP_TRIGGERS.",
+  "label": {
+   "shape": "sending-a-serial",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "register_warranty",
+   "turns": 1,
+   "cause_if_wrong": "A"
+  },
+  "shape": [
+   "sending-a-serial",
+   "sending",
+   "serial",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "cust-serial-04",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "แอร์ไม่เย็น",
+   "ซีเรียลคือ SN12345678 ครับ"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "the serial volunteered mid-report. With one registered product the flow may not even have asked — the danger is the line landing in whatever slot is open.",
+  "label": {
+   "shape": "sending-a-serial-multiturn",
+   "should_write": "yes",
+   "right_write": "create_ticket against SN12345678",
+   "forbidden_write": "storing 'ซีเรียลคือ SN12345678' as the service address",
+   "turns": 2,
+   "cause_if_wrong": "E"
+  },
+  "shape": [
+   "sending-a-serial-multiturn",
+   "sending",
+   "serial",
+   "multiturn",
+   "multi-turn",
+   "has-forbidden-write"
+  ],
+  "must_write": [
+   "create_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "cust-serial-05",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "แจ้งซ่อม",
+   "ไม่มีหมายเลขเครื่องครับ",
+   "แอร์ไม่เย็น"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "NO_SERIAL_PHRASES (chat.py:3948) is the documented way out. Turn 2 is a sentence full of ไม่ that must not be read as a refusal of the repair.",
+  "label": {
+   "shape": "sending-a-serial-multiturn",
+   "should_write": "yes",
+   "right_write": "create_ticket with no serial",
+   "forbidden_write": "",
+   "turns": 3,
+   "cause_if_wrong": "A if turn 2 is taken as 'no repair wanted'"
+  },
+  "shape": [
+   "sending-a-serial-multiturn",
+   "sending",
+   "serial",
+   "multiturn",
+   "multi-turn"
+  ],
+  "must_write": [
+   "create_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "cust-serial-06",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "เครื่องรุ่นอะไรไม่รู้ครับ ซื้อมา 3 ปีแล้ว"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "an answer that does not answer — no serial, no symptom, just history. The right move is a question.",
+  "label": {
+   "shape": "sending-a-serial",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "create_ticket from this alone, register_warranty",
+   "turns": 1,
+   "cause_if_wrong": "E"
+  },
+  "shape": [
+   "sending-a-serial",
+   "sending",
+   "serial",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": "the symptom, and the serial or 'no serial'"
+ },
+ {
+  "id": "cust-wrong-01",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "แอร์ไม่เย็น",
+   "0812345678"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "a phone number where an address was asked for. _looks_like_phone (chat.py:3843) exists because this was stored as a serial (review, 6 Sep 2026).",
+  "label": {
+   "shape": "wrong-kind-of-answer",
+   "should_write": "yes",
+   "right_write": "create_ticket once a real address arrives",
+   "forbidden_write": "storing the phone number as the service address",
+   "turns": 2,
+   "cause_if_wrong": "E"
+  },
+  "shape": [
+   "wrong-kind-of-answer",
+   "wrong",
+   "kind",
+   "answer",
+   "multi-turn",
+   "has-forbidden-write"
+  ],
+  "must_write": [
+   "create_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "cust-wrong-02",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "แอร์ไม่เย็น",
+   "วันเสาร์ครับ"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "a date where an address was asked for. People answer the question they expected, not the one asked.",
+  "label": {
+   "shape": "wrong-kind-of-answer",
+   "should_write": "yes",
+   "right_write": "create_ticket once a real address arrives",
+   "forbidden_write": "storing 'วันเสาร์' as the service address",
+   "turns": 2,
+   "cause_if_wrong": "E"
+  },
+  "shape": [
+   "wrong-kind-of-answer",
+   "wrong",
+   "kind",
+   "answer",
+   "multi-turn",
+   "has-forbidden-write"
+  ],
+  "must_write": [
+   "create_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "cust-wrong-03",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "แอร์ไม่เย็น",
+   "แอร์ไม่เย็นครับ"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "repeating the fault instead of answering. Two tickets from one fault is the worst outcome.",
+  "label": {
+   "shape": "wrong-kind-of-answer",
+   "should_write": "yes",
+   "right_write": "create_ticket once an address arrives",
+   "forbidden_write": "storing the repeated symptom as the address, or opening a SECOND job",
+   "turns": 2,
+   "cause_if_wrong": "E"
+  },
+  "shape": [
+   "wrong-kind-of-answer",
+   "wrong",
+   "kind",
+   "answer",
+   "multi-turn",
+   "has-forbidden-write"
+  ],
+  "must_write": [
+   "create_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "cust-wrong-04",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "แอร์ไม่เย็น",
+   "งานของฉัน"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "a tile tapped mid-flow. _not_an_address (chat.py:3877) lists commands first. Labelled no-write because the flow is abandoned for a read; if the product prefers to keep the flow alive, it must SAY so.",
+  "label": {
+   "shape": "wrong-kind-of-answer",
+   "should_write": "yes",
+   "right_write": "create_ticket from turn 1",
+   "forbidden_write": "storing 'งานของฉัน' as the address, or a second ticket",
+   "turns": 2,
+   "cause_if_wrong": "E"
+  },
+  "shape": [
+   "wrong-kind-of-answer",
+   "wrong",
+   "kind",
+   "answer",
+   "multi-turn",
+   "has-forbidden-write"
+  ],
+  "must_write": [
+   "create_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "cust-wrong-05",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "งานของฉัน",
+   "ไม่ใช่ อันเก่าครับ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "a correction of the bot's choice, phrased as a negation with no noun. Pure context.",
+  "label": {
+   "shape": "wrong-kind-of-answer",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "any write",
+   "turns": 2,
+   "cause_if_wrong": "B"
+  },
+  "shape": [
+   "wrong-kind-of-answer",
+   "wrong",
+   "kind",
+   "answer",
+   "multi-turn",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": "which of the jobs they mean"
+ },
+ {
+  "id": "cust-wrong-06",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "แอร์ไม่เย็น",
+   "อยู่คอนโดครับ ชั้น 12",
+   "ห้อง 1204 ตึก A ถนนพระราม 4"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "an address arriving in pieces across two messages, neither complete. Real people do this constantly.",
+  "label": {
+   "shape": "wrong-kind-of-answer",
+   "should_write": "yes",
+   "right_write": "create_ticket with the address assembled from turns 2 and 3",
+   "forbidden_write": "",
+   "turns": 3,
+   "cause_if_wrong": "E if turn 3 replaces turn 2 instead of completing it"
+  },
+  "shape": [
+   "wrong-kind-of-answer",
+   "wrong",
+   "kind",
+   "answer",
+   "multi-turn"
+  ],
+  "must_write": [
+   "create_ticket"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "cust-oa-01",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "เช็คอิน"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "a staff tile typed by a customer. CUSTOMER_STAFF_TILE (chat.py:3174) is the intended answer.",
+  "label": {
+   "shape": "staff-command-on-customer-oa",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "check_in_ticket, create_ticket named 'เช็คอิน'",
+   "turns": 1,
+   "cause_if_wrong": "E"
+  },
+  "shape": [
+   "staff-command-on-customer-oa",
+   "staff",
+   "command",
+   "on",
+   "customer",
+   "oa",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "cust-oa-02",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "สร้างใบเสนอราคาให้ผมหน่อย"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "why": "the model is SCRIPTED to read it as quote/create. A customer holds NO permission keys at all (chat.py:15703), and the customer block returns before the model on every path except a profile edit — so the model's answer should never be reachable here. This case measures whether that is true.",
+  "label": {
+   "shape": "staff-command-on-customer-oa",
+   "should_write": "no",
+   "right_write": "",
+   "forbidden_write": "create_quote",
+   "turns": 1,
+   "cause_if_wrong": "E if a quote is created; D if the refusal is unintelligible"
+  },
+  "ai": {
+   "action": "create",
+   "entity": "quote",
+   "fields": {},
+   "missing": []
+  },
+  "shape": [
+   "staff-command-on-customer-oa",
+   "staff",
+   "command",
+   "on",
+   "customer",
+   "oa",
+   "scripted-model",
+   "has-forbidden-write"
+  ],
+  "must_write": [],
+  "must_ask": null
+ },
+ {
+  "id": "cust-profile-01",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "แก้เบอร์เป็น 0899999999"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "_looks_like_profile_edit (chat.py:4507) is the ONLY exit from the customer block that continues to the model (chat.py:16289). A customer's own edit is allowed regardless of permissions.",
+  "label": {
+   "shape": "profile-edit",
+   "should_write": "yes",
+   "right_write": "update_profile",
+   "forbidden_write": "",
+   "turns": 1,
+   "cause_if_wrong": "D"
+  },
+  "ai": {
+   "action": "update",
+   "entity": "profile",
+   "fields": {
+    "phone": "0899999999"
+   },
+   "missing": []
+  },
+  "shape": [
+   "profile-edit",
+   "profile",
+   "edit",
+   "scripted-model"
+  ],
+  "must_write": [
+   "update_profile"
+  ],
+  "must_ask": null
+ },
+ {
+  "id": "cust-profile-02",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ย้ายบ้านแล้วครับ",
+   "ที่อยู่ใหม่ 12/3 ซอยอารีย์ 5"
+  ],
+  "expect": {
+   "no_mutation": false
+  },
+  "why": "turn 1 has none of the 24 _PROFILE_EDIT_HINTS; turn 2 has ที่อยู่ใหม่. So turn 1 is a customer-report catch-all and turn 2 is a profile edit — the flow changes lane between messages.",
+  "label": {
+   "shape": "profile-edit-multiturn",
+   "should_write": "yes",
+   "right_write": "update_profile with the new address",
+   "forbidden_write": "create_ticket, or storing the address against a job",
+   "turns": 2,
+   "cause_if_wrong": "A on turn 1 if 'ย้ายบ้าน' opens a job"
+  },
+  "ai": [
+   {
+    "action": "suggest",
+    "entity": null,
+    "fields": {},
+    "missing": []
+   },
+   {
+    "action": "update",
+    "entity": "profile",
+    "fields": {
+     "address": "12/3 ซอยอารีย์ 5"
+    },
+    "missing": []
+   }
+  ],
+  "shape": [
+   "profile-edit-multiturn",
+   "profile",
+   "edit",
+   "multiturn",
+   "multi-turn",
+   "scripted-model",
+   "has-forbidden-write"
+  ],
+  "must_write": [
+   "update_profile"
+  ],
+  "must_ask": null
+ }
+]

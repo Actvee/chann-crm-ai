@@ -369,3 +369,66 @@ class TestTheModelRoadIsGuardedByDefault:
             assert not intent_to_act(
                 message, action="quote_create", proposed=True,
             ).acts, message
+
+
+class TestThePromptCarriesOnlyWhatTheOACanDo:
+    """Requirement 2: send the model the context it needs, "โดยรักษาการแยก
+    สิทธิ์แต่ละ OA/ร้าน".
+
+    One prompt went to everyone. A technician can reach 13 of the 64
+    (action, entity) pairs and a customer 7, and both were handed a
+    catalogue describing all 18 entities — so the model was routinely
+    offered actions the permission gate would refuse a moment later, which
+    is one of the ways it produces an action with no handler."""
+
+    def test_each_oa_gets_its_own_capabilities(self):
+        from chann_app.services.ai.intent import build_prompt, entities_for
+
+        def prompt_for(oa):
+            return build_prompt(
+                chann_uid="CHN-S-000001", role=oa, license_id="L1",
+                permission_keys=["ticket.read"], language="th", oa=oa,
+            )
+
+        tech = prompt_for("technician")
+        cust = prompt_for("customer")
+        sales = prompt_for("sales")
+
+        # A technician's own work is there…
+        for entity in ("ticket", "service_report", "warranty"):
+            assert f'entity="{entity}"' in tech
+        # …and the shop's is not.
+        for entity in ("deal", "quote", "customer", "product", "team"):
+            assert f'entity="{entity}"' not in tech, entity
+        # A customer sees their own record and their jobs, nothing else.
+        for entity in ("deal", "quote", "approval", "setting"):
+            assert f'entity="{entity}"' not in cust, entity
+        # Sales reaches everything, so nothing is trimmed.
+        assert entities_for("sales") is None
+        assert len(sales) > len(tech)
+
+    def test_the_tone_rules_survive_the_trim(self):
+        """The trim takes entity blocks, never the guidance — a shorter
+        prompt that forgot how to read a refusal would be worse than the
+        long one."""
+        from chann_app.services.ai.intent import build_prompt
+
+        for oa in ("sales", "technician", "customer"):
+            prompt = build_prompt(
+                chann_uid="CHN-S-000001", role=oa, license_id="L1",
+                permission_keys=["ticket.read"], language="th", oa=oa,
+            )
+            assert "WHAT THE SENTENCE IS DOING" in prompt, oa
+            assert "แอร์ไม่เย็น" in prompt, oa
+            assert '"suggest"' in prompt, oa
+
+    def test_an_unknown_oa_is_shown_everything(self):
+        """Failing closed here would mean a new channel silently loses
+        capabilities with no error to notice."""
+        from chann_app.services.ai.intent import build_prompt, INTENT_SYSTEM_PROMPT
+
+        prompt = build_prompt(
+            chann_uid="CHN-S-000001", role="sales", license_id="L1",
+            permission_keys=[], language="th", oa="something-new",
+        )
+        assert len(prompt) >= len(INTENT_SYSTEM_PROMPT) - 200

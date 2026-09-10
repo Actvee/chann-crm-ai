@@ -17864,6 +17864,13 @@ async def _route_chat_message(
             language=language,
             client=ai_client,
             pending=pending_intent,
+            # The OA decides which capabilities exist at all, so it decides
+            # what the model is shown. A technician's prompt drops from
+            # 13,591 to 6,004 characters and a customer's to 6,783 — and,
+            # more to the point, neither is offered an action the
+            # permission gate would refuse a moment later
+            # (owner, 10 ก.ย. 2569, requirement 2).
+            oa=ctx.oa,
         )
     except AINotConfigured as exc:
         # A deploy problem, not an outage — log loudly, but the user still
