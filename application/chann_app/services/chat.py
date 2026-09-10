@@ -12706,6 +12706,23 @@ async def _handle_staff_profile_view(
     )
     blank = _t(_NOT_SET, language)
     name = " ".join(p for p in (profile.get("first_name"), profile.get("last_name")) if p) or ctx.display_name or blank
+    # The card invites an edit, so hold what is still blank: the next message
+    # is often the value on its own ("0869768057"), which is not a command on
+    # any OA and would otherwise read as nothing at all.
+    blanks = [f for f in ("first_name", "phone", "email") if not profile.get(f)]
+    if blanks:
+        try:
+            # Never over a flow that is already waiting: this card is a tile,
+            # and a tile pressed in the middle of a service report must leave
+            # the draft alone (review A1).
+            open_flow = await client.get_pending_intent(ctx.chann_uid, ctx.oa)
+            if open_flow is None or open_flow.get("entity") == "profile_edit":
+                await client.set_pending_intent(
+                    ctx.chann_uid, ctx.oa, action="update", entity="profile_edit",
+                    fields={}, missing=blanks, ttl_seconds=PENDING_INTENT_TTL_S,
+                )
+        except Exception:  # noqa: BLE001
+            log.exception("could not hold the profile fields still blank")
     return ChatReply(
         text=_t(STAFF_PROFILE_TEXT, language).format(
             name=name, phone=profile.get("phone") or blank, email=profile.get("email") or blank,
@@ -12916,6 +12933,87 @@ def suggest_what_you_can_do(
 # Mirrors data/chann_data/repositories/profile.py's EDITABLE_FIELDS; kept as
 # a separate constant rather than imported, since the Application tier has
 # no dependency on the Data tier's Python package (only its HTTP API).
+# The profile card ends with 'แก้ได้เลย เช่น "แก้เบอร์เป็น …"', so the next
+# message is very often nothing but a field and a value. Without this the
+# technician's "ชื่อ ทดสอบ1 มีทดสอบ" was read as a new CUSTOMER, the flow
+# asked for a phone number, and the phone was then refused as a sales-only
+# command — a dead end that started with our own invitation (owner, 10 Sep
+# 2026).
+_PROFILE_FIELD_LABELS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("last_name", ("นามสกุล", "last name", "surname")),
+    ("first_name", ("ชื่อจริง", "ชื่อ", "first name", "name")),
+    ("phone", ("เบอร์โทรศัพท์", "เบอร์โทร", "เบอร์", "โทรศัพท์", "โทร", "phone", "tel", "mobile")),
+    ("email", ("อีเมล", "อีเมล์", "email", "e-mail", "mail")),
+    ("address", ("ที่อยู่", "address")),
+)
+
+
+def _bare_profile_value(message: str, blanks: list[str]) -> dict | None:
+    """A value with no label, matched to a field that is still empty.
+
+    Only shapes that cannot be a command anywhere: a phone number, an email
+    address. A bare word is NOT taken as a name — too much else is a bare
+    word — so the label form above stays the way to set one.
+    """
+    text = _strip_polite_tail(" ".join((message or "").split())).strip()
+    if not text or len(text) > 60:
+        return None
+    if "@" in text and "email" in blanks and re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", text):
+        return {"email": text}
+    digits = re.sub(r"[^0-9]", "", text)
+    if "phone" in blanks and re.fullmatch(r"[0-9 ()+.-]+", text) and 9 <= len(digits) <= 11:
+        return {"phone": text}
+    return None
+
+
+_NOT_MINE_QUALIFIERS = (
+    "บริษัท", "ร้าน", "ลูกค้า", "ช่าง", "ทีม", "งาน", "ดีล", "ผู้ติดต่อ", "สาขา",
+)
+
+
+def _profile_field_edit(message: str) -> dict | None:
+    """{field: value} when the message is a field label and a value, else None.
+
+    "ชื่อ ทดสอบ1 มีทดสอบ" gives both names, the way the card's own example
+    reads. A label with nothing after it is not an edit — it is a question.
+    """
+    text = " ".join((message or "").split())
+    if not text or len(text) > 120:
+        return None
+    # The established edit phrasings ("เปลี่ยนเบอร์เป็น …", "เบอร์ใหม่ …") have
+    # their own parser, which reads the value out of a whole sentence. This
+    # one only handles a bare label and value; anything richer defers.
+    if _looks_like_profile_edit(text):
+        return None
+    lowered = text.lower()
+    for field, labels in _PROFILE_FIELD_LABELS:
+        for label in labels:
+            if not lowered.startswith(label):
+                continue
+            rest = text[len(label):].lstrip(" :：=")
+            # "ที่อยู่บริษัท 99 …" is the shop's address, "ชื่อลูกค้า …" is
+            # somebody else's: a qualifier right after the label means this
+            # is not the caller's own field.
+            if any(rest.startswith(q) for q in _NOT_MINE_QUALIFIERS):
+                return None
+            for lead in ("เป็น", "คือ", "ใหม่", "is", "to"):
+                if rest.lower().startswith(lead):
+                    rest = rest[len(lead):].lstrip(" :：=")
+            rest = _strip_polite_tail(rest).strip()
+            if not rest:
+                return None
+            if field == "first_name":
+                parts = rest.split()
+                if len(parts) >= 2:
+                    return {"first_name": parts[0], "last_name": " ".join(parts[1:])}
+                return {"first_name": rest}
+            if field == "phone":
+                digits = re.sub(r"[^0-9]", "", rest)
+                return {"phone": rest} if digits else None
+            return {field: rest}
+    return None
+
+
 PROFILE_EDITABLE_FIELDS = frozenset(
     {"first_name", "last_name", "phone", "email", "address"}
 )
@@ -15357,6 +15455,21 @@ async def _route_chat_message(
     if ctx.oa in ("sales", "technician") and _matches_phrase(message, CUSTOMER_PROFILE_PHRASES):
         return await _handle_staff_profile_view(client, ctx=ctx, license_id=license_id, language=language)
 
+    # Editing your own details is always permitted (Phase 8, self-edit), so
+    # this sits above every entity handler: on the technician OA there is no
+    # customer to create, and on the sales OA "ชื่อ …" alone names nobody else.
+    if ctx.oa in ("sales", "technician"):
+        own = _profile_field_edit(message)
+        if own is None and early_pending is not None and early_pending.get("entity") == "profile_edit":
+            own = _bare_profile_value(message, list(early_pending.get("missing") or []))
+            if own is not None:
+                await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
+        if own is not None:
+            return await _handle_profile_intent(
+                client, intent={"action": "update", "entity": "profile", "fields": own},
+                ctx=ctx, language=language,
+            )
+
     # A bare number right after the help menu picks a topic.
     if _menu_digit(message) is not None:
         step_reply = await _help_step_from_pending(
@@ -15961,6 +16074,19 @@ async def _route_chat_message(
         switched_from = pending_intent
     carried = _abandoned_flow(switched_from) or abandoned
     notice = _switch_notice(switched_from, message, language, intent) if switched_from else ""
+
+    # ... but never start collecting for something this LINE cannot do at
+    # all. Asking a technician for a customer's phone number and then
+    # refusing the answer as a sales-only command is worse than saying so at
+    # the first message (owner, 10 Sep 2026).
+    gate_needed = required_permission(intent.get("action") or "", intent.get("entity") or "")
+    if gate_needed is not None and not _oa_allows(ctx.oa, gate_needed):
+        if pending_intent is not None:
+            await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
+        return ChatReply(
+            text=_t(SUGGEST_WRONG_OA, language) + "\n\n" + _t(GUIDE_POINTER, language),
+            intent=intent, quick_reply_url=_guide_button(ctx.oa, language),
+        )
 
     # Missing fields come first: never refuse a request we did not understand.
     missing = _prune_missing(intent.get("missing") or [], intent, message)

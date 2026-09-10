@@ -1,0 +1,15 @@
+name: technician-edits-own-profile
+description: the owner's exact sequence on the technician OA
+backend: fake
+actor: {oa: technician, role: technician, language: th, permissions: technician}
+steps:
+- send: ข้อมูลของฉัน
+  expect: {contains: ["ข้อมูลของคุณ"]}
+- send:
+    message: ชื่อ ทดสอบ1 มีทดสอบ
+    ai: {action: create, entity: customer, fields: {first_name: ทดสอบ1, last_name: มีทดสอบ}, missing: [phone]}
+  expect: {not_contains: ["กรุณาระบุเบอร์โทร"], is_not: [generic_error, permission]}
+- send: "0869768057"
+  expect: {not_contains: ["ไม่ได้เปิดในช่องทางนี้"], is_not: [not_sure, generic_error]}
+- send: ข้อมูลของฉัน
+  expect: {contains: ["ทดสอบ1", "มีทดสอบ", "0869768057"]}

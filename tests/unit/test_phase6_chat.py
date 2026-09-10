@@ -295,7 +295,18 @@ class FakeDataClient:
         self.recorded.append(("update_profile", chann_uid, fields, actor_id))
         if getattr(self, "_profile_conflict", False):
             raise ProfileConflictForTest("invalid value")
-        return {"chann_uid": chann_uid, **fields}
+        # Write it where get_profile reads. Recording the call and returning
+        # a dict made every profile edit unverifiable: a scenario could see
+        # "แก้ไขข้อมูลส่วนตัวเรียบร้อยแล้ว" and the card would still be blank,
+        # which is exactly the shape of the bug reported on 10 Sep 2026.
+        profiles = getattr(self, "_profiles", None)
+        if profiles is None:
+            profiles = {}
+            self._profiles = profiles
+        stored = dict(profiles.get(chann_uid) or {})
+        stored.update({"chann_uid": chann_uid, **fields})
+        profiles[chann_uid] = stored
+        return dict(stored)
 
     async def get_pending_intent(self, chann_uid, oa):
         self.recorded.append(("get_pending_intent", chann_uid, oa))
