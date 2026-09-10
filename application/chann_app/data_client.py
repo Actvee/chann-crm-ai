@@ -1392,12 +1392,19 @@ class DataClient:
         )
         self._unwrap(resp)
 
+    # "Which record was this conversation just on?" is per SHOP as well as
+    # per person and per OA. One LINE account can be staff at two shops,
+    # and without the license in the path a customer opened in shop A was
+    # still the record in context after switching to shop B — a reminder
+    # written in shop B pointed at shop A's customer, and the row landed
+    # (10 ก.ย. 2569).
+
     async def set_last_entity_ref(
-        self, chann_uid: str, oa: str, *, entity_type: str, entity_id: str,
-        code: str, ttl_seconds: int = 600, extra: dict | None = None,
+        self, chann_uid: str, oa: str, *, license_id: str, entity_type: str,
+        entity_id: str, code: str, ttl_seconds: int = 600, extra: dict | None = None,
     ) -> None:
         resp = await self._client.put(
-            f"{self._base}/internal/v1/chat/last-entity/{oa}/{chann_uid}",
+            f"{self._base}/internal/v1/chat/last-entity/{license_id}/{oa}/{chann_uid}",
             headers=self._headers,
             json={
                 "entity_type": entity_type, "entity_id": entity_id,
@@ -1406,9 +1413,9 @@ class DataClient:
         )
         self._unwrap(resp)
 
-    async def get_last_entity_ref(self, chann_uid: str, oa: str) -> dict | None:
+    async def get_last_entity_ref(self, chann_uid: str, oa: str, *, license_id: str) -> dict | None:
         resp = await self._client.get(
-            f"{self._base}/internal/v1/chat/last-entity/{oa}/{chann_uid}",
+            f"{self._base}/internal/v1/chat/last-entity/{license_id}/{oa}/{chann_uid}",
             headers=self._headers,
         )
         if resp.status_code == 404:
@@ -1416,19 +1423,19 @@ class DataClient:
         return self._unwrap(resp)
 
     async def set_last_customer_ref(
-        self, chann_uid: str, oa: str, *, customer_id: str, name: str,
-        ttl_seconds: int = 600,
+        self, chann_uid: str, oa: str, *, license_id: str, customer_id: str,
+        name: str, ttl_seconds: int = 600,
     ) -> None:
         resp = await self._client.put(
-            f"{self._base}/internal/v1/chat/last-customer/{oa}/{chann_uid}",
+            f"{self._base}/internal/v1/chat/last-customer/{license_id}/{oa}/{chann_uid}",
             headers=self._headers,
             json={"customer_id": customer_id, "name": name, "ttl_seconds": ttl_seconds},
         )
         self._unwrap(resp)
 
-    async def get_last_customer_ref(self, chann_uid: str, oa: str) -> dict | None:
+    async def get_last_customer_ref(self, chann_uid: str, oa: str, *, license_id: str) -> dict | None:
         resp = await self._client.get(
-            f"{self._base}/internal/v1/chat/last-customer/{oa}/{chann_uid}",
+            f"{self._base}/internal/v1/chat/last-customer/{license_id}/{oa}/{chann_uid}",
             headers=self._headers,
         )
         if resp.status_code == 404:

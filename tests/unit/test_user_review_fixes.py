@@ -26,7 +26,7 @@ from chann_app.data_client import DataTierError  # noqa: E402
 from chann_app.services import deal_fields, lead_cleanup  # noqa: E402
 from chann_app.services.chat import handle_chat_message  # noqa: E402
 from chann_app.services.thai_datetime import local_today  # noqa: E402
-from test_phase6_chat import PERMISSION_KEYS, FakeDataClient, _ai, _catalog, _ctx, describe  # noqa: E402
+from test_phase6_chat import LICENSE_ID, PERMISSION_KEYS, FakeDataClient, _ai, _catalog, _ctx, describe  # noqa: E402
 
 SALES_KEYS = ["customer.read", "customer.create", "customer.update", "customer.archive",
               "deal.read", "deal.create", "deal.update", "ticket.read", "setting.manage"]
@@ -198,7 +198,7 @@ class TestDuplicateCustomer:
         await self._duplicate(client)
         reply = await handle_chat_message(client, message="1", ctx=_ctx())
         assert "ใช้รายชื่อเดิม" in reply.text and len(client._customers) == 1
-        assert (await client.get_last_customer_ref("CHN-S-000001", "sales"))["customer_id"] == client._customers[0]["id"]
+        assert (await client.get_last_customer_ref("CHN-S-000001", "sales", license_id=LICENSE_ID))["customer_id"] == client._customers[0]["id"]
 
     async def test_merge_fills_empty_fields_and_asks_before_overwriting(self):
         client = ReviewFake()
@@ -246,7 +246,7 @@ class TestLeadDeletion:
     async def test_this_lead_uses_the_customer_in_context(self):
         client = ReviewFake()
         row = await _seed(client)
-        await client.set_last_customer_ref("CHN-S-000001", "sales", customer_id=row["id"], name="สมชาย ใจดี")
+        await client.set_last_customer_ref("CHN-S-000001", "sales", license_id=LICENSE_ID, customer_id=row["id"], name="สมชาย ใจดี")
         reply = await handle_chat_message(client, message="ลบ Lead นี้", ctx=_ctx())
         assert "สมชาย" in reply.text and "ยืนยันลบ" in reply.text
 
@@ -308,7 +308,7 @@ class TestDealCreation:
         client = ReviewFake()
         arthit = await _seed(client, "อาทิตย์", "แสงจันทร์", "0811111111")
         somchai = await _seed(client, "สมชาย", "ใจดี", "0822222222")
-        await client.set_last_customer_ref("CHN-S-000001", "sales", customer_id=somchai["id"], name="สมชาย ใจดี")
+        await client.set_last_customer_ref("CHN-S-000001", "sales", license_id=LICENSE_ID, customer_id=somchai["id"], name="สมชาย ใจดี")
         ai = _deal_ai({"target_name": "อาทิตย์", "amount": "500,000", "expected_close_date": "30/09/2026"})
         reply = await handle_chat_message(client, message="ดีลนี้ของอาทิตย์ มูลค่า 500,000 บาท คาดว่าจะปิดวันที่ 30/09/2026", ctx=_ctx(), ai_client=ai)
         payload = _created(client)
@@ -319,7 +319,7 @@ class TestDealCreation:
     async def test_no_name_in_the_message_confirms_the_context_customer_instead_of_assuming(self):
         client = ReviewFake()
         somchai = await _seed(client, "สมชาย", "ใจดี", "0822222222")
-        await client.set_last_customer_ref("CHN-S-000001", "sales", customer_id=somchai["id"], name="สมชาย ใจดี")
+        await client.set_last_customer_ref("CHN-S-000001", "sales", license_id=LICENSE_ID, customer_id=somchai["id"], name="สมชาย ใจดี")
         ai = _deal_ai({"amount": "250000"})
         reply = await handle_chat_message(client, message="เปิดดีลมูลค่า 250,000 บาท", ctx=_ctx(), ai_client=ai)
         assert not [r for r in client.recorded if r[0] == "create_deal"]
@@ -330,7 +330,7 @@ class TestDealCreation:
     async def test_saying_no_to_the_context_customer_creates_nothing(self):
         client = ReviewFake()
         somchai = await _seed(client, "สมชาย", "ใจดี", "0822222222")
-        await client.set_last_customer_ref("CHN-S-000001", "sales", customer_id=somchai["id"], name="สมชาย ใจดี")
+        await client.set_last_customer_ref("CHN-S-000001", "sales", license_id=LICENSE_ID, customer_id=somchai["id"], name="สมชาย ใจดี")
         await handle_chat_message(client, message="เปิดดีลมูลค่า 250,000 บาท", ctx=_ctx(), ai_client=_deal_ai({"amount": "250000"}))
         reply = await handle_chat_message(client, message="ไม่ใช่", ctx=_ctx())
         assert not [r for r in client.recorded if r[0] == "create_deal"] and "ยังไม่ได้สร้างดีล" in reply.text

@@ -54,7 +54,7 @@ class TestUnwrapHandles204NoContent:
         )
         await client.clear_pending_intent("CHN-S-000001", "sales")
         await client.set_last_customer_ref(
-            "CHN-S-000001", "sales", customer_id="CUST-1", name="สมชาย",
+            "CHN-S-000001", "sales", license_id="L1", customer_id="CUST-1", name="สมชาย",
         )
 
     async def test_a_204_with_empty_but_present_content_also_does_not_raise(self):
@@ -88,6 +88,6 @@ class TestUnwrapHandles204NoContent:
         client = _client_for(handler)
         with pytest.raises(DataTierError) as exc_info:
             await client.set_last_customer_ref(
-                "CHN-S-000001", "sales", customer_id="CUST-1", name="สมชาย",
+                "CHN-S-000001", "sales", license_id="L1", customer_id="CUST-1", name="สมชาย",
             )
         assert exc_info.value.status_code == 409

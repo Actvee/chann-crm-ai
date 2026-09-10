@@ -34,7 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from chann_app.config import settings  # noqa: E402
 from chann_app.services import chat  # noqa: E402
 from chann_data.permissions import DEFAULT_ROLE_TEMPLATES  # noqa: E402
-from test_phase6_chat import FakeDataClient, _ai, _ctx  # noqa: E402
+from test_phase6_chat import LICENSE_ID, FakeDataClient, _ai, _ctx  # noqa: E402
 
 SALES = sorted(DEFAULT_ROLE_TEMPLATES["admin"])
 WRITES = (
@@ -817,7 +817,7 @@ class TestAQuoteIsMadeOnlyWhenOneWasAskedFor:
     async def test_but_an_order_still_makes_one(self, message):
         client = _shop(customers=[CUSTOMER], deals=[DEAL])
         await client.set_last_entity_ref(
-            "CHN-S-000001", "sales", entity_type="deal", entity_id="DEAL-1", code="D-2026-0001",
+            "CHN-S-000001", "sales", license_id=LICENSE_ID, entity_type="deal", entity_id="DEAL-1", code="D-2026-0001",
         )
         text, written = await _say(client, message)
         assert "create_quote" in written, f"{text} / {written}"
@@ -846,7 +846,7 @@ class TestAValueTheModelReturnsIsAProposalNotAFact:
                                   "quoted_unit_price": "1200", "qty": 1}],
         }])
         await client.set_last_entity_ref(
-            "CHN-S-000001", "sales", entity_type="deal", entity_id="DEAL-1", code="D-2026-0001",
+            "CHN-S-000001", "sales", license_id=LICENSE_ID, entity_type="deal", entity_id="DEAL-1", code="D-2026-0001",
         )
         return await _say(client, message, intent={
             "action": "update", "entity": "line_item", "fields": fields, "missing": [],
@@ -903,7 +903,7 @@ class TestAWordMayDeclineButMayNotAct:
     async def test_declining_a_quote_is_still_answered_in_words(self, message):
         client = _shop(customers=[CUSTOMER], deals=[DEAL])
         await client.set_last_entity_ref(
-            "CHN-S-000001", "sales", entity_type="deal", entity_id="DEAL-1", code="D-2026-0001",
+            "CHN-S-000001", "sales", license_id=LICENSE_ID, entity_type="deal", entity_id="DEAL-1", code="D-2026-0001",
         )
         text, written = await _say(client, message, intent={
             "action": "suggest", "entity": "", "fields": {}, "missing": [],
@@ -936,3 +936,102 @@ class TestAWordMayDeclineButMayNotAct:
             "action": "suggest", "entity": "", "fields": {}, "missing": [],
         })
         assert written == [], f"{message!r} wrote {written}"
+
+
+class TestOneShopCannotSeeAnothersRecord:
+    """Reproduced end to end, 10 ก.ย. 2569: one LINE account that is staff
+    at two shops opened a customer in shop A, switched shops, then said
+    "เตือนพรุ่งนี้ 10 โมง" — a sentence with no subject. A follow-up was
+    written IN SHOP B against SHOP A's customer, and the row landed.
+
+    The cause was the cache key: last_entity_ref / last_customer_ref were
+    keyed on (person, OA) with no license, while k_member beside them has
+    always carried one. Scoping the key means a shop switch moves the
+    conversation to that shop's own slot, so nothing has to be cleared —
+    and switching back finds the record still there.
+    """
+
+    SHOP_A = "11111111-1111-1111-1111-111111111111"
+    SHOP_B = "22222222-2222-2222-2222-222222222222"
+
+    @staticmethod
+    def _rows():
+        return [{"id": "CUST-A", "customer_id": "C-2026-0001", "first_name": "สมชาย",
+                 "last_name": "ใจดี", "phone": "0812345678", "stage": "lead"}]
+
+    @pytest.mark.asyncio
+    async def test_the_other_shop_does_not_inherit_the_record_in_context(self):
+        client = FakeDataClient(role="sales", permission_keys=SALES, customers=self._rows())
+        here = _ctx(primary_role="sales", oa="sales", license_id=self.SHOP_A)
+        there = _ctx(primary_role="sales", oa="sales", license_id=self.SHOP_B)
+        await chat._remember_entity(
+            client, here, entity_type="customer", entity_id="CUST-A", code="C-2026-0001",
+        )
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "suggest", "entity": "", "fields": {}, "missing": []})))
+        reply = await chat.handle_chat_message(
+            client, ctx=there, message="เตือนพรุ่งนี้ 10 โมง", language="th", ai_client=ai,
+        )
+        written = [c[0] for c in client.recorded if c[0].startswith(WRITES)]
+        assert "create_follow_up" not in written, f"wrote across shops: {written}"
+        assert "C-2026-0001" not in (reply.text or ""), reply.text
+
+    @pytest.mark.asyncio
+    async def test_but_the_shop_it_belongs_to_still_has_it(self):
+        """The fifth case: isolation must not cost the feature."""
+        client = FakeDataClient(role="sales", permission_keys=SALES, customers=self._rows())
+        here = _ctx(primary_role="sales", oa="sales", license_id=self.SHOP_A)
+        await chat._remember_entity(
+            client, here, entity_type="customer", entity_id="CUST-A", code="C-2026-0001",
+        )
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "suggest", "entity": "", "fields": {}, "missing": []})))
+        reply = await chat.handle_chat_message(
+            client, ctx=here, message="เตือนพรุ่งนี้ 10 โมง", language="th", ai_client=ai,
+        )
+        written = [c[0] for c in client.recorded if c[0].startswith(WRITES)]
+        assert "create_follow_up" in written, f"{reply.text} / {written}"
+
+    def test_the_cache_key_carries_the_shop(self):
+        from chann_data.cache import k_last_customer_ref, k_last_entity_ref
+
+        assert k_last_entity_ref("L1", "CHN-1", "sales") != k_last_entity_ref("L2", "CHN-1", "sales")
+        assert k_last_customer_ref("L1", "CHN-1", "sales") != k_last_customer_ref("L2", "CHN-1", "sales")
+
+
+class TestHoldingTheKeyIsNotBeingAllowedHere:
+    """_appointment_net checked the permission set and never _oa_allows, so
+    a technician holding followup.create — the shop owner, who is admin
+    everywhere — booked a real reminder on the technician OA, where
+    _oa_allows says the action does not exist (10 ก.ย. 2569)."""
+
+    @pytest.mark.asyncio
+    async def test_a_channel_that_forbids_the_action_writes_nothing(self):
+        keys = sorted(set(DEFAULT_ROLE_TEMPLATES["technician"]) | {"followup.create"})
+        client = FakeDataClient(role="technician", permission_keys=keys, customers=[CUSTOMER])
+        ctx = _ctx(primary_role="technician", oa="technician")
+        await chat._remember_entity(
+            client, ctx, entity_type="customer", entity_id="CUST-1", code="C-2026-0001",
+        )
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "suggest", "entity": "", "fields": {}, "missing": []})))
+        reply = await chat.handle_chat_message(
+            client, ctx=ctx, message="เตือนพรุ่งนี้ 10 โมง", language="th", ai_client=ai,
+        )
+        written = [c[0] for c in client.recorded if c[0].startswith(WRITES)]
+        assert "create_follow_up" not in written, f"{reply.text} / {written}"
+
+    @pytest.mark.asyncio
+    async def test_and_the_channel_that_allows_it_still_does(self):
+        client = FakeDataClient(role="sales", permission_keys=SALES, customers=[CUSTOMER])
+        ctx = _ctx(primary_role="sales", oa="sales")
+        await chat._remember_entity(
+            client, ctx, entity_type="customer", entity_id="CUST-1", code="C-2026-0001",
+        )
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "suggest", "entity": "", "fields": {}, "missing": []})))
+        reply = await chat.handle_chat_message(
+            client, ctx=ctx, message="เตือนพรุ่งนี้ 10 โมง", language="th", ai_client=ai,
+        )
+        written = [c[0] for c in client.recorded if c[0].startswith(WRITES)]
+        assert "create_follow_up" in written, f"{reply.text} / {written}"

@@ -33,19 +33,29 @@ def _ai_configured(monkeypatch):
 
 
 class Probe:
-    def __init__(self):
+    """The model, stubbed. `answer` is what it replies with.
+
+    The default — "I have no reading for this" — is what most of this file
+    wants, because most of these phrasings are meant to be handled without
+    the model at all. Pass a real answer for the ones that now consult it;
+    what to pass is whatever `scripts/dev/ask-model.py` shows the deployed
+    model returning, so the test measures production rather than a shrug.
+    """
+
+    def __init__(self, answer: dict | None = None):
         self.calls = 0
+        self.answer = answer or {"action": "suggest", "entity": None, "fields": {}, "missing": []}
         self.client = httpx.AsyncClient(transport=httpx.MockTransport(self._handle))
 
     def _handle(self, request):
         self.calls += 1
-        body = json.dumps({"action": "suggest", "entity": None, "fields": {}, "missing": []})
+        body = json.dumps(self.answer, ensure_ascii=False)
         return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": body}}],
                                          "usage": {"prompt_tokens": 1, "completion_tokens": 1}, "provider": "x"})
 
 
-async def say(client, oa, message, role=None):
-    probe = Probe()
+async def say(client, oa, message, role=None, ai=None):
+    probe = Probe(ai)
     ctx = _ctx(oa=oa, primary_role=role or ("technician" if oa == "technician" else "sales"))
     reply = await handle_chat_message(client, message=message, ctx=ctx, ai_client=probe.client)
     return reply, probe.calls
@@ -244,10 +254,37 @@ class TestCustomerCatchAll:
         assert not [r for r in client.recorded if r[0] == "update_ticket"]
         assert len([r for r in client.recorded if r[0] == "create_ticket"]) == 1
 
-    @pytest.mark.parametrize("phrasing", ["ประตูเลื่อนไม่ได้", "ล้างแอร์", "อยากให้ช่างมาดู", "น้ำไม่ไหล", "ขอนัดช่าง"])
-    async def test_faults_and_visit_requests_still_open_a_job(self, phrasing):
+    @pytest.mark.parametrize("phrasing", ["ประตูเลื่อนไม่ได้", "ล้างแอร์", "น้ำไม่ไหล"])
+    async def test_faults_still_open_a_job_without_asking_anyone(self, phrasing):
+        """A fault marker or an appliance is enough; the model is not consulted."""
         client = _customer()
         reply, calls = await say(client, "customer", phrasing)
+        assert [r for r in client.recorded if r[0] == "create_ticket"], (phrasing, reply.text)
+        assert calls == 0, (phrasing, calls)
+
+    @pytest.mark.parametrize("phrasing", ["อยากให้ช่างมาดู", "ขอนัดช่าง"])
+    async def test_a_visit_request_with_no_appliance_is_read_then_opened(self, phrasing):
+        """These carry no fault marker and name no machine — the only thing
+        saying "job" is the word "ช่าง", which also appears in "ขอบคุณมาก
+        ครับ ช่างทำงานดีมาก". So the sentence is read first.
+
+        The answer below is what google/gemini-3.1-flash-lite really
+        returned for each of these on 10 ก.ย. 2569; the expectation — a job
+        is opened — is exactly what it was."""
+        client = _customer()
+        reply, calls = await say(client, "customer", phrasing, ai={
+            "action": "create", "entity": "ticket", "fields": {},
+            "missing": ["issue_description", "service_address"],
+        })
+        assert [r for r in client.recorded if r[0] == "create_ticket"], (phrasing, reply.text)
+
+    @pytest.mark.parametrize("phrasing", ["อยากให้ช่างมาดู", "ขอนัดช่าง"])
+    async def test_and_an_outage_opens_it_anyway(self, phrasing):
+        """A model that cannot be reached must never stop somebody
+        reporting a fault: no reading means the old behaviour."""
+        client = _customer()
+        ctx = _ctx(oa="customer", primary_role="sales")
+        reply = await handle_chat_message(client, message=phrasing, ctx=ctx, ai_client=None)
         assert [r for r in client.recorded if r[0] == "create_ticket"], (phrasing, reply.text)
 
     async def test_a_warranty_question_shows_the_registered_products(self):

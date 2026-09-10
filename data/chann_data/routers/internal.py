@@ -740,8 +740,8 @@ def reset_member(
     oa = payload.channel
     cache.invalidate(
         k_pending_intent(chann_uid, oa),
-        k_last_customer_ref(chann_uid, oa),
-        k_last_entity_ref(chann_uid, oa),
+        k_last_customer_ref(str(license_id), chann_uid, oa),
+        k_last_entity_ref(str(license_id), chann_uid, oa),
         k_active_tenant(chann_uid, oa),
         *_member_cache_keys(license_id, chann_uid),
     )
@@ -2374,23 +2374,23 @@ def get_active_tenant(oa: str, chann_uid: str):
     return ActiveTenantOut(**raw)
 
 
-@router.put("/chat/last-customer/{oa}/{chann_uid}", status_code=204)
-def set_last_customer_ref(oa: str, chann_uid: str, payload: LastCustomerRefIn):
+@router.put("/chat/last-customer/{license_id}/{oa}/{chann_uid}", status_code=204)
+def set_last_customer_ref(license_id: str, oa: str, chann_uid: str, payload: LastCustomerRefIn):
     """9.7 follow-up, reported live: "บันทึกสมชายเป็น Contact แล้ว" followed
     immediately by "สร้างดีล" with no name — a completely natural way to
     talk once a customer has already been named once. See
     cache.k_last_customer_ref for why this is a separate key from
     pending_intent rather than reusing it."""
     cache.set(
-        k_last_customer_ref(chann_uid, oa),
+        k_last_customer_ref(license_id, chann_uid, oa),
         {"customer_id": payload.customer_id, "name": payload.name},
         payload.ttl_seconds,
     )
 
 
-@router.get("/chat/last-customer/{oa}/{chann_uid}", response_model=LastCustomerRefOut)
-def get_last_customer_ref(oa: str, chann_uid: str):
-    raw = cache.get_or_load(k_last_customer_ref(chann_uid, oa), ttl_s=0, loader=lambda: None)
+@router.get("/chat/last-customer/{license_id}/{oa}/{chann_uid}", response_model=LastCustomerRefOut)
+def get_last_customer_ref(license_id: str, oa: str, chann_uid: str):
+    raw = cache.get_or_load(k_last_customer_ref(license_id, chann_uid, oa), ttl_s=0, loader=lambda: None)
     if raw is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="no recent customer reference"
@@ -2398,13 +2398,13 @@ def get_last_customer_ref(oa: str, chann_uid: str):
     return LastCustomerRefOut(**raw)
 
 
-@router.put("/chat/last-entity/{oa}/{chann_uid}", status_code=204)
-def set_last_entity_ref(oa: str, chann_uid: str, payload: LastEntityRefIn):
+@router.put("/chat/last-entity/{license_id}/{oa}/{chann_uid}", status_code=204)
+def set_last_entity_ref(license_id: str, oa: str, chann_uid: str, payload: LastEntityRefIn):
     """Generalises set_last_customer_ref to any entity, for notes and
     reminders — see cache.k_last_entity_ref for why this is a separate key
     from last_customer_ref rather than replacing it."""
     cache.set(
-        k_last_entity_ref(chann_uid, oa),
+        k_last_entity_ref(license_id, chann_uid, oa),
         {
             "entity_type": payload.entity_type,
             "entity_id": payload.entity_id,
@@ -2415,9 +2415,9 @@ def set_last_entity_ref(oa: str, chann_uid: str, payload: LastEntityRefIn):
     )
 
 
-@router.get("/chat/last-entity/{oa}/{chann_uid}", response_model=LastEntityRefOut)
-def get_last_entity_ref(oa: str, chann_uid: str):
-    raw = cache.get_or_load(k_last_entity_ref(chann_uid, oa), ttl_s=0, loader=lambda: None)
+@router.get("/chat/last-entity/{license_id}/{oa}/{chann_uid}", response_model=LastEntityRefOut)
+def get_last_entity_ref(license_id: str, oa: str, chann_uid: str):
+    raw = cache.get_or_load(k_last_entity_ref(license_id, chann_uid, oa), ttl_s=0, loader=lambda: None)
     if raw is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="no recent entity reference"

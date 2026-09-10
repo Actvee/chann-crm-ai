@@ -128,8 +128,8 @@ async def _seeded(oa):
     client._warranties = [{
         "id": "w-1", "serial_number": "SN12345678", "product_name": "แอร์", "status": "active",
         "warranty_end": "2027-01-01", "customer_name": "สมชาย"}]
-    await client.set_last_customer_ref(ME, oa, customer_id=customer["id"], name="สมชาย ใจดี")
-    await client.set_last_entity_ref(ME, oa, entity_type="deal", entity_id=deal["id"], code=deal["deal_id"])
+    await client.set_last_customer_ref(ME, oa, license_id=T.LICENSE_ID, customer_id=customer["id"], name="สมชาย ใจดี")
+    await client.set_last_entity_ref(ME, oa, license_id=T.LICENSE_ID, entity_type="deal", entity_id=deal["id"], code=deal["deal_id"])
     return client, keys
 
 

@@ -41,7 +41,7 @@ from chann_app.config import settings  # noqa: E402
 from chann_app.services import chat  # noqa: E402
 from chann_app.services.chat import handle_chat_message, handle_reply  # noqa: E402
 from chann_data.permissions import DEFAULT_ROLE_TEMPLATES  # noqa: E402
-from test_phase6_chat import FakeDataClient, _ai, _ctx  # noqa: E402
+from test_phase6_chat import LICENSE_ID, FakeDataClient, _ai, _ctx  # noqa: E402
 
 SALES_KEYS = sorted(DEFAULT_ROLE_TEMPLATES["admin"])
 ME = "CHN-S-000001"
@@ -89,11 +89,11 @@ def _lines(client, deal_index=0):
 async def _customer_and_deal(client, *, name=("จรสิงค์", "กิ่งปัญญา"), lines=()):
     """A customer, a deal in context, and the given (name, qty, price) lines."""
     cust = await client.create_customer("L1", {"first_name": name[0], "last_name": name[1], "phone": "0576788866"})
-    await client.set_last_customer_ref(ME, "sales", customer_id=cust["id"], name=" ".join(name))
+    await client.set_last_customer_ref(ME, "sales", license_id=LICENSE_ID, customer_id=cust["id"], name=" ".join(name))
     deal = await client.create_deal("L1", {"contact_id": cust["id"]})
     for product_name, qty, price in lines:
         await client.add_deal_product("L1", deal["id"], {"product_name": product_name, "qty": qty, "quoted_unit_price": price})
-    await client.set_last_entity_ref(ME, "sales", entity_type="deal", entity_id=deal["id"], code=deal["deal_id"])
+    await client.set_last_entity_ref(ME, "sales", license_id=LICENSE_ID, entity_type="deal", entity_id=deal["id"], code=deal["deal_id"])
     return cust, deal
 
 
@@ -122,14 +122,14 @@ class TestCustomerInterestOpensADeal:
     async def test_the_variants_all_offer(self, message):
         client = _sales()
         cust = await client.create_customer("L1", {"first_name": "จรสิงค์", "last_name": "กิ่งปัญญา", "phone": "0576788866"})
-        await client.set_last_customer_ref(ME, "sales", customer_id=cust["id"], name="จรสิงค์ กิ่งปัญญา")
+        await client.set_last_customer_ref(ME, "sales", license_id=LICENSE_ID, customer_id=cust["id"], name="จรสิงค์ กิ่งปัญญา")
         reply = await say(client, message)
         assert reply.text.startswith("ต้องการสร้างดีลสำหรับ จรสิงค์ กิ่งปัญญา") and "พัดลม" in reply.text
 
     async def test_no_declines_and_nothing_is_created(self):
         client = _sales()
         cust = await client.create_customer("L1", {"first_name": "จรสิงค์", "last_name": "กิ่งปัญญา", "phone": "0576788866"})
-        await client.set_last_customer_ref(ME, "sales", customer_id=cust["id"], name="จรสิงค์ กิ่งปัญญา")
+        await client.set_last_customer_ref(ME, "sales", license_id=LICENSE_ID, customer_id=cust["id"], name="จรสิงค์ กิ่งปัญญา")
         await say(client, "ลูกค้าสนใจอยากได้พัดลม 1 ตัว")
         reply = await say(client, "ไม่ใช่")
         assert "ยังไม่ได้สร้างดีล" in reply.text and not _writes(client, "create_deal") and client._pending is None
@@ -143,7 +143,7 @@ class TestCustomerInterestOpensADeal:
         """"ลูกค้าสนใจเรื่องการซื้อบ้าน" is a note (existing behaviour), not a fan."""
         client = _sales()
         cust = await client.create_customer("L1", {"first_name": "สมชาย", "last_name": "ใจดี", "phone": "0812345678"})
-        await client.set_last_customer_ref(ME, "sales", customer_id=cust["id"], name="สมชาย ใจดี")
+        await client.set_last_customer_ref(ME, "sales", license_id=LICENSE_ID, customer_id=cust["id"], name="สมชาย ใจดี")
         reply = await say(client, "ลูกค้าสนใจเรื่องการซื้อบ้าน")
         assert "ต้องการสร้างดีล" not in reply.text
 
@@ -162,7 +162,7 @@ class TestCustomerInterestOpensADeal:
     async def test_english(self):
         client = _sales(products=[{"id": "p1", "product_id": "FAN001", "product_name": "fan", "unit_price": "1500.00"}])
         cust = await client.create_customer("L1", {"first_name": "John", "last_name": "Smith", "phone": "0812345678"})
-        await client.set_last_customer_ref(ME, "sales", customer_id=cust["id"], name="John Smith")
+        await client.set_last_customer_ref(ME, "sales", license_id=LICENSE_ID, customer_id=cust["id"], name="John Smith")
         reply = await say(client, "customer wants 2 fans", language="en")
         assert reply.text == "Create a deal for John Smith and add 2 fans?"
 
@@ -585,7 +585,7 @@ class TestLatestDeal:
     async def test_the_latest_customer(self):
         client = _sales()
         cust = await client.create_customer("L1", {"first_name": "จรสิงค์", "last_name": "กิ่งปัญญา", "phone": "0576788866"})
-        await client.set_last_customer_ref(ME, "sales", customer_id=cust["id"], name="จรสิงค์ กิ่งปัญญา")
+        await client.set_last_customer_ref(ME, "sales", license_id=LICENSE_ID, customer_id=cust["id"], name="จรสิงค์ กิ่งปัญญา")
         reply = await say(client, "ลูกค้าล่าสุด")
         assert "จรสิงค์ กิ่งปัญญา" in reply.text and "ไม่พบ" not in reply.text
 

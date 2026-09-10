@@ -1557,7 +1557,7 @@ async def _resolve_target_or_context(
             raise _TargetNotFound(entity_type, code)
         return entity_type, str(row["id"]), code
 
-    last_ref = await client.get_last_entity_ref(ctx.chann_uid, ctx.oa)
+    last_ref = await _last_entity_ref(client, ctx)
     if last_ref is None:
         return None
     return last_ref["entity_type"], last_ref["entity_id"], last_ref["code"]
@@ -2422,7 +2422,14 @@ async def _appointment_net(
     carries a date/time, the OA is a staff one, the person may create
     follow-ups, and a target record resolves from the text or context.
     """
-    if ctx.oa == "customer" or "followup.create" not in set(permission_keys):
+    # Both halves of the boundary, not one. Holding the key is not the same
+    # as being allowed to use it HERE: a technician holding followup.create
+    # booked a real reminder from this net on the technician OA, where
+    # _oa_allows says the action does not exist (10 ก.ย. 2569). Every other
+    # write in this file asks _oa_allows; this one asked only the key.
+    if not _oa_allows(ctx.oa, "followup.create"):
+        return None
+    if "followup.create" not in set(permission_keys):
         return None
     if not _mentions_a_datetime(message):
         return None
@@ -3487,6 +3494,12 @@ _COMPLAINT_WORDS = (
     "แย่", "ห่วย", "ร้องเรียน", "ไม่พอใจ", "ผิดหวัง", "ไม่โอเค", "บริการไม่ดี", "รอนาน", "ไม่มีใครติดต่อ", "ไม่มีใครตอบ",
     "ไม่ประทับใจ", "โกง", "หลอก", "ไม่รับผิดชอบ", "เสียเวลา", "แย่มาก", "ช้ามาก", "ไม่ได้เรื่อง", "complain", "complaint",
     "terrible", "awful", "unacceptable", "disappointed", "bad service", "poor service", "ripped off", "scam",
+    # Said about a person rather than the service: "ช่างพูดจาไม่ดีเลย" was
+    # answered by opening a repair job, because the only thing that read it
+    # was a matcher looking for the word "ช่าง" (10 ก.ย. 2569). This list
+    # can only ever route someone to a human — it never writes — so it is
+    # allowed to be generous.
+    "พูดจาไม่ดี", "พูดไม่ดี", "ไม่สุภาพ", "หยาบคาย", "มารยาทไม่ดี", "rude", "impolite",
 )
 
 
@@ -4791,9 +4804,45 @@ def _looks_like_profile_edit(message: str) -> bool:
     return any(hint in lowered for hint in _PROFILE_EDIT_HINTS)
 
 
+async def _customer_line_is_a_job(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
+    permission_keys: list[str], language: str, ai_client=None,
+) -> bool | None:
+    """Does this line describe something the shop has to come and fix?
+
+    True when the model reads it as a job, False when it reads it as
+    anything else, None when the model could not be asked — and None means
+    the old behaviour, because an outage must never stop a customer
+    reporting a fault.
+    """
+    try:
+        intent = await parse_intent(
+            message=message, chann_uid=ctx.chann_uid, role=ctx.primary_role,
+            license_id=str(license_id), permission_keys=list(permission_keys or []),
+            language=language, client=ai_client, oa=ctx.oa,
+        )
+    except Exception:  # noqa: BLE001 — AINotConfigured, AIUnavailable, anything
+        log.info("could not read a customer line; treating it as a report")
+        return None
+    entity = str(intent.get("entity") or "")
+    action = str(intent.get("action") or "")
+    if entity in ("ticket", "service_report") and action in ("create", "update"):
+        return True
+    if action != "suggest":
+        # The model read it as something else — a status question
+        # ("เช็คสถานะงานหน่อยค่ะ" -> read/ticket), who the technician is
+        # ("ช่างชื่ออะไร" -> read/member), a reschedule. Those have their
+        # own paths further down this handler; a veto here would answer a
+        # perfectly clear question with a shrug. Only "the model has no
+        # reading at all" is a reason to stop.
+        return None
+    return False
+
+
 async def _handle_customer_report(
     client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
     language: str, serial_hint: str | None = None, skip_serial: bool = False,
+    permission_keys: list[str] | None = None, ai_client=None,
 ) -> ChatReply:
     """A customer reporting a fault, or answering the follow-up questions.
 
@@ -5334,6 +5383,35 @@ async def _handle_customer_report(
     # typed here used to become a ticket called, say, "ใช้งานยังไง".
     if not (forced_fault or serial_hint or skip_serial or _looks_like_fault(text) or _looks_like_service_request(text)):
         return _customer_fallback(text, language)
+    # docs/MODEL_FIRST.md — where the words alone said "job", the sentence
+    # is READ before one is opened.
+    #
+    # _looks_like_service_request matches "ช่าง" anywhere, so "ขอบคุณมาก
+    # ครับ ช่างทำงานดีมาก" and "ช่างมาตรงเวลาดีค่ะ" — thanking the
+    # technician — asked the customer to register a machine and file a
+    # repair (10 ก.ย. 2569). Asked directly, the model answers "suggest"
+    # for all four praise forms and "create ticket" for all three real
+    # requests, including "อยากล้างแอร์".
+    #
+    # Only where the service-request words are the ONLY signal: a fault
+    # marker, a serial or an in-flight report is never second-guessed, and
+    # the model being unavailable means the old behaviour, because an
+    # outage must never stop somebody reporting a fault.
+    # An appliance named in the sentence is a positive signal, like a fault
+    # marker: "มีช่างมาติดตั้งแอร์ให้ไหม" is somebody asking the shop to
+    # come, and the model reads it as a plain question. The markers stay
+    # first; the model only decides where they say nothing.
+    names_a_thing = any(w.replace(" ", "") in _normalise(text) for w in _APPLIANCE_WORDS)
+    if _looks_like_service_request(text) and not (
+        forced_fault or serial_hint or skip_serial or _looks_like_fault(text) or names_a_thing
+    ):
+        read = await _customer_line_is_a_job(
+            client, ctx=ctx, license_id=license_id, message=text,
+            permission_keys=list(permission_keys or []), language=language,
+            ai_client=ai_client,
+        )
+        if read is False:
+            return _customer_fallback(text, language)
     if _is_only_a_greeting(text) or _is_small_talk(text):
         return _customer_fallback(text, language)
 
@@ -7013,7 +7091,7 @@ async def _ticket_for_assignment(
             break
 
     try:
-        last = await client.get_last_entity_ref(ctx.chann_uid, ctx.oa)
+        last = await _last_entity_ref(client, ctx)
     except Exception:
         log.exception("could not read the conversation's last record")
         last = None
@@ -8074,7 +8152,7 @@ async def _handle_approval_act(
         # waiting, a bare "อนุมัติ" means that one, not the one rejected a
         # moment ago (review, 6 Sep 2026).
         try:
-            ref = await client.get_last_entity_ref(ctx.chann_uid, ctx.oa)
+            ref = await _last_entity_ref(client, ctx)
         except Exception:
             ref = None
         if ref and ref.get("entity_type") == "service_report" and ref.get("code"):
@@ -9528,7 +9606,7 @@ async def _status_answer(
             # A quotation for the deal named, or for the deal just discussed.
             deal_code = code if code.startswith("D-") else ""
             if not deal_code:
-                ref = await client.get_last_entity_ref(ctx.chann_uid, ctx.oa)
+                ref = await _last_entity_ref(client, ctx)
                 if ref and str(ref.get("entity_type")) == "deal":
                     deal_code = str(await _code_for_entity(
                         client, str(license_id), "deal", str(ref.get("entity_id") or ""),
@@ -9593,7 +9671,7 @@ async def _guarded_in_context(
     if _GUARD_CODE_RE.search(message or ""):
         return reply
     try:
-        ref = await client.get_last_entity_ref(ctx.chann_uid, ctx.oa)
+        ref = await _last_entity_ref(client, ctx)
     except Exception:
         return reply
     code = await _code_for_entity(
@@ -9982,7 +10060,7 @@ async def _handle_customer_detail(
         # คำค้น" about the record the conversation is already on was the
         # 21:49 dead end wearing different words.
         try:
-            ref = await client.get_last_entity_ref(ctx.chann_uid, ctx.oa)
+            ref = await _last_entity_ref(client, ctx)
         except Exception:
             ref = None
         if ref and ref.get("entity_type") == "customer":
@@ -10653,7 +10731,7 @@ async def _line_from_context(client: DataClient, ctx: ResolvedContext, lines: li
     """The line "เพิ่มอีก 1 ตัว" refers to: the one last added or edited on
     this record, else the only line there is."""
     try:
-        ref = await client.get_last_entity_ref(ctx.chann_uid, ctx.oa)
+        ref = await _last_entity_ref(client, ctx)
     except Exception:
         ref = None
     extra = (ref or {}).get("extra") or {}
@@ -11051,7 +11129,7 @@ async def _resolve_line_target(
             return None, code, None, []
         return "deal", code, str(row["id"]), list(row.get("products") or [])
 
-    last_ref = await client.get_last_entity_ref(ctx.chann_uid, ctx.oa)
+    last_ref = await _last_entity_ref(client, ctx)
     if not last_ref:
         return None, None, None, []
     kind = str(last_ref.get("entity_type") or "")
@@ -11255,7 +11333,7 @@ async def _handle_staff_ticket_create(
         if problem is not None:
             return problem
     if customer is None:
-        last_ref = await client.get_last_customer_ref(ctx.chann_uid, ctx.oa)
+        last_ref = await _last_customer_ref(client, ctx)
         if last_ref:
             customer = {"id": last_ref["customer_id"], "first_name": last_ref["name"]}
     if customer is None:
@@ -11589,7 +11667,7 @@ async def _handle_ai_understood_intent(
             )
             if row is not None:
                 resolved = ("customer", str(row["id"]), str(row.get("customer_id") or ""))
-            elif not await client.get_last_entity_ref(ctx.chann_uid, ctx.oa):
+            elif not await _last_entity_ref(client, ctx):
                 # Unknown name and nothing in context: the not-found reply
                 # (which offers the candidates or a way to add them) is more
                 # use than booking against the wrong record.
@@ -11853,7 +11931,7 @@ async def _handle_quote_status(
             )
         code = str(quotes_of_deal[-1].get("quote_id") or "").upper()
     if not code:
-        last_ref = await client.get_last_entity_ref(ctx.chann_uid, ctx.oa)
+        last_ref = await _last_entity_ref(client, ctx)
         if last_ref and last_ref.get("entity_type") == "quote":
             code = str(last_ref.get("code") or "")
     if not code:
@@ -11909,7 +11987,7 @@ async def _handle_quote_discount(
     match = re.search(r"(?<![A-Za-z0-9])(Q-\d{4}-\d{4})(?![0-9])", message or "", re.I)
     code = match.group(1).upper() if match else None
     if not code:
-        last_ref = await client.get_last_entity_ref(ctx.chann_uid, ctx.oa)
+        last_ref = await _last_entity_ref(client, ctx)
         if last_ref and last_ref.get("entity_type") == "quote":
             code = str(last_ref.get("code") or "")
     if not code:
@@ -12162,7 +12240,7 @@ async def _handle_deal_product_add(
         deal_code = match.group(1).upper()
         text = text.replace(match.group(1), " ")
     else:
-        last_ref = await client.get_last_entity_ref(ctx.chann_uid, ctx.oa)
+        last_ref = await _last_entity_ref(client, ctx)
         if last_ref and last_ref.get("entity_type") == "deal":
             deal_code = str(last_ref.get("code") or "")
     if not deal_code:
@@ -12324,7 +12402,7 @@ async def _handle_quote_create_direct(
         if match:
             deal_code = match.group(1).upper()
         else:
-            last_ref = await client.get_last_entity_ref(ctx.chann_uid, ctx.oa)
+            last_ref = await _last_entity_ref(client, ctx)
             if last_ref and last_ref.get("entity_type") == "deal":
                 deal_code = str(last_ref.get("code") or "")
 
@@ -12701,7 +12779,7 @@ async def _handle_deal_create_direct(
         # for exactly this since Phase 9, and a second mechanism for "the
         # customer we were just discussing" would drift from the first and
         # give different answers to the same question.
-        last_ref = await client.get_last_customer_ref(ctx.chann_uid, ctx.oa)
+        last_ref = await _last_customer_ref(client, ctx)
         if last_ref is None:
             return ChatReply(text=_t(DEAL_NEEDS_TARGET_NAME, language))
         contact = {"id": last_ref["customer_id"], "first_name": last_ref["name"]}
@@ -12806,7 +12884,7 @@ async def _handle_deal_close_date(
     match = re.search(r"(?<![A-Za-z0-9])(D-\d{4}-\d{4})(?![0-9])", message or "", re.I)
     code = match.group(1).upper() if match else None
     if not code:
-        last_ref = await client.get_last_entity_ref(ctx.chann_uid, ctx.oa)
+        last_ref = await _last_entity_ref(client, ctx)
         if last_ref and last_ref.get("entity_type") == "deal":
             code = str(last_ref.get("code") or "")
     if not code:
@@ -15225,11 +15303,42 @@ async def _remember_customer(client: DataClient, ctx: ResolvedContext, row: dict
     """Records "the customer we were just talking about", so a follow-up
     like "สร้างดีล" with no name at all can fall back to them instead of
     refusing. See cache.k_last_customer_ref for why this can't just reuse
-    pending_intent."""
-    await client.set_last_customer_ref(
-        ctx.chann_uid, ctx.oa, customer_id=row["id"], name=_display_name(row),
-        ttl_seconds=LAST_CUSTOMER_REF_TTL_S,
-    )
+    pending_intent.
+
+    Per SHOP: without a license there is one slot per person per OA, and a
+    customer opened in one shop was still "the customer we were just
+    talking about" after switching to another (10 ก.ย. 2569). No license,
+    nothing remembered — a conversation with no shop chosen has no record
+    to be on.
+    """
+    lic = str(getattr(ctx, "license_id", "") or "")
+    if not lic:
+        return
+    try:
+        await client.set_last_customer_ref(
+            ctx.chann_uid, ctx.oa, license_id=lic, customer_id=row["id"],
+            name=_display_name(row), ttl_seconds=LAST_CUSTOMER_REF_TTL_S,
+        )
+    except Exception:
+        # Best-effort, same as _remember_entity: failing to remember must
+        # never break the view that triggered it.
+        log.exception("failed to remember last customer ref")
+
+
+async def _last_customer_ref(client: DataClient, ctx: ResolvedContext) -> dict | None:
+    """The customer in context FOR THIS SHOP, or None."""
+    lic = str(getattr(ctx, "license_id", "") or "")
+    if not lic:
+        return None
+    return await client.get_last_customer_ref(ctx.chann_uid, ctx.oa, license_id=lic)
+
+
+async def _last_entity_ref(client: DataClient, ctx: ResolvedContext) -> dict | None:
+    """The record in context FOR THIS SHOP, or None."""
+    lic = str(getattr(ctx, "license_id", "") or "")
+    if not lic:
+        return None
+    return await client.get_last_entity_ref(ctx.chann_uid, ctx.oa, license_id=lic)
 
 
 # An hour, not ten minutes. Ten was long enough for a demo and too short
@@ -15247,10 +15356,14 @@ async def _remember_entity(
     _remember_customer to deals and quotes, for notes and reminders. See
     cache.k_last_entity_ref for why this is a separate key from
     last_customer_ref rather than reusing it."""
+    lic = str(getattr(ctx, "license_id", "") or "")
+    if not lic:
+        return
     try:
         await client.set_last_entity_ref(
-            ctx.chann_uid, ctx.oa, entity_type=entity_type, entity_id=str(entity_id),
-            code=code, ttl_seconds=LAST_ENTITY_REF_TTL_S, extra=extra,
+            ctx.chann_uid, ctx.oa, license_id=lic, entity_type=entity_type,
+            entity_id=str(entity_id), code=code,
+            ttl_seconds=LAST_ENTITY_REF_TTL_S, extra=extra,
         )
     except Exception:
         # Best-effort: failing to cache "what we were just looking at" must
@@ -15286,7 +15399,7 @@ async def _handle_deal_intent(
                 fields=deal_fields, ambiguous=ambiguous, language=language,
             )
         if not target_name:
-            last_ref = await client.get_last_customer_ref(ctx.chann_uid, ctx.oa)
+            last_ref = await _last_customer_ref(client, ctx)
             if last_ref is None:
                 return ChatReply(text=_t(DEAL_NEEDS_TARGET_NAME, language), intent=intent)
             contact = {"id": last_ref["customer_id"], "first_name": last_ref["name"]}
@@ -15534,7 +15647,7 @@ async def _handle_quote_intent(
             # with nothing in context the list is the honest answer, not a
             # guess at which quote was meant.
             try:
-                ref = await client.get_last_entity_ref(ctx.chann_uid, ctx.oa)
+                ref = await _last_entity_ref(client, ctx)
             except Exception:  # noqa: BLE001
                 ref = None
             if ref and ref.get("entity_type") == "quote" and ref.get("code"):
@@ -17262,7 +17375,7 @@ async def _route_chat_message(
                 )
             return await _handle_customer_report(
                 client, ctx=ctx, license_id=license_id, message=message,
-                language=language,
+                language=language, permission_keys=permission_keys, ai_client=ai_client,
             )
 
     # User review (4 Sep 2026): "ทำอะไรกับ Lead ได้บ้าง" / "ฉันมีสิทธิ์ทำอะไร"
@@ -17633,7 +17746,7 @@ async def _route_chat_message(
         if product_trigger and not re.search(
             r"(?<![A-Za-z0-9])(D-\d{4}-\d{4})(?![0-9])", message or "", re.IGNORECASE
         ):
-            last_ref = await client.get_last_entity_ref(ctx.chann_uid, ctx.oa)
+            last_ref = await _last_entity_ref(client, ctx)
             if not (last_ref and last_ref.get("entity_type") == "deal"):
                 product_trigger = None
         if product_trigger:
@@ -17705,7 +17818,7 @@ async def _route_chat_message(
         if any(t in message.lower() for t in DEAL_CREATE_BARE_TRIGGERS) and not re.search(
             r"(?<![A-Za-z0-9])(D-\d{4}-\d{4})(?![0-9])", message or "", re.IGNORECASE
         ):
-            if await client.get_last_customer_ref(ctx.chann_uid, ctx.oa):
+            if await _last_customer_ref(client, ctx):
                 return await _handle_deal_create_direct(
                     client, ctx=ctx, license_id=license_id, name=_deal_name_from_message(message),
                     permission_keys=permission_keys, language=language,
@@ -17732,7 +17845,7 @@ async def _route_chat_message(
             )
         for_customer = _parse_after_trigger(message, DEAL_FOR_CUSTOMER_TRIGGERS) or _deal_owner_asked(message)
         if not for_customer and _CONTEXT_CUSTOMER_DEALS_RE.match(_canonical(message)):
-            last_customer = await client.get_last_customer_ref(ctx.chann_uid, ctx.oa)
+            last_customer = await _last_customer_ref(client, ctx)
             if last_customer and last_customer.get("name"):
                 for_customer = str(last_customer["name"])
         if for_customer:
@@ -17951,7 +18064,7 @@ async def _route_chat_message(
         # that merely contains it is not hijacked.
         bare_stage = _bare_stage_word(message)
         if bare_stage:
-            last_ref = await client.get_last_entity_ref(ctx.chann_uid, ctx.oa)
+            last_ref = await _last_entity_ref(client, ctx)
             if last_ref and last_ref.get("entity_type") == "deal" and last_ref.get("code"):
                 deal_stage_cmd = (str(last_ref["code"]).upper(), bare_stage)
             elif last_ref and last_ref.get("entity_type") == "quote":
@@ -19022,7 +19135,7 @@ async def _handle_lead_archive_request(
         if problem is not None:
             return problem
     else:
-        last_ref = await client.get_last_customer_ref(ctx.chann_uid, ctx.oa)
+        last_ref = await _last_customer_ref(client, ctx)
         if last_ref is None:
             return ChatReply(text=_t(ARCHIVE_NEEDS_NAME, language))
         row = next(
@@ -19283,7 +19396,7 @@ async def _handle_sales_interest(
     None when there is no customer in context — the model still gets the
     sentence, as before.
     """
-    last_ref = await client.get_last_customer_ref(ctx.chann_uid, ctx.oa)
+    last_ref = await _last_customer_ref(client, ctx)
     if not last_ref:
         return None
     if not _interest_is_counted(item):
@@ -19421,7 +19534,7 @@ async def _handle_latest_deal(
             language=language, ctx=ctx,
         )
     try:
-        last_ref = await client.get_last_entity_ref(ctx.chann_uid, ctx.oa)
+        last_ref = await _last_entity_ref(client, ctx)
     except Exception:
         last_ref = None
     if last_ref and last_ref.get("entity_type") == "deal" and last_ref.get("code"):
@@ -19440,7 +19553,7 @@ async def _handle_latest_deal(
 async def _handle_latest_customer(
     client: DataClient, *, ctx: ResolvedContext, license_id, permission_keys: list[str], language: str,
 ) -> ChatReply:
-    last_ref = await client.get_last_customer_ref(ctx.chann_uid, ctx.oa)
+    last_ref = await _last_customer_ref(client, ctx)
     if last_ref and last_ref.get("name"):
         return await _handle_customer_detail(
             client, license_id=license_id, code=str(last_ref["name"]), permission_keys=permission_keys,

@@ -346,16 +346,24 @@ class FakeDataClient:
                     "chat_messages": 0, "storage_paths": [], "request_id": request_id}
         return {"request_type": "export", "bundle": {"request_id": request_id, "identity": {}, "companies": []}}
 
-    async def set_last_customer_ref(self, chann_uid, oa, *, customer_id, name, ttl_seconds=600):
+    # Stricter than the route on purpose: the refs are per SHOP as well as
+    # per person and per OA, and a fake more generous than the real thing
+    # is how the cross-shop leak survived (10 ก.ย. 2569).
+    async def set_last_customer_ref(self, chann_uid, oa, *, license_id, customer_id, name, ttl_seconds=600):
         self._last_customer_ref = {"customer_id": customer_id, "name": name}
+        self._ref_license = str(license_id)
         self.recorded.append(("set_last_customer_ref", chann_uid, oa, customer_id, name))
 
-    async def get_last_customer_ref(self, chann_uid, oa):
+    async def get_last_customer_ref(self, chann_uid, oa, *, license_id):
         self.recorded.append(("get_last_customer_ref", chann_uid, oa))
+        held = getattr(self, "_ref_license", None)
+        if held is not None and held != str(license_id):
+            return None
         return self._last_customer_ref
 
-    async def set_last_entity_ref(self, chann_uid, oa, *, entity_type, entity_id, code, ttl_seconds=600, extra=None):
+    async def set_last_entity_ref(self, chann_uid, oa, *, license_id, entity_type, entity_id, code, ttl_seconds=600, extra=None):
         self._last_entity_ref = {"entity_type": entity_type, "entity_id": entity_id, "code": code, "extra": extra}
+        self._entity_ref_license = str(license_id)
         self.recorded.append(("set_last_entity_ref", chann_uid, oa, entity_type, entity_id, code))
 
     async def get_member(self, license_id, chann_uid, channel=None):
@@ -748,8 +756,11 @@ class FakeDataClient:
         self.recorded.append(("create_notification", license_id, target_chann_uid, type, message))
         return row
 
-    async def get_last_entity_ref(self, chann_uid, oa):
+    async def get_last_entity_ref(self, chann_uid, oa, *, license_id):
         self.recorded.append(("get_last_entity_ref", chann_uid, oa))
+        held = getattr(self, "_entity_ref_license", None)
+        if held is not None and held != str(license_id):
+            return None
         return getattr(self, "_last_entity_ref", None)
 
     async def create_note(self, license_id, payload, actor_id=None):
@@ -1254,7 +1265,7 @@ def _one_product(chann_uid="CHN-S-000001"):
 
 
 def _ctx(resolution=TenantResolution.SINGLE, display_name="LINE Name",
-         primary_role="sales", oa=None):
+         primary_role="sales", oa=None, license_id=None):
     # oa defaults to primary_role: in the ordinary case a message really does
     # arrive on the OA matching the identity's role. Tests that specifically
     # prove ctx.oa is used INSTEAD of a possibly-stale ctx.primary_role pass
@@ -1266,7 +1277,7 @@ def _ctx(resolution=TenantResolution.SINGLE, display_name="LINE Name",
         # Mirrors MembershipOut exactly — no display_name, because the real
         # payload has none. A fake with extra keys hides dead code.
         memberships = [{
-            "license_id": LICENSE_ID, "license_code": "TESTCO",
+            "license_id": license_id or LICENSE_ID, "license_code": "TESTCO",
             "company_name": "บริษัททดสอบ", "chann_uid": "CHN-S-000001",
             "role": "sales", "status": "active",
         }]

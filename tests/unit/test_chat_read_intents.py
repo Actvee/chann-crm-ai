@@ -41,7 +41,7 @@ from chann_app.config import settings  # noqa: E402
 from chann_app.services import chat  # noqa: E402
 from chann_app.services.chat import handle_chat_message  # noqa: E402
 from chann_data.permissions import DEFAULT_ROLE_TEMPLATES  # noqa: E402
-from test_phase6_chat import FakeDataClient, _ai, _ctx  # noqa: E402
+from test_phase6_chat import LICENSE_ID, FakeDataClient, _ai, _ctx  # noqa: E402
 
 SALES_KEYS = sorted(DEFAULT_ROLE_TEMPLATES["admin"])
 TECH_KEYS = ["ticket.read", "ticket.update", "ticket.close", "service_report.create",
@@ -163,7 +163,7 @@ class TestCustomerRead:
     async def test_reading_a_customer_puts_them_in_context_for_the_next_line(self):
         client = await _sales()
         await say(client, "ขอดูข้อมูลคุณสมหมาย", ai=_read("customer", target_name="คุณสมหมาย"))
-        ref = await client.get_last_customer_ref(ME, "sales")
+        ref = await client.get_last_customer_ref(ME, "sales", license_id=LICENSE_ID)
         assert ref and ref["name"] == "สมหมาย ใจดี"
 
 
@@ -196,7 +196,7 @@ class TestDealRead:
 
     async def test_the_latest_deal_is_the_one_in_context(self):
         client, deal = await self._with_a_deal()
-        await client.set_last_entity_ref(ME, "sales", entity_type="deal",
+        await client.set_last_entity_ref(ME, "sales", license_id=LICENSE_ID, entity_type="deal",
                                          entity_id=deal["id"], code=deal["deal_id"])
         reply = await say(client, "ขอข้อมูลดีลล่าสุดหน่อย", ai=_read("deal"))
         assert reply.text.startswith("D-2026-0001 ·")
@@ -232,7 +232,7 @@ class TestQuoteRead:
 
     async def test_the_latest_quote_is_the_one_in_context(self):
         client, quote = await self._with_a_quote()
-        await client.set_last_entity_ref(ME, "sales", entity_type="quote",
+        await client.set_last_entity_ref(ME, "sales", license_id=LICENSE_ID, entity_type="quote",
                                          entity_id=quote["id"], code=quote["quote_id"])
         reply = await say(client, "ขอดูใบเสนอราคาล่าสุด", ai=_read("quote"))
         assert quote["quote_id"] in reply.text
@@ -255,7 +255,7 @@ class TestQuoteRead:
         deal = await client.create_deal("L1", {"contact_id": client._customers_created[0]["id"]})
         await say(client, "สร้างใบเสนอราคาจากดีล D-2026-0001", ai=_crafted(
             {"action": "create", "entity": "quote", "fields": {"deal_code": deal["deal_id"]}, "missing": []}))
-        ref = await client.get_last_entity_ref(ME, "sales")
+        ref = await client.get_last_entity_ref(ME, "sales", license_id=LICENSE_ID)
         assert ref and ref["entity_type"] == "quote"
 
 

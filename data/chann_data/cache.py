@@ -167,7 +167,7 @@ def k_active_tenant(chann_uid: str, oa: str) -> str:
     return f"active_tenant:{chann_uid}:{oa}"
 
 
-def k_last_customer_ref(chann_uid: str, oa: str) -> str:
+def k_last_customer_ref(license_id: str, chann_uid: str, oa: str) -> str:
     """Phase 9 — "which customer was this conversation just about?"
 
     Reported live: "บันทึกสมชายเป็น Contact แล้ว" followed immediately by
@@ -179,13 +179,18 @@ def k_last_customer_ref(chann_uid: str, oa: str) -> str:
     start existing. Conflating the two would mean the reference vanishes
     at the one point it's needed.
 
-    Same (chann_uid, oa) scoping and same Redis-not-Postgres reasoning as
+    Scoped by LICENSE as well as (chann_uid, oa), for the same reason
+    k_member is: one LINE account can be staff at two shops. Without the
+    license, a person who opened a customer in shop A, switched shops, and
+    then said "สร้างดีล" with no name got shop A's customer written into
+    shop B's deal — reproduced end to end, and the row landed
+    (10 ก.ย. 2569). Redis-not-Postgres reasoning is unchanged from
     pending_intent above.
     """
-    return f"last_customer_ref:{chann_uid}:{oa}"
+    return f"last_customer_ref:{license_id}:{chann_uid}:{oa}"
 
 
-def k_last_entity_ref(chann_uid: str, oa: str) -> str:
+def k_last_entity_ref(license_id: str, chann_uid: str, oa: str) -> str:
     """Phase 6 follow-up — "which record was this conversation just
     looking at?"
 
@@ -201,10 +206,12 @@ def k_last_entity_ref(chann_uid: str, oa: str) -> str:
     name, not a typed code). This one is generic across customer/deal/
     quote and is read by notes and reminders.
 
-    Same (chann_uid, oa) scoping and same Redis-not-Postgres reasoning as
-    pending_intent.
+    Scoped by LICENSE as well as (chann_uid, oa) — see k_last_customer_ref
+    for the sequence that made this necessary. A shop switch now moves the
+    conversation to that shop's own slot instead of carrying the previous
+    shop's record across, so nothing has to be cleared on the way.
     """
-    return f"last_entity_ref:{chann_uid}:{oa}"
+    return f"last_entity_ref:{license_id}:{chann_uid}:{oa}"
 
 
 cache = Cache()
