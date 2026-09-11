@@ -298,12 +298,25 @@ class TestCustomerCatchAll:
         assert len([r for r in client.recorded if r[0] == "create_ticket"]) == 1
 
     @pytest.mark.parametrize("phrasing", ["ประตูเลื่อนไม่ได้", "ล้างแอร์", "น้ำไม่ไหล"])
-    async def test_faults_still_open_a_job_without_asking_anyone(self, phrasing):
-        """A fault marker or an appliance is enough; the model is not consulted."""
+    async def test_faults_open_a_job_from_the_models_reading(self, phrasing):
+        """The customer OA reads with the model first (11 ก.ย. 2569). Each
+        of these came back create/ticket with the fault in
+        issue_description from google/gemini-3.1-flash-lite that day; the
+        job is opened by the same report road the typed phrase reached."""
         client = _customer()
-        reply, calls = await say(client, "customer", phrasing)
+        reply, calls = await say(client, "customer", phrasing, ai={
+            "action": "create", "entity": "ticket",
+            "fields": {"issue_description": phrasing}, "missing": ["service_address"]})
         assert [r for r in client.recorded if r[0] == "create_ticket"], (phrasing, reply.text)
-        assert calls == 0, (phrasing, calls)
+        assert calls == 1, (phrasing, calls)
+
+    @pytest.mark.parametrize("phrasing", ["ประตูเลื่อนไม่ได้", "ล้างแอร์", "น้ำไม่ไหล"])
+    async def test_faults_still_open_a_job_when_the_model_cannot_be_reached(self, phrasing):
+        """An outage must never stop a customer reporting a fault."""
+        client = _customer()
+        ctx = _ctx(oa="customer", primary_role="sales")
+        reply = await handle_chat_message(client, message=phrasing, ctx=ctx, ai_client=None)
+        assert [r for r in client.recorded if r[0] == "create_ticket"], (phrasing, reply.text)
 
     @pytest.mark.parametrize("phrasing", ["อยากให้ช่างมาดู", "ขอนัดช่าง"])
     async def test_a_visit_request_with_no_appliance_is_read_then_opened(self, phrasing):

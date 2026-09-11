@@ -70,12 +70,13 @@ TICKET = {"id": "TICKET-1", "ticket_number": "T-2026-0001", "status": "assigned"
           "assigned_to": "CHN-T-000001", "customer_name": "สมชาย", "customer_phone": "0812345678",
           "service_address": "99/1", "issue_description": "แอร์ไม่เย็น",
           "scheduled_date": "2026-09-12", "scheduled_time": "10:00"}
-ROLE_FOR = {"sales": "sales", "technician": "technician"}
+ROLE_FOR = {"sales": "sales", "technician": "technician", "customer": "customer"}
+KEYS_FOR = {"sales": "admin", "technician": "technician"}
 
 
 async def _reaches_model(case: dict, oa: str) -> bool:
     role = ROLE_FOR[oa]
-    client = FakeDataClient(role=role, permission_keys=sorted(DEFAULT_ROLE_TEMPLATES["admin" if oa == "sales" else "technician"]),
+    client = FakeDataClient(role=role, permission_keys=sorted(DEFAULT_ROLE_TEMPLATES[KEYS_FOR[oa]]) if oa in KEYS_FOR else [],
                             customers=[copy.deepcopy(CUSTOMER)], deals=[copy.deepcopy(DEAL)],
                             quotes=[copy.deepcopy(QUOTE)])
     if oa == "technician":
@@ -98,8 +99,9 @@ async def _ask(text: str, oa: str) -> dict:
     from chann_app.services.ai.intent import parse_intent
     role = ROLE_FOR[oa]
     return await parse_intent(
-        message=text, chann_uid="CHN-S-000001" if oa == "sales" else "CHN-T-000001", role=role,
-        license_id="L1", permission_keys=sorted(DEFAULT_ROLE_TEMPLATES["admin" if oa == "sales" else "technician"]),
+        message=text, chann_uid={"sales": "CHN-S-000001", "technician": "CHN-T-000001"}.get(oa, "CHN-C-000001"),
+        role=role, license_id="L1",
+        permission_keys=sorted(DEFAULT_ROLE_TEMPLATES[KEYS_FOR[oa]]) if oa in KEYS_FOR else [],
         language="th", oa=oa,
     )
 
@@ -110,21 +112,28 @@ def _write(text: str, answer: dict, prefix: str) -> bool:
     ai = json.dumps(answer, ensure_ascii=False).replace("null", "None").replace("true", "True").replace("false", "False")
     new, n = pat.subn(lambda m: m.group(1) + ",\n       ai=" + ai + ")", src, count=1)
     if n:
-        CORPUS.write_text(new, encoding="utf-8")
+        # Atomic: a Cloud Shell restart in the middle of a plain write left
+        # the corpus at 0 bytes (11 ก.ย. 2569).
+        tmp = CORPUS.with_suffix(".py.tmp")
+        tmp.write_text(new, encoding="utf-8")
+        os.replace(tmp, CORPUS)
     return bool(n)
 
 
 async def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry", action="store_true")
-    parser.add_argument("--oa", choices=("sales", "technician"), default="sales")
+    parser.add_argument("--oa", choices=("sales", "technician", "customer"), default="sales")
+    parser.add_argument("--all", action="store_true",
+                        help="ask for every entry without an answer, reaching the model or not — "
+                             "the survey that precedes a channel's conversion")
     args = parser.parse_args()
     oa = args.oa
-    entries = chat_corpus.SALES if oa == "sales" else chat_corpus.TECH
-    prefix = "s" if oa == "sales" else "t"
+    entries = {"sales": chat_corpus.SALES, "technician": chat_corpus.TECH, "customer": chat_corpus.CUSTOMER}[oa]
+    prefix = {"sales": "s", "technician": "t", "customer": "c"}[oa]
 
     todo = [c for c in entries if "ai" not in c and not c.get("pre")]
-    reaching = [c for c in todo if await _reaches_model(c, oa)]
+    reaching = todo if args.all else [c for c in todo if await _reaches_model(c, oa)]
     print(f"{len(entries)} {oa} entries · {len(todo)} without an answer · "
           f"{len(reaching)} of those reach the model")
     if args.dry:

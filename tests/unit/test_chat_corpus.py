@@ -193,10 +193,12 @@ SPEC = {
     "c.fault": [A(h=["_handle_customer_report"], text=FAULT_TXT + ASK_ISSUE, forbid=["_customer_fallback"])],
     "c.fault_question": [A(h=["_handle_customer_report"], text=FAULT_TXT + STATUS_TXT, forbid=["_customer_fallback"]), A(h=["_handle_customer_chat_start"])],
     "c.product_or_fault": [A(h=["_handle_customer_report"], text=FAULT_TXT + ASK_ISSUE, forbid=["_customer_fallback"]), A(h=["storefront", "_storefront_browse_reply"]), A(text=PRODUCT_TXT)],
-    "c.urgent_vague": [A(h=["_handle_customer_report"], text=FAULT_TXT + ASK_ISSUE, forbid=["_customer_fallback"]), A(h=["_handle_customer_chat_start"])],
-    "c.status": [A(h=["_handle_customer_report"], text=STATUS_TXT, forbid=["_customer_fallback"])],
+    "c.urgent_vague": [A(h=["_handle_customer_report"], text=FAULT_TXT + ASK_ISSUE, forbid=["_customer_fallback"]), A(h=["_handle_customer_chat_start"]), A(ai=True, h=["_handle_customer_status"], partial=True)],
+    # The customer OA reads with the model first (11 ก.ย. 2569): read/ticket
+    # names the status handler the typed phrases reached through the report road.
+    "c.status": [A(h=["_handle_customer_report"], text=STATUS_TXT, forbid=["_customer_fallback"]), A(ai=True, h=["_handle_customer_status"]), A(ai=True, h=["_handle_customer_contact"], partial=True)],
     "c.warranty": [A(h=["_handle_warranty_mine"]), A(h=["_handle_serial_enquiry"])],
-    "c.register": [A(h=["_handle_warranty_register"])],
+    "c.register": [A(h=["_handle_warranty_register"]), A(ai=True, h=["_handle_serial_enquiry"], partial=True)],
     "c.help_register": [A(h=["_help_reply"]), A(h=["_handle_warranty_register"])],
     "c.contact": [A(h=["_handle_customer_contact"])],
     # The handler is the same; what it does inside changed on 11 ก.ย. 2569.
@@ -207,7 +209,7 @@ SPEC = {
     # was understood and forwarded", not "the visit moved".
     "c.resched": [A(h=["_handle_customer_amend|cancel=False"])],
     "c.cancel": [A(h=["_handle_customer_amend|cancel=True"])],
-    "c.correction": [A(h=["_handle_customer_amend"]), A(h=["_handle_customer_report"], text=STATUS_TXT, forbid=["_customer_fallback"]), A(h=["_handle_customer_chat_start"])],
+    "c.correction": [A(h=["_handle_customer_amend"]), A(h=["_handle_customer_report"], text=STATUS_TXT, forbid=["_customer_fallback"]), A(h=["_handle_customer_chat_start"]), A(ai=True, h=["_handle_customer_status"], partial=True)],
     "c.profile_edit": [A(ai=True, h=["_handle_profile_intent"])],
     "c.chat": [A(h=["_handle_customer_chat_start"])],
     "c.complaint": [A(h=["_handle_customer_chat_start"]), A(h=["_handle_customer_report"], text=STATUS_TXT, forbid=["_customer_fallback"])],
@@ -216,7 +218,7 @@ SPEC = {
     "c.product_list": [A(h=["storefront", "_storefront_browse_reply"]), A(text=PRODUCT_TXT, partial=True)],
     "c.search": [A(h=["storefront"])],
     "c.payment": [A(h=["_handle_customer_chat_start"]), A(text=["คุยกับร้าน", "talk to the shop"], partial=True)],
-    "c.profile": [A(h=["_handle_customer_profile_view"])],
+    "c.profile": [A(h=["_handle_customer_profile_view"]), A(ai=True, h=["_handle_customer_contact"], partial=True)],
     "c.orders": [A(h=["_handle_orders_mine"])],
     "c.lang": [A(h=["_switch_language"])],
     "c.address_answer": [A(text=["บันทึกที่อยู่แล้ว", "Address saved"])],

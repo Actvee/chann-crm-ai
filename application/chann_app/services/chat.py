@@ -4988,6 +4988,146 @@ async def _customer_line_is_a_job(
     return False
 
 
+async def _handle_customer_status(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str, language: str,
+) -> ChatReply:
+    """Where the customer's own repair stands: one job when the sentence
+    names a code, all of theirs otherwise. Lifted out of the report road
+    on 11 ก.ย. 2569 so the model's read/ticket can name it directly."""
+    license_id = str(license_id)
+    try:
+        tickets = await client.list_tickets(license_id)
+    except Exception:
+        log.exception("customer ticket lookup failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    mine = [t for t in tickets if t.get("customer_chann_uid") == ctx.chann_uid]
+    status_code = TICKET_CODE_RE.search(message or "")
+    if status_code:
+        wanted = status_code.group(1).upper()
+        t = next((x for x in mine if str(x.get("ticket_number") or "").upper() == wanted), None)
+        if t is None:
+            return ChatReply(text=_t(NOT_FOUND_BY_CODE, language).format(what="งาน", code=wanted))
+        return ChatReply(
+            text=_t(CUSTOMER_JOB_STATUS, language).format(
+                code=t.get("ticket_number"),
+                status=_label(TICKET_STATUS_LABELS, t.get("status"), language),
+                when=_ticket_when(t) or "ยังไม่ได้นัด",
+                tech=t.get("assigned_to_name") or "ยังไม่ได้มอบหมาย",
+            ),
+            quick_replies=[("ดูทุกงาน", "งานของฉัน")],
+        )
+    if not mine:
+        return ChatReply(
+            text=_t(REPORT_NONE, language),
+            quick_replies=[("แจ้งซ่อม", "แจ้งซ่อม")],
+        )
+    lines = [
+        _t(REPORT_STATUS_LINE, language).format(
+            code=t.get("ticket_number"),
+            status=_label(TICKET_STATUS_LABELS, t.get("status"), language),
+            when=f" · {_ticket_when(t)}" if t.get("scheduled_date") else "",
+        )
+        for t in mine[:LIST_LIMIT]
+    ]
+    return ChatReply(text="\n".join(lines))
+
+
+#: What a customer's sentence may lead to, in the model's words. The
+#: customer OA has no permission keys and no permission gate: the list IS
+#: the gate. Owner, 11 ก.ย. 2569: a customer may report a fault, cancel
+#: their own visit and register their own product; moving a visit or
+#: changing what was reported is a REQUEST to the shop, never a write.
+_CUSTOMER_CANCEL_ACTIONS = frozenset({"cancel", "archive", "delete", "close"})
+
+
+async def _customer_model_road(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str, intent: dict,
+    language: str, permission_keys: list[str], ai_client=None,
+) -> ChatReply | None:
+    """The customer's sentence, read by the model, handed to the customer
+    road's own handler for that reading — the same handlers the typed
+    phrases reach, so nothing new can be done here, only found faster.
+    None when the reading names nothing this channel does, in which case
+    the typed cascade runs as before."""
+    action = str(intent.get("action") or "")
+    entity = str(intent.get("entity") or "")
+    fields = intent.get("fields") or {}
+    license_id = str(license_id)
+    if entity == "ticket":
+        if action == "create":
+            return await _handle_customer_report(
+                client, ctx=ctx, license_id=license_id, message=message, language=language,
+                permission_keys=permission_keys, ai_client=ai_client,
+            )
+        if action in _CUSTOMER_CANCEL_ACTIONS:
+            return await _handle_customer_amend(
+                client, ctx=ctx, license_id=license_id, message=message, language=language, cancel=True,
+            )
+        if action == "update":
+            return await _handle_customer_amend(
+                client, ctx=ctx, license_id=license_id, message=message, language=language, cancel=False,
+            )
+        if action in READ_ACTIONS:
+            if _is_complaint(message):
+                # "ช่างมาช้ามาก รอมาสามชั่วโมงแล้ว" came back read/ticket
+                # (11 ก.ย. 2569). The sentence is a complaint whatever the
+                # verb, and a complaint reaches a person, not a status
+                # line — the customer road's own rule since B7.
+                return await _handle_customer_chat_start(
+                    client, ctx=ctx, license_id=license_id,
+                    first_message=(message or "").strip(), language=language,
+                )
+            return await _handle_customer_status(
+                client, ctx=ctx, license_id=license_id, message=message, language=language,
+            )
+        return None
+    if entity in ("report", "member", "service_report") and action in READ_ACTIONS:
+        # "ช่างมาเมื่อไหร่", "งานผมถึงไหนแล้ว": the model reaches for the
+        # nearest entity it was shown; on this channel every one of them
+        # is the customer's own repair.
+        return await _handle_customer_status(
+            client, ctx=ctx, license_id=license_id, message=message, language=language,
+        )
+    if entity == "warranty":
+        if action == "create":
+            return await _handle_warranty_register(
+                client, ctx=ctx, license_id=license_id, message=message, language=language,
+                permission_keys=permission_keys,
+            )
+        if action in READ_ACTIONS:
+            if SERIAL_RE.search(message or "") or fields.get("serial_number"):
+                return await _handle_serial_enquiry(
+                    client, ctx=ctx, license_id=license_id, message=message, language=language,
+                )
+            return await _handle_warranty_mine(client, ctx=ctx, license_id=license_id, language=language)
+        return None
+    if entity in ("profile", "customer"):
+        if action in READ_ACTIONS:
+            return await _handle_customer_profile_view(
+                client, ctx=ctx, license_id=license_id, language=language,
+            )
+        if entity == "profile" and action == "update":
+            return await _handle_profile_intent(
+                client, intent=intent, ctx=ctx, language=language, message=message,
+            )
+        return None
+    if entity == "shop":
+        if action == "chat":
+            return await _handle_customer_chat_start(
+                client, ctx=ctx, license_id=license_id,
+                first_message=(message or "").strip() if _is_complaint(message) else "", language=language,
+            )
+        if action in READ_ACTIONS:
+            return await _handle_customer_contact(client, license_id=license_id, language=language, ctx=ctx)
+        return None
+    if entity in ("product", "quote", "deal") and action in READ_ACTIONS:
+        browsed = await maybe_handle_storefront(client, message=message, ctx=ctx, language=language)
+        if browsed is not None:
+            return browsed
+        return await _storefront_browse_reply(client, ctx=ctx, language=language)
+    return None
+
+
 async def _handle_customer_report(
     client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
     language: str, serial_hint: str | None = None, skip_serial: bool = False,
@@ -5450,30 +5590,8 @@ async def _handle_customer_report(
         any(text.lower().startswith(p.lower()) for p in TICKET_MINE_PHRASES + CUSTOMER_STATUS_PHRASES)
         or not _looks_like_fault(TICKET_CODE_RE.sub("", text))
     ):
-        try:
-            tickets = await client.list_tickets(license_id)
-        except Exception:
-            log.exception("customer ticket lookup failed")
-            return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
-        wanted = status_code.group(1).upper()
-        t = next(
-            (x for x in tickets
-             if x.get("customer_chann_uid") == ctx.chann_uid
-             and str(x.get("ticket_number") or "").upper() == wanted),
-            None,
-        )
-        if t is None:
-            return ChatReply(
-                text=_t(NOT_FOUND_BY_CODE, language).format(what="งาน", code=wanted)
-            )
-        return ChatReply(
-            text=_t(CUSTOMER_JOB_STATUS, language).format(
-                code=t.get("ticket_number"),
-                status=_label(TICKET_STATUS_LABELS, t.get("status"), language),
-                when=_ticket_when(t) or "ยังไม่ได้นัด",
-                tech=t.get("assigned_to_name") or "ยังไม่ได้มอบหมาย",
-            ),
-            quick_replies=[("ดูทุกงาน", "งานของฉัน")],
+        return await _handle_customer_status(
+            client, ctx=ctx, license_id=license_id, message=text, language=language,
         )
 
     # "งานของฉัน" from a customer means their own reports, not a
@@ -5482,26 +5600,9 @@ async def _handle_customer_report(
     if _matches_phrase(
         message, TICKET_MINE_PHRASES + TICKET_LIST_PHRASES + CUSTOMER_STATUS_PHRASES,
     ):
-        try:
-            tickets = await client.list_tickets(license_id)
-        except Exception:
-            log.exception("customer ticket list failed")
-            return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
-        mine = [t for t in tickets if t.get("customer_chann_uid") == ctx.chann_uid]
-        if not mine:
-            return ChatReply(
-                text=_t(REPORT_NONE, language),
-                quick_replies=[("แจ้งซ่อม", "แจ้งซ่อม")],
-            )
-        lines = [
-            _t(REPORT_STATUS_LINE, language).format(
-                code=t.get("ticket_number"),
-                status=_label(TICKET_STATUS_LABELS, t.get("status"), language),
-                when=f" · {_ticket_when(t)}" if t.get("scheduled_date") else "",
-            )
-            for t in mine[:LIST_LIMIT]
-        ]
-        return ChatReply(text="\n".join(lines))
+        return await _handle_customer_status(
+            client, ctx=ctx, license_id=license_id, message="", language=language,
+        )
 
     # The bare tile / word: ask what is wrong rather than log "แจ้งซ่อม"
     # as the fault — and remember that the next line IS the fault. "ด่วน"
@@ -18832,6 +18933,41 @@ async def _route_chat_message(
                 text=_t(SMALL_TALK_REPLY, language),
                 quick_replies=[("แจ้งซ่อม", "แจ้งซ่อม"), ("งานของฉัน", "งานของฉัน")],
             )
+        # MODEL FIRST on the customer OA (11 ก.ย. 2569), the third channel.
+        # What stays closed: a report flow waiting for its answer (the
+        # fault after "แจ้งซ่อม", an address, a serial, a date), any other
+        # pending question (a cancel confirmation, a contact prompt), a
+        # conversation with the shop, a tile, help, small talk — all of
+        # which returned or are checked above and below. The reading is
+        # handed to the customer road's OWN handlers, which is what keeps
+        # the owner's rule: nothing a customer cannot do is reachable here.
+        if (
+            not _is_menu_tile(message, ctx.oa) and not _is_customer_command(message)
+            and not _is_only_a_greeting(message)
+            # "คุยกับร้าน <first line>" names its own road; the line after
+            # the prefix is FOR the shop, not for the model to classify.
+            and not (message or "").strip().lower().startswith(tuple(p.lower() for p in CUSTOMER_CHAT_PHRASES))
+        ):
+            try:
+                pending_now = await client.get_pending_intent(ctx.chann_uid, ctx.oa)
+            except Exception:
+                pending_now = None
+            try:
+                live_now = await live_chat.live_session(client, license_id=str(license_id), chann_uid=ctx.chann_uid)
+            except Exception:
+                live_now = None
+            if pending_now is None and live_now is None:
+                reading = await _read_for_router(
+                    message=message, ctx=ctx, license_id=license_id, permission_keys=permission_keys,
+                    language=language, ai_client=ai_client, member=member, context=context,
+                )
+                if reading is not None and str(reading.get("action") or "") != "suggest":
+                    answered = await _customer_model_road(
+                        client, ctx=ctx, license_id=license_id, message=message, intent=reading,
+                        language=language, permission_keys=permission_keys, ai_client=ai_client,
+                    )
+                    if answered is not None:
+                        return answered
         if _matches_phrase(message, CUSTOMER_PROFILE_PHRASES + CUSTOMER_SHOP_PHRASES):
             return await _handle_customer_profile_view(
                 client, ctx=ctx, license_id=license_id, language=language,

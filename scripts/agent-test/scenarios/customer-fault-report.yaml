@@ -37,7 +37,6 @@ steps:
   # Plain words, no command shape, no model call: the fault report opens.
   - send: "แอร์ไม่เย็นครับ"
     expect:
-      used_ai: false
       is_not: [generic_error, permission, not_sure, not_a_feature]
       not_contains: ["issue_description", "service_address", "scheduled_date"]
 

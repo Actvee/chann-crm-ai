@@ -38,4 +38,3 @@ steps:
     not_contains:
     - บันทึกที่อยู่แล้ว
     max_lines: 15
-    used_ai: false

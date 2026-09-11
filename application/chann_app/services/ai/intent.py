@@ -498,6 +498,45 @@ def entities_for(oa: str) -> set[str] | None:
     return reachable | {"profile", "report"}
 
 
+#: Sent only on the customer OA. The person is a CUSTOMER of the shop, not
+#: staff: every entity above means their own record, and two things the
+#: staff vocabulary has no word for — the shop itself, and cancelling — are
+#: named here. Owner, 11 ก.ย. 2569: a customer may report a fault, cancel
+#: their own visit and register their own product; moving a visit or
+#: changing what they reported is a request the shop decides on.
+CUSTOMER_PROMPT_BLOCK = """
+
+THE PERSON IS A CUSTOMER of the shop, not a member of staff. Read every
+entity as THEIR OWN record:
+- entity="ticket" is their own repair.
+    action="create": something of theirs is broken or needs a visit.
+      Examples: "แอร์ไม่เย็น", "ตู้เย็นมีเสียงดัง", "อยากให้ช่างมาดู".
+    action="read": how their repair is going, when the technician comes,
+      who is coming. Examples: "ช่างมาเมื่อไหร่", "งานผมถึงไหนแล้ว",
+      "ซ่อมเสร็จยัง", "สถานะ".
+    action="update": they ask to MOVE the visit or CHANGE what they
+      reported — a request the shop decides on. fields may include
+      scheduled_date, scheduled_time, issue_description. Examples:
+      "ขอเลื่อนเป็นวันเสาร์", "ไม่ใช่ๆ ผมหมายถึงแอร์ห้องนอน".
+    action="cancel": they no longer want the visit. Examples: "ไม่ซ่อมแล้ว",
+      "ยกเลิกนัด", "ไม่ต้องมาแล้วครับ".
+- entity="warranty": their own product. action="create" registers one
+  ("ลงทะเบียนสินค้า SN12345678"); action="read" asks about it ("ยังมี
+  ประกันไหม", "หมดประกันเมื่อไหร่").
+- entity="profile": their own name, phone, address (read or update).
+- entity="shop" — the shop itself.
+    action="read": how to reach it, where it is, when it opens.
+      Examples: "เบอร์ร้าน", "ร้านเปิดกี่โมง", "ติดต่อร้าน".
+    action="chat": they want a person at the shop, or are complaining.
+      Examples: "ขอคุยกับพนักงาน", "แอดมินอยู่ไหม", "บริการแย่มาก".
+- entity="product", action="read": prices, what is for sale, a product
+  they want to buy. Examples: "ราคาแอร์เท่าไหร่", "มีแอร์รุ่นไหนบ้าง",
+  "อยากซื้อแอร์".
+A greeting, thanks, "ok", a question about how to use this chat, or a
+payment question is action="suggest".
+"""
+
+
 def build_prompt(
     *,
     chann_uid: str,
@@ -533,6 +572,8 @@ def build_prompt(
         weekday=_THAI_WEEKDAYS[today.weekday()],
         buddhist_year=today.year + 543,
     )
+    if oa == "customer":
+        prompt += CUSTOMER_PROMPT_BLOCK
     if recent:
         rendered = _recent_turns_for_prompt(recent)
         if rendered:

@@ -50,7 +50,6 @@ steps:
   # Two registered units: the machine is asked about, never guessed.
   - send: "แอร์ไม่เย็น มีน้ำหยด"
     expect:
-      used_ai: false
       contains: "เครื่องไหน"
       is_not: [generic_error, permission, not_sure, not_a_feature]
       not_contains: ["product_id", "serial_number", "warranty_end"]

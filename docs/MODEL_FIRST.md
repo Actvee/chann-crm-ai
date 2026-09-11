@@ -87,22 +87,32 @@ None of that moves to the model. Ever.
 
 ## Where it stands
 
-**The sales and technician OAs read first (11 ก.ย. 2569).** `_route_chat_message` asks
-the model before any keyword table for a fresh sentence on those two channels; the tables
-run only when the model answers `suggest`. What stays deterministic, by design: a pending
-answer (a check-in question, the report being written, an accept/decline waiting), small
-talk, a greeting, a rich-menu tile, the help menu. Measured over the 1,168-utterance
-corpus through the real router:
+**All three OAs read first (11 ก.ย. 2569).** `_route_chat_message` asks the model before
+any keyword table for a fresh sentence; the tables run only when the model answers
+`suggest`. What stays deterministic, by design: a pending answer (a check-in question, the
+report being written, an accept/decline waiting, a customer's address or date), a
+conversation with the shop, small talk, a greeting, a rich-menu tile, the help menu, and
+the "คุยกับร้าน …" prefix. Measured over the 1,168-utterance corpus through the real router:
 
 | OA | model reads | rule decides | share |
 |---|---|---|---|
 | sales | 492 | 48 | **91%** (was 27%) |
 | technician | 236 | 48 | **83%** (was 18%) |
-| customer | 12 | 332 | 3% |
+| customer | 231 | 113 | **67%** (was 3%) |
 
-Overall **740/1168 (63%)**, from 218. The customer OA's rule (what a customer may do
-alone) is in `SESSION_HANDOFF.md` and its conversion means classifying into that road's
-actions, not widening them.
+Overall **959/1168 (82%)**, from 218.
+
+**The customer OA classifies into what a customer may do** (`_customer_model_road`). The
+customer holds no permission keys, so the dispatcher IS the gate: every reading is handed
+to the customer road's own handler — a fault to the report road (with its address and
+date questions), `read/ticket` to the status reply, `update/ticket` and `cancel/ticket` to
+`_handle_customer_amend` (a request to the shop; a cancel that asks first), warranty and
+profile to theirs, `shop` to contact or a person, `product` to the storefront. Nothing a
+customer cannot do is reachable, because no new handler exists. The model is told it is
+reading a customer (`CUSTOMER_PROMPT_BLOCK`): the same entities mean their own record,
+plus two words staff never needed — `shop` and `cancel`. A complaint the model calls a
+status read still reaches a person: the sentence's own words validate the verb.
+Customer understood share with the model's real answers: 86% → 98%.
 
 **What the technician's channel keeps in its own words** (`_as_the_technician_means_it`,
 read before the OA gate): the model answers `read/report {type: agenda|jobs}` for "งานผม"
@@ -115,8 +125,9 @@ the model names is the verb this system has (`declined` → reject, `closed` →
 the model's verb. Technician understood share with the model's real answers: 74% → 99%.
 
 **The corpus carries the model's real answers.** `tests/unit/chat_corpus.py` entries take
-`ai={...}` — since the inversion, 297 sales and 161 technician entries hold the verbatim
-answer the deployed model gave (`scripts/dev/fill-corpus-answers.py --oa …`, ~$0.15 a run). `test_chat_corpus.py`
+`ai={...}` — since the inversion, 297 sales, 161 technician and 252 customer entries hold
+the verbatim answer the deployed model gave (`scripts/dev/fill-corpus-answers.py --oa …
+[--all]`, ~$0.15 a run; `--all` is the survey that precedes a channel's conversion). `test_chat_corpus.py`
 therefore measures *what the model returns and what the road does with it*, not a
 hand-written stub. Re-run the filler for an entry whenever the prompt changes what the
 model would say about it (clear its `ai=` and run the script).
