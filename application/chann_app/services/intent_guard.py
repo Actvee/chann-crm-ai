@@ -215,6 +215,13 @@ ACTION_WORDS: dict[str, tuple[str, ...]] = {
     # something each new handler has to remember to ask for
     # (owner, 10 ก.ย. 2569, requirement 5).
     "record_write": (
+        # "ยืนยัน" earns its place here: customer.promote has no
+        # deterministic trigger anywhere, so this list is the ONLY thing
+        # that reads the mood of a promote sentence. Without it
+        # "สมชายยืนยันเป็นลูกค้าไปหรือยัง" — a question — was answered by
+        # promoting them (10 ก.ย. 2569). This tuple can only ever make the
+        # guard refuse; it never dispatches anything.
+        "ยืนยัน", "confirm",
         "สร้าง", "เพิ่ม", "ทำ", "เปิด", "บันทึก", "แก้", "แก้ไข", "เปลี่ยน", "อัปเดต", "ตั้ง",
         "ลบ", "ยกเลิก", "เอาออก", "นำออก", "ปิด", "ส่ง", "ออก", "มอบหมาย", "รับ", "อนุมัติ",
         "create", "add", "update", "change", "edit", "set", "delete", "remove", "cancel",

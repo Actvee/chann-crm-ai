@@ -9440,9 +9440,16 @@ _AI_GUARDED: dict[tuple[str, str], str] = {
     # `record_write` / `record_delete` in _execute_intent — guarded, just
     # less specific (10 ก.ย. 2569).
     ("customer", "create"): "customer_bulk",
-    ("customer", "update"): "customer_bulk",
+    # These two were bound to vocabularies that an edit sentence never
+    # contains — customer_bulk is the paste-a-list wording, deal_create is
+    # about opening deals — so intent_to_act looked for words that were
+    # never there and returned ACT every time. "แก้เบอร์ลูกค้ายังไงครับ"
+    # (a how-to) wrote update_customer, and "สมชายยืนยันเป็นลูกค้าไปหรือยัง"
+    # (a question) promoted them (10 ก.ย. 2569). record_write is the
+    # generic edit vocabulary and reads all three moods correctly.
+    ("customer", "update"): "record_write",
     ("customer", "archive"): "record_delete",
-    ("customer", "promote"): "deal_create",
+    ("customer", "promote"): "record_write",
     ("deal", "create"): "deal_create",
     ("deal", "update"): "deal_stage",
     ("deal", "archive"): "record_delete",
@@ -18183,11 +18190,13 @@ async def _route_chat_message(
             )
         if kind == "customer_duplicate":
             return await _resolve_customer_duplicate(
-                client, ctx=ctx, license_id=str(license_id), message=message, pending=pending_intent, language=language,
+                client, ctx=ctx, license_id=str(license_id), message=message, pending=pending_intent,
+                permission_keys=permission_keys, language=language,
             )
         if kind == "customer_merge_confirm":
             return await _resolve_customer_merge_confirm(
-                client, ctx=ctx, license_id=str(license_id), message=message, pending=pending_intent, language=language,
+                client, ctx=ctx, license_id=str(license_id), message=message, pending=pending_intent,
+                permission_keys=permission_keys, language=language,
             )
         if kind == "customer_archive_confirm":
             return await _resolve_archive_confirm(
@@ -19057,8 +19066,15 @@ def _field_lines(items: dict, language: str) -> str:
 
 async def _resolve_customer_duplicate(
     client: DataClient, *, ctx: ResolvedContext, license_id: str, message: str,
-    pending: dict, language: str,
+    pending: dict, language: str, permission_keys: list[str] | None = None,
 ) -> ChatReply:
+    # The confirmation may arrive after a role change or a shop switch —
+    # the same reasoning _resolve_archive_confirm states beside it, which
+    # was never applied here. Both arms of this resolver write a customer
+    # row, and it checked neither the key nor the channel (10 ก.ย. 2569).
+    if "customer.update" not in set(permission_keys) or not _oa_allows(ctx.oa, "customer.update"):
+        await _drop_pending_quietly(client, ctx)
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
     fields = pending.get("fields") or {}
     existing = fields.get("existing") or {}
     new_fields = fields.get("new_fields") or {}
@@ -19109,8 +19125,15 @@ async def _resolve_customer_duplicate(
 
 async def _resolve_customer_merge_confirm(
     client: DataClient, *, ctx: ResolvedContext, license_id: str, message: str,
-    pending: dict, language: str,
+    pending: dict, language: str, permission_keys: list[str] | None = None,
 ) -> ChatReply:
+    # The confirmation may arrive after a role change or a shop switch —
+    # the same reasoning _resolve_archive_confirm states beside it, which
+    # was never applied here. Both arms of this resolver write a customer
+    # row, and it checked neither the key nor the channel (10 ก.ย. 2569).
+    if "customer.update" not in set(permission_keys) or not _oa_allows(ctx.oa, "customer.update"):
+        await _drop_pending_quietly(client, ctx)
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
     fields = pending.get("fields") or {}
     existing = fields.get("existing") or {}
     conflicts = fields.get("conflicts") or {}
@@ -19244,6 +19267,13 @@ async def _maybe_lead_cleanup_setting(
     off = _matches_any(text, LEAD_CLEANUP_OFF_PHRASES)
     view = _matches_any(text, LEAD_CLEANUP_VIEW_PHRASES)
     if not (set_match or off or view):
+        return None
+    # Holding the key is not the same as being allowed to use it here. On
+    # the technician OA, where _oa_allows says setting.manage does not
+    # exist, "ตั้งค่าลบ lead อัตโนมัติ 90 วัน" wrote the policy — and that
+    # policy archives customers in bulk, from a channel with no customer
+    # permission at all (10 ก.ย. 2569). Same shape as _appointment_net.
+    if not _oa_allows(ctx.oa, "setting.manage"):
         return None
     if "setting.manage" not in set(permission_keys):
         return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))

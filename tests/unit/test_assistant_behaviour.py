@@ -37,10 +37,20 @@ from chann_data.permissions import DEFAULT_ROLE_TEMPLATES  # noqa: E402
 from test_phase6_chat import LICENSE_ID, FakeDataClient, _ai, _ctx  # noqa: E402
 
 SALES = sorted(DEFAULT_ROLE_TEMPLATES["admin"])
+# Every way this system changes a record. The list matters: it was missing
+# "promote_", so a test asserting "nothing was written" passed while the
+# router promoted a customer on a question — the assertion could not see
+# it (10 ก.ย. 2569). Conversation state is excluded on purpose below.
 WRITES = (
     "create_", "update_", "delete_", "set_quote", "transition_", "archive_",
     "register_", "claim_", "add_", "remove_", "put_", "assign_", "reject_",
+    "promote_", "check_in_", "check_out_", "set_ticket_status",
+    "set_follow_up_status", "open_approval_steps", "publish_",
+    "open_chat_session", "close_chat_session", "mark_survey_sent",
+    "set_display_preferences", "set_identity_signature",
 )
+#: Not writes — where the conversation is, not what the shop knows.
+NOT_WRITES = ("set_last_", "set_pending", "clear_pending", "set_active_tenant", "mark_chat_read")
 CUSTOMER = {
     "id": "CUST-1", "customer_id": "C-2026-0001", "first_name": "สมชาย",
     "last_name": "ใจดี", "phone": "0812345678", "stage": "lead",
@@ -89,7 +99,7 @@ async def _say(client, message, *, intent=None, oa="sales", role="sales"):
     )
     written = [
         c[0] for c in client.recorded
-        if c[0].startswith(WRITES) and not c[0].startswith(("set_last_", "set_pending"))
+        if c[0].startswith(WRITES) and not c[0].startswith(NOT_WRITES)
     ]
     return (reply.text or ""), written
 
@@ -1148,3 +1158,91 @@ class TestThePromptSaysOnlyWhatIsTrueHere:
 
         out = _pending_fields_for_prompt({"something_new": [{"secret": "0812345678"}]})
         assert "0812345678" not in out, out
+
+
+class TestAQuestionAboutACustomerDoesNotChangeThem:
+    """The owner's case 2 and 3, on the entity nobody had mapped.
+
+    _AI_GUARDED bound customer.update to "customer_bulk" (the paste-a-list
+    wording) and customer.promote to "deal_create" (about opening deals).
+    intent_to_act therefore looked for words an edit sentence never
+    contains, found none, and returned ACT every time — so a how-to and a
+    status question both wrote (10 ก.ย. 2569). customer.promote has no
+    deterministic trigger anywhere, which made that guard the only reader
+    of the sentence's mood.
+    """
+
+    UPDATE = {"action": "update", "entity": "customer",
+              "fields": {"target_name": "สมชาย", "phone": "0899999999"}, "missing": []}
+    PROMOTE = {"action": "promote", "entity": "customer",
+               "fields": {"target_name": "สมชาย"}, "missing": []}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message,intent", [
+        ("แก้เบอร์ลูกค้ายังไงครับ", "UPDATE"),
+        ("ยืนยันลูกค้ายังไงครับ", "PROMOTE"),
+        ("สมชายยืนยันเป็นลูกค้าไปหรือยัง", "PROMOTE"),
+        ("ยังไม่ต้องยืนยันลูกค้า", "PROMOTE"),
+    ])
+    async def test_asking_about_it_writes_nothing(self, message, intent):
+        client = _shop(customers=[CUSTOMER])
+        text, written = await _say(client, message, intent=getattr(self, intent))
+        assert written == [], f"{message!r} wrote {written}"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message,intent,expect", [
+        ("แก้เบอร์สมชายเป็น 0899999999", "UPDATE", "update_customer"),
+        ("ยืนยันลูกค้า สมชาย ใจดี", "PROMOTE", "promote_customer"),
+        ("สมชาย ใจดี ตกลงซื้อแล้ว ยืนยันเป็นลูกค้าเลยครับ", "PROMOTE", "promote_customer"),
+    ])
+    async def test_but_telling_it_to_still_does(self, message, intent, expect):
+        client = _shop(customers=[CUSTOMER])
+        text, written = await _say(client, message, intent=getattr(self, intent))
+        assert expect in written, f"{text} / {written}"
+
+    def test_the_guard_reads_the_verbs_these_sentences_use(self):
+        from chann_app.services.intent_guard import ACTION_WORDS
+
+        assert "ยืนยัน" in ACTION_WORDS["record_write"], (
+            "customer.promote has no trigger table; this list is the only reader of its mood"
+        )
+        assert chat._AI_GUARDED[("customer", "update")] == "record_write"
+        assert chat._AI_GUARDED[("customer", "promote")] == "record_write"
+
+
+class TestASettingThatDeletesCustomersNeedsTheRightChannel:
+    """_maybe_lead_cleanup_setting checked the permission key and never
+    _oa_allows, so the technician OA — which holds no customer permission
+    at all — could switch on a policy that archives customers in bulk
+    (10 ก.ย. 2569). Same shape as _appointment_net."""
+
+    @pytest.mark.asyncio
+    async def test_the_technician_channel_cannot_set_it(self):
+        keys = sorted(set(DEFAULT_ROLE_TEMPLATES["technician"]) | {"setting.manage"})
+        client = FakeDataClient(role="technician", permission_keys=keys)
+        text, written = await _say(
+            client, "ตั้งค่าลบ lead อัตโนมัติ 90 วัน", oa="technician", role="technician",
+        )
+        assert not [w for w in written if w.startswith("put_")], written
+        assert not chat._oa_allows("technician", "setting.manage")
+
+    @pytest.mark.asyncio
+    async def test_and_the_sales_channel_still_can(self):
+        client = _shop()
+        text, written = await _say(client, "ตั้งค่าลบ lead อัตโนมัติ 90 วัน")
+        assert [w for w in written if w.startswith("put_")], f"{text} / {written}"
+
+
+class TestAConfirmationIsStillCheckedWhenItArrives:
+    """_resolve_archive_confirm re-checks the permission because "the
+    confirmation may arrive after a role change". The duplicate and merge
+    resolvers write a customer row on the same kind of answer and checked
+    neither the key nor the channel."""
+
+    def test_both_resolvers_check_the_key_and_the_channel(self):
+        source = (ROOT / "application" / "chann_app" / "services" / "chat.py").read_text(encoding="utf-8")
+        for fn in ("_resolve_customer_duplicate", "_resolve_customer_merge_confirm"):
+            body = source.split(f"async def {fn}(", 1)[1].split("\nasync def ", 1)[0]
+            assert "permission_keys" in body, fn
+            assert "_oa_allows" in body, fn
+            assert "customer.update" in body, fn
