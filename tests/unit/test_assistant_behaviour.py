@@ -1246,3 +1246,59 @@ class TestAConfirmationIsStillCheckedWhenItArrives:
             assert "permission_keys" in body, fn
             assert "_oa_allows" in body, fn
             assert "customer.update" in body, fn
+
+
+class TestTheInstrumentDoesNotMeasureItsOwnLeftovers:
+    """measure-road-share.py gates every deploy: it fails the build when a
+    keyword takes back a sentence the model had been reading. It was
+    building each utterance's fixture with dict(), and DEAL carries a
+    nested products list — so every utterance shared one list, and a case
+    that added or removed a line changed what every later case measured
+    against. The count came out 210 against a true 208, and the two
+    phantom sentences were both about deal line items:
+    "ราคา 1500 บาท" and the s-switch-line-abort scenario (11 ก.ย. 2569).
+
+    Two independent reviewers reached 208 on a pristine tree before this
+    was found here, which is the only reason it was found at all.
+    """
+
+    def test_a_case_cannot_change_the_fixture_the_next_case_sees(self):
+        import copy
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "_road_share", ROOT / "scripts" / "dev" / "measure-road-share.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        pristine = copy.deepcopy(mod.DEAL)
+        client = mod.FakeDataClient(
+            role="sales", permission_keys=list(mod.KEYS["sales"]),
+            customers=[copy.deepcopy(mod.CUSTOMER)], deals=[copy.deepcopy(mod.DEAL)],
+            quotes=[copy.deepcopy(mod.QUOTE)],
+        )
+        # What a line-item utterance does: mutate the deal's products.
+        client._deals[0]["products"].append({"id": "L9", "product_name": "x",
+                                             "quoted_unit_price": "1", "qty": 1})
+        client._deals[0]["stage"] = "won"
+        assert mod.DEAL == pristine, (
+            "the module-level fixture was mutated — the next utterance would "
+            "be measured against this case's leftovers"
+        )
+
+    def test_the_probe_measures_the_tree_it_lives_in(self):
+        """probe.py had a worktree path hardcoded as its default repo, so
+        running it from anywhere else measured THAT tree. A real-model run
+        reported a guard failing that the tree under test had already
+        fixed — the failure was in the instrument, and it was reported to
+        the owner as a product defect before anyone noticed
+        (11 ก.ย. 2569)."""
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "_probe", ROOT / "scripts" / "agent-test" / "probe.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        assert Path(mod.DEFAULT_REPO).resolve() == ROOT.resolve(), (
+            f"probe defaults to {mod.DEFAULT_REPO}, not the tree it ships in"
+        )

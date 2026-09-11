@@ -970,3 +970,657 @@ class TestPolitenessAtTheEndOfAnOrder:
         assert not intent_to_act(
             "เช่น ลบบันทึกของ C-2026-0001 หน่อย", action="note_write", triggers=triggers,
         ).acts
+
+
+# ---------------------------------------------------------------------------
+# 11 ก.ย. 2569 — the branches that could ACT and could not DECLINE.
+#
+# Every case below was measured on the real handlers before the guard was
+# added; the "before" behaviour is named in each docstring. The pairing rule
+# from the top of this file holds throughout: the declining form must write
+# nothing AND the plain command must still write.
+
+CUSTOMER_TICKET = {
+    "id": "t1", "ticket_number": "T-2026-0001", "status": "assigned",
+    "accept_status": "accepted", "assigned_to_ref": "member-1",
+    "customer_chann_uid": "CHN-S-000001", "customer_name": "สมชาย",
+    "service_address": "99/1", "issue_description": "แอร์ไม่เย็น",
+    "scheduled_date": "2026-09-11", "scheduled_time": "10:00",
+}
+
+
+async def _customer_say(message):
+    """One message on the Customer OA, against one open, scheduled job."""
+    client = FakeDataClient(role="customer", permission_keys=[])
+    client._tickets = [dict(CUSTOMER_TICKET)]
+    reply = await chat.handle_chat_message(
+        client, ctx=_ctx(primary_role="customer", oa="customer"),
+        message=message, language="th",
+    )
+    writes = [c[0] for c in client.recorded if not c[0].startswith(READS)]
+    return (reply.text or ""), writes, client
+
+
+class TestACustomerAmendingTheirOwnJob:
+    """_handle_customer_amend had three branches dispatching into it and no
+    guard in front of any of them.
+
+    Measured before (11 ก.ย. 2569), all on a real scheduled job:
+      เช่น พิมพ์ว่า เลื่อนนัด พรุ่งนี้ 10 โมง ใช่ไหม -> the visit MOVED to 12 ก.ย. 10:00
+      ลูกค้าบอกว่าขอเลื่อนนัดเป็นพรุ่งนี้            -> the visit MOVED
+      ถ้าฝนตกขอเลื่อนนัดเป็นพรุ่งนี้                 -> the visit MOVED
+      ขอเลื่อนนัดยังไงครับ                           -> armed the schedule prompt
+      ยังไม่ต้องเลื่อนนัดนะครับ                      -> armed the schedule prompt
+      ไม่ใช่ ผมหมายถึงว่าจะถามเฉยๆ                   -> issue_description := "ว่าจะถามเฉยๆ"
+    The last one is the sharpest: those words are what the technician reads
+    before setting off.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message", [
+        "เช่น พิมพ์ว่า เลื่อนนัด พรุ่งนี้ 10 โมง ใช่ไหม",
+        "ลูกค้าบอกว่าขอเลื่อนนัดเป็นพรุ่งนี้",
+        "ถ้าฝนตกขอเลื่อนนัดเป็นพรุ่งนี้",
+        "ขอเลื่อนนัดยังไงครับ",
+        "ยังไม่ต้องเลื่อนนัดนะครับ",
+        "ไม่ใช่ ผมหมายถึงว่าจะถามเฉยๆ",
+    ])
+    async def test_nothing_is_written_and_no_prompt_is_armed(self, message):
+        text, writes, client = await _customer_say(message)
+        assert writes == [], f"{message!r} wrote {writes}"
+        assert text.strip()
+        # The row itself, not only the absence of a call.
+        assert client._tickets[0]["scheduled_date"] == "2026-09-11"
+        assert client._tickets[0]["issue_description"] == "แอร์ไม่เย็น"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message,date,time", [
+        ("เลื่อนนัดเป็นวันศุกร์", "2026-09-18", "09:00:00"),
+        ("ขอเลื่อนนัด T-2026-0001 วันเสาร์ บ่าย 2", "2026-09-12", "14:00:00"),
+        ("วันศุกร์ไม่สะดวกค่ะ ขอเป็นวันเสาร์", "2026-09-12", "09:00:00"),
+        ("พรุ่งนี้ไม่สะดวก ขอเป็นวันเสาร์", "2026-09-12", "09:00:00"),
+    ])
+    async def test_a_real_reschedule_still_moves_the_visit(self, message, date, time):
+        text, writes, client = await _customer_say(message)
+        assert "update_ticket" in writes, f"{message!r} was refused: {text[:80]}"
+        moved = next(c for c in client.recorded if c[0] == "update_ticket")
+        assert moved[3]["scheduled_date"] == date
+        assert moved[3].get("scheduled_time") == time
+
+    @pytest.mark.asyncio
+    async def test_asking_for_a_reschedule_with_no_date_still_arms_the_prompt(self):
+        text, writes, _ = await _customer_say("ขอเลื่อนนัดหน่อยครับ")
+        assert writes == ["set_pending_intent"]
+        assert "สะดวกให้ช่างไปวันไหน" in text
+
+    @pytest.mark.asyncio
+    async def test_a_date_that_does_not_suit_still_arms_the_prompt(self):
+        text, writes, _ = await _customer_say("ช่างมาพรุ่งนี้ไม่ได้นะ")
+        assert writes == ["set_pending_intent"]
+        assert "สะดวกให้ช่างไปวันไหน" in text
+
+    @pytest.mark.asyncio
+    async def test_a_real_correction_still_restates_the_fault(self):
+        text, writes, client = await _customer_say("ไม่ใช่ๆ ผมหมายถึงแอร์ห้องนอน")
+        assert "update_ticket" in writes
+        assert client._tickets[0]["issue_description"] == "แอร์ห้องนอน"
+
+    @pytest.mark.asyncio
+    async def test_the_refusal_names_something_a_customer_can_type(self):
+        """The catch-all record_write wording teaches "สร้างลูกค้า สมชาย ใจดี
+        0812345678" — a sales command, on the one channel that cannot run
+        it. The correction branch has its own wording for that reason."""
+        text, _, _ = await _customer_say("ไม่ใช่ ผมหมายถึงว่าจะถามเฉยๆ")
+        assert "สร้างลูกค้า" not in text
+        assert "แอร์ห้องนอน" in text
+
+
+class TestTheCancelGuardDoesNotDefeatItself:
+    """The cancel arm holds a sentence and then deliberately clears
+    `explicit_cancel` so a sentence that ALSO reschedules can fall through.
+    One line later `_is_cancel_hint` re-read the same sentence on the bare
+    substring "ยกเลิก" and offered the cancellation anyway.
+
+    Measured before: "ไม่ได้จะยกเลิกงาน ขอแค่เลื่อนเป็นวันอาทิตย์" — the
+    customer saying out loud that they are NOT cancelling — was answered
+    with "ยกเลิกงาน T-2026-0001 … ใช่ไหมครับ" and a confirm button.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_sentence_that_refuses_the_cancel_reaches_the_reschedule(self):
+        text, writes, client = await _customer_say(
+            "ไม่ได้จะยกเลิกงาน ขอแค่เลื่อนเป็นวันอาทิตย์",
+        )
+        assert "ยกเลิกงาน" not in text, "offered to cancel what the sentence refused"
+        assert "update_ticket" in writes
+        assert client._tickets[0]["status"] != "cancelled"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message", [
+        "ไม่เอาแล้วค่ะ ซ่อมเองได้แล้ว",
+        "หายแล้วครับ ไม่ต้องมาแล้ว",
+        "ไม่ต้องส่งช่างมาแล้วครับ",
+    ])
+    async def test_a_real_cancellation_still_offers_the_confirmation(self, message):
+        text, writes, _ = await _customer_say(message)
+        assert writes == [], f"{message!r} cancelled without confirming"
+        assert "ยกเลิกงาน T-2026-0001" in text
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message", [
+        "ยกเลิกงานยังไงครับ",
+        "ไม่ต้องยกเลิกงาน T-2026-0001 นะครับ",
+    ])
+    async def test_the_ticket_cancel_guard_still_refuses(self, message):
+        text, writes, _ = await _customer_say(message)
+        assert writes == []
+        assert "ยังไม่ได้ยกเลิกงาน" in text or "วิธียกเลิกงาน" in text
+
+    @pytest.mark.asyncio
+    async def test_only_the_confirmation_cancels(self):
+        _, writes, client = await _customer_say("ยืนยันยกเลิกงาน T-2026-0001")
+        assert "set_ticket_status" in writes
+        assert client._tickets[0]["status"] == "cancelled"
+
+
+class TestDesigningATemplate:
+    """The only branch in the five 11 ก.ย. maps with no guard of any kind.
+    TEMPLATE_DESIGN_TRIGGERS is matched by bare substring and the handler
+    goes straight to routers_phase2.upload_document_template; only the
+    PUBLISH step was ever guarded, and nobody reaches publish without first
+    being shown a draft.
+
+    Measured before, with a stub returning valid template markup: each of
+    the four sentences below stored a real document_templates row, a
+    version, and spent a model call.
+    """
+
+    QUOTE_HTML = (
+        "<html><body><h1>{{company.name}}</h1><p>{{quote.quote_id}}</p>"
+        "<table>{{#line_items}}<tr><td>{{item.product_name}}</td></tr>{{/line_items}}</table>"
+        "<p>{{totals.grand_total}}</p></body></html>"
+    )
+
+    @pytest.fixture(autouse=True)
+    def _configured(self, monkeypatch):
+        """The design road needs a configured model and a signing key, or
+        it answers "unavailable" before it decides anything — which would
+        make the refusals pass for the wrong reason."""
+        from chann_app.config import settings
+
+        monkeypatch.setattr(settings, "openrouter_api_key", "test-key")
+        monkeypatch.setattr(settings, "openrouter_model", "test-model")
+        monkeypatch.setattr(settings, "public_base_url", "https://app.example")
+        monkeypatch.setattr(settings, "jwt_secret", "test-secret")
+
+    @classmethod
+    async def _say(cls, message):
+        import httpx
+
+        from chann_app.services.storage import base as storage_base
+
+        class _Store:
+            def __init__(self):
+                self._by_path = {}
+
+            async def put(self, *, key, content, content_type):
+                self._by_path[key] = content
+
+                class _Stored:
+                    path = key
+                return _Stored()
+
+            async def get(self, *, path):
+                return self._by_path[path]
+
+        real = storage_base.get_document_store
+        storage_base.get_document_store = lambda *a, **k: _Store()
+        calls = {"n": 0}
+
+        def _handle(request):
+            calls["n"] += 1
+            return httpx.Response(200, json={
+                "choices": [{"message": {"role": "assistant", "content": cls.QUOTE_HTML}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1}, "provider": "x",
+            })
+
+        client = FakeDataClient(role="sales", permission_keys=KEYS)
+        try:
+            reply = await chat.handle_chat_message(
+                client, ctx=_ctx(primary_role="sales", oa="sales"),
+                message=message, language="th",
+                ai_client=httpx.AsyncClient(transport=httpx.MockTransport(_handle)),
+            )
+        finally:
+            storage_base.get_document_store = real
+        made = [c[0] for c in client.recorded if "template" in c[0]]
+        return (reply.text or ""), made, calls["n"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message", [
+        "ไม่ต้องออกแบบใบเสนอราคา",
+        "อย่าเพิ่งออกแบบใบเสนอราคา",
+        "ออกแบบใบเสนอราคายังไง",
+        "ลูกค้าถามว่าออกแบบใบเสนอราคายังไง",
+        "ยังไม่ต้องออกแบบใบเสนอราคา",
+    ])
+    async def test_no_template_row_and_no_model_call(self, message):
+        text, made, model_calls = await self._say(message)
+        assert made == [], f"{message!r} stored {made}"
+        assert model_calls == 0, f"{message!r} spent a model call to be refused"
+        assert text.strip()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message", [
+        "ออกแบบใบเสนอราคา",
+        "ทำแม่แบบใบรายงานการซ่อม",
+    ])
+    async def test_a_real_design_request_still_drafts(self, message):
+        _, made, model_calls = await self._say(message)
+        assert "create_document_template" in made
+        assert model_calls == 1
+
+    @pytest.mark.asyncio
+    async def test_a_bare_design_request_still_asks_which_document(self):
+        text, made, model_calls = await self._say("ออกแบบ")
+        assert "create_document_template" not in made
+        assert model_calls == 0
+        assert "ใบเสนอราคา" in text
+
+
+class TestTheFourTeamWriteRegexes:
+    """Only the CREATE arm of _maybe_handle_teams was guarded. add, lead,
+    remove and delete are matched by HEAD-ANCHORED regexes, so a refusal
+    matched none of them and walked out of the handler entirely.
+
+    Measured before: "ไม่ต้องเพิ่ม สมศักดิ์ เข้าทีม แอร์", "อย่าเพิ่งตั้ง
+    สมศักดิ์ เป็นหัวหน้าทีม แอร์", "ยังไม่ต้องเอา สมศักดิ์ ออกจากทีม แอร์"
+    and "ไม่ต้องลบทีม แอร์" all reached the capability menu — the branch
+    could act and could not decline, the exact inversion of the standing
+    rule.
+    """
+
+    @staticmethod
+    async def _say(message):
+        client = FakeDataClient(role="sales", permission_keys=KEYS)
+        client._teams = [{"id": "team-1", "team_name": "แอร์"}]
+        client._members = [
+            {"id": "m1", "chann_uid": "CHN-A", "role": "technician", "status": "active"},
+        ]
+        client._profiles = {"CHN-A": {"first_name": "สมศักดิ์", "last_name": "ดีมาก"}}
+        client._team_members = []
+        reply = await chat.handle_chat_message(
+            client, ctx=_ctx(primary_role="sales", oa="sales"), message=message, language="th",
+        )
+        writes = [c[0] for c in client.recorded if not c[0].startswith(READS)]
+        return (reply.text or ""), writes
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message", [
+        "ไม่ต้องเพิ่ม สมศักดิ์ เข้าทีม แอร์",
+        "อย่าเพิ่งตั้ง สมศักดิ์ เป็นหัวหน้าทีม แอร์",
+        "ยังไม่ต้องเอา สมศักดิ์ ออกจากทีม แอร์",
+        "ไม่ต้องลบทีม แอร์",
+        "ลบทีมแอร์ยังไง",
+        "ลูกค้าบอกว่าเพิ่ม สมศักดิ์ เข้าทีม แอร์ แล้ว",
+    ])
+    async def test_the_team_is_not_changed(self, message):
+        text, writes = await self._say(message)
+        assert writes == [], f"{message!r} wrote {writes}"
+        assert "ยังไม่แน่ใจว่าต้องการอะไร" not in text, "fell through instead of refusing"
+        assert "ทีมช่าง" in text
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message,call", [
+        ("สร้างทีมช่าง แอร์2", "create_technician_team"),
+        ("ตั้งทีมช่าง ตู้เย็น", "create_technician_team"),
+        ("เพิ่ม สมศักดิ์ เข้าทีม แอร์", "add_team_member"),
+        ("ตั้ง สมศักดิ์ เป็นหัวหน้าทีม แอร์", "add_team_member"),
+        ("เอา สมศักดิ์ ออกจากทีม แอร์", "remove_team_member"),
+        ("ลบทีม แอร์", "delete_technician_team"),
+        ("ยุบทีม แอร์", "delete_technician_team"),
+    ])
+    async def test_the_command_still_changes_the_team(self, message, call):
+        text, writes = await self._say(message)
+        assert call in writes, f"{message!r} was refused: {text[:80]}"
+
+    @pytest.mark.asyncio
+    async def test_setting_a_lead_still_records_the_lead_flag(self):
+        client = FakeDataClient(role="sales", permission_keys=KEYS)
+        client._teams = [{"id": "team-1", "team_name": "แอร์"}]
+        client._members = [
+            {"id": "m1", "chann_uid": "CHN-A", "role": "technician", "status": "active"},
+        ]
+        client._profiles = {"CHN-A": {"first_name": "สมศักดิ์", "last_name": "ดีมาก"}}
+        client._team_members = []
+        await chat.handle_chat_message(
+            client, ctx=_ctx(primary_role="sales", oa="sales"),
+            message="ตั้ง สมศักดิ์ เป็นหัวหน้าทีม แอร์", language="th",
+        )
+        added = next(c for c in client.recorded if c[0] == "add_team_member")
+        assert added[4] is True
+
+    @pytest.mark.asyncio
+    async def test_a_job_assignment_to_a_team_is_still_the_assignment_guard(self):
+        """The team guard reads the distinctive halves of its own four
+        regexes, not "a team word plus any verb" — "ไม่ต้องมอบหมาย … ให้ทีม
+        แอร์" is an assignment refusal and must keep saying so."""
+        text, writes = await self._say("ไม่ต้องมอบหมาย T-2026-0001 ให้ทีมแอร์")
+        assert writes == []
+        assert "มอบหมายงาน" in text
+
+
+class TestTheTwoShopSettingWriters:
+    """_maybe_auto_accept_setting and _maybe_chat_policy_setting write a
+    shop-wide switch and had no guard, while _maybe_lead_cleanup_setting in
+    the same router block has had one since 10 ก.ย.
+
+    Measured before: "ไม่ต้องเปิดรับลูกค้าใหม่อัตโนมัติ" and "ไม่ต้องตั้งค่า
+    เวลาตอบแชท 15" both reached the capability menu — no refusal anywhere.
+    Both dispatch tests are head-anchored, which is why the guard reads the
+    wide vocabulary and the dispatch keeps the narrow one.
+    """
+
+    @staticmethod
+    async def _say(message):
+        client = FakeDataClient(role="sales", permission_keys=KEYS)
+        reply = await chat.handle_chat_message(
+            client, ctx=_ctx(primary_role="sales", oa="sales"), message=message, language="th",
+        )
+        writes = [c[0] for c in client.recorded if not c[0].startswith(READS)]
+        return (reply.text or ""), writes, client
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message", [
+        "ไม่ต้องเปิดรับลูกค้าใหม่อัตโนมัติ",
+        "ไม่ต้องตั้งค่าเวลาตอบแชท 15",
+        "เช่น ตั้งค่าเวลาตอบแชท 15",
+        "ลูกค้าถามว่าตั้งค่าเวลาตอบแชท 15 นาที",
+    ])
+    async def test_the_switch_is_not_flipped(self, message):
+        text, writes, _ = await self._say(message)
+        assert "put_license_setting" not in writes, f"{message!r} wrote {writes}"
+        assert "ยังไม่แน่ใจว่าต้องการอะไร" not in text, "fell through instead of refusing"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message,key,value", [
+        ("ตั้งค่ารับลูกค้าใหม่อัตโนมัติ เปิด", "auto_accept_new_customers", True),
+        ("รับลูกค้าใหม่อัตโนมัติ ปิด", "auto_accept_new_customers", False),
+        ("ตั้งค่าเวลาตอบแชท 15", "chat_sla_minutes", 15),
+        ("เวลาตอบแชท 15 นาที", "chat_sla_minutes", 15),
+        ("ตั้งค่าลบ lead อัตโนมัติ 90 วัน", "lead_auto_archive_days", 90),
+    ])
+    async def test_the_command_still_writes_the_setting(self, message, key, value):
+        text, _, client = await self._say(message)
+        put = [c for c in client.recorded if c[0] == "put_license_setting"]
+        assert put, f"{message!r} was refused: {text[:80]}"
+        assert (put[0][2], put[0][3]) == (key, value)
+
+    @pytest.mark.asyncio
+    async def test_the_handlers_own_how_to_reply_is_not_replaced(self):
+        """"ตั้งค่าเวลาตอบแชทยังไง" already wrote nothing and already said
+        something better than a generic refusal would. The guard is on the
+        arm that does NOT dispatch, so this reply is untouched."""
+        text, writes, _ = await self._say("ตั้งค่าเวลาตอบแชทยังไง")
+        assert "put_license_setting" not in writes
+        assert "1–1440" in text
+
+
+class TestTheExpectedCloseDate:
+    """The DEAL_CLOSE_DATE_TRIGGERS branch had no guard identity at all —
+    no ACTION_WORDS row, no _GUARD_ACTIONS wording, no call site.
+
+    A six-shape refusal battery over the thirteen write-capable branches in
+    the deals group found this the only offender: it wrote
+    expected_close_date for every one of the shapes below, against whatever
+    deal happened to be in _last_entity_ref when the sentence named none.
+
+    The second half is the read: the handler called parse_thai_date on the
+    RAW message, so the four digits of the record code standing in front of
+    a named month killed the parse.
+    """
+
+    DEAL = {
+        "id": "DEAL-1", "deal_id": "D-2026-0001", "stage": "proposed",
+        "contact_id": "CUST-1", "notes": None, "products": [],
+    }
+
+    @classmethod
+    async def _say(cls, message):
+        client = FakeDataClient(
+            role="sales", permission_keys=KEYS,
+            customers=[dict(c) for c in CUSTOMERS], deals=[dict(cls.DEAL)],
+        )
+        reply = await chat.handle_chat_message(
+            client, ctx=_ctx(primary_role="sales", oa="sales"), message=message, language="th",
+        )
+        updates = [c for c in client.recorded if c[0] == "update_deal"]
+        return (reply.text or ""), updates
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message", [
+        "ไม่ต้องตั้งวันปิดดีล D-2026-0001 เป็นวันศุกร์",
+        "อย่าเพิ่งตั้งวันปิดดีล D-2026-0001 เป็นวันศุกร์",
+        "ยังไม่ได้ตั้งวันปิดดีล D-2026-0001 นะ",
+        "ตั้งวันปิดดีล D-2026-0001 เป็นวันศุกร์ได้ไหมครับ",
+        "ลูกค้าบอกว่าคาดว่าจะปิดดีล D-2026-0001 วันศุกร์",
+        "ถ้าลูกค้าตอบค่อยตั้งวันปิดดีล D-2026-0001 เป็นวันศุกร์",
+        "เดี๋ยวค่อยตั้งวันปิดดีล D-2026-0001 เป็นวันศุกร์",
+    ])
+    async def test_the_forecast_is_not_written(self, message):
+        text, updates = await self._say(message)
+        assert updates == [], f"{message!r} wrote {updates}"
+        assert text.strip()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message,expected", [
+        ("ดีล D-2026-0001 คาดว่าจะปิดวันศุกร์", "2026-09-18"),
+        # The agent corpus's own control case, which wrote nothing before.
+        ("ดีล D-2026-0001 คาดว่าจะปิดวันที่ 30 กันยายน", "2026-09-30"),
+        ("D-2026-0001 คาดว่าจะปิดวันที่ 30 กันยายน", "2026-09-30"),
+        # Every month phrasing deal_fields.parse_close_date handles. These
+        # worked on the create road and were lost on the update road.
+        ("ดีล D-2026-0001 คาดว่าจะปิดสิ้นเดือนนี้", "2026-09-30"),
+        ("ดีล D-2026-0001 คาดว่าจะปิดปลายเดือนหน้า", "2026-10-31"),
+        ("ดีล D-2026-0001 คาดว่าจะปิดสิ้นปี", "2026-12-31"),
+    ])
+    async def test_the_command_writes_the_date_it_was_given(self, message, expected):
+        text, updates = await self._say(message)
+        assert updates, f"{message!r} was refused or unread: {text[:80]}"
+        assert updates[0][3]["expected_close_date"] == expected
+
+    @pytest.mark.asyncio
+    async def test_a_sentence_with_no_date_still_asks_for_one(self):
+        text, updates = await self._say("ดีล D-2026-0001 คาดว่าจะปิด")
+        assert updates == []
+        assert "ระบุวัน" in text
+
+    @pytest.mark.asyncio
+    async def test_the_create_road_is_untouched(self):
+        """deal_fields is shared with deal creation, which was passing —
+        so this asserts the ROW the create road writes, not the sentence
+        it prints."""
+        client = FakeDataClient(
+            role="sales", permission_keys=KEYS,
+            customers=[dict(c) for c in CUSTOMERS], deals=[dict(self.DEAL)],
+        )
+        await chat.handle_chat_message(
+            client, ctx=_ctx(primary_role="sales", oa="sales"),
+            message="สร้างดีลใหม่ให้ สมชาย 50,000 บาท ปิดสิ้นเดือน", language="th",
+        )
+        made = next(c for c in client.recorded if c[0] == "create_deal")
+        assert made[2]["amount"] == "50000.00"
+        assert made[2]["expected_close_date"] == "2026-09-30"
+
+
+class TestTheQuotePdfArm:
+    """The arm inside the TICKET block that matches "ใบเสนอราคา" plus one of
+    pdf/ไฟล์/เอกสาร and dispatches to _handle_quote_issue — which builds and
+    SENDS the document the customer receives. It had no guard, while the
+    report arm three lines below and the sales-side document branch both
+    do; the call site simply sat in nobody's territory."""
+
+    @staticmethod
+    async def _say(message):
+        client = FakeDataClient(
+            role="sales", permission_keys=KEYS,
+            customers=[dict(c) for c in CUSTOMERS], deals=[dict(d) for d in DEALS],
+            quotes=[{
+                "id": "QUOTE-1", "quote_id": "Q-2026-0001", "status": "sent",
+                "deal_id": "DEAL-1", "contact_id": "CUST-1", "items": [], "total": "1000.00",
+            }],
+        )
+        reply = await chat.handle_chat_message(
+            client, ctx=_ctx(primary_role="sales", oa="sales"), message=message, language="th",
+        )
+        return (reply.text or ""), [c[0] for c in client.recorded if "document" in c[0]]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message", [
+        "ไม่ต้องขอ pdf ใบเสนอราคา Q-2026-0001",
+        "ขอ pdf ใบเสนอราคา Q-2026-0001 ยังไง",
+        "ลูกค้าบอกว่าขอไฟล์ใบเสนอราคา Q-2026-0001 แล้ว",
+    ])
+    async def test_no_document_is_built(self, message):
+        text, made = await self._say(message)
+        assert made == [], f"{message!r} built {made}"
+        assert "ยังไม่ได้ออกเอกสาร" in text or "วิธีออกเอกสาร" in text
+
+    @pytest.mark.asyncio
+    async def test_the_plain_request_still_reaches_the_issuer(self):
+        """The company profile in the fake is incomplete, so the issuer
+        stops there — which is exactly the proof that it was reached."""
+        text, _ = await self._say("ขอ pdf ใบเสนอราคา Q-2026-0001")
+        assert "ข้อมูลบริษัทไม่ครบ" in text
+
+
+class TestTheLineItemGuardCanAnswerAStatusQuestion:
+    """Both line_item call sites called the SYNCHRONOUS _intent_guard_reply,
+    which has no DataClient and so could look nothing up.
+
+    Measured before: "เพิ่มพัดลมเข้าดีลแล้วรึยัง" was answered "ยังไม่ได้แก้
+    รายการสินค้า" with the fan sitting on the deal — a status question
+    answered with a falsehood, the same defect already fixed for
+    quote_create on 10 ก.ย.
+    """
+
+    DEAL = {
+        "id": "DEAL-1", "deal_id": "D-2026-0001", "stage": "proposed",
+        "contact_id": "CUST-1", "notes": None,
+        "products": [{"id": "L1", "product_name": "พัดลม", "qty": 1, "quoted_unit_price": "1200"}],
+    }
+
+    @classmethod
+    async def _say(cls, message, *, with_ref=True):
+        client = FakeDataClient(role="sales", permission_keys=KEYS, deals=[dict(cls.DEAL)])
+        if with_ref:
+            client._last_entity_ref = {
+                "entity_type": "deal", "entity_id": "DEAL-1",
+                "code": "D-2026-0001", "extra": None,
+            }
+        reply = await chat.handle_chat_message(
+            client, ctx=_ctx(primary_role="sales", oa="sales"), message=message, language="th",
+        )
+        writes = [c[0] for c in client.recorded if "deal_product" in c[0]]
+        return (reply.text or ""), writes
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message", [
+        "เพิ่มพัดลมเข้าดีลแล้วรึยัง",
+        "ลบสินค้าพัดลมใน D-2026-0001 ไปหรือยัง",
+    ])
+    async def test_it_answers_from_the_deal_instead_of_asserting(self, message):
+        text, writes = await self._say(message)
+        assert writes == []
+        assert "ยังไม่ได้แก้รายการสินค้า" not in text, "asserted a falsehood about a line that exists"
+        assert "พัดลม" in text and "D-2026-0001" in text
+
+    @pytest.mark.asyncio
+    async def test_it_still_says_not_yet_when_the_line_is_not_there(self):
+        text, writes = await self._say("เพิ่มทีวีเข้าดีลแล้วรึยัง")
+        assert writes == []
+        assert "ยังไม่ได้แก้รายการสินค้า" in text
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message", [
+        "ไม่ต้องลบสินค้าพัดลม",
+        "ไม่ต้องแก้ราคาพัดลมเหลือ 1400",
+        "ไม่ต้องเพิ่มสินค้า พัดลม 2 ตัว ราคา 1500",
+    ])
+    async def test_a_refusal_is_still_a_refusal_after_the_call_site_went_async(self, message):
+        """The failure mode of turning a sync call async inside the router
+        chain is an un-awaited coroutine returning a truthy object and
+        swallowing the branch — so this asserts the WORDS, not just that
+        something came back."""
+        text, writes = await self._say(message)
+        assert writes == []
+        assert "ยังไม่ได้แก้รายการสินค้า" in text
+
+    @pytest.mark.asyncio
+    async def test_the_command_still_edits_the_line(self):
+        text, writes = await self._say("ลดราคาพัดลมเหลือ 1400 ใน D-2026-0001")
+        assert "update_deal_product" in writes, text[:80]
+
+
+class TestTheGuardDeclinesWithoutAskingASecondQuestion:
+    """`intent_to_act` has three answers and only two are refusals.
+
+    ASK is the deliberately balanced case — the verb, the record, and a
+    bare "ได้ไหม" with no polite head. On a road whose alternative is a
+    silent write, asking beats guessing and stays. On the customer's own
+    reschedule road it is wrong: the corpus records "เลื่อนเป็นวันศุกร์ได้
+    ไหม" (tests/unit/chat_corpus.py, intent c.resched, phrasing "question")
+    as a reschedule that must be carried out, and wiring the guard in
+    turned it into a confirm prompt — caught by
+    test_chat_corpus.py::test_no_regression_against_baseline, which is
+    exactly what that baseline is for.
+
+    `confirm=False` gives up the power to ask and keeps the power to
+    decline. Both halves are pinned here.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_reschedule_phrased_as_a_question_still_moves_the_visit(self):
+        text, writes, client = await _customer_say("เลื่อนเป็นวันศุกร์ได้ไหม")
+        assert "ใช่ไหมครับ? ถ้าใช่" not in text, "turned a reschedule into a confirm prompt"
+        assert "update_ticket" in writes, text[:80]
+        moved = next(c for c in client.recorded if c[0] == "update_ticket")
+        assert moved[3]["scheduled_date"] == "2026-09-18"
+
+    @pytest.mark.asyncio
+    async def test_the_same_shape_still_reaches_the_handler_when_the_time_is_unreadable(self):
+        """"ขอเปลี่ยนเวลาเป็นบ่ายสองได้มั้ย" is the same question shape.
+        The amend handler cannot read "บ่ายสอง" as a time and says so — its
+        own message, which is the proof the guard let the sentence through
+        rather than answering it."""
+        text, writes, _ = await _customer_say("ขอเปลี่ยนเวลาเป็นบ่ายสองได้มั้ย")
+        assert "ใช่ไหมครับ? ถ้าใช่" not in text
+        assert "ไม่เข้าใจวันที่" in text
+        assert writes == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message", [
+        "ยังไม่ต้องเลื่อนนัดนะครับ",
+        "ขอเลื่อนนัดยังไงครับ",
+        "ลูกค้าบอกว่าขอเลื่อนนัดเป็นพรุ่งนี้",
+        "ถ้าฝนตกขอเลื่อนนัดเป็นพรุ่งนี้",
+        "เช่น พิมพ์ว่า เลื่อนนัด พรุ่งนี้ 10 โมง ใช่ไหม",
+    ])
+    async def test_every_other_refusal_still_stops_here(self, message):
+        _, writes, client = await _customer_say(message)
+        assert writes == [], f"{message!r} wrote {writes}"
+        assert client._tickets[0]["scheduled_date"] == "2026-09-11"
+
+    def test_confirm_true_is_still_the_default_everywhere_else(self):
+        """Only the two customer-amend call sites pass confirm=False; the
+        balanced ASK stays the answer on every road that writes silently."""
+        from chann_app.services.intent_guard import intent_to_act
+
+        assert intent_to_act(
+            "ยกเลิกนัด C-2026-0001 ได้ไหม", action="appointment_cancel",
+            triggers=chat.REMINDER_CANCEL_TRIGGERS,
+        ).asks
+        asked = chat._intent_guard_reply(
+            "ยกเลิกนัด C-2026-0001 ได้ไหม", action="appointment_cancel", language="th",
+        )
+        assert asked is not None and "ใช่ไหมครับ" in asked.text

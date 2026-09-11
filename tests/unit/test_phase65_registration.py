@@ -451,3 +451,71 @@ class TestSerialFirstOnboarding:
             client, message="ZZZZ99999", ctx=_ctx(), audience="customer",
         )
         assert "ชื่อร้าน" in reply or "ยินดีต้อนรับ" in reply
+
+
+class TestACompanyCannotBeAskedIntoExistence:
+    """CREATE_TRIGGERS -> create_license was unguarded, and
+    parse_create_company takes everything after the trigger as the name.
+
+    Measured on the real handler, 11 ก.ย. 2569: "เปิดบริษัทใหม่ยังไง"
+    created a license named "ยังไง" and "เปิดบริษัทยังไงครับ" one named
+    "ยังไงครับ" — the identical how-to bug that was already fixed for
+    team-create on 10 ก.ย., here in the heaviest row in the product: a
+    license, a company code and an owner, made out of a question.
+
+    Paired, both ways. The welcome menu prints "เปิดบริษัทใหม่" verbatim as
+    a button and this is the first thing a new tenant ever types, so a
+    guard that refuses too much locks somebody out of onboarding.
+    """
+
+    @pytest.mark.parametrize("message", [
+        "เปิดบริษัทใหม่ยังไง",
+        "เปิดบริษัทยังไงครับ",
+        "เปิดบริษัทใหม่ต้องทำอย่างไร",
+        "สร้างบริษัทใหม่ยังไงครับ",
+        "ลูกค้าถามว่าเปิดบริษัทใหม่ยังไง",
+    ])
+    async def test_no_license_is_created(self, message):
+        client = FakeRegClient()
+        reply = await handle_registration(client, message=message, ctx=_ctx())
+        text = reply if isinstance(reply, str) else getattr(reply, "text", "")
+        assert "create_license" not in client.calls, f"{message!r} made a company"
+        assert (text or "").strip(), "a refusal with no words is worse than the write"
+
+    @pytest.mark.parametrize("message", [
+        "เปิดบริษัทใหม่ ร้านสมชาย",
+        "สร้างบริษัทใหม่ ร้านสมชาย",
+        "ลงทะเบียนบริษัท ร้านสมชาย",
+        "เปิดบริษัท ร้านสมชาย",
+        "create new company Somchai Air",
+    ])
+    async def test_a_real_registration_still_creates_the_license(self, message):
+        client = FakeRegClient()
+        reply = await handle_registration(client, message=message, ctx=_ctx())
+        assert client.calls == ["create_license"], f"{message!r} was refused: {reply[:60]}"
+        assert "ABCD2345" in reply
+
+    async def test_the_menu_button_still_asks_for_the_name(self):
+        """The welcome menu's own quick reply is the bare trigger."""
+        client = FakeRegClient()
+        reply = await handle_registration(client, message="เปิดบริษัทใหม่", ctx=_ctx())
+        assert client.calls == []
+        assert "ชื่อบริษัท" in reply
+
+    async def test_a_pasted_invite_code_still_redeems(self):
+        """The guard sits on the create arm only; the code roads are
+        untouched."""
+        client = FakeRegClient()
+        await handle_registration(client, message="ABCDEFGHJK", ctx=_ctx())
+        assert client.calls == ["redeem_invite"]
+
+    async def test_the_consent_gate_still_holds_the_create(self):
+        """PDPA first: a stranger who has not consented gets the consent
+        question and no company, guard or no guard."""
+        client = FakeRegClient()
+        client.consented = False
+        reply = await handle_registration(
+            client, message="เปิดบริษัทใหม่ ร้านสมชาย", ctx=_ctx(),
+        )
+        assert "create_license" not in client.calls
+        assert (reply or "").strip()

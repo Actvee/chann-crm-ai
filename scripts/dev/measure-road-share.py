@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import copy
 import json
 import os
 import sys
@@ -55,6 +56,11 @@ KEYS = {
 }
 CUSTOMER = {"id": "CUST-1", "customer_id": "C-2026-0001", "first_name": "สมชาย",
             "last_name": "ใจดี", "phone": "0812345678", "stage": "lead"}
+# deepcopy, not dict(): DEAL carries a nested products list, so a shallow
+# copy handed every utterance the SAME list. One case adding or removing a
+# line changed the fixture every later case measured against, and the
+# number came out 2 too high (210 against a true 208) — the instrument
+# that gates every deploy, measuring its own leftovers (11 ก.ย. 2569).
 DEAL = {"id": "DEAL-1", "deal_id": "D-2026-0001", "stage": "proposed", "contact_id": "CUST-1",
         "notes": None, "products": [{"id": "L1", "product_name": "พัดลม",
                                      "quoted_unit_price": "1200", "qty": 1}]}
@@ -95,8 +101,9 @@ def _cases() -> list[tuple[str, str, list[str]]]:
 
 async def _play(oa: str, messages: list[str]) -> int:
     client = FakeDataClient(role=oa, permission_keys=list(KEYS[oa]),
-                            customers=[dict(CUSTOMER)], deals=[dict(DEAL)], quotes=[dict(QUOTE)])
-    client._tickets = [dict(TICKET)]
+                            customers=[copy.deepcopy(CUSTOMER)], deals=[copy.deepcopy(DEAL)],
+                            quotes=[copy.deepcopy(QUOTE)])
+    client._tickets = [copy.deepcopy(TICKET)]
     calls = 0
     for message in messages:
         transport = _Counting(_ai(SUGGEST))

@@ -86,6 +86,15 @@ ACTION_WORDS: dict[str, tuple[str, ...]] = {
         "เลื่อนนัด", "เลื่อนเตือน", "เลื่อน", "เปลี่ยนเวลา", "เปลี่ยนวัน", "เปลี่ยนวันนัด",
         "แก้เวลา", "แก้วันนัด", "reschedule", "นัด", "เตือน",
     ),
+    # The same move, seen from the Customer OA, where the record is the
+    # customer's own SERVICE TICKET and not a followup. Separate from
+    # `appointment_move` only so the refusal can teach a T- code: telling a
+    # customer to type "เลื่อนนัด C-2026-0001 เป็น 16:00" names a code shape
+    # they will never hold (11 ก.ย. 2569).
+    "visit_move": (
+        "เลื่อนนัด", "ขอเลื่อน", "เลื่อน", "เปลี่ยนเวลา", "เปลี่ยนวัน", "เปลี่ยนวันนัด",
+        "ย้ายนัด", "ขอย้ายนัด", "เลื่อนเวลา", "reschedule", "move", "นัด",
+    ),
     "appointment_cancel": (
         "ยกเลิกนัด", "ยกเลิกเตือน", "ยกเลิกการเตือน", "ยกเลิกการนัด", "ลบนัด", "ลบเตือน",
         "เอานัดออก", "ยกเลิก", "cancel", "นัด", "เตือน",
@@ -207,6 +216,27 @@ ACTION_WORDS: dict[str, tuple[str, ...]] = {
         "เผยแพร่", "ใช้เลย", "ใช้แบบนี้", "ใช้อันนี้", "เอาแบบนี้", "ตกลงใช้", "ยืนยันใช้",
         "publish", "use it",
     ),
+    # DESIGNING a template, which is the step BEFORE publishing and was the
+    # only write branch in the five 11 ก.ย. maps with no guard of any kind:
+    # "ไม่ต้องออกแบบใบเสนอราคา", "อย่าเพิ่งออกแบบใบเสนอราคา",
+    # "ออกแบบใบเสนอราคายังไง" and "ลูกค้าถามว่าออกแบบใบเสนอราคายังไง" each
+    # stored a real document_templates row and burned a model call. Only
+    # the publish step above was ever guarded, and publishing is the one
+    # step a person cannot reach without first being shown a draft.
+    "template_design": (
+        "ออกแบบ", "แม่แบบ", "ทำแม่แบบ", "เทมเพลต", "ทำเทมเพลต", "แบบฟอร์ม", "ฟอร์ม",
+        "template", "design",
+    ),
+    # The expected closing date on a deal. It had no guard identity at all
+    # — no ACTION_WORDS row, no _GUARD_ACTIONS wording, no call site — so
+    # a six-shape refusal battery over the deals group found it the one
+    # branch of thirteen that wrote expected_close_date for "ไม่ต้อง…",
+    # "อย่าเพิ่ง…", "ยังไม่ได้…", "…ได้ไหมครับ", "ลูกค้าบอกว่า…", "ถ้า…"
+    # and "เดี๋ยวค่อย…" alike (11 ก.ย. 2569).
+    "deal_close_date": (
+        "คาดว่าจะปิด", "วันปิดดีล", "ตั้งวันปิด", "จะปิดวันที่", "วันปิด", "ปิดดีล",
+        "expected close", "close date",
+    ),
     # The default for any mutating action with no wording of its own. It
     # holds the verbs a person uses to ask for a change of ANY kind, so
     # the words a refusal negates can be found even when the entity is one
@@ -228,6 +258,16 @@ ACTION_WORDS: dict[str, tuple[str, ...]] = {
         "close", "issue", "send", "assign", "approve", "reject",
     ),
     "ticket_cancel": ("ยกเลิกงาน", "ยกเลิกนัด", "ยกเลิก", "cancel job", "cancel"),
+    # A customer restating the fault on their own open job: "ไม่ใช่ๆ ผม
+    # หมายถึงแอร์ห้องนอน". The words ARE the correction heads, because the
+    # generic `record_write` vocabulary finds none of its own verbs in a
+    # sentence shaped like this — so `intent_to_act` had nothing to bind and
+    # returned ACT, and "ไม่ใช่ ผมหมายถึงว่าจะถามเฉยๆ" was written onto the
+    # job as its issue_description (11 ก.ย. 2569).
+    "issue_correction": (
+        "ไม่ใช่", "ผิดแล้ว", "ผิด", "ขอแก้", "แก้หน่อย", "หมายถึง", "ที่จริง", "แก้เป็น",
+        "i mean", "actually", "wrong",
+    ),
     "chat_open": ("คุยกับร้าน", "แชทกับร้าน", "คุยกับเจ้าหน้าที่", "คุยกับพนักงาน", "คุยกับแอดมิน", "talk to the shop", "live chat"),
     "job_situation": (
         "สั่งอะไหล่", "เลื่อนนัด", "ขอเลื่อน", "ลูกค้าไม่อยู่", "เข้าไม่ได้", "ของไม่พอ",
@@ -374,7 +414,13 @@ _HOWTO_RE = re.compile(
     # begins "why" (10 ก.ย. 2569, from a technician's status report being
     # read as a how-to question).
     r"ทำไม(?![่็])|ทำอย่างไร|ทำยังไง|อย่างไร|อย่างอะไร|ยังไง|วิธี|ต้องทำอะไร|ต้องทำยังไง|จะเกิดอะไรขึ้น|"
-    r"แค่ถาม|ขอถาม|ขอทราบ|สอบถาม|อยากทราบ|อยากรู้|เผื่อถาม|howdoi|howto|howcani|whathappens"
+    # "ถามเฉยๆ" — the compact form drops the ๆ, so "ถามเฉย" is what is
+    # left. A customer correcting themselves with "ไม่ใช่ ผมหมายถึงว่าจะ
+    # ถามเฉยๆ" had the words "ว่าจะถามเฉยๆ" written onto a live job as its
+    # issue_description — the text the technician reads before setting off
+    # (11 ก.ย. 2569). It is the same species as "แค่ถาม" one line up, and
+    # it appears in no command anybody gives.
+    r"แค่ถาม|ถามเฉย|ขอถาม|ขอทราบ|สอบถาม|อยากทราบ|อยากรู้|เผื่อถาม|howdoi|howto|howcani|whathappens"
 )
 
 # A plain question, when nothing more specific fits.

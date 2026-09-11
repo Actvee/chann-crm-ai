@@ -79,3 +79,46 @@ Declare it first, and do not move it afterwards.
 Hold the model fixed while testing the architecture, and hold the
 architecture fixed while testing the model. Changing both at once measures
 neither.
+
+## Asking the model itself — `corpus-model-check.json`
+
+A stub answering "I have no reading for this" makes the pipeline look
+broken when it is not, and makes a narrowing look safe when it is not.
+This file holds the sentences whose ANSWER depends on how the deployed
+model reads them, and it is meant to be run against the real model:
+
+```bash
+OPENROUTER_API_KEY=…  OPENROUTER_MODEL=google/gemini-3.1-flash-lite \
+  python3 scripts/agent-test/probe.py scripts/agent-test/corpus/corpus-model-check.json \
+  --real-model --out /tmp/model-check.jsonl --summary
+```
+
+About $0.0005 a sentence — the whole file is roughly one satang. The key
+comes from the environment and is never printed; nothing here reads it
+from the repo.
+
+**Run it before narrowing any dispatch.** `docs/MODEL_FIRST.md` step 1
+asks whether the message even reached the model: the probe answers that
+directly (`ai_calls` per turn), and it records the rows written as well as
+the reply, which is the measurement the owner asked for from the start.
+
+What the first run found (11 ก.ย. 2569, 20 real calls, 0 forbidden
+writes) — each one invisible to a stubbed run:
+
+* `ลบลูกค้ายังไง` and `ลบลูกค้าสมชายไปหรือยัง` never reach the model at
+  all; the `ลบลูกค้า` trigger claims them and answers
+  `ไม่พบลูกค้าชื่อ "ยังไง" ในบริษัทนี้` — the question word searched as a
+  person's name.
+* `ตั้งทีมขายชื่อ ทีมกรุงเทพ` really does write `create_technician_team`.
+  The sales-group request lands in the technician-team table.
+* `เพิ่มสมศักดิ์เข้าทีมขาย ภาคเหนือ` and `ลบทีมขาย` never reach the model
+  either — a regex claims them first, which is why the unguarded team
+  delete is reachable from a sentence about a sales team.
+* `ใครลบลูกค้ารายนี้` → `ไม่พบลูกค้ารหัส ลูกค้ารายนี้`;
+  `ใครเปลี่ยนข้อมูลบริษัทล่าสุด` → the company profile;
+  `ลูกค้าที่ยังไม่ได้ติดต่อมีใครบ้าง` → the appointment list. Three
+  "who did this" / filtered-list shapes with no handler behind them.
+
+Add a case here whenever a judgement call turns on what the model would
+say. Keep `expect.no_mutation` honest: it is what makes a forbidden write
+visible.

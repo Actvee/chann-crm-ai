@@ -47,12 +47,19 @@ import json
 import os
 import random
 import sys
+import pathlib
 import time
 import traceback
 from decimal import Decimal
 
 SCHEMA = "chann-probe/1"
-DEFAULT_REPO = "/home/thanawinmax2/stage-fix/audit"
+# The tree this file lives in, not a path someone's machine happened to
+# have. It was hardcoded to one worktree, so running the probe from
+# anywhere else silently measured THAT tree — a real-model run reported a
+# guard failing that had already been fixed in the tree under test, and
+# the failure was in the instrument (11 ก.ย. 2569). Override with --repo
+# or PROBE_REPO when you deliberately want a different checkout.
+DEFAULT_REPO = str(pathlib.Path(__file__).resolve().parents[2])
 
 
 # --------------------------------------------------------------------------

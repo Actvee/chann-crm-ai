@@ -1,0 +1,617 @@
+[
+ {
+  "id": "g-forbid-1",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "แก้เบอร์ลูกค้ายังไงครับ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "question",
+   "newly-mapped"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "how-to about editing a customer — must not edit anyone"
+ },
+ {
+  "id": "g-forbid-2",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ยืนยันลูกค้ายังไงครับ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "question",
+   "newly-mapped"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "how-to about promoting — must not promote anyone"
+ },
+ {
+  "id": "g-forbid-3",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "สมชายยืนยันเป็นลูกค้าไปหรือยัง"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "question",
+   "newly-mapped"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "status question — must not promote"
+ },
+ {
+  "id": "g-forbid-4",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ยังไม่ต้องยืนยันลูกค้าสมชาย"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "question",
+   "newly-mapped"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "refusal — must not promote"
+ },
+ {
+  "id": "g-forbid-5",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ลบลูกค้ายังไง"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "question",
+   "newly-mapped"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "how-to about deleting — must not archive anyone"
+ },
+ {
+  "id": "g-forbid-6",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ลบลูกค้าสมชายไปหรือยัง"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "question",
+   "newly-mapped"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "status question about deletion"
+ },
+ {
+  "id": "g-order-1",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "แก้เบอร์สมชายเป็น 0899999999"
+  ],
+  "expect": {},
+  "shape": [
+   "order",
+   "newly-mapped"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "a real edit order"
+ },
+ {
+  "id": "g-order-2",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "สมชาย ใจดี ย้ายไปอยู่ 99/9 ถนนสุขุมวิท แล้วนะครับ"
+  ],
+  "expect": {},
+  "shape": [
+   "order",
+   "newly-mapped"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "an address change stated as news"
+ },
+ {
+  "id": "g-order-3",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ยืนยันลูกค้า สมชาย ใจดี"
+  ],
+  "expect": {},
+  "shape": [
+   "order",
+   "newly-mapped"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "a real promote order"
+ },
+ {
+  "id": "g-order-4",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "สมชาย ใจดี ตกลงซื้อแล้ว ยืนยันเป็นลูกค้าเลยครับ"
+  ],
+  "expect": {},
+  "shape": [
+   "order",
+   "newly-mapped"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "promote, colloquial"
+ },
+ {
+  "id": "g-order-5",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "เอาสมชาย ใจดี ออกจาก lead"
+  ],
+  "expect": {},
+  "shape": [
+   "order",
+   "newly-mapped"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "a real archive request — should OFFER, then confirm"
+ },
+ {
+  "id": "g-judge-1",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ตั้งทีมขายชื่อ ทีมกรุงเทพ มีสมศักดิ์กับสมหญิง"
+  ],
+  "expect": {},
+  "shape": [
+   "judgement",
+   "newly-mapped"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "does the model say scope=sales, or a different entity?"
+ },
+ {
+  "id": "g-judge-2",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "เพิ่มสมศักดิ์เข้าทีมขาย ภาคเหนือ"
+  ],
+  "expect": {},
+  "shape": [
+   "judgement",
+   "newly-mapped"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "membership, not an invite — does the model agree?"
+ },
+ {
+  "id": "g-judge-3",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ลบทีมขาย"
+  ],
+  "expect": {},
+  "shape": [
+   "judgement",
+   "newly-mapped"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "destructive on a word today — how does the model read it?"
+ },
+ {
+  "id": "g-judge-4",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ขอดูประวัติการใช้งานของร้าน"
+  ],
+  "expect": {},
+  "shape": [
+   "judgement",
+   "newly-mapped"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "audit trail — does the model name audit_log?"
+ },
+ {
+  "id": "g-judge-5",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ใครลบลูกค้ารายนี้"
+  ],
+  "expect": {},
+  "shape": [
+   "judgement",
+   "newly-mapped"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "who-did-this — audit or something else?"
+ },
+ {
+  "id": "g-judge-6",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ใครเปลี่ยนข้อมูลบริษัทล่าสุด"
+  ],
+  "expect": {},
+  "shape": [
+   "judgement",
+   "newly-mapped"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "same shape, different subject"
+ },
+ {
+  "id": "g-judge-7",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ขอดูรายการสิทธิ์ของแต่ละบทบาท"
+  ],
+  "expect": {},
+  "shape": [
+   "judgement",
+   "newly-mapped"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "role listing — reachable at all?"
+ },
+ {
+  "id": "g-judge-8",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ลูกค้าที่ยังไม่ได้ติดต่อมีใครบ้าง"
+  ],
+  "expect": {},
+  "shape": [
+   "judgement",
+   "newly-mapped"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "a filtered list the read shape cannot express"
+ },
+ {
+  "id": "g-judge-9",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ลูกค้าที่เป็น lead มีกี่คน"
+  ],
+  "expect": {},
+  "shape": [
+   "judgement",
+   "newly-mapped"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "a count, not a list"
+ },
+ {
+  "id": "g-judge-10",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ลูกค้า สมชาย ใจดี ไม่เอาแล้ว เอาออกจากรายชื่อให้หน่อย"
+  ],
+  "expect": {},
+  "shape": [
+   "judgement",
+   "newly-mapped"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "a genuine order worded as a negation"
+ },
+ {
+  "id": "g-owner-1",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ไม่ต้องยกเลิกนัด"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "owner-case"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "case 1 — must not cancel"
+ },
+ {
+  "id": "g-owner-2",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "สร้างใบเสนอราคาไปหรือยัง"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "owner-case"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "case 2 — must check before answering"
+ },
+ {
+  "id": "g-owner-3",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ยังไม่เอาใบราคาครับ"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "owner-case"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "case 3 — must not create"
+ },
+ {
+  "id": "g-owner-4",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ขอบคุณมากครับ ช่างทำงานดีมาก"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "owner-case"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "praise must not open a job"
+ },
+ {
+  "id": "g-owner-5",
+  "oa": "sales",
+  "role": "sales",
+  "permissions": "sales",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "เพิ่มลูกค้า สมชาย ใจดี 0812345678"
+  ],
+  "expect": {},
+  "shape": [
+   "owner-case"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "case 5 — a clear order must still work"
+ },
+ {
+  "id": "g-oa-tech-setting",
+  "oa": "technician",
+  "role": "technician",
+  "permissions": "technician",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ตั้งค่าลบ lead อัตโนมัติ 90 วัน"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "oa-boundary"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "a channel with no customer permission must not set a policy that archives customers"
+ },
+ {
+  "id": "g-oa-cust-praise",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "ประทับใจมากครับ บริการดีมาก"
+  ],
+  "expect": {
+   "no_mutation": true
+  },
+  "shape": [
+   "oa-boundary"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "praise on the customer channel must not open a repair job"
+ },
+ {
+  "id": "g-oa-cust-fault",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "แอร์ไม่เย็นเลยครับ"
+  ],
+  "expect": {},
+  "shape": [
+   "oa-boundary"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "a real fault must still open one"
+ },
+ {
+  "id": "g-oa-cust-vague",
+  "oa": "customer",
+  "role": "customer",
+  "permissions": "customer",
+  "language": "th",
+  "seed": 1,
+  "messages": [
+   "มันไม่ทำงานเลยค่ะ"
+  ],
+  "expect": {},
+  "shape": [
+   "oa-boundary"
+  ],
+  "must_write": [],
+  "may_write": [],
+  "must_ask": null,
+  "why": "a vague fault the model reads as small talk — the markers must catch it"
+ }
+]

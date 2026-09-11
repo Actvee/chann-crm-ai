@@ -408,6 +408,23 @@ async def _handle_registration(
     if name is not None:
         if not name:
             return _t(ASK_COMPANY_NAME, language)
+        # The heaviest row in the product — a license, a company code, an
+        # owner — and the only trigger table in it that could act and could
+        # not decline. `parse_create_company` takes everything after the
+        # trigger as the name, so "เปิดบริษัทใหม่ยังไง" created a license
+        # called "ยังไง" and "เปิดบริษัทยังไงครับ" one called "ยังไงครับ"
+        # (11 ก.ย. 2569) — the identical how-to bug fixed for team-create
+        # on 10 ก.ย. The guard is decline-only and the trigger table it
+        # reads is the same one that matched, so the menu's own
+        # "เปิดบริษัทใหม่" and every named form still create.
+        from .chat import _intent_guard_reply  # lazy: chat imports this module
+
+        held = _intent_guard_reply(
+            message, action="record_write", language=language,
+            triggers=CREATE_TRIGGERS,
+        )
+        if held is not None:
+            return held
         try:
             created = await client.create_license(
                 company_name=name,

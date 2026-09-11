@@ -689,6 +689,27 @@ _TEAM_ADD_RE = re.compile(
 _TEAM_LEAD_RE = re.compile(r"^(?:ตั้ง|ให้|แต่งตั้ง)\s*(?P<who>.+?)\s*เป็นหัวหน้าทีม\s*(?P<team>.+?)\s*$")
 _TEAM_REMOVE_RE = re.compile(r"^(?:เอา|ลบ|นำ|ถอด)\s*(?P<who>.+?)\s*ออกจากทีม\s*(?P<team>.+?)\s*$")
 _TEAM_DELETE_RE = re.compile(r"^(?:ลบทีมช่าง|ลบทีม|ยุบทีม)\s*(?P<team>.+?)\s*$")
+# The words the four write regexes above match on, flat, for the intent
+# guard. `_guard_triggers` cannot supply these — the team branch matches on
+# regexes, not a trigger table — and without them the guard has nothing to
+# bind a refusal to. All four regexes are HEAD-anchored, so a declining
+# sentence never reaches them at all: "ไม่ต้องเพิ่ม สมศักดิ์ เข้าทีม แอร์",
+# "อย่าเพิ่งตั้ง สมศักดิ์ เป็นหัวหน้าทีม แอร์", "ยังไม่ต้องเอา สมศักดิ์
+# ออกจากทีม แอร์" and "ไม่ต้องลบทีม แอร์" each got the capability menu
+# instead of a refusal (11 ก.ย. 2569). Guard on the wide vocabulary,
+# dispatch on the narrow regex — the standing rule, both halves.
+TEAM_WRITE_TRIGGERS = (
+    "เพิ่ม", "ใส่", "ให้", "ตั้ง", "แต่งตั้ง", "เอา", "ลบ", "นำ", "ถอด",
+    "ลบทีมช่าง", "ลบทีม", "ยุบทีม", "เข้าทีม", "ออกจากทีม", "หัวหน้าทีม",
+)
+# How far the guard above reaches. Deliberately the DISTINCTIVE halves of
+# the four regexes rather than "a team word plus any verb": "ไม่ต้อง
+# มอบหมาย T-2026-0002 ให้ทีมแอร์" is a job-assignment refusal and belongs
+# to the assignment guard, not to this one.
+_TEAM_WRITE_SHAPES = (
+    "เข้าทีม", "ออกจากทีม", "หัวหน้าทีม", "ลบทีม", "ยุบทีม", "ในทีม", "ไปทีม",
+    "to team", "from team", "team lead", "delete team",
+)
 TEAM_TEXT = {
     "list_head": {"th": "ทีมช่าง ({n} ทีม):", "en": "Technician teams ({n}):"},
     "list_empty": {
@@ -821,6 +842,21 @@ async def _maybe_handle_teams(
             text=_t(TEAM_TEXT["created"], language).format(team=team.get("team_name") or name),
             quick_replies=[("รายชื่อช่าง", "รายชื่อช่าง"), ("ทีมช่าง", "ทีมช่าง")],
         )
+
+    # The three member regexes and the delete regex below are head-anchored,
+    # so a refusal ("ไม่ต้องเพิ่ม …") matches none of them and the sentence
+    # walks past the whole block. The guard therefore reads the WIDE team
+    # vocabulary here, before the narrow regexes, exactly as the create arm
+    # above reads TEAM_CREATE_TRIGGERS — a refusal reaches a refusal, and
+    # what dispatches is unchanged.
+    compact_team = _normalise(text)
+    if any(s in lowered or s.replace(" ", "") in compact_team for s in _TEAM_WRITE_SHAPES):
+        held_team = _intent_guard_reply(
+            message, action="team_manage", language=language,
+            triggers=TEAM_WRITE_TRIGGERS,
+        )
+        if held_team is not None:
+            return held_team
 
     for kind, regex in (("lead", _TEAM_LEAD_RE), ("remove", _TEAM_REMOVE_RE), ("add", _TEAM_ADD_RE)):
         m = regex.match(text)
@@ -4404,10 +4440,33 @@ async def _maybe_auto_accept_setting(
     text = (message or "").strip()
     lowered = text.lower()
     matched = next((p for p in AUTO_ACCEPT_PHRASES if lowered.startswith(p)), None)
-    if matched is None and not _matches_phrase(text, AUTO_ACCEPT_VIEW):
+    # The dispatch test is head-anchored, so "ไม่ต้องเปิดรับลูกค้าใหม่
+    # อัตโนมัติ" matched nothing and fell through to the capability menu —
+    # this switch could act and could not decline, while its sibling
+    # _maybe_lead_cleanup_setting has been guarded since 10 ก.ย. `names_it`
+    # is the WIDE read used for the refusal only; `matched` stays the narrow
+    # head test that dispatches, so nothing this handler used to do has
+    # moved (11 ก.ย. 2569).
+    names_it = any(p in lowered for p in AUTO_ACCEPT_PHRASES)
+    if matched is None and not names_it and not _matches_phrase(text, AUTO_ACCEPT_VIEW):
         return None
     if "setting.manage" not in set(permission_keys):
         return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    if matched is None and names_it and not _matches_phrase(text, AUTO_ACCEPT_VIEW):
+        # Names the setting but does not open with it, so the dispatch below
+        # will not claim it and the sentence used to walk out of here to the
+        # capability menu. The guard reads it; a refusal is returned and
+        # anything else falls through untouched. Only this arm is guarded:
+        # the dispatching arm writes only when the residue is exactly
+        # เปิด/ปิด/on/off, which is already a narrow command test, and its
+        # own replies are better than a generic refusal would be.
+        held_auto = _intent_guard_reply(
+            message, action="shop_setting", language=language,
+            triggers=tuple(AUTO_ACCEPT_PHRASES),
+        )
+        if held_auto is not None:
+            return held_auto
+        return None
     rest = text[len(matched):].strip().lower() if matched else ""
     if rest in ("เปิด", "on", "true", "yes"):
         await client.put_license_setting(str(license_id), SETTING_KEY, True, actor_id=ctx.chann_uid)
@@ -4440,10 +4499,29 @@ async def _maybe_chat_policy_setting(
         if matched:
             key = setting
             break
-    if key is None and not _matches_phrase(text, CHAT_POLICY_VIEW):
+    # Same shape as _maybe_auto_accept_setting above: the head test cannot
+    # see "ไม่ต้องตั้งค่าเวลาตอบแชท 15", so this writer could set the
+    # shop's whole answer-time SLA and could not refuse. The wide read is
+    # for the refusal only; `key` still decides what is written.
+    all_policy_phrases = tuple(CHAT_POLICY_SLA_PHRASES) + tuple(CHAT_POLICY_TIMEOUT_PHRASES)
+    names_it = any(p in lowered for p in all_policy_phrases)
+    if key is None and not names_it and not _matches_phrase(text, CHAT_POLICY_VIEW):
         return None
     if "setting.manage" not in set(permission_keys):
         return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    if key is None and names_it and not _matches_phrase(text, CHAT_POLICY_VIEW):
+        # Same arm, same reasoning as _maybe_auto_accept_setting: the head
+        # test cannot see "ไม่ต้องตั้งค่าเวลาตอบแชท 15", so that sentence
+        # left here with no refusal at all. The dispatching arm below writes
+        # only when the residue parses as 1–1440 minutes and already answers
+        # a how-to with its own, better message.
+        held_policy = _intent_guard_reply(
+            message, action="shop_setting", language=language,
+            triggers=all_policy_phrases,
+        )
+        if held_policy is not None:
+            return held_policy
+        return None
     if key is not None:
         rest = text[len(matched):].strip().rstrip("นาที").strip() if matched else ""
         try:
@@ -5151,6 +5229,13 @@ async def _handle_customer_report(
     explicit_cancel = _matches_phrase(message, CUSTOMER_CANCEL_PHRASES) or any(
         w in text.lower() for w in CUSTOMER_CANCEL_TRIGGERS
     )
+    # The ticket_cancel guard held this sentence a moment ago. Remembered,
+    # because the hint arm below reads the SAME sentence again on a bare
+    # "ยกเลิก" substring: "ไม่ได้จะยกเลิกงาน ขอแค่เลื่อนเป็นวันอาทิตย์" — a
+    # customer saying out loud they are NOT cancelling — was correctly held
+    # by the guard and then immediately offered a cancellation anyway
+    # (11 ก.ย. 2569). One read, not two.
+    cancel_held = False
     if explicit_cancel:
         # Only the explicit-trigger half. The _is_cancel_hint clause below
         # exists BECAUSE a customer often cancels by negating something
@@ -5172,14 +5257,33 @@ async def _handle_customer_report(
             if not (_is_reschedule_request(text) or _says_unavailable(text)):
                 return held_cancel
             explicit_cancel = False
+            cancel_held = True
     if explicit_cancel or (
-        _is_cancel_hint(text) and not _looks_like_a_question(text) and not forced_fault
+        _is_cancel_hint(text) and not cancel_held
+        and not _looks_like_a_question(text) and not forced_fault
     ):
         return await _handle_customer_amend(
             client, ctx=ctx, license_id=license_id, message=text,
             language=language, cancel=True,
         )
+    # The three amend branches below move a real appointment, arm a prompt
+    # that turns the NEXT line typed into the new appointment, or rewrite
+    # the fault the technician reads before setting off — and none of them
+    # had a guard in front of it. Measured on the real handler (11 ก.ย.
+    # 2569): "เช่น พิมพ์ว่า เลื่อนนัด พรุ่งนี้ 10 โมง ใช่ไหม" — somebody
+    # quoting an example — moved the visit and notified both the shop and
+    # the assigned technician; "ลูกค้าบอกว่าขอเลื่อนนัดเป็นพรุ่งนี้" and
+    # "ถ้าฝนตกขอเลื่อนนัดเป็นพรุ่งนี้" moved it too; "ขอเลื่อนนัดยังไงครับ"
+    # and "ยังไม่ต้องเลื่อนนัดนะครับ" each armed the schedule prompt; and
+    # "ไม่ใช่ ผมหมายถึงว่าจะถามเฉยๆ" overwrote a live job's
+    # issue_description with the words "ว่าจะถามเฉยๆ".
     if _is_reschedule_request(text) and not forced_fault:
+        held_move = _intent_guard_reply(
+            message, action="visit_move", language=language,
+            triggers=CUSTOMER_RESCHEDULE_TRIGGERS, confirm=False,
+        )
+        if held_move is not None:
+            return held_move
         return await _handle_customer_amend(
             client, ctx=ctx, license_id=license_id, message=text,
             language=language, cancel=False,
@@ -5188,6 +5292,12 @@ async def _handle_customer_report(
         # "ช่างมาพรุ่งนี้ไม่ได้นะ": the date named is the one that does NOT
         # suit — ask for one that does; "พรุ่งนี้ไม่สะดวก ขอเป็นวันเสาร์"
         # names it, so that one is booked (review, 6 Sep 2026).
+        held_move = _intent_guard_reply(
+            message, action="visit_move", language=language,
+            triggers=CUSTOMER_RESCHEDULE_TRIGGERS + _UNAVAILABLE_HINTS, confirm=False,
+        )
+        if held_move is not None:
+            return held_move
         return await _handle_customer_amend(
             client, ctx=ctx, license_id=license_id, message=text,
             language=language, cancel=False, date_text=_new_date_part(text),
@@ -5195,6 +5305,19 @@ async def _handle_customer_report(
     correction = _issue_correction(text)
     if correction and not forced_fault:
         # "ไม่ใช่ๆ ผมหมายถึงแอร์ห้องนอน": the fault on the open job, restated.
+        #
+        # The correction heads are handed in as the triggers on purpose. The
+        # catch-all `record_write` vocabulary finds none of its own words in
+        # "ไม่ใช่ ผมหมายถึงว่าจะถามเฉยๆ", so `intent_to_act` had nothing to
+        # bind and returned ACT — a guard that looks present and does
+        # nothing. With the handler's own words the shape checks run, and
+        # the "ถามเฉยๆ" in it is read as the question it is.
+        held_fix = _intent_guard_reply(
+            message, action="issue_correction", language=language,
+            triggers=_CORRECTION_HEADS,
+        )
+        if held_fix is not None:
+            return held_fix
         return await _handle_customer_amend(
             client, ctx=ctx, license_id=license_id, message=text,
             language=language, cancel=False, new_issue=correction,
@@ -5555,6 +5678,17 @@ _CORRECTION_RE = re.compile(
     r"^(?:ไม่ใช่ๆ?|ไม่ๆ|ผิด|ผิดแล้ว|ไม่ใช่นะ|ขอแก้|แก้หน่อย|no,?|wrong,?)\s*(?:ครับ|ค่ะ|คะ)?\s*(?:ฉัน|ผม|ดิฉัน)?\s*"
     r"(?:หมายถึง|ที่จริง|จริงๆ|จริงๆแล้ว|แก้เป็น|เป็น|i mean|actually|it's|its)\s*(.+)$",
     re.IGNORECASE,
+)
+
+
+# The same heads, flat, for the intent guard. A guard needs the words that
+# ARE the command in order to find what a refusal or a question is aimed at;
+# _CORRECTION_RE is the dispatcher's own reading and this is the guard's
+# view of it, so the two can never disagree about what the action is called.
+_CORRECTION_HEADS = (
+    "ไม่ใช่ๆ", "ไม่ใช่", "ไม่ๆ", "ผิดแล้ว", "ผิด", "ขอแก้", "แก้หน่อย",
+    "หมายถึง", "ที่จริง", "จริงๆ", "แก้เป็น",
+    "no", "wrong", "i mean", "actually",
 )
 
 
@@ -9235,6 +9369,14 @@ _GUARD_ACTIONS: dict[str, dict[str, str]] = {
         "th_eg": "เลื่อนนัด {code} เป็น 16:00", "en_eg": "move the appointment for {code} to 16:00",
         "code": "C-2026-0001",
     },
+    # The customer's own visit. Same verb as appointment_move, different
+    # record: a customer holds a T- job, never a C- followup, and a refusal
+    # that teaches the wrong code shape teaches nothing.
+    "visit_move": {
+        "th": "เลื่อนนัด", "en": "move the visit",
+        "th_eg": "เลื่อนนัด {code} วันศุกร์", "en_eg": "reschedule {code} to Friday",
+        "code": "T-2026-0001",
+    },
     "appointment_cancel": {
         "th": "ยกเลิกนัด", "en": "cancel the appointment",
         "th_eg": "ยกเลิกนัด {code}", "en_eg": "cancel the appointment for {code}",
@@ -9348,6 +9490,25 @@ _GUARD_ACTIONS: dict[str, dict[str, str]] = {
     "template_publish": {
         "th": "เผยแพร่แบบฟอร์มนี้", "en": "publish this template",
         "th_eg": "ใช้เลย", "en_eg": "use it",
+        "code": "",
+    },
+    "template_design": {
+        "th": "ออกแบบแบบฟอร์ม", "en": "design a template",
+        "th_eg": "ออกแบบใบเสนอราคา", "en_eg": "design a quotation template",
+        "code": "",
+    },
+    "deal_close_date": {
+        "th": "ตั้งวันปิดคาดการณ์", "en": "set the expected close date",
+        "th_eg": "ดีล {code} คาดว่าจะปิดวันศุกร์", "en_eg": "deal {code} expected close Friday",
+        "code": "D-2026-0001",
+    },
+    # The customer's own words about their own job, so the example has to be
+    # something a customer can actually type — `record_write`'s example is
+    # "สร้างลูกค้า สมชาย ใจดี 0812345678", a sales command on a channel that
+    # cannot run it.
+    "issue_correction": {
+        "th": "แก้อาการของงาน", "en": "change the reported fault",
+        "th_eg": "ไม่ใช่ ผมหมายถึงแอร์ห้องนอน", "en_eg": "no, I mean the bedroom air-con",
         "code": "",
     },
     "record_write": {
@@ -9502,6 +9663,8 @@ def _guard_triggers(action: str) -> tuple[str, ...]:
         "job_claim": TICKET_CLAIM_TRIGGERS,
         "job_reject": TICKET_REJECT_TRIGGERS,
         "job_assign": TICKET_ASSIGN_TRIGGERS,
+        "template_design": TEMPLATE_DESIGN_TRIGGERS,
+        "deal_close_date": DEAL_CLOSE_DATE_TRIGGERS,
         # deal_stage, team_manage, warranty_register and company_update
         # match on their own tables inline rather than a named constant;
         # ACTION_WORDS carries their vocabulary.
@@ -9532,8 +9695,23 @@ STATUS_DONE_TEXT = {
     "deal_create": {
         "th": "ดีล {code} เปิดไว้แล้ว", "en": "deal {code} is already open",
     },
+    # Added 11 ก.ย. 2569, once the two line_item call sites became async.
+    # Before that, "เพิ่มพัดลมเข้าดีลแล้วรึยัง" — a question about what is
+    # on the deal — was answered "ยังไม่ได้แก้รายการสินค้า" with the fan
+    # sitting on the deal: a status question answered with a falsehood,
+    # the same defect already fixed for quote_create.
+    #
+    # This one is a plain statement of what the deal holds, and it does NOT
+    # go through INTENT_STATUS_DONE below, because the question can be about
+    # a removal as easily as an addition: "ลบสินค้าพัดลมไปหรือยัง" answered
+    # "Yes — the fan is on the deal" would be a second falsehood dressed as
+    # the fix for the first. The fact answers both.
+    "line_item": {
+        "th": "ตอนนี้ {item} อยู่ในดีล {code} ครับ — {qty} × {price}",
+        "en": "Right now {item} is on deal {code} — {qty} × {price}.",
+    },
 }
-# Only these two, deliberately. A status question can only be answered
+# Only these three, deliberately. A status question can only be answered
 # where the guard is reached through _guarded_in_context, which has the
 # client; the appointment and warranty branches call the synchronous
 # _intent_guard_reply and cannot look anything up. Listing them here would
@@ -9555,7 +9733,7 @@ _GUARD_CODE_RE = re.compile(r"(?<![A-Za-z0-9])((?:SR|[CDQT])-\d{4}-\d{4})(?![0-9
 def _intent_guard_reply(
     message: str, *, action: str, language: str,
     triggers: tuple[str, ...] | None = None, code: str | None = None,
-    proposed: bool = False,
+    proposed: bool = False, confirm: bool = True,
 ) -> ChatReply | None:
     """The answer to give INSTEAD of writing, or None to go ahead.
 
@@ -9572,6 +9750,21 @@ def _intent_guard_reply(
         proposed=proposed,
     )
     if verdict.acts:
+        return None
+    if verdict.asks and not confirm:
+        # `intent_to_act` has three answers and only two of them are
+        # refusals. ASK is the deliberately balanced case — the verb, the
+        # record, and a bare "ได้ไหม" with no polite head — where asking
+        # beats guessing, which is right on a road whose alternative is a
+        # silent write and wrong on one that is already a conversation with
+        # its own next question. The corpus records "เลื่อนเป็นวันศุกร์ได้
+        # ไหม" (tests/unit/chat_corpus.py, intent c.resched, phrasing
+        # "question") as a reschedule the customer road must carry out, and
+        # turning it into a confirm prompt was measured as a regression the
+        # moment the guard was wired in (11 ก.ย. 2569). `confirm=False`
+        # keeps the power to DECLINE — every negation, question, report,
+        # example, conditional and deferral still stops here — and gives up
+        # only the power to ask a second question.
         return None
     spec = _GUARD_ACTIONS[action]
     found = _GUARD_CODE_RE.search(_normalise_message(message) or "")
@@ -9592,6 +9785,14 @@ def _intent_guard_reply(
     return ChatReply(text=_t(table, language).format(what=what, verb=verb, example=example))
 
 
+def _line_price_text(value) -> str:
+    """A stored unit price as the chat prints it, or "-" when it is absent."""
+    try:
+        return f"{Decimal(str(value)):,.2f}"
+    except Exception:
+        return "-"
+
+
 async def _status_answer(
     client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
     action: str, language: str,
@@ -9608,7 +9809,41 @@ async def _status_answer(
     if found:
         code = found.group(1).upper()
     try:
-        if action == "quote_create":
+        if action == "line_item":
+            # "เพิ่มพัดลมเข้าดีลแล้วรึยัง" — is the fan on the deal? The
+            # deal named, or the one just discussed; then the line whose
+            # product name the sentence actually mentions. Matching on the
+            # STORED name rather than on a name parsed out of the question
+            # is what makes the answer true: nothing is guessed, and a
+            # product nobody asked about cannot be reported back.
+            deals = await client.list_deals(str(license_id))
+            deal_code = code if code.startswith("D-") else ""
+            if not deal_code:
+                ref = await _last_entity_ref(client, ctx)
+                if ref and str(ref.get("entity_type")) == "deal":
+                    deal_code = str(await _code_for_entity(
+                        client, str(license_id), "deal", str(ref.get("entity_id") or ""),
+                    ) or "")
+            deal = next(
+                (d for d in deals if str(d.get("deal_id")) == deal_code), None,
+            ) if deal_code else None
+            asked = _normalise(message)
+            hit = next(
+                (
+                    p for p in ((deal or {}).get("products") or [])
+                    if str(p.get("product_name") or "").strip()
+                    and _normalise(str(p.get("product_name"))) in asked
+                ),
+                None,
+            )
+            if not hit:
+                return None
+            return ChatReply(text=_t(STATUS_DONE_TEXT["line_item"], language).format(
+                code=deal_code, item=str(hit.get("product_name") or ""),
+                qty=str(hit.get("qty") or hit.get("quantity") or ""),
+                price=_line_price_text(hit.get("quoted_unit_price")),
+            ))
+        elif action == "quote_create":
             quotes = await client.list_quotes(str(license_id))
             # A quotation for the deal named, or for the deal just discussed.
             deal_code = code if code.startswith("D-") else ""
@@ -12887,6 +13122,17 @@ def _deal_value(deal: dict) -> Decimal:
 # Setting the two fields a deal has that nothing in chat could touch.
 DEAL_CLOSE_DATE_TRIGGERS = ("คาดว่าจะปิด", "วันปิดดีล", "ตั้งวันปิด", "จะปิดวันที่", "expected close")
 
+# A record code is four digits, a dash, four digits, and a date reader that
+# meets it before a named month reads the year out of it and gives up.
+_RECORD_CODE_ANYWHERE_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:SR|WR|[CDQTW])-\d{4}-\d{4}(?![0-9])", re.IGNORECASE,
+)
+
+
+def _without_record_codes(message: str) -> str:
+    """The sentence with its record codes blanked out, for a date reader."""
+    return _RECORD_CODE_ANYWHERE_RE.sub(" ", message or "")
+
 DEAL_CLOSE_DATE_SET = {
     "th": "ตั้งวันปิดคาดการณ์ของ {code} เป็น {date} แล้ว",
     "en": "{code} now expected to close {date}.",
@@ -12903,14 +13149,26 @@ async def _handle_deal_close_date(
 ) -> ChatReply:
     """"ดีล D-2026-0001 คาดว่าจะปิดวันศุกร์" — the forecast, from chat.
 
-    Uses the deal named, or the one just discussed. The date parser is
-    the same one reminders use, so every phrasing that works for "เตือน"
-    works here too.
+    Uses the deal named, or the one just discussed. The date is read by
+    `deal_fields.parse_close_date`, the same reader the CREATE road uses,
+    with the record code taken out of the text first.
+
+    Both halves were measured on 11 ก.ย. 2569 and both were wrong. This
+    function used to call `parse_thai_date` on the RAW message, so
+    "คาดว่าจะปิดวันที่ 30 กันยายน" read as 2026-09-30 while "D-2026-0001
+    คาดว่าจะปิดวันที่ 30 กันยายน" read as None — the four digits of the
+    record code standing in front of a named month killed the parse, which
+    is why the agent corpus's own control case s-close-date-ctrl wrote
+    nothing. And every month phrasing `parse_close_date` handles
+    (สิ้นเดือนนี้, ปลายเดือนหน้า, สิ้นปี) worked on the create road and was
+    lost here. Stripping the code is what fixes the first; the shared
+    reader is what fixes the second — neither alone does both.
     """
     if "deal.update" not in set(permission_keys):
         return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
 
-    from .thai_datetime import format_thai_date, parse_thai_date
+    from .thai_datetime import format_thai_date
+    from . import deal_fields
 
     license_id = str(license_id)
     match = re.search(r"(?<![A-Za-z0-9])(D-\d{4}-\d{4})(?![0-9])", message or "", re.I)
@@ -12922,7 +13180,7 @@ async def _handle_deal_close_date(
     if not code:
         return ChatReply(text=_t(QUOTE_NEEDS_DEAL, language))
 
-    when = parse_thai_date(message, local_today())
+    when = deal_fields.parse_close_date(_without_record_codes(message), local_today())
     if when is None:
         return ChatReply(text=_t(DEAL_CLOSE_DATE_NEEDS, language))
 
@@ -16834,6 +17092,21 @@ async def _route_chat_message(
     # the words "ใบเสนอราคา" and "รายงาน": this asks for a FORM, and a
     # sentence that says so must not be read as issuing a document.
     if ctx.oa == "sales" and _is_template_design_request(message):
+        # Only PUBLISHING was guarded, and publishing is the step nobody
+        # reaches without first being shown a draft. Drafting itself writes
+        # a document_templates row and a version and spends a model call,
+        # and TEMPLATE_DESIGN_TRIGGERS is a bare-substring table — so
+        # "ไม่ต้องออกแบบใบเสนอราคา", "อย่าเพิ่งออกแบบใบเสนอราคา",
+        # "ออกแบบใบเสนอราคายังไง" and "ลูกค้าถามว่าออกแบบใบเสนอราคายังไง"
+        # each stored a real template (11 ก.ย. 2569). The prompt has no
+        # template entity, so the model cannot take this over: the guard is
+        # the whole answer here, and it reads the same wide table the
+        # dispatcher just matched.
+        held_design = _intent_guard_reply(
+            message, action="template_design", language=language,
+        )
+        if held_design is not None:
+            return held_design
         return await _handle_template_design(
             client, ctx=ctx, license_id=license_id, message=message,
             permission_keys=permission_keys, language=language, ai_client=ai_client,
@@ -17013,6 +17286,17 @@ async def _route_chat_message(
         ) and not any(t in (message or "").lower() for t in QUOTE_CREATE_TRIGGERS):
             # "ขอ pdf ใบเสนอราคา" is the quote's document, not a report's
             # (review, 6 Sep 2026).
+            #
+            # This arm BUILDS AND SENDS the document the customer receives
+            # and had no guard, while the report arm immediately below and
+            # the sales-side document branch both have one — the call site
+            # simply sat in nobody's territory (11 ก.ย. 2569). Same action,
+            # same wording, same decline-only behaviour.
+            held_quote_doc = _intent_guard_reply(
+                message, action="document_issue", language=language,
+            )
+            if held_quote_doc is not None:
+                return held_quote_doc
             quote_code = QUOTE_CODE_RE.search(message or "")
             return await _handle_quote_issue(
                 client, license_id=license_id, code=quote_code.group(1).upper() if quote_code else "",
@@ -17694,7 +17978,10 @@ async def _route_chat_message(
             # "ไม่ต้องเพิ่มพัดลมอีก 3 ตัว" and "เพิ่มพัดลมอีก 3 ตัวได้เท่าไหร่"
             # parse as perfectly good line commands; neither asks for one
             # (review v3, quantity-014/015/016).
-            guarded = _intent_guard_reply(message, action="line_item", language=language)
+            guarded = await _guarded_in_context(
+                client, ctx=ctx, license_id=license_id, message=message,
+                action="line_item", language=language,
+            )
             if guarded is not None:
                 return guarded
             handled = await _handle_line_item_command(
@@ -17721,7 +18008,10 @@ async def _route_chat_message(
             t in message.lower()
             for t in (LINE_REMOVE_TRIGGERS + LINE_EDIT_TRIGGERS + DEAL_PRODUCT_ADD_TRIGGERS)
         ):
-            held_line = _intent_guard_reply(message, action="line_item", language=language)
+            held_line = await _guarded_in_context(
+                client, ctx=ctx, license_id=license_id, message=message,
+                action="line_item", language=language,
+            )
             if held_line is not None:
                 return held_line
 
@@ -17910,6 +18200,18 @@ async def _route_chat_message(
                 language=language, open_only=True,
             )
         if any(t in message.lower() for t in DEAL_CLOSE_DATE_TRIGGERS) and not _looks_like_deal_creation(message):
+            # The one branch of the thirteen write-capable branches in the
+            # deals group that had no guard identity at all — no action
+            # name, no vocabulary, no call site. It wrote expected_close_date
+            # for "ไม่ต้อง…", "อย่าเพิ่ง…", "…ได้ไหมครับ", "ลูกค้าบอกว่า…",
+            # "ถ้า…" and "เดี๋ยวค่อย…" alike, against whatever deal was in
+            # _last_entity_ref when the sentence named none (11 ก.ย. 2569).
+            held_close = await _guarded_in_context(
+                client, ctx=ctx, license_id=license_id, message=message,
+                action="deal_close_date", language=language,
+            )
+            if held_close is not None:
+                return held_close
             return await _handle_deal_close_date(
                 client, ctx=ctx, license_id=license_id, message=message,
                 permission_keys=permission_keys, language=language,

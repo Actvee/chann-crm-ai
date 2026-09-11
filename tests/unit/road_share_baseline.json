@@ -6,15 +6,15 @@
    "rule": 332
   },
   "sales": {
-   "read": 147,
-   "rule": 390
+   "read": 145,
+   "rule": 392
   },
   "technician": {
    "read": 51,
    "rule": 233
   }
  },
- "reached_model": 210,
+ "reached_model": 208,
  "roads": {
   "customer\t15/9 10.30": false,
   "customer\t55555 โอเค": false,
@@ -566,7 +566,7 @@
   "sales\ts-switch-answers-slot": true,
   "sales\ts-switch-completes": true,
   "sales\ts-switch-confirm-bare-yes": true,
-  "sales\ts-switch-line-abort": true,
+  "sales\ts-switch-line-abort": false,
   "sales\ts-switch-pause": true,
   "sales\ts-switch-quote-then-stop": true,
   "sales\ts-switch-then-confirm": true,
@@ -737,7 +737,7 @@
   "sales\tรหัสร้านหน่อย": false,
   "sales\tรหัสร้านเราคืออะไร": false,
   "sales\tรับทราบครับ": false,
-  "sales\tราคา 1500 บาท": true,
+  "sales\tราคา 1500 บาท": false,
   "sales\tราคาแอร์เท่าไหร่": false,
   "sales\tรายการประกันครับ": false,
   "sales\tรายการรออนุมัติครับ": false,
