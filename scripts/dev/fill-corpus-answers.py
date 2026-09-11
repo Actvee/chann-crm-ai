@@ -66,16 +66,26 @@ class _Counting(httpx.AsyncBaseTransport):
         return await self.inner.handle_async_request(request)
 
 
-async def _reaches_model(case: dict) -> bool:
-    client = FakeDataClient(role="sales", permission_keys=sorted(DEFAULT_ROLE_TEMPLATES["admin"]),
+TICKET = {"id": "TICKET-1", "ticket_number": "T-2026-0001", "status": "assigned", "accept_status": "accepted",
+          "assigned_to": "CHN-T-000001", "customer_name": "สมชาย", "customer_phone": "0812345678",
+          "service_address": "99/1", "issue_description": "แอร์ไม่เย็น",
+          "scheduled_date": "2026-09-12", "scheduled_time": "10:00"}
+ROLE_FOR = {"sales": "sales", "technician": "technician"}
+
+
+async def _reaches_model(case: dict, oa: str) -> bool:
+    role = ROLE_FOR[oa]
+    client = FakeDataClient(role=role, permission_keys=sorted(DEFAULT_ROLE_TEMPLATES["admin" if oa == "sales" else "technician"]),
                             customers=[copy.deepcopy(CUSTOMER)], deals=[copy.deepcopy(DEAL)],
                             quotes=[copy.deepcopy(QUOTE)])
+    if oa == "technician":
+        client._tickets = [copy.deepcopy(TICKET)]
     calls = 0
     for message in list(case.get("pre") or []) + [case["text"]]:
         transport = _Counting(_ai(SUGGEST))
         try:
             await C.handle_chat_message(
-                client, ctx=_ctx(primary_role="sales", oa="sales"), message=message,
+                client, ctx=_ctx(primary_role=role, oa=oa), message=message,
                 language="th", ai_client=httpx.AsyncClient(transport=transport),
             )
         except Exception:  # noqa: BLE001
@@ -84,17 +94,19 @@ async def _reaches_model(case: dict) -> bool:
     return calls > 0
 
 
-async def _ask(text: str) -> dict:
+async def _ask(text: str, oa: str) -> dict:
     from chann_app.services.ai.intent import parse_intent
+    role = ROLE_FOR[oa]
     return await parse_intent(
-        message=text, chann_uid="CHN-S-000001", role="sales", license_id="L1",
-        permission_keys=sorted(DEFAULT_ROLE_TEMPLATES["admin"]), language="th", oa="sales",
+        message=text, chann_uid="CHN-S-000001" if oa == "sales" else "CHN-T-000001", role=role,
+        license_id="L1", permission_keys=sorted(DEFAULT_ROLE_TEMPLATES["admin" if oa == "sales" else "technician"]),
+        language="th", oa=oa,
     )
 
 
-def _write(text: str, answer: dict) -> bool:
+def _write(text: str, answer: dict, prefix: str) -> bool:
     src = CORPUS.read_text(encoding="utf-8")
-    pat = re.compile(r'(_e\("' + re.escape(text) + r'", "s\.[a-z_]+", "[^"]*")\)')
+    pat = re.compile(r'(_e\("' + re.escape(text) + r'", "' + prefix + r'\.[a-z_]+", "[^"]*")\)')
     ai = json.dumps(answer, ensure_ascii=False).replace("null", "None").replace("true", "True").replace("false", "False")
     new, n = pat.subn(lambda m: m.group(1) + ",\n       ai=" + ai + ")", src, count=1)
     if n:
@@ -105,11 +117,15 @@ def _write(text: str, answer: dict) -> bool:
 async def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry", action="store_true")
+    parser.add_argument("--oa", choices=("sales", "technician"), default="sales")
     args = parser.parse_args()
+    oa = args.oa
+    entries = chat_corpus.SALES if oa == "sales" else chat_corpus.TECH
+    prefix = "s" if oa == "sales" else "t"
 
-    todo = [c for c in chat_corpus.SALES if "ai" not in c and not c.get("pre")]
-    reaching = [c for c in todo if await _reaches_model(c)]
-    print(f"{len(chat_corpus.SALES)} sales entries · {len(todo)} without an answer · "
+    todo = [c for c in entries if "ai" not in c and not c.get("pre")]
+    reaching = [c for c in todo if await _reaches_model(c, oa)]
+    print(f"{len(entries)} {oa} entries · {len(todo)} without an answer · "
           f"{len(reaching)} of those reach the model")
     if args.dry:
         for c in reaching:
@@ -126,13 +142,13 @@ async def main() -> int:
     written = skipped = 0
     for c in reaching:
         try:
-            answer = await _ask(c["text"])
+            answer = await _ask(c["text"], oa)
         except Exception as exc:  # noqa: BLE001
             print(f"  UNREADABLE {c['text'][:40]}: {type(exc).__name__}")
             skipped += 1
             continue
         answer.pop("suggestions", None)
-        if _write(c["text"], answer):
+        if _write(c["text"], answer, prefix):
             written += 1
             print(f"  {c['text'][:40]:42} <- {json.dumps(answer, ensure_ascii=False)[:70]}")
         else:

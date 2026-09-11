@@ -184,27 +184,49 @@ class TestStaffPhrasings:
 
 
 class TestTechnicianPhrasings:
-    @pytest.mark.parametrize("phrasing", ["งานของผม", "งาน", "ตารางงาน", "งานที่ต้องไป", "วันนี้มีงานไหม", "งานของฉันครับ"])
+    # The technician OA reads with the model first (11 ก.ย. 2569). Each
+    # answer below is what google/gemini-3.1-flash-lite returned for the
+    # sentence that day: "my jobs" is a report of type "agenda", which
+    # this channel keeps as its own job list.
+    AGENDA = {"action": "read", "entity": "report", "fields": {"type": "agenda"}, "missing": []}
+
+    @pytest.mark.parametrize("phrasing", ["งานของผม", "ตารางงาน", "งานที่ต้องไป", "วันนี้มีงานไหม", "งานของฉันครับ"])
     async def test_my_jobs_in_many_words_lists_only_mine(self, phrasing):
         client = _tech()
-        reply, calls = await say(client, "technician", phrasing)
-        assert calls == 0 and "T-2026-0001" in reply.text and "T-2026-0002" not in reply.text, (phrasing, reply.text)
+        reply, calls = await say(client, "technician", phrasing, ai=self.AGENDA)
+        # A rich-menu tile ("งานของผม") keeps the direct path; a sentence is read.
+        assert (calls == 0) == chat._is_menu_tile(phrasing, "technician"), (phrasing, calls)
+        assert "T-2026-0001" in reply.text and "T-2026-0002" not in reply.text, (phrasing, reply.text)
+
+    async def test_a_bare_job_word_is_read_as_the_open_jobs(self):
+        """"งาน" alone came back type "jobs" — the ones waiting for someone."""
+        client = _tech()
+        reply, calls = await say(client, "technician", "งาน", ai={
+            "action": "read", "entity": "report", "fields": {"type": "jobs"}, "missing": []})
+        # Both jobs in the fixture are already assigned, so the honest
+        # answer is that nothing is waiting — the point is which list.
+        assert calls == 1 and "ไม่มีงานเปิดรับ" in reply.text, reply.text
 
     async def test_arrival_in_plain_words_checks_in_but_a_sentence_about_arriving_does_not(self):
         client = _tech()
         reply, calls = await say(client, "technician", "ลูกค้าบอกว่าถึงแล้วค่อยโทร")
         assert not [r for r in client.recorded if r[0] == "check_in_ticket"]
         client = _tech()
-        reply, calls = await say(client, "technician", "ถึงบ้านลูกค้าแล้วครับ")
-        assert calls == 0 and [r for r in client.recorded if r[0] == "check_in_ticket"]
+        reply, calls = await say(client, "technician", "ถึงบ้านลูกค้าแล้วครับ", ai={
+            "action": "check_in", "entity": "service_report", "fields": {}, "missing": []})
+        assert calls == 1 and [r for r in client.recorded if r[0] == "check_in_ticket"]
         assert reply.quick_replies == [("ปิดงาน", "ปิดงาน T-2026-0001")]
 
     async def test_bare_code_and_job_questions_show_the_job(self):
         client = _tech()
-        reply, calls = await say(client, "technician", "T-2026-0001")
-        assert calls == 0 and "99/1" in reply.text
-        reply, calls = await say(client, "technician", "ลูกค้าเบอร์อะไร")
-        assert calls == 0 and "0812345678" in reply.text
+        reply, calls = await say(client, "technician", "T-2026-0001", ai={
+            "action": "read", "entity": "ticket", "fields": {"code": "T-2026-0001"}, "missing": []})
+        assert calls == 1 and "99/1" in reply.text
+        # read/customer with nobody named: on this channel, the customer
+        # of the job at hand.
+        reply, calls = await say(client, "technician", "ลูกค้าเบอร์อะไร", ai={
+            "action": "read", "entity": "customer", "missing": ["target_name"], "fields": {}})
+        assert calls == 1 and "0812345678" in reply.text
 
     async def test_accept_and_decline_words_on_their_own(self):
         client = _tech()
@@ -212,8 +234,10 @@ class TestTechnicianPhrasings:
         # Declining sends the job back to the dispatcher: a bare "ไม่รับ"
         # is confirmed with a reason first (review, 6 Sep 2026); the reason
         # is the confirmation.
+        # The model shrugs at a bare "ไม่รับ" (suggest); the closed follow-up
+        # then asks for the reason, as it always has.
         reply, calls = await say(client, "technician", "ไม่รับ")
-        assert calls == 0 and "ใช่ไหม" in reply.text
+        assert calls == 1 and "ใช่ไหม" in reply.text
         assert not [r for r in client.recorded if r[0] == "reject_ticket"]
         reply, calls = await say(client, "technician", "ไม่ว่างวันนั้น")
         assert calls == 0 and [r for r in client.recorded if r[0] == "reject_ticket"]
@@ -221,8 +245,9 @@ class TestTechnicianPhrasings:
     async def test_check_out_prefers_the_job_in_progress(self):
         client = _tech()
         client._tickets[1].update({"assigned_to_ref": "member-1", "status": "in_progress"})
-        reply, calls = await say(client, "technician", "เสร็จแล้ว")
-        assert calls == 0 and "T-2026-0002" in reply.text and "พบปัญหา" in reply.text
+        reply, calls = await say(client, "technician", "เสร็จแล้ว", ai={
+            "action": "check_out", "entity": "service_report", "fields": {}, "missing": []})
+        assert calls == 1 and "T-2026-0002" in reply.text and "พบปัญหา" in reply.text
         # and the draft can be abandoned
         reply, _ = await say(client, "technician", "ยกเลิก")
         assert "ยกเลิกการปิดงาน T-2026-0002" in reply.text

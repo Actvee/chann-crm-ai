@@ -1448,6 +1448,11 @@ def _entity_code_mismatch(intent: dict) -> ChatReply | None:
             continue
         prefix = found.group(1).upper().split("-")[0]
         kind = _ALL_CODE_PREFIXES.get(prefix)
+        if entity == "service_report" and kind == "ticket":
+            # "เช็คอิน T-2026-0001", "ขอ pdf งาน T-2026-0001": a report has
+            # no life apart from its job, and the model names the job
+            # (measured 11 ก.ย. 2569, technician OA).
+            continue
         if kind and kind != entity:
             language = "th"
             return ChatReply(text=_t(CODE_IS_ANOTHER_ENTITY, language).format(
@@ -12207,7 +12212,8 @@ async def _handle_ai_understood_intent(
                 # _handle_customer_report answers that long before anything
                 # reaches the model; this is the belt to that brace.
                 return _customer_fallback(message, language)
-            if code or TICKET_CODE_RE.search(message or ""):
+            scope = str(fields.get("scope") or "").lower()
+            if code or TICKET_CODE_RE.search(message or "") or scope == "current":
                 return await _handle_ticket_detail(
                     client, ctx=ctx, license_id=license_id,
                     message=_joined(code, message),
@@ -12216,7 +12222,8 @@ async def _handle_ai_understood_intent(
             return await _handle_ticket_list(
                 client, ctx=ctx, license_id=license_id,
                 permission_keys=permission_keys, language=language,
-                mine=(ctx.oa == "technician"),
+                mine=(ctx.oa == "technician" and scope not in ("open", "team")),
+                open_only=(scope == "open"), team_only=(scope == "team"),
             )
         if action == "reject":
             return await _handle_ticket_reject(
@@ -12234,6 +12241,23 @@ async def _handle_ai_understood_intent(
                 permission_keys=permission_keys, language=language,
             )
         if action == "update":
+            # "ปฏิเสธ T-2026-0001 ป่วย" comes back update/ticket
+            # {"status": "rejected"} and "ปิดงาน T-2026-0001" {"status":
+            # "closed"} (measured 11 ก.ย. 2569): a status the model names
+            # is the verb this system has for it, not a situation note.
+            status = str(fields.get("status") or "").strip().lower()
+            if status in ("rejected", "declined", "decline", "reject", "refused"):
+                return await _handle_ticket_reject(
+                    client, ctx=ctx, license_id=license_id,
+                    message=_joined("ไม่รับงาน", code, fields.get("reason") or fields.get("notes")),
+                    permission_keys=permission_keys, language=language,
+                )
+            if status in ("closed", "close", "done", "completed", "complete", "finished"):
+                return await _handle_check_out(
+                    client, ctx=ctx, license_id=license_id,
+                    message=_joined("ปิดงาน", code, fields.get("found_issue"), fields.get("work_done")),
+                    permission_keys=permission_keys, language=language,
+                )
             # "เลื่อนไปพรุ่งนี้บ่าย", "ลูกค้าขอเปลี่ยนที่อยู่" — the same
             # situation handler the technician's own words already reach.
             #
@@ -12245,10 +12269,11 @@ async def _handle_ai_understood_intent(
             # The handler checks ticket.update itself and the gate above has
             # already checked _oa_allows, which is what keeps the Customer
             # OA out: ticket.update is not in its allowance.
+            kind = str(fields.get("situation") or "reschedule")
             return await _handle_technician_situation(
-                client, ctx=ctx, license_id=license_id, kind="reschedule",
+                client, ctx=ctx, license_id=license_id, kind=kind,
                 message=_joined(code, fields.get("scheduled_date"), fields.get("scheduled_time"),
-                                fields.get("service_address"), message),
+                                fields.get("service_address"), message) if kind == "reschedule" else _joined(code, message),
                 permission_keys=permission_keys, language=language,
             )
 
@@ -12266,6 +12291,13 @@ async def _handle_ai_understood_intent(
                 permission_keys=permission_keys, language=language,
             )
         if action in READ_ACTIONS:
+            if code and TICKET_CODE_RE.search(code):
+                # "ขอ pdf งาน T-2026-0001": the report of that job.
+                return await _handle_report_pdf(
+                    client, ctx=ctx, license_id=license_id,
+                    message=_joined("ออกรายงาน", code),
+                    permission_keys=permission_keys, language=language,
+                )
             found = SERVICE_REPORT_CODE_RE.search(_joined(code, message))
             if found:
                 return await _handle_report_detail(
@@ -18304,8 +18336,11 @@ async def _route_chat_message(
     # action already, and the help menu is a closed list. The gate found
     # both within one run — "เพิ่มลูกค้า" (a tile) and "ขอคู่มือ" (help)
     # were being sent to the model to be told what they already were.
+    # The technician OA followed on the same day, the same way: its
+    # pending flows (check-in questions, the report being written, an
+    # accept/decline waiting) are `early_pending` and stay closed.
     if (
-        ctx.oa == "sales" and early_pending is None
+        ctx.oa in ("sales", "technician") and early_pending is None
         and not _is_small_talk(message) and not _is_only_a_greeting(message)
         and not _is_menu_tile(message, ctx.oa) and not _is_help_request(message, ctx.oa)
     ):
@@ -19933,6 +19968,92 @@ async def _read_for_router(
 _CODE_PREFIX_ENTITY = {"D-": "deal", "Q-": "quote", "C-": "customer", "T-": "ticket"}
 
 
+_REPORT_SCOPE_WORDS = {
+    "open": ("jobs", "open", "unassigned", "available", "new", "ว่าง"),
+    "team": ("team", "ทีม"),
+}
+
+
+_SITUATION_STATUS_WORDS = {
+    "delayed": "late", "late": "late", "running_late": "late",
+    "customer_not_home": "not_home", "not_home": "not_home", "no_answer": "not_home",
+    "cannot_access": "not_home", "customer_absent": "not_home", "no_one_home": "not_home",
+    "needs_parts": "need_parts", "need_parts": "need_parts", "waiting_for_parts": "need_parts",
+    "cannot_finish": "cannot_finish", "incomplete": "cannot_finish", "unfinished": "cannot_finish",
+    "continue": "cannot_finish", "to_be_continued": "cannot_finish",
+    "rescheduled": "reschedule", "reschedule": "reschedule", "postponed": "reschedule",
+    "on_the_way": "on_my_way", "on_my_way": "on_my_way", "en_route": "on_my_way",
+}
+_SITUATION_STATUS_FAMILIES = (
+    ("late", ("late", "delay")), ("not_home", ("not_home", "absent", "no_answer", "access")),
+    ("need_parts", ("part",)), ("cannot_finish", ("finish", "continu", "incomplete")),
+    ("reschedule", ("resched", "postpone")), ("on_my_way", ("way", "route", "travel")),
+)
+
+
+def _as_the_technician_means_it(intent: dict, ctx: ResolvedContext, message: str = "") -> dict:
+    """On the technician OA a "report" is the jobs and a "customer" is the
+    one whose house they are at. Measured 11 ก.ย. 2569 with the deployed
+    model: "งานผมครับ" came back read/report {"type": "agenda"}, "มีงานว่าง
+    ไหม" read/report {"type": "jobs"}, "ลูกค้าเบอร์อะไร" read/customer {} —
+    all three correct readings, and all three refused by the OA gate,
+    because report and customer are keyed to sales permissions. The
+    reading is kept; only the entity is named the way this channel keeps
+    it, so the gate sees ticket.read, which the technician holds."""
+    if ctx.oa != "technician":
+        return intent
+    action = str(intent.get("action") or "")
+    entity = str(intent.get("entity") or "")
+    fields = dict(intent.get("fields") or {})
+    if action in READ_ACTIONS and entity == "report":
+        said = " ".join(str(v) for v in fields.values() if v not in (None, "")).lower()
+        scope = "mine"
+        for name, words in _REPORT_SCOPE_WORDS.items():
+            if any(w in said for w in words):
+                scope = name
+        return {**intent, "entity": "ticket", "fields": {"scope": scope}, "missing": []}
+    if action in READ_ACTIONS and entity == "customer" and not _named_customer(fields):
+        return {**intent, "entity": "ticket", "fields": {"scope": "current"}, "missing": []}
+    if action in READ_ACTIONS and entity == "ticket" and not fields.get("scope") and not any(
+        fields.get(k) for k in ("code", "ticket_code", "ticket_id")
+    ) and not TICKET_CODE_RE.search(str(fields) + " "):
+        # "งานนี้อยู่ไหนครับ", "บ้านลูกค้าอยู่ไหน": the job at hand.
+        return {**intent, "fields": {**fields, "scope": "current"}, "missing": []}
+    # What a technician says from the road or the doorstep. The model
+    # reads "กำลังไปครับ" as check_in two times in three and "ลูกค้าไม่อยู่
+    # บ้าน" as update/ticket {"status": "customer_not_home"} (11 ก.ย. 2569);
+    # the typed road has filed both as situation notes since B12. The
+    # sentence's own words are the validation: they say "not there yet",
+    # so a check-in is not executed on them — a note is filed instead.
+    situation = _technician_situation(message) if message else None
+    if action in ("check_in", "check_out") and entity == "service_report" and situation in ("on_my_way", "late"):
+        return {"action": "update", "entity": "ticket", "fields": {"situation": situation}, "missing": []}
+    if action in ("create", "update") and entity == "service_report" and situation is not None and not (
+        fields.get("found_issue") or fields.get("work_done")
+    ):
+        return {"action": "update", "entity": "ticket", "fields": {"situation": situation}, "missing": []}
+    if action == "update" and entity == "ticket":
+        status = str(fields.get("status") or "").strip().lower()
+        kind = situation or _SITUATION_STATUS_WORDS.get(status)
+        if kind is None and status:
+            kind = next((k for k, words in _SITUATION_STATUS_FAMILIES if any(w in status for w in words)), None)
+        if kind is not None and status not in ("rejected", "declined", "decline", "reject", "refused",
+                                                "closed", "close", "done", "completed", "complete", "finished"):
+            return {**intent, "fields": {**{k: v for k, v in fields.items() if k != "status"}, "situation": kind},
+                    "missing": []}
+        # "งาน T-2026-0001 ผมไปไม่ได้ครับ" -> {"status": "declined"} and
+        # "ปิดงาน T-2026-0001" -> {"status": "closed"}: the verb this system
+        # has, named before the gate and the guard look, so each is
+        # checked as the reject or the close-out it is — not as an edit
+        # whose ไม่ reads as a refusal.
+        status = str(fields.get("status") or "").strip().lower()
+        if status in ("rejected", "declined", "decline", "reject", "refused"):
+            return {**intent, "action": "reject", "fields": {k: v for k, v in fields.items() if k != "status"}}
+        if status in ("closed", "close", "done", "completed", "complete", "finished"):
+            return {**intent, "action": "close", "fields": {k: v for k, v in fields.items() if k != "status"}}
+    return intent
+
+
 def _entity_by_code(intent: dict) -> dict:
     """A record code names its own entity: "D-2026-0001 ลูกค้าไม่เอา" came
     back as entity="quote" and was answered with a question about the
@@ -20011,6 +20132,7 @@ async def _model_road(
           return ChatReply(text=unavailable_reply(language))
 
     intent = _entity_by_code(intent)
+    intent = _as_the_technician_means_it(intent, ctx, message)
     switched_from = None
     if _is_continuation(pending_intent, intent):
         intent = _merge_pending(pending_intent, intent)

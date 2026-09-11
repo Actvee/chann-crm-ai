@@ -87,25 +87,36 @@ None of that moves to the model. Ever.
 
 ## Where it stands
 
-**The sales OA reads first (11 ก.ย. 2569).** `_route_chat_message` asks the model before
-any keyword table for a fresh sentence on `ctx.oa == "sales"`; the tables run only when
-the model answers `suggest`. What stays deterministic, by design: a pending answer, small
+**The sales and technician OAs read first (11 ก.ย. 2569).** `_route_chat_message` asks
+the model before any keyword table for a fresh sentence on those two channels; the tables
+run only when the model answers `suggest`. What stays deterministic, by design: a pending
+answer (a check-in question, the report being written, an accept/decline waiting), small
 talk, a greeting, a rich-menu tile, the help menu. Measured over the 1,168-utterance
 corpus through the real router:
 
 | OA | model reads | rule decides | share |
 |---|---|---|---|
 | sales | 492 | 48 | **91%** (was 27%) |
-| technician | 51 | 233 | 18% |
+| technician | 236 | 48 | **83%** (was 18%) |
 | customer | 12 | 332 | 3% |
 
-Overall **555/1168 (48%)**, from 218. The same inversion is the plan for the technician
-OA; the customer OA's rule (what a customer may do alone) is in `SESSION_HANDOFF.md` and
-its conversion means classifying into that road's actions, not widening them.
+Overall **740/1168 (63%)**, from 218. The customer OA's rule (what a customer may do
+alone) is in `SESSION_HANDOFF.md` and its conversion means classifying into that road's
+actions, not widening them.
+
+**What the technician's channel keeps in its own words** (`_as_the_technician_means_it`,
+read before the OA gate): the model answers `read/report {type: agenda|jobs}` for "งานผม"
+and "มีงานว่างไหม" and `read/customer {}` for "ลูกค้าเบอร์อะไร" — correct readings, keyed
+to sales permissions, so the gate refused all three. The reading is kept and the entity
+named the way this channel keeps it (ticket, scope mine/open/team/current). A job status
+the model names is the verb this system has (`declined` → reject, `closed` → close,
+`customer_not_home` → the not-home note), and a `check_in` on a sentence that says
+"กำลังไปครับ" is filed as on-the-way, not executed — the sentence's own words validate
+the model's verb. Technician understood share with the model's real answers: 74% → 99%.
 
 **The corpus carries the model's real answers.** `tests/unit/chat_corpus.py` entries take
-`ai={...}` — since the inversion, 297 sales entries hold the verbatim answer the deployed
-model gave (`scripts/dev/fill-corpus-answers.py`, ~$0.15 a run). `test_chat_corpus.py`
+`ai={...}` — since the inversion, 297 sales and 161 technician entries hold the verbatim
+answer the deployed model gave (`scripts/dev/fill-corpus-answers.py --oa …`, ~$0.15 a run). `test_chat_corpus.py`
 therefore measures *what the model returns and what the road does with it*, not a
 hand-written stub. Re-run the filler for an entry whenever the prompt changes what the
 model would say about it (clear its `ai=` and run the script).

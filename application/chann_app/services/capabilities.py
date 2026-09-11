@@ -132,10 +132,41 @@ APPROVAL_REJECT = Capability(
     never_needed=("code", "reason"),
 )
 
+#: The job at hand needs no code: the handlers take the one job assigned,
+#: the one in progress, or the one just looked at, and ask with buttons
+#: when several qualify. Measured 11 ก.ย. 2569: "ผมรับเองครับ" came back
+#: claim/ticket with missing ["code"] and was answered "กรุณาระบุ
+#: รายละเอียดที่เหลือ" at a technician with exactly one job to take.
+TICKET_CLAIM = Capability(action="claim", entity="ticket", never_needed=("code", "target_name"))
+TICKET_READ = Capability(action="read", entity="ticket", never_needed=("code", "target_name", "scope"))
+SERVICE_REPORT_CHECK_IN = Capability(action="check_in", entity="service_report", never_needed=("code",))
+SERVICE_REPORT_CHECK_OUT = Capability(
+    action="check_out", entity="service_report",
+    optional=("found_issue", "work_done", "parts_changed", "notes"),
+    # The close-out asks for what it found and did in its own words.
+    never_needed=("code", "found_issue", "work_done", "parts_changed", "notes"),
+)
+
+#: A situation on a job is filed from the sentence; nothing about it is
+#: asked for. "ลูกค้าไม่อยู่บ้านครับ" came back with missing ["scheduled_date"]
+#: and was answered "กรุณาระบุรายละเอียดที่เหลือ" (11 ก.ย. 2569).
+TICKET_UPDATE = Capability(
+    action="update", entity="ticket",
+    optional=("scheduled_date", "scheduled_time", "service_address", "reason", "notes", "status"),
+    never_needed=("code", "scheduled_date", "scheduled_time", "service_address", "reason", "notes", "status", "situation"),
+)
+SERVICE_REPORT_CREATE = Capability(
+    action="create", entity="service_report",
+    optional=("found_issue", "work_done", "parts_changed", "notes"),
+    never_needed=("code", "found_issue", "work_done", "parts_changed", "notes"),
+)
+
 REGISTRY: dict[tuple[str, str], Capability] = {
     (c.entity, c.action): c for c in (
         CUSTOMER_CREATE, FOLLOWUP_CREATE, QUOTE_CREATE, TEAM_CREATE, SALES_GROUP_CREATE,
         APPROVAL_APPROVE, APPROVAL_REJECT,
+        TICKET_CLAIM, TICKET_READ, TICKET_UPDATE, SERVICE_REPORT_CHECK_IN, SERVICE_REPORT_CHECK_OUT,
+        SERVICE_REPORT_CREATE,
     )
 }
 

@@ -36,7 +36,6 @@ steps:
     - issue_description
     max_lines: 15
     contains: T-2026-0001
-    used_ai: false
 - send: ข้อมูลงาน T-2026-0001
   expect:
     is_not:
