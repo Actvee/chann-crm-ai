@@ -806,6 +806,13 @@ async def list_customers(
 ):
     _require_same_tenant(principal, license_id)
     principal.require("customer.read")
+    # A linked customer holds customer.read for their OWN history
+    # (/deals/mine, /warranties/mine, and get_customer below, which checks
+    # the row is theirs). This route is the shop's contact book — every
+    # other customer's name and phone number — and it had no such check:
+    # reproduced 11 ก.ย. 2569, a customer principal got the full list, 200.
+    if principal.is_customer:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="staff only")
     try:
         return await client.list_customers(license_id, stage)
     except DataTierError as exc:
@@ -1054,6 +1061,13 @@ async def update_customer(
 ):
     _require_same_tenant(principal, license_id)
     principal.require("customer.update")
+    # Staff only, and checked here rather than left to the key list: the
+    # customer principal used to carry customer.update, so a linked
+    # customer could PATCH ANY row in the shop — reproduced 11 ก.ย. 2569,
+    # 200, another person's name and phone rewritten. Their own details go
+    # through /api/liff/{audience}/profile, which is scoped by construction.
+    if principal.is_customer:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="staff only")
     try:
         return await client.update_customer(
             license_id, customer_id, payload.model_dump(exclude_unset=True),
@@ -1074,6 +1088,9 @@ async def promote_customer(
     the spec defines no separate permission for confirming a lead."""
     _require_same_tenant(principal, license_id)
     principal.require("customer.update")
+    # Lead -> Contact is the shop's judgement about the shop's pipeline.
+    if principal.is_customer:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="staff only")
     try:
         return await client.promote_customer(
             license_id, customer_id, actor_id=principal.chann_uid,

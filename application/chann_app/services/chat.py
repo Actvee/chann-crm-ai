@@ -168,6 +168,11 @@ ACTION_PERMISSIONS: dict[tuple[str, str], str] = {
     ("read", "sales_group"): "team.manage",
     ("create", "sales_group"): "team.manage",
     ("update", "sales_group"): "team.manage",
+    # Registered late: a technician team can be deleted from chat and a
+    # sales group could not, so "ลบกลุ่มขาย เหนือ" fell off the gate as a
+    # capability this system does not have — while the Data tier has had
+    # DELETE /sales-groups/{id} since Phase 7 (11 ก.ย. 2569).
+    ("delete", "sales_group"): "team.manage",
     ("read", "report"): "view_reports",
     ("read", "audit_log"): "audit_log.view",
     ("read", "role"): "role.manage",
@@ -196,8 +201,13 @@ ACTION_PERMISSIONS: dict[tuple[str, str], str] = {
 # permission gate" — Sales OA's own table in the spec covers nearly
 # everything a tenant does, so there is nothing meaningful left to narrow.
 OA_ALLOWED_PERMISSION_KEYS: dict[str, frozenset[str] | None] = {
+    # Mirrors authorization.CUSTOMER_PERMISSION_KEYS, and for the same
+    # reason customer.update is not here: on this channel "แก้เบอร์เป็น
+    # 08x" is the sender's own number, and that road is the profile
+    # handler, which needs no key. Leaving the key listed meant one grant
+    # stood between a LINE customer and the shop's contact book.
     "customer": frozenset({
-        "customer.read", "customer.update",
+        "customer.read",
         "ticket.create", "ticket.read",
         "warranty.read", "warranty.create",
     }),
@@ -10177,6 +10187,35 @@ def _parse_after_trigger(message: str, triggers: tuple[str, ...]) -> str | None:
     return None
 
 
+#: Verbs that turn a lookup phrase into an edit. "ข้อมูลลูกค้า" is how
+#: people ask to SEE a customer; "แก้ข้อมูลลูกค้าสมชาย หมายเหตุ อยากได้
+#: ติดตั้งวันเสาร์" contains the same eight characters and is an order to
+#: write. The detail road matched it anywhere in the sentence, took the
+#: whole tail as a record code and answered "ไม่พบลูกค้ารหัส สมชาย หมายเหตุ
+#: อยากได้ติดตั้งวันเสาร์" — with ZERO model calls (verified 11 ก.ย. 2569).
+_EDIT_VERBS_BEFORE_A_LOOKUP = (
+    "แก้ไข", "แก้", "อัปเดต", "อัพเดต", "อัปเดท", "อัพเดท", "ปรับ", "เปลี่ยน",
+    "update", "edit", "change",
+)
+
+
+def _lookup_is_really_an_edit(message: str, triggers: tuple[str, ...]) -> bool:
+    """Does an edit verb sit immediately in front of this lookup phrase?
+
+    Falls THROUGH to the model rather than answering — a read road has
+    nothing to decline, so the right move is to stop deciding and let the
+    sentence be read (docs/MODEL_FIRST.md, step 1).
+    """
+    lowered = (message or "").strip().lower()
+    for trigger in triggers:
+        index = lowered.find(trigger.lower())
+        if index > 0:
+            head = lowered[:index].rstrip()
+            if any(head.endswith(verb) for verb in _EDIT_VERBS_BEFORE_A_LOOKUP):
+                return True
+    return False
+
+
 def _customer_name(customer: dict) -> str:
     parts = [customer.get("first_name") or "", customer.get("last_name") or ""]
     return " ".join(p for p in parts if p).strip() or "-"
@@ -15104,6 +15143,25 @@ PROFILE_NOTHING_TO_UPDATE = {
 # a different channel.
 PROFILE_ELIGIBLE_ROLES = frozenset({"technician", "customer"})
 
+#: What a profile sentence is allowed to DO. The handler used to read the
+#: fields and write, whatever verb was on the intent — so "ลบโปรไฟล์ฉัน"
+#: read as action="delete" still updated the profile with whatever fields
+#: rode along (verified against the real router, 11 ก.ย. 2569). Registration
+#: fills the same fields in, so "create" is an update here. Erasure has its
+#: own road ("ขอลบข้อมูล", PDPA) and it is not this one.
+PROFILE_WRITE_ACTIONS = frozenset({"update", "create"})
+
+PROFILE_ACTION_NOT_SUPPORTED = {
+    "th": (
+        "ผ่านแชทแก้ไขข้อมูลส่วนตัวของตัวเองได้อย่างเดียว (ชื่อ เบอร์โทร อีเมล ที่อยู่) "
+        "ถ้าต้องการลบข้อมูล พิมพ์ \"ขอลบข้อมูล\""
+    ),
+    "en": (
+        "Through chat you can only update your own details — name, phone, "
+        "email, or address. To have your data erased, ask to delete it."
+    ),
+}
+
 PROFILE_NOT_ELIGIBLE = {
     "th": (
         "การแก้ไขข้อมูลส่วนตัวผ่านแชทใช้ได้เฉพาะบัญชีช่างและลูกค้าเท่านั้น "
@@ -15125,7 +15183,8 @@ def _is_not_found(exc: Exception) -> bool:
 
 
 async def _handle_profile_intent(
-    client: DataClient, *, intent: dict, ctx: ResolvedContext, language: str
+    client: DataClient, *, intent: dict, ctx: ResolvedContext, language: str,
+    message: str = "",
 ) -> ChatReply:
     """Phase 8 self-edit through chat (Master Spec 8.4).
 
@@ -15138,6 +15197,25 @@ async def _handle_profile_intent(
     """
     if ctx.oa not in PROFILE_ELIGIBLE_ROLES:
         return ChatReply(text=_t(PROFILE_NOT_ELIGIBLE, language), intent=intent)
+
+    # The verb, then the sentence. This handler sits BEFORE the permission
+    # gate (self-edit needs no key, which is the whole reason for the
+    # bypass) and so it also sat before the two checks the gate runs on
+    # everything else: the action, and intent_guard. Both are run here
+    # instead — "ลบโปรไฟล์ฉัน" and "ไม่ต้องเปลี่ยนเบอร์ฉัน" each wrote the
+    # profile until 11 ก.ย. 2569.
+    raw_action = str(intent.get("action") or "update").strip().lower()
+    if ACTION_ALIASES.get(raw_action, raw_action) not in PROFILE_WRITE_ACTIONS:
+        return ChatReply(text=_t(PROFILE_ACTION_NOT_SUPPORTED, language), intent=intent)
+    if message:
+        # Only the model road passes a message. The bare-value road answers
+        # a question this system just asked and runs its own narrower check
+        # — an answer is not a sentence that has to argue for itself.
+        held = _intent_guard_reply(
+            message, action="profile_update", language=language, proposed=True,
+        )
+        if held is not None:
+            return held
 
     raw_fields = intent.get("fields") or {}
     fields = {
@@ -15677,6 +15755,18 @@ async def _apply_customer_action(
     }
     if not editable:
         return ChatReply(text=_t(CUSTOMER_NEEDS_SOMETHING, language))
+    # A note is added, not swapped. Every other field on this row has one
+    # value — a phone number replaces a phone number — but notes are what
+    # the shop has learned about this person, and the model puts only the
+    # NEW sentence in the field. "อัปเดตลูกค้าสมชาย หมายเหตุว่าอยากได้
+    # ติดตั้งวันเสาร์" erased "ชอบสีขาว ห้ามโทรก่อน 10 โมง" and said
+    # "แก้ไขข้อมูลลูกค้าเรียบร้อยแล้ว" (verified 11 ก.ย. 2569). Nothing in
+    # the sentence asked for that, and nothing showed it had happened.
+    if "notes" in editable:
+        kept = str(row.get("notes") or "").strip()
+        fresh = str(editable["notes"]).strip()
+        if kept and fresh and fresh not in kept:
+            editable["notes"] = f"{kept}\n{fresh}"
     from .phone import phone_problem
 
     problem = phone_problem(editable.get("phone"))
@@ -18436,6 +18526,8 @@ async def _route_chat_message(
             )
 
         customer_code = _parse_after_trigger(message, CUSTOMER_DETAIL_TRIGGERS)
+        if customer_code is not None and _lookup_is_really_an_edit(message, CUSTOMER_DETAIL_TRIGGERS):
+            customer_code = None
         if customer_code is not None:
             customer_code = _strip_polite_tail(customer_code)
             return await _handle_customer_detail(
@@ -18481,6 +18573,8 @@ async def _route_chat_message(
             )
 
         deal_code = _parse_after_trigger(message, DEAL_DETAIL_TRIGGERS)
+        if deal_code is not None and _lookup_is_really_an_edit(message, DEAL_DETAIL_TRIGGERS):
+            deal_code = None
         if deal_code is not None:
             return await _handle_deal_detail(
                 client, license_id=license_id, code=deal_code,
@@ -18873,7 +18967,9 @@ async def _execute_intent(
     # (action, entity) to a single permission key, with no notion of "unless
     # it's your own record". Handled here, before the gate ever runs.
     if intent.get("entity") == "profile":
-        return await _handle_profile_intent(client, intent=intent, ctx=ctx, language=language)
+        return await _handle_profile_intent(
+            client, intent=intent, ctx=ctx, language=language, message=message,
+        )
 
     # The real permission gate. Checked here rather than trusted from the
     # model: asked for "รายงานทางการเงิน", the model happily returned
@@ -19039,7 +19135,17 @@ async def _execute_intent(
         return await _handle_note_intent(
             client, intent=intent, ctx=ctx, license_id=license_id, language=language,
         )
-    if intent.get("entity") in ("team", "sales_group"):
+    if intent.get("entity") == "sales_group" or (
+        intent.get("entity") == "team"
+        and str((intent.get("fields") or {}).get("scope") or "").strip().lower() == "sales"
+    ):
+        # The prompt asks the model for a "scope" on entity="team" and the
+        # handler ignored it, so both roads wrote technician_teams.
+        return await _handle_sales_group_intent(
+            client, intent=intent, ctx=ctx, license_id=license_id,
+            permission_keys=permission_keys, language=language,
+        )
+    if intent.get("entity") == "team":
         return await _handle_team_intent(
             client, intent=intent, ctx=ctx, license_id=license_id,
             permission_keys=permission_keys, language=language, message=message,
@@ -19061,6 +19167,177 @@ async def _execute_intent(
     # The reply names the dashboard page that DOES do it, so an honest "not
     # here" is still somewhere to go.
     return _no_handler_reply(intent, language, ctx.oa)
+
+
+SALES_GROUP_TEXT = {
+    "list_head": {"th": "กลุ่มขาย ({n} กลุ่ม):", "en": "Sales groups ({n}):"},
+    "list_empty": {
+        "th": "ยังไม่มีกลุ่มขาย พิมพ์ \"สร้างกลุ่มขาย เหนือ\" แล้ว \"เพิ่ม สมชาย เข้ากลุ่มขาย เหนือ\"",
+        "en": "No sales groups yet — \"create sales group North\" then \"add Somchai to sales group North\"",
+    },
+    "created": {
+        "th": "สร้างกลุ่มขาย {team} แล้ว เพิ่มคนด้วย \"เพิ่ม <ชื่อ> เข้ากลุ่มขาย {team}\"",
+        "en": "Sales group {team} created — add people with \"add <name> to sales group {team}\"",
+    },
+    "deleted": {"th": "ลบกลุ่มขาย {team} แล้ว", "en": "Sales group {team} deleted"},
+    "added": {"th": "เพิ่ม {who} เข้ากลุ่มขาย {team} แล้ว", "en": "Added {who} to sales group {team}"},
+    "created_added": {
+        "th": "สร้างกลุ่มขาย {team} แล้ว เพิ่ม {who} เข้ากลุ่มเรียบร้อย",
+        "en": "Sales group {team} created, with {who} added",
+    },
+    "removed": {"th": "เอา {who} ออกจากกลุ่มขาย {team} แล้ว", "en": "Removed {who} from sales group {team}"},
+    "no_group": {"th": "ไม่พบกลุ่มขายชื่อ {team}", "en": "No sales group called {team}"},
+    "need_name": {
+        "th": "ระบุชื่อกลุ่มขายด้วยครับ เช่น \"สร้างกลุ่มขาย เหนือ\"",
+        "en": "Name the sales group, e.g. \"create sales group North\"",
+    },
+    "no_member": {
+        "th": "ไม่พบคนชื่อ \"{who}\" ในร้าน พิมพ์ \"รายชื่อสมาชิก\" เพื่อดูรายชื่อ",
+        "en": "No member named \"{who}\" — type \"members\" to see the roster",
+    },
+    "many": {
+        "th": "มีคนชื่อคล้ายกันหลายคน: {names} — พิมพ์ชื่อเต็ม",
+        "en": "Several match: {names} — use the full name",
+    },
+}
+
+
+async def _sales_group_named(client: DataClient, license_id: str, fragment: str) -> dict | None:
+    """The one sales group whose name matches, or None. Same shape as
+    _team_named — exact first, then a single loose match."""
+    fragment = (fragment or "").strip().lower()
+    if not fragment:
+        return None
+    groups = await client.list_sales_groups(license_id)
+    exact = [g for g in groups if str(g.get("group_name") or "").lower() == fragment]
+    if exact:
+        return exact[0]
+    loose = [g for g in groups if fragment in str(g.get("group_name") or "").lower()]
+    return loose[0] if len(loose) == 1 else None
+
+
+async def _handle_sales_group_intent(
+    client: DataClient, *, intent: dict, ctx: ResolvedContext, license_id,
+    permission_keys: list[str], language: str,
+) -> ChatReply:
+    """Sales groups are their own table (`sales_groups`), their own Data
+    routes and their own dashboard page — and chat had no road to any of
+    it. Every sales-group sentence was rebuilt into a TECHNICIAN sentence
+    and written to `technician_teams`: "สร้างกลุ่มขาย ทีมเหนือ" answered
+    "สร้างทีม ทีมเหนือ แล้ว" and recorded create_technician_team, so a
+    sales group appeared in the technician roster and could be sent to a
+    repair job (verified against the real router, 11 ก.ย. 2569).
+
+    The permission is team.manage, the same key the gate already checked;
+    re-checked here because this handler is reachable from more than one
+    road and the confirmation may arrive after a role change.
+    """
+    if "team.manage" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+
+    action = str(intent.get("action") or "").strip().lower()
+    fields = intent.get("fields") or {}
+    name = str(fields.get("team_name") or fields.get("group_name")
+               or fields.get("name") or "").strip()
+    members = fields.get("members")
+    if isinstance(members, (list, tuple)):
+        members = ", ".join(str(m) for m in members if str(m or "").strip())
+    who = str(members or fields.get("target_name") or "").strip()
+
+    try:
+        if action in READ_ACTIONS:
+            groups = await client.list_sales_groups(str(license_id))
+            if not groups:
+                return ChatReply(text=_t(SALES_GROUP_TEXT["list_empty"], language))
+            lines = [_t(SALES_GROUP_TEXT["list_head"], language).format(n=len(groups))]
+            for group in groups[:LIST_LIMIT]:
+                people = await client.list_sales_group_members(str(license_id), str(group["id"]))
+                names = []
+                for member in people:
+                    profile = {}
+                    try:
+                        profile = await client.get_profile(str(member.get("chann_uid") or "")) or {}
+                    except Exception:  # noqa: BLE001 — a missing profile is not a failed list
+                        profile = {}
+                    names.append(" ".join(
+                        p for p in (profile.get("first_name"), profile.get("last_name")) if p
+                    ) or str(member.get("chann_uid") or ""))
+                lines.append(f"· {group.get('group_name')}: " + (", ".join(names) if names else (
+                    "no members yet" if language == "en" else "ยังไม่มีสมาชิก")))
+            return ChatReply(text="\n".join(lines))
+
+        if not name:
+            return ChatReply(text=_t(SALES_GROUP_TEXT["need_name"], language))
+
+        if action == "create":
+            group = await client.create_sales_group(str(license_id), name)
+            if not who:
+                return ChatReply(
+                    text=_t(SALES_GROUP_TEXT["created"], language).format(
+                        team=group.get("group_name") or name),
+                    entity_type="sales_group", entity_id=str(group.get("id") or ""),
+                )
+            # "สร้างกลุ่มขาย เหนือ มีสมชาย" names the group AND its first
+            # member; creating the group and then answering "ไม่พบกลุ่มขาย
+            # ชื่อ เหนือ" is the shape of bug this handler exists to stop.
+        else:
+            group = await _sales_group_named(client, str(license_id), name)
+            if group is None:
+                return ChatReply(
+                    text=_t(SALES_GROUP_TEXT["no_group"], language).format(team=name))
+
+        if action in ("delete", "archive"):
+            await client.delete_sales_group(str(license_id), str(group["id"]))
+            return ChatReply(text=_t(SALES_GROUP_TEXT["deleted"], language).format(
+                team=group.get("group_name") or name))
+
+        if who:
+            # _technician_named resolves any ACTIVE member of the shop by
+            # the name on their profile — the "technician" in its name is
+            # where it was first used, not what it looks at. A salesperson
+            # is a member row like any other.
+            person, candidates = await _technician_named(client, str(license_id), who)
+            if person is None:
+                if candidates:
+                    return ChatReply(text=_t(SALES_GROUP_TEXT["many"], language).format(
+                        names=", ".join(candidates)))
+                return ChatReply(text=_t(SALES_GROUP_TEXT["no_member"], language).format(who=who))
+            if action == "create":
+                await client.add_sales_group_member(
+                    str(license_id), str(group["id"]), str(person["id"]))
+                return ChatReply(
+                    text=_t(SALES_GROUP_TEXT["created_added"], language).format(
+                        who=person["name"], team=group.get("group_name") or name),
+                    entity_type="sales_group", entity_id=str(group.get("id") or ""),
+                )
+            if _wants_removal(intent, fields):
+                await client.remove_sales_group_member(
+                    str(license_id), str(group["id"]), str(person["id"]))
+                key = "removed"
+            else:
+                await client.add_sales_group_member(
+                    str(license_id), str(group["id"]), str(person["id"]))
+                key = "added"
+            return ChatReply(text=_t(SALES_GROUP_TEXT[key], language).format(
+                who=person["name"], team=group.get("group_name") or name))
+    except Exception:  # noqa: BLE001
+        log.exception("sales group change failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    return _no_handler_reply(intent, language, ctx.oa)
+
+
+def _wants_removal(intent: dict, fields: dict) -> bool:
+    """Is this "take X out of the group" rather than "put X in it"?
+
+    "เอาสมชายออกจากกลุ่มขายเหนือ" arrives as action="update" with the
+    person named — the verb alone does not say which way it goes, so the
+    field does. action="delete" never reaches here: deleting the GROUP is
+    handled above, and the model uses the same verb for both.
+    """
+    if str(fields.get("membership") or "").strip().lower() in ("remove", "out", "ออก"):
+        return True
+    return str(intent.get("action") or "").strip().lower() == "remove"
 
 
 async def _handle_team_intent(

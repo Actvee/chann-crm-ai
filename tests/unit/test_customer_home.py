@@ -178,3 +178,60 @@ class TestHomeRoutes:
         response = http.get(f"/api/v1/licenses/{LICENSE_ID}/deals/mine")
         assert response.status_code == 200, response.text
         assert [d["deal_id"] for d in response.json()] == ["D-2026-0001"]
+
+
+class TestTheShopsContactBookIsNotTheCustomersToRead:
+    """A linked customer holds customer.read for their OWN history. Three
+    routes read that key as "any customer of this shop", and two of them
+    WROTE. Reproduced against the real routes 11 ก.ย. 2569:
+
+      GET   /licenses/{id}/customers               -> 200, every name and phone
+      PATCH /licenses/{id}/customers/{other}       -> 200, row rewritten
+      POST  /licenses/{id}/customers/{other}/promote -> 200
+
+    The customer app calls none of the three: their own details are edited
+    through /api/liff/{audience}/profile, and their history through
+    /deals/mine and /warranties/mine."""
+
+    OTHER = {
+        "id": "CUST-1", "customer_id": "C-2026-0001", "first_name": "สมชาย",
+        "last_name": "ใจดี", "phone": "0812345678",
+        "customer_chann_uid": "CHN-S-000099",
+    }
+
+    def _shop(self, principal):
+        http, client = _harness(principal)
+        client._customers = [dict(self.OTHER)]
+        return http, client
+
+    def test_a_customer_cannot_read_the_list(self):
+        http, _ = self._shop(_customer_principal())
+        assert http.get(f"/api/v1/licenses/{LICENSE_ID}/customers").status_code == 403
+
+    def test_a_customer_cannot_write_another_row(self):
+        http, client = self._shop(_customer_principal())
+        patch = http.patch(
+            f"/api/v1/licenses/{LICENSE_ID}/customers/CUST-1", json={"first_name": "x"},
+        )
+        promote = http.post(f"/api/v1/licenses/{LICENSE_ID}/customers/CUST-1/promote")
+        assert (patch.status_code, promote.status_code) == (403, 403)
+        assert not [c for c in client.recorded if c[0] in ("update_customer", "promote_customer")]
+
+    def test_the_grant_itself_is_gone(self):
+        """Defence in depth: the routes refuse a customer principal, AND the
+        key that made them reachable is no longer in the customer set."""
+        assert "customer.update" not in CUSTOMER_PERMISSION_KEYS
+
+    def test_staff_are_untouched(self):
+        staff = TenantPrincipal(
+            license_id=LICENSE_ID, chann_uid="CHN-S-000002", role="sales", is_owner=False,
+            permission_keys=frozenset({"customer.read", "customer.update"}), audience="sales",
+        )
+        http, _ = self._shop(staff)
+        assert http.get(f"/api/v1/licenses/{LICENSE_ID}/customers").status_code == 200
+        assert http.patch(
+            f"/api/v1/licenses/{LICENSE_ID}/customers/CUST-1", json={"first_name": "สมชาย2"},
+        ).status_code == 200
+        assert http.post(
+            f"/api/v1/licenses/{LICENSE_ID}/customers/CUST-1/promote",
+        ).status_code == 200

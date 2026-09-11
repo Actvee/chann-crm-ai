@@ -1380,3 +1380,233 @@ class TestTheConversationIsRemembered:
             {"said": "ขอดูข้อมูลลูกค้าสมชาย", "did": "แสดงข้อมูล C-2026-0001", "at": ""},
         ])
         assert "0812345678" not in rendered and "@" not in rendered, rendered
+
+
+class TestAProfileSentenceIsCheckedLikeEveryOther:
+    """The self-edit road sits BEFORE the permission gate, because editing
+    your own details needs no tenant key. It therefore also sat before the
+    two checks the gate runs on everything else — the action, and
+    intent_guard — and nobody noticed for as long as the road existed.
+
+    Verified against the real router 11 ก.ย. 2569: a model answer of
+    action="delete" and a sentence that REFUSED both wrote the profile and
+    replied "แก้ไขข้อมูลส่วนตัวเรียบร้อยแล้ว"."""
+
+    TECH = sorted(DEFAULT_ROLE_TEMPLATES["technician"])
+    FIELDS = {"phone": "0899998888"}
+
+    async def _profile(self, message, *, action="update"):
+        client = FakeDataClient(role="technician", permission_keys=list(self.TECH))
+        return await _say(
+            client, message, oa="technician", role="technician",
+            intent={"action": action, "entity": "profile",
+                    "fields": dict(self.FIELDS), "missing": []},
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_plain_self_edit_still_writes(self):
+        text, written = await self._profile("เปลี่ยนเบอร์ฉันเป็น 0899998888")
+        assert "update_profile" in written, f"{text} / {written}"
+
+    @pytest.mark.asyncio
+    async def test_an_action_that_is_not_an_edit_writes_nothing(self):
+        text, written = await self._profile("ลบโปรไฟล์ฉัน", action="delete")
+        assert written == [], f"{text} / {written}"
+        assert "เรียบร้อย" not in text, text
+
+    @pytest.mark.asyncio
+    async def test_a_refusal_writes_nothing(self):
+        text, written = await self._profile("ไม่ต้องเปลี่ยนเบอร์ฉัน")
+        assert written == [], f"{text} / {written}"
+
+    @pytest.mark.asyncio
+    async def test_a_question_writes_nothing(self):
+        text, written = await self._profile("เปลี่ยนเบอร์ยังไงครับ")
+        assert written == [], f"{text} / {written}"
+
+
+class TestACurrencyIsOneThisSystemNames:
+    """`len(code) == 3 and code.isalpha()` accepted ZZZ, and every amount
+    after it was formatted in a currency that does not exist."""
+
+    def test_an_invented_code_falls_back_to_the_shop_currency(self):
+        from datetime import date
+
+        from chann_app.services.deal_fields import extract_deal_fields
+
+        today = date(2026, 9, 11)
+        out = extract_deal_fields("สมชายสนใจแอร์ ตกลงกันที่ห้าแสน",
+                                  {"amount": 500000, "currency": "ZZZ"}, today)
+        assert out["currency"] == "THB", out
+
+    def test_a_real_code_is_kept(self):
+        from datetime import date
+
+        from chann_app.services.deal_fields import KNOWN_CURRENCIES, extract_deal_fields
+
+        assert "USD" in KNOWN_CURRENCIES and "ZZZ" not in KNOWN_CURRENCIES
+        out = extract_deal_fields("ตกลงกันที่ 5000 usd", {"currency": "USD"}, date(2026, 9, 11))
+        assert out["currency"] == "USD", out
+
+
+class TestANoteIsAddedNotSwapped:
+    """Every other field on a customer row holds ONE value, so the model
+    sends the new one and the handler writes it. Notes are not that: they
+    are what the shop has learned about a person, and the model sends only
+    the new sentence. "อัปเดตลูกค้าสมชาย หมายเหตุว่าอยากได้ติดตั้งวันเสาร์"
+    erased "ชอบสีขาว ห้ามโทรก่อน 10 โมง" and reported success
+    (verified 11 ก.ย. 2569)."""
+
+    async def _note(self, before, fresh):
+        client = _shop(customers=[{**CUSTOMER, "notes": before}])
+        await _say(
+            client, "อัปเดตลูกค้าสมชาย หมายเหตุว่า" + fresh,
+            intent={"action": "update", "entity": "customer",
+                    "fields": {"target_name": "สมชาย", "notes": fresh}, "missing": []},
+        )
+        return client._customers[0].get("notes")
+
+    @pytest.mark.asyncio
+    async def test_what_was_there_survives(self):
+        assert await self._note("ชอบสีขาว ห้ามโทรก่อน 10 โมง", "อยากได้ติดตั้งวันเสาร์") == (
+            "ชอบสีขาว ห้ามโทรก่อน 10 โมง\nอยากได้ติดตั้งวันเสาร์"
+        )
+
+    @pytest.mark.asyncio
+    async def test_the_first_note_is_written_plainly(self):
+        assert await self._note(None, "อยากได้ติดตั้งวันเสาร์") == "อยากได้ติดตั้งวันเสาร์"
+
+    @pytest.mark.asyncio
+    async def test_the_same_note_twice_is_not_doubled(self):
+        assert await self._note("อยากได้ติดตั้งวันเสาร์", "อยากได้ติดตั้งวันเสาร์") == (
+            "อยากได้ติดตั้งวันเสาร์"
+        )
+
+
+class TestALookupPhraseInsideAnOrderIsNotALookup:
+    """"ข้อมูลลูกค้า" is how someone asks to SEE a customer. It is also
+    eight characters inside "แก้ข้อมูลลูกค้าสมชาย หมายเหตุ …", and the
+    detail road matched it anywhere in the sentence: it took the whole tail
+    as a record code and answered "ไม่พบลูกค้ารหัส สมชาย หมายเหตุ อยากได้
+    ติดตั้งวันเสาร์" with ZERO model calls (11 ก.ย. 2569).
+
+    docs/MODEL_FIRST.md step 1: the sentence never reached the model, so the
+    rule is what had to move — and a read road has nothing to decline, so it
+    falls through rather than refusing."""
+
+    INTENT = {"action": "update", "entity": "customer",
+              "fields": {"target_name": "สมชาย", "notes": "อยากได้ติดตั้งวันเสาร์"}, "missing": []}
+
+    @pytest.mark.asyncio
+    async def test_the_edit_reaches_the_model_and_is_carried_out(self):
+        client = _shop(customers=[{**CUSTOMER, "notes": "ชอบสีขาว"}])
+        text, written = await _say(
+            client, "แก้ข้อมูลลูกค้าสมชาย หมายเหตุ อยากได้ติดตั้งวันเสาร์", intent=self.INTENT,
+        )
+        assert "update_customer" in written, f"{text} / {written}"
+        assert "ไม่พบ" not in text, text
+
+    @pytest.mark.asyncio
+    async def test_the_lookup_itself_is_untouched(self):
+        client = _shop(customers=[dict(CUSTOMER)])
+        text, written = await _say(client, "ข้อมูลลูกค้าสมชาย")
+        assert "C-2026-0001" in text and written == [], f"{text} / {written}"
+
+    @pytest.mark.asyncio
+    async def test_a_lookup_by_code_is_untouched(self):
+        client = _shop(customers=[dict(CUSTOMER)])
+        text, _ = await _say(client, "ขอข้อมูลลูกค้า C-2026-0001")
+        assert "สมชาย" in text, text
+
+    def test_the_test_itself_names_the_verbs(self):
+        from chann_app.services.chat import _lookup_is_really_an_edit as f
+
+        triggers = ("ข้อมูลลูกค้า",)
+        assert f("แก้ข้อมูลลูกค้าสมชาย", triggers)
+        assert f("อัปเดตข้อมูลลูกค้าสมชาย", triggers)
+        assert not f("ข้อมูลลูกค้าสมชาย", triggers)
+        assert not f("ขอข้อมูลลูกค้าสมชาย", triggers)
+
+
+class TestASalesGroupIsNotATechnicianTeam:
+    """`sales_groups` and `technician_teams` are different tables, with
+    different Data routes and different dashboard pages. Chat had a road to
+    one of them: every sales-group sentence was rebuilt as a technician
+    sentence, so "สร้างกลุ่มขาย ทีมเหนือ" answered "สร้างทีม ทีมเหนือ แล้ว"
+    and recorded create_technician_team — a sales group in the technician
+    roster, assignable to a repair job (verified 11 ก.ย. 2569)."""
+
+    @pytest.mark.asyncio
+    async def test_a_sales_group_is_created_in_its_own_table(self):
+        client = _shop()
+        text, _ = await _say(client, "สร้างกลุ่มขาย เหนือ", intent={
+            "action": "create", "entity": "sales_group",
+            "fields": {"team_name": "เหนือ", "scope": "sales"}, "missing": [],
+        })
+        kinds = [c[0] for c in client.recorded if "group" in c[0] or "team" in c[0]]
+        assert "create_sales_group" in kinds, f"{text} / {kinds}"
+        assert "create_technician_team" not in kinds, kinds
+
+    @pytest.mark.asyncio
+    async def test_the_scope_the_prompt_asks_for_is_read(self):
+        """entity="team" with scope="sales" is what INTENT_SYSTEM_PROMPT
+        tells the model to send; the handler ignored the field entirely."""
+        client = _shop()
+        await _say(client, "ตั้งทีมขาย ใต้", intent={
+            "action": "create", "entity": "team",
+            "fields": {"team_name": "ใต้", "scope": "sales"}, "missing": [],
+        })
+        kinds = [c[0] for c in client.recorded if "group" in c[0] or "team" in c[0]]
+        assert "create_sales_group" in kinds and "create_technician_team" not in kinds, kinds
+
+    @pytest.mark.asyncio
+    async def test_a_technician_team_still_goes_where_it_always_did(self):
+        client = _shop()
+        await _say(client, "สร้างทีมช่าง แอร์", intent={
+            "action": "create", "entity": "team",
+            "fields": {"team_name": "แอร์", "scope": "technician"}, "missing": [],
+        })
+        kinds = [c[0] for c in client.recorded if "group" in c[0] or "team" in c[0]]
+        assert "create_technician_team" in kinds and "create_sales_group" not in kinds, kinds
+
+    @pytest.mark.asyncio
+    async def test_deleting_one_is_a_capability_the_gate_knows(self):
+        """("delete", "sales_group") was unregistered, so the gate answered
+        "this system cannot do that" while DELETE /sales-groups/{id} had
+        existed since Phase 7."""
+        client = _shop()
+        await _say(client, "สร้างกลุ่มขาย เหนือ", intent={
+            "action": "create", "entity": "sales_group",
+            "fields": {"team_name": "เหนือ"}, "missing": []})
+        text, _ = await _say(client, "ลบกลุ่มขาย เหนือ", intent={
+            "action": "delete", "entity": "sales_group",
+            "fields": {"team_name": "เหนือ"}, "missing": []})
+        assert "delete_sales_group" in [c[0] for c in client.recorded], text
+        assert client._sales_groups == [], client._sales_groups
+
+    @pytest.mark.asyncio
+    async def test_naming_the_group_and_its_first_member_does_both(self):
+        """"สร้างกลุ่มขาย เหนือ มีสมชาย" names a group AND a member. The
+        first cut created the group and then looked it up by name in the
+        same breath, so the reply was "ไม่พบกลุ่มขายชื่อ เหนือ"."""
+        client = _shop()
+        client._members = [{"id": "member-9", "chann_uid": "CHN-S-000009", "status": "active"}]
+        client._profiles = {"CHN-S-000009": {"first_name": "สมชาย", "last_name": "ขายเก่ง"}}
+        text, _ = await _say(client, "สร้างกลุ่มขาย เหนือ มีสมชาย", intent={
+            "action": "create", "entity": "sales_group",
+            "fields": {"team_name": "เหนือ", "members": "สมชาย"}, "missing": [],
+        })
+        kinds = [c[0] for c in client.recorded if "group" in c[0]]
+        assert kinds == ["create_sales_group", "add_sales_group_member"], f"{text} / {kinds}"
+        assert "เหนือ" in text and "สมชาย" in text and "ไม่พบ" not in text, text
+
+    @pytest.mark.asyncio
+    async def test_a_refusal_deletes_nothing(self):
+        client = _shop()
+        await _say(client, "สร้างกลุ่มขาย เหนือ", intent={
+            "action": "create", "entity": "sales_group",
+            "fields": {"team_name": "เหนือ"}, "missing": []})
+        await _say(client, "ไม่ต้องลบกลุ่มขาย เหนือ", intent={
+            "action": "delete", "entity": "sales_group",
+            "fields": {"team_name": "เหนือ"}, "missing": []})
+        assert [g["group_name"] for g in client._sales_groups] == ["เหนือ"]

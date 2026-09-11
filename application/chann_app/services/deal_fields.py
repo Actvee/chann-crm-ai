@@ -36,6 +36,10 @@ MONEY_CUES = (
 )
 QUANTITY_WORDS = ("ตัว", "ชิ้น", "อัน", "เครื่อง", "ชุด", "คน", "วัน", "นาที", "ชั่วโมง", "เดือน", "ปี", "%", "เปอร์เซ็นต์", "ราย")
 CURRENCY_CUES = {"usd": "USD", "$": "USD", "ดอลลาร์": "USD", "eur": "EUR", "ยูโร": "EUR", "jpy": "JPY", "เยน": "JPY"}
+#: Every currency this system can read out of a sentence, and therefore the
+#: only ones it will accept from the model. THB is the default and has no
+#: cue of its own.
+KNOWN_CURRENCIES = frozenset({"THB"} | set(CURRENCY_CUES.values()))
 
 _PHONE_RE = re.compile(r"(?<!\d)(?:\+66|0)\d{1,2}[- ]?\d{3}[- ]?\d{3,4}(?!\d)")
 _CODE_RE = re.compile(r"\b[A-Z]{1,3}-\d{4}-\d{4}\b")
@@ -202,8 +206,14 @@ def extract_deal_fields(message: str, ai_fields: dict | None, today: date) -> di
                 amount = parsed
     if amount is None and len(candidates) > 1:
         ambiguous.append("amount")
+    # A currency the system names, not any three letters. The test used to
+    # be `len == 3 and isalpha()`, so a model answering currency="ZZZ" wrote
+    # ZZZ onto the deal and every amount after it was formatted in a
+    # currency that does not exist (verified against the real router,
+    # 11 ก.ย. 2569). docs/MODEL_FIRST.md: the model proposes, the schema
+    # layer asks "is this a value the system defines?" — this is that layer.
     ai_currency = str(ai_fields.get("currency") or "").strip().upper()
-    if len(ai_currency) == 3 and ai_currency.isalpha():
+    if ai_currency in KNOWN_CURRENCIES:
         currency = ai_currency
 
     close = None

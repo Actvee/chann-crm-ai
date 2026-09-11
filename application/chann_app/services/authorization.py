@@ -17,8 +17,17 @@ READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 # What a linked customer may do from the customer app. Mirrors
 # chat.OA_ALLOWED_PERMISSION_KEYS["customer"]; kept here so the LIFF
 # principal does not import the 9k-line chat module.
+#: What a linked customer can do in a shop they are linked to. customer.read
+#: is their own history and their own row, never the shop's list.
+#:
+#: customer.update was in this set and nothing in the customer app ever used
+#: it — their own details are edited through /api/liff/{audience}/profile.
+#: What it did do was open PATCH /customers/{id} and POST /promote on EVERY
+#: row in the shop (reproduced 11 ก.ย. 2569). Both routes now refuse a
+#: customer principal outright; this removes the grant that made them
+#: reachable at all.
 CUSTOMER_PERMISSION_KEYS = frozenset({
-    "customer.read", "customer.update",
+    "customer.read",
     "ticket.create", "ticket.read",
     "warranty.read", "warranty.create",
 })

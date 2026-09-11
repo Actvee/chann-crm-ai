@@ -693,6 +693,51 @@ class FakeDataClient:
             if not (r["team_id"] == team_id and r["member_id"] == member_id)
         ]
 
+    # Sales groups are their own table in the Data tier and had no chat
+    # road at all until 11 ก.ย. 2569 — every sales-group sentence was
+    # rebuilt as a technician one and written to technician_teams. The
+    # fake needs them separate for the same reason the schema does.
+    async def create_sales_group(self, license_id, group_name):
+        self.recorded.append(("create_sales_group", license_id, group_name))
+        if not hasattr(self, "_sales_groups"):
+            self._sales_groups = []
+        row = {"id": f"sg-{len(self._sales_groups) + 1}", "group_name": group_name}
+        self._sales_groups.append(row)
+        return row
+
+    async def list_sales_groups(self, license_id):
+        return list(getattr(self, "_sales_groups", []))
+
+    async def delete_sales_group(self, license_id, group_id):
+        self.recorded.append(("delete_sales_group", license_id, group_id))
+        self._sales_groups = [
+            g for g in getattr(self, "_sales_groups", []) if g["id"] != group_id
+        ]
+
+    async def list_sales_group_members(self, license_id, group_id):
+        return [
+            r for r in getattr(self, "_sales_group_members", [])
+            if r.get("group_id") == group_id
+        ]
+
+    async def add_sales_group_member(self, license_id, group_id, member_id):
+        self.recorded.append(("add_sales_group_member", license_id, group_id, member_id))
+        rows = [
+            r for r in getattr(self, "_sales_group_members", [])
+            if not (r["group_id"] == group_id and r["member_id"] == member_id)
+        ]
+        member = next((m for m in getattr(self, "_members", []) if m["id"] == member_id), {})
+        rows.append({**member, "group_id": group_id, "member_id": member_id})
+        self._sales_group_members = rows
+        return {"id": f"sgm-{len(rows)}", "group_id": group_id, "member_id": member_id}
+
+    async def remove_sales_group_member(self, license_id, group_id, member_id):
+        self.recorded.append(("remove_sales_group_member", license_id, group_id, member_id))
+        self._sales_group_members = [
+            r for r in getattr(self, "_sales_group_members", [])
+            if not (r["group_id"] == group_id and r["member_id"] == member_id)
+        ]
+
     async def get_generated_document(self, license_id, document_id):
         return {"id": document_id, "sha256": "abc123", "output_path": f"gs://b/{document_id}.pdf"}
 
