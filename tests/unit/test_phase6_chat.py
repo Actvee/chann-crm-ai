@@ -5213,14 +5213,20 @@ class TestCustomerCanChangeTheirMind:
         assert "T-2026-0001" in reply.text
 
     async def test_rescheduling_reads_a_thai_date(self):
+        """The date and time still have to be READ — the shop is told what
+        the customer asked for. What changed on 11 ก.ย. 2569 is that the
+        visit is not moved: only someone with the permission, in the Sales
+        OA, may do that, because only they know if a technician is free."""
         client = self._client()
-        await handle_chat_message(
+        reply = await handle_chat_message(
             client, message="เลื่อนนัดเป็นวันศุกร์ บ่าย 2",
             ctx=_ctx(oa="customer"),
         )
-        updates = [r for r in client.recorded if r[0] == "update_ticket"]
-        assert updates, "the appointment was not moved"
-        assert updates[-1][3]["scheduled_time"] == "14:00:00"
+        assert not [r for r in client.recorded if r[0] == "update_ticket"], client.recorded
+        notes = [r for r in client.recorded if r[0] == "create_note"]
+        assert notes, f"the request never reached the shop: {reply.text[:80]}"
+        body = next(p for p in notes[-1] if isinstance(p, dict)).get("body", "")
+        assert "14:00" in body, body
 
     async def test_a_finished_job_cannot_be_cancelled(self):
         client = self._client()

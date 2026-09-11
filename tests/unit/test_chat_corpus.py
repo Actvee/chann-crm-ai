@@ -199,6 +199,12 @@ SPEC = {
     "c.register": [A(h=["_handle_warranty_register"])],
     "c.help_register": [A(h=["_help_reply"]), A(h=["_handle_warranty_register"])],
     "c.contact": [A(h=["_handle_customer_contact"])],
+    # The handler is the same; what it does inside changed on 11 ก.ย. 2569.
+    # A customer may not move a visit — only someone with the permission, in
+    # the Sales OA, may — so this road records the request against the job
+    # and pushes it to the shop and the assigned technician. The intent name
+    # is kept so the baseline does not churn; what it MEANS is "the request
+    # was understood and forwarded", not "the visit moved".
     "c.resched": [A(h=["_handle_customer_amend|cancel=False"])],
     "c.cancel": [A(h=["_handle_customer_amend|cancel=True"])],
     "c.correction": [A(h=["_handle_customer_amend"]), A(h=["_handle_customer_report"], text=STATUS_TXT, forbid=["_customer_fallback"]), A(h=["_handle_customer_chat_start"])],

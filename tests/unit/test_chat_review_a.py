@@ -331,12 +331,19 @@ class TestA9NotEveryLineIsAFault:
         assert not _writes(client, "create_ticket") and "ยกเลิกงาน T-2026-0001" in reply.text
 
     async def test_the_technician_cannot_come_that_day_asks_for_another(self):
+        """The day they name reaches the SHOP. Until 11 ก.ย. 2569 it moved
+        the visit outright; the owner's rule is that only someone with the
+        permission, in the Sales OA, may move one — the team has to see
+        whether a technician is free first."""
         client = _customer(_ticket(1, status="assigned"))
         reply = await say(client, "customer", "ช่างมาพรุ่งนี้ไม่ได้นะ")
         assert not _writes(client, "create_ticket")
         assert client._pending["missing"] == ["schedule"] and "วันไหน" in reply.text
-        await say(client, "customer", "วันศุกร์ บ่าย 2")
-        assert client._tickets[0]["scheduled_time"] == "14:00:00" and client._pending is None
+        second = await say(client, "customer", "วันศุกร์ บ่าย 2")
+        assert not _writes(client, "update_ticket"), client.recorded
+        note = next(c for c in client.recorded if c[0] == "create_note")
+        assert "14:00" in next(p for p in note if isinstance(p, dict)).get("body", "")
+        assert "แจ้งร้าน" in second.text and client._pending is None
 
     def test_short_fault_markers_respect_place_names(self):
         assert not chat._looks_like_fault("99/1 ถ.สุขุมวิท แขวงคลองตัน")

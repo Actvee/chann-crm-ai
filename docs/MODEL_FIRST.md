@@ -103,11 +103,45 @@ The conversion order, largest blocker first:
 
 Each step is measured with a per-sentence A/B and ships on its own.
 
+## What a stubbed model cannot tell you
+
+Every harness in this repo answers the model call with a canned string:
+`test_phase6_chat._ai`, `simulate-phrasings`, `measure-road-share`,
+`map-rule-roads`. They prove which ROAD a sentence takes and what the handlers do
+with it. They cannot prove the model reads it correctly — and the stubs are written
+by the same hand as the code, so they agree with it by construction.
+
+Owner, 11 ก.ย. 2569: *"ตอนนี้ที่ทดสอบคือยังทำตามแนวทาง model first ใช่ไหม เห็นทดสอบ
+แต่ credit ไม่ได้ถูกใช้เลย"*. Asking the deployed model the same day found four bugs
+in code that had already passed its tests:
+
+| sentence | the model returns | the code expected |
+|---|---|---|
+| `ดีล D-2026-0001 ลูกค้าตกลงซื้อแล้ว` | `"status": "won"` | `"stage"` |
+| `สร้างกลุ่มขาย เหนือ` | `missing: ["members"]` | nothing missing |
+| `ลบกลุ่มขาย เหนือ` | `entity:"team"`, no `scope` | `scope:"sales"` |
+| `เพิ่ม สมชาย เข้ากลุ่มขาย เหนือ` | `entity:"team"`, no `scope` | `scope:"sales"` |
+
+The last two would have written to the TECHNICIAN table — the defect that round had
+just fixed, re-entering through the model road.
+
+So: **a prompt change is invisible to the offline suite.** The only regression test for
+one is `scripts/agent-test/evaluate-model.py --run` (49 cases × 3 repeats, ~$0.10).
+Run it before and after, and compare `varying_outputs` as well as pass/fail — a case
+whose ACTION varies between repeats is a coin flip in production.
+
+`scripts/dev/ask-model.py` answers the one-sentence question. The key is never in the
+environment by default; ask for it.
+
 ## Rejected by measurement — do not re-propose without new evidence
 
 - Deleting `_appointment_net` before the context block exists: loses five real appointments
   (`พรุ่งนี้ 10 โมง โทรหาสมชาย` among them).
-- Routing deal-stage sentences (`ปิดสำเร็จ`) through the model: the prompt documents no way
-  to express a stage transition, so there is no model-road path to `transition_deal_stage`.
+- Routing deal-stage sentences (`ปิดสำเร็จ`) through the model *instead of* the typed road:
+  the prompt documents no way to express a stage transition, so there is no model-road path
+  to `transition_deal_stage`. (11 ก.ย. 2569 — the handler now ACCEPTS a stage when the model
+  sends one anyway, and hands it to the same `_handle_deal_stage_command`. That is a net,
+  not a conversion: the typed road still decides these sentences, and the entry above still
+  stands until the prompt says how to express a transition.)
 - Moving `_sales_interest_item` to the model road: the deal-create field shape carries no
   product or quantity, so the model's natural answer cannot be executed.

@@ -1,20 +1,20 @@
 {
- "cases": 1165,
+ "cases": 1168,
  "per_oa": {
   "customer": {
    "read": 12,
    "rule": 332
   },
   "sales": {
-   "read": 146,
-   "rule": 391
+   "read": 148,
+   "rule": 392
   },
   "technician": {
    "read": 51,
    "rule": 233
   }
  },
- "reached_model": 209,
+ "reached_model": 211,
  "roads": {
   "customer\t15/9 10.30": false,
   "customer\t55555 โอเค": false,
@@ -760,6 +760,7 @@
   "sales\tลูกค้าครับ": false,
   "sales\tลูกค้าจะเข้ามาที่ร้านพรุ่งนี้ตอนบ่าย": true,
   "sales\tลูกค้าชื่อสมชายครับ": false,
+  "sales\tลูกค้าตกลงซื้อ 2 แสน เปิดดีลเลย": true,
   "sales\tลูกค้าตกลงใบเสนอราคาแล้ว": false,
   "sales\tลูกค้าต้องการแอร์ 12000 BTU": true,
   "sales\tลูกค้าทั้งหมดมีใครบ้างครับ": false,
@@ -780,6 +781,7 @@
   "sales\tสมชายบอกว่ารอเงินเดือนออกก่อน": true,
   "sales\tสมชายมีดีลอะไรบ้าง": false,
   "sales\tสมชายสนใจซื้อแอร์ 2 ตัว 30000": true,
+  "sales\tสมชายสนใจแอร์ เปิดดีลให้หน่อย": true,
   "sales\tสมชายเบอร์ไรนะ": true,
   "sales\tสมชายเปลี่ยนเบอร์แล้วนะ เป็น 0899999999": true,
   "sales\tสมศักดิ์ไปงาน T-2026-0001 นะ": false,
@@ -844,6 +846,7 @@
   "sales\tเปลี่ยนเวลานัดเป็น 14.00": false,
   "sales\tเปิดงานซ่อมให้สมชาย แอร์ไม่เย็น": true,
   "sales\tเปิดดีล": true,
+  "sales\tเปิดดีลให้คุณสมชาย มูลค่าห้าแสน ปิดสิ้นเดือน": false,
   "sales\tเปิดดีลให้สมชายหน่อย": false,
   "sales\tเป็นสินค้ารายการใหม่": false,
   "sales\tเพิ่ม lead": true,

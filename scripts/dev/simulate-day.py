@@ -145,7 +145,16 @@ async def customer_day():
     await say(c, "customer", "SN12345678")   # register-first: the serial registers the product and files the held fault
     await say(c, "customer", "ลงทะเบียนสินค้า")
     await say(c, "customer", "เช็คประกัน")
+    # The fault report is FINISHED before anything else is asked of it.
+    # Without these two the address prompt was still open, and every line
+    # after it was answered with "ยังรอที่อยู่ที่จะให้ช่างไปครับ" — so the
+    # reschedule line below never reached the reschedule road at all, and
+    # this day claimed to walk a customer moving a visit while walking
+    # nothing (11 ก.ย. 2569).
+    await say(c, "customer", "99/1 ถ.สุขุมวิท")
+    await say(c, "customer", "พรุ่งนี้ 10 โมง")
     await say(c, "customer", "งานของฉัน")
+    # A customer may no longer move a visit; the shop is asked instead.
     await say(c, "customer", "เลื่อนนัดวันศุกร์ บ่าย 2")
     await say(c, "customer", "ยกเลิกงาน")
     await say(c, "customer", "ขอบคุณครับ")

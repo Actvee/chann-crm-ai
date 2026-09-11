@@ -89,7 +89,9 @@ PROMPT_FIELDS: dict[str, dict] = {
     "deal": {"target_name": "สมชาย", "amount": 500000, "currency": "THB"},
     "product": {"product_id": "FAN001", "product_name": "พัดลมไอเย็น", "unit_price": 1200},
     "line_item": {"product_name": "พัดลม", "qty": 2, "unit_price": 1200},
-    "quote": {"deal_code": "D-2026-0001"},
+    # create takes a deal_code; update is the customer's answer to a
+    # quotation already sent. Both are what the prompt documents.
+    "quote": {"deal_code": "D-2026-0001", "status": "accepted"},
     "ticket": {"target_name": "สมชาย", "issue_description": "แอร์ไม่เย็น",
                "service_address": "99/1", "scheduled_date": "2026-09-12",
                "scheduled_time": "10:00"},

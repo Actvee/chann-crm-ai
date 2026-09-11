@@ -413,6 +413,20 @@ SALES = [
     _e("สร้างดีลใหม่ให้ สมชาย 50,000 บาท ปิดสิ้นเดือน", "s.deal_create", "with_data amount date"),
     _e("ดีลใหม่ สมชาย แอร์ 2 ตัว", "s.deal_create_ai", "ai with_data order"),
     _e("สมชายสนใจซื้อแอร์ 2 ตัว 30000", "s.deal_create_ai", "ai buried"),
+    # Written 11 ก.ย. 2569 by typing what a salesperson would actually send,
+    # then playing it through the real router. All three were wrong:
+    #   "…เปิดดีลให้หน่อย"        -> ไม่พบลูกค้าชื่อ หน่อย ในบริษัทนี้
+    #   "เปิดดีลให้คุณสมชาย …"     -> ไม่พบลูกค้าชื่อ คุณสมชาย ในบริษัทนี้
+    #   "ลูกค้าตกลงซื้อ 2 แสน …"   -> แก้ของดีลหรือใบเสนอราคาไหนครับ
+    # The first two are a courtesy particle and an honorific read as names;
+    # the third is "ตกลง" — how a Thai sentence says the customer agreed to
+    # ANYTHING — pulling a deal-create order into the quote-accept road.
+    _e("สมชายสนใจแอร์ เปิดดีลให้หน่อย", "s.deal_create_ai", "ai polite_particle",
+       ai={"action": "create", "entity": "deal", "fields": {"target_name": "สมชาย"}, "missing": []}),
+    _e("ลูกค้าตกลงซื้อ 2 แสน เปิดดีลเลย", "s.deal_create_ai", "ai accept_word",
+       ai={"action": "create", "entity": "deal",
+           "fields": {"target_name": "สมชาย", "amount": 200000}, "missing": []}),
+    _e("เปิดดีลให้คุณสมชาย มูลค่าห้าแสน ปิดสิ้นเดือน", "s.deal_create", "honorific spelled_amount"),
     _e("เปิดดีล", "s.deal_create_bare", "bare"),
     _e("สร้างดีล", "s.deal_create_bare", "bare"),
     _e("create deal for somchai", "s.deal_create", "english"),

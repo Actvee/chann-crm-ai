@@ -58,6 +58,12 @@ READS = (
     "get_", "list_", "search", "permission_catalog", "authorization_context",
     "resolve", "storefront_browse", "storefront_search", "code_for",
     "line_target_of", "set_last_", "clear_", "save_", "append_recent_turn",
+    # Where the conversation is, not what the shop knows. Holding the
+    # question "ยกเลิกงาน … ใช่ไหมครับ" open so a bare "ยืนยัน" can answer it
+    # writes a pending slot and changes no record (11 ก.ย. 2569); counting
+    # it as a write made "nothing was written" fail on a road that had
+    # written nothing.
+    "set_pending_intent",
 )
 
 # `customer_id` is the C- code, not a UUID — that is what the Data tier
@@ -758,9 +764,16 @@ class TestAHoldIsNotAnAnswer:
         assert "ยังไม่ได้ยกเลิกงาน" not in text
 
     @pytest.mark.asyncio
-    async def test_a_plain_reschedule_still_moves_the_visit(self):
-        _, writes = await self._customer("ขอเลื่อนนัดเป็นวันอาทิตย์")
-        assert "update_ticket" in writes
+    async def test_a_plain_reschedule_still_reaches_the_shop(self):
+        """It used to move the visit. Owner, 11 ก.ย. 2569: only someone with
+        the permission, in the Sales OA, may move one — the shop has to see
+        whether a technician is free first. What must survive is that the
+        request is not swallowed: it is recorded against the job and pushed
+        to the shop."""
+        text, writes = await self._customer("ขอเลื่อนนัดเป็นวันอาทิตย์")
+        assert "update_ticket" not in writes, writes
+        assert "create_note" in writes, writes
+        assert "แจ้งร้าน" in text, text
 
     @pytest.mark.asyncio
     async def test_and_the_plain_refusal_still_refuses(self):
@@ -1039,36 +1052,56 @@ class TestACustomerAmendingTheirOwnJob:
         assert client._tickets[0]["issue_description"] == "แอร์ไม่เย็น"
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("message,date,time", [
-        ("เลื่อนนัดเป็นวันศุกร์", "2026-09-18", "09:00:00"),
-        ("ขอเลื่อนนัด T-2026-0001 วันเสาร์ บ่าย 2", "2026-09-12", "14:00:00"),
-        ("วันศุกร์ไม่สะดวกค่ะ ขอเป็นวันเสาร์", "2026-09-12", "09:00:00"),
-        ("พรุ่งนี้ไม่สะดวก ขอเป็นวันเสาร์", "2026-09-12", "09:00:00"),
+    @pytest.mark.parametrize("message,when", [
+        ("เลื่อนนัดเป็นวันศุกร์", "18 ก.ย. 2569"),
+        ("ขอเลื่อนนัด T-2026-0001 วันเสาร์ บ่าย 2", "12 ก.ย. 2569 14:00"),
+        ("วันศุกร์ไม่สะดวกค่ะ ขอเป็นวันเสาร์", "12 ก.ย. 2569"),
+        ("พรุ่งนี้ไม่สะดวก ขอเป็นวันเสาร์", "12 ก.ย. 2569"),
     ])
-    async def test_a_real_reschedule_still_moves_the_visit(self, message, date, time):
+    async def test_a_real_reschedule_becomes_a_request_to_the_shop(self, message, when):
+        """These four used to move the visit. Owner, 11 ก.ย. 2569: "ลูกค้า
+        ไม่มีสิทธิ์เลื่อน จะเลื่อนได้แค่คนที่มีสิทธิ์และทำใน Sale OA …
+        ควรแจ้งร้านเพราะไม่รู้ว่าช่างจะมีคิวว่างหรือไม่".
+
+        The request must still be UNDERSTOOD — the date the customer named
+        is what the shop is told — and the job must be untouched."""
         text, writes, client = await _customer_say(message)
-        assert "update_ticket" in writes, f"{message!r} was refused: {text[:80]}"
-        moved = next(c for c in client.recorded if c[0] == "update_ticket")
-        assert moved[3]["scheduled_date"] == date
-        assert moved[3].get("scheduled_time") == time
+        assert "update_ticket" not in writes, f"{message!r} still wrote: {writes}"
+        assert "create_note" in writes, f"{message!r} was swallowed: {text[:80]}"
+        note = next(c for c in client.recorded if c[0] == "create_note")
+        body = next(p for p in note if isinstance(p, dict)).get("body", "")
+        assert when in body, f"{message!r} -> {body!r}"
+        assert client._tickets[0]["scheduled_date"] == "2026-09-11"
+        assert client._tickets[0]["scheduled_time"] == "10:00"
 
     @pytest.mark.asyncio
     async def test_asking_for_a_reschedule_with_no_date_still_arms_the_prompt(self):
-        text, writes, _ = await _customer_say("ขอเลื่อนนัดหน่อยครับ")
-        assert writes == ["set_pending_intent"]
+        text, writes, client = await _customer_say("ขอเลื่อนนัดหน่อยครับ")
+        # The pending slot is conversation state, so it is not in `writes`
+        # any more; assert the thing itself rather than its side effect.
+        assert writes == [], writes
+        assert client._pending and client._pending["missing"] == ["schedule"]
         assert "สะดวกให้ช่างไปวันไหน" in text
 
     @pytest.mark.asyncio
     async def test_a_date_that_does_not_suit_still_arms_the_prompt(self):
-        text, writes, _ = await _customer_say("ช่างมาพรุ่งนี้ไม่ได้นะ")
-        assert writes == ["set_pending_intent"]
+        text, writes, client = await _customer_say("ช่างมาพรุ่งนี้ไม่ได้นะ")
+        assert writes == [], writes
+        assert client._pending and client._pending["missing"] == ["schedule"]
         assert "สะดวกให้ช่างไปวันไหน" in text
 
     @pytest.mark.asyncio
-    async def test_a_real_correction_still_restates_the_fault(self):
+    async def test_a_real_correction_reaches_the_shop_without_rewriting_the_job(self):
+        """It used to overwrite issue_description — the words a technician
+        reads before setting off — from a channel where nobody holds a
+        permission key. The restatement is recorded and pushed instead;
+        the shop updates the job."""
         text, writes, client = await _customer_say("ไม่ใช่ๆ ผมหมายถึงแอร์ห้องนอน")
-        assert "update_ticket" in writes
-        assert client._tickets[0]["issue_description"] == "แอร์ห้องนอน"
+        assert "update_ticket" not in writes, writes
+        assert "create_note" in writes, f"swallowed: {text[:80]}"
+        note = next(c for c in client.recorded if c[0] == "create_note")
+        assert "แอร์ห้องนอน" in next(p for p in note if isinstance(p, dict)).get("body", "")
+        assert client._tickets[0]["issue_description"] == "แอร์ไม่เย็น"
 
     @pytest.mark.asyncio
     async def test_the_refusal_names_something_a_customer_can_type(self):
@@ -1078,6 +1111,50 @@ class TestACustomerAmendingTheirOwnJob:
         text, _, _ = await _customer_say("ไม่ใช่ ผมหมายถึงว่าจะถามเฉยๆ")
         assert "สร้างลูกค้า" not in text
         assert "แอร์ห้องนอน" in text
+
+
+class TestTheSecondDoorIntoTheReschedule:
+    """Closing the one-message reschedule road left a two-turn one open, and
+    five single-sentence probes all missed it: "ขอเลื่อนนัด" with no date
+    arms a schedule prompt, and the ANSWER to that prompt is read by a
+    different block — which still called update_ticket. Found by an audit
+    agent reading the pending-intent paths rather than by sending messages
+    (11 ก.ย. 2569).
+
+    The same block books the visit for a fault report still being taken.
+    That one IS the customer's to set: it is part of creating their own job,
+    which the owner's rule allows. Only the reschedule arm changed."""
+
+    JOB = dict(CUSTOMER_TICKET)
+
+    async def _turns(self, *messages):
+        client = FakeDataClient(role="customer", permission_keys=[])
+        client._tickets = [dict(self.JOB)]
+        ctx = _ctx(primary_role="customer", oa="customer")
+        reply = None
+        for message in messages:
+            reply = await chat.handle_chat_message(
+                client, ctx=ctx, message=message, language="th",
+            )
+        writes = [c[0] for c in client.recorded if not c[0].startswith(READS)]
+        return (reply.text or ""), writes, client
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("opener", ["ขอเลื่อนนัด", "ช่างมาพรุ่งนี้ไม่ได้"])
+    async def test_answering_the_schedule_prompt_asks_the_shop(self, opener):
+        text, writes, client = await self._turns(opener, "วันเสาร์ 10 โมง")
+        assert "update_ticket" not in writes, f"{opener!r} then a date still wrote: {writes}"
+        assert "create_note" in writes, f"the request was swallowed: {text[:80]}"
+        assert client._tickets[0]["scheduled_date"] == self.JOB["scheduled_date"]
+        assert client._tickets[0]["scheduled_time"] == self.JOB["scheduled_time"]
+        assert "แจ้งร้าน" in text, text
+
+    @pytest.mark.asyncio
+    async def test_the_shop_is_told_the_day_the_customer_asked_for(self):
+        _, _, client = await self._turns("ขอเลื่อนนัด", "วันเสาร์ 10 โมง")
+        note = next(c for c in client.recorded if c[0] == "create_note")
+        body = next(p for p in note if isinstance(p, dict)).get("body", "")
+        assert "12 ก.ย. 2569" in body and "10:00" in body, body
 
 
 class TestTheCancelGuardDoesNotDefeatItself:
@@ -1096,8 +1173,12 @@ class TestTheCancelGuardDoesNotDefeatItself:
         text, writes, client = await _customer_say(
             "ไม่ได้จะยกเลิกงาน ขอแค่เลื่อนเป็นวันอาทิตย์",
         )
-        assert "ยกเลิกงาน" not in text, "offered to cancel what the sentence refused"
-        assert "update_ticket" in writes
+        assert "ยกเลิกงาน T-" not in text, "offered to cancel what the sentence refused"
+        # The reschedule road now asks the shop rather than moving the visit
+        # (owner, 11 ก.ย. 2569); what this test guards is that the sentence
+        # reaches that road at all instead of dying at the cancel guard.
+        assert "create_note" in writes, f"swallowed: {text[:80]}"
+        assert "update_ticket" not in writes, writes
         assert client._tickets[0]["status"] != "cancelled"
 
     @pytest.mark.asyncio
@@ -1585,12 +1666,16 @@ class TestTheGuardDeclinesWithoutAskingASecondQuestion:
     """
 
     @pytest.mark.asyncio
-    async def test_a_reschedule_phrased_as_a_question_still_moves_the_visit(self):
+    async def test_a_reschedule_phrased_as_a_question_still_reaches_the_shop(self):
+        """The guard must not turn this into a confirm prompt. What lies at
+        the end of the road changed on 11 ก.ย. 2569 — the shop is asked, the
+        visit is not moved — but the road itself must stay open."""
         text, writes, client = await _customer_say("เลื่อนเป็นวันศุกร์ได้ไหม")
         assert "ใช่ไหมครับ? ถ้าใช่" not in text, "turned a reschedule into a confirm prompt"
-        assert "update_ticket" in writes, text[:80]
-        moved = next(c for c in client.recorded if c[0] == "update_ticket")
-        assert moved[3]["scheduled_date"] == "2026-09-18"
+        assert "create_note" in writes, text[:80]
+        assert "update_ticket" not in writes, writes
+        note = next(c for c in client.recorded if c[0] == "create_note")
+        assert "18 ก.ย. 2569" in next(p for p in note if isinstance(p, dict)).get("body", "")
 
     @pytest.mark.asyncio
     async def test_the_same_shape_still_reaches_the_handler_when_the_time_is_unreadable(self):
@@ -1629,3 +1714,104 @@ class TestTheGuardDeclinesWithoutAskingASecondQuestion:
             "ยกเลิกนัด C-2026-0001 ได้ไหม", action="appointment_cancel", language="th",
         )
         assert asked is not None and "ใช่ไหมครับ" in asked.text
+
+
+class TestTheCustomerCanCancelWithoutFightingTheWording:
+    """Owner, 11 ก.ย. 2569: cancelling their own visit is the customer's to
+    do. The confirmation was stateless — it re-read the message for the word
+    "ยกเลิก" — so the quick reply worked ("ยืนยันยกเลิกงาน T-2026-0001") and
+    a person who read "กด ยืนยันยกเลิก เพื่อยืนยัน" and typed "ยืนยัน" lost
+    the cancellation to the catch-all. The question is held now, so the
+    answer can be an answer."""
+
+    JOB = dict(CUSTOMER_TICKET)
+
+    async def _turns(self, *messages):
+        client = FakeDataClient(role="customer", permission_keys=[])
+        client._tickets = [dict(self.JOB)]
+        ctx = _ctx(primary_role="customer", oa="customer")
+        reply = None
+        for message in messages:
+            reply = await chat.handle_chat_message(
+                client, ctx=ctx, message=message, language="th",
+            )
+        writes = [c[0] for c in client.recorded if not c[0].startswith(READS)]
+        return (reply.text or ""), writes, client
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("answer", ["ยืนยัน", "ใช่", "ตกลง", "ยืนยันยกเลิกงาน T-2026-0001"])
+    async def test_a_plain_yes_cancels(self, answer):
+        _, writes, client = await self._turns("ไม่ต้องมาแล้วครับ ซ่อมเองได้แล้ว", answer)
+        assert "set_ticket_status" in writes, f"{answer!r} did not cancel: {writes}"
+        assert client._tickets[0]["status"] == "cancelled"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("answer", ["ไม่", "ไม่ต้อง"])
+    async def test_a_plain_no_keeps_the_job(self, answer):
+        text, writes, client = await self._turns("ไม่ต้องมาแล้วครับ ซ่อมเองได้แล้ว", answer)
+        assert "set_ticket_status" not in writes, writes
+        assert client._tickets[0]["status"] == "assigned"
+        assert "ยังอยู่" in text, text
+
+    @pytest.mark.asyncio
+    async def test_a_new_subject_lets_the_question_lapse(self):
+        """The held question must not swallow the next message."""
+        text, writes, client = await self._turns(
+            "ไม่ต้องมาแล้วครับ ซ่อมเองได้แล้ว", "แอร์ห้องนอนก็เสียด้วย",
+        )
+        assert "set_ticket_status" not in writes, writes
+        assert client._tickets[0]["status"] == "assigned"
+        assert "ยกเลิก" not in text[:40], text
+
+    @pytest.mark.asyncio
+    async def test_a_bare_yes_with_no_question_open_does_nothing(self):
+        """These words act ONLY while a confirmation is held. Otherwise
+        "ยืนยัน" would be a way to cancel a job by accident."""
+        _, writes, client = await self._turns("ยืนยัน")
+        assert writes == [], writes
+        assert client._tickets[0]["status"] == "assigned"
+
+
+class TestTheJobShowsWhatTheCustomerAskedFor:
+    """Owner's answer to "the restated fault is buried in the notes":
+    "ปรับให้เด่นกว่านี้" (11 ก.ย. 2569). A customer's outstanding requests
+    are the first thing under the job number — above the fault and above the
+    appointment — because a technician reads this screen before setting off
+    and a request to move the visit is what most changes what they do."""
+
+    JOB = dict(CUSTOMER_TICKET)
+
+    async def _asked_then_opened(self, *customer_messages):
+        customer = FakeDataClient(role="customer", permission_keys=[])
+        customer._tickets = [dict(self.JOB)]
+        cctx = _ctx(primary_role="customer", oa="customer")
+        for message in customer_messages:
+            await chat.handle_chat_message(
+                customer, ctx=cctx, message=message, language="th",
+            )
+        tech = FakeDataClient(
+            role="technician",
+            permission_keys=sorted(DEFAULT_ROLE_TEMPLATES["technician"]),
+        )
+        tech._tickets = [dict(self.JOB)]
+        tech._notes = list(getattr(customer, "_notes", []))
+        reply = await chat.handle_chat_message(
+            tech, ctx=_ctx(primary_role="technician", oa="technician"),
+            message="ข้อมูลงาน T-2026-0001", language="th",
+        )
+        return reply.text or ""
+
+    @pytest.mark.asyncio
+    async def test_the_asks_come_before_the_job_s_own_fields(self):
+        text = await self._asked_then_opened(
+            "ขอเลื่อนนัดเป็นวันเสาร์ได้ไหมคะ", "ไม่ใช่ๆ ผมหมายถึงแอร์ห้องนอน",
+        )
+        assert "คำขอจากลูกค้า" in text, text
+        assert "แอร์ห้องนอน" in text and "ขอเลื่อนนัด" in text, text
+        assert text.index("คำขอจากลูกค้า") < text.index("อาการ:"), text
+
+    @pytest.mark.asyncio
+    async def test_a_job_nobody_asked_about_shows_no_header(self):
+        text = await self._asked_then_opened()
+        assert "คำขอจากลูกค้า" not in text, text
+        assert "T-2026-0001" in text

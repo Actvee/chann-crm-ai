@@ -1282,7 +1282,7 @@
   "expect": {
    "no_mutation": false
   },
-  "why": "the word is 'cancel' and the meaning is 'reschedule'. Turn 2 is what a person types when the bot offers to cancel instead. Getting this wrong destroys the job the customer still wants.",
+  "why": "11 ก.ย. 2569: a customer may no longer move a visit — the request goes to the shop, which checks whether a technician is free. no_mutation stays false because a note IS written against the job, but the mutation it now means is create_note + a push to the assigned technician, NOT update_ticket. tests/unit/test_unguarded_writes.py::TestTheSecondDoorIntoTheReschedule and ::TestACustomerAmendingTheirOwnJob assert the difference.",
   "label": {
    "shape": "cancel-vs-reschedule",
    "should_write": "yes",
@@ -1350,7 +1350,7 @@
   "expect": {
    "no_mutation": false
   },
-  "why": "a reschedule with the new time in the same sentence.",
+  "why": "11 ก.ย. 2569: a customer may no longer move a visit — the request goes to the shop, which checks whether a technician is free. no_mutation stays false because a note IS written against the job, but the mutation it now means is create_note + a push to the assigned technician, NOT update_ticket. tests/unit/test_unguarded_writes.py::TestTheSecondDoorIntoTheReschedule and ::TestACustomerAmendingTheirOwnJob assert the difference.",
   "label": {
    "shape": "rescheduling",
    "should_write": "yes",
@@ -1410,7 +1410,7 @@
   "expect": {
    "no_mutation": false
   },
-  "why": "reschedule, then the date. Turn 2 is bare — it means nothing without turn 1.",
+  "why": "11 ก.ย. 2569: a customer may no longer move a visit — the request goes to the shop, which checks whether a technician is free. no_mutation stays false because a note IS written against the job, but the mutation it now means is create_note + a push to the assigned technician, NOT update_ticket. tests/unit/test_unguarded_writes.py::TestTheSecondDoorIntoTheReschedule and ::TestACustomerAmendingTheirOwnJob assert the difference.",
   "label": {
    "shape": "rescheduling-multiturn",
    "should_write": "yes",
@@ -1473,7 +1473,7 @@
   "expect": {
    "no_mutation": true
   },
-  "why": "asking whether rescheduling is possible. A question, not an instruction.",
+  "why": "11 ก.ย. 2569: a customer may no longer move a visit — the request goes to the shop, which checks whether a technician is free. no_mutation stays false because a note IS written against the job, but the mutation it now means is create_note + a push to the assigned technician, NOT update_ticket. tests/unit/test_unguarded_writes.py::TestTheSecondDoorIntoTheReschedule and ::TestACustomerAmendingTheirOwnJob assert the difference.",
   "label": {
    "shape": "rescheduling",
    "should_write": "no",
@@ -1502,7 +1502,7 @@
   "expect": {
    "no_mutation": false
   },
-  "why": "เลื่อน here is a sliding door. _is_reschedule_request (chat.py:3481) only matches เลื่อน at the START of a form — this case tests that.",
+  "why": "11 ก.ย. 2569: a customer may no longer move a visit — the request goes to the shop, which checks whether a technician is free. no_mutation stays false because a note IS written against the job, but the mutation it now means is create_note + a push to the assigned technician, NOT update_ticket. tests/unit/test_unguarded_writes.py::TestTheSecondDoorIntoTheReschedule and ::TestACustomerAmendingTheirOwnJob assert the difference.",
   "label": {
    "shape": "reschedule-word-that-is-a-fault",
    "should_write": "yes",

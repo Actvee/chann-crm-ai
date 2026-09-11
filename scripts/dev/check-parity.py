@@ -53,11 +53,11 @@ ACCEPTED = {
         "warranties/claim the customer home posts to (owner rule, 3 Sep: the shop "
         "records the unit, the customer claims it by serial)"
     ),
-    ("audit_log", "read"): "chat only — a compliance trail is read in the dashboard's own screen",
+    ("audit_log", "read"): "dashboard only — a compliance trail is read in its own screen; chat says so",
     ("member", "read"): "both, via the roles/members screen",
-    ("member", "update"): "both, via the roles/members screen",
+    ("member", "update"): "dashboard only — the roles/members screen; chat answers that it cannot",
     ("report", "read"): "chat only — the dashboard has its own reports pages",
-    ("role", "create"): "dashboard has the roles screen; chat routes the same intents",
+    ("role", "create"): "dashboard only — the roles screen; chat routes the intent and answers that it cannot",
     ("role", "read"): "dashboard has the roles screen",
     ("role", "update"): "dashboard has the roles screen",
     ("sales_group", "create"): "dashboard has the groups screen",
@@ -69,13 +69,13 @@ ACCEPTED = {
     ("setting", "read"): "dashboard has the settings screen",
     ("setting", "update"): "dashboard has the settings screen",
     ("customer", "archive"): "chat only by design — archiving from a list tap is too easy to do by accident",
-    ("deal", "archive"): "chat only by design — same reason as customer archive",
+    ("deal", "archive"): "neither, yet — customer archive asks for a confirmation first and a deal needs the same flow (see NO_HANDLER_YET)",
     ("warranty", "update"): "chat only — a customer registers and reads from the home screen; corrections are staff work in chat",
     ("service_report", "create"): "created by checking in; both surfaces do that",
     ("followup", "cancel"): "the dashboard cancels via PATCH status — same operation, different verb",
     ("line_item", "read"): "chat shows a quote's lines inside the quote detail, not as its own command",
     ("role", "delete"): "dashboard only — deleting a role is an admin screen job, with the members list in view",
-    ("sales_group", "delete"): "dashboard only — same as role.delete: an admin screen job with the members in view (E7, 6 Sep 2026)",
+    ("sales_group", "delete"): "both since 11 ก.ย. 2569 — chat's \"ลบกลุ่มขาย <ชื่อ>\" calls the same DELETE the groups screen does",
     ("setting", "create"): "the settings screen upserts; chat updates the same keys",
     # Phase 14: a customer answers the survey from the quick reply chat
     # pushes and from the home-screen card; there is no staff permission
@@ -93,6 +93,28 @@ ACCEPTED = {
 # collapsing the two would let a genuine gap hide behind a reason.
 KNOWN_GAPS = {
     ("product", "delete"): "the catalogue screen upserts but cannot remove; no Application route for it either",
+}
+
+# Registered in ACTION_PERMISSIONS and answered by NO handler: chat says
+# "ยังทำรายการนี้ไม่ได้". Measured, not declared — scripts/dev/
+# measure-capabilities.py plays each one through the real router. They are
+# listed here so the deploy gate stays green on what is already known, and
+# a NEW one shows up the moment it appears.
+#
+# This whole section exists because the check below used to take
+# ACTION_PERMISSIONS as "what chat can do". It is a registry of what is
+# REGISTERED. deal.update sat in it for months while chat answered "ยังทำ
+# รายการนี้ไม่ได้" and the dashboard's DealDetail saved the same four
+# fields happily — a parity break the parity checker could not see
+# (11 ก.ย. 2569).
+NO_HANDLER_YET = {
+    ("audit_log", "read"): "the compliance trail is a dashboard screen; chat has no reader",
+    ("deal", "archive"): "customer archive asks for a confirmation first; a deal needs the same flow",
+    ("member", "update"): "changing someone's role is the roles screen's job, with the members list in view",
+    ("product", "delete"): "no Application route either — see KNOWN_GAPS",
+    ("role", "create"): "permission editing is the roles screen, deliberately",
+    ("role", "read"): "same screen",
+    ("role", "update"): "same screen",
 }
 
 # URL fragment -> entity. Longest match wins, so "quotes/X/products"
@@ -212,7 +234,12 @@ def dashboard_capabilities() -> set[tuple[str, str]]:
     return found
 
 
-chat = {(entity, action) for (action, entity) in ACTION_PERMISSIONS}
+registered = {(entity, action) for (action, entity) in ACTION_PERMISSIONS}
+# What chat can actually DO is the registry minus the rows nothing answers.
+# Measured by scripts/dev/measure-capabilities.py; kept as a literal here so
+# this check stays a fast static read, and cross-checked by
+# tests/unit/test_assistant_behaviour.py so the two cannot drift.
+chat = registered - set(NO_HANDLER_YET)
 dash = dashboard_capabilities()
 
 chat_only = sorted(
@@ -223,11 +250,15 @@ dash_only = sorted(
     pair for pair in dash - chat if pair not in ACCEPTED and pair not in KNOWN_GAPS
 )
 
-print(f"chat routes {len(chat)} capabilities; the dashboard exercises {len(dash)}")
+print(f"chat routes {len(registered)} capabilities and answers {len(chat)} of them; "
+      f"the dashboard exercises {len(dash)}")
 print(f"{len(ACCEPTED)} pairs accepted as one-sided on purpose")
 print(f"{len(KNOWN_GAPS)} known gaps on the backlog:")
 for (entity, action), why in sorted(KNOWN_GAPS.items()):
     print(f"  {entity}.{action:9} — {why}")
+print(f"{len(NO_HANDLER_YET)} registered with no handler (chat says so honestly):")
+for (entity, action), why in sorted(NO_HANDLER_YET.items()):
+    print(f"  {entity + '.' + action:<22} — {why}")
 
 if chat_only or dash_only:
     if chat_only:

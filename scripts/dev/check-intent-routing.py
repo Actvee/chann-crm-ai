@@ -52,7 +52,6 @@ ME = "CHN-S-000001"
 # "No handler" is an honest answer; a silent fall-through is not.
 NO_HANDLER = {
     ("archive", "deal"): "deals close won/lost by stage; archiving one lives on the deals page",
-    ("update", "deal"): "no single deal edit in chat — stage, close date and lines each have their own command",
     ("update", "quote"): "a quote changes through its lines and its discount, each with its own command",
     ("update", "warranty"): "editing a registration is a dashboard job (warranties page); chat registers and reads",
     ("update", "approval"): "the approval flow is configured with \"ตั้งค่าการอนุมัติ\", not from a bare intent",

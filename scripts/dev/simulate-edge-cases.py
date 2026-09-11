@@ -102,8 +102,28 @@ async def main():
     if after != before:
         findings.append(("customer", "rich-menu tiles", "OPENED_TICKET", f"{after-before} junk ticket(s)"))
         print("!! rich-menu tiles opened", after - before, "ticket(s)")
-    await say(u,"customer","เลื่อนนัด 1/1/2020", expect_ok=True)   # past date → refused in words
-    await say(u,"customer","เลื่อนนัด พรุ่งนี้", expect_ok=True)    # no time → 09:00 echoed
+    # Two jobs are open by now, so a bare "เลื่อนนัด" is answered with "มีงาน
+    # อยู่หลายรายการ ระบุเลขงานด้วยครับ" — which is correct, and is also why
+    # these two lines exercised nothing for as long as they have existed:
+    # neither ever reached the reschedule road. The job is named now.
+    #
+    # And what the road does changed on 11 ก.ย. 2569: a customer may not move
+    # a visit, so a date in the past is still refused in words, and a date
+    # that reads is passed to the shop as a REQUEST — no 09:00 default,
+    # because nothing is written.
+    # Counted BEFORE, because answering the schedule prompt on a brand-new
+    # fault report writes the same field and IS the customer's to do — the
+    # first cut of this check flagged that legitimate booking.
+    booked_before = len([r for r in u.recorded if r[0] == "update_ticket"
+                         and any(isinstance(p, dict) and "scheduled_date" in p for p in r)])
+    await say(u,"customer","เลื่อนนัด T-2026-0001 1/1/2020", expect_ok=True)  # past date → refused
+    await say(u,"customer","เลื่อนนัด T-2026-0001 พรุ่งนี้", expect_ok=True)  # → a request to the shop
+    moved = [r for r in u.recorded if r[0] == "update_ticket"
+             and any(isinstance(p, dict) and "scheduled_date" in p for p in r)][booked_before:]
+    if moved:
+        findings.append(("customer", "reschedule", "MOVED_THE_VISIT",
+                         "a customer moved a visit; only the shop may"))
+        print("!! a customer moved a visit:", moved[-1])
 
     print(f"\n=== {len(findings)} FINDINGS ===")
     for f in findings: print("  ", f)

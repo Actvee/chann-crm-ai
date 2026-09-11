@@ -150,18 +150,24 @@ class TestCustomerAppointmentRules:
         assert not [r for r in c.recorded if r[0] == "update_ticket"]
 
     @pytest.mark.asyncio
-    async def test_reschedule_without_a_time_defaults_to_nine(self):
+    async def test_a_reschedule_without_a_time_asks_the_shop_for_the_day(self):
+        """Owner rule 1's 09:00 default was for a visit with no time on it.
+        Since 11 ก.ย. 2569 a customer cannot move a visit at all — the
+        request goes to the shop, so there is no empty field to fill and no
+        default to apply. The day the customer named is what the shop is
+        told, and the job is untouched."""
         c = _customer_client()
         c._tickets = [{"id": "t1", "ticket_number": "T-2026-0001", "status": "assigned",
                        "customer_chann_uid": "CHN-C-1"}]
         ctx = _ctx(**CUSTOMER)
         ctx.chann_uid = "CHN-C-1"
         reply = await handle_chat_message(c, message="เลื่อนนัด พรุ่งนี้", ctx=ctx)
-        updates = [r for r in c.recorded if r[0] == "update_ticket"]
-        assert updates, reply.text
-        fields = updates[-1][3] if len(updates[-1]) > 3 else updates[-1][-1]
-        assert fields.get("scheduled_time") == "09:00:00"
-        assert "09:00" in reply.text
+        assert not [r for r in c.recorded if r[0] == "update_ticket"], c.recorded
+        notes = [r for r in c.recorded if r[0] == "create_note"]
+        assert notes, reply.text
+        body = next(p for p in notes[-1] if isinstance(p, dict)).get("body", "")
+        assert "12 ก.ย. 2569" in body and "09:00" not in body, body
+        assert "แจ้งร้าน" in reply.text, reply.text
 
 
 class TestTechnicianOpenJobs:

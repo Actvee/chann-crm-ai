@@ -109,10 +109,14 @@ GUIDES: dict[str, dict] = {
                 "image_prompt": "แชท 3 ฟอง: ลูกค้า 'แอร์ไม่เย็น' → บอท 'รับแจ้งแล้ว เลขงาน T-2026-0001 ขอที่อยู่' → ลูกค้าพิมพ์ที่อยู่ → บอทถามวันนัด",
             },
             {
-                "key": "status", "title": {"th": "ดูสถานะ / เลื่อนนัด / ยกเลิก", "en": "Status, reschedule, cancel"},
+                "key": "status", "title": {"th": "ดูสถานะ / ขอเลื่อนนัด / ยกเลิก", "en": "Status, ask to move, cancel"},
+                # 11 ก.ย. 2569: asking to move a visit is a REQUEST now — the
+                # shop checks whether a technician is free and confirms back.
+                # The guide said "เลื่อนนัด: …" as though it happened on the
+                # spot, which is what the road used to do.
                 "body": {
-                    "th": "พิมพ์ \"งานของฉัน\" หรือ \"สถานะการซ่อม\" · เลื่อนนัด: \"เลื่อนนัดวันศุกร์ บ่าย 2\" · ยกเลิก: \"ยกเลิกงาน\"",
-                    "en": "\"my jobs\" / \"repair status\" · reschedule: \"move it to Friday 2pm\" · \"cancel job\"",
+                    "th": "พิมพ์ \"งานของฉัน\" หรือ \"สถานะการซ่อม\" · ขอเลื่อนนัด: \"ขอเลื่อนนัดวันศุกร์ บ่าย 2\" (ร้านจะเช็คคิวช่างแล้วยืนยันกลับ นัดเดิมยังอยู่จนกว่าร้านจะยืนยัน) · ยกเลิก: \"ยกเลิกงาน\" (ยกเลิกได้เลย)",
+                    "en": "\"my jobs\" / \"repair status\" · ask to move it: \"move it to Friday 2pm\" (the shop checks the technicians' schedule and confirms; the existing appointment stands until they do) · \"cancel job\" (cancels straight away)",
                 },
                 "commands": ["งานของฉัน", "สถานะการซ่อม", "เลื่อนนัด", "ยกเลิกงาน"],
                 "example": "งานของฉัน",

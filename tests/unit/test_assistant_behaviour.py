@@ -92,6 +92,16 @@ def _shop(*, quotes=(), deals=(), customers=(), keys=None):
     return client
 
 
+def _payload(client, method: str) -> dict:
+    """The dict a recorded call carried. Recorded tuples are
+    (method, license_id, id, payload, ...) and the trailing members differ
+    per method, so the payload is found by shape rather than by index —
+    a test that indexes wrongly asserts about a UUID string and passes for
+    the wrong reason."""
+    call = [c for c in client.recorded if c[0] == method][-1]
+    return next(part for part in reversed(call) if isinstance(part, dict))
+
+
 async def _say(client, message, *, intent=None, oa="sales", role="sales"):
     ai = httpx.AsyncClient(transport=_ai(json.dumps(intent, ensure_ascii=False))) if intent else None
     reply = await chat.handle_chat_message(
@@ -1610,3 +1620,310 @@ class TestASalesGroupIsNotATechnicianTeam:
             "action": "delete", "entity": "sales_group",
             "fields": {"team_name": "เหนือ"}, "missing": []})
         assert [g["group_name"] for g in client._sales_groups] == ["เหนือ"]
+
+
+class TestTheParityCheckerKnowsWhatChatCanActuallyDo:
+    """check-parity.py took ACTION_PERMISSIONS as "what chat can do". That
+    dict says what is REGISTERED. deal.update sat in it while chat answered
+    "ยังทำรายการนี้ไม่ได้" and the dashboard's DealDetail saved the same four
+    fields happily — a parity break the parity checker could not see
+    (11 ก.ย. 2569).
+
+    It now subtracts NO_HANDLER_YET, which is a measurement. These tests are
+    what stops that list from drifting away from the router: every pair on
+    it must really have no handler, and the ones just built must really
+    have one."""
+
+    @staticmethod
+    def _no_handler_list():
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "_parity", ROOT / "scripts" / "dev" / "check-parity.py")
+        module = importlib.util.module_from_spec(spec)
+        import sys as _sys
+        _sys.argv = ["check-parity"]
+        spec.loader.exec_module(module)
+        return module.NO_HANDLER_YET
+
+    async def _probe(self, action, entity, fields):
+        client = _shop(customers=[dict(CUSTOMER)], deals=[dict(DEAL)], quotes=[dict(QUOTE)])
+        intent = {"action": action, "entity": entity, "fields": dict(fields), "missing": []}
+        text, _ = await _say(client, "ทำรายการนี้ให้หน่อย", intent=intent)
+        from chann_app.services.chat import _no_handler_reply
+        return text.strip() == (_no_handler_reply(intent, "th", "sales").text or "").strip()
+
+    @pytest.mark.asyncio
+    async def test_everything_on_the_list_really_has_no_handler(self):
+        stale = []
+        for entity, action in self._no_handler_list():
+            if entity in ("audit_log", "role", "member", "product"):
+                continue  # nothing to name a record with; the list's reason stands
+            if not await self._probe(action, entity, {"code": "D-2026-0001"}):
+                stale.append(f"{entity}.{action}")
+        assert not stale, f"these now have a handler — take them off NO_HANDLER_YET: {stale}"
+
+    @pytest.mark.asyncio
+    async def test_the_ones_just_built_are_not_on_it(self):
+        built = {("deal", "update"), ("quote", "update"), ("sales_group", "create"),
+                 ("sales_group", "delete")}
+        on_the_list = built & set(self._no_handler_list())
+        assert not on_the_list, f"built, but still listed as unreachable: {on_the_list}"
+
+    @pytest.mark.asyncio
+    async def test_a_deal_edit_is_carried_out(self):
+        """The parity break itself: the dashboard has saved amount,
+        expected close, notes and lost reason since Phase 9."""
+        client = _shop(customers=[dict(CUSTOMER)], deals=[{**DEAL, "amount": "500000.00"}])
+        text, written = await _say(client, "แก้มูลค่าดีล D-2026-0001 เป็น 600000", intent={
+            "action": "update", "entity": "deal",
+            "fields": {"code": "D-2026-0001", "amount": 600000}, "missing": [],
+        })
+        assert "update_deal" in written, f"{text} / {written}"
+        sent = _payload(client, "update_deal")
+        assert sent == {"amount": "600000", "currency": "THB"}, sent
+
+    @pytest.mark.asyncio
+    async def test_a_date_inside_a_note_is_not_a_close_date(self):
+        """Which fields change is the model's reading; what they change to
+        is read from the message. Running the message scanner over every
+        update put an expected close date on a note that merely said
+        "วันเสาร์"."""
+        client = _shop(customers=[dict(CUSTOMER)], deals=[{**DEAL, "notes": "ลูกค้าขอส่วนลด"}])
+        await _say(client, "จดในดีล D-2026-0001 ว่าลูกค้าขอติดตั้งวันเสาร์", intent={
+            "action": "update", "entity": "deal",
+            "fields": {"code": "D-2026-0001", "notes": "ลูกค้าขอติดตั้งวันเสาร์"}, "missing": [],
+        })
+        sent = _payload(client, "update_deal")
+        assert set(sent) == {"notes"}, sent
+        assert sent["notes"] == "ลูกค้าขอส่วนลด\nลูกค้าขอติดตั้งวันเสาร์", sent
+
+    @pytest.mark.asyncio
+    async def test_a_stage_the_model_reads_goes_to_the_stage_road(self):
+        """"ดีล D-2026-0001 ลูกค้าตกลงซื้อแล้ว" is a phrasing the typed
+        parser misses. It used to fall off the end of the handler."""
+        client = _shop(customers=[dict(CUSTOMER)], deals=[dict(DEAL)])
+        text, written = await _say(client, "ดีล D-2026-0001 ลูกค้าตกลงซื้อแล้ว", intent={
+            "action": "update", "entity": "deal",
+            "fields": {"code": "D-2026-0001", "stage": "won"}, "missing": [],
+        })
+        assert "transition_deal_stage" in written, f"{text} / {written}"
+
+    @pytest.mark.asyncio
+    async def test_a_refusal_still_changes_nothing(self):
+        client = _shop(customers=[dict(CUSTOMER)], deals=[{**DEAL, "amount": "500000.00"}])
+        text, written = await _say(client, "ไม่ต้องแก้มูลค่าดีล D-2026-0001 เป็น 600000", intent={
+            "action": "update", "entity": "deal",
+            "fields": {"code": "D-2026-0001", "amount": 600000}, "missing": [],
+        })
+        assert written == [], f"{text} / {written}"
+
+    @pytest.mark.asyncio
+    async def test_the_customers_answer_to_a_quotation_is_recorded(self):
+        client = _shop(customers=[dict(CUSTOMER)], deals=[dict(DEAL)], quotes=[dict(QUOTE)])
+        text, _ = await _say(client, "ลูกค้าตอบรับใบเสนอราคา Q-2026-0001 แล้ว", intent={
+            "action": "update", "entity": "quote",
+            "fields": {"code": "Q-2026-0001", "status": "accepted"}, "missing": [],
+        })
+        assert "set_quote_status" in [c[0] for c in client.recorded], text
+
+
+
+class TestWhatTheDeployedModelActuallyReturns:
+    """Every intent in these tests is a VERBATIM answer from the deployed
+    model (google/gemini-3.1-flash-lite), captured on 11 ก.ย. 2569 by
+    scripts/dev/ask-model.py. That matters: the stubs in every other test
+    were written by the same hand as the code, so they agreed with it by
+    construction. The real model disagreed in four places, and all four were
+    bugs in code that had already "passed" its tests.
+
+      ดีล D-2026-0001 ลูกค้าตกลงซื้อแล้ว -> {"status": "won"}, not "stage"
+      สร้างกลุ่มขาย เหนือ             -> entity "team" + missing ["members"]
+      ลบกลุ่มขาย เหนือ                -> entity "team", NO scope at all
+      เพิ่ม สมชาย เข้ากลุ่มขาย เหนือ   -> entity "team", NO scope at all
+
+    The last two would have deleted from, and written to, the TECHNICIAN
+    table — the same defect this round set out to fix, re-entering through
+    the model road."""
+
+    REAL = {
+        "stage": ("ดีล D-2026-0001 ลูกค้าตกลงซื้อแล้ว", {
+            "action": "update", "entity": "deal",
+            "fields": {"deal_code": "D-2026-0001", "status": "won"}, "missing": []}),
+        "group_create": ("สร้างกลุ่มขาย เหนือ", {
+            "action": "create", "entity": "team",
+            "fields": {"team_name": "เหนือ", "scope": "sales"}, "missing": ["members"]}),
+        "group_add": ("เพิ่ม สมชาย เข้ากลุ่มขาย เหนือ", {
+            "action": "update", "entity": "team",
+            "fields": {"team_name": "เหนือ", "members": ["สมชาย"]}, "missing": []}),
+        "group_delete": ("ลบกลุ่มขาย เหนือ", {
+            "action": "delete", "entity": "team",
+            "fields": {"team_name": "เหนือ"}, "missing": []}),
+        "tech_team": ("สร้างทีมช่าง แอร์", {
+            "action": "create", "entity": "team",
+            "fields": {"team_name": "แอร์", "scope": "technician"}, "missing": []}),
+    }
+
+    def _staffed(self):
+        client = _shop(customers=[dict(CUSTOMER)], deals=[dict(DEAL)])
+        client._members = [{"id": "member-9", "chann_uid": "CHN-S-000009", "status": "active"}]
+        client._profiles = {"CHN-S-000009": {"first_name": "สมชาย", "last_name": "ขายเก่ง"}}
+        return client
+
+    async def _real(self, client, key):
+        message, intent = self.REAL[key]
+        return await _say(client, message, intent=intent)
+
+    @pytest.mark.asyncio
+    async def test_the_model_calls_it_status_and_the_stage_still_moves(self):
+        client = self._staffed()
+        text, written = await self._real(client, "stage")
+        assert "transition_deal_stage" in written, f"{text} / {written}"
+
+    @pytest.mark.asyncio
+    async def test_a_group_is_created_although_members_is_reported_missing(self):
+        client = self._staffed()
+        text, _ = await self._real(client, "group_create")
+        kinds = [c[0] for c in client.recorded if "group" in c[0] or "team" in c[0]]
+        assert "create_sales_group" in kinds, f"{text} / {kinds}"
+
+    @pytest.mark.asyncio
+    async def test_a_group_with_no_scope_is_still_not_a_technician_team(self):
+        client = self._staffed()
+        await self._real(client, "group_create")
+        await self._real(client, "group_add")
+        text, _ = await self._real(client, "group_delete")
+        kinds = [c[0] for c in client.recorded if "group" in c[0] or "team" in c[0]]
+        assert "add_sales_group_member" in kinds and "delete_sales_group" in kinds, kinds
+        assert not [k for k in kinds if "technician_team" in k], f"{text} / {kinds}"
+
+    @pytest.mark.asyncio
+    async def test_a_technician_team_still_goes_to_the_technician_table(self):
+        client = self._staffed()
+        await self._real(client, "tech_team")
+        kinds = [c[0] for c in client.recorded if "group" in c[0] or "team" in c[0]]
+        assert "create_technician_team" in kinds and "create_sales_group" not in kinds, kinds
+
+
+class TestReadingIsTheModelsJobRefusingIsTheCodes:
+    """scripts/agent-test/model-cases.json expected the MODEL to answer
+    "suggest" for three sentences whose speaker lacks the permission. It
+    failed all nine runs on 11 ก.ย. 2569 — by reading them correctly.
+
+    That expectation was the architecture backwards. docs/MODEL_FIRST.md:
+    "permission key — does this person hold the key? … None of that moves to
+    the model. Ever." The model reads; the gate refuses. These tests assert
+    the refusal where it actually lives, so the corpus does not have to ask
+    the model for something it must not be asked.
+
+    The intents below are verbatim from the deployed model."""
+
+    DENIED = [
+        ("ลบลูกค้า สมชาย",
+         {"action": "archive", "entity": "customer",
+          "fields": {"target_name": "สมชาย"}, "missing": []}),
+        ("สร้างใบเสนอราคาให้ดีล D-2026-0001",
+         {"action": "create", "entity": "quote",
+          "fields": {"deal_code": "D-2026-0001"}, "missing": []}),
+        ("อนุมัติ SR-2026-0001",
+         {"action": "approve", "entity": "approval",
+          "fields": {"code": "SR-2026-0001"}, "missing": []}),
+    ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message,intent", DENIED)
+    async def test_a_correct_reading_without_the_key_writes_nothing(self, message, intent):
+        client = FakeDataClient(
+            role="technician", permission_keys=["ticket.read"],
+            customers=[dict(CUSTOMER)], deals=[dict(DEAL)],
+        )
+        text, written = await _say(
+            client, message, intent=intent, oa="technician", role="technician",
+        )
+        assert written == [], f"{message!r} wrote {written}"
+        assert text.strip(), "refused with silence"
+
+
+class TestTheShopCanMoveAVisitFromChat:
+    """The other half of the owner's rule. A customer may not move a visit;
+    "จะเลื่อนได้แค่คนที่มีสิทธิ์และทำใน Sale OA" — and until 11 ก.ย. 2569 the
+    Sales OA could not either. Measured: "เลื่อนนัด T-2026-0001 วันศุกร์" was
+    claimed by the REMINDER roads (first the move road, then the create road,
+    because _is_reminder_command sees a record code and the word "นัด" inside
+    "เลื่อนนัด") and answered by asking for a code the sentence had given. So
+    the shop could receive a customer's request in chat and had to leave chat
+    to act on it."""
+
+    JOB = {
+        "id": "t1", "ticket_number": "T-2026-0001", "status": "assigned",
+        "accept_status": "accepted", "assigned_to_ref": "member-1",
+        "customer_chann_uid": "CHN-S-000001", "customer_name": "สมชาย",
+        "service_address": "99/1", "issue_description": "แอร์ไม่เย็น",
+        "scheduled_date": "2026-09-12", "scheduled_time": "14:00",
+    }
+
+    def _shop_with_a_job(self, oa, role):
+        client = FakeDataClient(
+            role=oa, permission_keys=sorted(DEFAULT_ROLE_TEMPLATES[role]),
+            customers=[dict(CUSTOMER)],
+        )
+        client._tickets = [dict(self.JOB)]
+        return client
+
+    async def _say_on(self, client, message, oa, role):
+        return await _say(client, message, oa=oa, role=role)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message", [
+        "เลื่อนนัด T-2026-0001 วันศุกร์ บ่าย 2",
+        "เลื่อนงาน T-2026-0001 เป็นวันศุกร์ บ่าย 2",
+    ])
+    async def test_sales_moves_the_visit(self, message):
+        client = self._shop_with_a_job("sales", "admin")
+        text, written = await self._say_on(client, message, "sales", "admin")
+        assert "update_ticket" in written, f"{text} / {written}"
+        sent = _payload(client, "update_ticket")
+        assert sent["scheduled_date"] == "2026-09-18", sent
+        assert sent["scheduled_time"].startswith("14:00"), sent
+
+    @pytest.mark.asyncio
+    async def test_a_refusal_moves_nothing(self):
+        client = self._shop_with_a_job("sales", "admin")
+        text, written = await self._say_on(
+            client, "ไม่ต้องเลื่อนนัด T-2026-0001 นะครับ", "sales", "admin")
+        assert written == [], f"{text} / {written}"
+
+    @pytest.mark.asyncio
+    async def test_a_reminder_about_a_job_is_still_a_reminder(self):
+        """Both halves of _is_a_job_move are required: a T- code with no move
+        verb is a reminder ABOUT a job, which is a real thing."""
+        client = self._shop_with_a_job("sales", "admin")
+        _, written = await self._say_on(
+            client, "เตือนเรื่องงาน T-2026-0001 พรุ่งนี้", "sales", "admin")
+        assert "update_ticket" not in written, written
+
+    @pytest.mark.asyncio
+    async def test_the_technician_road_is_unchanged(self):
+        client = self._shop_with_a_job("technician", "technician")
+        _, written = await self._say_on(
+            client, "เลื่อนนัด T-2026-0001 วันศุกร์ บ่าย 2", "technician", "technician")
+        assert "update_ticket" in written, written
+
+    @pytest.mark.asyncio
+    async def test_the_customer_hears_who_moved_it(self, monkeypatch):
+        """The wording said "ช่าง" unconditionally, which was true while only
+        a technician could reach this handler. A customer told "ช่างขอเลื่อน
+        นัด" by the salesperson they had just asked would be confused."""
+        said = {}
+
+        async def spy(client, license_id, ticket_id, text, language,
+                      text_en=None, customer_text=None, customer_text_en=None):
+            said["shop"], said["customer"] = text, customer_text
+
+        monkeypatch.setattr(chat, "_notify_ticket_change", spy)
+        for oa, role, who in (("sales", "admin", "ร้าน"), ("technician", "technician", "ช่าง")):
+            said.clear()
+            client = self._shop_with_a_job(oa, role)
+            await self._say_on(client, "เลื่อนนัด T-2026-0001 วันศุกร์ บ่าย 2", oa, role)
+            assert said["shop"].startswith(who), (oa, said["shop"])
+            assert said["customer"].startswith(who), (oa, said["customer"])

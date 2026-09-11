@@ -91,8 +91,35 @@ QUOTE_CREATE = Capability(
     optional=(),
 )
 
+TEAM_CREATE = Capability(
+    action="create",
+    entity="team",
+    # A team is a name. Who is in it comes next, in its own sentence —
+    # "เพิ่ม <ชื่อ> เข้าทีม <ทีม>" — and the create trigger deliberately
+    # takes everything after it as the NAME, so members cannot be part of
+    # the same call anyway.
+    required=("team_name",),
+    optional=("scope", "members"),
+    # Measured against the deployed model, 11 ก.ย. 2569: asked
+    # "สร้างกลุ่มขาย เหนือ" it answered
+    # {"action":"create","entity":"team","fields":{"team_name":"เหนือ",
+    #  "scope":"sales"},"missing":["members"]} — a complete request with a
+    # field listed as missing that this flow never needs. The reply was
+    # "กรุณาระบุรายละเอียดที่เหลือ" and no group was made.
+    never_needed=("members", "scope"),
+)
+
+#: Sales groups take the same shape; the entity name is the only difference.
+SALES_GROUP_CREATE = Capability(
+    action="create", entity="sales_group",
+    required=TEAM_CREATE.required, optional=TEAM_CREATE.optional,
+    never_needed=TEAM_CREATE.never_needed,
+)
+
 REGISTRY: dict[tuple[str, str], Capability] = {
-    (c.entity, c.action): c for c in (CUSTOMER_CREATE, FOLLOWUP_CREATE, QUOTE_CREATE)
+    (c.entity, c.action): c for c in (
+        CUSTOMER_CREATE, FOLLOWUP_CREATE, QUOTE_CREATE, TEAM_CREATE, SALES_GROUP_CREATE,
+    )
 }
 
 

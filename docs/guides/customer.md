@@ -54,15 +54,15 @@ _EN: Register your product (warranty) — Type "register product" then the S/N t
 
 _EN: Report a fault — Describe what is wrong, e.g. "air con not cooling". The machine is picked for you (or you tap which one), the reply names it and says whether it is still under warranty, then address and appointment are asked. With no serial, the job is filed and says so._
 
-## 6. ดูสถานะ / เลื่อนนัด / ยกเลิก
+## 6. ดูสถานะ / ขอเลื่อนนัด / ยกเลิก
 
-พิมพ์ "งานของฉัน" หรือ "สถานะการซ่อม" · เลื่อนนัด: "เลื่อนนัดวันศุกร์ บ่าย 2" · ยกเลิก: "ยกเลิกงาน"
+พิมพ์ "งานของฉัน" หรือ "สถานะการซ่อม" · ขอเลื่อนนัด: "ขอเลื่อนนัดวันศุกร์ บ่าย 2" (ร้านจะเช็คคิวช่างแล้วยืนยันกลับ นัดเดิมยังอยู่จนกว่าร้านจะยืนยัน) · ยกเลิก: "ยกเลิกงาน" (ยกเลิกได้เลย)
 
 พิมพ์: `งานของฉัน`
 
 [IMAGE: customer-status — การ์ดสถานะงานซ่อม T-2026-0001 แสดงขั้น รอมอบหมาย → ช่างรับแล้ว → กำลังทำ → เสร็จ พร้อมไอคอนนาฬิกา]
 
-_EN: Status, reschedule, cancel — "my jobs" / "repair status" · reschedule: "move it to Friday 2pm" · "cancel job"_
+_EN: Status, ask to move, cancel — "my jobs" / "repair status" · ask to move it: "move it to Friday 2pm" (the shop checks the technicians' schedule and confirms; the existing appointment stands until they do) · "cancel job" (cancels straight away)_
 
 ## 7. หลังซ่อมเสร็จ
 
