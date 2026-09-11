@@ -2645,6 +2645,13 @@ class TestLastCustomerReference:
             {"action": "create", "entity": "deal", "fields": {}, "missing": []})))
         client = FakeDataClient(
             permission_keys=["deal.create"],
+            # The customer has to BE there. The fixture used to seed only
+            # the cache, which is a state that cannot occur — and is
+            # exactly how "สร้างดีล" kept making deals for customers who
+            # had been archived or erased since (10 ก.ย. 2569).
+            customers=[{"id": "CUST-1", "customer_id": "C-2026-0001",
+                        "first_name": "สมชาย", "last_name": None,
+                        "phone": "0812345678", "stage": "lead"}],
             last_customer_ref={"customer_id": "CUST-1", "name": "สมชาย"},
         )
         reply = await handle_chat_message(

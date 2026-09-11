@@ -703,7 +703,22 @@ def set_member_status(
                 field_changes={"assigned_to_ref": {"old": str(member.id), "new": None}},
             )
         session.commit()
-        cache.invalidate(*_member_cache_keys(license_id, chann_uid))
+        # Revoking someone takes their membership away; it must take the
+        # conversation with it. The refs and the pending intent are what
+        # "the record we were just on" and "the question still open" live
+        # in, so a suspended member coming back — or being re-added to a
+        # different shop — must not resume where they left off.
+        #
+        # Deliberately HERE and not inside _member_cache_keys: that helper
+        # runs for every member of the license when authorization is
+        # invalidated, so putting these keys in it would wipe the whole
+        # shop's conversational state every time a role was edited.
+        cache.invalidate(
+            *_member_cache_keys(license_id, chann_uid),
+            k_pending_intent(chann_uid, member.channel),
+            k_last_customer_ref(str(license_id), chann_uid, member.channel),
+            k_last_entity_ref(str(license_id), chann_uid, member.channel),
+        )
         return _member_out(
             session, scope, member, model=MemberStatusOut,
             unassigned_tickets=[
@@ -5161,8 +5176,18 @@ def process_pdpa_request(
             line_user_id = identity.line_user_id
             result = repo.erase(request_id, processed_by=payload.processed_by)
             session.commit()
-            cache.invalidate(k_identity(line_user_id))
-            return {"request_type": "erasure", **result}
+            # Erasure deletes rows; Redis was never touched, so this
+            # person's own conversational state — the record in context,
+            # the customer in context, the half-finished request — lived on
+            # past the record it was about (10 ก.ย. 2569).
+            conversational = [k_identity(line_user_id)]
+            for oa in ("sales", "technician", "customer"):
+                conversational.append(k_pending_intent(request.chann_uid, oa))
+                for lic in result.get("licenses") or []:
+                    conversational.append(k_last_customer_ref(lic, request.chann_uid, oa))
+                    conversational.append(k_last_entity_ref(lic, request.chann_uid, oa))
+            cache.invalidate(*conversational)
+            return {"request_type": "erasure", **{k: v for k, v in result.items() if k != "licenses"}}
         if request.request_type == "export":
             bundle = repo.export(request_id, processed_by=payload.processed_by)
             session.commit()

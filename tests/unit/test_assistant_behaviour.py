@@ -1035,3 +1035,116 @@ class TestHoldingTheKeyIsNotBeingAllowedHere:
         )
         written = [c[0] for c in client.recorded if c[0].startswith(WRITES)]
         assert "create_follow_up" in written, f"{reply.text} / {written}"
+
+
+class TestTheConversationDoesNotOutliveTheRecord:
+    """Scoping the cache by shop closed the cross-shop road. Three holes a
+    scoped key does not reach, all reproduced on 10 ก.ย. 2569."""
+
+    @pytest.mark.asyncio
+    async def test_a_deleted_customer_does_not_get_a_new_deal(self):
+        """The cached name is up to an hour old. "สร้างดีล" with no name
+        made a deal against the cached id and echoed the cached name —
+        "สร้างดีล D-2026-0001 สำหรับ สมชาย ใจดี (ลูกค้าที่เพิ่งคุยถึง)
+        เรียบร้อยแล้ว" — over a shop with no สมชาย left in it."""
+        client = _shop(customers=[CUSTOMER])
+        ctx = _ctx(primary_role="sales", oa="sales")
+        await chat._remember_customer(client, ctx, dict(CUSTOMER))
+        client._customers.clear()
+        text, written = await _say(client, "สร้างดีล", intent={
+            "action": "suggest", "entity": "", "fields": {}, "missing": [],
+        })
+        assert "create_deal" not in written, f"a deal for a deleted person: {written}"
+        assert "สมชาย" not in text, f"an erased name was spoken: {text}"
+
+    @pytest.mark.asyncio
+    async def test_but_a_customer_who_is_still_there_still_gets_one(self):
+        client = _shop(customers=[CUSTOMER])
+        ctx = _ctx(primary_role="sales", oa="sales")
+        await chat._remember_customer(client, ctx, dict(CUSTOMER))
+        text, written = await _say(client, "สร้างดีล", intent={
+            "action": "suggest", "entity": "", "fields": {}, "missing": [],
+        })
+        assert "create_deal" in written, f"{text} / {written}"
+
+    def test_revoking_a_membership_clears_the_conversation(self):
+        """A suspended member coming back must not resume where they left
+        off. Deliberately at the revocation site, NOT in _member_cache_keys
+        — that helper runs for every member of the licence, so a role edit
+        would wipe the whole shop's context."""
+        source = (ROOT / "data" / "chann_data" / "routers" / "internal.py").read_text(encoding="utf-8")
+        block = source.split("def set_member_status", 1)[1].split("@router", 1)[0]
+        for key in ("k_pending_intent(", "k_last_customer_ref(", "k_last_entity_ref("):
+            assert key in block, key
+        helper = source.split("def _member_cache_keys", 1)[1].split("\n\n\n", 1)[0]
+        for key in ("k_pending_intent(", "k_last_customer_ref(", "k_last_entity_ref("):
+            assert key not in helper, f"{key} must not be in the shared helper"
+
+    def test_erasure_clears_the_conversation(self):
+        """Erasure deleted rows and never touched Redis, so an erased
+        person's own conversational state outlived the record."""
+        source = (ROOT / "data" / "chann_data" / "routers" / "internal.py").read_text(encoding="utf-8")
+        block = source.split("def process_pdpa_request", 1)[1].split("@router", 1)[0]
+        for key in ("k_pending_intent(", "k_last_customer_ref(", "k_last_entity_ref("):
+            assert key in block, key
+        repo = (ROOT / "data" / "chann_data" / "repositories" / "phase165.py").read_text(encoding="utf-8")
+        assert "erased_licenses" in repo, "erase must report which shops it touched"
+
+
+class TestThePromptSaysOnlyWhatIsTrueHere:
+    """The prompt is guidance, never the gate — but describing capability
+    the channel does not have invites proposals the gate refuses, and
+    shipping looked-up rows into it sends data nobody asked to send.
+    Both measured 10 ก.ย. 2569."""
+
+    def test_a_channel_is_not_told_it_can_do_what_it_cannot(self):
+        from chann_data.permissions import DEFAULT_ROLE_TEMPLATES
+
+        held = sorted(DEFAULT_ROLE_TEMPLATES["admin"])
+        for oa in ("sales", "technician", "customer"):
+            shown = chat._keys_this_oa_can_use(held, oa)
+            forbidden = [k for k in shown if not chat._oa_allows(oa, k)]
+            assert not forbidden, f"{oa} prompt would advertise {forbidden[:5]}"
+
+    def test_and_the_channel_that_allows_everything_loses_nothing(self):
+        from chann_data.permissions import DEFAULT_ROLE_TEMPLATES
+
+        held = sorted(DEFAULT_ROLE_TEMPLATES["admin"])
+        assert chat._keys_this_oa_can_use(held, "sales") == held
+
+    def test_a_looked_up_row_never_reaches_the_model(self):
+        """Two customers sharing a name put whole rows — phone, email,
+        address, the shop's private notes, the LINE user id — into
+        "values already collected"."""
+        from chann_app.services.ai.intent import _pending_fields_for_prompt
+
+        rows = [
+            {"id": "CUST-1", "first_name": "สมชาย", "phone": "0812345678",
+             "email": "a@b.c", "address": "99/1", "notes": "ค้างชำระ 2 งวด",
+             "line_user_id": "Uab12"},
+            {"id": "CUST-2", "first_name": "สมชาย", "phone": "0898765432",
+             "email": "d@e.f", "address": "12/3", "notes": "", "line_user_id": "Uef56"},
+        ]
+        out = _pending_fields_for_prompt({"candidates": rows, "resume_entity": "deal"})
+        for leaked in ("0812345678", "a@b.c", "99/1", "ค้างชำระ", "Uab12"):
+            assert leaked not in out, f"{leaked} reached the prompt: {out}"
+        assert "2 records" in out, out
+        assert "deal" in out, "what the person is doing must survive"
+
+    def test_but_what_the_person_typed_still_does(self):
+        from chann_app.services.ai.intent import _pending_fields_for_prompt
+
+        out = _pending_fields_for_prompt({"first_name": "สมชาย", "phone": "0812345678"})
+        assert "สมชาย" in out and "0812345678" in out, out
+
+    def test_an_empty_record_is_not_described_as_a_record(self):
+        from chann_app.services.ai.intent import _pending_fields_for_prompt
+
+        assert "<a record>" not in _pending_fields_for_prompt({"resume_fields": {}})
+
+    def test_a_new_field_carrying_rows_is_covered_the_day_it_is_added(self):
+        """The rule is shape, not a blocklist of field names."""
+        from chann_app.services.ai.intent import _pending_fields_for_prompt
+
+        out = _pending_fields_for_prompt({"something_new": [{"secret": "0812345678"}]})
+        assert "0812345678" not in out, out

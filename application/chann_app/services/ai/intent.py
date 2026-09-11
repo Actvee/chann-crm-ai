@@ -285,6 +285,43 @@ WHAT THE SENTENCE IS DOING, not only what it is about
 # message is self-contained — but the bot itself creates messages that are
 # NOT: it asks "what is the phone number?", and the honest human answer is a
 # bare "0812345678" with no verb, no entity, and no way to parse it alone.
+def _pending_fields_for_prompt(fields: dict) -> str:
+    """What the person has already given, WITHOUT the rows we looked up.
+
+    A pending intent carries working state as well as the person's own
+    answers. When two customers share a name, `candidates` holds whole
+    rows straight from the Data tier — phone, email, address, the shop's
+    private notes, the LINE user id — and every one of those went out to
+    the model inside "values already collected" (measured 10 ก.ย. 2569).
+    The model needs to know that three people matched and that the next
+    message probably picks one; it never needs their contact details.
+
+    The rule is shape, not a list of blocked names: what the person typed
+    is a scalar, what we looked up is a record. Records become a count.
+    A new field carrying rows is covered the day it is added.
+    """
+    out: dict = {}
+    for key, value in (fields or {}).items():
+        if str(key).startswith("_"):
+            continue          # internal carriers (_then_deal, _abandoned)
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            out[key] = value
+        elif isinstance(value, list):
+            if all(isinstance(v, (str, int, float)) for v in value):
+                out[key] = value
+            else:
+                out[key] = f"<{len(value)} records — the person picks one>"
+        elif isinstance(value, dict):
+            inner = {k: v for k, v in value.items()
+                     if isinstance(v, (str, int, float, bool)) or v is None}
+            # An empty dict is empty, not a record withheld — saying
+            # "<a record>" there would invent something to ask about.
+            out[key] = inner if inner or not value else "<a record>"
+        else:
+            out[key] = "<omitted>"
+    return json.dumps(out, ensure_ascii=False)
+
+
 PENDING_PROMPT_BLOCK = """
 
 There is an action ALREADY IN PROGRESS from the previous message:
@@ -380,7 +417,7 @@ def build_prompt(
         prompt += PENDING_PROMPT_BLOCK.format(
             p_action=pending.get("action") or "?",
             p_entity=pending.get("entity") or "?",
-            p_fields=json.dumps(pending.get("fields") or {}, ensure_ascii=False),
+            p_fields=_pending_fields_for_prompt(pending.get("fields") or {}),
             p_missing=", ".join(pending.get("missing") or []) or "(nothing)",
         )
     return prompt

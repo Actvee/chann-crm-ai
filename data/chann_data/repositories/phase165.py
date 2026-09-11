@@ -196,6 +196,7 @@ class PdpaRepository:
         self._s.flush()
 
         paths: list[str] = []
+        erased_licenses: list[str] = []
         touched = {
             "tenants": 0, "customers": 0, "tickets": 0, "photos": 0, "chat_messages": 0,
             "notes": 0, "follow_ups": 0, "deals": 0, "documents": 0, "audit_rows": 0,
@@ -359,6 +360,11 @@ class PdpaRepository:
                         counts["audit_rows"] += 1
             for key, value in counts.items():
                 touched[key] += value
+            # The caller clears this person's conversational cache for each
+            # of these: erasure deletes rows and never touched Redis, so
+            # "the customer we were just talking about" and a half-finished
+            # request outlived the record they were about (10 ก.ย. 2569).
+            erased_licenses.append(str(license_row.id))
             AuditRepository(self._s).write(
                 license_id=license_row.id, entity_type="data_subject_request", entity_id=request.id,
                 actor_type="system" if processed_by is None else "user",
@@ -396,6 +402,7 @@ class PdpaRepository:
         request.completed_at = _now()
         request.processed_by = processed_by
         request.result_json = {**touched, "storage_paths": len(paths)}
+        touched["licenses"] = erased_licenses
         self._s.flush()
         return {**touched, "storage_paths": paths, "request_id": str(request.id)}
 

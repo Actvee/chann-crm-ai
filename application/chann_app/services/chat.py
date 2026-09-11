@@ -12739,6 +12739,30 @@ def _deal_name_from_message(message: str | None) -> str | None:
     return _deal_name_only(match.group(1))
 
 
+async def _customer_still_there(
+    client: DataClient, ctx: ResolvedContext, license_id,
+) -> dict | None:
+    """The customer in context, re-read from this shop's own rows.
+
+    The cache holds a name and an id from up to an hour ago. In that hour
+    the person can be archived, renamed, or erased under PDPA — and
+    "สร้างดีล" with no name still made a deal against the id and echoed
+    the cached name back: "สร้างดีล D-2026-0001 สำหรับ สมชาย ใจดี (ลูกค้า
+    ที่เพิ่งคุยถึง) เรียบร้อยแล้ว" over a shop with no สมชาย in it
+    (10 ก.ย. 2569). The id is authoritative; the name has to be re-read
+    before it is spoken.
+    """
+    ref = await _last_customer_ref(client, ctx)
+    if not ref or not ref.get("customer_id"):
+        return None
+    try:
+        rows = await client.list_customers(str(license_id))
+    except Exception:  # noqa: BLE001
+        log.exception("could not re-read the customer in context")
+        return None
+    return next((r for r in rows if str(r.get("id")) == str(ref["customer_id"])), None)
+
+
 async def _handle_deal_create_direct(
     client: DataClient, *, ctx: ResolvedContext, license_id, name: str | None,
     permission_keys: list[str], language: str, rest: str | None = None, message: str | None = None,
@@ -12779,10 +12803,11 @@ async def _handle_deal_create_direct(
         # for exactly this since Phase 9, and a second mechanism for "the
         # customer we were just discussing" would drift from the first and
         # give different answers to the same question.
-        last_ref = await _last_customer_ref(client, ctx)
-        if last_ref is None:
+        # Re-read, not remembered: the cached name is up to an hour old and
+        # the person may have been archived or erased since.
+        contact = await _customer_still_there(client, ctx, license_id)
+        if contact is None:
             return ChatReply(text=_t(DEAL_NEEDS_TARGET_NAME, language))
-        contact = {"id": last_ref["customer_id"], "first_name": last_ref["name"]}
         used_context = True
 
     deal_fields, ambiguous = _deal_fields_from_message(message or "", None)
@@ -15236,6 +15261,24 @@ def _named_customer(fields: dict) -> str:
         if value:
             return _strip_polite_tail(_strip_honorific(value))
     return ""
+
+
+def _keys_this_oa_can_use(permission_keys, oa: str) -> list[str]:
+    """The keys the person holds AND this channel can act on.
+
+    The prompt used to list every key the person held, whatever channel
+    they were on: a shop owner messaging the technician OA was described
+    to the model as holding 46 keys, 38 of which that channel forbids —
+    approval.approve, chat_session.reply, audit_log.view and the rest
+    (measured 10 ก.ย. 2569). Every one of those invites a proposal the
+    gate refuses a moment later, and reads to the model as capability the
+    conversation does not have.
+
+    The gate is unchanged; this only stops advertising what it will
+    refuse. On the sales OA nothing is filtered, because nothing there is
+    out of scope.
+    """
+    return [k for k in (permission_keys or []) if _oa_allows(oa, k)]
 
 
 def _private_fields(fields: dict) -> dict:
@@ -18208,7 +18251,7 @@ async def _route_chat_message(
             chann_uid=ctx.chann_uid,
             role=context.get("role", member.get("role", "")),
             license_id=str(license_id),
-            permission_keys=permission_keys,
+            permission_keys=_keys_this_oa_can_use(permission_keys, ctx.oa),
             language=language,
             client=ai_client,
             pending=pending_intent,
