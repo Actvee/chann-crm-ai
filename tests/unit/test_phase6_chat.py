@@ -2163,7 +2163,10 @@ class TestPhase9CustomerChat:
         assert "นามสกุล" in reply.text
         assert not any(r[0] == "create_customer" for r in client.recorded)
 
-    async def test_last_name_and_phone_together_is_enough_even_without_first_name(self):
+    async def test_last_name_and_phone_without_a_first_name_asks_for_it(self):
+        """Owner, 11 ก.ย. 2569: "ถ้าจะเพิ่มลูกค้าต้องมีชื่อจริงด้วย". A surname
+        and a phone used to be enough; now the first name is asked for,
+        and the request is held so the bare answer completes it."""
         ai = httpx.AsyncClient(transport=_ai(json.dumps(
             {"action": "create", "entity": "customer",
              "fields": {"last_name": "ใจดี", "phone": "0812345678"},
@@ -2173,7 +2176,10 @@ class TestPhase9CustomerChat:
             client, message="เพิ่มลูกค้านามสกุลใจดี เบอร์ 0812345678",
             ctx=_ctx(primary_role="sales"), ai_client=ai,
         )
-        assert any(r[0] == "create_customer" for r in client.recorded)
+        assert not any(r[0] == "create_customer" for r in client.recorded)
+        assert "ชื่อ" in reply.text
+        pending = await client.get_pending_intent("CHN-S-000001", "sales")
+        assert pending and pending.get("missing") == ["first_name"]
 
     async def test_a_bare_reply_completes_a_hard_validation_refusal(self):
         """The exact scenario asked about directly: type "เพิ่มลูกค้า

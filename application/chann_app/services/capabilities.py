@@ -45,8 +45,10 @@ class Capability:
 CUSTOMER_CREATE = Capability(
     action="create",
     entity="customer",
-    required=("last_name", "phone"),
-    optional=("first_name", "email", "address", "notes"),
+    # Owner, 11 ก.ย. 2569: "ถ้าจะเพิ่มลูกค้าต้องมีชื่อจริงด้วย" — a first
+    # name joins the last name and the phone as required.
+    required=("first_name", "last_name", "phone"),
+    optional=("email", "address", "notes"),
     # Reported live (9 ก.ย. 2569): a perfectly good paste was blocked on
     # "กรุณาระบุอีเมล" because the model listed email as missing.
     never_needed=("email", "address", "notes"),

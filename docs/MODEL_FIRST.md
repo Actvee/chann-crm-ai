@@ -139,10 +139,14 @@ held by the guard because the model road passed it no trigger words ("ไม่�
 verb); `update/quote` with a `D-` code; `read/deal {status: "lost"}` listing everything.
 Each was a hole in the model ROAD, fixed there — no keyword table was touched.
 
-What stays honest in the baseline (`chat_corpus_baseline.json`): 21 sales sentences now
-classify `partial` (the model road asks or lands one handler away) and 5 `ai_fallback`
-(the model misreads: "ดีลค้าง" as jobs, "ใครว่างบ้าง" as agenda). Those are prompt work,
-measured with `evaluate-model.py`, never a rule.
+What stays honest in the baseline (`chat_corpus_baseline.json`): sentences that classify
+`partial` (the model road asks or lands one handler away) and the few `ai_fallback` (the
+model misreads). The misreads are prompt work, measured with `evaluate-model.py`, never a
+rule — the first pass (11 ก.ย. 2569) took nine of them to two by naming the readings in
+the entity blocks: a pending DEAL is a deal read, "who is free" is a team read, the shop's
+code is a setting read, a technician's "ดูรายงาน" is a service report read. One hygiene
+rule: a hint about entity X lives in X's own block, so a channel that cannot reach X never
+sees the word (`TestThePromptCarriesOnlyWhatTheOACanDo`).
 
 ## What a stubbed model cannot tell you
 

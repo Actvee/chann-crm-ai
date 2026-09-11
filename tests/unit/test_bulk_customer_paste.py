@@ -92,14 +92,15 @@ class TestNeverDemandAnOptionalField:
             ["address", "notes", "first_name"], intent, "ลูกค้าใหม่"
         ) == ["first_name"]
 
-    def test_last_name_survives_because_the_handler_requires_it(self):
+    def test_the_names_and_phone_survive_because_the_handler_requires_them(self):
+        """Owner, 11 ก.ย. 2569: a customer needs a first name too."""
         from chann_app.services.capabilities import CUSTOMER_CREATE
 
         intent = {"action": "create", "entity": "customer", "fields": {}}
         assert chat._prune_missing(
-            ["address", "last_name", "phone"], intent, "ลูกค้าใหม่"
-        ) == ["last_name", "phone"]
-        assert set(CUSTOMER_CREATE.required) == {"last_name", "phone"}
+            ["address", "first_name", "last_name", "phone"], intent, "ลูกค้าใหม่"
+        ) == ["first_name", "last_name", "phone"]
+        assert set(CUSTOMER_CREATE.required) == {"first_name", "last_name", "phone"}
 
     def test_a_pasted_line_with_one_name_is_still_created(self):
         """The declared exception: a paste is not held to the surname rule."""

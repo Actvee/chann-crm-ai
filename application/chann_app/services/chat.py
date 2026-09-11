@@ -16020,10 +16020,12 @@ async def _handle_customer_intent(
             if k in ("first_name", "last_name", "phone", "email", "address", "notes")
             and v not in (None, "")
         }
-        # Owner's explicit rule: a walk-in customer record must have at
-        # least a last name AND a phone number — a first name alone is not
-        # enough to reliably identify someone later (very common shared
-        # first names), and a phone is how staff actually follow up.
+        # Owner's explicit rule: a walk-in customer record must have a
+        # first name, a last name AND a phone number (the first name joined
+        # the list on 11 ก.ย. 2569) — a first name alone is not enough to
+        # reliably identify someone later (very common shared first
+        # names), and a phone is how staff actually follow up. The list
+        # itself lives in CUSTOMER_CREATE.required.
         #
         # This check exists precisely because the AI's own "missing" list
         # cannot be trusted to always catch it — but when it doesn't, the
@@ -20869,6 +20871,12 @@ async def _handle_setting_intent(
     action = str(intent.get("action") or "")
     fields = intent.get("fields") or {}
     if action in READ_ACTIONS:
+        wanted = " ".join(str(v) for v in (intent.get("fields") or {}).values() if v not in (None, "")).lower()
+        if any(w in wanted for w in ("code", "contact", "รหัส", "เบอร์", "phone")):
+            # "ขอรหัสร้านให้ลูกค้าหน่อย" read as setting/field=code
+            # (11 ก.ย. 2569): the shop's code and how to reach it — the
+            # tile's answer, not the document details.
+            return await _handle_shop_info(client, ctx=ctx, license_id=license_id, language=language)
         return await _handle_company_profile_view(
             client, license_id=license_id, permission_keys=permission_keys, language=language,
         )

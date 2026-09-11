@@ -671,7 +671,7 @@ class TestTheRegistryIsTheOnlyDefinition:
 
         for field_name in CUSTOMER_CREATE.required:
             assert field_name in INTENT_SYSTEM_PROMPT, field_name
-        assert "BOTH required" in INTENT_SYSTEM_PROMPT
+        assert "ALL required" in INTENT_SYSTEM_PROMPT
 
     def test_the_bulk_exception_is_declared_not_accidental(self):
         from chann_app.services.capabilities import CUSTOMER_CREATE
