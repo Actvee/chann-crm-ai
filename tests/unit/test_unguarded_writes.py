@@ -49,10 +49,15 @@ KEYS = sorted(DEFAULT_ROLE_TEMPLATES["admin"])
 # Everything that is not a lookup. Deliberately a deny-list of reads
 # rather than an allow-list of writes: a write named something this file
 # never anticipated must still show up.
+# Calls that are not the shop's data changing: reads, and the
+# conversational scratch state that remembers where a conversation is.
+# "append_recent_turn" belongs with "set_last_" — it stores the person's
+# own words for a quarter of an hour so the next sentence can lean on
+# them, and no refusal test is about that (11 ก.ย. 2569).
 READS = (
     "get_", "list_", "search", "permission_catalog", "authorization_context",
     "resolve", "storefront_browse", "storefront_search", "code_for",
-    "line_target_of", "set_last_", "clear_", "save_",
+    "line_target_of", "set_last_", "clear_", "save_", "append_recent_turn",
 )
 
 # `customer_id` is the C- code, not a UUID — that is what the Data tier

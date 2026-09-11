@@ -167,6 +167,25 @@ def k_active_tenant(chann_uid: str, oa: str) -> str:
     return f"active_tenant:{chann_uid}:{oa}"
 
 
+def k_recent_turns(license_id: str, chann_uid: str, oa: str) -> str:
+    """The last few things this person said, and what came back.
+
+    The model was given the half-finished action and the record in focus
+    but never the conversation, so "แล้วอันนั้นล่ะ" and every other
+    sentence that leans on what was just said had nothing to lean on.
+
+    Licence-scoped like the refs beside it, for the same reason: one LINE
+    account can be staff at two shops, and what was said in one is not
+    context for the other.
+
+    Redis and a short TTL on purpose. This is what a person said a minute
+    ago, not business data — losing it means the assistant asks instead of
+    assuming, which is the safe direction. Nothing here is ever an
+    authorization input.
+    """
+    return f"recent_turns:{license_id}:{chann_uid}:{oa}"
+
+
 def k_last_customer_ref(license_id: str, chann_uid: str, oa: str) -> str:
     """Phase 9 — "which customer was this conversation just about?"
 

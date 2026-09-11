@@ -1302,3 +1302,81 @@ class TestTheInstrumentDoesNotMeasureItsOwnLeftovers:
         assert Path(mod.DEFAULT_REPO).resolve() == ROOT.resolve(), (
             f"probe defaults to {mod.DEFAULT_REPO}, not the tree it ships in"
         )
+
+
+class TestTheConversationIsRemembered:
+    """The model was given the half-finished action and the record in
+    focus, but never the conversation, so a sentence that leans on what
+    was just said had nothing to lean on. Owner, 11 ก.ย. 2569: "ลองส่ง
+    ความก่อนหน้าให้ AI ด้วยดีไหม ถ้า session ที่จับไว้ยังถือว่าคุยต่ออยู่".
+
+    The trap a review had already found in the related record-in-focus
+    work is the model treating an old subject as the current one, so the
+    block states each turn's age, and a sentence that names its own
+    person or record always wins.
+    """
+
+    A = dict(CUSTOMER)
+    B = {"id": "CUST-2", "customer_id": "C-2026-0002", "first_name": "สมหญิง",
+         "last_name": "รักดี", "phone": "0898887777", "stage": "lead"}
+
+    @pytest.mark.asyncio
+    async def test_a_turn_is_remembered_for_this_shop_only(self):
+        client = _shop(customers=[self.A])
+        here = _ctx(primary_role="sales", oa="sales",
+                    license_id="11111111-1111-1111-1111-111111111111")
+        there = _ctx(primary_role="sales", oa="sales",
+                     license_id="22222222-2222-2222-2222-222222222222")
+        await chat._remember_turn(client, here, "ขอดูข้อมูลลูกค้าสมชาย", None)
+        assert await chat._recent_turns(client, here), "the shop's own turn was lost"
+        assert not await chat._recent_turns(client, there), "another shop saw it"
+
+    @pytest.mark.asyncio
+    async def test_a_pronoun_uses_the_customer_in_context(self):
+        """"เปิดดีลให้เขาหน่อย" searched for a customer named "เขา" and
+        answered "ไม่พบลูกค้าชื่อ เขา ในบริษัทนี้" — while the model had
+        already read the sentence correctly and reported the name as
+        missing. The trigger never let it get that far."""
+        client = _shop(customers=[self.A])
+        # The previous turn's effect, stated directly so the test does not
+        # depend on a network call to reproduce it.
+        await chat._remember_customer(client, _ctx(primary_role="sales", oa="sales"), dict(self.A))
+        text, written = await _say(client, "เปิดดีลให้เขาหน่อย", intent={
+            "action": "create", "entity": "deal", "fields": {}, "missing": ["target_name"],
+        })
+        assert "create_deal" in written, f"{text} / {written}"
+        assert "เขา" not in text.replace("เขาหน่อย", ""), text
+
+    @pytest.mark.asyncio
+    async def test_but_a_named_person_still_wins_over_the_context(self):
+        """The failure that killed the first record-in-focus attempt: a
+        sentence naming a DIFFERENT person was redirected to the record in
+        focus and wrote against the wrong one."""
+        client = _shop(customers=[self.A, self.B])
+        await chat._remember_customer(client, _ctx(primary_role="sales", oa="sales"), dict(self.A))
+        text, written = await _say(client, "เปิดดีลให้สมหญิง รักดี", intent={
+            "action": "create", "entity": "deal",
+            "fields": {"target_name": "สมหญิง รักดี"}, "missing": [],
+        })
+        assert "create_deal" in written, f"{text} / {written}"
+        assert "สมหญิง" in text and "สมชาย" not in text, text
+
+    def test_the_block_states_how_old_each_turn_is(self):
+        from chann_app.services.ai.intent import _recent_turns_for_prompt
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime.now(timezone.utc)
+        rendered = _recent_turns_for_prompt([
+            {"said": "ขอดูข้อมูลลูกค้าสมชาย", "did": "แสดงข้อมูล",
+             "at": (now - timedelta(minutes=7)).isoformat()},
+        ])
+        assert "7 นาที" in rendered, rendered
+
+    def test_nothing_looked_up_reaches_the_prompt(self):
+        """Only the person's own words and a short label the code wrote."""
+        from chann_app.services.ai.intent import _recent_turns_for_prompt
+
+        rendered = _recent_turns_for_prompt([
+            {"said": "ขอดูข้อมูลลูกค้าสมชาย", "did": "แสดงข้อมูล C-2026-0001", "at": ""},
+        ])
+        assert "0812345678" not in rendered and "@" not in rendered, rendered

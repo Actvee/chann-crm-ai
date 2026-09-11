@@ -23,6 +23,7 @@ from ..cache import (
     k_admin_session,
     k_identity,
     k_last_customer_ref,
+    k_recent_turns,
     k_last_entity_ref,
     k_member,
     k_pending_intent,
@@ -176,6 +177,8 @@ from ..schemas import (
     ActiveTenantOut,
     WarrantyClaimIn,
     PendingIntentIn,
+    RecentTurnIn,
+    RecentTurnsOut,
     PendingIntentOut,
     LastCustomerRefIn,
     LastCustomerRefOut,
@@ -2366,6 +2369,36 @@ def get_pending_intent(oa: str, chann_uid: str):
             status_code=status.HTTP_404_NOT_FOUND, detail="no pending intent"
         )
     return PendingIntentOut(**raw)
+
+
+@router.put("/chat/recent-turns/{license_id}/{oa}/{chann_uid}", status_code=204)
+def append_recent_turn(license_id: str, oa: str, chann_uid: str, payload: RecentTurnIn):
+    """Append one exchange to this conversation's short memory.
+
+    A ring buffer, newest last, capped at `keep`. The model was given the
+    half-finished action and the record in focus but never the
+    conversation itself, so a sentence leaning on what was just said had
+    nothing to lean on.
+
+    Licence-scoped like the refs: one LINE account can be staff at two
+    shops, and what was said in one is not context for the other.
+    """
+    key = k_recent_turns(license_id, chann_uid, oa)
+    held = cache.get_or_load(key, ttl_s=0, loader=lambda: None) or {"turns": []}
+    turns = list(held.get("turns") or [])
+    turns.append({"said": payload.said[:400], "did": payload.did[:120], "at": payload.at})
+    cache.set(key, {"turns": turns[-max(1, min(payload.keep, 10)):]}, payload.ttl_seconds)
+
+
+@router.get("/chat/recent-turns/{license_id}/{oa}/{chann_uid}", response_model=RecentTurnsOut)
+def get_recent_turns(license_id: str, oa: str, chann_uid: str):
+    raw = cache.get_or_load(k_recent_turns(license_id, chann_uid, oa), ttl_s=0, loader=lambda: None)
+    return RecentTurnsOut(turns=(raw or {}).get("turns") or [])
+
+
+@router.delete("/chat/recent-turns/{license_id}/{oa}/{chann_uid}", status_code=204)
+def clear_recent_turns(license_id: str, oa: str, chann_uid: str):
+    cache.invalidate(k_recent_turns(license_id, chann_uid, oa))
 
 
 @router.delete("/chat/pending-intent/{oa}/{chann_uid}", status_code=204)

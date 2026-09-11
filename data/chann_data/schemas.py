@@ -616,6 +616,26 @@ class PendingIntentIn(BaseModel):
     ttl_seconds: int = 600
 
 
+class RecentTurnIn(BaseModel):
+    """One exchange: what the person said, and what came back.
+
+    `said` is the person's OWN words. `did` is a short label for what the
+    system did about it ("asked for the phone", "created C-2026-0001") —
+    never a record, never a row, because the whole point of trimming
+    pending fields by shape was to keep looked-up data out of the prompt.
+    """
+
+    said: str
+    did: str = ""
+    at: str = ""
+    keep: int = 5
+    ttl_seconds: int = 900
+
+
+class RecentTurnsOut(BaseModel):
+    turns: list[dict] = []
+
+
 class ActiveTenantIn(BaseModel):
     license_id: str
     ttl_seconds: int = 90 * 24 * 3600

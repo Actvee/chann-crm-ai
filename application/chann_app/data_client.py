@@ -1399,6 +1399,37 @@ class DataClient:
     # written in shop B pointed at shop A's customer, and the row landed
     # (10 ก.ย. 2569).
 
+    # What was said a minute ago. Licence-scoped like the refs below, and
+    # best-effort everywhere: losing it means the assistant asks instead of
+    # assuming, which is the safe direction.
+
+    async def append_recent_turn(
+        self, chann_uid: str, oa: str, *, license_id: str, said: str,
+        did: str = "", at: str = "", keep: int = 5, ttl_seconds: int = 900,
+    ) -> None:
+        resp = await self._client.put(
+            f"{self._base}/internal/v1/chat/recent-turns/{license_id}/{oa}/{chann_uid}",
+            headers=self._headers,
+            json={"said": said, "did": did, "at": at, "keep": keep, "ttl_seconds": ttl_seconds},
+        )
+        self._unwrap(resp)
+
+    async def get_recent_turns(self, chann_uid: str, oa: str, *, license_id: str) -> list[dict]:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/chat/recent-turns/{license_id}/{oa}/{chann_uid}",
+            headers=self._headers,
+        )
+        if resp.status_code == 404:
+            return []
+        return (self._unwrap(resp) or {}).get("turns") or []
+
+    async def clear_recent_turns(self, chann_uid: str, oa: str, *, license_id: str) -> None:
+        resp = await self._client.delete(
+            f"{self._base}/internal/v1/chat/recent-turns/{license_id}/{oa}/{chann_uid}",
+            headers=self._headers,
+        )
+        self._unwrap(resp)
+
     async def set_last_entity_ref(
         self, chann_uid: str, oa: str, *, license_id: str, entity_type: str,
         entity_id: str, code: str, ttl_seconds: int = 600, extra: dict | None = None,

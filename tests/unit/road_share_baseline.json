@@ -6,15 +6,15 @@
    "rule": 332
   },
   "sales": {
-   "read": 145,
-   "rule": 392
+   "read": 146,
+   "rule": 391
   },
   "technician": {
    "read": 51,
    "rule": 233
   }
  },
- "reached_model": 208,
+ "reached_model": 209,
  "roads": {
   "customer\t15/9 10.30": false,
   "customer\t55555 โอเค": false,
@@ -440,7 +440,7 @@
   "sales\ts-en-status-quote": true,
   "sales\ts-example-quoted": false,
   "sales\ts-gibberish": true,
-  "sales\ts-hesitant-create": false,
+  "sales\ts-hesitant-create": true,
   "sales\ts-howto-appt-move": false,
   "sales\ts-howto-appt-polite": true,
   "sales\ts-howto-customer-add": true,

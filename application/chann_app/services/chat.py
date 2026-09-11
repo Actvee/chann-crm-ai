@@ -1489,6 +1489,18 @@ def _drop_invented_values(intent: dict) -> None:
                 raise InvalidOperation
         except (InvalidOperation, ValueError, ArithmeticError):
             fields.pop(key, None)
+    # A name the model returns carries whatever the person typed around it.
+    # Once the prompt started asking for real values instead of raw text,
+    # it began returning "คุณสมชาย" — and the reminder path looks a name up
+    # verbatim, so a three-turn appointment ended in "ไม่พบลูกค้าชื่อ
+    # คุณสมชาย ในบริษัทนี้" (11 ก.ย. 2569). Two call sites stripped it
+    # already; doing it where the model's fields arrive covers the rest.
+    for key in ("target_name", "first_name", "last_name", "customer_name", "name"):
+        raw = fields.get(key)
+        if isinstance(raw, str) and raw.strip():
+            cleaned = _strip_polite_tail(_strip_honorific(raw.strip()))
+            if cleaned:
+                fields[key] = cleaned
     for key in _COUNT_FIELDS:
         raw = fields.get(key)
         if raw is None or isinstance(raw, bool):
@@ -15546,6 +15558,86 @@ def _keys_this_oa_can_use(permission_keys, oa: str) -> list[str]:
     return [k for k in (permission_keys or []) if _oa_allows(oa, k)]
 
 
+def _is_only_abort_words(message: str) -> bool:
+    """Is the whole message nothing but ways of saying "stop"?
+
+    The check was an exact match on the normalised string, so one word
+    worked and two did not: "ไม่เอาแล้ว ยกเลิก" normalises to
+    "ไม่เอาแล้วยกเลิก", which is in no list, and a person cancelling
+    twice as emphatically got "ยังไม่แน่ใจว่าต้องการอะไรครับ"
+    (11 ก.ย. 2569).
+
+    Deliberately not a containment test: "ยกเลิกนัด C-2026-0001" contains
+    an abort word and is an order, not an abort. Everything in the
+    sentence has to be one.
+    """
+    rest = _normalise(message)
+    if not rest:
+        return False
+    for word in sorted(_SLOT_FILL_ABORT_WORDS, key=len, reverse=True):
+        rest = rest.replace(_normalise(word), "")
+    return not rest.strip()
+
+
+async def _remember_turn(client: DataClient, ctx: ResolvedContext, said: str, reply) -> None:
+    """Keep what was just said, so the next sentence can lean on it.
+
+    Best-effort in every direction: this is conversational memory, and
+    losing it means the assistant asks instead of assuming — the safe way
+    to fail. Only the person's own words are stored, plus a short label of
+    what came back; never a looked-up row, for the same reason the pending
+    fields are trimmed by shape before they reach the prompt.
+    """
+    lic = str(getattr(ctx, "license_id", "") or "")
+    if not lic or not (said or "").strip():
+        return
+    from datetime import datetime, timezone
+
+    did = " ".join(((reply.text if reply is not None else "") or "").split())[:120]
+    try:
+        await client.append_recent_turn(
+            ctx.chann_uid, ctx.oa, license_id=lic, said=said.strip()[:400], did=did,
+            at=datetime.now(timezone.utc).isoformat(), keep=5,
+            ttl_seconds=RECENT_TURNS_TTL_S,
+        )
+    except Exception:  # noqa: BLE001
+        log.debug("could not remember the turn", exc_info=True)
+
+
+async def _recent_turns(client: DataClient, ctx: ResolvedContext) -> list[dict]:
+    """What was said just before, or nothing."""
+    lic = str(getattr(ctx, "license_id", "") or "")
+    if not lic:
+        return []
+    try:
+        return await client.get_recent_turns(ctx.chann_uid, ctx.oa, license_id=lic)
+    except Exception:  # noqa: BLE001
+        return []
+
+
+#: Long enough that stepping away mid-task and coming back still reads as
+#: one conversation; short enough that tomorrow's "อันนั้น" is not answered
+#: from yesterday's subject.
+RECENT_TURNS_TTL_S = 900
+
+
+#: Words that point at somebody instead of naming them. A record is never
+#: called any of these, so a "name" that is one of them is a reference to
+#: whoever the conversation is already on — not a person to look up.
+#: "เปิดดีลให้เขาหน่อย" searched for a customer named "เขา" and answered
+#: "ไม่พบลูกค้าชื่อ เขา ในบริษัทนี้", while the model had already read the
+#: sentence correctly and reported the name as missing (11 ก.ย. 2569).
+_PRONOUN_TARGETS = frozenset({
+    "เขา", "เค้า", "เธอ", "แก", "ท่าน", "คนนี้", "คนนั้น", "รายนี้", "รายนั้น",
+    "อันนี้", "อันนั้น", "เจ้านี้", "ตัวนี้", "คนเมื่อกี้", "คนเดิม", "เจ้าเดิม",
+    "him", "her", "them", "this one", "that one",
+})
+
+
+def _is_pronoun_target(name: str) -> bool:
+    return _normalise(name) in {_normalise(w) for w in _PRONOUN_TARGETS}
+
+
 def _private_fields(fields: dict) -> dict:
     """The "_then_deal" / "_abandoned" carriers a pending intent holds
     alongside the person's own fields — kept when the flow is re-asked."""
@@ -16854,7 +16946,12 @@ async def handle_chat_message(
             ):
                 parts = None
     if parts is None:
-        return _localise_reply(await _route_chat_message(client, message=message, ctx=ctx, language=language, ai_client=ai_client), language)
+        single = _localise_reply(
+            await _route_chat_message(client, message=message, ctx=ctx, language=language, ai_client=ai_client),
+            language,
+        )
+        await _remember_turn(client, ctx, message, single)
+        return single
     first, second = parts
     reply = await _route_chat_message(client, message=first, ctx=ctx, language=language, ai_client=ai_client)
     if _is_read_request(second, ctx.oa):
@@ -16867,7 +16964,9 @@ async def handle_chat_message(
     else:
         reply.text = (reply.text or "") + "\n\n" + _t(SECOND_INTENT_ACK, language).format(part=second[:60])
         reply.quick_replies = ([(second[:20], second[:300])] + list(reply.quick_replies))[:4]
-    return _localise_reply(reply, language)
+    joined = _localise_reply(reply, language)
+    await _remember_turn(client, ctx, message, joined)
+    return joined
 
 
 async def _route_chat_message(
@@ -17729,7 +17828,51 @@ async def _route_chat_message(
     # this sits above every entity handler: on the technician OA there is no
     # customer to create, and on the sales OA "ชื่อ …" alone names nobody else.
     if ctx.oa in ("sales", "technician"):
-        own = _profile_field_edit(message)
+        # A bare "ชื่อ X" / "เบอร์ X" says nothing about WHOSE it is. That
+        # shape used to be read as editing your own profile, so it ate the
+        # answer to "กรุณาระบุนามสกุล" and told a salesperson that self-edit
+        # is only for technicians and customers (11 ก.ย. 2569). Asked
+        # directly, the model reads "ชื่อ สมหญิง รักดี" as looking a
+        # customer up, and reads every sentence that really is about
+        # oneself — "ขอแก้ไขชื่อตัวเองเป็น…", "เปลี่ยนเบอร์ฉันเป็น…",
+        # "ที่อยู่ของฉันเปลี่ยนเป็น…" — as update/profile.
+        #
+        # So the bare shape is only an edit while a profile flow is open
+        # and waiting for exactly that value. Everything else is read.
+        # On the technician and customer channels the bare label IS the
+        # established way to edit your own details — it is the owner's own
+        # reported sequence ("ชื่อ ทดสอบ1 มีทดสอบ" then the phone), and
+        # those channels hold no customer permission, so there is nothing
+        # else it could mean.
+        #
+        # On the sales channel there is: "ชื่อ สมหญิง รักดี" is almost
+        # always a customer, and reading it as a self-edit ate the answer
+        # to "กรุณาระบุนามสกุล" and replied that self-edit is only for
+        # technicians and customers (11 ก.ย. 2569). There the sentence has
+        # to say it is about oneself — which the model reads correctly for
+        # "ขอแก้ไขชื่อตัวเองเป็น…", "เปลี่ยนเบอร์ฉันเป็น…".
+        own = _profile_field_edit(message) if (
+            ctx.oa != "sales"
+            or _looks_like_profile_edit(message)
+            or (early_pending is not None and early_pending.get("entity") == "profile_edit")
+        ) else None
+        if (
+            own is not None
+            and early_pending is not None
+            and early_pending.get("missing")
+            # …unless the waiting flow IS this one. Guarding against "some
+            # flow is waiting" also killed the profile edit itself, since
+            # viewing your own details opens a profile_edit pending — and
+            # that broke the owner's own technician sequence.
+            and early_pending.get("entity") != "profile_edit"
+        ):
+            # A create is waiting for exactly these fields. "ชื่อ สมหญิง
+            # รักดี" answering "กรุณาระบุนามสกุล" was read as a
+            # salesperson editing their OWN name and answered "การแก้ไข
+            # ข้อมูลส่วนตัวผ่านแชทใช้ได้เฉพาะบัญชีช่างและลูกค้า", which
+            # stranded the flow (11 ก.ย. 2569). A question we just asked
+            # owns the answer to it.
+            own = None
         if own is not None and ctx.oa == "sales" and _looks_like_name_and_phone(message):
             # "ชื่อ สมชาย ใจดี เบอร์ 0812345678" is somebody being added,
             # not a salesperson editing their own record: nobody sets
@@ -18137,6 +18280,10 @@ async def _route_chat_message(
                 return held
 
         create_for = _parse_after_trigger(message, DEAL_CREATE_TRIGGERS)
+        if create_for is not None and _is_pronoun_target(_strip_polite_tail(create_for)):
+            # A pronoun is not a name: fall through to the bare path, which
+            # uses the customer this conversation is already on.
+            create_for = None
         if create_for is not None and not _deal_name_only(_strip_polite_tail(create_for)):
             # "เปิดดีลให้เลย" / "สร้างดีลให้หน่อย": no name — the customer just
             # mentioned, through the bare path below.
@@ -18262,7 +18409,15 @@ async def _route_chat_message(
             )
 
         search_term = _parse_after_trigger(message, CUSTOMER_SEARCH_TRIGGERS)
-        if search_term is None and not _looks_like_name_and_phone(message):
+        if search_term is None and early_pending is not None and early_pending.get("missing"):
+            # A flow is waiting for a field and this is most likely the
+            # answer. "เบอร์ 0898887777" answering "กรุณาระบุเบอร์โทร" was
+            # read as "look up the customer whose phone is 0898887777" and
+            # answered "ไม่พบลูกค้าที่ตรงกับ 0898887777", stranding the
+            # half-made record (11 ก.ย. 2569). The explicit "ค้นหาลูกค้า …"
+            # arm above still wins, because that one says what it wants.
+            search_term = None
+        elif search_term is None and not _looks_like_name_and_phone(message):
             # "ลูกค้าชื่อสมชาย", "เบอร์สมชาย", "สมชาย เบอร์อะไร", "ค้นหา สมชาย"
             #
             # But a term carrying a full name AND a phone number is not a
@@ -18540,7 +18695,7 @@ async def _route_chat_message(
         # meant a question mid-flow — "ต้องกรอกอะไรบ้าง", "กรอกยังไง",
         # "เพิ่มไปหรือยัง" — destroyed the half-filled record and answered
         # "ยกเลิกแล้วครับ", a cancellation the person never asked for.
-        _abort_word = _normalise(message) in _SLOT_FILL_ABORT_WORDS
+        _abort_word = _is_only_abort_words(message)
         _verdict = intent_to_act(
             message, action="pending_flow", canonical=_canonical(message),
         )
@@ -18566,6 +18721,7 @@ async def _route_chat_message(
             language=language,
             client=ai_client,
             pending=pending_intent,
+            recent=await _recent_turns(client, ctx),
             # The OA decides which capabilities exist at all, so it decides
             # what the model is shown. A technician's prompt drops from
             # 13,591 to 6,004 characters and a customer's to 6,783 — and,
@@ -18612,6 +18768,23 @@ async def _route_chat_message(
 
     # Missing fields come first: never refuse a request we did not understand.
     missing = _prune_missing(intent.get("missing") or [], intent, message)
+    if missing == ["target_name"] and not (intent.get("fields") or {}).get("target_name"):
+        # The model read "เปิดดีลให้เขาหน่อย" correctly — a deal, for
+        # somebody it could not name — and the system asked "กรุณาระบุ
+        # ชื่อลูกค้า" at a customer it had just been shown. The prompt
+        # promises the opposite ("the system knows which record the
+        # conversation is on and will use it"); this is that promise
+        # (11 ก.ย. 2569).
+        #
+        # Only when the person is the ONLY thing missing, and only from
+        # this shop's own current rows — an archived or erased customer
+        # resolves to nothing and the question is asked after all.
+        in_context = await _customer_still_there(client, ctx, license_id)
+        if in_context is not None:
+            intent = {**intent, "fields": {
+                **(intent.get("fields") or {}), "target_name": _display_name(in_context),
+            }}
+            missing = []
     if missing:
         # Remember what is still outstanding so the next message — which may
         # be nothing but the answer itself — can be understood as part of it.

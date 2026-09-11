@@ -361,6 +361,26 @@ class FakeDataClient:
             return None
         return self._last_customer_ref
 
+    # Short conversational memory — the same ring buffer the route keeps,
+    # licence-scoped, so a test can prove a turn is remembered and that
+    # another shop's turns are not visible.
+    async def append_recent_turn(self, chann_uid, oa, *, license_id, said, did="", at="", keep=5, ttl_seconds=900):
+        store = getattr(self, "_recent_turns", None)
+        if store is None:
+            store = self._recent_turns = {}
+        turns = store.setdefault((str(license_id), chann_uid, oa), [])
+        turns.append({"said": said, "did": did, "at": at})
+        del turns[:-max(1, min(keep, 10))]
+        self.recorded.append(("append_recent_turn", chann_uid, oa, said))
+
+    async def get_recent_turns(self, chann_uid, oa, *, license_id):
+        self.recorded.append(("get_recent_turns", chann_uid, oa))
+        return list(getattr(self, "_recent_turns", {}).get((str(license_id), chann_uid, oa), []))
+
+    async def clear_recent_turns(self, chann_uid, oa, *, license_id):
+        getattr(self, "_recent_turns", {}).pop((str(license_id), chann_uid, oa), None)
+        self.recorded.append(("clear_recent_turns", chann_uid, oa))
+
     async def set_last_entity_ref(self, chann_uid, oa, *, license_id, entity_type, entity_id, code, ttl_seconds=600, extra=None):
         self._last_entity_ref = {"entity_type": entity_type, "entity_id": entity_id, "code": code, "extra": extra}
         self._entity_ref_license = str(license_id)
