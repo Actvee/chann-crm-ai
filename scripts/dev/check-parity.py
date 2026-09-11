@@ -69,7 +69,8 @@ ACCEPTED = {
     ("setting", "read"): "dashboard has the settings screen",
     ("setting", "update"): "dashboard has the settings screen",
     ("customer", "archive"): "chat only by design — archiving from a list tap is too easy to do by accident",
-    ("deal", "archive"): "neither, yet — customer archive asks for a confirmation first and a deal needs the same flow (see NO_HANDLER_YET)",
+    ("product", "delete"): "chat only, same reason as the customer and deal archives — a catalogue row removed by a list tap is removed by accident; chat asks first and says what survives (11 ก.ย. 2569)",
+    ("deal", "archive"): "chat only, by the owner's choice 11 ก.ย. 2569 — archiving from a list tap is too easy to do by accident, so it asks for a confirmation in chat and has no button",
     ("warranty", "update"): "chat only — a customer registers and reads from the home screen; corrections are staff work in chat",
     ("service_report", "create"): "created by checking in; both surfaces do that",
     ("followup", "cancel"): "the dashboard cancels via PATCH status — same operation, different verb",
@@ -91,9 +92,7 @@ ACCEPTED = {
 # Real gaps, planned rather than accepted. Listed separately so the
 # accepted list stays a statement of intent and this stays a backlog —
 # collapsing the two would let a genuine gap hide behind a reason.
-KNOWN_GAPS = {
-    ("product", "delete"): "the catalogue screen upserts but cannot remove; no Application route for it either",
-}
+KNOWN_GAPS: dict[tuple[str, str], str] = {}
 
 # Registered in ACTION_PERMISSIONS and answered by NO handler: chat says
 # "ยังทำรายการนี้ไม่ได้". Measured, not declared — scripts/dev/
@@ -109,9 +108,7 @@ KNOWN_GAPS = {
 # (11 ก.ย. 2569).
 NO_HANDLER_YET = {
     ("audit_log", "read"): "the compliance trail is a dashboard screen; chat has no reader",
-    ("deal", "archive"): "customer archive asks for a confirmation first; a deal needs the same flow",
     ("member", "update"): "changing someone's role is the roles screen's job, with the members list in view",
-    ("product", "delete"): "no Application route either — see KNOWN_GAPS",
     ("role", "create"): "permission editing is the roles screen, deliberately",
     ("role", "read"): "same screen",
     ("role", "update"): "same screen",

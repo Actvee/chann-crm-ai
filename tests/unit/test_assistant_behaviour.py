@@ -1927,3 +1927,242 @@ class TestTheShopCanMoveAVisitFromChat:
             await self._say_on(client, "เลื่อนนัด T-2026-0001 วันศุกร์ บ่าย 2", oa, role)
             assert said["shop"].startswith(who), (oa, said["shop"])
             assert said["customer"].startswith(who), (oa, said["customer"])
+
+
+class TestTheVisitHandlerGuardsItsOwnChannel:
+    """_handle_technician_situation had one caller and one OA when it was
+    written, so a bare `ticket.update in permission_keys` test was the whole
+    of its gate. It now serves three callers — the technician road, the sales
+    road and the model road — and what keeps a customer out is _oa_allows on
+    the CALLER's side.
+
+    A guard that lives in the caller is a guard the next caller forgets, and
+    "a road below the gate" is the shape of every hole closed this session.
+    The handler checks the channel itself now, so the test calls it directly,
+    as a future caller that forgot would."""
+
+    JOB = {
+        "id": "t1", "ticket_number": "T-2026-0001", "status": "assigned",
+        "accept_status": "accepted", "assigned_to_ref": "member-1",
+        "customer_chann_uid": "CHN-S-000001", "customer_name": "สมชาย",
+        "service_address": "99/1", "issue_description": "แอร์ไม่เย็น",
+        "scheduled_date": "2026-09-12", "scheduled_time": "14:00",
+    }
+
+    async def _direct(self, oa, keys):
+        client = FakeDataClient(role=oa, permission_keys=list(keys))
+        client._tickets = [dict(self.JOB)]
+        reply = await chat._handle_technician_situation(
+            client, ctx=_ctx(primary_role=oa, oa=oa),
+            license_id=LICENSE_ID, message="T-2026-0001 วันศุกร์ บ่าย 2",
+            kind="reschedule", permission_keys=list(keys), language="th",
+        )
+        written = [c[0] for c in client.recorded if c[0] == "update_ticket"]
+        return (reply.text or ""), written
+
+    @pytest.mark.asyncio
+    async def test_the_customer_channel_is_refused_even_holding_the_key(self):
+        """ticket.update is not in OA_ALLOWED_PERMISSION_KEYS["customer"], and
+        that is the fact the handler now checks for itself."""
+        text, written = await self._direct("customer", ["ticket.update"])
+        assert written == [], f"a customer moved a visit: {written}"
+        assert text.strip()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("oa,role", [("sales", "admin"), ("technician", "technician")])
+    async def test_the_two_real_callers_still_work(self, oa, role):
+        _, written = await self._direct(oa, sorted(DEFAULT_ROLE_TEMPLATES[role]))
+        assert "update_ticket" in written, written
+
+
+class TestACourtesyWordIsNotPartOfTheName:
+    """Measured over the whole sales corpus on 11 ก.ย. 2569: 29 sentences a
+    rule decided and answered badly, and most were one shape — the rule took
+    the tail of the sentence verbatim as a name or a code.
+
+      ข้อมูลดีล D-2026-0001 ครับ  -> ไม่พบดีลรหัส D-2026-0001 ครับ
+      ดีลของสมชายครับ            -> ไม่พบลูกค้าชื่อ "สมชายครับ"
+      เบอร์คุณสมชายอะไรครับ       -> ไม่พบลูกค้าที่ตรงกับ "คุณสมชายอะไร"
+      ค้นหาลูกค้าเบอร์ 0812345678 -> ไม่พบลูกค้าที่ตรงกับ "เบอร์ 0812345678"
+
+    Every one of those records exists. A confident wrong answer about a
+    record that is right there is the failure this codebase already names as
+    worse than the write it replaced — and the model road has stripped these
+    words since _drop_invented_values learned to. One rule about what a name
+    is, not two."""
+
+    @pytest.mark.parametrize("raw,want", [
+        ("คุณสมชายอะไรครับ", "สมชาย"),
+        ("สมชายครับ", "สมชาย"),
+        ("สมชายหน่อย", "สมชาย"),
+        ("D-2026-0001 ครับ", "D-2026-0001"),
+        ("เบอร์ 0812345678", "0812345678"),
+        ("ขึ้นต้นด้วย สม", "สม"),
+        ("ลูกค้าสมชายทั้งหมด", "สมชาย"),
+        # and what must survive untouched
+        ("สมชาย", "สมชาย"),
+        ("สมชาย ใจดี", "สมชาย ใจดี"),
+        ("somchai", "somchai"),
+        ("สม", "สม"),
+    ])
+    def test_the_cleaner_keeps_the_name_and_drops_the_rest(self, raw, want):
+        from chann_app.services.chat import _clean_lookup_term
+
+        assert _clean_lookup_term(raw) == want
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message,expected", [
+        ("ข้อมูลดีล D-2026-0001 ครับ", "D-2026-0001"),
+        ("ดีลของสมชายครับ", "D-2026-0001"),
+        ("ขอดูดีลของสมชายหน่อย", "D-2026-0001"),
+        ("อยากเห็นดีลของลูกค้าสมชายทั้งหมด", "D-2026-0001"),
+    ])
+    async def test_the_record_is_found_through_the_courtesy(self, message, expected):
+        client = _shop(customers=[dict(CUSTOMER)], deals=[dict(DEAL)])
+        text, written = await _say(client, message)
+        assert expected in text, f"{message!r} -> {text[:80]}"
+        assert "ไม่พบ" not in text, text
+        assert written == [], written
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("message", [
+        "เบอร์คุณสมชายอะไรครับ",
+        "ค้นหาลูกค้าเบอร์ 0812345678",
+    ])
+    async def test_the_customer_is_found_through_the_courtesy(self, message):
+        client = _shop(customers=[dict(CUSTOMER)])
+        text, _ = await _say(client, message)
+        assert "สมชาย" in text and "ไม่พบ" not in text, f"{message!r} -> {text[:80]}"
+
+
+class TestArchivingADealAsksFirst:
+    """Owner approved it on 11 ก.ย. 2569. It had been registered in
+    ACTION_PERMISSIONS and answered "ยังทำรายการนี้ไม่ได้" — check-parity
+    carried the reason: "customer archive asks for a confirmation first; a
+    deal needs the same flow". A deal carries its quotations and its line
+    items, and "ลบดีล" typed in passing is too cheap a sentence for that."""
+
+    ARCHIVE = {"action": "archive", "entity": "deal",
+               "fields": {"deal_code": "D-2026-0001"}, "missing": []}
+
+    async def _turns(self, *turns):
+        client = _shop(customers=[dict(CUSTOMER)], deals=[{**DEAL, "amount": "500000.00"}])
+        text = ""
+        for message, intent in turns:
+            text, _ = await _say(client, message, intent=intent)
+        archived = [c[0] for c in client.recorded if c[0].startswith("archive_")]
+        return text, archived, client
+
+    @pytest.mark.asyncio
+    async def test_it_asks_and_then_archives(self):
+        text, archived, _ = await self._turns(
+            ("ลบดีล D-2026-0001", self.ARCHIVE), ("ยืนยันลบ", None),
+        )
+        assert archived == ["archive_deal"], archived
+        assert "เก็บถาวร" in text, text
+
+    @pytest.mark.asyncio
+    async def test_the_question_names_the_deal_and_its_value(self):
+        """A confirmation that does not say what is about to go is a
+        confirmation nobody can give properly."""
+        text, archived, _ = await self._turns(("ลบดีล D-2026-0001", self.ARCHIVE))
+        assert archived == [], archived
+        assert "D-2026-0001" in text and "สมชาย" in text and "500,000" in text, text
+
+    @pytest.mark.asyncio
+    async def test_backing_out_keeps_the_deal(self):
+        text, archived, _ = await self._turns(
+            ("ลบดีล D-2026-0001", self.ARCHIVE), ("ยกเลิก", None),
+        )
+        assert archived == [], archived
+        assert "ยังอยู่" in text, text
+
+    @pytest.mark.asyncio
+    async def test_a_refusal_never_reaches_the_question(self):
+        text, archived, _ = await self._turns(("ไม่ต้องลบดีล D-2026-0001", self.ARCHIVE))
+        assert archived == [], archived
+        assert "ใช่ไหมครับ" not in text, text
+
+    @pytest.mark.asyncio
+    async def test_naming_no_deal_asks_which(self):
+        text, archived, _ = await self._turns((
+            "ลบดีล", {"action": "archive", "entity": "deal", "fields": {}, "missing": []},
+        ))
+        assert archived == [], archived
+        assert "ดีลไหน" in text, text
+
+
+class TestTakingAProductOutOfTheCatalogue:
+    """Owner approved it on 11 ก.ย. 2569. check-parity had it on the backlog
+    as "no Application route for it either" — which was half right and the
+    wrong half: the Data tier has done this since Phase 7 under the verb
+    ARCHIVE, with products.archived_at shipped in migration 0006 and five
+    foreign keys into products.id that make a hard delete impossible. What
+    was missing was every way to reach it.
+
+    In chat, "ลบสินค้า …" was claimed by the road that removes a line from a
+    DEAL — the two share every trigger word — and answered "แก้ของดีลหรือ
+    ใบเสนอราคาไหนครับ"."""
+
+    PRODUCT = {"id": "P-1", "product_id": "FAN001",
+               "product_name": "พัดลมไอเย็น", "unit_price": "1200"}
+    DELETE = {"action": "delete", "entity": "product",
+              "fields": {"product_name": "พัดลมไอเย็น"}, "missing": []}
+
+    async def _turns(self, *turns):
+        client = _shop(deals=[{**DEAL, "products": [
+            {"id": "L1", "product_name": "พัดลมไอเย็น", "quoted_unit_price": "1200", "qty": 1}]}])
+        client._products = [dict(self.PRODUCT)]
+        text = ""
+        for message, intent in turns:
+            text, _ = await _say(client, message, intent=intent)
+        archived = [c[0] for c in client.recorded if c[0] == "archive_product"]
+        return text, archived, client
+
+    @pytest.mark.asyncio
+    async def test_it_asks_and_then_archives(self):
+        text, archived, client = await self._turns(
+            ("เอาพัดลมไอเย็นออกจากรายการสินค้า", self.DELETE), ("ยืนยันลบ", None),
+        )
+        assert archived == ["archive_product"], archived
+        assert client._products == [], client._products
+        assert "ของเดิม" in text, "did not say the existing deals keep it"
+
+    @pytest.mark.asyncio
+    async def test_the_question_says_what_survives(self):
+        """Five tables reference a product. Someone confirming this needs to
+        know last year's deals are not about to lose their contents."""
+        text, archived, _ = await self._turns(
+            ("เอาพัดลมไอเย็นออกจากรายการสินค้า", self.DELETE),
+        )
+        assert archived == [], archived
+        assert "FAN001" in text and "ดีลและใบเสนอราคาเดิมยังเก็บ" in text, text
+
+    @pytest.mark.asyncio
+    async def test_backing_out_keeps_it(self):
+        text, archived, client = await self._turns(
+            ("เอาพัดลมไอเย็นออกจากรายการสินค้า", self.DELETE), ("ยกเลิก", None),
+        )
+        assert archived == [] and len(client._products) == 1
+        assert "ยังอยู่" in text, text
+
+    @pytest.mark.asyncio
+    async def test_a_refusal_never_reaches_the_question(self):
+        """The catch-all record_delete vocabulary could not bind to this
+        sentence: "เอา" and "ออก" sit either side of the product's name, so
+        "เอาออก" never matches and the guard had nothing to negate. It has
+        its own vocabulary now, with the halves listed separately."""
+        text, archived, _ = await self._turns(
+            ("ไม่ต้องเอาพัดลมไอเย็นออกจากรายการสินค้า", self.DELETE),
+        )
+        assert archived == [], archived
+        assert "ใช่ไหมครับ" not in text, text
+
+    @pytest.mark.asyncio
+    async def test_a_deal_line_is_still_a_deal_line(self):
+        """A sentence that says neither belongs to the deal road: it asks
+        "which deal?" and can be answered, where a wrong catalogue delete
+        cannot be taken back in one word."""
+        text, archived, _ = await self._turns(("ลบสินค้าพัดลมไอเย็น", None))
+        assert archived == [], archived
+        assert "ดีล" in text or "ใบเสนอราคา" in text, text

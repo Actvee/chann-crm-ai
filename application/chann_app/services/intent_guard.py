@@ -134,6 +134,15 @@ ACTION_WORDS: dict[str, tuple[str, ...]] = {
     # The catch-all for a removal the model asked for on an entity with no
     # wording of its own.
     "record_delete": ("ลบ", "ยกเลิก", "เอาออก", "นำออก", "delete", "remove", "cancel"),
+    # Retiring a product from the catalogue. Its own entry because the
+    # catch-all above could not bind to the sentence people actually type:
+    # "ไม่ต้องเอาพัดลมไอเย็นออกจากรายการสินค้า" has "เอา" and "ออก" with the
+    # product's name between them, so "เอาออก" never matches, the guard has
+    # nothing to negate, and a refusal was answered with the confirmation
+    # prompt (11 ก.ย. 2569). The words are split here for that reason.
+    "product_archive": ("ลบสินค้า", "เอาสินค้าออก", "ตัดสินค้า", "ออกจากรายการ", "ออกจากแคตตาล็อก",
+                        "เลิกขาย", "ไม่ขายแล้ว", "remove product", "delete product", "discontinue",
+                        "ลบ", "เอา", "ออก"),
 
     # ------------------------------------------------------------------
     # The rule branches that write. Until 10 ก.ย. 2569 the guard was wired
@@ -488,8 +497,12 @@ def _negated(compact: str, words: Sequence[str], triggers: Sequence[str] = ()) -
     # reading their ไม่ as a refusal refuses the refusal (10 ก.ย. 2569).
     # The existing `imperative` escape only covers a trigger at the FRONT,
     # which "SR-2026-0001 ไม่ผ่าน" is not.
+    # The same holds for the action's own vocabulary: "ไม่อนุมัติ" and
+    # "ไม่ผ่าน" ARE the reject, and the model road passes no triggers —
+    # so a reject the model read correctly was held as "negated" and the
+    # report went undecided (measured 11 ก.ย. 2569).
     spans: list[tuple[int, int]] = []
-    for trigger in triggers or ():
+    for trigger in tuple(triggers or ()) + tuple(words):
         needle = (trigger or "").replace(" ", "").lower()
         if not needle or not any(n in needle for n in _NEGATIONS):
             continue

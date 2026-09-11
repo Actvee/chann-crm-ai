@@ -116,9 +116,26 @@ SALES_GROUP_CREATE = Capability(
     never_needed=TEAM_CREATE.never_needed,
 )
 
+APPROVAL_APPROVE = Capability(
+    action="approve",
+    entity="approval",
+    # The report is found by its code, by the one just looked at, or — with
+    # one waiting — by itself; several waiting get buttons, never a
+    # question about a code the person has not seen (_handle_approval_act).
+    never_needed=("code",),
+)
+APPROVAL_REJECT = Capability(
+    action="reject",
+    entity="approval",
+    optional=("reason",),
+    # The handler asks for the reason itself, naming the report.
+    never_needed=("code", "reason"),
+)
+
 REGISTRY: dict[tuple[str, str], Capability] = {
     (c.entity, c.action): c for c in (
         CUSTOMER_CREATE, FOLLOWUP_CREATE, QUOTE_CREATE, TEAM_CREATE, SALES_GROUP_CREATE,
+        APPROVAL_APPROVE, APPROVAL_REJECT,
     )
 }
 

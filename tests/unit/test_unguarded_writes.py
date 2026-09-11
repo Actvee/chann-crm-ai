@@ -1815,3 +1815,51 @@ class TestTheJobShowsWhatTheCustomerAskedFor:
         text = await self._asked_then_opened()
         assert "คำขอจากลูกค้า" not in text, text
         assert "T-2026-0001" in text
+
+
+class TestTheQuestionAfterTheContactTileReachesTheShop:
+    """"ติดต่อร้าน" promises "ทางร้านจะเห็นข้อความนี้". The line typed next
+    was forwarded — unless it happened to mention the shop, in which case the
+    tile branch claimed it again, re-sent its own prompt, and the shop never
+    saw the question. The customer read the same sentence twice and would
+    reasonably conclude nobody was listening.
+
+    Found by an audit agent reading the customer road in order, and
+    reproduced before the fix (11 ก.ย. 2569): "ร้านเปิดวันอาทิตย์ไหมครับ"
+    satisfies _asks_shop_contact, so the tile matched ahead of the forward."""
+
+    async def _turns(self, *messages):
+        client = FakeDataClient(role="customer", permission_keys=[])
+        ctx = _ctx(primary_role="customer", oa="customer")
+        reply = None
+        for message in messages:
+            reply = await chat.handle_chat_message(
+                client, ctx=ctx, message=message, language="th",
+            )
+        forwarded = [c[0] for c in client.recorded
+                     if c[0] in ("open_chat_session", "add_chat_message")]
+        return (reply.text or ""), forwarded
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("question", [
+        "ร้านเปิดวันอาทิตย์ไหมครับ",
+        "อยากทราบว่ามีรุ่น 18000 BTU ไหมครับ",
+    ])
+    async def test_the_shop_sees_the_question(self, question):
+        text, forwarded = await self._turns("ติดต่อร้าน", question)
+        assert "open_chat_session" in forwarded, f"{question!r} never reached the shop: {text[:70]}"
+        assert "add_chat_message" in forwarded, forwarded
+
+    @pytest.mark.asyncio
+    async def test_tapping_the_tile_twice_asks_again_rather_than_forwarding_it(self):
+        """The forward declines a tile itself, so the word "ติดต่อร้าน" is
+        never sent to the shop as if it were the customer's question."""
+        text, forwarded = await self._turns("ติดต่อร้าน", "ติดต่อร้าน")
+        assert forwarded == [], forwarded
+        assert "พิมพ์เรื่องที่ต้องการติดต่อ" in text, text
+
+    @pytest.mark.asyncio
+    async def test_the_shop_details_tile_is_unchanged(self):
+        text, forwarded = await self._turns("ข้อมูลร้าน")
+        assert forwarded == [], forwarded
+        assert text.strip()

@@ -1405,6 +1405,36 @@ async def upsert_product(
         raise _propagate(exc)
 
 
+@router.post("/licenses/{license_id}/products/{product_id}/archive")
+async def archive_product(
+    license_id: str,
+    product_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Retire a product from the catalogue.
+
+    Spec 7.5 requires delete to BE an archive, and the Data tier has done it
+    that way since Phase 7 — `products.archived_at`, five foreign keys into
+    products.id, and a partial index for the active ones. What was missing
+    was any way to reach it: no Application route, no dashboard control, and
+    in chat "ลบสินค้า FAN001" was claimed by the road that removes a line
+    from a DEAL (owner's backlog, 11 ก.ย. 2569).
+
+    POST .../archive rather than DELETE .../{id}: the verb is the archive,
+    the row survives, and check-parity reads the trailing segment as the
+    action — a bare DELETE would be recorded as "delete", which this is not.
+    """
+    _require_same_tenant(principal, license_id)
+    principal.require("product.manage")
+    try:
+        return await client.archive_product(
+            license_id, product_id, actor_id=principal.chann_uid,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
 # ----------------------------------------------------------------- warranties
 
 

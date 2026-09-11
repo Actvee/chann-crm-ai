@@ -653,8 +653,12 @@ class TestProductCardAndSearch:
         assert "พัดลม 16 นิ้ว" in reply.text and "ทีวี" not in reply.text
 
     async def test_the_plain_list_and_other_questions_are_untouched(self):
+        """"มีสินค้าอะไรบ้าง" reaches the model since 11 ก.ย. 2569 (the
+        deployed model reads it as read/product); the reply is the same
+        catalogue list, from the same handler."""
         client = _sales()
-        assert "FAN001 · พัดลม" in (await say(client, "มีสินค้าอะไรบ้าง")).text
+        read_product = _crafted({"action": "read", "entity": "product", "fields": {}, "missing": []})
+        assert "FAN001 · พัดลม" in (await say(client, "มีสินค้าอะไรบ้าง", ai=read_product)).text
         reply = await say(client, "มีดีลอะไรบ้าง")
         assert "พัดลม" not in reply.text
 

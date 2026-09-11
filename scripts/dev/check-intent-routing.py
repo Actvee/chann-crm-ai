@@ -51,11 +51,9 @@ ME = "CHN-S-000001"
 # Deliberately unrouted, with the reason and where the work is done instead.
 # "No handler" is an honest answer; a silent fall-through is not.
 NO_HANDLER = {
-    ("archive", "deal"): "deals close won/lost by stage; archiving one lives on the deals page",
     ("update", "quote"): "a quote changes through its lines and its discount, each with its own command",
     ("update", "warranty"): "editing a registration is a dashboard job (warranties page); chat registers and reads",
     ("update", "approval"): "the approval flow is configured with \"ตั้งค่าการอนุมัติ\", not from a bare intent",
-    ("delete", "product"): "the products page owns removal; chat adds and updates the catalogue",
     ("read", "audit_log"): "the audit trail is a dashboard view — a LINE bubble cannot page through it",
     ("read", "role"): "roles and permissions are managed on the roles page",
     ("create", "role"): "roles and permissions are managed on the roles page",

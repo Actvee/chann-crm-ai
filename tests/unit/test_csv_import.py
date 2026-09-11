@@ -132,3 +132,35 @@ class TestGuideFiles:
         root = Path(__file__).resolve().parents[2] / "presentation" / "public" / "samples"
         assert (root / "products.csv").read_text(encoding="utf-8") == csv_import.PRODUCT_SAMPLE
         assert (root / "warranties.csv").read_text(encoding="utf-8") == csv_import.WARRANTY_SAMPLE
+
+
+class TestArchivingAProductOverHttp:
+    """The route added 11 ก.ย. 2569. The audit that scoped this work noted
+    that nothing exercised the archive at the HTTP layer on ANY tier — the
+    repository had a test, the Data smoke test covered only GET, and above
+    that there was no route at all."""
+
+    PRODUCT = {"id": "P-1", "product_id": "FAN001",
+               "product_name": "พัดลมไอเย็น", "unit_price": "1200"}
+
+    def test_it_archives_and_needs_the_key(self):
+        http, client = _harness(["product.manage"])
+        client._products = [dict(self.PRODUCT)]
+        response = http.post(f"/api/v1/licenses/{LICENSE_ID}/products/FAN001/archive")
+        assert response.status_code == 200, response.text
+        assert ("archive_product", LICENSE_ID, "FAN001", "CHN-OWNER") in client.recorded
+        assert client._products == []
+
+    def test_without_the_key_it_refuses_and_writes_nothing(self):
+        http, client = _harness(["product.read"])
+        client._products = [dict(self.PRODUCT)]
+        response = http.post(f"/api/v1/licenses/{LICENSE_ID}/products/FAN001/archive")
+        assert response.status_code == 403, response.text
+        assert not [c for c in client.recorded if c[0] == "archive_product"]
+        assert len(client._products) == 1
+
+    def test_a_product_that_is_not_there_is_a_404_not_a_crash(self):
+        http, client = _harness(["product.manage"])
+        client._products = []
+        response = http.post(f"/api/v1/licenses/{LICENSE_ID}/products/NOPE/archive")
+        assert response.status_code == 404, response.text

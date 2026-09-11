@@ -278,9 +278,16 @@ does not exist anywhere else the model can check against):
     tax_id, phone, vat_rate.
     Examples: "เลขผู้เสียภาษีคือ 0105558012345", "แก้ที่อยู่บริษัทเป็น ...".
 
-- entity="report" — asking for numbers rather than changing anything.
-  action="read": fields may include period ("today", "week", "month").
-    Examples: "เดือนนี้ขายได้เท่าไหร่", "สรุปยอดให้หน่อย", "มีงานค้างกี่งาน".
+- entity="report" — asking for an overview rather than changing anything.
+  action="read": fields may include type and period ("today", "week", "month").
+    type is one of:
+      "sales"  — the figures. Examples: "เดือนนี้ขายได้เท่าไหร่", "สรุปยอดให้หน่อย".
+      "chart"  — a picture was asked for. Examples: "ขอกราฟยอดขาย",
+                 "top products chart", "ยอดขาย 6 เดือนเป็นกราฟ".
+      "agenda" — what is on the person's own plate for a day or a week.
+                 Examples: "วันนี้มีอะไรบ้าง", "อาทิตย์นี้ต้องทำอะไร".
+      "jobs"   — repair jobs still open. Examples: "มีงานค้างกี่งาน",
+                 "มีงานซ่อมค้างไหม".
 
 - entity="note" — a short remark about a customer, deal or quote that is
   neither a data field to change nor a request for anything else. Examples:

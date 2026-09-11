@@ -1115,6 +1115,33 @@ class FakeDataClient:
         row["stage"] = stage
         return row
 
+    async def archive_product(self, license_id, product_id, actor_id=None):
+        """Spec 7.5: deleting a product IS archiving it — five tables carry a
+        foreign key into products.id, and a deal from last year must still
+        say what it sold. The real client has had this since Phase 7 with
+        nothing able to reach it (11 ก.ย. 2569)."""
+        self.recorded.append(("archive_product", license_id, product_id, actor_id))
+        row = next((p for p in getattr(self, "_products", [])
+                    if p.get("product_id") == product_id or p.get("id") == product_id), None)
+        if row is None:
+            from chann_app.data_client import DataTierError
+            raise DataTierError(404, "product not found")
+        row["archived_at"] = "2026-09-11T00:00:00Z"
+        self._products = [p for p in self._products if p is not row]
+        return row
+
+    async def archive_deal(self, license_id, deal_id, actor_id=None):
+        """Soft delete, like the customer one: the row stays and stops being
+        listed. Added 11 ก.ย. 2569 with the chat road that reaches it — the
+        real client has had it since Phase 9 with no caller."""
+        self.recorded.append(("archive_deal", license_id, deal_id, actor_id))
+        row = next((d for d in self._deals if d["id"] == deal_id), None)
+        if row is None:
+            from chann_app.data_client import DataTierError
+            raise DataTierError(404, "deal not found")
+        row["archived_at"] = "2026-09-11T00:00:00Z"
+        return row
+
     # ------------------------------------------------------------ Phase 10
 
     async def create_quote(self, license_id, payload, actor_id=None):
@@ -1392,17 +1419,20 @@ class TestSlotFilling:
     """6.9 test_slot_filling"""
 
     async def test_missing_name_asks_for_it(self):
+        """"เพิ่มลูกค้า" is read by the model since 11 ก.ย. 2569, and the
+        model's verbatim answer is create/customer with missing
+        ["last_name", "phone"] — so the slot-fill asks for those two, in
+        words, from MISSING_FIELD_LABELS. (The old crafted answer put a Thai
+        string in `missing`, which no model returns; it folded into the
+        generic "รายละเอียดที่เหลือ".)"""
         ai = httpx.AsyncClient(transport=_ai(json.dumps(
                 {"action": "create", "entity": "customer",
-                 "fields": {}, "missing": ["ชื่อลูกค้า"]}, ensure_ascii=False)))
+                 "fields": {}, "missing": ["last_name", "phone"]}, ensure_ascii=False)))
         reply = await handle_chat_message(
             FakeDataClient(permission_keys=["customer.create"]),
             message="เพิ่มลูกค้า", ctx=_ctx(), ai_client=ai,
         )
-        # The bare button is answered before the AI is reached, and the
-        # reply says what to send. The slot-filling wording it used to
-        # assert belongs to the interpreted path, tested separately.
-        assert "ชื่อ" in reply.text and "เบอร์" in reply.text
+        assert "นามสกุล" in reply.text and "เบอร์" in reply.text, reply.text
 
     async def test_complete_message_proceeds_past_slot_filling(self):
         ai = httpx.AsyncClient(transport=_ai(json.dumps(

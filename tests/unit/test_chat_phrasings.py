@@ -123,18 +123,30 @@ class TestLayeredHelp:
 
 class TestStaffPhrasings:
     async def test_polite_particles_and_openers_do_not_hide_a_command(self):
+        """The sales OA reads first since 11 ก.ย. 2569. A tile the rich menu
+        sends still decides without the model ("รายชื่อลูกค้า"); everything
+        else is the model's, and lands in the same _handle_customer_list.
+        The reply is what this test guards; the road is asserted too, so a
+        tile can never be sent to be told what it already is."""
+        READ_CUSTOMER = {"action": "read", "entity": "customer", "fields": {}, "missing": []}
         for phrasing in ("รายชื่อลูกค้าครับ", "ขอดูลูกค้าหน่อย", "ลูกค้า", "ขอรายชื่อลูกค้า", "ลูกค้ามีใครบ้าง", "list customers"):
             client = ReviewFake()
             await FakeDataClient.create_customer(client, "L1", {"first_name": "สมชาย", "last_name": "ใจดี", "phone": "0812345678"})
-            reply, calls = await say(client, "sales", phrasing)
-            assert calls == 0 and "สมชาย" in reply.text, phrasing
+            reply, calls = await say(client, "sales", phrasing, ai=READ_CUSTOMER)
+            is_tile = chat._is_menu_tile(phrasing, "sales")
+            assert (calls == 0) == is_tile, (phrasing, calls, is_tile)
+            assert "สมชาย" in reply.text, phrasing
 
     @pytest.mark.parametrize("phrasing", ["ลูกค้าชื่อสมชาย", "เบอร์สมชาย", "สมชาย เบอร์อะไร", "หาลูกค้าชื่อสมชาย", "ค้นหา สมชาย", "ขอเบอร์ลูกค้า สมชาย"])
     async def test_a_name_lookup_in_plain_words_finds_the_customer(self, phrasing):
+        """Read by the model now — its verbatim answer for these is
+        read/customer with target_name "สมชาย" (ask-model.py, 11 ก.ย. 2569) —
+        and found by the same lookup as before."""
         client = ReviewFake()
         await FakeDataClient.create_customer(client, "L1", {"first_name": "สมชาย", "last_name": "ใจดี", "phone": "0812345678"})
-        reply, calls = await say(client, "sales", phrasing)
-        assert calls == 0 and "0812345678" in reply.text, (phrasing, reply.text)
+        reply, calls = await say(client, "sales", phrasing, ai={
+            "action": "read", "entity": "customer", "fields": {"target_name": "สมชาย"}, "missing": []})
+        assert calls == 1 and "0812345678" in reply.text, (phrasing, calls, reply.text)
 
     async def test_small_talk_is_answered_not_parsed(self):
         for phrasing in ("ขอบคุณครับ", "โอเค", "ok", "👍", "555", "ครับ"):
@@ -150,10 +162,16 @@ class TestStaffPhrasings:
         reply, calls = await say(client, "technician", "เปลี่ยนร้าน")
         assert calls == 0 and "บริษัททดสอบ" in reply.text
 
-    async def test_sales_summary_with_a_word_in_front_stays_deterministic(self):
-        client = FakeDataClient(permission_keys=["deal.read", "view_reports"])
-        reply, calls = await say(client, "sales", "สรุปยอดขาย")
-        assert calls == 0 and "entity" not in reply.text
+    async def test_sales_summary_with_a_word_in_front_reaches_the_model(self):
+        """Used to stay deterministic. Since 11 ก.ย. 2569 the model reads it
+        — verbatim: read/report period=month — and the same
+        _handle_sales_summary answers, gated on deal.read as the handler
+        always was (the registry said view_reports; it was wrong)."""
+        client = FakeDataClient(permission_keys=["deal.read"])
+        reply, calls = await say(client, "sales", "ขอดูยอดขายเดือนนี้หน่อย", ai={
+            "action": "read", "entity": "report", "fields": {"period": "month"}, "missing": []})
+        assert calls == 1, calls
+        assert "สรุปการขาย" in reply.text or "ดีล" in reply.text, reply.text
 
     async def test_discount_ignores_the_quote_code(self):
         client = FakeDataClient(permission_keys=["quote.update"])

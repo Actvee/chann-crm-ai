@@ -173,7 +173,16 @@ ACTION_PERMISSIONS: dict[tuple[str, str], str] = {
     # capability this system does not have — while the Data tier has had
     # DELETE /sales-groups/{id} since Phase 7 (11 ก.ย. 2569).
     ("delete", "sales_group"): "team.manage",
-    ("read", "report"): "view_reports",
+    # deal.read, not view_reports. The sentence the prompt teaches for
+    # entity="report" — "เดือนนี้ขายได้เท่าไหร่", "สรุปยอดให้หน่อย" — is the
+    # pipeline summary, which _handle_sales_summary gates on deal.read and
+    # which the dashboard shows to the same people. The moment the model
+    # road came first, that sentence was refused for lacking view_reports,
+    # a key the keyword road had never asked for: the registry and the
+    # handler disagreed and the gate believed the registry (11 ก.ย. 2569).
+    # The Phase 17 report engine is a different thing, reached as
+    # ("create", "report") by its own phrases, and keeps view_reports.
+    ("read", "report"): "deal.read",
     ("read", "audit_log"): "audit_log.view",
     ("read", "role"): "role.manage",
     ("update", "role"): "role.manage",
@@ -5792,10 +5801,6 @@ AMEND_CANCELLED = {
     "th": "ยกเลิกงาน {code} แล้วครับ ทางร้านจะรับทราบ",
     "en": "Cancelled {code}. The shop has been told.",
 }
-AMEND_RESCHEDULED = {
-    "th": "เลื่อนนัด {code} เป็นวันที่ {date}{time} แล้วครับ",
-    "en": "Moved {code} to {date}{time}.",
-}
 AMEND_ALREADY_DONE = {
     "th": "งาน {code} ปิดไปแล้ว แก้ไขไม่ได้ครับ ถ้ามีปัญหาเพิ่มเติมแจ้งใหม่ได้เลย",
     "en": "{code} is already closed. Report a new fault if something is still wrong.",
@@ -6037,12 +6042,6 @@ async def _handle_customer_amend(
         text=_t(AMEND_MOVE_REQUESTED, language).format(code=code, when=when),
         entity_type="service_ticket", entity_id=ticket_id,
         quick_replies=[("ดูสถานะงาน", "งานของฉัน")],
-    )
-    return ChatReply(
-        text=_t(AMEND_RESCHEDULED, language).format(
-            code=code, date=format_thai_date(due_date),
-            time=f" {format_thai_time(due_time)}",
-        )
     )
 
 
@@ -9146,19 +9145,28 @@ def dashboard_link(section: str, oa: str = "sales") -> str | None:
         return f"https://liff.line.me/{liff_id}"
     return f"https://liff.line.me/{liff_id}/{path}" if path else f"https://liff.line.me/{liff_id}"
 
+# Shrunk to the forms the MODEL cannot read, 11 ก.ย. 2569. Asked the deployed
+# model the sentences this table used to claim, it answered read/customer for
+# every phrasal one — "ขอดูลูกค้าหน่อยครับ", "ขอรายชื่อลูกค้าทั้งหมดหน่อย",
+# "ลูกค้าทั้งหมดมีใครบ้างครับ", "มีลูกค้ากี่คนแล้ว" — and "suggest" only for a
+# bare noun ("ลูกค้าครับ"), which carries no verb for it to read. So the bare
+# nouns and the typos stay here and everything else goes to the model, which
+# lands in the same _handle_customer_list through _handle_customer_intent.
+#
+# docs/MODEL_FIRST.md step 1: a rule that dispatches first is the thing to
+# narrow. Owner, same day: "ยกเลิกการแก้กฎทั้งหมดไปเลย แล้วสนใจแค่เปลี่ยนเป็น
+# model first".
 CUSTOMER_LIST_PHRASES = (
-    "รายชื่อลูกค้า", "รายการลูกค้า", "ดูลูกค้า", "ลูกค้าทั้งหมด", "รายชื่อลูกค้าทั้งหมด", "ลูกค้ามีใครบ้าง",
-    "ลูกค้ามีอะไรบ้าง", "ลูกค้าทั้งหมดมีกี่คน", "มีลูกค้ากี่คน", "ดูรายชื่อลูกค้า", "customer list", "list customers",
-    # Review, 6 Sep 2026 (B8): the synonyms and the English people mix in.
-    "ลิสต์ลูกค้า", "list ลูกค้า", "ลูกค้ากี่คน", "ลูกค้าทั้งหมดมีใครบ้าง", "lead", "leads", "lead ทั้งหมด", "ดู lead",
-    "รายชื่อ lead", "lead มีใครบ้าง", "lead list", "รายการ lead", "ลูกค้ามุ่งหวัง", "รายชื่อลูกค้ามุ่งหวัง", "customers",
-    "all customers", "who are our customers",
+    "รายชื่อลูกค้า", "รายการลูกค้า", "ลิสต์ลูกค้า", "list ลูกค้า",
+    "customer list", "list customers", "customers",
+    "lead", "leads", "lead list", "รายการ lead", "รายชื่อ lead", "ลูกค้ามุ่งหวัง",
 )
 BARE_CUSTOMER_WORDS = frozenset({"ลูกค้า", "customers", "customer", "lead", "leads"})
+# Same shrink, same measurement: the model reads "ขอดูดีลหน่อย" and
+# "ดีลทั้งหมดมีอะไรบ้าง" as read/deal and shrugs at a bare "ดีลครับ".
 DEAL_LIST_PHRASES = (
-    "รายการดีล", "รายชื่อดีล", "ดูดีล", "ดีลทั้งหมด", "ดีลมีอะไรบ้าง", "deal list", "deals",
-    "pipeline", "ดู pipeline", "รายการ pipeline", "pipeline ทั้งหมด", "ดีลทั้งหมดมีอะไรบ้าง", "ดีลที่มี", "ดีลมีกี่ดีล",
-    "all deals", "list deals",
+    "รายการดีล", "รายชื่อดีล", "deal list", "deals", "list deals",
+    "pipeline", "ดู pipeline", "รายการ pipeline",
 )
 BARE_DEAL_WORDS = frozenset({"ดีล", "deal", "pipeline"})
 BARE_PRODUCT_WORDS = frozenset({"สินค้า", "products", "product", "catalogue", "catalog"})
@@ -9185,10 +9193,36 @@ DEAL_OPEN_PHRASES = (
     "ดีลที่ยังไม่ปิด", "ดีลค้าง", "ดีลเปิดอยู่", "open deals", "ดีลไหนยังเปิดอยู่", "ดีลไหนยังเปิด", "ดีลที่เปิดอยู่",
     "ดีลยังเปิด", "ดีลที่ยังเปิด", "ดีลที่ยังไม่จบ", "ดีลที่ค้าง", "ดีลค้างอยู่", "ดีลรอปิด", "pending deals",
 )
+# Same shrink. The model reads "มีสินค้าอะไรบ้าง" as read/product, and reads
+# "ราคาแอร์เท่าไหร่" and "ค้นสินค้า แอร์" as read/product WITH product_name —
+# which the phrase table could not do at all, since it matches whole messages.
 PRODUCT_LIST_PHRASES = (
     "รายการสินค้า", "รายชื่อสินค้า", "ดูสินค้า", "สินค้าทั้งหมด", "product list", "มีสินค้าอะไรบ้าง", "สินค้ามีอะไรบ้าง",
     "สินค้าที่ขาย", "ขายอะไรบ้าง", "มีขายอะไรบ้าง", "แคตตาล็อก", "ราคาสินค้า", "all products",
 )
+#: What the SALES road matches on. The catalogue phrases above stay whole
+#: for the customer storefront, which cannot be converted — a customer holds
+#: no permission keys, so a reading the model proposes there dies at the
+#: gate. On the sales OA the model reads every phrasal form, and reads
+#: "ราคาแอร์เท่าไหร่" and "ค้นสินค้า แอร์" WITH the product name, which a
+#: whole-message phrase table cannot do at all (measured against the
+#: deployed model, 11 ก.ย. 2569).
+#:
+#: "สินค้าทั้งหมด" stays because the rich menu sends it as a tile and this
+#: system writes it as a button; those are never the model's to read, and
+#: two tests hold that line.
+SALES_PRODUCT_LIST_PHRASES = (
+    "รายการสินค้า", "รายชื่อสินค้า", "product list", "all products", "แคตตาล็อก",
+    "สินค้าทั้งหมด",
+)
+
+#: Reverted 11 ก.ย. 2569. Shrinking this table moved six sales sentences to
+#: the model and broke the CUSTOMER channel doing it: "ค้นหา พัดลม" stopped
+#: searching the storefront and "ดูสินค้าหน่อย" stopped showing the browse
+#: hint. The table is shared, and a customer holds no permission keys, so
+#: the reading the model proposes there dies at the gate — the conversion
+#: takes the storefront away and gives nothing back. The customer and deal
+#: list tables above ARE sales-only and stay converted.
 QUOTE_LIST_PHRASES = (
     "รายการใบเสนอราคา", "ใบเสนอราคาทั้งหมด", "ดูใบเสนอราคา", "quote list", "ใบเสนอราคาที่ยังไม่ตอบ", "ใบเสนอราคาค้าง",
     "ใบเสนอราคาที่รอ", "ใบเสนอราคารอตอบ", "ใบเสนอราคาที่ส่งไป", "ใบเสนอราคาที่ส่งแล้ว", "quotes", "pending quotes", "all quotes",
@@ -9655,6 +9689,12 @@ _GUARD_ACTIONS: dict[str, dict[str, str]] = {
         "th_eg": "ลบ {code}", "en_eg": "delete {code}",
         "code": "C-2026-0001",
     },
+    "product_archive": {
+        "th": "เอาสินค้าออกจากรายการ", "en": "remove a product from the catalogue",
+        "th_eg": "ลบสินค้า {code} ออกจากรายการสินค้า",
+        "en_eg": "remove product {code} from the catalogue",
+        "code": "FAN001",
+    },
     # The deterministic branches, added 10 ก.ย. 2569 — see the note on
     # ACTION_WORDS in intent_guard.py for what each of these was doing to
     # the database before it had a guard.
@@ -9841,6 +9881,8 @@ _AI_GUARDED: dict[tuple[str, str], str] = {
     # generic edit vocabulary and reads all three moods correctly.
     ("customer", "update"): "record_write",
     ("customer", "archive"): "record_delete",
+    ("product", "delete"): "product_archive",
+    ("product", "archive"): "product_archive",
     ("customer", "promote"): "record_write",
     ("deal", "create"): "deal_create",
     ("deal", "update"): "deal_stage",
@@ -10425,6 +10467,56 @@ def _lookup_is_really_an_edit(message: str, triggers: tuple[str, ...]) -> bool:
             if any(head.endswith(verb) for verb in _EDIT_VERBS_BEFORE_A_LOOKUP):
                 return True
     return False
+
+
+#: Words that sit around a name in a question but are not part of it.
+#: "เบอร์คุณสมชายอะไรครับ" searched for "คุณสมชายอะไร" and answered
+#: "ไม่พบลูกค้าที่ตรงกับ …" about a customer who exists (measured over the
+#: sales corpus, 11 ก.ย. 2569: 29 sentences a rule decided and answered
+#: badly, and this shape was most of them).
+_LOOKUP_HEADS = ("ที่ชื่อ", "ชื่อว่า", "ชื่อ", "ที่", "เบอร์โทรของ", "เบอร์ของ", "เบอร์",
+                 "ขึ้นต้นด้วย", "ลงท้ายด้วย", "ของลูกค้า", "ลูกค้าชื่อ", "ลูกค้า")
+_LOOKUP_TAILS = ("อะไรบ้าง", "อะไร", "บ้าง", "ไหม", "มั้ย", "หน่อย", "ด้วย", "ทั้งหมด", "หรือเปล่า")
+
+
+def _clean_lookup_term(text: str | None) -> str:
+    """What the person actually named, out of a sentence that asks for it.
+
+    A record code wins outright: "ข้อมูลดีล D-2026-0001 ครับ" was looked up
+    as "D-2026-0001 ครับ" and answered "ไม่พบดีลรหัส D-2026-0001 ครับ" about
+    a deal that was right there. Otherwise the courtesy and the question
+    words come off, the same way the model road's _drop_invented_values
+    takes them off a name the model returns — one rule about what a name is,
+    not two.
+    """
+    term = (text or "").strip()
+    if not term:
+        return ""
+    found = _GUARD_CODE_RE.search(term)
+    if found:
+        return found.group(1).upper()
+    for _ in range(3):  # "ลูกค้าที่ชื่อ …" is two heads deep
+        before = term
+        for head in sorted(_LOOKUP_HEADS, key=len, reverse=True):
+            if term.startswith(head) and len(term) > len(head):
+                term = term[len(head):].strip(" :")
+                break
+        if term == before:
+            break
+    term = _strip_honorific(term)
+    # Courtesy and question words interleave — "สมชายอะไรครับ" is a question
+    # word under a particle — so both come off in the same loop until
+    # nothing more will.
+    for _ in range(4):
+        before = term
+        term = _strip_polite_tail(term)
+        for tail in sorted(_LOOKUP_TAILS, key=len, reverse=True):
+            if term.endswith(tail) and len(term) > len(tail) + 1:
+                term = term[: -len(tail)].strip(" ,")
+                break
+        if term == before:
+            break
+    return term.strip(" ,:")
 
 
 def _customer_name(customer: dict) -> str:
@@ -11928,6 +12020,75 @@ SALES_SUMMARY_CAVEAT = {
     "th": "\n({overdue} ดีลเลยกำหนด · {undated} ดีลยังไม่ระบุวันปิด)",
     "en": "\n({overdue} overdue · {undated} with no close date)",
 }
+
+
+_REPORT_CHART_WORDS = ("chart", "graph", "กราฟ", "แผนภูมิ", "picture", "plot")
+_REPORT_JOB_WORDS = ("ticket", "job", "repair", "งาน", "ซ่อม")
+_REPORT_AGENDA_WORDS = ("agenda", "schedule", "task", "todo", "work", "นัด", "followup")
+_REPORT_SALES_WORDS = ("sales", "revenue", "deal", "pipeline", "ยอด", "ขาย", "summary")
+
+
+async def _handle_report_intent(
+    client: DataClient, *, intent: dict, ctx: ResolvedContext, license_id, message: str,
+    permission_keys: list[str], language: str, ai_client=None,
+) -> ChatReply:
+    """entity="report", read the model's way.
+
+    Until 11 ก.ย. 2569 every report read became the sales summary, whatever
+    the person had asked for: "ขอกราฟยอดขาย" (a picture), "วันนี้มีอะไรบ้าง"
+    (the day's agenda) and "มีงานซ่อมค้างไหม" (open jobs) all came back as
+    "สรุปการขาย" — the model had read them correctly and the road threw
+    the reading away. The prompt now names four kinds (sales, chart,
+    agenda, jobs); a model that answers in its own words is read by the
+    same four families of words, and the summary stays the default.
+    """
+    fields = intent.get("fields") or {}
+    kind = str(fields.get("type") or fields.get("kind") or fields.get("report") or "").lower()
+    said = " ".join(str(v) for v in fields.values() if v not in (None, "")).lower()
+    period = str(fields.get("period") or "").lower()
+
+    def _any(words, text) -> bool:
+        return any(w in text for w in words)
+
+    if _any(_REPORT_CHART_WORDS, said) or _any(_REPORT_CHART_WORDS, (message or "").lower()):
+        picture = _chart_request(message) if ctx.oa == "sales" else None
+        if picture is not None:
+            return await _handle_sales_chart(
+                client, ctx=ctx, license_id=license_id, request=picture,
+                permission_keys=permission_keys, language=language,
+            )
+        return await _handle_ai_report(
+            client, ctx=ctx, license_id=license_id, message=message,
+            permission_keys=permission_keys, language=language, ai_client=ai_client,
+            with_chart=True,
+        )
+    deal_kind = _deal_query_kind(fields, by_period=False)
+    if deal_kind is not None:
+        # "ดีลใหญ่สุดคืออันไหน" comes back report/type=largest_deal: the
+        # filtered view, not the whole summary.
+        return await _handle_deal_query(
+            client, license_id=license_id, permission_keys=permission_keys,
+            language=language, kind=deal_kind,
+        )
+    if _any(_REPORT_JOB_WORDS, kind) or (
+        _any(_REPORT_JOB_WORDS, said) and not _any(_REPORT_SALES_WORDS, said)
+    ):
+        return await _handle_ticket_list(
+            client, ctx=ctx, license_id=license_id, permission_keys=permission_keys,
+            language=language, open_only=True,
+        )
+    if _any(_REPORT_AGENDA_WORDS, kind) or (
+        not _any(_REPORT_SALES_WORDS, said)
+        and any(p in period for p in ("today", "tomorrow", "week", "วันนี้", "พรุ่งนี้", "สัปดาห์", "อาทิตย์"))
+    ):
+        days = 1 if any(p in period for p in ("today", "วันนี้", "tomorrow", "พรุ่งนี้")) else 7
+        return await _handle_work_list(
+            client, license_id=license_id, permission_keys=permission_keys,
+            language=language, days=days,
+        )
+    return await _handle_sales_summary(
+        client, license_id=license_id, permission_keys=permission_keys, language=language,
+    )
 
 
 async def _handle_sales_summary(
@@ -15891,12 +16052,68 @@ def _strip_honorific(name: str) -> str:
     return text
 
 
+def _amount_in(fields: dict) -> Decimal | None:
+    """The money figure in a read intent, whichever key the model chose."""
+    for key, value in (fields or {}).items():
+        if not any(w in str(key).lower() for w in ("amount", "value", "over", "min", "threshold")):
+            continue
+        digits = re.sub(r"[^\d.]", "", str(value or ""))
+        if digits:
+            try:
+                return Decimal(digits)
+            except (InvalidOperation, ValueError):
+                continue
+    return None
+
+
+def _deal_query_kind(fields: dict, *, by_period: bool = True) -> str | None:
+    """Which filtered deal view the model's fields describe, or None for
+    the plain list. Read from the model's own words for it (measured
+    11 ก.ย. 2569): status "lost"/"won"/"closed", type "largest_deal",
+    period "month"."""
+    said = " ".join(str(v) for v in (fields or {}).values() if v not in (None, "")).lower()
+    if any(w in said for w in ("largest", "biggest", "top_deal", "highest", "ใหญ่สุด")):
+        return "biggest"
+    status = str(fields.get("status") or fields.get("stage") or "").lower()
+    status = _DEAL_STAGE_SYNONYMS.get(status, status)
+    if status == "lost":
+        return "lost"
+    if status == "won":
+        return "won"
+    if not by_period:
+        # On entity="report" a period is the figures' period ("เดือนนี้ขาย
+        # ได้เท่าไหร่" is the summary, not the deals closing this month);
+        # only on entity="deal" does it name the closing window.
+        return None
+    period = str(fields.get("period") or "").lower()
+    if period in ("month", "this_month", "เดือนนี้") and not status:
+        return "closing_this_month"
+    if period in ("week", "this_week", "สัปดาห์นี้", "อาทิตย์นี้") and not status:
+        return "closing_this_week"
+    return None
+
+
+def _deal_amount_asked(fields: dict) -> Decimal | None:
+    """The amount a deal read is filtered by, whatever the model called it:
+    "amount", "amount_greater_than", "min_amount", "value" (11 ก.ย. 2569)."""
+    for key, value in (fields or {}).items():
+        if not any(w in str(key).lower() for w in ("amount", "value", "threshold", "min")):
+            continue
+        digits = re.sub(r"[^\d.]", "", str(value or ""))
+        if digits:
+            try:
+                return Decimal(digits)
+            except (InvalidOperation, ValueError):
+                continue
+    return None
+
+
 def _named_customer(fields: dict) -> str:
     """Who a read intent is about — a code, a name or a phone number, in
     whichever of the model's field names it landed in. Empty when the
     person named nobody, which means "the list"."""
-    for key in ("target_name", "customer_id", "code", "name", "query", "search",
-                "first_name", "last_name", "phone"):
+    for key in ("target_name", "customer_id", "customer_code", "code", "name", "query",
+                "search", "first_name", "last_name", "phone"):
         value = str((fields or {}).get(key) or "").strip()
         if value:
             return _strip_polite_tail(_strip_honorific(value))
@@ -16199,6 +16416,12 @@ async def _handle_deal_intent(
             license_id=license_id, language=language,
         )
 
+    if action == "archive":
+        return await _handle_deal_archive(
+            client, intent=intent, ctx=ctx, license_id=license_id,
+            permission_keys=permission_keys, language=language, message=message or "",
+        )
+
     if action == "update":
         return await _handle_deal_update(
             client, intent=intent, ctx=ctx, license_id=license_id,
@@ -16208,6 +16431,15 @@ async def _handle_deal_intent(
     if action in READ_ACTIONS:
         # The typed "ข้อมูลดีล D-2026-0001" and "รายการดีล" have always
         # worked; the model's reading of the same request did not.
+        threshold = _amount_in(fields)
+        if threshold is not None:
+            # "ดีลเกิน 10000": the model names the amount under whatever
+            # key it likes (amount, min_amount, amount_greater_than…); the
+            # question is the same one the typed road answers.
+            return await _handle_deal_query(
+                client, license_id=license_id, permission_keys=permission_keys,
+                language=language, kind="over_value", threshold=threshold,
+            )
         code = str(fields.get("deal_code") or fields.get("code") or fields.get("deal_id") or "").strip().upper()
         if not code:
             found = DEAL_ID_RE.search(message or "")
@@ -16224,13 +16456,128 @@ async def _handle_deal_intent(
                 client, ctx=ctx, license_id=license_id, message=message,
                 permission_keys=permission_keys, language=language,
             )
+        deal_kind = _deal_query_kind(fields)
+        if deal_kind is not None:
+            # "ดีลที่แพ้ไป" as read/deal {"status": "lost"}, "ดีลเดือนนี้"
+            # as {"period": "month"}: the same filtered views the typed
+            # questions reach.
+            return await _handle_deal_query(
+                client, license_id=license_id, permission_keys=permission_keys,
+                language=language, kind=deal_kind,
+            )
+        threshold = _deal_amount_asked(fields)
+        if threshold is not None:
+            # "ดีลเกิน 10000" read as read/deal {"amount": 10000} — the
+            # filtered view the typed road gives, not the whole list.
+            return await _handle_deal_query(
+                client, license_id=license_id, permission_keys=permission_keys,
+                language=language, kind="over_value", threshold=threshold,
+            )
         who = _strip_polite_tail(_strip_honorific(str(fields.get("target_name") or "").strip()))
+        # "ดีลไหนยังเปิดอยู่บ้าง" comes back read/deal {"status": "open"}: the
+        # open ones, as the typed "ดีลที่ยังเปิดอยู่" lists them.
+        wanted = str(fields.get("status") or fields.get("stage") or "").strip().lower()
         return await _handle_deal_list(
             client, ctx=ctx, license_id=license_id, permission_keys=permission_keys,
             language=language, for_customer=who or None,
+            open_only=wanted in ("open", "pending", "active", "in_progress", "ongoing", "new"),
         )
 
     return _no_handler_reply(intent, language, ctx.oa)
+
+
+async def _handle_deal_archive(
+    client: DataClient, *, intent: dict, ctx: ResolvedContext, license_id,
+    permission_keys: list[str], language: str, message: str,
+) -> ChatReply:
+    """Ask first. A deal carries its quotations and its line items, and
+    "ลบดีล" typed in passing is too cheap a sentence for that — the same
+    reasoning as the customer archive, whose flow this mirrors."""
+    if "deal.archive" not in set(permission_keys) or not _oa_allows(ctx.oa, "deal.archive"):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+
+    fields = intent.get("fields") or {}
+    code = str(fields.get("deal_code") or fields.get("code")
+               or fields.get("deal_id") or "").strip().upper()
+    if not code:
+        found = DEAL_ID_RE.search(message or "")
+        code = found.group(0).upper() if found else ""
+    deal = None
+    if code:
+        deal = await _resolve_entity(client, str(license_id), "deal", code)
+    else:
+        ref = await _last_entity_ref(client, ctx)
+        if ref and ref.get("entity_type") == "deal":
+            deal = await _resolve_entity(client, str(license_id), "deal", str(ref.get("code") or ""))
+    if deal is None:
+        return ChatReply(text=_t(
+            QUOTE_DEAL_NOT_FOUND if code else DEAL_ARCHIVE_NEEDS_CODE, language,
+        ).format(deal_id=code) if code else _t(DEAL_ARCHIVE_NEEDS_CODE, language))
+
+    await client.set_pending_intent(
+        ctx.chann_uid, ctx.oa, action="resolve", entity="deal_archive_confirm",
+        fields={"deal": {"id": str(deal["id"]), "deal_id": str(deal.get("deal_id") or code)}},
+        missing=[], ttl_seconds=DUPLICATE_TTL_S,
+    )
+    from .deal_fields import format_amount
+
+    contact = ""
+    try:
+        rows = await client.list_customers(str(license_id))
+        row = next((r for r in rows if str(r.get("id")) == str(deal.get("contact_id"))), None)
+        contact = _display_name(row) if row else ""
+    except Exception:  # noqa: BLE001 — a name is a courtesy, not a precondition
+        contact = ""
+    amount = deal.get("amount")
+    return ChatReply(
+        text=_t(DEAL_ARCHIVE_CONFIRM, language).format(
+            code=deal.get("deal_id") or code, name=contact or "-",
+            amount=f" · {format_amount(amount, deal.get('currency') or 'THB')}" if amount else "",
+        ),
+        entity_type="deal", entity_id=str(deal["id"]),
+        quick_replies=[("ยืนยันลบ", "ยืนยันลบ"), ("ยกเลิก", "ยกเลิก")],
+    )
+
+
+async def _resolve_deal_archive_confirm(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str, pending: dict,
+    permission_keys: list[str], language: str,
+) -> ChatReply:
+    """The answer to "เก็บถาวรดีล … ใช่ไหมครับ". Same vocabulary as the
+    customer archive, and the permission is re-checked here because the
+    confirmation can arrive after a role change."""
+    row = (pending.get("fields") or {}).get("deal") or {}
+    code = str(row.get("deal_id") or "")
+    if _matches_any(message, DUPLICATE_CANCEL_PHRASES):
+        await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
+        return ChatReply(text=_t(DEAL_ARCHIVE_CANCELLED, language).format(code=code))
+    if not _matches_any(message, ARCHIVE_CONFIRM_PHRASES):
+        return ChatReply(
+            text=_t(ARCHIVE_CHOICE_INVALID, language),
+            quick_replies=[("ยืนยันลบ", "ยืนยันลบ"), ("ยกเลิก", "ยกเลิก")],
+        )
+    if "deal.archive" not in set(permission_keys) or not _oa_allows(ctx.oa, "deal.archive"):
+        await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
+    try:
+        await client.archive_deal(str(license_id), str(row.get("id")), actor_id=ctx.chann_uid)
+    except Exception as exc:  # noqa: BLE001
+        if _is_not_found(exc):
+            return ChatReply(text=_t(QUOTE_DEAL_NOT_FOUND, language).format(deal_id=code))
+        log.exception("could not archive deal %s", row.get("id"))
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    return ChatReply(
+        text=_t(DEAL_ARCHIVE_DONE, language).format(code=code),
+        entity_type="deal", entity_id=str(row.get("id")),
+    )
+
+
+_DEAL_STAGE_SYNONYMS = {
+    "rejected": "lost", "declined": "lost", "closed_lost": "lost", "cancelled": "lost",
+    "canceled": "lost", "failed": "lost", "accepted": "won", "closed_won": "won",
+    "success": "won", "successful": "won", "open": "new", "reopen": "new",
+}
 
 
 async def _handle_deal_update(
@@ -16286,6 +16633,9 @@ async def _handle_deal_update(
     # (real model, 11 ก.ย. 2569). Both are accepted; _drop_invented_values
     # has already checked the VALUE against the closed set either way.
     stage = str(fields.get("stage") or fields.get("status") or "").strip().lower()
+    # The model's word for the stage, then this system's: "D-2026-0001
+    # ลูกค้าไม่เอา" came back status="rejected" (11 ก.ย. 2569).
+    stage = _DEAL_STAGE_SYNONYMS.get(stage, stage)
     if stage:
         return await _handle_deal_stage_command(
             client, license_id=license_id, deal_code=str(deal.get("deal_id") or code).upper(),
@@ -16454,6 +16804,26 @@ PRODUCT_SAVED = {
     "th": "บันทึกสินค้า {name} (รหัส {code}) เรียบร้อยแล้ว",
     "en": "Saved product {name} (code {code}).",
 }
+#: Retiring a product. Spec 7.5 makes delete an archive: the row survives,
+#: because five tables carry a foreign key into it and a deal from last year
+#: must still say what it sold. Owner approved the road 11 ก.ย. 2569.
+PRODUCT_ARCHIVE_CONFIRM = {
+    "th": "เอา {name} ({code}) ออกจากรายการสินค้าใช่ไหมครับ กด \"ยืนยันลบ\" เพื่อยืนยัน\n(ดีลและใบเสนอราคาเดิมยังเก็บชื่อสินค้าไว้)",
+    "en": "Remove {name} ({code}) from the catalogue? Reply \"confirm delete\".\n(Existing deals and quotations keep it.)",
+}
+PRODUCT_ARCHIVED = {
+    "th": "เอา {name} ออกจากรายการสินค้าแล้ว (ของเดิมในดีลยังอยู่)",
+    "en": "{name} is out of the catalogue — existing deals keep it.",
+}
+PRODUCT_ARCHIVE_CANCELLED = {
+    "th": "ยกเลิกแล้ว {name} ยังอยู่ในรายการสินค้า",
+    "en": "Cancelled — {name} stays in the catalogue.",
+}
+PRODUCT_ARCHIVE_NOT_FOUND = {
+    "th": "ไม่พบสินค้า \"{name}\" ในรายการ พิมพ์ \"รายการสินค้า\" เพื่อดูทั้งหมด",
+    "en": "No product \"{name}\" in the catalogue — type \"products\" to see them.",
+}
+
 PRODUCT_NEEDS_ID_AND_NAME = {
     "th": "กรุณาระบุรหัสสินค้าและชื่อสินค้า",
     "en": "Please provide both a product code and a product name.",
@@ -16463,6 +16833,119 @@ PRODUCT_INVALID_VALUE = {
     "en": "The price or another product value doesn't look right — please check and try again "
           "(e.g. the price must be numbers only).",
 }
+
+
+#: The words that say "the shop's list of products", as opposed to the
+#: products ON a particular deal or quotation. Both are "สินค้า".
+_CATALOGUE_WORDS = ("รายการสินค้า", "แคตตาล็อก", "catalogue", "catalog",
+                    "สินค้าในระบบ", "สินค้าของร้าน", "คลังสินค้า", "ออกจากรายการ")
+
+
+def _means_the_catalogue(message: str) -> bool:
+    """Does this sentence say it is about the catalogue rather than a deal?
+
+    Deliberately narrow, and it decides nothing on its own: it only takes
+    the sentence away from the deal-line road, which is the road that keeps
+    every sentence that says neither.
+    """
+    lowered = _canonical(message)
+    if any(word in lowered for word in _CATALOGUE_WORDS):
+        return True
+    # A deal or a quotation named in the sentence settles it the other way.
+    return False
+
+
+async def _find_one_product(client: DataClient, license_id: str, named: str) -> dict | None:
+    """The one catalogue row this names, by code or by name. None when it is
+    not there, or when more than one could be meant — asking is the only
+    honest answer to an ambiguous delete."""
+    wanted = (named or "").strip().lower()
+    if not wanted:
+        return None
+    rows = await client.list_products(license_id)
+    exact = [r for r in rows if str(r.get("product_id") or "").lower() == wanted
+             or str(r.get("product_name") or "").lower() == wanted]
+    if exact:
+        return exact[0]
+    loose = [r for r in rows if wanted in str(r.get("product_name") or "").lower()]
+    return loose[0] if len(loose) == 1 else None
+
+
+async def _handle_product_archive(
+    client: DataClient, *, intent: dict, ctx: ResolvedContext, license_id,
+    permission_keys: list[str], language: str,
+) -> ChatReply:
+    """Take a product out of the catalogue, after asking.
+
+    The Data tier has done this since Phase 7 (`archive_product`, a soft
+    delete behind DELETE /products/{id}) and nothing could reach it: no
+    Application route, no dashboard control, and in chat "ลบสินค้า FAN001"
+    was claimed by the road that removes a line from a DEAL and answered
+    "แก้ของดีลหรือใบเสนอราคาไหนครับ" (measured 11 ก.ย. 2569).
+
+    Asks first, like the customer and the deal archives, and for a sharper
+    reason: a product on last year's deals is referenced by five tables, and
+    the confirmation says so rather than leaving the person to wonder.
+    """
+    if "product.manage" not in set(permission_keys) or not _oa_allows(ctx.oa, "product.manage"):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+
+    fields = intent.get("fields") or {}
+    named = next(
+        (str(fields[k]).strip() for k in ("product_id", "product_name", "target_name", "name", "code")
+         if fields.get(k)), "",
+    )
+    if not named:
+        return ChatReply(text=_t(PRODUCT_NEEDS_ID_AND_NAME, language), intent=intent)
+    row = await _find_one_product(client, str(license_id), named)
+    if row is None:
+        return ChatReply(text=_t(PRODUCT_ARCHIVE_NOT_FOUND, language).format(name=named))
+
+    await client.set_pending_intent(
+        ctx.chann_uid, ctx.oa, action="resolve", entity="product_archive_confirm",
+        fields={"product": {"id": str(row["id"]), "product_id": str(row.get("product_id") or ""),
+                            "product_name": str(row.get("product_name") or "")}},
+        missing=[], ttl_seconds=DUPLICATE_TTL_S,
+    )
+    return ChatReply(
+        text=_t(PRODUCT_ARCHIVE_CONFIRM, language).format(
+            name=row.get("product_name") or named, code=row.get("product_id") or "-"),
+        entity_type="product", entity_id=str(row["id"]),
+        quick_replies=[("ยืนยันลบ", "ยืนยันลบ"), ("ยกเลิก", "ยกเลิก")],
+    )
+
+
+async def _resolve_product_archive_confirm(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str, pending: dict,
+    permission_keys: list[str], language: str,
+) -> ChatReply:
+    row = (pending.get("fields") or {}).get("product") or {}
+    name = str(row.get("product_name") or row.get("product_id") or "")
+    if _matches_any(message, DUPLICATE_CANCEL_PHRASES):
+        await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
+        return ChatReply(text=_t(PRODUCT_ARCHIVE_CANCELLED, language).format(name=name))
+    if not _matches_any(message, ARCHIVE_CONFIRM_PHRASES):
+        return ChatReply(
+            text=_t(ARCHIVE_CHOICE_INVALID, language),
+            quick_replies=[("ยืนยันลบ", "ยืนยันลบ"), ("ยกเลิก", "ยกเลิก")],
+        )
+    if "product.manage" not in set(permission_keys) or not _oa_allows(ctx.oa, "product.manage"):
+        await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
+    try:
+        await client.archive_product(
+            str(license_id), str(row.get("product_id") or row.get("id")), actor_id=ctx.chann_uid,
+        )
+    except Exception as exc:  # noqa: BLE001
+        if _is_not_found(exc):
+            return ChatReply(text=_t(PRODUCT_ARCHIVE_NOT_FOUND, language).format(name=name))
+        log.exception("could not archive product %s", row.get("product_id"))
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    return ChatReply(
+        text=_t(PRODUCT_ARCHIVED, language).format(name=name),
+        entity_type="product", entity_id=str(row.get("id") or ""),
+    )
 
 
 async def _handle_product_intent(
@@ -16489,6 +16972,11 @@ async def _handle_product_intent(
         return await _handle_product_list(
             client, license_id=license_id, permission_keys=list(permission_keys or []) or ["product.manage"],
             language=language, query=query,
+        )
+    if action in ("delete", "archive", "remove"):
+        return await _handle_product_archive(
+            client, intent=intent, ctx=ctx, license_id=license_id,
+            permission_keys=list(permission_keys or []), language=language,
         )
     if action not in ("create", "update"):
         return _no_handler_reply(intent, language, ctx.oa)
@@ -16522,6 +17010,27 @@ QUOTE_NEEDS_DEAL_CODE = {
     "th": "กรุณาระบุรหัสดีลที่จะสร้างใบเสนอราคา เช่น D-2026-0001",
     "en": "Please provide the deal code to create a quote from, e.g. D-2026-0001",
 }
+#: Archiving a deal. The owner asked for it on 11 ก.ย. 2569; the reason it
+#: did not exist is the reason it needs a confirmation — check-parity's note
+#: said "customer archive asks for a confirmation first; a deal needs the
+#: same flow", and a deal carries its quotations and its line items with it.
+DEAL_ARCHIVE_CONFIRM = {
+    "th": "เก็บถาวรดีล {code} ({name}{amount}) ใช่ไหมครับ กด \"ยืนยันลบ\" เพื่อยืนยัน",
+    "en": "Archive deal {code} ({name}{amount})? Reply \"confirm delete\".",
+}
+DEAL_ARCHIVE_DONE = {
+    "th": "เก็บถาวรดีล {code} แล้ว (ยังดูย้อนหลังได้ ไม่ได้ลบทิ้ง)",
+    "en": "Deal {code} archived — kept for the record, not deleted.",
+}
+DEAL_ARCHIVE_CANCELLED = {
+    "th": "ยกเลิกแล้ว ดีล {code} ยังอยู่",
+    "en": "Cancelled — deal {code} stays.",
+}
+DEAL_ARCHIVE_NEEDS_CODE = {
+    "th": "เก็บถาวรดีลไหนครับ พิมพ์รหัสด้วย เช่น \"ลบดีล D-2026-0001\"",
+    "en": "Which deal? Include its code, e.g. \"archive deal D-2026-0001\".",
+}
+
 DEAL_UPDATED = {
     "th": "อัปเดตดีล {code} แล้ว — {changed}",
     "en": "Deal {code} updated — {changed}",
@@ -17003,7 +17512,14 @@ async def _handle_technician_situation(
         parse_thai_date, parse_thai_time,
     )
 
-    if "ticket.update" not in set(permission_keys):
+    # The key AND the channel. This handler had one caller and one OA when
+    # it was written, so a bare key test was the whole of it; it now serves
+    # the technician road, the sales road and the model road, and the thing
+    # that keeps a customer out is _oa_allows on the caller's side. A guard
+    # that lives in the caller is a guard the next caller forgets — and
+    # "the road below the gate" is the exact shape of every hole this
+    # session has closed (11 ก.ย. 2569).
+    if "ticket.update" not in set(permission_keys) or not _oa_allows(ctx.oa, "ticket.update"):
         return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
     license_id = str(license_id)
     label = _t(_SITUATION_LABEL[kind], language)
@@ -17577,6 +18093,7 @@ async def _route_chat_message(
 
     license_id = ctx.license_id
     member = ctx.memberships[0]
+    early_intent: dict | None = None   # the sales OA's first reading, see below
 
     # Phase 16.5 — PDPA rights come before help and before any intent: a
     # person asking for their data, or to be forgotten, is not asking for
@@ -17766,6 +18283,43 @@ async def _route_chat_message(
             client, ctx=ctx, license_id=license_id, message=message,
             permission_keys=permission_keys, language=language, ai_client=ai_client,
         )
+
+    # ------------------------------------------------------------------
+    # MODEL FIRST on the sales OA (owner, 11 ก.ย. 2569: "ยกเลิกการแก้กฎ
+    # ทั้งหมดไปเลย แล้วสนใจแค่เปลี่ยนเป็น model first"). A fresh sentence is
+    # READ before any keyword table below gets a look at it; the tables run
+    # only when the model has no reading. What must stay deterministic
+    # already returned above this line — tenant choice, PDPA, suspension,
+    # the flow-switch and slot-fill answers — or is a pending answer, which
+    # `early_pending` holds and which is left to the closed follow-ups at
+    # the tail, exactly as before. Small talk is not sent either: a greeting
+    # is answered by a word, and a round trip to be told so is waste.
+    #
+    # The reading is kept in `early_intent` so that when the model shrugs
+    # and the tables also decline, the tail does not parse the same sentence
+    # a second time.
+    # ------------------------------------------------------------------
+    # Buttons and postbacks keep the direct path (docs/MODEL_FIRST.md): a
+    # tile the rich menu sends and a button this system writes name the
+    # action already, and the help menu is a closed list. The gate found
+    # both within one run — "เพิ่มลูกค้า" (a tile) and "ขอคู่มือ" (help)
+    # were being sent to the model to be told what they already were.
+    if (
+        ctx.oa == "sales" and early_pending is None
+        and not _is_small_talk(message) and not _is_only_a_greeting(message)
+        and not _is_menu_tile(message, ctx.oa) and not _is_help_request(message, ctx.oa)
+    ):
+        early_intent = await _read_for_router(
+            message=message, ctx=ctx, license_id=license_id, permission_keys=permission_keys,
+            language=language, ai_client=ai_client, member=member, context=context,
+        )
+        if early_intent is not None and str(early_intent.get("action") or "") != "suggest":
+            return await _model_road(
+                client, ctx=ctx, license_id=license_id, message=message,
+                permission_keys=permission_keys, language=language, ai_client=ai_client,
+                pending_intent=None, abandoned=abandoned, member=member, context=context,
+                intent=early_intent,
+            )
 
     # Assignment policy (Phase 11.6). Sales OA only, and before the AI
     # path: the policy TEXT goes to a model deliberately, but the command
@@ -18261,6 +18815,23 @@ async def _route_chat_message(
             )
             if step_reply is not None:
                 return step_reply
+        # The line typed right after the "ติดต่อร้าน" tile goes to the shop,
+        # and it has to be tried BEFORE the tile matches again. "ร้านเปิด
+        # วันอาทิตย์ไหมครับ" is a question FOR the shop that also satisfies
+        # _asks_shop_contact, so the tile branch below claimed it, re-sent
+        # its own prompt, and the shop never saw the question — the customer
+        # read the same sentence twice and reasonably concluded nobody was
+        # listening (11 ก.ย. 2569).
+        #
+        # Safe to sit here: _maybe_forward_to_shop returns None unless a
+        # customer_contact pending is open, and it declines a tile, a bare
+        # serial and small talk itself, so tapping "ติดต่อร้าน" twice still
+        # re-prompts rather than forwarding the word "ติดต่อร้าน".
+        forwarded_first = await _maybe_forward_to_shop(
+            client, ctx=ctx, license_id=license_id, message=message, language=language,
+        )
+        if forwarded_first is not None:
+            return forwarded_first
         # The rich-menu tiles that are not a fault report. Each is an
         # exact phrase, tested before the catch-all that would otherwise
         # turn the tile's label into a repair job.
@@ -18745,6 +19316,14 @@ async def _route_chat_message(
         remove_trigger = next(
             (t for t in LINE_REMOVE_TRIGGERS if t in message.lower()), None,
         )
+        if remove_trigger and _means_the_catalogue(message):
+            # "ลบสินค้า FAN001 ออกจากรายการสินค้า" is the CATALOGUE, not a
+            # line on a deal. The two share every trigger word — "ลบสินค้า"
+            # is both — so the sentence has to say which, and when it says
+            # neither the deal road keeps it: a line edit asks "which deal?"
+            # and can be answered, where a wrong catalogue delete cannot be
+            # taken back in one word (11 ก.ย. 2569).
+            remove_trigger = None
         if remove_trigger:
             return await _handle_line_edit(
                 client, ctx=ctx, license_id=license_id, message=message,
@@ -18916,7 +19495,13 @@ async def _route_chat_message(
                 client, license_id=license_id, code=DEAL_ID_RE.search(message or "").group(0).upper(),
                 permission_keys=permission_keys, language=language, ctx=ctx,
             )
-        for_customer = _parse_after_trigger(message, DEAL_FOR_CUSTOMER_TRIGGERS) or _deal_owner_asked(message)
+        # Cleaned like every other lookup term: "ดีลของสมชายครับ" searched
+        # for "สมชายครับ" and "อยากเห็นดีลของลูกค้าสมชายทั้งหมด" for
+        # "ลูกค้าสมชายทั้งหมด", both answering "ไม่พบลูกค้าชื่อ …" about a
+        # customer who is right there (11 ก.ย. 2569).
+        for_customer = _clean_lookup_term(
+            _parse_after_trigger(message, DEAL_FOR_CUSTOMER_TRIGGERS) or _deal_owner_asked(message) or ""
+        ) or None
         if not for_customer and _CONTEXT_CUSTOMER_DEALS_RE.match(_canonical(message)):
             last_customer = await _last_customer_ref(client, ctx)
             if last_customer and last_customer.get("name"):
@@ -18977,7 +19562,7 @@ async def _route_chat_message(
                 client, ctx=ctx, license_id=license_id, permission_keys=permission_keys,
                 language=language,
             )
-        if _matches_phrase(message, PRODUCT_LIST_PHRASES) or _is_bare_word(message, BARE_PRODUCT_WORDS) or (
+        if _matches_phrase(message, SALES_PRODUCT_LIST_PHRASES) or _is_bare_word(message, BARE_PRODUCT_WORDS) or (
             # "ราคาแอร์เท่าไหร่" on the staff OA: the catalogue with prices.
             _asks_price(message) and _looks_like_a_question(message)
             and not re.search(r"(?<![A-Za-z0-9])(?:SR|[CDQT])-\d{4}-\d{4}", message or "", re.I)
@@ -19013,7 +19598,7 @@ async def _route_chat_message(
             # "ค้นหาลูกค้า …" arm above still wins.
             search_term = _customer_lookup_term(message)
         if search_term is not None:
-            search_term = _strip_polite_tail(re.sub(r"^(?:ที่ชื่อ|ชื่อว่า|ชื่อ|ที่)\s*", "", search_term).strip())
+            search_term = _clean_lookup_term(search_term)
             if not search_term:
                 return ChatReply(text=_t(SEARCH_NEEDS_TERM, language))
             return await _handle_customer_list(
@@ -19025,7 +19610,7 @@ async def _route_chat_message(
         if customer_code is not None and _lookup_is_really_an_edit(message, CUSTOMER_DETAIL_TRIGGERS):
             customer_code = None
         if customer_code is not None:
-            customer_code = _strip_polite_tail(customer_code)
+            customer_code = _clean_lookup_term(customer_code)
             return await _handle_customer_detail(
                 client, license_id=license_id, code=customer_code,
                 permission_keys=permission_keys, language=language, ctx=ctx,
@@ -19073,7 +19658,7 @@ async def _route_chat_message(
             deal_code = None
         if deal_code is not None:
             return await _handle_deal_detail(
-                client, license_id=license_id, code=deal_code,
+                client, license_id=license_id, code=_clean_lookup_term(deal_code),
                 permission_keys=permission_keys, language=language, ctx=ctx,
             )
         # "ลูกค้าสนใจอยากได้พัดลม 1 ตัว" right after adding the customer: a
@@ -19222,9 +19807,20 @@ async def _route_chat_message(
     # word or a number and never sent through the model.
     if pending_intent is not None and pending_intent.get("entity") in (
         "customer_duplicate", "customer_merge_confirm", "customer_archive_confirm", "deal_context_confirm",
-        "deal_item_confirm", "draft_customer_deal_confirm",
+        "deal_item_confirm", "draft_customer_deal_confirm", "deal_archive_confirm",
+        "product_archive_confirm",
     ):
         kind = pending_intent.get("entity")
+        if kind == "product_archive_confirm":
+            return await _resolve_product_archive_confirm(
+                client, ctx=ctx, license_id=license_id, message=message, pending=pending_intent,
+                permission_keys=permission_keys, language=language,
+            )
+        if kind == "deal_archive_confirm":
+            return await _resolve_deal_archive_confirm(
+                client, ctx=ctx, license_id=license_id, message=message, pending=pending_intent,
+                permission_keys=permission_keys, language=language,
+            )
         if kind == "deal_item_confirm":
             return await _resolve_deal_item_confirm(
                 client, ctx=ctx, license_id=license_id, message=message, pending=pending_intent,
@@ -19301,8 +19897,24 @@ async def _route_chat_message(
     if pending_intent is None and _is_small_talk(message):
         return ChatReply(text=_t(SMALL_TALK_REPLY, language))
 
+    return await _model_road(
+        client, ctx=ctx, license_id=license_id, message=message,
+        permission_keys=permission_keys, language=language, ai_client=ai_client,
+        pending_intent=pending_intent, abandoned=abandoned, member=member, context=context,
+        intent=early_intent,
+    )
+
+
+async def _read_for_router(
+    *, message: str, ctx: ResolvedContext, license_id, permission_keys: list[str],
+    language: str, ai_client, member: dict, context: dict,
+) -> dict | None:
+    """parse_intent for the early call: the reading, or None when the model
+    could not be asked. None means "let the tables decide", which is what
+    the router did for every sentence before 11 ก.ย. 2569 — an outage must
+    not make the sales OA fall silent."""
     try:
-        intent = await parse_intent(
+        return await parse_intent(
             message=message,
             chann_uid=ctx.chann_uid,
             role=context.get("role", member.get("role", "")),
@@ -19310,25 +19922,95 @@ async def _route_chat_message(
             permission_keys=_keys_this_oa_can_use(permission_keys, ctx.oa),
             language=language,
             client=ai_client,
-            pending=pending_intent,
-            recent=await _recent_turns(client, ctx),
-            # The OA decides which capabilities exist at all, so it decides
-            # what the model is shown. A technician's prompt drops from
-            # 13,591 to 6,004 characters and a customer's to 6,783 — and,
-            # more to the point, neither is offered an action the
-            # permission gate would refuse a moment later
-            # (owner, 10 ก.ย. 2569, requirement 2).
+            pending=None,
             oa=ctx.oa,
         )
-    except AINotConfigured as exc:
-        # A deploy problem, not an outage — log loudly, but the user still
-        # gets the same plain apology rather than a configuration detail.
-        log.error("AI not configured: %s", exc)
-        return ChatReply(text=unavailable_reply(language))
-    except AIUnavailable as exc:
-        log.warning("AI unavailable: %s", exc)
-        return ChatReply(text=unavailable_reply(language))
+    except (AINotConfigured, AIUnavailable) as exc:
+        log.warning("model-first read skipped: %s", exc)
+        return None
 
+
+_CODE_PREFIX_ENTITY = {"D-": "deal", "Q-": "quote", "C-": "customer", "T-": "ticket"}
+
+
+def _entity_by_code(intent: dict) -> dict:
+    """A record code names its own entity: "D-2026-0001 ลูกค้าไม่เอา" came
+    back as entity="quote" and was answered with a question about the
+    quote's discount (measured 11 ก.ย. 2569). The prefix is the system's
+    own and cannot be misread, so it wins over the model's label — only
+    among the four entities that carry such a code, and only when the
+    model's entity is one of them too."""
+    fields = intent.get("fields") or {}
+    entity = str(intent.get("entity") or "")
+    if entity not in ("deal", "quote"):
+        # A D- code on entity="ticket" is left for _execute_intent's field
+        # check, which answers "D-2026-0001 is a deal, not a job" — a
+        # better reply than the OA gate's refusal a renamed intent gets.
+        return intent
+    # Only the record's OWN code can rename the entity: the bare "code", or
+    # a "<entity>_code" whose name agrees with the model's label. A quote
+    # created "จากดีล D-2026-0001" carries deal_code on entity="quote" —
+    # a reference to another record, not a mislabel — and flipping it
+    # turned a quote request into a deal request the person had no
+    # permission for.
+    own_keys = ("code", f"{entity}_code", f"{entity}_id")
+    for key in own_keys:
+        code = str(fields.get(key) or "").strip().upper()
+        for prefix, named in _CODE_PREFIX_ENTITY.items():
+            if code.startswith(prefix) and named != entity and re.match(r"^[A-Z]{1,2}-\d{4}-\d{4}$", code):
+                return {**intent, "entity": named}
+    return intent
+
+
+async def _model_road(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
+    permission_keys: list[str], language: str, ai_client, pending_intent: dict | None,
+    abandoned: dict | None, member: dict, context: dict, intent: dict | None = None,
+) -> ChatReply:
+    """The model's reading, from the sentence to the handler.
+
+    This used to be the tail of _route_chat_message — reached only after
+    ~1,500 lines of keyword tables had declined the sentence. Since
+    11 ก.ย. 2569 the sales OA calls it FIRST, and the tables are what runs
+    when the model has no reading; the tail call remains for that case, and
+    for the other OAs. `intent` lets the early call hand its reading on, so
+    a sentence is parsed once.
+
+    Everything between parsing and executing stays here, unchanged: the
+    continuation merge, the OA gate, the missing-field slot-fill, and
+    _execute_intent with its permission gate, _oa_allows, intent_guard and
+    invented-value checks. Nothing about what the model may DO moved.
+    """
+    if intent is None:
+      try:
+          intent = await parse_intent(
+              message=message,
+              chann_uid=ctx.chann_uid,
+              role=context.get("role", member.get("role", "")),
+              license_id=str(license_id),
+              permission_keys=_keys_this_oa_can_use(permission_keys, ctx.oa),
+              language=language,
+              client=ai_client,
+              pending=pending_intent,
+              recent=await _recent_turns(client, ctx),
+              # The OA decides which capabilities exist at all, so it decides
+              # what the model is shown. A technician's prompt drops from
+              # 13,591 to 6,004 characters and a customer's to 6,783 — and,
+              # more to the point, neither is offered an action the
+              # permission gate would refuse a moment later
+              # (owner, 10 ก.ย. 2569, requirement 2).
+              oa=ctx.oa,
+          )
+      except AINotConfigured as exc:
+          # A deploy problem, not an outage — log loudly, but the user still
+          # gets the same plain apology rather than a configuration detail.
+          log.error("AI not configured: %s", exc)
+          return ChatReply(text=unavailable_reply(language))
+      except AIUnavailable as exc:
+          log.warning("AI unavailable: %s", exc)
+          return ChatReply(text=unavailable_reply(language))
+
+    intent = _entity_by_code(intent)
     switched_from = None
     if _is_continuation(pending_intent, intent):
         intent = _merge_pending(pending_intent, intent)
@@ -19406,6 +20088,7 @@ async def _route_chat_message(
     reply = await _execute_intent(
         client, intent=intent, ctx=ctx, license_id=license_id, message=message,
         permission_keys=permission_keys, language=language, abandoned=carried,
+        ai_client=ai_client,
     )
     if notice and (reply.text or "").strip():
         reply.text = notice + reply.text
@@ -19415,6 +20098,7 @@ async def _route_chat_message(
 async def _execute_intent(
     client: DataClient, *, intent: dict, ctx: ResolvedContext, license_id, message: str,
     permission_keys: list[str], language: str, abandoned: dict | None = None,
+    ai_client=None,
 ) -> ChatReply:
     """The model's reading, gated and dispatched — the tail of the router,
     separate so a switch notice can be put in front of whatever it says."""
@@ -19463,6 +20147,18 @@ async def _execute_intent(
     # (action, entity) to a single permission key, with no notion of "unless
     # it's your own record". Handled here, before the gate ever runs.
     if intent.get("entity") == "profile":
+        raw_action = str(intent.get("action") or "").strip().lower()
+        if ACTION_ALIASES.get(raw_action, raw_action) in READ_ACTIONS:
+            # "โปรไฟล์ผม" read by the model is the same view the tile
+            # shows; it was answered as an edit the channel refuses
+            # (measured 11 ก.ย. 2569).
+            if ctx.oa == "customer":
+                return await _handle_customer_profile_view(
+                    client, ctx=ctx, license_id=license_id, language=language,
+                )
+            return await _handle_staff_profile_view(
+                client, ctx=ctx, license_id=license_id, language=language,
+            )
         return await _handle_profile_intent(
             client, intent=intent, ctx=ctx, language=language, message=message,
         )
@@ -19556,9 +20252,9 @@ async def _execute_intent(
             permission_keys=permission_keys, message=message,
         )
     if intent.get("entity") == "report":
-        return await _handle_sales_summary(
-            client, license_id=license_id,
-            permission_keys=permission_keys, language=language,
+        return await _handle_report_intent(
+            client, intent=intent, ctx=ctx, license_id=license_id, message=message,
+            permission_keys=permission_keys, language=language, ai_client=ai_client,
         )
     # The model's FIELDS are checked too, not only its verb. Two ways it
     # got a write it should not have (measured 10 ก.ย. 2569):
@@ -19878,6 +20574,13 @@ async def _handle_team_intent(
     members = str(members or fields.get("target_name") or "").strip()
 
     if action in READ_ACTIONS:
+        if not name and str(fields.get("scope") or "").lower() in ("technician", "technicians", "ช่าง"):
+            # "ช่างมีใครบ้างคะ" comes back read/team {"scope": "technician"}
+            # (11 ก.ย. 2569): the people, which is what was asked, not the
+            # groups they are sorted into.
+            return await _handle_technician_list(
+                client, license_id=license_id, permission_keys=permission_keys, language=language,
+            )
         rebuilt = "รายชื่อทีมช่าง"
     elif action == "create" and name:
         # The create trigger takes everything after it as the team's name,

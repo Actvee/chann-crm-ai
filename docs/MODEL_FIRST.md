@@ -87,21 +87,40 @@ None of that moves to the model. Ever.
 
 ## Where it stands
 
-Measured over 1,161 corpus utterances through the real router: **the rule road still decides
-83%** of sentences without consulting the model. Closing holes does not move that number;
-moving the reading does.
+**The sales OA reads first (11 ก.ย. 2569).** `_route_chat_message` asks the model before
+any keyword table for a fresh sentence on `ctx.oa == "sales"`; the tables run only when
+the model answers `suggest`. What stays deterministic, by design: a pending answer, small
+talk, a greeting, a rich-menu tile, the help menu. Measured over the 1,168-utterance
+corpus through the real router:
 
-The conversion order, largest blocker first:
+| OA | model reads | rule decides | share |
+|---|---|---|---|
+| sales | 492 | 48 | **91%** (was 27%) |
+| technician | 51 | 233 | 18% |
+| customer | 12 | 332 | 3% |
 
-1. ~~Make the conversational refs tenant-safe~~ (in progress) — the model cannot be given
-   "the record in focus" until that record is scoped per shop, because a cached ref keyed
-   only on `(person, OA)` already writes across shops.
-2. Send the record in focus to the model, per-OA and per-shop.
-3. Narrow the read-only deictic branches ("ลูกค้าคนนี้", "ดีลล่าสุด").
-4. Narrow the branches that only offer a confirmation.
-5. Narrow the write branches, one per ship, largest last.
+Overall **555/1168 (48%)**, from 218. The same inversion is the plan for the technician
+OA; the customer OA's rule (what a customer may do alone) is in `SESSION_HANDOFF.md` and
+its conversion means classifying into that road's actions, not widening them.
 
-Each step is measured with a per-sentence A/B and ships on its own.
+**The corpus carries the model's real answers.** `tests/unit/chat_corpus.py` entries take
+`ai={...}` — since the inversion, 297 sales entries hold the verbatim answer the deployed
+model gave (`scripts/dev/fill-corpus-answers.py`, ~$0.15 a run). `test_chat_corpus.py`
+therefore measures *what the model returns and what the road does with it*, not a
+hand-written stub. Re-run the filler for an entry whenever the prompt changes what the
+model would say about it (clear its `ai=` and run the script).
+
+What the real answers found on the first pass (sales understood share 83% → 96% after):
+`read/profile` answered as an edit refusal; `read/report` with `type: "sales_graph"` given
+the text summary; `read/customer {customer_code}` listed instead of shown; `reject/approval`
+held by the guard because the model road passed it no trigger words ("ไม่ผ่าน" IS the
+verb); `update/quote` with a `D-` code; `read/deal {status: "lost"}` listing everything.
+Each was a hole in the model ROAD, fixed there — no keyword table was touched.
+
+What stays honest in the baseline (`chat_corpus_baseline.json`): 21 sales sentences now
+classify `partial` (the model road asks or lands one handler away) and 5 `ai_fallback`
+(the model misreads: "ดีลค้าง" as jobs, "ใครว่างบ้าง" as agenda). Those are prompt work,
+measured with `evaluate-model.py`, never a rule.
 
 ## What a stubbed model cannot tell you
 
