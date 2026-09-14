@@ -467,6 +467,16 @@ def _recent_turns_for_prompt(turns: list[dict]) -> str:
     return "\n".join(lines)
 
 
+REPLY_TO_BLOCK = """
+
+THIS MESSAGE IS A REPLY. The person tapped the system's own message about
+{r_noun} {r_code} and typed a reply to it. A bare verb answers about THAT
+record — "อนุมัติ" is action="approve" on it, "ไม่ผ่าน …" is action="reject",
+"ออกเอกสาร" is action="issue", "ยกเลิก" is a cancel of it — with {r_code} in
+"fields" as its code. It is never a request to LIST or read the record; the
+person is looking at it.
+"""
+
 PENDING_PROMPT_BLOCK = """
 
 There is an action ALREADY IN PROGRESS from the previous message:
@@ -582,6 +592,7 @@ def build_prompt(
     pending: dict | None = None,
     oa: str = "",
     recent: list[dict] | None = None,
+    reply_to: dict | None = None,
 ) -> str:
     keys = sorted(permission_keys)
     lang = (language or DEFAULT_LOCALE).lower()
@@ -613,6 +624,14 @@ def build_prompt(
         rendered = _recent_turns_for_prompt(recent)
         if rendered:
             prompt += RECENT_TURNS_BLOCK.format(turns=rendered)
+    if reply_to and reply_to.get("code"):
+        # A quoted reply on LINE (14 ก.ย. 2569): the owner replied "อนุมัติ"
+        # to the approval notification and the model, told nothing of
+        # what was replied to, read it as "show me the pending list".
+        prompt += REPLY_TO_BLOCK.format(
+            r_noun=str(reply_to.get("entity_type") or "record").replace("_", " "),
+            r_code=str(reply_to.get("code") or ""),
+        )
     if pending:
         prompt += PENDING_PROMPT_BLOCK.format(
             p_action=pending.get("action") or "?",
@@ -683,6 +702,7 @@ async def parse_intent(
     recent: list[dict] | None = None,
     timeout_s: float | None = None,
     attempts: int | None = None,
+    reply_to: dict | None = None,
 ) -> dict:
     """Parse one user message. Raises AIUnavailable; never returns a half-result."""
     system_prompt = build_prompt(
@@ -694,6 +714,7 @@ async def parse_intent(
         pending=pending,
         recent=recent,
         oa=oa,
+        reply_to=reply_to,
     )
     raw = await complete(
         system_prompt=system_prompt,

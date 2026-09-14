@@ -2483,3 +2483,107 @@ class TestASecondFaultOnAnOpenJobAsksFirst:
         done = await self._say(client, chat.DUPLICATE_FAULT_NEW_TEXT)
         assert len(client._tickets) == 2, done.text
         assert "T-2026-0002" in done.text, done.text
+
+
+# ---------------------------------------------------------------------------
+# Round 17 (14 ก.ย. 2569): what the owner found on DEV.
+
+
+class TestAQuotedReplyTellsTheModelWhatItAnswers:
+    def test_the_prompt_names_the_record_replied_to(self):
+        from chann_app.services.ai.intent import build_prompt
+        prompt = build_prompt(chann_uid="X", role="sales", license_id="L1", permission_keys=["approval.approve"],
+                              language="th", oa="sales", reply_to={"entity_type": "service_report", "code": "SR-2026-0001"})
+        assert "THIS MESSAGE IS A REPLY" in prompt and "SR-2026-0001" in prompt
+        plain = build_prompt(chann_uid="X", role="sales", license_id="L1", permission_keys=["approval.approve"], language="th", oa="sales")
+        assert "THIS MESSAGE IS A REPLY" not in plain
+
+    @pytest.mark.asyncio
+    async def test_handle_reply_hands_the_record_to_the_model(self, monkeypatch):
+        from test_phase6_chat import FakeDataClient, _ctx
+        from chann_app.services import chat
+        client = FakeDataClient(permission_keys=["approval.approve", "approval.view"])
+        client._members = [{"id": "member-1", "chann_uid": "CHN-S-000001", "role": "owner", "status": "active"}]
+        client._reports = [{"id": "11111111-1111-1111-1111-111111111111", "report_id": "SR-2026-0001", "ticket_id": "t1",
+                            "status": "submitted", "technician_member_id": "member-9", "report_data": {}}]
+        client._tickets = [{"id": "t1", "ticket_number": "T-2026-0001", "status": "completed", "customer_name": "สมชาย"}]
+        # The fake serves whatever _mapping holds (record only logs the call).
+        client._mapping = {"entity_type": "service_report", "entity_id": "11111111-1111-1111-1111-111111111111"}
+        seen: list[dict] = []
+
+        async def fake_parse(**kw):
+            seen.append(kw.get("reply_to"))
+            return {"action": "read", "entity": "approval", "fields": {}, "missing": []}
+        monkeypatch.setattr(chat, "parse_intent", fake_parse)
+        await chat.handle_reply(client, message_id="LINEMSG1", reply_text="อนุมัติ", ctx=_ctx(oa="sales", primary_role="sales"))
+        assert seen and seen[0] == {"entity_type": "service_report", "code": "SR-2026-0001"}, seen
+
+
+class TestAnApprovalStepNobodyCanActOnIsNotSilent:
+    def _client(self, second_step_role="cs"):
+        from test_phase6_chat import FakeDataClient
+        client = FakeDataClient(permission_keys=["approval.approve", "approval.view"])
+        client._members = [{"id": "member-1", "chann_uid": "CHN-S-000001", "role": "owner", "status": "active"}]
+        client._line_targets = {"CHN-S-000001": "U-owner"}
+        client._tickets = [{"id": "t1", "ticket_number": "T-2026-0001", "status": "completed", "customer_name": "สมชาย"}]
+        client._reports = [{"id": "11111111-1111-1111-1111-111111111111", "report_id": "SR-2026-0001", "ticket_id": "t1",
+                            "status": "submitted", "technician_member_id": "member-9", "report_data": {}}]
+        client._approval_steps = [
+            {"id": "step-1", "entity_type": "service_report", "entity_id": "11111111-1111-1111-1111-111111111111",
+             "status": "approved", "step_order": 1, "approver_type": "user", "approver_ref": "member-1"},
+            {"id": "step-2", "entity_type": "service_report", "entity_id": "11111111-1111-1111-1111-111111111111",
+             "status": "pending", "step_order": 2, "approver_type": "role", "approver_ref": second_step_role},
+        ]
+        return client
+
+    @pytest.mark.asyncio
+    async def test_the_owner_is_told_and_named_as_the_way_out(self):
+        from chann_app.services import approval
+        client = self._client()
+        steps = await client.approval_steps_for_entity("L1", "service_report", "11111111-1111-1111-1111-111111111111")
+        await approval._notify_current_approvers(client, "L1", client._reports[0], steps, "th")
+        told = [n for n in client.recorded if n[0] == "create_notification" and "CHN-S-000001" in str(n)]
+        assert told and "cs" in str(told[-1]) and "SR-2026-0001" in str(told[-1]), client.recorded
+
+    def test_the_next_approver_is_named_or_nobody(self):
+        from chann_app.services.approval import next_approver_names
+        client = self._client()
+        ref, names = next_approver_names(client._approval_steps, client._members)
+        assert ref == "cs" and names == []
+        client._members.append({"id": "member-2", "chann_uid": "CHN-S-000002", "role": "cs", "status": "active", "display_name": "แนน"})
+        assert next_approver_names(client._approval_steps, client._members) == ("cs", ["แนน"])
+
+    @pytest.mark.asyncio
+    async def test_setting_a_chain_on_an_empty_role_is_refused(self, monkeypatch):
+        from test_phase6_chat import FakeDataClient, _ctx
+        from chann_app.services import chat
+        from chann_app.services.ai import approval_policy
+        client = FakeDataClient(permission_keys=["approval.manage"])
+        client._members = [{"id": "member-1", "chann_uid": "CHN-S-000001", "role": "owner", "status": "active"}]
+        client._roles = [{"role_name": "owner"}, {"role_name": "admin"}, {"role_name": "cs"}]
+
+        async def fake_policy(policy, *, roles, client=None):
+            return {"version": 1, "entity_type": "service_report",
+                    "steps": [{"order": 1, "approver_type": "role", "approver_ref": "cs"}],
+                    "on_reject": "notify_submitter", "on_all_approved": "send_survey"}, []
+        monkeypatch.setattr(approval_policy, "policy_to_workflow", fake_policy)
+        reply = await chat._handle_approval_policy(
+            client, ctx=_ctx(oa="sales", primary_role="sales"), license_id="L1",
+            message="ตั้งกฎอนุมัติ ให้ CS อนุมัติ", trigger="ตั้งกฎอนุมัติ",
+            permission_keys=["approval.manage"], language="th", ai_client=None,
+        )
+        assert "cs" in reply.text and "ยังไม่มีสมาชิก" in reply.text, reply.text
+
+
+class TestTheCustomerHearsTheSignOff:
+    @pytest.mark.asyncio
+    async def test_final_approval_sends_the_customer_the_report(self, monkeypatch):
+        from chann_app.services import approval
+        from test_phase6_chat import FakeDataClient
+        client = FakeDataClient(permission_keys=[])
+        client._tickets = [{"id": "t1", "ticket_number": "T-2026-0001", "status": "completed", "customer_chann_uid": "CHN-C-9"}]
+        client._line_targets = {"CHN-C-9": "U-c9"}
+        report = {"id": "r1", "report_id": "SR-2026-0001", "ticket_id": "t1"}
+        await approval._notify_customer_of_approval(client, "L1", report, "https://x/report.pdf")
+        told = [n for n in client.recorded if n[0] == "create_notification" and "CHN-C-9" in str(n)]
+        assert told and "T-2026-0001" in str(told[-1]) and "report.pdf" in str(told[-1]), client.recorded

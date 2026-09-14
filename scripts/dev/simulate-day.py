@@ -312,11 +312,16 @@ async def approval_day():
     c._reports = [{"id":"sr-1","report_id":"SR-2026-0001","ticket_id":"t1",
                    "technician_member_id":"member-1","status":"submitted",
                    "report_data":{"found_issue":"คอมเพรสเซอร์รั่ว","work_done":"เปลี่ยนแล้ว"}}]
+    # Every real shop has its owner (the person who created it); a chain
+    # whose step names "admin" is theirs to act on. Without one the shop
+    # could not set that chain since 14 ก.ย. 2569 — and could not, in
+    # reality, exist.
     c._members = [
+        {"id":"owner-1","chann_uid":"CHN-S-000009","role":"owner","status":"active"},
         {"id":"cs-1","chann_uid":"CHN-S-000001","role":"cs","status":"active"},
         {"id":"member-1","chann_uid":"CHN-T-000001","role":"technician","status":"active"},
     ]
-    c._line_targets = {"CHN-S-000001":"U-cs","CHN-T-000001":"U-tech","CHN-C-1":"U-cust"}
+    c._line_targets = {"CHN-S-000001":"U-cs","CHN-S-000009":"U-owner","CHN-T-000001":"U-tech","CHN-C-1":"U-cust"}
 
     # Technician closes the job through the terse form.
     await say(c, "technician", "ปิดงาน T-2026-0001\nพบ: คอมเพรสเซอร์รั่ว\nแก้: เปลี่ยนแล้ว")

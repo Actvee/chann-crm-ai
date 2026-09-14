@@ -68,6 +68,15 @@ async def actor_of(client: DataClient, license_id: str, chann_uid: str) -> dict:
     roles = [r for r in (context.get("role"),) if r]
     if context.get("is_owner"):
         roles += [r for r in ("owner", "admin") if r not in roles]
+        # The owner may act on ANY role's step: a chain whose step names a
+        # role nobody holds would otherwise stall for good (14 ก.ย. 2569).
+        try:
+            for row in await client.list_roles(license_id):
+                name = str(row.get("role_name") or "")
+                if name and name not in roles:
+                    roles.append(name)
+        except Exception:  # noqa: BLE001
+            log.exception("could not widen the owner's approval roles")
     return {
         "member_id": str(context.get("member_id") or ""),
         "roles": roles,
@@ -134,7 +143,35 @@ async def _notify_current_approvers(
     )
     text = _t(APPROVAL_REQUEST, "th").format(**fields)
     text_en = _t(APPROVAL_REQUEST, "en").format(**fields)
-    for member in approvers_for(current, members):
+    approvers = approvers_for(current, members)
+    if not approvers:
+        # Nobody can act on this step. Until 14 ก.ย. 2569 this returned in
+        # silence: the report stayed "submitted", the technician got no
+        # paper, the customer no survey, and nobody knew. The owner and
+        # the admins hear now, and the owner may act on any role's step.
+        who = str(current.get("approver_ref") or "?")
+        escalate = [
+            m for m in members
+            if str(m.get("role") or "").lower() in ("owner", "admin") and str(m.get("status") or "active") == "active"
+        ]
+        for member in escalate:
+            uid = str(member.get("chann_uid") or "")
+            if not uid:
+                continue
+            try:
+                line_uid = await client.line_target_of(uid)
+                await send_notification(
+                    client, license_id=license_id, target_chann_uid=uid,
+                    target_line_user_id=line_uid, type="approval_pending",
+                    message=_t(APPROVAL_NO_APPROVER, "th").format(who=who, **fields),
+                    message_en=_t(APPROVAL_NO_APPROVER, "en").format(who=who, **fields),
+                    entity_type=ENTITY_TYPE, entity_id=str(report["id"]),
+                    language=language, oa="sales",
+                )
+            except Exception:
+                log.exception("approval escalation to %s failed", uid)
+        return
+    for member in approvers:
         uid = str(member.get("chann_uid") or "")
         if not uid:
             continue
@@ -149,6 +186,26 @@ async def _notify_current_approvers(
             )
         except Exception:
             log.exception("approval notification to %s failed", uid)
+
+
+APPROVAL_NO_APPROVER = {
+    "th": "รายงาน {report} (งาน {ticket}{customer}) รออนุมัติขั้นที่ต้องการ \"{who}\" แต่ยังไม่มีสมาชิกที่เป็นบทบาทนี้ — "
+          "อนุมัติแทนได้ด้วย \"อนุมัติ {report}\" หรือแก้กฎอนุมัติ",
+    "en": "Report {report} (job {ticket}{customer}) is waiting on a step for \"{who}\", and no member holds that role — "
+          "approve it with \"approve {report}\", or change the approval rule",
+}
+
+
+def next_approver_names(steps: list[dict], members: list[dict]) -> tuple[str | None, list[str]]:
+    """(the pending step's approver ref, the people who can act on it)."""
+    pending = [s for s in steps if s.get("status") == "pending"]
+    if not pending:
+        return None, []
+    current = min(pending, key=lambda s: int(s.get("step_order") or 0))
+    names = [
+        str(m.get("display_name") or m.get("chann_uid") or "") for m in approvers_for(current, members)
+    ]
+    return str(current.get("approver_ref") or ""), [n for n in names if n]
 
 
 # ------------------------------------------------------------------ acting
@@ -216,18 +273,52 @@ async def act(
             client, license_id=license_id, report=report, actor_id=actor_chann_uid,
         )
         await _notify_submitter_of_document(client, license_id, report, result["document_url"], language)
+        # The customer hears that the shop has signed the work off — with
+        # the report itself. Until 14 ก.ย. 2569 the only thing a customer
+        # got at this moment was the survey.
+        await _notify_customer_of_approval(client, license_id, report, result["document_url"])
         if result.get("survey"):
             result["survey_sent"] = await send_survey(
                 client, license_id=license_id, survey=result["survey"], language=language,
             )
     elif status == "submitted":
-        # More steps: the next approver hears about it now.
+        # More steps: the next approver hears about it now — and the
+        # reply can say who, or that nobody can (see _notify_current_approvers).
         try:
             steps = await client.approval_steps_for_entity(license_id, ENTITY_TYPE, report_id)
+            members = await client.list_members(license_id)
+            result["next_step_ref"], result["next_approvers"] = next_approver_names(steps, members)
             await _notify_current_approvers(client, license_id, report, steps, language)
         except Exception:
             log.exception("could not notify the next approver for %s", report_id)
     return result
+
+
+REPORT_APPROVED_TO_CUSTOMER = {
+    "th": "งาน {ticket} ตรวจสอบเรียบร้อยแล้วครับ{link}",
+    "en": "Job {ticket} has been checked and signed off{link}",
+}
+
+
+async def _notify_customer_of_approval(
+    client: DataClient, license_id: str, report: dict, url: str | None,
+) -> None:
+    """The customer gets the sign-off and the report (recorded, then pushed)."""
+    ticket_id = str(report.get("ticket_id") or "")
+    if not ticket_id:
+        return
+    try:
+        from .chat import _notify_customer_recorded
+        ticket = await client.get_ticket(license_id, ticket_id) or {}
+        link = f"\nใบรายงานการซ่อม (7 วัน): {url}" if url else ""
+        link_en = f"\nService report (7 days): {url}" if url else ""
+        await _notify_customer_recorded(
+            client, license_id, ticket, type="ticket_report_approved",
+            text=_t(REPORT_APPROVED_TO_CUSTOMER, "th").format(ticket=ticket.get("ticket_number") or "", link=link),
+            text_en=_t(REPORT_APPROVED_TO_CUSTOMER, "en").format(ticket=ticket.get("ticket_number") or "", link=link_en),
+        )
+    except Exception:  # noqa: BLE001 — the approval stands
+        log.exception("could not tell the customer the report was approved")
 
 
 async def issue_report_document(

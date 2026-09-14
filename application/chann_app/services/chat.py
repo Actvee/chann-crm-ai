@@ -8679,6 +8679,10 @@ APPROVAL_APPROVED = {
     "th": "อนุมัติ {code} แล้ว{next}",
     "en": "Approved {code}.{next}",
 }
+APPROVAL_POLICY_ROLE_EMPTY = {
+    "th": "ขั้นที่ให้บทบาท \"{role}\" อนุมัติ: ตอนนี้ยังไม่มีสมาชิกที่เป็น {role} จึงไม่มีใครอนุมัติได้ — เชิญคนเข้าบทบาทนี้ก่อน หรือใช้บทบาทอื่น",
+    "en": "The step for role \"{role}\": no active member holds {role}, so nobody could approve it — invite someone into that role first, or use another role",
+}
 APPROVAL_NEXT_SURVEY_SENT = {
     "th": "\nครบทุกขั้นแล้ว ส่งแบบประเมินความพึงพอใจให้ลูกค้าแล้ว",
     "en": "\nAll steps passed — the customer has been sent the survey.",
@@ -8688,8 +8692,14 @@ APPROVAL_NEXT_SURVEY_NOT_SENT = {
     "en": "\nAll steps passed (the customer has no LINE on file, so no survey was sent).",
 }
 APPROVAL_NEXT_STEP = {
-    "th": "\nส่งต่อให้ขั้นถัดไปแล้ว",
-    "en": "\nPassed on to the next approver.",
+    "th": "\nส่งต่อให้ขั้นถัดไปแล้ว (ผู้อนุมัติ: {who})",
+    "en": "\nPassed on to the next approver ({who}).",
+}
+APPROVAL_NEXT_NOBODY = {
+    "th": "\n⚠️ ขั้นถัดไปต้องการ \"{who}\" แต่ยังไม่มีสมาชิกที่เป็นบทบาทนี้ — แจ้งเจ้าของแล้ว "
+          "เจ้าของอนุมัติแทนได้ด้วย \"อนุมัติ {code}\" หรือแก้กฎอนุมัติ",
+    "en": "\n⚠️ The next step needs \"{who}\" and no member holds that role — the owner has been told; "
+          "the owner can approve it with \"approve {code}\", or change the approval rule.",
 }
 APPROVAL_REJECTED = {
     "th": "ตีกลับ {code} แล้ว{reason}\nแจ้งช่างให้แก้แล้ว",
@@ -8901,10 +8911,15 @@ async def _handle_approval_act(
     if approve:
         status = result.get("report_status")
         if status == "approved":
-            tail = APPROVAL_NEXT_SURVEY_SENT if result.get("survey_sent") else APPROVAL_NEXT_SURVEY_NOT_SENT
+            tail = _t(APPROVAL_NEXT_SURVEY_SENT if result.get("survey_sent") else APPROVAL_NEXT_SURVEY_NOT_SENT, language)
+        elif result.get("next_approvers"):
+            tail = _t(APPROVAL_NEXT_STEP, language).format(who=", ".join(result["next_approvers"]))
         else:
-            tail = APPROVAL_NEXT_STEP
-        text = _t(APPROVAL_APPROVED, language).format(code=report_code, next=_t(tail, language))
+            # A step nobody can act on (DEV, 14 ก.ย. 2569: a chain whose second
+            # step named a role no member holds — the report sat "submitted"
+            # and the customer heard nothing). Said here, and the owner told.
+            tail = _t(APPROVAL_NEXT_NOBODY, language).format(who=result.get("next_step_ref") or "?", code=report_code)
+        text = _t(APPROVAL_APPROVED, language).format(code=report_code, next=tail)
         if result.get("document_url"):
             text += f"\nPDF (7 วัน): {result['document_url']}"
     else:
@@ -8943,6 +8958,22 @@ async def _handle_approval_policy(
         roles = []
 
     rules, problems = await policy_to_workflow(policy, roles=roles, client=ai_client)
+    if rules and not problems:
+        # A role the company HAS but nobody HOLDS makes a step nobody can
+        # act on, and the report stalls silently (DEV, 14 ก.ย. 2569).
+        try:
+            members = await client.list_members(license_id)
+        except Exception:  # noqa: BLE001
+            members = []
+        held = {str(m.get("role") or "").lower() for m in members if str(m.get("status") or "active") == "active"}
+        if "owner" in held:
+            held.add("admin")  # an owner holds every permission
+        for step in (rules.get("steps") or []) if members else []:
+            ref = str(step.get("approver_ref") or "").lower()
+            if step.get("approver_type") == "role" and ref not in held:
+                problems.append(_t(APPROVAL_POLICY_ROLE_EMPTY, language).format(role=ref))
+        if problems:
+            rules = None
     if rules is None:
         return ChatReply(
             text=_t(APPROVAL_POLICY_NOT_UNDERSTOOD, language).format(
@@ -10548,6 +10579,9 @@ def _command_like(message: str, triggers: tuple[str, ...]) -> bool:
 #: measure over real traffic, readable in Cloud Logging as `chat.road`
 #: and in-process through metrics.roads() (14 ก.ย. 2569).
 _ROAD: contextvars.ContextVar[dict | None] = contextvars.ContextVar("chat_road", default=None)
+#: The record a quoted LINE reply is about, for the model's reading of the
+#: reply text — set by handle_reply for the one message it dispatches.
+_REPLY_TO: contextvars.ContextVar[dict | None] = contextvars.ContextVar("chat_reply_to", default=None)
 
 
 def _note_road(**facts) -> None:
@@ -20630,6 +20664,7 @@ async def _read_for_router(
             oa=ctx.oa,
             timeout_s=ROUTER_READ_BUDGET_S,
             attempts=1,
+            reply_to=_REPLY_TO.get(),
         )
     except (AINotConfigured, AIUnavailable) as exc:
         log.warning("model-first read skipped: %s", exc)
@@ -20786,6 +20821,7 @@ async def _model_road(
               client=ai_client,
               pending=pending_intent,
               recent=await _recent_turns(client, ctx),
+              reply_to=_REPLY_TO.get(),
               # The OA decides which capabilities exist at all, so it decides
               # what the model is shown. A technician's prompt drops from
               # 13,591 to 6,004 characters and a customer's to 6,783 — and,
@@ -21612,9 +21648,17 @@ async def handle_reply(
             entity_id=mapping["entity_id"], code=code,
         )
 
-    reply = await handle_chat_message(
-        client, message=reply_text, ctx=ctx, language=language, ai_client=ai_client
-    )
+    # The model is told too (14 ก.ย. 2569): seeding the ref helped the
+    # handlers, but the model read "อนุมัติ" in reply to the approval
+    # notification as "show me what is pending" — it had no idea the
+    # sentence was a reply to anything.
+    token = _REPLY_TO.set({"entity_type": mapping["entity_type"], "code": code} if code else None)
+    try:
+        reply = await handle_chat_message(
+            client, message=reply_text, ctx=ctx, language=language, ai_client=ai_client
+        )
+    finally:
+        _REPLY_TO.reset(token)
     # Still asserted on the way out: the entity is decided by what was
     # replied to, not by whatever the model inferred from the reply text.
     reply.entity_type = mapping["entity_type"]
