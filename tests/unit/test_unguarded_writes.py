@@ -36,6 +36,17 @@ from pathlib import Path
 
 import pytest
 
+
+def _next_weekday(weekday: int) -> str:
+    """"วันศุกร์" / "วันเสาร์" as the parser reads them: the next such day
+    strictly ahead of today, rendered the way the reply renders it. These
+    expectations were pinned to the calendar on 11 ก.ย. 2569 and broke on
+    the 14th; the parser's rule, not a date, is what the test asserts."""
+    from datetime import timedelta
+    from chann_app.services.thai_datetime import format_thai_date, local_today
+    today = local_today()
+    return format_thai_date(today + timedelta(days=((weekday - today.weekday()) % 7) or 7))
+
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "application"))
 sys.path.insert(0, str(ROOT / "data"))
@@ -1053,12 +1064,13 @@ class TestACustomerAmendingTheirOwnJob:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("message,when", [
-        ("เลื่อนนัดเป็นวันศุกร์", "18 ก.ย. 2569"),
-        ("ขอเลื่อนนัด T-2026-0001 วันเสาร์ บ่าย 2", "12 ก.ย. 2569 14:00"),
-        ("วันศุกร์ไม่สะดวกค่ะ ขอเป็นวันเสาร์", "12 ก.ย. 2569"),
-        ("พรุ่งนี้ไม่สะดวก ขอเป็นวันเสาร์", "12 ก.ย. 2569"),
+        ("เลื่อนนัดเป็นวันศุกร์", "FRIDAY"),
+        ("ขอเลื่อนนัด T-2026-0001 วันเสาร์ บ่าย 2", "SATURDAY 14:00"),
+        ("วันศุกร์ไม่สะดวกค่ะ ขอเป็นวันเสาร์", "SATURDAY"),
+        ("พรุ่งนี้ไม่สะดวก ขอเป็นวันเสาร์", "SATURDAY"),
     ])
     async def test_a_real_reschedule_becomes_a_request_to_the_shop(self, message, when):
+        when = when.replace("FRIDAY", _next_weekday(4)).replace("SATURDAY", _next_weekday(5))
         """These four used to move the visit. Owner, 11 ก.ย. 2569: "ลูกค้า
         ไม่มีสิทธิ์เลื่อน จะเลื่อนได้แค่คนที่มีสิทธิ์และทำใน Sale OA …
         ควรแจ้งร้านเพราะไม่รู้ว่าช่างจะมีคิวว่างหรือไม่".
@@ -1154,7 +1166,7 @@ class TestTheSecondDoorIntoTheReschedule:
         _, _, client = await self._turns("ขอเลื่อนนัด", "วันเสาร์ 10 โมง")
         note = next(c for c in client.recorded if c[0] == "create_note")
         body = next(p for p in note if isinstance(p, dict)).get("body", "")
-        assert "12 ก.ย. 2569" in body and "10:00" in body, body
+        assert _next_weekday(5) in body and "10:00" in body, body
 
 
 class TestTheCancelGuardDoesNotDefeatItself:

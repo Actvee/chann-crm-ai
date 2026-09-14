@@ -72,8 +72,19 @@ async def complete(
     max_tokens: int = 1024,
     temperature: float = 0.0,
     client: httpx.AsyncClient | None = None,
+    timeout_s: float | None = None,
+    attempts: int | None = None,
 ) -> str:
-    """Return the assistant's raw text. Raises AIUnavailable if all attempts fail."""
+    """Return the assistant's raw text. Raises AIUnavailable if all attempts fail.
+
+    timeout_s / attempts override the module budget for one call. The
+    router's first read of a sentence passes a short budget and a single
+    attempt (14 ก.ย. 2569): the keyword tables answer when the model does
+    not, so a slow model must cost the person a few seconds, never the
+    10 s × 2 the report tier is allowed.
+    """
+    budget = float(timeout_s) if timeout_s else REQUEST_TIMEOUT_S
+    tries = max(1, int(attempts)) if attempts else MAX_ATTEMPTS
     api_key = (settings.openrouter_api_key or "").strip()
     if not api_key:
         raise AINotConfigured("OPENROUTER_API_KEY is REQUIRED_NOT_CONFIGURED")
@@ -101,16 +112,16 @@ async def complete(
     }
 
     owns_client = client is None
-    http = client or httpx.AsyncClient(timeout=REQUEST_TIMEOUT_S)
+    http = client or httpx.AsyncClient(timeout=budget)
     last_error = "no attempt was made"
 
     try:
-        for attempt in range(1, MAX_ATTEMPTS + 1):
+        for attempt in range(1, tries + 1):
             with Timer(chosen) as timer:
                 try:
                     resp = await http.post(
                         OPENROUTER_URL, headers=headers, json=body,
-                        timeout=REQUEST_TIMEOUT_S,
+                        timeout=budget,
                     )
                 except (httpx.TimeoutException, httpx.TransportError) as exc:
                     last_error = f"{type(exc).__name__}: {exc}"
@@ -130,7 +141,7 @@ async def complete(
                     if resp.status_code not in RETRYABLE_STATUS:
                         break
 
-            if attempt < MAX_ATTEMPTS:
+            if attempt < tries:
                 await asyncio.sleep(RETRY_BACKOFF_S)
 
         raise AIUnavailable(f"all OpenRouter attempts failed ({last_error})")

@@ -705,7 +705,12 @@ class TestTheRegistryIsTheOnlyDefinition:
     def test_a_quote_is_always_made_from_an_existing_deal(self):
         from chann_app.services.capabilities import QUOTE_CREATE
 
-        assert QUOTE_CREATE.required == ("deal_code",)
+        # The deal is found by the handler — from a code, from the customer
+        # named, or from the conversation — so nothing is asked up front
+        # (14 ก.ย. 2569); what stays true is that no field of the quote
+        # itself is ever taken from the model.
+        assert QUOTE_CREATE.required == ()
+        assert "deal_code" in QUOTE_CREATE.never_needed
 
 
 class TestTheSentenceIsReadBeforeAnActionIsChosen:

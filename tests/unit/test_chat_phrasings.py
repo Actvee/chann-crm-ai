@@ -133,7 +133,7 @@ class TestStaffPhrasings:
             client = ReviewFake()
             await FakeDataClient.create_customer(client, "L1", {"first_name": "สมชาย", "last_name": "ใจดี", "phone": "0812345678"})
             reply, calls = await say(client, "sales", phrasing, ai=READ_CUSTOMER)
-            is_tile = chat._is_menu_tile(phrasing, "sales")
+            is_tile = chat._is_a_button_press(phrasing, "sales")
             assert (calls == 0) == is_tile, (phrasing, calls, is_tile)
             assert "สมชาย" in reply.text, phrasing
 
@@ -195,7 +195,7 @@ class TestTechnicianPhrasings:
         client = _tech()
         reply, calls = await say(client, "technician", phrasing, ai=self.AGENDA)
         # A rich-menu tile ("งานของผม") keeps the direct path; a sentence is read.
-        assert (calls == 0) == chat._is_menu_tile(phrasing, "technician"), (phrasing, calls)
+        assert (calls == 0) == chat._is_a_button_press(phrasing, "technician"), (phrasing, calls)
         assert "T-2026-0001" in reply.text and "T-2026-0002" not in reply.text, (phrasing, reply.text)
 
     async def test_a_bare_job_word_is_read_as_the_open_jobs(self):

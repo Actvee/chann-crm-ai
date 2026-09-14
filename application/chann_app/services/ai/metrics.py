@@ -37,6 +37,7 @@ class Call:
 class Metrics:
     def __init__(self, window: int = WINDOW):
         self._calls: deque[Call] = deque(maxlen=window)
+        self._roads: deque[tuple[str, str]] = deque(maxlen=max(window, 1000))
         self._lock = threading.Lock()
 
     def record(self, call: Call) -> None:
@@ -75,6 +76,27 @@ class Metrics:
     def reset(self) -> None:
         with self._lock:
             self._calls.clear()
+            self._roads.clear()
+
+    # ---- which road answered a chat message (docs/MODEL_FIRST.md, 14 ก.ย. 2569)
+    # The corpus share is a laboratory number; this is the same measure over
+    # real traffic. One entry per message: (oa, road). Roads: "model" (the
+    # model's reading was carried out), "suggest→rule" (it had no reading
+    # and the keyword tables answered), "outage→rule" (it could not be
+    # asked), "button", "greeting", "small_talk", "help", "pending" (a
+    # closed follow-up), "prelude" (tenant choice, PDPA, a held flow).
+    def record_road(self, oa: str, road: str) -> None:
+        with self._lock:
+            self._roads.append((oa or "?", road or "?"))
+
+    def roads(self) -> dict:
+        with self._lock:
+            rows = list(self._roads)
+        out: dict[str, dict[str, int]] = {}
+        for oa, road in rows:
+            out.setdefault(oa, {})
+            out[oa][road] = out[oa].get(road, 0) + 1
+        return {"samples": len(rows), "by_oa": out}
 
 
 def _percentile(sorted_values: list[float], q: float) -> float | None:

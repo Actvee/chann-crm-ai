@@ -96,11 +96,20 @@ the "คุยกับร้าน …" prefix. Measured over the 1,168-utteran
 
 | OA | model reads | rule decides | share |
 |---|---|---|---|
-| sales | 492 | 48 | **91%** (was 27%) |
-| technician | 236 | 48 | **83%** (was 18%) |
+| sales | 500 | 40 | **93%** (was 27%) |
+| technician | 261 | 23 | **92%** (was 18%) |
 | customer | 231 | 113 | **67%** (was 3%) |
 
-Overall **959/1168 (82%)**, from 218.
+Overall **992/1168 (85%)**, from 218. What stays on the rule road is the closed set above;
+the model-first gates test a button by its EXACT label (`_is_a_button_press`), because a
+person typing "ถึงแล้วครับ" is speaking, not tapping.
+
+**The number to watch is now the production one.** Every message logs one line,
+`chat.road oa=… road=…`, and `metrics.roads()` keeps a rolling count in-process (14 ก.ย. 2569).
+The corpus share is the laboratory figure; the log is the same measure over real traffic —
+how often the model shrugs (`suggest→rule`), cannot be asked (`outage→rule`), or reads and
+the road declines (`model→rule`). The router's first read has a budget of its own
+(`ROUTER_READ_BUDGET_S`, 4 s, one attempt): the tables answer when the model does not.
 
 **The customer OA classifies into what a customer may do** (`_customer_model_road`). The
 customer holds no permission keys, so the dispatcher IS the gate: every reading is handed

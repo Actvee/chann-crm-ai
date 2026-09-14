@@ -317,6 +317,9 @@ does not exist anywhere else the model can check against):
     (starts with C-/D-/Q-) if the user gave one; OMIT the key entirely if
     they did not — do not guess one and do not put it in "missing", since
     the system may already know which record the conversation is about.
+    When the remark NAMES the customer it is about ("บันทึกว่าสมชายขอเลื่อน",
+    "จดไว้ว่าคุณสมหญิงจะโทรกลับ"), add "target_name": "สมชาย" — the system
+    finds that customer; the body keeps the person's words.
   action="update": correcting what was already written. Examples:
     "แก้บันทึกเป็น ลูกค้าขอส่วนลด 10%", "เปลี่ยนบันทึกล่าสุด".
   action="delete": removing it. Examples: "ลบบันทึกล่าสุด", "เอาบันทึก
@@ -669,6 +672,8 @@ async def parse_intent(
     pending: dict | None = None,
     oa: str = "",
     recent: list[dict] | None = None,
+    timeout_s: float | None = None,
+    attempts: int | None = None,
 ) -> dict:
     """Parse one user message. Raises AIUnavailable; never returns a half-result."""
     system_prompt = build_prompt(
@@ -686,6 +691,8 @@ async def parse_intent(
         user_message=message,
         thinking=False,          # 4.3: chat tier runs with thinking OFF
         client=client,
+        timeout_s=timeout_s,
+        attempts=attempts,
     )
     intent = parse_intent_json(raw)
 

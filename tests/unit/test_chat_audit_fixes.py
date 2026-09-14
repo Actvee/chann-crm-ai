@@ -166,7 +166,12 @@ class TestCustomerAppointmentRules:
         notes = [r for r in c.recorded if r[0] == "create_note"]
         assert notes, reply.text
         body = next(p for p in notes[-1] if isinstance(p, dict)).get("body", "")
-        assert "12 ก.ย. 2569" in body and "09:00" not in body, body
+        # "พรุ่งนี้" as the parser reads it from the real calendar — pinned to
+        # 12 ก.ย. 2569 this held for one day (written on the 11th).
+        from datetime import timedelta
+        from chann_app.services.thai_datetime import format_thai_date, local_today
+        tomorrow = format_thai_date(local_today() + timedelta(days=1))
+        assert tomorrow in body and "09:00" not in body, body
         assert "แจ้งร้าน" in reply.text, reply.text
 
 

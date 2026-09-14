@@ -88,10 +88,17 @@ QUOTE_CREATE = Capability(
     entity="quote",
     # A quote is always made FROM an existing deal, never invented, and its
     # own code is generated afterwards — never asked for and never accepted
-    # from the model (_handle_quote_intent).
-    required=("deal_code",),
-    optional=(),
+    # from the model (_handle_quote_intent). The deal itself is found by
+    # the handler: from the code, from the customer NAMED ("ทำใบเสนอราคาให้
+    # สมชาย" — his open deal), or from the deal the conversation is on —
+    # so the generic slot-fill must not ask for a code first (14 ก.ย. 2569).
+    required=(),
+    optional=("deal_code", "target_name"),
+    never_needed=("deal_code", "target_name"),
 )
+#: Dispatch finds the job (code, running number, the job in context, or the
+#: one open job) and asks for the person with buttons of its own.
+TICKET_ASSIGN = Capability(action="assign", entity="ticket", never_needed=("code", "target_name"))
 
 TEAM_CREATE = Capability(
     action="create",
@@ -167,7 +174,7 @@ REGISTRY: dict[tuple[str, str], Capability] = {
     (c.entity, c.action): c for c in (
         CUSTOMER_CREATE, FOLLOWUP_CREATE, QUOTE_CREATE, TEAM_CREATE, SALES_GROUP_CREATE,
         APPROVAL_APPROVE, APPROVAL_REJECT,
-        TICKET_CLAIM, TICKET_READ, TICKET_UPDATE, SERVICE_REPORT_CHECK_IN, SERVICE_REPORT_CHECK_OUT,
+        TICKET_CLAIM, TICKET_READ, TICKET_UPDATE, TICKET_ASSIGN, SERVICE_REPORT_CHECK_IN, SERVICE_REPORT_CHECK_OUT,
         SERVICE_REPORT_CREATE,
     )
 }

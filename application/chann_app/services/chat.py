@@ -12,15 +12,18 @@ never actually understood.
 """
 from __future__ import annotations
 
+import contextvars
 import logging
 import re
 from dataclasses import dataclass, field
+from time import monotonic
 from datetime import date, datetime, time, timezone, timedelta
 from decimal import Decimal, InvalidOperation
 
 from ..data_client import DataClient, DataTierError
 from .notify import send_notification
 from .ai.client import AIUnavailable, AINotConfigured
+from .ai.metrics import metrics as _ai_metrics
 # Reused rather than reimplemented on purpose: what a salesperson reads
 # in chat must never disagree with what the customer receives on the PDF.
 from .documents.snapshot import build_line_items
@@ -1705,6 +1708,18 @@ async def _handle_note_intent(
     # omit it rather than invent one, so a message that names no code always
     # falls through to context here — never to a guess.
     lookup_message = fields.get("entity_code") or ""
+    named = _strip_polite_tail(_strip_honorific(str(fields.get("target_name") or "").strip()))
+    if not lookup_message and named:
+        # "บันทึกว่าสมชายขอเลื่อน": the remark names its customer, and the
+        # model now says so in target_name (14 ก.ย. 2569). The person is
+        # found the way every other name is; a miss asks, never guesses.
+        row, err = await _find_one_customer_by_name(
+            client, license_id, named, language, ctx=ctx,
+            resume_entity="note", resume_action="create", resume_fields=fields,
+        )
+        if row is None:
+            return err if err is not None else ChatReply(text=_t(NOTE_NEEDS_TARGET, language))
+        lookup_message = str(row.get("customer_id") or "")
     try:
         target = await _resolve_target_or_context(client, ctx, license_id, lookup_message)
     except _TargetNotFound as exc:
@@ -10329,6 +10344,60 @@ def _command_like(message: str, triggers: tuple[str, ...]) -> bool:
     )
 
 
+#: Which road answered the message being handled — set at the decision
+#: points of the router, logged once by handle_chat_message. The corpus
+#: share (measure-road-share.py) is a laboratory number; this is the same
+#: measure over real traffic, readable in Cloud Logging as `chat.road`
+#: and in-process through metrics.roads() (14 ก.ย. 2569).
+_ROAD: contextvars.ContextVar[dict | None] = contextvars.ContextVar("chat_road", default=None)
+
+
+def _note_road(**facts) -> None:
+    rec = _ROAD.get()
+    if rec is None:
+        return
+    for k, v in facts.items():
+        if k == "road" and rec.get("road") and v == "model":
+            # A suggest that fell to the tables and then ran the model
+            # road's own suggest handler stays "suggest→rule".
+            continue
+        rec[k] = v
+
+
+def _is_a_button_press(message: str, oa: str) -> bool:
+    """The exact label of a rich-menu tile or of a button this system
+    writes — what LINE sends when a person TAPS, so the direct path is
+    the right one. A person typing "ถึงแล้วครับ" or "ฮอดแล้ว" is speaking,
+    not tapping: _is_menu_tile counted both as tiles by stripping the
+    particle and normalising the dialect, and 22 technician sentences
+    never reached the model because of it (measured 14 ก.ย. 2569). Only
+    the model-first gates use this; _is_menu_tile keeps its wider job of
+    stopping a tile's label from being filed as a fault."""
+    compact = (message or "").replace(" ", "").strip().lower()
+    if not compact:
+        return False
+    labels = frozenset(t.replace(" ", "").lower() for t in RICH_MENU_TILE_TEXTS.get(oa, ())) | frozenset(
+        t.replace(" ", "").lower() for t in _MENU_COMMAND_TEXTS
+    )
+    return compact in labels or bool(_HELP_STEP_RE.match(message or ""))
+
+
+def _deterministic_reason(message: str, oa: str, early_pending: dict | None) -> str | None:
+    """Why this sentence is NOT sent to the model first, or None when it is.
+    The closed set that stays deterministic by design (docs/MODEL_FIRST.md)."""
+    if early_pending is not None:
+        return "pending"
+    if _is_small_talk(message):
+        return "small_talk"
+    if _is_only_a_greeting(message):
+        return "greeting"
+    if _is_a_button_press(message, oa):
+        return "button"
+    if _is_help_request(message, oa):
+        return "help"
+    return None
+
+
 def _is_menu_tile(message: str, oa: str | None = None) -> bool:
     """A rich-menu tile or a menu command on its own — ANY OA's tile when
     oa is None, since a customer tapping a staff tile text still expects
@@ -17263,10 +17332,75 @@ async def _handle_quote_intent(
     # handler the buttons already reach. This road used to be a second,
     # weaker copy: it demanded a deal_code with no context fallback, and
     # re-raised a data error that was not a not-found.
+    said = str(fields.get("deal_code") or fields.get("code") or "").strip()
+    deal_code = said.upper() if DEAL_ID_RE.fullmatch(said.upper()) else None
+    named = "" if deal_code else _strip_polite_tail(_strip_honorific(
+        str(fields.get("target_name") or (said if not DEAL_ID_RE.search(said.upper()) else "")).strip()
+    ))
+    if named:
+        # "ทำใบเสนอราคาให้สมชาย": the model put the NAME where a code goes
+        # (deal_code="สมชาย", measured 11 ก.ย. 2569). A person, then their
+        # open deal — one, or a choice; never a question about a code.
+        deal_code, asked = await _deal_code_for_named_customer(
+            client, ctx=ctx, license_id=license_id, name=named, language=language, fields=fields,
+        )
+        if asked is not None:
+            return asked
     return await _handle_quote_create_direct(
         client, ctx=ctx, license_id=license_id, message=message,
-        permission_keys=held, language=language,
-        deal_code=str(fields.get("deal_code") or fields.get("code") or "").strip().upper() or None,
+        permission_keys=held, language=language, deal_code=deal_code,
+    )
+
+
+QUOTE_WHICH_DEAL = {
+    "th": "{name} มีดีลที่เปิดอยู่ {count} ดีล สร้างใบเสนอราคาจากดีลไหนครับ",
+    "en": "{name} has {count} open deals — which one is the quotation for?",
+}
+QUOTE_NO_OPEN_DEAL = {
+    "th": "{name} ยังไม่มีดีลที่เปิดอยู่ครับ เปิดดีลก่อนแล้วค่อยสร้างใบเสนอราคา",
+    "en": "{name} has no open deal yet — open one first, then quote it.",
+}
+
+
+async def _deal_code_for_named_customer(
+    client: DataClient, *, ctx: ResolvedContext, license_id, name: str, language: str, fields: dict,
+) -> tuple[str | None, ChatReply | None]:
+    """(deal code, None) for the one open deal of the customer called
+    `name`; (None, reply) when the person, or the choice, is still to be
+    settled — the reply asks with the same buttons the deal list shows."""
+    license_id = str(license_id)
+    row, err = await _find_one_customer_by_name(
+        client, license_id, name, language, ctx=ctx,
+        resume_entity="quote", resume_action="create", resume_fields=fields,
+    )
+    if row is None:
+        return None, err
+    try:
+        deals = await client.list_deals(license_id)
+    except Exception:
+        log.exception("deal list failed while quoting for %s", name)
+        return None, ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    theirs = [
+        d for d in deals
+        if str(d.get("contact_id") or "") == str(row.get("id"))
+        and str(d.get("stage") or "").lower() not in ("won", "lost")
+    ]
+    who = _display_name(row)
+    if len(theirs) == 1:
+        return str(theirs[0].get("deal_id") or "").upper(), None
+    if not theirs:
+        return None, ChatReply(
+            text=_t(QUOTE_NO_OPEN_DEAL, language).format(name=who),
+            quick_replies=[("เปิดดีล", f"เปิดดีลให้{who}")],
+        )
+    return None, ChatReply(
+        text=_t(QUOTE_WHICH_DEAL, language).format(name=who, count=len(theirs)) + "\n" + "\n".join(
+            f"{d.get('deal_id')} · {_label(DEAL_STAGE_LABELS, d.get('stage'), language)}" for d in theirs[:LIST_LIMIT]
+        ),
+        quick_replies=[
+            (str(d.get("deal_id") or ""), f"สร้างใบเสนอราคาจากดีล {d.get('deal_id')}")
+            for d in theirs[:4] if d.get("deal_id")
+        ],
     )
 
 # How long an unanswered question stays open. Long enough that a user can
@@ -18133,6 +18267,31 @@ async def handle_chat_message(
     This wrapper splits a two-request line (B13) and localises the reply
     (B14); _route_chat_message is the router itself."""
     message = _normalise_message(message)
+    token = _ROAD.set({"oa": ctx.oa})
+    started = monotonic()
+    try:
+        reply = await _handle_chat_message_inner(
+            client, message=message, ctx=ctx, language=language, ai_client=ai_client,
+        )
+    finally:
+        rec = _ROAD.get() or {}
+        _ROAD.reset(token)
+    road = str(rec.get("road") or "prelude")
+    try:
+        _ai_metrics.record_road(ctx.oa, road)
+        log.info(
+            "chat.road oa=%s road=%s action=%s entity=%s ms=%d chars=%d",
+            ctx.oa, road, rec.get("action") or "-", rec.get("entity") or "-",
+            int((monotonic() - started) * 1000), len(reply.text or ""),
+        )
+    except Exception:  # noqa: BLE001 — telemetry must never cost a reply
+        log.exception("chat.road record failed")
+    return reply
+
+
+async def _handle_chat_message_inner(
+    client: DataClient, *, message: str, ctx: ResolvedContext, language: str, ai_client,
+) -> ChatReply:
     # Dates and times are rendered by thai_datetime from the display
     # preferences; the reply language wins over whatever the webhook set
     # (review, 6 Sep 2026, B14: "Scheduled: 8 ก.ย. 2569 10:00 น." in English).
@@ -18442,15 +18601,17 @@ async def _route_chat_message(
     # The technician OA followed on the same day, the same way: its
     # pending flows (check-in questions, the report being written, an
     # accept/decline waiting) are `early_pending` and stay closed.
-    if (
-        ctx.oa in ("sales", "technician") and early_pending is None
-        and not _is_small_talk(message) and not _is_only_a_greeting(message)
-        and not _is_menu_tile(message, ctx.oa) and not _is_help_request(message, ctx.oa)
-    ):
+    if ctx.oa in ("sales", "technician"):
+        why = _deterministic_reason(message, ctx.oa, early_pending)
+        if why is not None:
+            _note_road(road=why)
+    if ctx.oa in ("sales", "technician") and why is None:
         early_intent = await _read_for_router(
             message=message, ctx=ctx, license_id=license_id, permission_keys=permission_keys,
             language=language, ai_client=ai_client, member=member, context=context,
         )
+        if early_intent is not None and str(early_intent.get("action") or "") == "suggest":
+            _note_road(road="suggest→rule")
         if early_intent is not None and str(early_intent.get("action") or "") != "suggest":
             return await _model_road(
                 client, ctx=ctx, license_id=license_id, message=message,
@@ -18943,13 +19104,14 @@ async def _route_chat_message(
         # which returned or are checked above and below. The reading is
         # handed to the customer road's OWN handlers, which is what keeps
         # the owner's rule: nothing a customer cannot do is reachable here.
-        if (
-            not _is_menu_tile(message, ctx.oa) and not _is_customer_command(message)
-            and not _is_only_a_greeting(message)
-            # "คุยกับร้าน <first line>" names its own road; the line after
-            # the prefix is FOR the shop, not for the model to classify.
-            and not (message or "").strip().lower().startswith(tuple(p.lower() for p in CUSTOMER_CHAT_PHRASES))
-        ):
+        why = _deterministic_reason(message, ctx.oa, None)
+        if why is None and _is_customer_command(message):
+            why = "button"
+        # "คุยกับร้าน <first line>" names its own road; the line after
+        # the prefix is FOR the shop, not for the model to classify.
+        if why is None and (message or "").strip().lower().startswith(tuple(p.lower() for p in CUSTOMER_CHAT_PHRASES)):
+            why = "button"
+        if why is None:
             try:
                 pending_now = await client.get_pending_intent(ctx.chann_uid, ctx.oa)
             except Exception:
@@ -18958,18 +19120,28 @@ async def _route_chat_message(
                 live_now = await live_chat.live_session(client, license_id=str(license_id), chann_uid=ctx.chann_uid)
             except Exception:
                 live_now = None
-            if pending_now is None and live_now is None:
-                reading = await _read_for_router(
-                    message=message, ctx=ctx, license_id=license_id, permission_keys=permission_keys,
-                    language=language, ai_client=ai_client, member=member, context=context,
+            if pending_now is not None:
+                why = "pending"
+            elif live_now is not None:
+                why = "live_chat"
+        if why is not None:
+            _note_road(road=why)
+        else:
+            reading = await _read_for_router(
+                message=message, ctx=ctx, license_id=license_id, permission_keys=permission_keys,
+                language=language, ai_client=ai_client, member=member, context=context,
+            )
+            if reading is not None and str(reading.get("action") or "") == "suggest":
+                _note_road(road="suggest→rule")
+            if reading is not None and str(reading.get("action") or "") != "suggest":
+                _note_road(road="model", action=reading.get("action"), entity=reading.get("entity"))
+                answered = await _customer_model_road(
+                    client, ctx=ctx, license_id=license_id, message=message, intent=reading,
+                    language=language, permission_keys=permission_keys, ai_client=ai_client,
                 )
-                if reading is not None and str(reading.get("action") or "") != "suggest":
-                    answered = await _customer_model_road(
-                        client, ctx=ctx, license_id=license_id, message=message, intent=reading,
-                        language=language, permission_keys=permission_keys, ai_client=ai_client,
-                    )
-                    if answered is not None:
-                        return answered
+                if answered is not None:
+                    return answered
+                _note_road(road="model→rule")
         if _matches_phrase(message, CUSTOMER_PROFILE_PHRASES + CUSTOMER_SHOP_PHRASES):
             return await _handle_customer_profile_view(
                 client, ctx=ctx, license_id=license_id, language=language,
@@ -20078,6 +20250,14 @@ async def _route_chat_message(
     )
 
 
+#: How long the router waits for the model's first reading of a sentence.
+#: Measured 14 ก.ย. 2569: median 1.1 s, p90 1.4 s, worst 6 s. The keyword
+#: tables answer when the model does not, so a slow model costs the person
+#: this much and no more — not REQUEST_TIMEOUT_S × MAX_ATTEMPTS = 20 s,
+#: which is longer than a LINE webhook is given.
+ROUTER_READ_BUDGET_S = 4.0
+
+
 async def _read_for_router(
     *, message: str, ctx: ResolvedContext, license_id, permission_keys: list[str],
     language: str, ai_client, member: dict, context: dict,
@@ -20097,9 +20277,12 @@ async def _read_for_router(
             client=ai_client,
             pending=None,
             oa=ctx.oa,
+            timeout_s=ROUTER_READ_BUDGET_S,
+            attempts=1,
         )
     except (AINotConfigured, AIUnavailable) as exc:
         log.warning("model-first read skipped: %s", exc)
+        _note_road(road="outage→rule")
         return None
 
 
@@ -20271,6 +20454,7 @@ async def _model_road(
 
     intent = _entity_by_code(intent)
     intent = _as_the_technician_means_it(intent, ctx, message)
+    _note_road(road="model", action=intent.get("action"), entity=intent.get("entity"))
     switched_from = None
     if _is_continuation(pending_intent, intent):
         intent = _merge_pending(pending_intent, intent)
