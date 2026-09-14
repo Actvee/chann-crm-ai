@@ -251,11 +251,21 @@ async def customer():
         "แจ้งซ่อมครับ", "ซ่อมแอร์", "ล้างแอร์", "อยากล้างแอร์", "แอร์เป่าลมไม่ออก", "รีโมทกดไม่ติด", "เครื่องทำน้ำอุ่นไม่ร้อน",
         "ประตูเลื่อนไม่ได้",
     ]
-    cases += [(m, "fault") for m in faults]
+    # Each fault on its own client: a job opened by one case would make the
+    # next fault ask "same matter?" (the guard added 14 ก.ย. 2569), which is
+    # right for a person and wrong for a list of independent sentences.
+    for m in faults:
+        fresh = T.FakeDataClient(permission_keys=CUST_KEYS)
+        fresh._warranties = list(c._warranties)
+        await run("customer", fresh, [(m, "ai")])  # a fault is read by the model first since round 12
+    # The status questions below need a job of the customer's own — the
+    # faults used to leave one behind on this client; now they run apart.
+    c._tickets = [{"id": "t-open", "ticket_number": "T-2026-0001", "status": "assigned", "customer_chann_uid": "CHN-S-000001",
+                   "customer_name": "สมชาย", "issue_description": "ตู้เย็นไม่เย็น", "scheduled_date": "2026-09-20", "scheduled_time": "10:00"}]
     cases += [
-        ("ช่างมาเมื่อไหร่", "any"), ("ช่างมากี่โมง", "any"), ("งานผมถึงไหนแล้ว", "any"), ("สถานะ", "rule"), ("เช็คสถานะงาน", "any"),
+        ("ช่างมาเมื่อไหร่", "any"), ("ช่างมากี่โมง", "any"), ("งานผมถึงไหนแล้ว", "any"), ("สถานะ", "rule"), ("เช็คสถานะงาน", "ai"),
         ("ซ่อมเสร็จยัง", "any"), ("งานของฉัน", "rule"), ("ประกัน", "any"), ("ประกันของฉัน", "rule"), ("เครื่องผมยังมีประกันไหม", "any"),
-        ("หมดประกันเมื่อไหร่", "any"), ("ลงทะเบียน", "any"), ("ลงทะเบียนสินค้า SN12345678", "rule"), ("SN12345678", "ai"),
+        ("หมดประกันเมื่อไหร่", "any"), ("ลงทะเบียน", "any"), ("ลงทะเบียนสินค้า SN12345678", "rule"), ("SN12345678", "any"),
         ("ราคาแอร์เท่าไหร่", "any"), ("มีแอร์รุ่นไหนบ้าง", "any"), ("อยากซื้อแอร์", "any"), ("สินค้า", "any"), ("ดูสินค้า", "rule"),
         ("ค้นหา พัดลม", "any"), ("คุยกับร้าน", "any"), ("คุยกับร้าน ราคาล้างแอร์", "any"), ("ขอคุยกับพนักงาน", "any"),  # storefront/live chat live in other modules the fake lacks
         ("ติดต่อร้าน", "rule"), ("เบอร์ร้าน", "rule"), ("ร้านเปิดกี่โมง", "any"), ("เลื่อนนัด", "rule"), ("เลื่อนนัดเป็นวันศุกร์", "rule"),

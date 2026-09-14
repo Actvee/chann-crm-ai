@@ -5209,7 +5209,7 @@ async def _customer_model_road(
 async def _handle_customer_report(
     client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
     language: str, serial_hint: str | None = None, skip_serial: bool = False,
-    permission_keys: list[str] | None = None, ai_client=None,
+    permission_keys: list[str] | None = None, ai_client=None, force_new: bool = False,
 ) -> ChatReply:
     """A customer reporting a fault, or answering the follow-up questions.
 
@@ -5237,6 +5237,41 @@ async def _handle_customer_report(
         return _customer_fallback(text, language)
     if _denies_repair_request(text) and not _is_cancel_hint(text):
         return ChatReply(text=_t(REPAIR_NOT_REQUESTED, language))
+    if pending and pending.get("entity") == "customer_duplicate_fault":
+        held = pending.get("fields") or {}
+        fault = str(held.get("fault") or "")
+        code_held = str(held.get("code") or "")
+        norm = _normalise(text)
+        if text == DUPLICATE_FAULT_SAME_TEXT or norm in _DUPLICATE_FAULT_SAME_WORDS:
+            await _drop_pending_quietly(client, ctx)
+            await _record_customer_request(
+                client, license_id=license_id, ticket_id=str(held.get("ticket_id") or ""), ctx=ctx,
+                body=f"ลูกค้าแจ้งอาการเพิ่ม: {fault}",
+            )
+            await _notify_ticket_change(
+                client, license_id, str(held.get("ticket_id") or ""),
+                f"ลูกค้าแจ้งอาการเพิ่มในงาน {code_held}: \"{fault[:120]}\"", language,
+                text_en=f"The customer added to job {code_held}: \"{fault[:120]}\"",
+            )
+            return ChatReply(
+                text=_t(AMEND_ISSUE_REQUESTED, language).format(code=code_held, issue=fault[:80]),
+                entity_type="service_ticket", entity_id=str(held.get("ticket_id") or ""),
+                quick_replies=[("ดูสถานะงาน", "งานของฉัน")],
+            )
+        if text == DUPLICATE_FAULT_NEW_TEXT or norm in _DUPLICATE_FAULT_NEW_WORDS:
+            await _drop_pending_quietly(client, ctx)
+            return await _handle_customer_report(
+                client, ctx=ctx, license_id=license_id, message=fault, language=language,
+                serial_hint=str(held.get("serial") or "") or serial_hint, skip_serial=skip_serial,
+                permission_keys=permission_keys, ai_client=ai_client, force_new=True,
+            )
+        # Anything else is a new message; the question lapses and the
+        # sentence goes back through the whole router — the model included,
+        # which the customer gate skips while a question is open.
+        await _drop_pending_quietly(client, ctx)
+        return await _route_chat_message(
+            client, message=text, ctx=ctx, language=language, ai_client=ai_client,
+        )
     if pending and (pending.get("fields") or {}).get("cancel_confirm"):
         # The answer to "ยกเลิกงาน … ใช่ไหมครับ". Only while that question is
         # open, and only these words: a bare "ยืนยัน" is an answer here and
@@ -5277,6 +5312,10 @@ async def _handle_customer_report(
                 # "แอร์ Daikin" then "ไม่เย็น": the machine named first is
                 # part of the fault.
                 text = f"{prefix} {text}"
+
+    # "เรื่องใหม่" to the same-matter question: the fault is a new job,
+    # whatever the open one says (14 ก.ย. 2569).
+    forced_fault = forced_fault or force_new
 
     # A fault held while we waited for the product (owner rule: register
     # first). What arrives now is the serial, "no serial", or a new
@@ -5868,6 +5907,38 @@ async def _handle_customer_report(
                 quick_replies=[("ไม่มีหมายเลขเครื่อง", "ไม่มีหมายเลขเครื่อง")],
             )
 
+    if not forced_fault:
+        # A job of theirs is still open: is this the same matter? Asked
+        # once, held, and answered by two buttons — "the same" becomes a
+        # request to the shop (a customer may not edit the job, owner's
+        # rule of 11 ก.ย. 2569), "new" opens a new job. Without this the
+        # same fault opened a third job on the same machine (14 ก.ย. 2569).
+        try:
+            still_open = [
+                t for t in await client.list_tickets(license_id)
+                if t.get("customer_chann_uid") == ctx.chann_uid
+                and str(t.get("status") or "") not in ("completed", "cancelled")
+            ]
+        except Exception:  # noqa: BLE001
+            still_open = []
+        open_job = next((t for t in reversed(still_open) if _same_machine_as(t, text, serial)), None)
+        if open_job is not None:
+            await client.set_pending_intent(
+                ctx.chann_uid, ctx.oa, action="resolve", entity="customer_duplicate_fault",
+                fields={"ticket_id": str(open_job.get("id") or ""), "code": str(open_job.get("ticket_number") or ""),
+                        "fault": text[:300], "serial": serial or ""},
+                missing=[], ttl_seconds=PENDING_INTENT_TTL_S,
+            )
+            return ChatReply(
+                text=_t(DUPLICATE_FAULT_ASK, language).format(
+                    code=open_job.get("ticket_number") or "", issue=str(open_job.get("issue_description") or "")[:40],
+                ),
+                quick_replies=[
+                    ("เรื่องเดียวกัน แจ้งเพิ่ม", DUPLICATE_FAULT_SAME_TEXT),
+                    ("เรื่องใหม่ เปิดงานใหม่", DUPLICATE_FAULT_NEW_TEXT),
+                ],
+            )
+
     try:
         profile = await client.get_profile(ctx.chann_uid)
     except Exception:
@@ -5953,6 +6024,41 @@ AMEND_MOVE_REQUESTED = {
     ),
 }
 #: The same, for a fault the customer restated on a job that is already out.
+def _appliance_in(text: str) -> str | None:
+    """The appliance a sentence mentions, anywhere in it — "แอร์ห้องนอน
+    ไม่เย็น" names an air conditioner; "น้ำไม่ไหล" names nothing."""
+    canon = _normalise(text)
+    for word in sorted(_APPLIANCE_WORDS, key=len, reverse=True):
+        if word.replace(" ", "") in canon:
+            return word
+    return None
+
+
+def _same_machine_as(open_job: dict, text: str, serial: str | None) -> bool:
+    """Could this fault be about the job that is already open? The same
+    registered unit, the same appliance, or a symptom that names none —
+    a fridge complaint while an air-conditioner job is open is plainly a
+    new matter and is not asked about."""
+    job_serial = str(open_job.get("serial_number") or "").upper()
+    if serial and job_serial and job_serial == str(serial).upper():
+        return True
+    theirs = _appliance_in(str(open_job.get("issue_description") or "")) or str(open_job.get("product_name") or "")
+    mine = _appliance_in(text)
+    if mine is None:
+        return True
+    if not theirs:
+        return True
+    return mine.replace(" ", "") in _normalise(theirs) or _normalise(theirs) in mine.replace(" ", "")
+
+
+DUPLICATE_FAULT_ASK = {
+    "th": "งาน {code} ({issue}) ของคุณยังเปิดอยู่ครับ — ที่แจ้งมาเป็นเรื่องเดียวกันไหม",
+    "en": "Your job {code} ({issue}) is still open — is this the same matter?",
+}
+DUPLICATE_FAULT_SAME_TEXT = "เรื่องเดียวกัน"
+DUPLICATE_FAULT_NEW_TEXT = "เรื่องใหม่"
+_DUPLICATE_FAULT_SAME_WORDS = frozenset({"เรื่องเดียวกัน", "เดียวกัน", "อันเดียวกัน", "ใช่", "same", "yes"})
+_DUPLICATE_FAULT_NEW_WORDS = frozenset({"เรื่องใหม่", "ใหม่", "คนละเรื่อง", "ไม่ใช่", "new", "no"})
 AMEND_ISSUE_REQUESTED = {
     "th": (
         "แจ้งร้านให้แล้วครับ — งาน {code} อาการเพิ่มเติม: \"{issue}\"\n"
@@ -6160,6 +6266,9 @@ async def _handle_customer_amend(
             client, license_id, ticket_id,
             f"ลูกค้ายกเลิกงาน {code}", language, text_en=f"The customer cancelled job {code}",
         )
+        await _resolve_customer_requests(
+            client, license_id=license_id, ticket_id=ticket_id, actor_id=ctx.chann_uid, what="ลูกค้ายกเลิกงาน",
+        )
         return ChatReply(text=_t(AMEND_CANCELLED, language).format(code=code))
 
     today = local_today()
@@ -6233,6 +6342,29 @@ async def _handle_customer_amend(
 #: is what the job's own screen finds them by, and it is why the mark is a
 #: constant rather than a phrase written at each call site.
 CUSTOMER_REQUEST_MARK = "⚠️ คำขอจากลูกค้า"
+#: Written on the job when the shop or the technician ACTS — moves or
+#: cancels — so the request stops being shown at the top of the job. Until
+#: 14 ก.ย. 2569 every request stayed there for the job's whole life.
+CUSTOMER_REQUEST_DONE_MARK = "✅ ดำเนินการแล้ว"
+
+
+async def _resolve_customer_requests(
+    client: DataClient, *, license_id: str, ticket_id: str, actor_id: str, what: str,
+) -> None:
+    """Close the customer's outstanding asks on this job with what was done.
+    Only when something is outstanding — a job with no request gets no
+    note. Best-effort, like the request itself."""
+    try:
+        if not await _pending_customer_requests(client, str(license_id), str(ticket_id), "th"):
+            return
+        await client.create_note(
+            str(license_id),
+            {"entity_type": "service_ticket", "entity_id": str(ticket_id),
+             "body": f"{CUSTOMER_REQUEST_DONE_MARK}: {what}"},
+            actor_id=actor_id,
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("could not mark a customer's request as handled")
 
 TICKET_PENDING_REQUESTS = {
     "th": "‼️ คำขอจากลูกค้าที่ยังไม่ได้จัดการ:",
@@ -6283,6 +6415,9 @@ async def _pending_customer_requests(
     out = []
     for note in reversed(list(notes or [])):
         body = str((note or {}).get("body") or "")
+        if body.startswith(CUSTOMER_REQUEST_DONE_MARK):
+            # Everything older was answered by this action.
+            break
         if body.startswith(CUSTOMER_REQUEST_MARK):
             out.append(body[len(CUSTOMER_REQUEST_MARK):].lstrip(": ").strip())
     return out[:3]
@@ -12997,15 +13132,44 @@ async def _handle_quote_status(
     except Exception:
         log.exception("quote status change failed")
         return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    text = _t(QUOTE_STATUS_SET, language).format(
+        code=code, status=_label(QUOTE_STATUS_LABELS, target, language),
+    )
+    if target == "accepted" and "deal.update" in set(permission_keys):
+        # An accepted quotation IS the sale: the deal it came from is won,
+        # in the same breath. Until 14 ก.ย. 2569 the quote changed and the
+        # deal stayed "proposed" until somebody remembered. A rejection
+        # does not lose the deal — the shop may quote again.
+        text += await _win_the_deal_behind(client, license_id=license_id, quote=quote, actor_id=ctx.chann_uid, language=language)
     return ChatReply(
-        text=_t(QUOTE_STATUS_SET, language).format(
-            code=code, status=_label(QUOTE_STATUS_LABELS, target, language),
-        ),
+        text=text,
         entity_type="quote", entity_id=str(quote["id"]),
         quick_replies=(
             [("สร้างใบใหม่", "สร้างใบเสนอราคา")] if target == "rejected" else []
         ),
     )
+
+
+QUOTE_WON_THE_DEAL = {"th": " · ดีล {code} เป็นสำเร็จแล้ว", "en": " · deal {code} is won"}
+
+
+async def _win_the_deal_behind(
+    client: DataClient, *, license_id: str, quote: dict, actor_id: str, language: str,
+) -> str:
+    """Move the quote's deal to won; a line for the reply, or nothing."""
+    deal_id = str(quote.get("deal_id") or "")
+    if not deal_id:
+        return ""
+    try:
+        deals = await client.list_deals(str(license_id))
+        deal = next((d for d in deals if str(d.get("id")) == deal_id), None)
+        if deal is None or str(deal.get("stage") or "").lower() in ("won", "lost"):
+            return ""
+        await client.transition_deal_stage(str(license_id), deal_id, "won", actor_id=actor_id)
+    except Exception:  # noqa: BLE001 — the quote is accepted either way
+        log.exception("could not win the deal behind an accepted quote")
+        return ""
+    return _t(QUOTE_WON_THE_DEAL, language).format(code=deal.get("deal_id") or deal_id)
 
 
 async def _handle_quote_discount(
@@ -17886,6 +18050,22 @@ _SITUATION_LATE_CUSTOMER = {
     "th": "ช่างแจ้งว่าจะถึงช้ากว่านัดเล็กน้อย งาน {code} ขออภัยในความไม่สะดวก",
     "en": "The technician will arrive a little later than planned — job {code}. Sorry for the delay.",
 }
+_SITUATION_CUSTOMER_TEXT = {
+    "on_my_way": _SITUATION_ON_MY_WAY_CUSTOMER,
+    "late": _SITUATION_LATE_CUSTOMER,
+    "not_home": {
+        "th": "ช่างไปถึงแล้วแต่ไม่พบใครที่บ้าน งาน {code} — ทางร้านจะติดต่อนัดวันใหม่ครับ หรือพิมพ์วันที่สะดวกมาได้เลย",
+        "en": "The technician arrived but found nobody home — job {code}. The shop will be in touch to rebook; you can also type a day that suits you.",
+    },
+    "need_parts": {
+        "th": "งาน {code}: ต้องสั่งอะไหล่ก่อน ช่างจึงยังซ่อมไม่จบวันนี้ ทางร้านจะแจ้งวันเข้าซ่อมต่ออีกครั้งครับ",
+        "en": "Job {code}: a part has to be ordered, so the repair could not be finished today. The shop will tell you the next visit date.",
+    },
+    "cannot_finish": {
+        "th": "งาน {code} วันนี้ยังไม่เสร็จ ช่างจะกลับมาทำต่อ ทางร้านจะแจ้งวันให้ครับ",
+        "en": "Job {code} could not be finished today; the technician will come back. The shop will tell you the date.",
+    },
+}
 
 
 def _technician_situation(message: str) -> str | None:
@@ -18001,6 +18181,10 @@ async def _handle_technician_situation(
             customer_text=f"{who_th}ขอเลื่อนนัดงาน {code} เป็น {when} ครับ",
             customer_text_en=f"{who_en} moved your job {code} to {when}",
         )
+        await _resolve_customer_requests(
+            client, license_id=license_id, ticket_id=ticket_id, actor_id=ctx.chann_uid,
+            what=f"เลื่อนนัดเป็น {when} โดย{who_th}",
+        )
         return ChatReply(
             text=_t(SITUATION_MOVED, language).format(code=code, when=when),
             entity_type="ticket", entity_id=ticket_id,
@@ -18017,9 +18201,13 @@ async def _handle_technician_situation(
         )
         if told:
             text += _t(SITUATION_TOLD_SHOP, language)
-    if kind in ("on_my_way", "late"):
-        table = _SITUATION_ON_MY_WAY_CUSTOMER if kind == "on_my_way" else _SITUATION_LATE_CUSTOMER
-        await _notify_customer(client, ticket, table["th"].format(code=code), table["en"].format(code=code))
+    customer_table = _SITUATION_CUSTOMER_TEXT.get(kind)
+    if customer_table is not None:
+        # The customer hears what happened at their own door. Until
+        # 14 ก.ย. 2569 only "on my way" and "running late" reached them;
+        # "nobody home", "needs parts" and "back another day" told the shop
+        # and left the customer to wonder.
+        await _notify_customer(client, ticket, customer_table["th"].format(code=code), customer_table["en"].format(code=code))
     if kind == "reschedule":
         text += _t(SITUATION_ASK_DATE, language).format(code=code)
     if kind in ("on_my_way", "late"):

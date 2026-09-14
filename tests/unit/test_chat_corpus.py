@@ -168,8 +168,13 @@ async def make_customer():
     c = ChatFake(permission_keys=[])
     c._warranties = [{"id": "w-1", "serial_number": "SN12345678", "product_name": "แอร์", "status": "active",
                       "customer_chann_uid": ME, "warranty_end": "2027-01-01"}]
+    # The open job is about the FRIDGE: since 14 ก.ย. 2569 a fault that could
+    # be the same machine as an open job is asked about first, and this
+    # corpus measures air-conditioner faults opening jobs. A bare symptom
+    # ("น้ำไม่ไหล") names no machine and is asked — that is the partial
+    # alternative on c.fault.
     c._tickets = [{"id": "t0", "ticket_number": "T-2026-0001", "status": "assigned", "customer_chann_uid": ME,
-                   "customer_name": "สมชาย", "service_address": "99/1", "issue_description": "แอร์ไม่เย็น",
+                   "customer_name": "สมชาย", "service_address": "99/1", "issue_description": "ตู้เย็นไม่เย็น",
                    "scheduled_date": "2026-09-08", "scheduled_time": "10:00", "assigned_to_name": "สมศักดิ์"}]
     c._profiles = {ME: {"first_name": "สมชาย", "last_name": "ใจดี", "phone": "0812345678", "address": "99/1"}}
     return c
@@ -190,7 +195,8 @@ SPEC = {
     "c.greet": [A(text=["สวัสดี", "Hello", "hello"], noai=True)],
     "c.small": [A(text=SMALL)],
     "c.help": [A(h=["_help_reply"])],
-    "c.fault": [A(h=["_handle_customer_report"], text=FAULT_TXT + ASK_ISSUE, forbid=["_customer_fallback"])],
+    "c.fault": [A(h=["_handle_customer_report"], text=FAULT_TXT + ASK_ISSUE, forbid=["_customer_fallback"]),
+                A(h=["_handle_customer_report"], text=["ยังเปิดอยู่", "still open"], partial=True)],
     "c.fault_question": [A(h=["_handle_customer_report"], text=FAULT_TXT + STATUS_TXT, forbid=["_customer_fallback"]), A(h=["_handle_customer_chat_start"])],
     "c.product_or_fault": [A(h=["_handle_customer_report"], text=FAULT_TXT + ASK_ISSUE, forbid=["_customer_fallback"]), A(h=["storefront", "_storefront_browse_reply"]), A(text=PRODUCT_TXT)],
     "c.urgent_vague": [A(h=["_handle_customer_report"], text=FAULT_TXT + ASK_ISSUE, forbid=["_customer_fallback"]), A(h=["_handle_customer_chat_start"]), A(ai=True, h=["_handle_customer_status"], partial=True)],

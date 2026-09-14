@@ -582,9 +582,16 @@ async def run_chat_sweep(
     """Phase 15 SLA + timeout sweep (Master Spec 15.4), for a Scheduler job
     that runs every few minutes. Same shared-secret auth as the reminder
     sweep. The dashboard's chat list ticks the same clock on every load."""
-    from .services import live_chat
+    from .services import job_sla, live_chat
 
-    return await live_chat.sweep(client)
+    summary = await live_chat.sweep(client)
+    # The same five-minute tick nudges the shop about jobs nobody is moving
+    # (14 ก.ย. 2569) — best-effort, so a job problem never hides a chat one.
+    try:
+        summary["jobs"] = await job_sla.sweep_jobs(client)
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).exception("job sweep inside the chat sweep failed")
+    return summary
 
 
 @router.post("/platform/quotes/expire-overdue")

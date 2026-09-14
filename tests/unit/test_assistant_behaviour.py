@@ -2306,3 +2306,180 @@ class TestAFlowSwitchCanCancelBoth:
         assert "ยกเลิกทั้งสองรายการ" in done.text
         assert await client.get_pending_intent("CHN-S-000001", "sales") is None
         assert not [r for r in client.recorded if r[0] in ("create_customer", "create_deal")]
+
+
+# ---------------------------------------------------------------------------
+# Round 16 (14 ก.ย. 2569): holes in the business flow, found by walking it.
+
+
+def _linked_customer(**ticket):
+    from test_phase6_chat import FakeDataClient
+    client = FakeDataClient(permission_keys=[])
+    client._warranties = [{"id": "w-1", "serial_number": "SN12345678", "product_name": "แอร์", "status": "active",
+                           "customer_chann_uid": "CHN-S-000001", "warranty_end": "2027-01-01"}]
+    client._tickets = [{"id": "t1", "ticket_number": "T-2026-0001", "status": "assigned", "customer_chann_uid": "CHN-S-000001",
+                        "issue_description": "แอร์ไม่เย็น", "scheduled_date": "2026-09-20", "scheduled_time": "10:00",
+                        "assigned_to_ref": "member-9", **ticket}]
+    return client
+
+
+class TestTheCustomerHearsWhatHappenedAtTheirDoor:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("kind", ["not_home", "need_parts", "cannot_finish"])
+    async def test_a_doorstep_situation_reaches_the_customer(self, kind, monkeypatch):
+        from test_phase6_chat import FakeDataClient, _ctx
+        from chann_app.services import chat
+        from chann_app.services.chat import _handle_technician_situation
+        pushed: list[tuple] = []
+
+        async def _push(oa, line_uid, text):
+            pushed.append((oa, line_uid, text))
+        monkeypatch.setattr(chat._notify_mod, "push_text", _push)
+        client = FakeDataClient(permission_keys=["ticket.read", "ticket.update"], role="technician")
+        client._line_targets = {"CHN-C-9": "U-line-9"}
+        client._tickets = [{"id": "t1", "ticket_number": "T-2026-0001", "status": "assigned", "accept_status": "accepted",
+                            "assigned_to_ref": "member-1", "customer_chann_uid": "CHN-C-9", "customer_name": "สมชาย",
+                            "scheduled_date": "2026-09-20", "scheduled_time": "10:00"}]
+        reply = await _handle_technician_situation(
+            client, ctx=_ctx(oa="technician", primary_role="technician"), license_id="L1",
+            message="T-2026-0001 ลูกค้าไม่อยู่บ้าน", kind=kind, permission_keys=["ticket.read", "ticket.update"], language="th",
+        )
+        to_customer = [p for p in pushed if p[0] == "customer"]
+        assert to_customer, (kind, reply.text, pushed)
+        assert "T-2026-0001" in to_customer[-1][2]
+
+
+class TestACustomersRequestIsClosedWhenTheShopActs:
+    @pytest.mark.asyncio
+    async def test_the_move_closes_the_open_request(self):
+        from test_phase6_chat import _ctx
+        from chann_app.services import chat
+        client = _linked_customer()
+        await client.create_note("L1", {"entity_type": "service_ticket", "entity_id": "t1",
+                                        "body": f"{chat.CUSTOMER_REQUEST_MARK}: ลูกค้าขอเลื่อนนัดเป็น 21 ก.ย. 2569"}, actor_id="CHN-S-000001")
+        assert await chat._pending_customer_requests(client, "L1", "t1", "th")
+        client._members = [{"id": "member-1", "chann_uid": "CHN-S-000001", "role": "sales", "status": "active"}]
+        reply = await chat._handle_technician_situation(
+            client, ctx=_ctx(oa="sales", primary_role="sales"), license_id="L1",
+            message="เลื่อนนัด T-2026-0001 21 ก.ย. 2569 10:00", kind="reschedule",
+            permission_keys=["ticket.read", "ticket.update"], language="th",
+        )
+        assert "เลื่อน" in reply.text, reply.text
+        assert await chat._pending_customer_requests(client, "L1", "t1", "th") == []
+        bodies = [n["body"] for n in client._notes]
+        assert any(b.startswith(chat.CUSTOMER_REQUEST_DONE_MARK) for b in bodies), bodies
+
+    @pytest.mark.asyncio
+    async def test_a_newer_request_after_the_action_shows_again(self):
+        from chann_app.services import chat
+        client = _linked_customer()
+        for body in (f"{chat.CUSTOMER_REQUEST_MARK}: เก่า", f"{chat.CUSTOMER_REQUEST_DONE_MARK}: เลื่อนแล้ว", f"{chat.CUSTOMER_REQUEST_MARK}: ใหม่"):
+            await client.create_note("L1", {"entity_type": "service_ticket", "entity_id": "t1", "body": body}, actor_id="x")
+        assert await chat._pending_customer_requests(client, "L1", "t1", "th") == ["ใหม่"]
+
+
+class TestAnAcceptedQuoteWinsItsDeal:
+    @pytest.mark.asyncio
+    async def test_accepting_the_quote_moves_the_deal_to_won(self):
+        from test_phase6_chat import FakeDataClient, _ai, _ctx
+        from chann_app.services.chat import handle_chat_message
+        import httpx
+        client = FakeDataClient(permission_keys=["quote.read", "quote.update", "deal.read", "deal.update"],
+                                deals=[{"id": "DEAL-1", "deal_id": "D-2026-0001", "stage": "proposed", "contact_id": "CUST-1", "notes": None, "products": []}],
+                                quotes=[{"id": "QUOTE-1", "quote_id": "Q-2026-0001", "status": "sent", "deal_id": "DEAL-1", "contact_id": "CUST-1", "items": [], "total": "1000.00"}])
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "update", "entity": "quote", "fields": {"code": "Q-2026-0001", "status": "accepted"}, "missing": []})))
+        reply = await handle_chat_message(client, message="ลูกค้าตอบรับใบเสนอราคา Q-2026-0001 แล้ว", ctx=_ctx(primary_role="sales", oa="sales"), ai_client=ai)
+        assert client._deals[0]["stage"] == "won", (reply.text, client._deals[0])
+        assert "D-2026-0001" in reply.text and "สำเร็จ" in reply.text, reply.text
+
+
+class TestJobsNobodyIsMovingAreFlagged:
+    def _client(self, **ticket):
+        from test_phase6_chat import FakeDataClient
+        client = FakeDataClient(permission_keys=["ticket.assign"])
+        client._members = [{"id": "member-1", "chann_uid": "CHN-S-000001", "role": "owner", "status": "active"},
+                           {"id": "member-9", "chann_uid": "CHN-T-000009", "role": "technician", "status": "active"}]
+        client._tickets = [{"id": "t1", "ticket_number": "T-2026-0001", "status": "open", "accept_status": "pending",
+                            "customer_name": "สมชาย", "created_at": "2026-09-14T06:00:00+07:00", "updated_at": "2026-09-14T06:00:00+07:00", **ticket}]
+        return client
+
+    def test_the_three_rules(self):
+        from datetime import datetime
+        from chann_app.services.job_sla import rules_tripped
+        from chann_app.services.thai_datetime import local_tz
+        now = datetime(2026, 9, 14, 11, 0, tzinfo=local_tz())
+        base = {"id": "t1", "ticket_number": "T-2026-0001", "customer_name": "สมชาย",
+                "created_at": "2026-09-14T06:00:00+07:00", "updated_at": "2026-09-14T09:30:00+07:00"}
+        assert [r for r, _ in rules_tripped({**base, "status": "open"}, now)] == ["unassigned"]
+        assert [r for r, _ in rules_tripped({**base, "status": "assigned", "assigned_to_ref": "m", "accept_status": "pending"}, now)] == ["unaccepted"]
+        assert [r for r, _ in rules_tripped({**base, "status": "assigned", "assigned_to_ref": "m", "accept_status": "accepted",
+                                             "scheduled_date": "2026-09-14", "scheduled_time": "10:00"}, now)] == ["no_checkin"]
+        assert rules_tripped({**base, "status": "in_progress"}, now) == []
+        assert rules_tripped({**base, "status": "open", "created_at": "2026-09-14T10:30:00+07:00"}, now) == []
+
+    @pytest.mark.asyncio
+    async def test_a_job_is_told_about_once(self):
+        from datetime import datetime
+        from chann_app.services.job_sla import sweep_jobs, SLA_MARK
+        from chann_app.services.thai_datetime import local_tz
+        client = self._client()
+        now = datetime(2026, 9, 14, 11, 0, tzinfo=local_tz())
+        first = await sweep_jobs(client, now=now, license_ids=["L1"])
+        second = await sweep_jobs(client, now=now, license_ids=["L1"])
+        assert first["told"] == 1 and second["told"] == 0, (first, second)
+        assert any(str(n.get("body", "")).startswith(SLA_MARK) for n in client._notes)
+        assert [n for n in client.recorded if n[0] == "create_notification"], [r[0] for r in client.recorded]
+
+
+class TestASecondFaultOnAnOpenJobAsksFirst:
+    """A customer with a job still open who reports again opened a THIRD
+    job on the same machine (probe, 14 ก.ย. 2569). Now the bot asks whether
+    it is the same matter — which becomes a request to the shop, per the
+    owner's rule — or a new one, which opens a new job."""
+
+    async def _say(self, client, text, reading=None):
+        from test_phase6_chat import _ai, _ctx
+        from chann_app.services.chat import handle_chat_message
+        import httpx
+        reading = reading or {"action": "create", "entity": "ticket", "fields": {"issue_description": text}, "missing": ["service_address"]}
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(reading, ensure_ascii=False)))
+        return await handle_chat_message(client, message=text, ctx=_ctx(oa="customer", primary_role="sales"), ai_client=ai)
+
+    @pytest.mark.asyncio
+    async def test_same_matter_becomes_a_request_and_opens_nothing(self):
+        from chann_app.services import chat
+        client = _linked_customer()
+        asked = await self._say(client, "แอร์เสียอีกแล้ว")
+        assert "T-2026-0001" in asked.text and "เรื่องเดียวกัน" in asked.text, asked.text
+        assert len(client._tickets) == 1
+        done = await self._say(client, chat.DUPLICATE_FAULT_SAME_TEXT)
+        assert len(client._tickets) == 1, done.text
+        assert await chat._pending_customer_requests(client, "L1", "t1", "th"), done.text
+        assert "แจ้งร้าน" in done.text, done.text
+
+    @pytest.mark.asyncio
+    async def test_a_different_appliance_is_not_asked_about(self):
+        client = _linked_customer()
+        reply = await self._say(client, "ตู้เย็นไม่เย็น")
+        assert len(client._tickets) == 2, reply.text
+
+    @pytest.mark.asyncio
+    async def test_anything_else_lets_the_question_lapse(self):
+        client = _linked_customer()
+        await self._say(client, "แอร์เสียอีกแล้ว")
+        # The lapsed sentence is read by the model like any other (the gate
+        # skips the model only while the question is open).
+        reply = await self._say(client, "เช็คสถานะงาน", reading={"action": "read", "entity": "ticket", "fields": {}, "missing": []})
+        assert "T-2026-0001" in reply.text and "เรื่องเดียวกัน" not in reply.text, reply.text
+        assert len(client._tickets) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_new_matter_opens_a_new_job(self):
+        from chann_app.services import chat
+        client = _linked_customer()
+        await self._say(client, "แอร์มีน้ำหยด")
+        assert len(client._tickets) == 1
+        done = await self._say(client, chat.DUPLICATE_FAULT_NEW_TEXT)
+        assert len(client._tickets) == 2, done.text
+        assert "T-2026-0002" in done.text, done.text
