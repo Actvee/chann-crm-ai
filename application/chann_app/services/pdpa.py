@@ -28,14 +28,18 @@ CONSENT_TEXT = {
         "• ระบบเก็บชื่อ เบอร์โทร ที่อยู่ และประวัติงานซ่อม/การซื้อ เพื่อให้ร้านที่คุณติดต่อให้บริการได้\n"
         "• ข้อมูลใช้เฉพาะร้านที่คุณผูกไว้ ไม่เปิดเผยให้ร้านอื่น\n"
         "• ขอสำเนาข้อมูลได้ทุกเมื่อด้วย \"ขอข้อมูลของฉัน\" และขอลบได้ด้วย \"ขอลบข้อมูล\"\n\n"
-        "ยอมรับไหมครับ"
+        "ยอมรับไหมครับ\n"
+        # Test team, 10 ก.ย. 2569: say what to type — the reply is read by
+        # people who have never met this bot.
+        "พิมพ์ \"ยอมรับ\" เพื่อดำเนินการต่อ หรือ \"ไม่ยอมรับ\""
     ),
     "en": (
         "Before we start, your consent under Thailand's PDPA:\n"
         "• The system keeps your name, phone, address and your repair/purchase history so the shop you contact can serve you\n"
         "• Only the shops you link to see it; never other shops\n"
         "• Ask for a copy any time with \"my data\", or for erasure with \"delete my data\"\n\n"
-        "Do you accept?"
+        "Do you accept?\n"
+        "Type \"accept\" to continue, or \"decline\""
     ),
 }
 CONSENT_YES = ("ยอมรับ", "ยินยอม", "ตกลง", "accept", "yes", "i accept", "agree")

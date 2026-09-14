@@ -260,7 +260,7 @@ SPEC = {
     "s.quote_create": [A(h=["_handle_quote_create_direct", "_handle_quote_issue"]), A(ai=True, h=["_handle_quote_intent"]), A(ai=True, h=["ask_for_missing"], partial=True)],
     "s.quote_list": [A(h=["_handle_quote_list"])],
     "s.quote_list_or_create": [A(h=["_handle_quote_list", "_handle_quote_create_direct", "_handle_bare_create_prompt"])],
-    "s.quote_discount": [A(h=["_handle_quote_discount"]), A(ai=True, h=["_handle_quote_intent", "ask_for_missing"], partial=True)],
+    "s.quote_discount": [A(h=["_handle_quote_discount"]), A(ai=True, h=["_handle_quote_discount"]), A(ai=True, h=["_handle_quote_intent", "ask_for_missing"], partial=True)],
     "s.quote_accept": [A(h=["_handle_quote_status|target=accepted"]), A(ai=True, h=["_handle_quote_intent", "ask_for_missing"], partial=True)],
     "s.quote_send": [A(h=["_handle_quote_issue"]), A(ai=True, partial=True)],
     "s.note_create": [A(h=["_handle_note_create"]), A(ai=True, h=["_handle_note_intent"], text=["บันทึกไว้กับ"]), A(ai=True, h=["_handle_note_intent"], partial=True)],
@@ -280,7 +280,7 @@ SPEC = {
     "s.approval_list": [A(h=["_handle_approval_list"])],
     "s.approve": [A(h=["_handle_approval_act|approve=True"]), A(ai=True, h=["_handle_approval_list"], partial=True)],
     "s.reject": [A(h=["_handle_approval_act|approve=False"])],
-    "s.shop_info": [A(h=["_handle_shop_info"]), A(ai=True, h=["_handle_company_profile_view"], partial=True)],
+    "s.shop_info": [A(h=["_handle_shop_card"]), A(ai=True, h=["_handle_shop_card"])],
     # _handle_technician_invite_request now delegates to _handle_invite_request,
     # which issues the sales-side code too (10 ก.ย. 2569).
     "s.invite": [A(h=["_handle_invite_request", "_handle_technician_invite_request"])],
@@ -288,9 +288,9 @@ SPEC = {
     # answer by issuing a real invite code. It now explains and writes
     # nothing.
     "s.invite_howto": [A(text=["ขอรหัสเชิญช่าง"], noai=True)],
-    "s.company_view": [A(h=["_handle_company_profile_view"])],
+    "s.company_view": [A(h=["_handle_shop_card"]), A(ai=True, h=["_handle_shop_card"])],
     "s.company_update": [A(h=["_handle_company_profile_command"])],
-    "s.settings": [A(h=["_help_reply", "_handle_company_profile_view", "_handle_shop_info"], partial=True)],
+    "s.settings": [A(h=["_help_reply", "_handle_shop_card"], partial=True), A(ai=True, h=["_handle_shop_card"], partial=True)],
     "s.team_list": [A(h=["_maybe_handle_teams"]), A(ai=True, h=["_handle_technician_list"], partial=True)],
     "s.team_create": [A(h=["_maybe_handle_teams"]), A(ai=True, partial=True)],
     "s.warranty_register": [A(h=["_handle_warranty_register"])],

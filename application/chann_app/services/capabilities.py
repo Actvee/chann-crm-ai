@@ -99,6 +99,19 @@ QUOTE_CREATE = Capability(
 #: Dispatch finds the job (code, running number, the job in context, or the
 #: one open job) and asks for the person with buttons of its own.
 TICKET_ASSIGN = Capability(action="assign", entity="ticket", never_needed=("code", "target_name"))
+#: A line on a deal: quantity unsaid is one, price unsaid comes from the
+#: catalogue, and the handler asks for the price BY NAME when it must —
+#: never the generic "กรุณาระบุรายละเอียดที่เหลือ" (test team, 10 ก.ย. 2569).
+LINE_ITEM_CREATE = Capability(
+    action="create", entity="line_item",
+    optional=("target_name", "code", "qty", "quoted_unit_price"),
+    never_needed=("target_name", "code", "qty", "quoted_unit_price", "qty_change"),
+)
+LINE_ITEM_UPDATE = Capability(
+    action="update", entity="line_item",
+    optional=("target_name", "code", "qty", "quoted_unit_price", "qty_change"),
+    never_needed=("target_name", "code", "qty", "quoted_unit_price", "qty_change"),
+)
 
 TEAM_CREATE = Capability(
     action="create",
@@ -174,7 +187,7 @@ REGISTRY: dict[tuple[str, str], Capability] = {
     (c.entity, c.action): c for c in (
         CUSTOMER_CREATE, FOLLOWUP_CREATE, QUOTE_CREATE, TEAM_CREATE, SALES_GROUP_CREATE,
         APPROVAL_APPROVE, APPROVAL_REJECT,
-        TICKET_CLAIM, TICKET_READ, TICKET_UPDATE, TICKET_ASSIGN, SERVICE_REPORT_CHECK_IN, SERVICE_REPORT_CHECK_OUT,
+        TICKET_CLAIM, TICKET_READ, TICKET_UPDATE, TICKET_ASSIGN, LINE_ITEM_CREATE, LINE_ITEM_UPDATE, SERVICE_REPORT_CHECK_IN, SERVICE_REPORT_CHECK_OUT,
         SERVICE_REPORT_CREATE,
     )
 }

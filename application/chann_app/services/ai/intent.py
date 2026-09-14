@@ -184,11 +184,20 @@ does not exist anywhere else the model can check against):
   its quantity, or removing it. This is NOT entity="product", which is
   the shop's catalogue; changing a line changes one deal, changing a
   product changes what the shop sells.
+  action="create": putting a product ON the deal or quote. fields may
+    include target_name (the product), code (D-/Q- if given), qty and
+    quoted_unit_price — only those the message says; never list any of
+    them as missing (quantity unsaid is one, price comes from the
+    catalogue). Examples: "เพิ่มสินค้า เคสคอมพิวเตอร์ ให้ดีล D-2026-0001",
+    "ใส่พัดลม 2 ตัวในดีลนี้", "เพิ่มทีวี 40 นิ้ว ราคา 4000".
   action="update": fields may include target_name (the product on the
     line, omit when the message does not name one), quoted_unit_price,
     qty, and code (a D- or Q- reference if the message gives one).
     Examples: "ลดราคาพัดลมเหลือ 1400", "ปรับจำนวนเป็น 3",
     "ทำให้ราคาถูกลงหน่อยเป็น 1200", "เพิ่มเป็น 5 ตัว".
+    A CHANGE to the quantity is qty_change, signed, not qty: "ลดพัดลม
+    1 ตัว" -> {{"target_name": "พัดลม", "qty_change": -1}}; "เพิ่มพัดลม
+    อีก 3 ตัว" -> {{"qty_change": 3}}. "แก้เป็น 5 ตัว" sets: {{"qty": 5}}.
   action="delete": fields={{"target_name": "<product on the line>"}}.
     Examples: "เอาพัดลมออก", "ไม่เอาตัวนี้แล้ว", "ตัดรายการแอร์ทิ้ง".
   Do not list target_name as missing — one line on the record is

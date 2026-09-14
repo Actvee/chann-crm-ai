@@ -964,30 +964,87 @@ TECHNICIAN_LIST_EMPTY = {
 }
 
 
-async def _handle_shop_info(
+_TENANT_STATUS_LABEL = {
+    "trial": {"th": "ทดลองใช้", "en": "trial"},
+    "active": {"th": "ใช้งานอยู่", "en": "active"},
+    "suspended": {"th": "ถูกระงับ", "en": "suspended"},
+}
+SHOP_CARD_HEAD = {
+    "th": "ร้าน: {name}\nรหัสร้าน: {code}\nสถานะ: {status}",
+    "en": "Shop: {name}\nShop code: {code}\nStatus: {status}",
+}
+SHOP_CARD_TRIAL_UNTIL = {"th": " (ถึง {until})", "en": " (until {until})"}
+SHOP_CARD_FOOT = {
+    "th": (
+        "รหัสร้านใช้ให้ลูกค้าพิมพ์ใน LINE บริการลูกค้าเพื่อผูกกับร้าน · ช่างเข้าร่วมด้วยรหัสเชิญ "
+        "(พิมพ์ \"ขอรหัสเชิญช่าง\") · แก้ข้อมูลที่ หน้าจอ > ข้อมูลบริษัท"
+    ),
+    "en": (
+        "Customers type the shop code in the customer LINE to link; technicians join with an "
+        "invite (\"technician invite\") · edit at Dashboard > Company",
+    ),
+}
+
+
+def _tenant_status_line(tenant: dict | None, language: str) -> str:
+    """"ทดลองใช้ (ถึง 30 ก.ย. 2569)" / "ใช้งานอยู่" / "ถูกระงับ" — what the test
+    team asked to see on the card (V.8.2, 9 ก.ย. 2569) and what the guide
+    had promised."""
+    tenant = tenant or {}
+    status = str(tenant.get("status") or "").lower()
+    if status not in _TENANT_STATUS_LABEL:
+        return "—"
+    text = _t(_TENANT_STATUS_LABEL[status], language)
+    raw = tenant.get("trial_expires_at")
+    if status == "trial" and raw:
+        try:
+            from .thai_datetime import format_thai_date
+            when = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            text += _t(SHOP_CARD_TRIAL_UNTIL, language).format(until=format_thai_date(when.date()))
+        except (ValueError, TypeError):
+            pass
+    return text
+
+
+async def _handle_shop_card(
     client: DataClient, *, ctx: ResolvedContext, license_id, language: str,
 ) -> ChatReply:
-    """Name, code and how to reach the shop — for any member. The code is
-    what a customer types to link; staff kept asking for it (3 Sep) and
-    got the permission catalogue back."""
+    """ONE card for the shop, whichever words asked for it. "ข้อมูลร้าน" and
+    "ข้อมูลบริษัท" used to be two cards — name/code/contact against legal
+    name/tax id/VAT — and the owner ruled they must answer the same
+    (14 ก.ย. 2569). Header: name, code, status (+ the trial's end); then
+    the company profile every member may see; then what the code is for.
+    A customer's "ติดต่อร้าน" stays its own card — a customer never sees
+    the tax id."""
     member = ctx.memberships[0] if ctx.memberships else {}
     name = member.get("company_name") or "—"
     code = member.get("license_code") or "—"
-    contact_lines = []
+    tenant = None
+    try:
+        tenant = await client.platform_tenant(str(license_id))
+    except Exception:  # noqa: BLE001 — the status line is a courtesy
+        log.warning("could not read the tenant for the shop card")
     try:
         profile = await client.get_company_profile(str(license_id)) or {}
-        for key, label_th, label_en in (
-            ("phone", "โทร", "Phone"), ("email", "อีเมล", "Email"), ("address", "ที่อยู่", "Address"),
-        ):
-            if profile.get(key):
-                contact_lines.append(f"{label_th if language != 'en' else label_en}: {profile[key]}")
     except Exception:
-        log.warning("could not read the company profile for shop info")
-    contact = ("\n".join(contact_lines) + "\n") if contact_lines else ""
-    return ChatReply(
-        text=_t(SHOP_INFO_TEXT, language).format(name=name, code=code, contact=contact),
-        quick_replies=[("รายชื่อช่าง", "รายชื่อช่าง"), ("ข้อมูลบริษัท", "ข้อมูลบริษัท")],
+        log.exception("company profile read failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    text = (
+        _t(SHOP_CARD_HEAD, language).format(name=name, code=code, status=_tenant_status_line(tenant, language))
+        + "\n" + _format_company_profile(profile, language)
+        + "\n\n" + _t(SHOP_CARD_FOOT, language)
     )
+    return ChatReply(
+        text=text,
+        quick_replies=[("รายชื่อช่าง", "รายชื่อช่าง"), ("ขอรหัสเชิญช่าง", "ขอรหัสเชิญช่าง")],
+    )
+
+
+async def _handle_shop_info(
+    client: DataClient, *, ctx: ResolvedContext, license_id, language: str,
+) -> ChatReply:
+    """The shop card. Kept as a name for the tile and the older tests."""
+    return await _handle_shop_card(client, ctx=ctx, license_id=license_id, language=language)
 
 
 WARRANTY_BOOK_PHRASES = (
@@ -1096,10 +1153,16 @@ def _format_company_profile(profile: dict, language: str) -> str:
 
 async def _handle_company_profile_view(
     client: DataClient, *, license_id, permission_keys: list[str], language: str,
+    ctx: ResolvedContext | None = None,
 ) -> ChatReply:
     # Viewing is for every member of the company; editing (below) still
     # needs setting.manage. The view used to demand the edit permission
     # and refuse with a sentence about editing (review, 6 Sep 2026).
+    # Since 14 ก.ย. 2569 it IS the shop card — the same answer "ข้อมูลร้าน"
+    # gives — when the caller can say whose shop; the bare profile only
+    # for the few callers that cannot.
+    if ctx is not None:
+        return await _handle_shop_card(client, ctx=ctx, license_id=license_id, language=language)
     try:
         profile = await client.get_company_profile(str(license_id))
     except Exception:
@@ -12660,19 +12723,82 @@ async def _handle_line_item_intent(
     # which (owner test, 8 Sep 2026). Then the model's reading, rebuilt as
     # a sentence the same handler parses.
     parsed = _parse_line_item_command(message) if message else None
+    name = _strip_item_particles(str(fields.get("target_name") or "").strip())
+    code = str(fields.get("code") or "").strip()
+
+    if message and _is_whole_quote_discount(message):
+        # "ลดราคา Q-2026-0001 500 บาท" read as a LINE price: a quote code, a
+        # discount verb and an amount, and no product — the whole quote,
+        # as the typed road has decided since 6 Sep 2026.
+        return await _handle_quote_discount(
+            client, ctx=ctx, license_id=license_id, message=message,
+            permission_keys=permission_keys, language=language,
+        )
+
+    # "ลดพัดลม 1 ตัว" / "เพิ่มพัดลมอีก 3 ตัว": a CHANGE, which the prompt now
+    # returns as qty_change (test team, 10 ก.ย. 2569: "ลด 1 ตัว" set the
+    # line to 1). The number's sign picks the operation.
+    change = fields.get("qty_change")
+    if change not in (None, "", 0) and parsed is None:
+        try:
+            delta = int(float(change))
+        except (TypeError, ValueError):
+            delta = 0
+        if delta:
+            handled = await _handle_line_item_command(
+                client, ctx=ctx, license_id=license_id,
+                cmd={"op": "add" if delta > 0 else "decrement", "name": name or None, "qty": abs(delta),
+                     "price": fields.get("quoted_unit_price"), "more": True, "code": code or None,
+                     "unit": _item_unit_word(message)},
+                message=_with_code(message, code), permission_keys=permission_keys, language=language,
+            )
+            if handled is not None:
+                return handled
+
+    if action == "create" and parsed is None:
+        # "เพิ่มสินค้า เคสคอมพิวเตอร์ ให้ดีล D-2026-0001 หน่อย" (test team,
+        # 10 ก.ย. 2569): read correctly, then asked "กรุณาระบุรายละเอียดที่
+        # เหลือ" for a quantity and a price. Quantity unsaid is one; price
+        # unsaid comes from the catalogue when the product is in it, and
+        # only otherwise is asked for — by name.
+        if not name:
+            return ChatReply(text=_t(LINE_NEEDS_TARGET, language))
+        qty_raw = fields.get("qty")
+        try:
+            qty = int(float(qty_raw)) if qty_raw not in (None, "") else 1
+        except (TypeError, ValueError):
+            qty = 1
+        price = fields.get("quoted_unit_price")
+        if price in (None, ""):
+            product = await _find_one_product(client, str(license_id), name)
+            price = (product or {}).get("unit_price")
+        if price in (None, ""):
+            await client.set_pending_intent(
+                ctx.chann_uid, ctx.oa, action="create", entity="line_item",
+                fields={"target_name": name, "code": code, "qty": qty}, missing=["quoted_unit_price"],
+                ttl_seconds=PENDING_INTENT_TTL_S,
+            )
+            return ChatReply(text=_t(LINE_NEEDS_PRICE, language).format(name=name), intent=intent)
+        handled = await _handle_line_item_command(
+            client, ctx=ctx, license_id=license_id,
+            cmd={"op": "add", "name": name, "qty": qty, "price": price, "more": False,
+                 "code": code or None, "unit": _item_unit_word(message)},
+            message=_with_code(message, code), permission_keys=permission_keys, language=language,
+        )
+        if handled is not None:
+            return handled
+        return ChatReply(text=_t(LINE_NEEDS_DEAL, language).format(name=name), intent=intent)
     if parsed is not None:
         handled = await _handle_line_item_command(
-            client, ctx=ctx, license_id=license_id, cmd=parsed, message=message,
+            client, ctx=ctx, license_id=license_id, cmd=parsed, message=_with_code(message, code),
             permission_keys=permission_keys, language=language,
         )
         if handled is not None:
             return handled
 
     parts: list[str] = []
-    name = _strip_item_particles(str(fields.get("target_name") or "").strip())
     if name:
         parts.append(name)
-    code = str(fields.get("code") or "").strip()
     if code:
         parts.append(code)
     qty = fields.get("qty")
@@ -12714,6 +12840,25 @@ async def _handle_line_item_intent(
         message=trigger + " " + " ".join(parts),
         trigger=trigger, permission_keys=permission_keys, language=language,
     )
+
+
+def _with_code(message: str, code: str) -> str:
+    """The sentence plus the record code the model read, when the sentence
+    itself does not carry one — the line resolver reads the sentence."""
+    code = (code or "").strip().upper()
+    if code and code not in (message or "").upper():
+        return f"{code} {message or ''}".strip()
+    return message or ""
+
+
+LINE_NEEDS_PRICE = {
+    "th": "{name} ยังไม่อยู่ในรายการสินค้าของร้าน ราคาต่อหน่วยเท่าไหร่ครับ (พิมพ์ตัวเลขได้เลย)",
+    "en": "{name} is not in the catalogue — what is the unit price? (just the number)",
+}
+LINE_NEEDS_DEAL = {
+    "th": "จะเพิ่ม {name} ลงดีลไหนครับ พิมพ์ \"เพิ่มสินค้า {name} ให้ดีล D-2026-0001\" หรือเปิดดีลนั้นก่อน",
+    "en": "Which deal should {name} go on? Type \"add {name} to deal D-2026-0001\", or open that deal first.",
+}
 
 
 QUOTE_DISCOUNT_TRIGGERS = ("ลดราคาทั้งใบ", "ส่วนลด", "ให้ส่วนลด", "discount")
@@ -15095,6 +15240,8 @@ def greet(ctx: ResolvedContext, language: str = "th") -> str:
 # _handle_customer_intent) — both use the same raw field-key vocabulary, so
 # one lookup table covers both sources rather than needing two.
 MISSING_FIELD_LABELS = {
+    "quoted_unit_price": {"th": "ราคาต่อหน่วย", "en": "unit price"},
+    "qty": {"th": "จำนวน", "en": "quantity"},
     "first_name": {"th": "ชื่อ", "en": "first name"},
     "last_name": {"th": "นามสกุล", "en": "last name"},
     "phone": {"th": "เบอร์โทร", "en": "phone number"},
@@ -17915,6 +18062,15 @@ FLOW_SWITCH_KEEP_LABEL = {"th": "{flow}ต่อ", "en": "Keep the {short}"}
 FLOW_SHORT_EN = {"customer": "customer", "deal": "deal", "followup": "appointment", "ticket": "ticket", "product": "product",
                  "warranty": "unit", "quote": "quote", "note": "note"}
 FLOW_SWITCH_KEEP_TEXT = "ทำรายการเดิมต่อ"
+# Test team, 9 ก.ย. 2569: "แนะนำเพิ่ม การยกเลิกรายการทั้งคู่" — neither the old
+# flow nor the new command, and nothing left waiting.
+FLOW_SWITCH_CANCEL_LABEL = {"th": "ยกเลิกทั้งคู่", "en": "Cancel both"}
+FLOW_SWITCH_CANCEL_TEXT = "ยกเลิกทั้งสองรายการ"
+FLOW_SWITCH_CANCELLED = {"th": "ยกเลิกทั้งสองรายการแล้วครับ", "en": "Both cancelled."}
+_FLOW_SWITCH_CANCEL_WORDS = frozenset({
+    "ยกเลิกทั้งคู่", "ยกเลิกทั้งสองรายการ", "ยกเลิกทั้งสอง", "ยกเลิกทั้งหมด", "ยกเลิกหมด", "ไม่เอาทั้งคู่",
+    "cancel both", "cancel all", "neither",
+})
 FLOW_SWITCH_RESUMED = {"th": "ทำรายการเดิมต่อครับ ", "en": "Back to it. "}
 _FLOW_SWITCH_GO_WORDS = frozenset({"ทำเลย", "เปลี่ยนเลย", "ยกเลิกแล้วทำใหม่", "ใช่", "ใช่เลย", "yes", "ok", "โอเค", "เอาอันใหม่", "go ahead", "switch"})
 _FLOW_SWITCH_KEEP_WORDS = frozenset({"ทำรายการเดิมต่อ", "ทำต่อ", "ต่อ", "ไม่", "ไม่เปลี่ยน", "อันเดิม", "ทำอันเดิมต่อ", "continue", "keep going", "no", "keep"})
@@ -18009,7 +18165,10 @@ async def _confirm_flow_switch(
     labels = ", ".join(MISSING_FIELD_LABELS.get(m, {}).get(language) or str(m) for m in missing) or ("ข้อมูล" if language != "en" else "details")
     go_label = _t(FLOW_SWITCH_GO_LABEL, language).format(new=new)[:20]
     keep_label = _t(FLOW_SWITCH_KEEP_LABEL, language).format(flow=flow, short=FLOW_SHORT_EN.get(entity, "flow"))[:20]
-    buttons = [(go_label, (message or "").strip()[:300]), (keep_label, FLOW_SWITCH_KEEP_TEXT)]
+    buttons = [
+        (go_label, (message or "").strip()[:300]), (keep_label, FLOW_SWITCH_KEEP_TEXT),
+        (_t(FLOW_SWITCH_CANCEL_LABEL, language)[:20], FLOW_SWITCH_CANCEL_TEXT),
+    ]
     return ChatReply(
         text=_t(FLOW_SWITCH_CONFIRM, language).format(
             flow=flow, name=f" {name}" if name else "", missing=labels, new=new,
@@ -18461,6 +18620,10 @@ async def _route_chat_message(
             original = held.get("original") or {}
             command = str(held.get("command") or "")
             norm = _normalise(message)
+            if (message or "").strip() == FLOW_SWITCH_CANCEL_TEXT or norm in _FLOW_SWITCH_CANCEL_WORDS:
+                await _drop_pending_quietly(client, ctx)
+                _note_road(road="pending")
+                return ChatReply(text=_t(FLOW_SWITCH_CANCELLED, language))
             if (message or "").strip() == command.strip() or norm in _FLOW_SWITCH_GO_WORDS:
                 await _drop_pending_quietly(client, ctx)
                 return await _route_chat_message(
@@ -20054,7 +20217,7 @@ async def _route_chat_message(
     if ctx.oa == "sales" and (_is_company_profile_view(message) or _matches_phrase(message, SETTINGS_PHRASES)):
         return await _handle_company_profile_view(
             client, license_id=license_id, permission_keys=permission_keys,
-            language=language,
+            language=language, ctx=ctx,
         )
 
     company_updates = (
@@ -20585,6 +20748,14 @@ async def _execute_intent(
             quick_reply_url=_guide_button(ctx.oa, language),
         )
 
+    # The shop card is every member's to read — the tile has never asked
+    # for a key — so the model's read/setting must not be refused for
+    # setting.manage, which is the key for CHANGING it (14 ก.ย. 2569).
+    if intent.get("entity") == "setting" and ACTION_ALIASES.get(
+        str(intent.get("action") or "").lower(), str(intent.get("action") or "").lower()
+    ) in READ_ACTIONS:
+        return await _handle_shop_card(client, ctx=ctx, license_id=license_id, language=language)
+
     # Profile edits (Phase 8) bypass the generic gate entirely: self-edit is
     # always allowed regardless of tenant permission keys, and that "always"
     # is exactly what ACTION_PERMISSIONS cannot express — it maps
@@ -21055,15 +21226,9 @@ async def _handle_setting_intent(
     action = str(intent.get("action") or "")
     fields = intent.get("fields") or {}
     if action in READ_ACTIONS:
-        wanted = " ".join(str(v) for v in (intent.get("fields") or {}).values() if v not in (None, "")).lower()
-        if any(w in wanted for w in ("code", "contact", "รหัส", "เบอร์", "phone")):
-            # "ขอรหัสร้านให้ลูกค้าหน่อย" read as setting/field=code
-            # (11 ก.ย. 2569): the shop's code and how to reach it — the
-            # tile's answer, not the document details.
-            return await _handle_shop_info(client, ctx=ctx, license_id=license_id, language=language)
-        return await _handle_company_profile_view(
-            client, license_id=license_id, permission_keys=permission_keys, language=language,
-        )
+        # One card whatever was asked — code, contact or the legal details
+        # (owner, 14 ก.ย. 2569: "ข้อมูลร้าน" and "ข้อมูลบริษัท" answer the same).
+        return await _handle_shop_card(client, ctx=ctx, license_id=license_id, language=language)
     if action == "update":
         # The prompt asks the model for "phone"; the profile column is
         # company_phone. Translating here rather than widening

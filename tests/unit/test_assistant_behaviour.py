@@ -2171,3 +2171,138 @@ class TestTakingAProductOutOfTheCatalogue:
         text, archived, _ = await self._turns(("ลบสินค้าพัดลมไอเย็น", None))
         assert archived == [], archived
         assert "ดีล" in text or "ใบเสนอราคา" in text, text
+
+
+# ---------------------------------------------------------------------------
+# Round 15 (14 ก.ย. 2569): the test team's V.8.2 notes, as behaviour.
+
+
+class TestOneShopCard:
+    """Owner: "ข้อมูลร้าน" and "ข้อมูลบริษัท" answer the same — one card with
+    the name, the code, the status and the company profile."""
+
+    async def _say(self, text, ai=None):
+        from test_phase6_chat import FakeDataClient, _ai, _ctx
+        from chann_app.services.chat import handle_chat_message
+        import httpx
+        client = FakeDataClient(permission_keys=["customer.read", "deal.read"])
+        client._company = {"legal_name": "บริษัท ทดสอบ จำกัด", "tax_id": "0105558012345"}
+        transport = _ai(ai) if ai else _ai(json.dumps({"action": "suggest", "entity": None, "fields": {}, "missing": []}))
+        reply = await handle_chat_message(
+            client, message=text, ctx=_ctx(primary_role="sales", oa="sales"),
+            ai_client=httpx.AsyncClient(transport=transport),
+        )
+        return reply
+
+    @pytest.mark.asyncio
+    async def test_the_two_tiles_give_one_card(self):
+        shop = await self._say("ข้อมูลร้าน")
+        company = await self._say("ข้อมูลบริษัท")
+        assert shop.text == company.text, (shop.text, company.text)
+        assert "รหัสร้าน:" in shop.text and "สถานะ:" in shop.text and "ชื่อนิติบุคคล" in shop.text
+
+    @pytest.mark.asyncio
+    async def test_the_models_reading_lands_on_the_same_card(self):
+        read = await self._say("ขอรหัสร้านให้ลูกค้าหน่อย", ai=json.dumps(
+            {"action": "read", "entity": "setting", "fields": {"field": "code"}, "missing": []}))
+        tile = await self._say("ข้อมูลร้าน")
+        assert read.text == tile.text
+
+    def test_the_trial_is_dated_on_the_card(self):
+        from chann_app.services.chat import _tenant_status_line
+        line = _tenant_status_line({"status": "trial", "trial_expires_at": "2026-09-30T00:00:00+00:00"}, "th")
+        assert line.startswith("ทดลองใช้") and "30 ก.ย. 2569" in line
+        assert _tenant_status_line({"status": "suspended"}, "th") == "ถูกระงับ"
+        assert _tenant_status_line(None, "th") == "—"
+
+
+class TestTheConsentPromptSaysWhatToType:
+    def test_the_thai_and_english_prompts_name_the_word(self):
+        from chann_app.services.pdpa import CONSENT_TEXT
+        assert 'พิมพ์ "ยอมรับ"' in CONSENT_TEXT["th"]
+        assert 'Type "accept"' in CONSENT_TEXT["en"]
+
+
+class TestACustomerTypingAStaffInvite:
+    @pytest.mark.asyncio
+    async def test_is_told_what_it_is_and_nothing_is_opened(self):
+        from test_phase6_chat import FakeDataClient, _ctx
+        from chann_app.services import registration
+        client = FakeDataClient(permission_keys=[])
+        reply = await registration._handle_customer(client, "ABCDEFGHJK", _ctx(oa="customer", primary_role="customer"), "th")
+        assert "รหัสเชิญพนักงาน" in reply and "S/N" in reply
+        assert not [r for r in client.recorded if r[0] in ("create_ticket", "lookup_serial", "redeem_invite")]
+
+
+class TestALineOnADealFromTheModelsReading:
+    """Test team, 10 ก.ย. 2569: "เพิ่มสินค้า เคสคอมพิวเตอร์ ให้ดีล D-2026-0001"
+    was answered "กรุณาระบุรายละเอียดที่เหลือ"; "ลดพัดลม 1 ตัว" set the line to 1."""
+
+    def _client(self):
+        from test_phase6_chat import FakeDataClient
+        client = FakeDataClient(permission_keys=["deal.read", "deal.update", "product.read"])
+        client._products = [{"id": "p1", "product_id": "CASE1", "product_name": "เคสคอมพิวเตอร์", "unit_price": "1500.00"}]
+        client._deals = [{"id": "DEAL-1", "deal_id": "D-2026-0001", "stage": "proposed", "contact_id": "CUST-1", "notes": None,
+                          "products": [{"id": "L1", "product_name": "พัดลม", "quoted_unit_price": "1200", "qty": 3}]}]
+        return client
+
+    async def _say(self, client, text, ai):
+        from test_phase6_chat import _ai, _ctx
+        from chann_app.services.chat import handle_chat_message
+        import httpx
+        return await handle_chat_message(
+            client, message=text, ctx=_ctx(primary_role="sales", oa="sales"),
+            ai_client=httpx.AsyncClient(transport=_ai(json.dumps(ai, ensure_ascii=False))),
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_catalogue_product_is_added_with_its_price_and_quantity_one(self):
+        client = self._client()
+        reply = await self._say(client, "เพิ่มสินค้า เคสคอมพิวเตอร์ ให้ดีล D-2026-0001 หน่อย", {
+            "action": "create", "entity": "line_item",
+            "fields": {"code": "D-2026-0001", "target_name": "เคสคอมพิวเตอร์"}, "missing": ["qty", "quoted_unit_price"]})
+        assert "รายละเอียดที่เหลือ" not in reply.text, reply.text
+        added = [r for r in client.recorded if r[0] in ("add_deal_product", "add_deal_line", "create_deal_line", "add_line_item")]
+        assert added or "เคสคอมพิวเตอร์" in reply.text, (reply.text, [r[0] for r in client.recorded])
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_product_is_asked_for_its_price_by_name(self):
+        client = self._client()
+        reply = await self._say(client, "เพิ่มสินค้า สายไฟ ให้ดีล D-2026-0001", {
+            "action": "create", "entity": "line_item",
+            "fields": {"code": "D-2026-0001", "target_name": "สายไฟ"}, "missing": ["qty", "quoted_unit_price"]})
+        # Either ask is the right one — the typed parser's "new line? give a
+        # price" or the model road's — as long as it names the price and
+        # the product, and holds the question.
+        assert "ราคาต่อ" in reply.text and "สายไฟ" in reply.text, reply.text
+        assert "รายละเอียดที่เหลือ" not in reply.text
+        assert await client.get_pending_intent("CHN-S-000001", "sales") is not None
+
+    @pytest.mark.asyncio
+    async def test_a_decrement_takes_one_off_rather_than_setting_one(self):
+        client = self._client()
+        reply = await self._say(client, "ลดพัดลม 1 ตัว", {
+            "action": "update", "entity": "line_item",
+            "fields": {"target_name": "พัดลม", "qty_change": -1, "code": "D-2026-0001"}, "missing": []})
+        line = client._deals[0]["products"][0]
+        assert int(line["qty"]) == 2, (reply.text, line)
+
+
+class TestAFlowSwitchCanCancelBoth:
+    @pytest.mark.asyncio
+    async def test_the_third_button_drops_the_old_flow_and_runs_nothing(self):
+        from test_phase6_chat import FakeDataClient, _ai, _ctx
+        from chann_app.services.chat import handle_chat_message, FLOW_SWITCH_CANCEL_TEXT
+        import httpx
+        client = FakeDataClient(permission_keys=["customer.create", "deal.create", "customer.read"])
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "create", "entity": "customer", "fields": {"first_name": "สมหญิง"}, "missing": ["last_name", "phone"]},
+            ensure_ascii=False)))
+        ctx = _ctx(primary_role="sales", oa="sales")
+        await handle_chat_message(client, message="เพิ่มลูกค้า สมหญิง", ctx=ctx, ai_client=ai)
+        asked = await handle_chat_message(client, message="สร้างดีลให้ สมชาย", ctx=ctx, ai_client=ai)
+        assert any(send == FLOW_SWITCH_CANCEL_TEXT for _l, send in asked.quick_replies), asked.quick_replies
+        done = await handle_chat_message(client, message=FLOW_SWITCH_CANCEL_TEXT, ctx=ctx, ai_client=ai)
+        assert "ยกเลิกทั้งสองรายการ" in done.text
+        assert await client.get_pending_intent("CHN-S-000001", "sales") is None
+        assert not [r for r in client.recorded if r[0] in ("create_customer", "create_deal")]

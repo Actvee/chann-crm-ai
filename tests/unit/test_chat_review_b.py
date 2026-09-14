@@ -80,8 +80,10 @@ class TestInterruptingACreateFlowAsksFirst:
         assert not _writes(client, "create_deal")
         assert "กำลังเพิ่มลูกค้า สมชาย" in reply.text and "เบอร์โทร" in reply.text and "สร้างดีล" in reply.text
         sends = [send for _label, send in reply.quick_replies]
-        assert sends == ["สร้างดีลให้สมชาย", chat.FLOW_SWITCH_KEEP_TEXT]
+        # A third way out since 14 ก.ย. 2569 (test team): cancel both.
+        assert sends == ["สร้างดีลให้สมชาย", chat.FLOW_SWITCH_KEEP_TEXT, chat.FLOW_SWITCH_CANCEL_TEXT]
         assert reply.quick_replies[0][0] == "สร้างดีลเลย" and reply.quick_replies[1][0] == "เพิ่มลูกค้าต่อ"
+        assert reply.quick_replies[2][0] == "ยกเลิกทั้งคู่"
         assert client._pending["entity"] == "flow_switch"
 
     async def test_tapping_the_new_command_runs_exactly_what_was_typed(self):

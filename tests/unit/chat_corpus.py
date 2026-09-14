@@ -1154,7 +1154,7 @@ SALES = [
     # ---- line items, the way the owner typed them (live test, 8 Sep 2026) -------
     _e("เพิ่ม ทีวี 40 นิ้ว ราคา 4000 ไปอีก 2 รายการ", "s.line_add", "with_data price count", pre=["ข้อมูลดีล D-2026-0001"]),
     _e("เพิ่ม ทีวี 40 นิ้ว ราคา 4000 ใน D-2026-0001", "s.line_add", "with_data price code",
-       ai={"action": "update", "entity": "line_item", "fields": {"code": "D-2026-0001", "target_name": "ทีวี 40 นิ้ว", "quoted_unit_price": 4000}, "missing": []}),
+       ai={"action": "create", "entity": "line_item", "fields": {"target_name": "ทีวี 40 นิ้ว", "quoted_unit_price": 4000, "code": "D-2026-0001"}, "missing": []}),
     _e("เพิ่มพัดลม 18 นิ้ว 2 ตัว", "s.line_add", "with_data size count", pre=["ข้อมูลดีล D-2026-0001"]),
     _e("ใส่สินค้า พัดลม 18 นิ้ว อีก 3 ตัว", "s.line_add", "with_data size more", pre=["ข้อมูลดีล D-2026-0001"]),
     _e("เพิ่มแอร์ 12000 BTU 2 เครื่อง", "s.line_add", "with_data catalogue", pre=["ข้อมูลดีล D-2026-0001"]),

@@ -6430,6 +6430,8 @@ class TestButtonsTheSystemWritesDoNotNeedTheAI:
             "แก้ที่อยู่เป็น {clean}",
             # the bulk-lead phone prompt's own answer words (_BULK_SKIP_WORDS)
             "ข้าม",
+            # the flow-switch's third button (_FLOW_SWITCH_CANCEL_WORDS)
+            "ยกเลิกทั้งสองรายการ",
         }
         remaining = [t for t in dead if t not in handled_by_literal]
         assert not remaining, f"buttons that lead nowhere: {remaining}"

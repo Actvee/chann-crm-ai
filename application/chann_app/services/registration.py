@@ -104,6 +104,17 @@ ASK_COMPANY_NAME = {
     "en": 'Please include the company name, e.g. "create company Somchai Repairs"',
 }
 
+CUSTOMER_TYPED_INVITE = {
+    "th": (
+        "รหัส 10 ตัวแบบนี้เป็นรหัสเชิญพนักงานของร้าน ใช้ใน LINE ทีมขายหรือ LINE ช่าง ไม่ใช่ที่นี่ครับ\n"
+        "ลูกค้าผูกกับร้านด้วยหมายเลขเครื่อง (S/N บนสติกเกอร์) หรือรหัสร้าน 8 หลักที่ร้านให้มา"
+    ),
+    "en": (
+        "A 10-character code like that is a staff invite — it is used in the sales or technician LINE, not here.\n"
+        "Customers link with the unit's serial number (on the sticker) or the shop's 8-character code."
+    ),
+}
+
 # The Customer OA's first words. Owner rule (3 Sep): a customer registers
 # the product BEFORE reporting a fault — that is how the shop learns which
 # customer and which machine — so the welcome says exactly that, in the
@@ -602,6 +613,11 @@ async def _handle_customer(
         return await _link_and_continue(
             client, ctx, company_code=text.upper(), language=language,
         )
+    if INVITE_CODE_RE.match(text.upper()):
+        # A staff invite typed by a customer (test team, 11 ก.ย. 2569: it
+        # was read as a serial, then as a fault). Say what it is and what a
+        # customer uses instead; open nothing.
+        return _t(CUSTOMER_TYPED_INVITE, language)
 
     # A command word from someone not yet linked: answer with how this
     # works, never with "got your message" (the bot mistaking its own
