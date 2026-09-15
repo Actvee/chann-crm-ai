@@ -307,6 +307,11 @@ TECHNICIAN_INVITE_DENIED = {
 # (data/chann_data/permissions.py:214). Chat only ever offered the
 # technician one.
 SALES_INVITE_TRIGGERS = (
+    # The English word and the short Thai one: "ขอรหัสเชิญ Sales" was
+    # answered with "which kind?" (tester, 10 ก.ย.; audit, 15 ก.ย. 2569).
+    "ขอรหัสเชิญ sales", "ขอรหัสเชิญ sale", "ขอรหัสเชิญเซล", "ขอรหัสเชิญฝ่ายขาย", "ขอรหัสเชิญพนักงานขาย",
+    "รหัสเชิญ sales", "รหัสเชิญ sale", "รหัสเชิญเซล", "รหัสเชิญฝ่ายขาย", "รหัสเชิญทีมขาย", "รหัสเชิญพนักงาน",
+    "เชิญ sales", "เชิญ sale", "เชิญเซล", "เชิญฝ่ายขาย", "เชิญพนักงานขาย", "invite sales", "sales invite",
     "ขอรหัสเชิญเซลส์", "ขอรหัสเชิญพนักงาน", "ขอรหัสเชิญทีมขาย", "ขอรหัสเชิญแอดมิน", "ขอรหัสเชิญ cs",
     "สร้างรหัสเชิญเซลส์", "สร้างรหัสเชิญพนักงาน", "สร้างรหัสเชิญทีมขาย",
     "เชิญเซลส์", "เชิญพนักงาน", "เชิญทีมขาย", "เชิญแอดมิน",
@@ -342,12 +347,26 @@ def _is_sales_invite_request(message: str) -> bool:
     return any(trigger.lower() in text for trigger in SALES_INVITE_TRIGGERS)
 
 
+CUSTOMER_INVITE_TRIGGERS = (
+    "ขอรหัสเชิญลูกค้า", "รหัสเชิญลูกค้า", "สร้างรหัสเชิญลูกค้า", "เชิญลูกค้าเข้าร้าน", "เชิญลูกค้า",
+    "invite customer", "customer invite", "invite a customer",
+)
+
+
+def _is_customer_invite_request(message: str) -> bool:
+    """A customer is not invited with a code of their own: they type the
+    SHOP code in the customer LINE. "ขอรหัสเชิญลูกค้า" was asked "ช่างหรือ
+    ทีมขาย?" (audit, 15 ก.ย. 2569); the answer is the shop card."""
+    text = (message or "").strip().lower()
+    return any(trigger.lower() in text for trigger in CUSTOMER_INVITE_TRIGGERS)
+
+
 def _is_ambiguous_invite_request(message: str) -> bool:
     """A request for an invite code that does not say for whom. Checked
     AFTER the two specific tables — "ขอรหัสเชิญช่าง" contains "ขอรหัสเชิญ",
     so the order is the whole correctness argument here."""
     text = (message or "").strip().lower()
-    if _is_technician_invite_request(text) or _is_sales_invite_request(text):
+    if _is_technician_invite_request(text) or _is_sales_invite_request(text) or _is_customer_invite_request(text):
         return False
     return any(trigger.lower() in text for trigger in INVITE_AMBIGUOUS_TRIGGERS)
 
@@ -1087,12 +1106,7 @@ async def _handle_warranty_book(
     if not rows:
         return ChatReply(text=_t(WARRANTY_BOOK_EMPTY, language))
     shown = rows[:15]
-    lines = [
-        f"· {r.get('serial_number')} {r.get('product_name') or ''} "
-        f"{'✓ ลูกค้าผูกแล้ว' if r.get('customer_chann_uid') else '· ยังไม่มีลูกค้าผูก'}"
-        .replace("  ", " ")
-        for r in shown
-    ]
+    lines = [_warranty_book_line(r) for r in shown]
     return ChatReply(
         text=_t(WARRANTY_BOOK_HEAD, language).format(n=len(shown)) + "\n" + "\n".join(lines),
         quick_replies=[("ลงทะเบียนสินค้า", "ลงทะเบียนสินค้า")],
@@ -1858,7 +1872,7 @@ async def _handle_note_edit(
         try:
             target = await _customer_named_in(client, license_id, message, permission_keys)
         except _AmbiguousName as exc:
-            return _name_choice(message, exc, language)
+            return await _name_pick(client, ctx, message, exc, language)
     if target is None:
         return ChatReply(text=_t(NOTE_NEEDS_TARGET, language))
     entity_type, entity_id, code = target
@@ -1973,7 +1987,7 @@ async def _handle_note_list(
     try:
         scope = await _record_scope(client, ctx, license_id, message, permission_keys)
     except _AmbiguousName as exc:
-        return _name_choice(message, exc, language)
+        return await _name_pick(client, ctx, message, exc, language)
     except _TargetNotFound as exc:
         return ChatReply(
             text=_t(NOT_FOUND_BY_CODE, language).format(what=_entity_noun(exc.entity_type, language), code=exc.code)
@@ -2056,8 +2070,30 @@ def _reminder_subject(message: str, code: str) -> str:
             text = re.sub(rf"(?<=[\d\s]){re.escape(word)}(?=[\d\s]|$)|^{re.escape(word)}(?=[\d\s])", " ", text)
         else:
             text = text.replace(word, " ")
+    for filler in _SUBJECT_FILLERS:
+        text = text.replace(filler, " ")
     subject = " ".join(text.split()).strip(" ·-:")
     # One stray character is noise, not a subject.
+    return subject if len(subject) >= 3 else ""
+
+
+# Words that only carry the command, never what the appointment is about:
+# "ลงนัดหมายกับลูกค้าสิงสระ ให้หน่อย" is an appointment with สิงสระ and
+# nothing more — the note it left was "สิงสระ กับลูกค้าสิงสระ ให้หน่อย".
+_SUBJECT_FILLERS = (
+    "กับลูกค้า", "ให้ลูกค้า", "ลูกค้า", "ให้หน่อย", "ให้ด้วย", "หน่อย", "ด้วย", "ให้ที", "คุณ", "กับ",
+    "เดือนนี้", "สัปดาห์นี้", "อาทิตย์นี้", "ปีนี้", "ที่จะถึง",
+    "ครับ", "ค่ะ", "คะ", "นะ", "จ้า", "please",
+)
+
+
+def _subject_without(subject: str, target_name: str | None) -> str:
+    """The subject minus the person it is with — the name is the record."""
+    if not subject:
+        return ""
+    for part in [p for p in str(target_name or "").split() if len(p) >= 2]:
+        subject = subject.replace(part, " ")
+    subject = " ".join(subject.split()).strip(" ·-:")
     return subject if len(subject) >= 3 else ""
 
 
@@ -2178,11 +2214,18 @@ async def _handle_reminder_list(
         window = _diary_window(message)
 
     try:
-        scope = await _record_scope(
-            client, ctx, str(license_id), message, permission_keys,
-        )
+        if window is not None and _find_entity_code(message) is None:
+            # "วันที่ 28 มีนัดใคร" asks about a DAY: only a code or a name in
+            # the sentence narrows it to one record — never the record that
+            # happens to be in context (it answered with สุดใจ's diary
+            # because สุดใจ was the last record touched).
+            scope = await _customer_named_in(client, str(license_id), message, permission_keys)
+        else:
+            scope = await _record_scope(
+                client, ctx, str(license_id), message, permission_keys,
+            )
     except _AmbiguousName as exc:
-        return _name_choice(message, exc, language)
+        return await _name_pick(client, ctx, message, exc, language)
     except _TargetNotFound as exc:
         return ChatReply(
             text=_t(NOT_FOUND_BY_CODE, language).format(what=_entity_noun(exc.entity_type, language), code=exc.code)
@@ -2461,7 +2504,7 @@ async def _handle_reminder_move(
         try:
             target = await _customer_named_in(client, license_id, message, permission_keys)
         except _AmbiguousName as exc:
-            return _name_choice(message, exc, language)
+            return await _name_pick(client, ctx, message, exc, language)
     if target is None:
         return ChatReply(text=_t(REMINDER_CANCEL_NEEDS_TARGET, language))
     entity_type, entity_id, code = target
@@ -2560,12 +2603,22 @@ async def _handle_reminder_cancel(
         return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
 
     license_id = str(license_id)
-    try:
-        target = await _resolve_target_or_context(client, ctx, license_id, message)
-    except _TargetNotFound as exc:
-        return ChatReply(
-            text=_t(NOT_FOUND_BY_CODE, language).format(what=_entity_noun(exc.entity_type, language), code=exc.code)
-        )
+    target = None
+    if _find_entity_code(message) is None:
+        # "ยกเลิกนัด สมชาย" names a person: two สมชาย get the choice, never
+        # the one who happens to be in context (audit, 15 ก.ย. 2569 — it
+        # cancelled the last record's appointment).
+        try:
+            target = await _customer_named_in(client, license_id, message, permission_keys)
+        except _AmbiguousName as exc:
+            return await _name_pick(client, ctx, message, exc, language)
+    if target is None:
+        try:
+            target = await _resolve_target_or_context(client, ctx, license_id, message)
+        except _TargetNotFound as exc:
+            return ChatReply(
+                text=_t(NOT_FOUND_BY_CODE, language).format(what=_entity_noun(exc.entity_type, language), code=exc.code)
+            )
     if target is None:
         return ChatReply(
             text=_t(REMINDER_CANCEL_NEEDS_TARGET, language),
@@ -2755,6 +2808,58 @@ class _AmbiguousName(Exception):
         self.fragments = fragments
 
 
+NAME_PICK_TAIL = {"th": "แตะปุ่ม หรือพิมพ์หมายเลข 1–{n}", "en": "Tap a button, or type 1–{n}"}
+NAME_PICK_INVALID = {"th": "พิมพ์หมายเลข 1–{n} หรือแตะปุ่มเลือกคน", "en": "Type 1–{n} or tap a name"}
+NAME_PICK_TTL_S = 600
+
+
+async def _name_pick(
+    client: DataClient, ctx: ResolvedContext | None, message: str, exc: _AmbiguousName, language: str,
+) -> ChatReply:
+    """_name_choice, remembered: the person may tap a button OR type the
+    number in front of the name. The typed number was answered
+    "ยังไม่แน่ใจว่าต้องการอะไร" (audit, 15 ก.ย. 2569) because the picker
+    kept no state — rule 3 says a duplicate name gets a choice, and a
+    choice a phone keyboard can answer is a number."""
+    reply = _name_choice(message, exc, language)
+    options = [{"n": i + 1, "label": label, "send": send} for i, (label, send) in enumerate(reply.quick_replies)]
+    if ctx is not None and options:
+        try:
+            await client.set_pending_intent(
+                ctx.chann_uid, ctx.oa, action="pick", entity="name_pick",
+                fields={"options": options}, missing=[], ttl_seconds=NAME_PICK_TTL_S,
+            )
+        except Exception:  # noqa: BLE001 — the buttons still work without the memory
+            log.exception("could not remember a name choice")
+        lines = (reply.text or "").split("\n")
+        numbered = [lines[0]] + [f"{i + 1}. {line.lstrip('· ')}" for i, line in enumerate(lines[1:])]
+        reply.text = "\n".join(numbered) + "\n" + _t(NAME_PICK_TAIL, language).format(n=len(options))
+    return reply
+
+
+async def _resolve_name_pick(
+    client: DataClient, *, ctx: ResolvedContext, message: str, pending: dict, language: str, ai_client,
+) -> ChatReply | None:
+    """A number (or a tapped button's text) after _name_pick re-runs the
+    person's own command with the code in place of the name. Anything else
+    drops the choice and is read as a fresh sentence."""
+    options = list((pending.get("fields") or {}).get("options") or [])
+    text = (message or "").strip().translate(_THAI_DIGITS)
+    chosen = None
+    if text.isdigit() and 1 <= int(text) <= len(options):
+        chosen = options[int(text) - 1]
+    else:
+        chosen = next((o for o in options if text == str(o.get("send") or "").strip()), None)
+    await _drop_pending_quietly(client, ctx)
+    if chosen is None:
+        if text.isdigit():
+            return ChatReply(text=_t(NAME_PICK_INVALID, language).format(n=len(options)))
+        return None
+    return await _route_chat_message(
+        client, message=str(chosen.get("send") or ""), ctx=ctx, language=language, ai_client=ai_client,
+    )
+
+
 def _name_choice(message: str, exc: _AmbiguousName, language: str) -> ChatReply:
     """The picker: same sentence, each button swaps the name for a code.
 
@@ -2861,7 +2966,7 @@ async def _handle_reminder_create(  # noqa: PLR0913
         except _AmbiguousName as exc:
             # Two people fit — booking against either would be a guess
             # written into the diary. The choice keeps the whole command.
-            return _name_choice(message, exc, language)
+            return await _name_pick(client, ctx, message, exc, language)
     if target is None:
         return ChatReply(text=_t(REMINDER_NEEDS_TARGET, language))
     entity_type, entity_id, code = target
@@ -2912,7 +3017,7 @@ async def _handle_reminder_create(  # noqa: PLR0913
         # cutting it out of the sentence is the fallback, and a poor one —
         # "ลงนัดหมายกับลูกค้า Hannah วันที่ 17 เดือนนี้ให้หน่อย" became
         # "Hannah ลง หมายกับลู ้า Hannah เดือนนี้ให้หน่อย" (tester, 14 ก.ย.).
-        subject = (subject or "").strip() or _reminder_subject(message, code)
+        subject = _reminder_subject(message, code) if subject is None else subject.strip()
         if subject:
             payload["notes"] = subject
         await client.create_follow_up(license_id, payload, actor_id=actor_id)
@@ -3169,9 +3274,37 @@ SERIAL_NO_SHOP = {
 }
 
 
+# "ให้ลูกค้า มิ เกียร", "ของคุณสมชาย", "ลูกค้า: สมหญิง" — the person the unit
+# was sold to, as staff write it. Only used to know that a name WAS given
+# when no record matches: registering silently without them was the
+# tester's "การผูกลูกค้ายังไม่ได้" (14 ก.ย. 2569).
+_WARRANTY_NAMED_RE = re.compile(r"(?:ให้ลูกค้า|ของลูกค้า|ลูกค้า|ให้คุณ|ของคุณ|ให้|ของ|for)\s*:?\s*([^\s][^\n]{0,60})$")
+WARRANTY_CUSTOMER_UNKNOWN = {
+    "th": "ไม่พบลูกค้าชื่อ \"{name}\" ในบริษัทนี้ — ยังไม่ได้ลงทะเบียน {serial}\nเพิ่มลูกค้าก่อน หรือลงทะเบียนโดยยังไม่ผูกลูกค้า",
+    "en": "No customer named \"{name}\" here — {serial} was not registered.\nAdd the customer first, or register without one.",
+}
+WARRANTY_CUSTOMER_ATTACHED = {
+    "th": "ผูกกับลูกค้า {name}{code} แล้ว",
+    "en": "Attached to customer {name}{code}",
+}
+
+
+def _warranty_name_asked(message: str, target_name: str | None) -> str:
+    """The customer name the sentence carries, or "". The model's reading
+    first; else the trailing "ให้ลูกค้า …" the typed road sees."""
+    if target_name and str(target_name).strip():
+        return str(target_name).strip()
+    text = SERIAL_RE.sub(" ", message or "")
+    m = _WARRANTY_NAMED_RE.search(text.strip())
+    if not m:
+        return ""
+    name = m.group(1).strip(" .,:;")
+    return "" if len(name) < 2 or re.fullmatch(r"[\d\-]+", name) else name
+
+
 async def _handle_warranty_register(
     client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
-    language: str, permission_keys: list[str] | None = None,
+    language: str, permission_keys: list[str] | None = None, target_name: str | None = None,
 ) -> ChatReply:
     """Registering a unit.
 
@@ -3229,7 +3362,7 @@ async def _handle_warranty_register(
     try:
         named = await _customer_named_in(client, license_id, message, permission_keys or [])
     except _AmbiguousName as exc:
-        return _name_choice(message, exc, language)
+        return await _name_pick(client, ctx, message, exc, language)
     except Exception:
         named = None
     if named:
@@ -3240,6 +3373,21 @@ async def _handle_warranty_register(
             contact_name = _display_name(row_named) if row_named else str(named[2])
         except Exception:
             contact_name = str(named[2])
+    else:
+        asked = _warranty_name_asked(message, target_name)
+        if asked and (product is None or asked.lower() not in str(product.get("product_name") or "").lower()):
+            # A name was given and nobody has it: registering anyway, with
+            # nothing attached, is the silent guess rule 3 forbids. Refuse,
+            # and offer the two honest ways forward.
+            without = f"ลงทะเบียนสินค้า {serial}" + (f" {product.get('product_name')}" if product else "")
+            return ChatReply(
+                text=_t(WARRANTY_CUSTOMER_UNKNOWN, language).format(name=asked, serial=serial),
+                quick_replies=[
+                    (f"เพิ่มลูกค้า {asked}"[:20], f"เพิ่มลูกค้า {asked}"),
+                    ("ลงทะเบียนโดยไม่ผูกลูกค้า", without),
+                    ("รายชื่อลูกค้า", "รายชื่อลูกค้า"),
+                ],
+            )
 
     try:
         row = await client.register_warranty(
@@ -3275,7 +3423,10 @@ async def _handle_warranty_register(
         end=_iso_to_thai_date(row.get("warranty_end")),
     )
     if contact_name:
-        text += f"\n{'สำหรับลูกค้า' if language != 'en' else 'For'} {contact_name}"
+        code = str(named[2] or "") if named else ""
+        text += "\n" + _t(WARRANTY_CUSTOMER_ATTACHED, language).format(
+            name=contact_name, code=f" ({code})" if code else "",
+        )
     text += "\n" + _t(WARRANTY_STAFF_NEXT, language).format(serial=serial)
     return ChatReply(
         text=text,
@@ -3285,9 +3436,23 @@ async def _handle_warranty_register(
 
 
 WARRANTY_STAFF_NEXT = {
-    "th": "ลูกค้าพิมพ์ {serial} ใน LINE บริการลูกค้าเพื่อผูกเครื่องนี้กับตัวเอง",
-    "en": "The customer types {serial} in the customer LINE to attach this unit to themselves",
+    "th": "ถ้าลูกค้าจะดูประกันเองใน LINE ให้พิมพ์ {serial} ใน LINE บริการลูกค้า",
+    "en": "If the customer wants to see the warranty on LINE, they type {serial} in the customer LINE",
 }
+
+
+def _warranty_book_line(r: dict) -> str:
+    """One unit: who it was sold to (the record), and whether that person
+    has claimed it on LINE — two different facts, both shown."""
+    who = str(r.get("contact_name") or "").strip()
+    code = str(r.get("contact_code") or "").strip()
+    claimed = bool(r.get("customer_chann_uid"))
+    if who:
+        link = "✓ ผูก LINE แล้ว" if claimed else "ยังไม่ผูก LINE"
+        who_part = f"ลูกค้า {who}" + (f" ({code})" if code else "") + f" · {link}"
+    else:
+        who_part = "✓ ลูกค้าผูก LINE แล้ว" if claimed else "ยังไม่มีลูกค้า"
+    return f"· {r.get('serial_number')} {r.get('product_name') or ''} · {who_part}".replace("  ", " ")
 WARRANTY_CLAIMED = {
     "th": "ลงทะเบียน {product} (S/N {serial}) เป็นของคุณแล้ว ใบรับประกัน {number} ถึง {end}",
     "en": "{product} (S/N {serial}) is registered to you — warranty {number} until {end}",
@@ -4506,6 +4671,9 @@ _QUESTION_MARKERS = (
     "ไหม", "มั้ย", "กี่โมง", "เมื่อไหร่", "เมื่อไร", "เท่าไหร่", "เท่าไร", "ยังไง", "ถึงไหน",
     "อย่างไร", "ทำไม", "ที่ไหน", "ใคร", "หรือเปล่า", "หรือยัง", "รึเปล่า", "รึยัง", "?",
     "เป็นไง", "ไงบ้าง", "อยู่ไหน", "แถวไหน", "กี่บาท", "กี่วัน", "วันไหน", "อันไหน", "ตอนไหน", "ได้ป่าว", "ได้เปล่า",
+    # "กี่" is interrogative in every position: "รหัสเชิญช่างใช้ได้กี่ครั้ง"
+    # issued a real invite (audit, 15 ก.ย. 2569).
+    "กี่ครั้ง", "กี่คน", "กี่งาน", "กี่รายการ", "กี่ชิ้น", "กี่นัด", "กี่ดีล", "กี่",
     "what", "when", "where", "how", "who", "which", "can i", "can you", "is it", "do you",
 )
 
@@ -4737,7 +4905,25 @@ async def _maybe_auto_accept_setting(
         )
         if held_auto is not None:
             return held_auto
-        return None
+        # Names the setting inside a sentence (audit, 15 ก.ย. 2569): "ช่วย
+        # เปิดรับลูกค้าใหม่อัตโนมัติให้หน่อยครับ" switches it on, "…ตอนนี้
+        # เปิดอยู่ไหม" says the state. The guard above has already refused
+        # a negation; a question here is a question.
+        if _looks_like_a_question(text) or not any(w in lowered for w in ("เปิด", "ปิด", " on", " off")):
+            state = await auto_accept_enabled(client, str(license_id))
+        elif "ปิด" in lowered or " off" in lowered:
+            await client.put_license_setting(str(license_id), SETTING_KEY, False, actor_id=ctx.chann_uid)
+            state = False
+        else:
+            await client.put_license_setting(str(license_id), SETTING_KEY, True, actor_id=ctx.chann_uid)
+            state = True
+        lang = "en" if language == "en" else "th"
+        return ChatReply(
+            text=_t(AUTO_ACCEPT_STATE, language).format(
+                state=("เปิด" if state else "ปิด") if lang == "th" else ("on" if state else "off"),
+                meaning=AUTO_ACCEPT_MEANING[(lang, state)],
+            ),
+        )
     rest = text[len(matched):].strip().lower() if matched else ""
     if rest in ("เปิด", "on", "true", "yes"):
         await client.put_license_setting(str(license_id), SETTING_KEY, True, actor_id=ctx.chann_uid)
@@ -4987,7 +5173,11 @@ def _looks_like_a_question(text: str) -> bool:
     """
     lowered = re.sub(r"(?:ครับ|ค่ะ|คะ|คับ|จ้า|นะ|[?!. ])+$", "", _canonical(text)).replace("ไหม้", "")
     return any(marker in lowered for marker in _QUESTION_MARKERS) or lowered.endswith(
-        ("ยัง", "ไหม", "มั้ย", "ป่าว", "เปล่า", "หรือไม่", "อะไรบ้าง", "ใครบ้าง", "ไหนบ้าง", "หรอ", "เหรอ", "รึ", "มะ", "ป่ะ")
+        ("ยัง", "ไหม", "มั้ย", "ป่าว", "เปล่า", "หรือไม่", "อะไรบ้าง", "ใครบ้าง", "ไหนบ้าง", "หรอ", "เหรอ", "รึ", "มะ", "ป่ะ",
+         # "ลูกค้าเบอร์อะไร", "งานอยู่ไหน", "ไปยังไง": a sentence that ENDS in
+         # the question word is a question (audit, 15 ก.ย. 2569 — filed as
+         # the fault found).
+         "อะไร", "ไหน", "ยังไง", "อย่างไร", "เท่าไหร่", "เมื่อไหร่", "กี่โมง")
     )
 
 
@@ -5085,6 +5275,30 @@ REPORT_REQUIRED_FIELDS = (
 REPORT_OPTIONAL_FIELDS = (
     ("parts_changed", "อะไหล่ที่เปลี่ยน"),
 )
+
+REPORT_ANSWER_CORRECTED = {
+    "th": "แก้คำตอบ \"{question}\" เป็น: {answer}",
+    "en": "Changed the answer to \"{question}\" to: {answer}",
+}
+_REPORT_CORRECTION_RE = re.compile(
+    r"^(?:ขอโทษ|โทษที|ขอแก้|แก้|ไม่ใช่|พิมพ์ผิด|ผิด|ที่จริง|จริง ๆ|จริงๆ|sorry|correction)[\s,]*"
+    r"(?:ครับ|ค่ะ|นะ|พิมพ์ผิด|ผิด|แก้เป็น|แก้ไข|ขอแก้|ที่พบคือ|ที่พบ|คือ|เป็น|:)*[\s,]*(.+)$",
+    re.I | re.S,
+)
+
+
+def _report_correction(answer: str) -> str | None:
+    """The corrected text when the answer says it corrects the previous one
+    ("ขอโทษ พิมพ์ผิด ที่พบคือเบรกเกอร์ทริป"), else None."""
+    text = (answer or "").strip()
+    lowered = text.lower()
+    if not any(w in lowered for w in ("พิมพ์ผิด", "ขอแก้", "แก้เป็น", "ที่จริง", "จริงๆ", "จริง ๆ", "ตอบผิด", "sorry", "correction")):
+        return None
+    m = _REPORT_CORRECTION_RE.match(text)
+    body = (m.group(1) if m else text).strip(" :,")
+    body = re.sub(r"^(?:ที่พบคือ|ที่พบ|คือ|เป็น)\s*", "", body).strip()
+    return body or None
+
 
 REPORT_QUESTIONS = {
     "found_issue": {
@@ -6161,16 +6375,20 @@ def _same_machine_as(open_job: dict, text: str, serial: str | None) -> bool:
     registered unit, the same appliance, or a symptom that names none —
     a fridge complaint while an air-conditioner job is open is plainly a
     new matter and is not asked about."""
+    theirs = _appliance_in(str(open_job.get("issue_description") or "")) or str(open_job.get("product_name") or "")
+    mine = _appliance_in(text)
+    if mine is not None and theirs:
+        # Two different appliances are two matters, whatever serial the
+        # customer's one registered unit carries: "ตู้เย็นไม่เย็น" while an
+        # air-conditioner job is open was still asked "เรื่องเดียวกันไหม"
+        # because both were filed under the same S/N (audit, 15 ก.ย. 2569).
+        return mine.replace(" ", "") in _normalise(theirs) or _normalise(theirs) in mine.replace(" ", "")
     job_serial = str(open_job.get("serial_number") or "").upper()
     if serial and job_serial and job_serial == str(serial).upper():
         return True
-    theirs = _appliance_in(str(open_job.get("issue_description") or "")) or str(open_job.get("product_name") or "")
-    mine = _appliance_in(text)
-    if mine is None:
+    if mine is None or not theirs:
         return True
-    if not theirs:
-        return True
-    return mine.replace(" ", "") in _normalise(theirs) or _normalise(theirs) in mine.replace(" ", "")
+    return False
 
 
 DUPLICATE_FAULT_ASK = {
@@ -7160,9 +7378,6 @@ async def _handle_check_out(
                     quick_replies=[("ยกเลิกการปิดงาน", "ยกเลิก")],
                 )
             if answer.lower() in _NONE_ANSWERS or _normalise(answer) in _SKIP_ANSWERS:
-                # "-", "ข้าม", "ไม่มี" mean nothing to record — allowed for
-                # the optional question, re-asked for a required one, since
-                # the Data tier's gate refuses a report without it.
                 if awaiting[0] == "parts_changed":
                     answer = ""
                 else:
@@ -7170,6 +7385,41 @@ async def _handle_check_out(
                         text=_t(REPORT_ANSWER_REQUIRED, language) + "\n" + _t(REPORT_QUESTIONS[awaiting[0]], language),
                         quick_replies=[("ยกเลิกการปิดงาน", "ยกเลิก")],
                     )
+            if answer and _looks_like_a_question(answer):
+                # "ลูกค้าเบอร์อะไรครับ" in the middle of the report is a
+                # question about the job, not what was found (audit, 15 ก.ย.
+                # 2569: it was filed as the fault). The job card answers it
+                # and the draft waits where it was.
+                card = await _handle_ticket_detail(
+                    client, ctx=ctx, license_id=license_id,
+                    message=f"ข้อมูลงาน {fields.get('code') or ''}",
+                    permission_keys=permission_keys, language=language,
+                )
+                return ChatReply(
+                    text=(card.text or "") + "\n\n" + resume,
+                    quick_replies=[("ยกเลิกการปิดงาน", "ยกเลิก")],
+                )
+            corrected = _report_correction(answer)
+            order = list(REPORT_QUESTIONS)
+            previous = order[order.index(awaiting[0]) - 1] if order.index(awaiting[0]) > 0 else None
+            if corrected is not None and previous and fields.get(previous):
+                # "ขอโทษ พิมพ์ผิด ที่พบคือเบรกเกอร์ทริป": the answer before
+                # this one is what is being corrected — it is rewritten and
+                # the same question is asked again.
+                fields[previous] = corrected[:400]
+                try:
+                    await client.set_pending_intent(
+                        ctx.chann_uid, ctx.oa, action="report", entity="service_report",
+                        fields=fields, missing=awaiting, ttl_seconds=CHECKOUT_DRAFT_TTL_S,
+                    )
+                except Exception:
+                    log.exception("could not rewrite a report answer")
+                return ChatReply(
+                    text=_t(REPORT_ANSWER_CORRECTED, language).format(
+                        question=_t(REPORT_QUESTIONS[previous], language).split(" (")[0], answer=corrected[:80],
+                    ) + "\n" + _t(REPORT_QUESTIONS[awaiting[0]], language),
+                    quick_replies=[("ยกเลิกการปิดงาน", "ยกเลิก")],
+                )
             fields[awaiting[0]] = answer[:400]
             awaiting = awaiting[1:]
         ticket_id = fields.pop("ticket_id", None)
@@ -7641,7 +7891,16 @@ async def _handle_ticket_detail(
 
     match = TICKET_CODE_RE.search(message or "")
     if not match:
-        # No code: the single open job, if there is exactly one.
+        # No code: the job just looked at ("ข้อมูลงาน T-…" then "ลูกค้าเบอร์
+        # อะไร" — audit, 15 ก.ย. 2569: it asked for the number again), else
+        # the single open job, if there is exactly one.
+        try:
+            ref = await _last_entity_ref(client, ctx)
+        except Exception:  # noqa: BLE001
+            ref = None
+        if ref and str(ref.get("entity_type") or "") in ("ticket", "service_ticket") and ref.get("code"):
+            match = TICKET_CODE_RE.search(str(ref.get("code")))
+    if not match:
         member, ticket, _ = await _ticket_for_action(
             client, str(license_id), ctx, message,
             prefer_status=("assigned", "in_progress", "open"),
@@ -7718,7 +7977,7 @@ TICKET_OPEN_EMPTY = {
 async def _handle_ticket_list(
     client: DataClient, *, ctx: ResolvedContext, license_id,
     permission_keys: list[str], language: str, mine: bool = False,
-    open_only: bool = False, team_only: bool = False,
+    open_only: bool = False, team_only: bool = False, today: bool = False,
 ) -> ChatReply:
     if "ticket.read" not in set(permission_keys):
         return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
@@ -7745,6 +8004,11 @@ async def _handle_ticket_list(
                     if str(t.get("assigned_to_ref") or "") == me
                     and str(t.get("status") or "") not in ("completed", "cancelled")
                 ]
+                if today:
+                    # "งานวันนี้" is today's appointments (and undated jobs),
+                    # not next week's under a "today" title (audit, 15 ก.ย.).
+                    day = local_today().isoformat()
+                    tickets = [t for t in tickets if not t.get("scheduled_date") or str(t.get("scheduled_date"))[:10] == day]
             if team_only:
                 # Accepted by the lead for a team I am on, not yet taken.
                 tickets = [
@@ -8807,6 +9071,10 @@ async def _resolve_ticket_reject_confirm(
 
 
 TICKET_REJECT_TTL_S = 600
+TICKET_REJECT_STILL_WAITING = {
+    "th": "ยังรอเหตุผลที่จะปฏิเสธงาน {code} อยู่ครับ (พิมพ์ \"ไม่ปฏิเสธ\" ถ้าจะรับงานต่อ)",
+    "en": "Still waiting for the reason to decline {code} (type \"ไม่ปฏิเสธ\" to keep the job)",
+}
 _REJECT_ABORT_WORDS = frozenset({"ยกเลิก", "ไม่ปฏิเสธ", "ไม่", "cancel", "no", "ไม่เอา", "ไม่ยกเลิก", "รับ", "รับงาน"})
 TICKET_REJECT_CONFIRM = {
     "th": "ปฏิเสธงาน {code} (นัด {when}) ใช่ไหมครับ บอกเหตุผลสั้น ๆ ด้วย — ทางร้านจะเห็นและมอบหมายใหม่",
@@ -10856,6 +11124,13 @@ def _deterministic_reason(message: str, oa: str, early_pending: dict | None) -> 
         return "help"
     if oa == "sales" and _is_policy_command(message):
         return "policy"
+    if oa == "sales" and _bulk_customer_entries(message):
+        # A pasted list ("ลูกค้าใหม่\n1.ชื่อ เบอร์\n2.ชื่อ เบอร์") is a format,
+        # not a sentence: DEV's model read the whole list as ONE customer,
+        # created the first, and the rest were never seen (tester,
+        # 14 ก.ย. 2569 16:44). Only with the head word and two or more
+        # lines — a single "เพิ่มลูกค้า สมชาย …" is still the model's.
+        return "bulk"
     return None
 
 
@@ -11034,6 +11309,10 @@ def _is_help_request(message: str, oa: str = "") -> bool:
     if (
         _matches_phrase(message, HELP_TRIGGERS) or _matches_phrase(message, HELP_EXAMPLES_PHRASES)
         or (message or "").strip() in ("?", "??", "???") or _is_general_capability_question(message)
+        # "สิทธิ์ของฉัน" is the help family too: on the model road it was
+        # read as a team lookup and refused for team.manage — a person
+        # asking what they may do must always be answered (audit, 15 ก.ย.).
+        or _matches_phrase(message, CAPABILITY_PHRASES)
     ):
         return True
     compact = _normalise(message)
@@ -11339,16 +11618,9 @@ async def _handle_customer_detail(
         if len(matches) == 1:
             customer = matches[0]
         elif len(matches) > 1:
-            return ChatReply(
-                text=_t(CUSTOMER_AMBIGUOUS_LEAD, language).format(name=code) + "\n"
-                + "\n".join(
-                    f"· {c.get('customer_id')} {_display_name(c)}" for c in matches[:LIST_LIMIT]
-                ),
-                quick_replies=[
-                    (_display_name(c)[:20], f"ข้อมูลลูกค้า {c.get('customer_id')}")
-                    for c in matches[:4]
-                ],
-            )
+            # The same picker as everywhere else: buttons AND a number.
+            exc = _AmbiguousName(matches, {str(c.get("id")): code for c in matches})
+            return await _name_pick(client, ctx, f"ข้อมูลลูกค้า {code}", exc, language)
     if customer is None:
         return ChatReply(
             text=_t(NOT_FOUND_BY_CODE, language).format(
@@ -11786,6 +12058,15 @@ def _parse_line_item_command(message: str) -> dict | None:
             qty = _qty_number(lead.group(1))
             rest = body[: head.end()] + " " + body[head.end() + lead.end():]
     rest = re.sub(r"(?:^|(?<=\s))(?:" + _ITEM_COUNT_UNITS + r")(?=\s|$)", " ", rest, flags=re.I)
+    if price is None and qty is not None:
+        # "เพิ่มรายการ Q-… แอร์ 12000 BTU 1 ชิ้น 15900": the number left at
+        # the end, after the quantity and its unit, is the price — a name
+        # does not end in a bare 15900 (audit, 15 ก.ย. 2569: it asked for a
+        # price it had been given).
+        tail = re.search(r"(?<![\w.])(\d{3,}(?:[.,]\d{1,2})?)\s*(?:บาท|฿|baht)?\s*$", rest, re.I)
+        if tail and rest[: tail.start()].strip():
+            price = tail.group(1).replace(",", "")
+            rest = rest[: tail.start()]
 
     if verb in ("เพิ่มสินค้า", "ใส่สินค้า", "เพิ่มรายการ", "ใส่รายการ", "เพิ่มจำนวน", "เพิ่ม", "บวก", "ใส่", "เอาเพิ่ม", "ไปอีก", "อีก",
                 "add", "put", "insert") or (verb == "เอา" and more):
@@ -12837,7 +13118,11 @@ async def _handle_ai_understood_intent(
     def _joined(*parts) -> str:
         return " ".join(str(p) for p in parts if str(p or "").strip())
 
-    code = str(fields.get("code") or "").strip()
+    # `entity_code` is the note block's name for the same thing, and the
+    # model reaches for it on other entities too ("ตั้งเตือน D-2026-0002"
+    # waited for a date, then the bare "พรุ่งนี้" lost the deal — audit,
+    # 15 ก.ย. 2569).
+    code = str(fields.get("code") or fields.get("entity_code") or "").strip()
     target = str(fields.get("target_name") or "").strip()
 
     if entity == "ticket":
@@ -13017,8 +13302,23 @@ async def _handle_ai_understood_intent(
         # model forgets to put it in due_date, and the parser reads it
         # perfectly well (12:03, 2 Sep — the model returned no date and the
         # assistant answered "ไม่เข้าใจวันที่" to a message containing one).
-        text = _joined("เตือน", due, target, fields.get("notes"), message)
-        subject = str(fields.get("notes") or "").strip() or None
+        from .thai_datetime import looks_like_a_time_attempt, parse_thai_time
+
+        if looks_like_a_time_attempt(message) and parse_thai_time(message) is None:
+            # "บ่ายเก้า": a time was given and cannot be read. The model's
+            # own guess (09:00) must not paper over it — the handler asks
+            # again, which is the whole point of the cue (review B06).
+            due = _joined(fields.get("due_date"))
+        # The code goes in too: on a slot-fill continuation ("พรุ่งนี้" after
+        # "กรุณาระบุวันที่") the sentence is the bare answer and the record
+        # lives only in the merged fields (audit, 15 ก.ย. 2569).
+        text = _joined("เตือน", code, due, target, fields.get("notes"), message)
+        # The note: the model's reading, else the person's own sentence
+        # minus the command, the date and the name. "" means no note —
+        # "ลงนัดหมายกับลูกค้าสิงสระ ให้หน่อย" is not ABOUT anything.
+        subject = str(fields.get("notes") or "").strip() or _subject_without(
+            _reminder_subject(message, code or ""), target,
+        )
         resolved = None
         if target and _find_entity_code(message) is None:
             # A named customer is a target in its own right — waiting for a
@@ -13105,7 +13405,7 @@ async def _handle_ai_understood_intent(
         return await _handle_warranty_register(
             client, ctx=ctx, license_id=license_id,
             message=_joined(fields.get("serial_number"), fields.get("product_name"), target, message),
-            language=language, permission_keys=permission_keys,
+            language=language, permission_keys=permission_keys, target_name=target,
         )
 
     # Understood as a category but not as something with a handler behind
@@ -14747,6 +15047,20 @@ async def _handle_deal_detail(
     rows = [
         f"{deal.get('deal_id')} · {_label(DEAL_STAGE_LABELS, deal.get('stage'), language)}",
     ]
+    # Whose deal it is: "ดีลนี้ของใคร" answered with the code and the stage
+    # and never the person (audit, 15 ก.ย. 2569). One lookup; a missing
+    # customer row leaves the line out rather than failing the card.
+    if deal.get("contact_id"):
+        try:
+            who = await client.get_customer(str(license_id), str(deal["contact_id"]))
+        except Exception:  # noqa: BLE001
+            who = None
+        if who:
+            code = str(who.get("customer_id") or "").strip()
+            rows.append(
+                ("ลูกค้า: " if language != "en" else "Customer: ")
+                + _display_name(who) + (f" ({code})" if code else "")
+            )
     if deal.get("notes"):
         rows.append(f"บันทึก: {deal['notes']}")
 
@@ -16602,7 +16916,10 @@ def _format_customer_candidates(candidates: list[dict], language: str, name: str
     lines = [_t(CUSTOMER_DISAMBIGUATION_HEADER, language).format(name=name)]
     for i, m in enumerate(candidates, start=1):
         phone = m.get("phone") or "-"
-        lines.append(f"{i}. {_display_name(m)} ({phone})")
+        code = str(m.get("customer_id") or "").strip()
+        # The code too: it is how the person tells two สมชาย apart on the
+        # customer list, and the other picker shows it.
+        lines.append(f"{i}. {_display_name(m)} ({code + ' · ' if code else ''}{phone})")
     return "\n".join(lines)
 
 
@@ -16649,7 +16966,13 @@ async def _find_one_customer_by_name(
                 },
                 missing=[], ttl_seconds=CUSTOMER_DISAMBIGUATION_TTL_S,
             )
-        return None, ChatReply(text=_format_customer_candidates(candidates, language, name))
+        # Buttons as well as numbers (rule 3, and the audit of 15 ก.ย.
+        # 2569: this picker had numbers, the other had buttons). A tap
+        # sends the number, which _resolve_customer_disambiguation reads.
+        return None, ChatReply(
+            text=_format_customer_candidates(candidates, language, name),
+            quick_replies=[(_display_name(m)[:20], str(i)) for i, m in enumerate(candidates[:4], start=1)],
+        )
     return matches[0], None
 
 
@@ -16783,7 +17106,7 @@ async def _handle_customer_intent(
                 client, contact=row, fields=dict(then_deal), ctx=ctx, license_id=license_id, language=language,
             )
             return ChatReply(
-                text=_t(CUSTOMER_CREATED, language).format(name=f" {_display_name(row)} ") + routed + "\n" + deal_reply.text,
+                text=_t(CUSTOMER_CREATED, language).format(name=f" {_display_name(row)} ({row.get('customer_id') or '-'}) ") + routed + "\n" + deal_reply.text,
                 entity_type=deal_reply.entity_type or "customer", entity_id=deal_reply.entity_id or row["id"],
                 intent=intent, quick_replies=deal_reply.quick_replies,
             )
@@ -16793,7 +17116,7 @@ async def _handle_customer_intent(
         # someone's diary they did not ask for, and the cost of asking is
         # one tap.
         reply_text = _t(CUSTOMER_CREATED, language).format(
-            name=f" {_display_name(row)} "
+            name=f" {_display_name(row)} ({row.get('customer_id') or '-'}) "
         ) + routed
         # From the note, which after recover_free_text holds the person's
         # own words rather than the model's retyping of them.
@@ -17959,6 +18282,12 @@ async def _handle_quote_intent(
     if action == "update":
         status = str(fields.get("status") or "").strip().lower()
         if status in ("accepted", "rejected", "expired", "sent"):
+            # "ยกเลิกใบเสนอราคา Q-… ได้ไหม" is a question; the typed road
+            # asks the guard before changing a status and so must this one
+            # (audit, 15 ก.ย. 2569: it rejected the quote).
+            held_status = _intent_guard_reply(message, action="quote_status", language=language)
+            if held_status is not None:
+                return held_status
             return await _handle_quote_status(
                 client, ctx=ctx, license_id=license_id, message=message,
                 target=status, permission_keys=held, language=language,
@@ -19170,19 +19499,37 @@ async def _route_chat_message(
                 await _drop_pending_quietly(client, ctx)
                 _note_road(road="pending")
                 return ChatReply(text=_t(FLOW_SWITCH_CANCELLED, language))
-            if (message or "").strip() == command.strip() or norm in _FLOW_SWITCH_GO_WORDS:
+            new_label = _normalise(_new_command_label(command, language)) if command else ""
+            goes_by_name = bool(new_label) and norm in (
+                new_label + "เลย", new_label + "ไปเลย", new_label + "เถอะ", new_label + "แทน", "เอา" + new_label, new_label,
+            )
+            if (message or "").strip() == command.strip() or norm in _FLOW_SWITCH_GO_WORDS or goes_by_name:
+                # "สร้างดีลเลย" answers "จะยกเลิกแล้วสร้างดีลแทนไหม" (audit,
+                # 15 ก.ย. 2569: it was "ยังไม่แน่ใจ" and both flows were lost).
                 await _drop_pending_quietly(client, ctx)
                 return await _route_chat_message(
                     client, message=command, ctx=ctx, language=language, ai_client=ai_client,
                     abandoned=_abandoned_flow(original),
                 )
             await _restore_flow(client, ctx, original)
-            if norm in _FLOW_SWITCH_KEEP_WORDS or (message or "").strip() == FLOW_SWITCH_KEEP_TEXT:
+            own_label = _normalise(_t(FLOW_LABELS.get(str(original.get("entity") or ""), {"th": "", "en": ""}), language))
+            keeps_by_name = bool(own_label) and norm in (own_label + "ต่อ", own_label + "ต่อเลย", "ทำ" + own_label + "ต่อ")
+            if norm in _FLOW_SWITCH_KEEP_WORDS or (message or "").strip() == FLOW_SWITCH_KEEP_TEXT or keeps_by_name:
+                # "เพิ่มลูกค้าต่อ" while adding a customer is "carry on", not
+                # a second customer (audit, 15 ก.ย. 2569: it asked again).
                 return ChatReply(
                     text=_t(FLOW_SWITCH_RESUMED, language) + ask_for_missing(list(original.get("missing") or []), language),
                 )
             # Anything else answers the original question.
             early_pending = {**original}
+        if early_pending is not None and early_pending.get("entity") == "name_pick":
+            picked = await _resolve_name_pick(
+                client, ctx=ctx, message=message, pending=early_pending, language=language, ai_client=ai_client,
+            )
+            if picked is not None:
+                _note_road(road="pending")
+                return picked
+            early_pending = None
         if early_pending is not None and early_pending.get("entity") == "bulk_customer_phone":
             resolved = await _resolve_bulk_customer_phone(
                 client, ctx=ctx, license_id=license_id, message=message, pending=early_pending,
@@ -19233,6 +19580,10 @@ async def _route_chat_message(
     # invite-code paths for the same pattern) — checked before the AI
     # parser, and before the pending-intent load below, since it is
     # unrelated to any in-progress slot-filling.
+    if ctx.oa == "sales" and _is_customer_invite_request(message) and not (
+        _is_technician_invite_request(message) or _is_sales_invite_request(message)
+    ):
+        return await _handle_shop_card(client, ctx=ctx, license_id=license_id, language=language)
     if ctx.oa == "sales" and (
         _is_technician_invite_request(message) or _is_sales_invite_request(message)
         or _is_ambiguous_invite_request(message)
@@ -19646,6 +19997,21 @@ async def _route_chat_message(
             # reason: the command wins, the decline is forgotten.
             await _drop_pending_quietly(client, ctx)
             in_progress = None
+        if in_progress and in_progress.get("entity") == "ticket_reject" and _looks_like_a_question(message):
+            # "งานนี้อยู่ที่ไหนครับ" while the decline waits for its reason is
+            # a question — it was filed as the reason and the job declined
+            # (audit, 15 ก.ย. 2569). The job card answers; the decline waits.
+            card = await _handle_ticket_detail(
+                client, ctx=ctx, license_id=license_id,
+                message=f"ข้อมูลงาน {(in_progress.get('fields') or {}).get('code') or ''}",
+                permission_keys=permission_keys, language=language,
+            )
+            return ChatReply(
+                text=(card.text or "") + "\n\n" + _t(TICKET_REJECT_STILL_WAITING, language).format(
+                    code=str((in_progress.get("fields") or {}).get("code") or ""),
+                ),
+                quick_replies=[(r, r) for r in _t(TICKET_REJECT_REASONS, language)] + [("ไม่ปฏิเสธ", "ยกเลิก")],
+            )
         if in_progress and in_progress.get("entity") == "ticket_reject":
             return await _resolve_ticket_reject_confirm(
                 client, ctx=ctx, license_id=license_id, message=message, pending=in_progress,
@@ -20121,6 +20487,7 @@ async def _route_chat_message(
         return await _handle_ticket_list(
             client, ctx=ctx, license_id=license_id,
             permission_keys=permission_keys, language=language, mine=True,
+            today=any(w in _normalise(message) for w in ("วันนี้", "today")),
         )
 
     if ctx.oa == "sales":
@@ -20192,6 +20559,17 @@ async def _route_chat_message(
             )
         day_span = _reminder_list_day(message)
         if day_span is not None:
+            # The same answer as the model road gives: the diary for the
+            # day named, not "everything due within N days" — which listed
+            # next week's appointments under "พรุ่งนี้" whenever a form was
+            # pending and this table answered instead of the model
+            # (owner's DEV test, 14 ก.ย. 2569).
+            window = _diary_window(message)
+            if window is not None and "followup.read" in set(permission_keys):
+                return await _handle_reminder_list(
+                    client, ctx=ctx, license_id=license_id, message=message,
+                    permission_keys=permission_keys, language=language, window=window,
+                )
             return await _handle_work_list(
                 client, license_id=license_id, permission_keys=permission_keys,
                 language=language, days=day_span,
@@ -21312,6 +21690,14 @@ async def _execute_intent(
     if intent.get("entity") == "setting" and ACTION_ALIASES.get(
         str(intent.get("action") or "").lower(), str(intent.get("action") or "").lower()
     ) in READ_ACTIONS:
+        # "รับลูกค้าใหม่อัตโนมัติ ตอนนี้เปิดอยู่ไหม" is the state of ONE
+        # setting, not the shop card (audit, 15 ก.ย. 2569).
+        auto = await _maybe_auto_accept_setting(
+            client, ctx=ctx, license_id=license_id, message=message,
+            permission_keys=permission_keys, language=language,
+        )
+        if auto is not None:
+            return auto
         return await _handle_shop_card(client, ctx=ctx, license_id=license_id, language=language)
 
     # Profile edits (Phase 8) bypass the generic gate entirely: self-edit is
@@ -21520,6 +21906,15 @@ async def _execute_intent(
             client, license_id=license_id, permission_keys=permission_keys, language=language,
         )
     if intent.get("entity") == "setting":
+        # The model read "ตั้งค่ารับลูกค้าใหม่อัตโนมัติ เปิด" as a setting
+        # update and the generic handler said the chat cannot do it — it
+        # can, and the guide says so (audit, 15 ก.ย. 2569).
+        auto = await _maybe_auto_accept_setting(
+            client, ctx=ctx, license_id=license_id, message=message,
+            permission_keys=permission_keys, language=language,
+        )
+        if auto is not None:
+            return auto
         return await _handle_setting_intent(
             client, intent=intent, ctx=ctx, license_id=license_id,
             permission_keys=permission_keys, language=language,
@@ -22925,7 +23320,7 @@ async def _resolve_draft_customer_deal_confirm(
         log.exception("creating the drafted customer failed")
         return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
     await _remember_customer(client, ctx, row)
-    created = _t(CUSTOMER_CREATED, language).format(name=f" {_display_name(row)} ")
+    created = _t(CUSTOMER_CREATED, language).format(name=f" {_display_name(row)} ({row.get('customer_id') or '-'}) ")
     created += await _route_created_customer(client, license_id, row, ctx=ctx, language=language)
     deal_reply = await _apply_deal_create(
         client, contact=row, fields=deal_fields, ctx=ctx, license_id=license_id, language=language,

@@ -1187,6 +1187,12 @@ class WarrantyOut(BaseModel):
     # Sent since 10 ก.ย. 2569 so a fault report can carry the catalogue
     # row of the unit the customer registered, not just its name.
     product_id: str | None = None
+    # Two different links (round 18b): the customer RECORD the shop attached
+    # at registration, and the LINE identity that claimed the unit.
+    contact_id: str | None = None
+    contact_name: str | None = None
+    contact_code: str | None = None
+    customer_chann_uid: str | None = None
     warranty_start: str
     warranty_end: str
     status: str

@@ -20,6 +20,9 @@ type Warranty = {
   serial_number?: string | null;
   product_name?: string | null;
   customer_chann_uid?: string | null;
+  contact_id?: string | null;
+  contact_name?: string | null;
+  contact_code?: string | null;
   warranty_start?: string | null;
   warranty_end?: string | null;
   status?: string | null;
@@ -316,7 +319,9 @@ export default function SalesWarranties({ liffId }: { liffId: string }) {
                     data-tone={row.customer_chann_uid ? "ok" : undefined}
                     style={{ marginLeft: 8 }}
                   >
-                    {row.customer_chann_uid ? copy.claimed : copy.unclaimed}
+                    {row.contact_name
+                      ? `${copy.contact} ${row.contact_name}${row.contact_code ? ` (${row.contact_code})` : ""} · ${row.customer_chann_uid ? copy.lineLinked : copy.lineNotLinked}`
+                      : row.customer_chann_uid ? copy.claimed : copy.unclaimed}
                   </span>
                 </div>
                 <div className="card-meta">

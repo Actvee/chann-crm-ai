@@ -522,8 +522,11 @@ class TestA20DashboardTiles:
 class TestA21AppointmentsToday:
     async def test_appointments_today_lists_rather_than_creates(self):
         client = _sales()
-        await say(client, "sales", "นัดหมายวันนี้ครับ")
-        assert _writes(client, "due_follow_ups") and not _writes(client, "create_follow_up")
+        reply = await say(client, "sales", "นัดหมายวันนี้ครับ")
+        # Round 18b: a day question is the diary for that day — answered
+        # by name ("วันนี้ … ไม่มีนัด"), and nothing is created.
+        assert "วันนี้" in reply.text and "ไม่มีนัด" in reply.text, reply.text
+        assert not _writes(client, "create_follow_up") and not _writes(client, "set_pending_intent")
 
     async def test_what_is_on_today_is_the_day_not_the_help_menu(self):
         client = _sales()

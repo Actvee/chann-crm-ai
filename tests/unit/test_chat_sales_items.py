@@ -105,7 +105,7 @@ class TestCustomerInterestOpensADeal:
         reply = await say(client, "ลูกค้าใหม่ จรสิงค์ กิ่งปัญญา 0576788866", ai=_crafted(
             {"action": "create", "entity": "customer",
              "fields": {"first_name": "จรสิงค์", "last_name": "กิ่งปัญญา", "phone": "0576788866"}, "missing": []}))
-        assert "เพิ่มลูกค้า จรสิงค์ กิ่งปัญญา เรียบร้อยแล้ว" in reply.text
+        assert "เพิ่มลูกค้า จรสิงค์ กิ่งปัญญา (C-2026-0001) เรียบร้อยแล้ว" in reply.text
         reply = await say(client, "ลูกค้าสนใจอยากได้พัดลม 1 ตัว")
         assert reply.text == "ต้องการสร้างดีลสำหรับ จรสิงค์ กิ่งปัญญา และเพิ่มพัดลม 1 ตัวใช่ไหมครับ?"
         assert [send for _label, send in reply.quick_replies] == ["ใช่", "ไม่ใช่"]
@@ -461,7 +461,7 @@ class TestAbandonedFlows:
         assert [send for _l, send in reply.quick_replies] == ["ใช่", "ไม่ใช่"]
         assert not _writes(client, "create_customer") and not _writes(client, "create_deal")
         reply = await say(client, "ใช่")
-        assert "เพิ่มลูกค้า สามเสน เขตคิงคิ เรียบร้อยแล้ว" in reply.text and "สร้างดีล D-2026-0001 สำหรับ สามเสน เขตคิงคิ" in reply.text
+        assert "เพิ่มลูกค้า สามเสน เขตคิงคิ (C-2026-0001) เรียบร้อยแล้ว" in reply.text and "สร้างดีล D-2026-0001 สำหรับ สามเสน เขตคิงคิ" in reply.text
         created = _writes(client, "create_customer")[0][2]
         assert created["first_name"] == "สามเสน" and "phone" not in created and client._pending is None
 
@@ -474,7 +474,7 @@ class TestAbandonedFlows:
         assert reply.text == "งั้นพิมพ์เบอร์โทรของ สามเสน เขตคิงคิ มาก่อนครับ จะสร้างลูกค้าให้เสร็จแล้วเปิดดีลให้ต่อเลย"
         assert client._pending["entity"] == "customer" and client._pending["missing"] == ["phone"]
         reply = await say(client, "0812345678", ai=_crafted({"action": "create", "entity": "customer", "fields": {"phone": "0812345678"}, "missing": []}))
-        assert reply.text == "เพิ่มลูกค้า สามเสน เขตคิงคิ เรียบร้อยแล้ว\nสร้างดีล D-2026-0001 สำหรับ สามเสน เขตคิงคิ เรียบร้อยแล้ว"
+        assert reply.text == "เพิ่มลูกค้า สามเสน เขตคิงคิ (C-2026-0001) เรียบร้อยแล้ว\nสร้างดีล D-2026-0001 สำหรับ สามเสน เขตคิงคิ เรียบร้อยแล้ว"
         assert _writes(client, "create_customer")[0][2]["phone"] == "0812345678"
 
     async def test_the_confirmed_switch_still_carries_the_draft(self):
@@ -597,7 +597,8 @@ class TestTotals:
         client = _sales()
         await _customer_and_deal(client)
         reply = await say(client, "ขอข้อมูลดีล D-2026-0001")
-        assert reply.text == "D-2026-0001 · ใหม่\nยังไม่มีรายการสินค้าในดีลนี้\nรวม: 0.00 บาท"
+        # Round 18b: the card names whose deal it is.
+        assert reply.text == "D-2026-0001 · ใหม่\nลูกค้า: จรสิงค์ กิ่งปัญญา (C-2026-0001)\nยังไม่มีรายการสินค้าในดีลนี้\nรวม: 0.00 บาท"
 
     async def test_an_empty_deal_in_english(self):
         client = _sales()

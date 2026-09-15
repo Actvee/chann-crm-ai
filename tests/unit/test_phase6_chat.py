@@ -482,10 +482,15 @@ class FakeDataClient:
             if str(w.get("serial_number", "")).upper() == serial:
                 raise DataTierError(409, "serial already registered")
         n = len(self._warranties) + 1
+        # Mirrors the Data Tier (round 18b): the attached customer record
+        # comes back by name and code, beside the LINE claim.
+        contact = next((c for c in self._customers if str(c.get("id")) == str(payload.get("contact_id") or "")), None)
         row = {
             "id": f"w-{n}", "warranty_number": f"W-2026-{n:04d}", "status": "active",
             "product_name": None, "warranty_start": None, "warranty_end": None,
             "customer_chann_uid": None, **payload,
+            "contact_name": " ".join(p for p in ((contact or {}).get("first_name"), (contact or {}).get("last_name")) if p) or None,
+            "contact_code": (contact or {}).get("customer_id"),
         }
         self._warranties.append(row)
         return row

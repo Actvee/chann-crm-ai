@@ -183,8 +183,19 @@ SERVICE_REPORT_CREATE = Capability(
     never_needed=("code", "found_issue", "work_done", "parts_changed", "notes"),
 )
 
+# Staff recording a sold unit (round 18b): the serial is the record; the
+# customer is optional by design — a unit sold over the counter has none
+# yet — so the model's "missing: target_name" must not open a form. When a
+# name IS given and nobody has it, the handler refuses rather than
+# registering nobody (tester, 14 ก.ย. 2569).
+WARRANTY_CREATE = Capability(
+    action="create", entity="warranty", required=("serial_number",),
+    never_needed=("target_name", "product_name", "warranty_end", "warranty_start"),
+)
+
 REGISTRY: dict[tuple[str, str], Capability] = {
     (c.entity, c.action): c for c in (
+        WARRANTY_CREATE,
         CUSTOMER_CREATE, FOLLOWUP_CREATE, QUOTE_CREATE, TEAM_CREATE, SALES_GROUP_CREATE,
         APPROVAL_APPROVE, APPROVAL_REJECT,
         TICKET_CLAIM, TICKET_READ, TICKET_UPDATE, TICKET_ASSIGN, LINE_ITEM_CREATE, LINE_ITEM_UPDATE, SERVICE_REPORT_CHECK_IN, SERVICE_REPORT_CHECK_OUT,

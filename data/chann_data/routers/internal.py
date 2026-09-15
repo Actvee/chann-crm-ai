@@ -4575,12 +4575,9 @@ def register_warranty(
         )
         session.commit()
         session.refresh(row)
-        return {
-            "id": str(row.id), "warranty_number": row.warranty_number,
-            "serial_number": row.serial_number, "product_name": row.product_name,
-            "warranty_start": row.warranty_start.isoformat(),
-            "warranty_end": row.warranty_end.isoformat(), "status": row.status,
-        }
+        # The same shape the list sends, contact included: the reply to
+        # "ลงทะเบียนสินค้า … ให้ลูกค้า X" names X from what was written.
+        return _warranty_out(row, _warranty_contacts(session, scope, [row]).get(row.contact_id))
     except Exception as exc:
         session.rollback()
         raise _warranty_error(exc)
@@ -4603,13 +4600,35 @@ def list_warranties(
         rows = repo.for_customer(scope, customer_chann_uid)
     else:
         rows = repo.list_for_license(scope, limit=limit)
-    return [_warranty_out(r) for r in rows]
+    contacts = _warranty_contacts(session, scope, rows)
+    return [_warranty_out(r, contacts.get(r.contact_id)) for r in rows]
 
 
-def _warranty_out(row) -> dict:
+def _warranty_contacts(session: Session, scope: TenantScope, rows) -> dict:
+    """The customer records the rows point at, in one query — the book
+    names the customer a unit was sold to, not only whether they have
+    claimed it on LINE (tester, 14 ก.ย. 2569: "ยังไม่มีลูกค้าผูก" on a unit
+    registered "ให้ลูกค้า มิ เกียร")."""
+    from ..models import Customer
+
+    ids = {r.contact_id for r in rows if getattr(r, "contact_id", None)}
+    if not ids:
+        return {}
+    found = session.execute(
+        select(Customer).where(Customer.license_id == scope.license_id, Customer.id.in_(list(ids)))
+    ).scalars()
+    return {c.id: c for c in found}
+
+
+def _warranty_out(row, contact=None) -> dict:
     """The row as the app sees it. `status` is what the cover IS today —
     a row the nightly sweep has not reached yet must not say "active"
-    past its end date (review E5)."""
+    past its end date (review E5). `contact_*` is the customer RECORD the
+    shop attached; `customer_chann_uid` is the LINE identity that claimed
+    the unit — two different links, both shown."""
+    name = " ".join(
+        p for p in (getattr(contact, "first_name", None), getattr(contact, "last_name", None)) if p
+    ) if contact is not None else None
     return {
         "id": str(row.id), "warranty_number": row.warranty_number,
         "serial_number": row.serial_number, "product_name": row.product_name,
@@ -4618,6 +4637,9 @@ def _warranty_out(row) -> dict:
         # alone is the name the unit was sold under, not a link.
         "product_id": str(row.product_id) if row.product_id else None,
         "customer_chann_uid": row.customer_chann_uid,
+        "contact_id": str(row.contact_id) if row.contact_id else None,
+        "contact_name": name or None,
+        "contact_code": getattr(contact, "customer_id", None) if contact is not None else None,
         "warranty_start": row.warranty_start.isoformat(),
         "warranty_end": row.warranty_end.isoformat(),
         "status": WarrantyRepository.effective_status(row),

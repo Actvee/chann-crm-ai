@@ -94,7 +94,12 @@ report being written, an accept/decline waiting, a customer's address or date), 
 conversation with the shop, small talk, a greeting, a rich-menu tile, the help menu, the
 "คุยกับร้าน …" prefix, and (14 ก.ย.) a configuration command that carries free text for
 its OWN model call — "ตั้งกฎมอบหมาย …", "ตั้งการอนุมัติ …" and their confirm/show words:
-the router's model read "ช่างแอร์ให้ทีม AC" as "create a team called AC" and created it. Measured over the 1,168-utterance corpus through the real router:
+the router's model read "ช่างแอร์ให้ทีม AC" as "create a team called AC" and created it; and
+(15 ก.ย.) a pasted customer list — "ลูกค้าใหม่" followed by two or more "ชื่อ เบอร์" lines —
+which DEV's model read as one customer, creating the first line only. One rule for the
+rule road too: a table may answer a fresh sentence only the way the model road would —
+"พรุ่งนี้มีนัดอะไรบ้าง" typed while a form waited was answered by a keyword table with
+next week's appointments, while the same words on the model road gave tomorrow's diary. Measured over the 1,168-utterance corpus through the real router:
 
 | OA | model reads | rule decides | share |
 |---|---|---|---|

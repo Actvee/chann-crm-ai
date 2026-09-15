@@ -220,7 +220,8 @@ class TestClaim:
         ]
         reply = await handle_chat_message(client, message="รายการประกัน", ctx=_ctx())
         assert "A1" in reply.text and "B2" in reply.text
-        assert "ยังไม่มีลูกค้าผูก" in reply.text
+        # Round 18b: the book tells the record link from the LINE claim.
+        assert "ยังไม่มีลูกค้า" in reply.text and "ผูก LINE แล้ว" in reply.text
 
 
 # ------------------------------------------------------ Sale OA questions
