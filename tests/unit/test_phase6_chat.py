@@ -68,6 +68,17 @@ def _catalog() -> list[dict]:
     ]
 
 
+def _digits_phone(phone):
+    """The Data tier stores digits only (phase9._normalise_phone): "081.234.5679"
+    and "+66812345679" are 0812345679. The fake must not keep the dots."""
+    if not phone:
+        return phone
+    digits = "".join(ch for ch in str(phone) if ch.isdigit())
+    if digits.startswith("66") and len(digits) > 9:
+        digits = "0" + digits[2:]
+    return digits or phone
+
+
 class FakeDataClient:
     """Stands in for the Data tier. Records what the engine asked it for."""
 
@@ -81,7 +92,11 @@ class FakeDataClient:
         self._customers = list(customers) if customers is not None else []
         self._deals = list(deals) if deals is not None else []
         self._quotes = list(quotes) if quotes is not None else []
-        self._next_deal_n = 1
+        # After the seeded deals, as the real sequence does: a seeded
+        # D-2026-0001 plus a created D-2026-0001 made "รายการดีล" list the
+        # same code twice (converse, 15 ก.ย. 2569).
+        seeded_n = [int(str(d.get("deal_id") or "")[-4:]) for d in self._deals if str(d.get("deal_id") or "")[-4:].isdigit()]
+        self._next_deal_n = (max(seeded_n) + 1) if seeded_n else 1
         self._storefront_results = storefront_results or []
         self._pending = pending_intent
         self._permission_keys = list(
@@ -752,6 +767,13 @@ class FakeDataClient:
             if not (r["group_id"] == group_id and r["member_id"] == member_id)
         ]
 
+    async def record_generated_document(self, license_id, payload, actor_id=None):
+        self.recorded.append(("record_generated_document", license_id, payload.get("document_type"), payload.get("source_entity_id")))
+        docs = getattr(self, "_generated_documents", [])
+        row = {"id": f"GD-{len(docs) + 1}", "license_id": license_id, **payload}
+        self._generated_documents = docs + [row]
+        return row
+
     async def get_generated_document(self, license_id, document_id):
         return {"id": document_id, "sha256": "abc123", "output_path": f"gs://b/{document_id}.pdf"}
 
@@ -931,12 +953,17 @@ class FakeDataClient:
         self.recorded.append(("upsert_product", license_id, product_id, payload, actor_id))
         if self._raises:
             raise self._raises
-        return {
+        row = {
             "id": f"PROD-{product_id}", "license_id": license_id,
             "product_id": product_id, "product_name": payload["product_name"],
             "sku": payload.get("sku"), "category": payload.get("category"),
             "unit_price": payload.get("unit_price"), "description": payload.get("description"),
         }
+        # The real tier lists what it saved; "เปลี่ยนราคาสินค้า TV40" right
+        # after saving TV40 could not find it here (converse, 15 ก.ย. 2569).
+        rows = [r for r in getattr(self, "_products", []) if str(r.get("product_id")) != str(product_id)]
+        self._products = rows + [row]
+        return row
 
     async def create_invite(self, license_id, payload, actor_id=None):
         self.recorded.append(("create_invite", license_id, payload, actor_id))
@@ -957,7 +984,7 @@ class FakeDataClient:
             "customer_id": f"C-2026-{len(self._customers) + 1:04d}",
             "customer_chann_uid": None, "stage": "lead", "owner_member_id": None,
             "first_name": payload.get("first_name"), "last_name": payload.get("last_name"),
-            "phone": payload.get("phone"), "email": payload.get("email"),
+            "phone": _digits_phone(payload.get("phone")), "email": payload.get("email"),
             "address": payload.get("address"), "notes": payload.get("notes"),
         }
         self._customers.append(row)
