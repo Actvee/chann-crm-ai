@@ -133,6 +133,9 @@ ACTION_WORDS: dict[str, tuple[str, ...]] = {
     ),
     # The catch-all for a removal the model asked for on an entity with no
     # wording of its own.
+    # "ไม่ต้องสร้างลูกค้า สมหญิง … แล้วนะ" refuses; the model still read a
+    # create (audit [70], 15 ก.ย. 2569).
+    "customer_create": ("เพิ่มลูกค้า", "สร้างลูกค้า", "ลูกค้าใหม่", "เพิ่มรายชื่อ", "add customer", "new customer", "create customer"),
     "record_delete": ("ลบ", "ยกเลิก", "เอาออก", "นำออก", "delete", "remove", "cancel"),
     # Retiring a product from the catalogue. Its own entry because the
     # catch-all above could not bind to the sentence people actually type:

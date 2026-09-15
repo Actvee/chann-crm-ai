@@ -540,6 +540,18 @@ class FakeDataClient:
             "company_name": "บริษัททดสอบ",
         }]
 
+    async def transition_quote_status(self, license_id, quote_id, status, actor_id=None):
+        # The issue road moves a draft to "sent" through this name (quote_issue.py);
+        # the fake lacked it, so the swallowed error left every quote a draft.
+        return await self.set_quote_status(license_id, quote_id, status, actor_id=actor_id)
+
+    async def link_quote_document(self, license_id, quote_id, document_id, actor_id=None):
+        self.recorded.append(("link_quote_document", license_id, quote_id, document_id))
+        for q in self._quotes:
+            if str(q.get("id")) == str(quote_id):
+                q["generated_document_id"] = document_id
+        return {"id": quote_id, "generated_document_id": document_id}
+
     async def set_quote_status(self, license_id, quote_id, status, actor_id=None):
         self.recorded.append(("set_quote_status", license_id, quote_id, status))
         for q in self._quotes:

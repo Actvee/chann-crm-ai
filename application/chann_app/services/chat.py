@@ -859,6 +859,12 @@ async def _maybe_handle_teams(
     # space away and the shop got a TECHNICIAN team called ขาย
     # (10 ก.ย. 2569). Matched as written, so a trigger that ends in a space
     # requires the separator and one that does not still matches tightly.
+    if any(t.lower().strip() in lowered for t in TEAM_CREATE_TRIGGERS) and not any(lowered.startswith(t.lower()) for t in TEAM_CREATE_TRIGGERS):
+        # "อย่าเพิ่งสร้างทีมช่าง ไฟฟ้า": the verb is inside a refusal (audit
+        # [70]) — the guard answers it; it used to fall to "not sure".
+        refused = _intent_guard_reply(message, action="team_manage", language=language)
+        if refused is not None:
+            return refused
     create = next(
         (t for t in TEAM_CREATE_TRIGGERS
          if lowered.startswith(t.lower()) and len(lowered) > len(t)),
@@ -3249,8 +3255,8 @@ def _is_register_request(message: str) -> bool:
 SERIAL_RE = re.compile(r"\b([A-Z0-9][A-Z0-9\-]{4,31})\b", re.IGNORECASE)
 
 WARRANTY_REGISTERED = {
-    "th": "ลงทะเบียนรับประกันแล้วครับ\n{number} · {product}\nคุ้มครองถึง {end}",
-    "en": "Registered.\n{number} · {product}\nCovered until {end}",
+    "th": "ลงทะเบียนรับประกันแล้วครับ\n{number} · {product}{end}",
+    "en": "Registered.\n{number} · {product}{end}",
 }
 WARRANTY_NEEDS_SERIAL = {
     "th": "ขอหมายเลขเครื่อง (serial) ที่อยู่บนตัวสินค้าด้วยครับ",
@@ -3439,7 +3445,8 @@ async def _handle_warranty_register(
     text = _t(WARRANTY_REGISTERED, language).format(
         number=(row.get("warranty_number") or "-"),
         product=row.get("product_name") or serial,
-        end=_iso_to_thai_date(row.get("warranty_end")),
+        end=("\nคุ้มครองถึง " if language != "en" else "\nCovered until ") + _iso_to_thai_date(row.get("warranty_end"))
+        if row.get("warranty_end") else "",
     )
     if contact_name:
         code = str(named[2] or "") if named else ""
@@ -4837,6 +4844,19 @@ async def _ask_for_the_unit_again(client: DataClient, ctx: ResolvedContext, lice
         text=_t(REPORT_REGISTER_FIRST, language).format(issue=held[:60]),
         quick_replies=[("ไม่มีหมายเลขเครื่อง", "ไม่มีหมายเลขเครื่อง")],
     )
+
+
+async def _serial_from_own_jobs(client: DataClient, license_id: str, ctx: ResolvedContext) -> str:
+    """The serial on the customer's most recent job, "" when none carries one."""
+    try:
+        rows = await client.list_tickets(license_id)
+    except Exception:  # noqa: BLE001
+        return ""
+    mine = [t for t in rows if str(t.get("customer_chann_uid") or "") == ctx.chann_uid and t.get("serial_number")]
+    if not mine:
+        return ""
+    mine.sort(key=lambda t: str(t.get("created_at") or t.get("scheduled_date") or ""), reverse=True)
+    return str(mine[0].get("serial_number") or "")
 
 
 async def _hold_customer_message(client: DataClient, ctx: ResolvedContext, text: str) -> None:
@@ -6376,6 +6396,11 @@ async def _handle_customer_report(
                     for w in registered[:4]
                 ] + [("ไม่มีหมายเลขเครื่อง", "ไม่มีหมายเลขเครื่อง")],
             )
+        elif (earlier := await _serial_from_own_jobs(client, str(license_id), ctx)):
+            # Nothing registered, but an earlier job of theirs carried the
+            # unit's serial: "แอร์ไม่เย็นอีกแล้ว" is that unit again (converse,
+            # 15 ก.ย. 2569 — they were asked to register first).
+            serial = earlier
         else:
             await _hold_customer_message(client, ctx, text)
             return ChatReply(
@@ -8138,6 +8163,15 @@ async def _handle_ticket_detail(
         client, ctx, entity_type="ticket", entity_id=str(ticket["id"]),
         code=str(ticket.get("ticket_number") or ""),
     )
+    if ticket.get("contact_id"):
+        # "เปิดงานให้ลูกค้าคนนี้อีกงาน" after looking at a job is that job's
+        # customer (audit [32], 15 ก.ย. 2569).
+        try:
+            who_row = await client.get_customer(str(license_id), str(ticket["contact_id"]))
+            if who_row:
+                await _remember_customer(client, ctx, who_row)
+        except Exception:  # noqa: BLE001
+            log.exception("could not remember the job's customer")
     return ChatReply(
         text="\n".join(lines),
         entity_type="ticket", entity_id=str(ticket["id"]),
@@ -8148,6 +8182,15 @@ TICKET_OPEN_EMPTY = {
     "th": "ตอนนี้ไม่มีงานเปิดรับครับ",
     "en": "No open jobs right now.",
 }
+
+
+def _asks_todays_jobs(message: str) -> bool:
+    """A question about today's jobs in a sentence that also names a job
+    code as history ("เมื่อวานปิดงาน T-… ไปแล้ว วันนี้มีงานอีกไหม"). Without
+    a code the agenda road already answers "วันนี้มีงานไหม"."""
+    said = (message or "").replace(" ", "")
+    return bool(TICKET_CODE_RE.search(message or "")) and "วันนี้" in said and _looks_like_a_question(message) \
+        and any(w in said for w in ("มีงาน", "งานอีก", "งานไหม", "งานอะไร", "งานบ้าง"))
 
 
 def _asks_unassigned_jobs(message: str) -> bool:
@@ -9216,7 +9259,9 @@ async def _handle_ticket_reject(
     if not reason:
         # Declining sends the job back to the dispatcher and is not undone
         # by typing again: confirm, and get the reason the dispatcher will
-        # read (review, 6 Sep 2026 — neither was asked).
+        # read (review, 6 Sep 2026 — neither was asked). A reason in the
+        # sentence IS the confirmation (test_tech_flow, 6 Sep) — on both
+        # roads, now that the model road passes its reason on (audit [49]).
         try:
             await client.set_pending_intent(
                 ctx.chann_uid, ctx.oa, action="reject", entity="ticket_reject",
@@ -9275,6 +9320,8 @@ async def _resolve_ticket_reject_confirm(
     for word in ("ยืนยันปฏิเสธ", "ยืนยัน", "confirm"):
         if reason.lower().startswith(word):
             reason = reason[len(word):].strip(" :-—,")
+    if not reason and fields.get("reason"):
+        reason = str(fields.get("reason"))
     try:
         member = await client.get_member(str(license_id), ctx.chann_uid, channel=member_channel(ctx.oa))
     except Exception:
@@ -9772,6 +9819,14 @@ async def _maybe_answer_survey(
         log.exception("could not look for a pending survey")
         return None
     if survey is None:
+        try:
+            ref = await _last_entity_ref(client, ctx)
+        except Exception:  # noqa: BLE001
+            ref = None
+        if ref and str(ref.get("entity_type") or "") == "survey_answered":
+            # "3" again, or "ดีเยี่ยม", right after the rating was taken: say
+            # so, rather than a greeting (converse rating t4/t5).
+            return ChatReply(text=_t(SURVEY_ALREADY_ANSWERED, language))
         return None
     scale = survey.get("scale_config_json") or approval_service.DEFAULT_SCALE
     if str(score) not in scale:
@@ -9794,6 +9849,13 @@ async def _maybe_answer_survey(
     except Exception:
         log.exception("survey answer failed")
         return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    try:
+        await _remember_entity(
+            client, ctx, entity_type="survey_answered", entity_id=str(survey.get("id") or ""),
+            code=str((ticket or {}).get("ticket_number") or ""),
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("could not remember the answered survey")
     return ChatReply(
         text=_t(SURVEY_THANKS, language).format(
             label=scale.get(str(score), str(score)),
@@ -10763,6 +10825,11 @@ _GUARD_ACTIONS: dict[str, dict[str, str]] = {
     },
     # Anything else the model asks to remove. Deliberately vague, because
     # this is the catch-all for entities with no wording of their own.
+    "customer_create": {
+        "th": "เพิ่มลูกค้า", "en": "add the customer",
+        "th_eg": "เพิ่มลูกค้า สมชาย ใจดี 0812345678", "en_eg": "add customer Somchai Jaidee 0812345678",
+        "code": "",
+    },
     "record_delete": {
         "th": "ลบข้อมูลนี้", "en": "delete this record",
         "th_eg": "ลบ {code}", "en_eg": "delete {code}",
@@ -10960,6 +11027,7 @@ _AI_GUARDED: dict[tuple[str, str], str] = {
     # generic edit vocabulary and reads all three moods correctly.
     ("customer", "update"): "record_write",
     ("customer", "archive"): "record_delete",
+    ("customer", "create"): "customer_create",
     ("product", "delete"): "product_archive",
     ("product", "archive"): "product_archive",
     ("customer", "promote"): "record_write",
@@ -11267,6 +11335,14 @@ async def _guarded_in_context(
     if _GUARD_CODE_RE.search(message or ""):
         return reply
     try:
+        named = await _customer_named_in(client, str(license_id), message, ["customer.read"])
+    except Exception:  # noqa: BLE001
+        named = None
+    if named and named[2]:
+        # "ยกเลิกนัดสมหญิงไม่ได้ใช่ไหม": the refusal names สมหญิง's code, not
+        # the table's placeholder (audit [20], 15 ก.ย. 2569).
+        return _intent_guard_reply(message, action=action, language=language, code=str(named[2]))
+    try:
         ref = await _last_entity_ref(client, ctx)
     except Exception:
         return reply
@@ -11341,6 +11417,29 @@ def _is_a_button_press(message: str, oa: str) -> bool:
         t.replace(" ", "").lower() for t in _MENU_COMMAND_TEXTS
     )
     return compact in labels or bool(_HELP_STEP_RE.match(message or ""))
+
+
+def _with_the_name_after_the_head(intent: dict, message: str) -> dict:
+    """"ลูกค้าใหม่ สามเสน": the model refused a district-like word as a name
+    and asked for one; the guide's own example says it IS the name (audit
+    verify, 15 ก.ย. 2569). Filled before the missing gate, so the form
+    starts named."""
+    if str(intent.get("entity") or "") != "customer" or str(intent.get("action") or "") != "create":
+        return intent
+    fields = dict(intent.get("fields") or {})
+    if fields.get("first_name"):
+        return intent
+    head = re.match(r"^\s*(?:ลูกค้าใหม่|เพิ่มลูกค้าใหม่|เพิ่มลูกค้า|สร้างลูกค้า)\s+(.+)$", (message or "").strip())
+    if not head:
+        return intent
+    words = [w for w in re.sub(r"[\d\-+().]{6,}", " ", head.group(1)).split() if not re.fullmatch(r"[\d\-+().]+", w)]
+    if not words or _looks_like_a_question(message):
+        return intent
+    fields["first_name"] = words[0]
+    if len(words) > 1 and not fields.get("last_name"):
+        fields["last_name"] = " ".join(words[1:])
+    missing = [m for m in (intent.get("missing") or []) if m not in ("first_name",) and not (m == "last_name" and fields.get("last_name"))]
+    return {**intent, "fields": fields, "missing": missing}
 
 
 def _note_verb_at_the_start(message: str) -> str | None:
@@ -12818,7 +12917,7 @@ async def _handle_line_item_command(
         price = cmd.get("price")
         product = None
         if price is None:
-            product, problem = await _catalogue_product(client, license_id, name, qty=qty, code=code, language=language, kind=kind)
+            product, problem = await _catalogue_product(client, license_id, name, qty=qty, code=code, language=language, kind=kind, ctx=ctx)
             if problem is not None:
                 return problem
             if product is not None and product.get("unit_price") is not None:
@@ -12866,8 +12965,20 @@ def _joined_words(*parts) -> str:
     return " ".join(str(p) for p in parts if str(p or "").strip())
 
 
+async def _hold_product_pick(client: DataClient, ctx: ResolvedContext, sends: list[str]) -> None:
+    """Number the product choice so "1" finishes it (audit [10])."""
+    try:
+        await client.set_pending_intent(
+            ctx.chann_uid, ctx.oa, action="pick", entity="product_pick",
+            fields={"sends": sends[:LIST_LIMIT]}, missing=["choice"], ttl_seconds=ASSIGN_TARGET_TTL_S,
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("could not hold the product choice")
+
+
 async def _catalogue_product(
     client: DataClient, license_id: str, name: str, *, qty: int, code: str, language: str, kind: str = "deal",
+    ctx: ResolvedContext | None = None,
 ) -> tuple[dict | None, ChatReply | None]:
     """The catalogue product a name means: (product, None), (None, None)
     when there is none, or (None, reply) when several could be meant.
@@ -12906,8 +13017,13 @@ async def _catalogue_product(
             (lambda c: f"เพิ่มสินค้าในใบเสนอราคา {c.get('product_name')} {qty} ตัว") if kind == "quote"
             else (lambda c: f"เพิ่มสินค้า {c.get('product_name')} {qty} ตัว เข้าดีล {code}")
         )
+        sends = [send(c) for c in shown]
+        options = "\n".join(f"{i}. {line[2:]}" for i, line in enumerate(options.split("\n"), 1))
+        if ctx is not None:
+            await _hold_product_pick(client, ctx, sends)
         return None, ChatReply(
-            text=_t(DEAL_PRODUCT_AMBIGUOUS, language).format(name=name, options=options),
+            text=_t(DEAL_PRODUCT_AMBIGUOUS, language).format(name=name, options=options)
+            + ("\n" + _t(NAME_PICK_TAIL, language).format(n=len(shown)) if ctx is not None else ""),
             quick_replies=[
                 (_distinguishing_part(str(c.get("product_name") or ""), [str(o.get("product_name") or "") for o in shown]), send(c))
                 for c in shown[:4]
@@ -13458,6 +13574,13 @@ async def _handle_ai_understood_intent(
                 # reaches the model; this is the belt to that brace.
                 return _customer_fallback(message, language)
             scope = str(fields.get("scope") or "").lower()
+            if _asks_todays_jobs(message) and "ticket.read" in set(permission_keys):
+                # "เมื่อวานปิดงาน T-… ไปแล้ว วันนี้มีงานอีกไหม": the question is
+                # about today, the code is history (converse tech-12).
+                return await _handle_ticket_list(
+                    client, ctx=ctx, license_id=license_id, permission_keys=permission_keys,
+                    language=language, mine=(ctx.oa == "technician"), today=True,
+                )
             about_this = any(w in (message or "") for w in ("งานนี้", "งานนั้น", "ใบงานนี้")) and not scope
             if about_this:
                 ref = await _last_entity_ref(client, ctx)
@@ -13481,7 +13604,7 @@ async def _handle_ai_understood_intent(
         if action == "reject":
             return await _handle_ticket_reject(
                 client, ctx=ctx, license_id=license_id,
-                message=_joined("ไม่รับงาน", code, fields.get("reason")),
+                message=_joined("ไม่รับงาน", code, fields.get("reason") or fields.get("notes") or fields.get("lost_reason")),
                 permission_keys=permission_keys, language=language,
             )
         if action == "close":
@@ -14091,7 +14214,7 @@ async def _handle_quote_status(
             # deal won (review, 6 Sep 2026 — it answered "no quote" only).
             return await _handle_deal_stage_command(
                 client, license_id=license_id, deal_code=deal_code, target_stage="won",
-                permission_keys=permission_keys, language=language, actor_id=ctx.chann_uid, message=message,
+                permission_keys=permission_keys, language=language, actor_id=ctx.chann_uid, message=message, ctx=ctx,
             )
         if not quotes_of_deal:
             return ChatReply(
@@ -14491,8 +14614,7 @@ async def _handle_deal_product_add(
         # Look it up rather than asking: a shop that has entered its
         # catalogue should not have to retype prices it already knows.
         product, problem = await _catalogue_product(
-            client, license_id, name, qty=qty, code=deal_code, language=language,
-        )
+            client, license_id, name, qty=qty, code=deal_code, language=language, ctx=ctx)
         if problem is not None:
             return problem
         if product and product.get("unit_price") is not None:
@@ -15691,6 +15813,15 @@ DEAL_STAGE_ILLEGAL = {
     "th": "ไม่สามารถเปลี่ยนสถานะดีล {deal_id} ได้ในตอนนี้",
     "en": "Deal {deal_id} cannot move to that stage right now.",
 }
+DEAL_LOST_ASK_REASON = {
+    "th": "แพ้เพราะอะไรครับ พิมพ์เหตุผลสั้น ๆ ได้เลย (หรือพิมพ์ \"ข้าม\")",
+    "en": "Why was it lost? Type a short reason (or \"skip\").",
+}
+DEAL_LOST_SKIPPED = {"th": "รับทราบครับ ไม่บันทึกเหตุผล", "en": "Understood — no reason recorded."}
+DEAL_LOST_REASON_SAVED = {
+    "th": "บันทึกเหตุผลของ {deal_id} แล้ว: {reason}",
+    "en": "Recorded why {deal_id} was lost: {reason}",
+}
 DEAL_REOPEN_DENIED = {
     "th": "การเปิดดีลที่ปิดแล้วใหม่ต้องมีสิทธิ์ deal.reopen",
     "en": "Reopening a closed deal requires deal.reopen permission",
@@ -15701,6 +15832,7 @@ async def _handle_deal_stage_command(
     client: DataClient, *, license_id, deal_code: str, target_stage: str,
     permission_keys: list[str], language: str, actor_id: str,
     message: str = "",
+    ctx: ResolvedContext | None = None,
 ) -> ChatReply:
     license_id = str(license_id)
     deals = await client.list_deals(license_id)
@@ -15736,10 +15868,23 @@ async def _handle_deal_stage_command(
             return ChatReply(text=_t(DEAL_STAGE_NOT_FOUND, language).format(deal_id=deal_code))
         raise
     await _notify_deal_owner(client, license_id, row, actor_id=actor_id, language=language)
-    return ChatReply(
-        text=_t(DEAL_STAGE_UPDATED, language).format(deal_id=row["deal_id"], stage=_label(DEAL_STAGE_LABELS, row["stage"], language)),
-        entity_type="deal", entity_id=row["id"],
-    )
+    text = _t(DEAL_STAGE_UPDATED, language).format(deal_id=row["deal_id"], stage=_label(DEAL_STAGE_LABELS, row["stage"], language))
+    quick: list[tuple[str, str]] = []
+    if target_stage == "lost" and not lost_reason and ctx is not None:
+        # "ดีลนี้แพ้" closes the deal; the reason typed next ("ราคาแพงกว่า
+        # คู่แข่ง") had nowhere to go (audit [7], 15 ก.ย. 2569). Ask, and
+        # hold the deal so the next sentence is its reason.
+        try:
+            await client.set_pending_intent(
+                ctx.chann_uid, ctx.oa, action="resolve", entity="deal_lost_reason",
+                fields={"deal_id": str(row["id"]), "deal_code": str(row["deal_id"])}, missing=["lost_reason"],
+                ttl_seconds=DEAL_CONTEXT_TTL_S,
+            )
+            text += "\n" + _t(DEAL_LOST_ASK_REASON, language)
+            quick.append(("ข้าม", "ข้าม"))
+        except Exception:  # noqa: BLE001
+            log.exception("could not hold the lost-reason question")
+    return ChatReply(text=text, entity_type="deal", entity_id=row["id"], quick_replies=quick)
 
 
 async def _notify_deal_owner(client: DataClient, license_id: str, deal: dict, *, actor_id: str, language: str) -> None:
@@ -16432,6 +16577,16 @@ def greet(ctx: ResolvedContext, language: str = "th") -> str:
 # one lookup table covers both sources rather than needing two.
 MISSING_FIELD_LABELS = {
     "target": {"th": "ชื่อช่างหรือทีมที่จะมอบหมาย", "en": "who to assign it to"},
+    # "ลงทะเบียน พัดลม ให้ เวหา" was answered "กรุณาระบุรายละเอียดที่เหลือ"
+    # (tester, 15 ก.ย. 2569): the field the model asks for had no words.
+    "serial_number": {"th": "หมายเลขเครื่อง (S/N บนสติกเกอร์ตัวสินค้า)", "en": "the serial number (S/N on the unit)"},
+    "lost_reason": {"th": "เหตุผลที่แพ้", "en": "why it was lost"},
+    "when": {"th": "วันและเวลาใหม่", "en": "the new date and time"},
+    "code": {"th": "รหัสรายการ", "en": "the record's code"},
+    "stage": {"th": "สถานะดีล", "en": "the deal stage"},
+    "status": {"th": "สถานะ", "en": "the status"},
+    "found_issue": {"th": "สิ่งที่พบ", "en": "what was found"},
+    "work_done": {"th": "สิ่งที่ทำ", "en": "what was done"},
     "quoted_unit_price": {"th": "ราคาต่อหน่วย", "en": "unit price"},
     "qty": {"th": "จำนวน", "en": "quantity"},
     "first_name": {"th": "ชื่อ", "en": "first name"},
@@ -18300,8 +18455,8 @@ async def _handle_deal_update(
         return await _handle_deal_stage_command(
             client, license_id=license_id, deal_code=str(deal.get("deal_id") or code).upper(),
             target_stage=stage, permission_keys=permission_keys, language=language,
-            actor_id=ctx.chann_uid, message=message,
-        )
+            actor_id=ctx.chann_uid, message=message, ctx=ctx,
+            )
 
     # WHICH fields change is the model's reading; what they change TO is
     # read from the message and checked against it. Running the message
@@ -19424,6 +19579,13 @@ async def _handle_technician_situation(
         await _notify_customer(client, ticket, customer_table["th"].format(code=code), customer_table["en"].format(code=code))
     if kind == "reschedule":
         text += _t(SITUATION_ASK_DATE, language).format(code=code)
+        try:
+            await client.set_pending_intent(
+                ctx.chann_uid, ctx.oa, action="resolve", entity="ticket_reschedule",
+                fields={"code": code}, missing=["when"], ttl_seconds=ASSIGN_TARGET_TTL_S,
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("could not hold the reschedule question")
     if kind in ("on_my_way", "late"):
         quick.append(("เช็คอิน", f"เช็คอิน {code}"))
     if kind != "reschedule":
@@ -20105,6 +20267,50 @@ async def _route_chat_message(
                 )
             # Anything else answers the original question.
             early_pending = {**original}
+        if early_pending is not None and early_pending.get("entity") == "product_pick":
+            sends = list((early_pending.get("fields") or {}).get("sends") or [])
+            digit = _menu_digit(message)
+            if digit is not None and 1 <= digit <= len(sends):
+                await _drop_pending_quietly(client, ctx)
+                _note_road(road="pending")
+                return await _route_chat_message(client, message=sends[digit - 1], ctx=ctx, language=language, ai_client=ai_client)
+            await _drop_pending_quietly(client, ctx)
+            early_pending = None
+        if early_pending is not None and early_pending.get("entity") == "deal_lost_reason":
+            held = early_pending.get("fields") or {}
+            answer = (message or "").strip()
+            if _normalise(answer) in ("ข้าม", "skip", "ไม่มี", "ไม่บอก", "-") or _is_new_command(message, ctx.oa) \
+                    or _looks_like_a_question(answer) or _is_read_request(message, ctx.oa) or _is_menu_tile(message, ctx.oa) \
+                    or _find_entity_code(answer) is not None or _deterministic_reason(message, ctx.oa, None) is not None \
+                    or len(answer) > 160:
+                # A reason is a short plain sentence: "ข้อมูลดีล D-…" typed
+                # next is a lookup, not why the deal was lost.
+                await _drop_pending_quietly(client, ctx)
+                if _normalise(answer) in ("ข้าม", "skip", "ไม่มี", "ไม่บอก", "-"):
+                    return ChatReply(text=_t(DEAL_LOST_SKIPPED, language))
+                early_pending = None
+            else:
+                await _drop_pending_quietly(client, ctx)
+                _note_road(road="pending")
+                try:
+                    await client.update_deal(str(license_id), str(held.get("deal_id")), {"lost_reason": answer[:500]}, actor_id=ctx.chann_uid)
+                except Exception:  # noqa: BLE001
+                    log.exception("could not record the lost reason")
+                    return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+                return ChatReply(text=_t(DEAL_LOST_REASON_SAVED, language).format(deal_id=held.get("deal_code"), reason=answer[:120]))
+        if early_pending is not None and early_pending.get("entity") == "ticket_reschedule":
+            # "ขอเลื่อนนัด" was answered "เลื่อนไปวันไหนครับ"; the bare date
+            # typed next is that answer (audit [44], 15 ก.ย. 2569).
+            held = early_pending.get("fields") or {}
+            answer = (message or "").strip()
+            await _drop_pending_quietly(client, ctx)
+            if answer and not _is_new_command(message, ctx.oa) and not _looks_like_a_question(answer) \
+                    and not _is_menu_tile(message, ctx.oa) and len(answer) <= 60:
+                _note_road(road="pending")
+                return await _route_chat_message(
+                    client, message=f"เลื่อนนัด {held.get('code') or ''} {answer}", ctx=ctx, language=language, ai_client=ai_client,
+                )
+            early_pending = None
         if early_pending is not None and early_pending.get("entity") == "ticket_assign_target":
             held = early_pending.get("fields") or {}
             await _drop_pending_quietly(client, ctx)
@@ -20190,6 +20396,9 @@ async def _route_chat_message(
                 # its name is the same flow, restated in full: it replaces the
                 # form — "จะยกเลิกแล้วตั้งนัดแทนไหม" asked to switch from
                 # setting an appointment to setting one (converse, 15 ก.ย.).
+                # The half-made customer the form was carrying stays with it
+                # ("สร้างดีลเลย" after "สร้างดีล" lost สามเสน — R3, 15 ก.ย.).
+                abandoned = abandoned or held_fields.get("_abandoned")
                 await _drop_pending_quietly(client, ctx)
                 early_pending = None
             else:
@@ -20459,6 +20668,23 @@ async def _route_chat_message(
                 client, ctx=ctx, license_id=license_id, message=message,
                 permission_keys=permission_keys, language=language,
             )
+        if early_pending is not None and early_pending.get("entity") == "warranty" \
+                and str(early_pending.get("action") or "") == "create" and SERIAL_RE.search(message or ""):
+            # "ลงทะเบียน พัดลม ให้ เวหา" asked for the S/N; the S/N typed next
+            # is the answer, not an enquiry ("ไม่พบหมายเลข … ในระบบ" — tester,
+            # 15 ก.ย. 2569). The form's product and customer come with it.
+            held = early_pending.get("fields") or {}
+            await _drop_pending_quietly(client, ctx)
+            _note_road(road="pending")
+            return await _handle_warranty_register(
+                client, ctx=ctx, license_id=license_id,
+                message=" ".join(str(p) for p in (
+                    "ลงทะเบียนสินค้า", SERIAL_RE.search(message or "").group(1), held.get("product_name"),
+                    ("ให้ลูกค้า " + str(held.get("target_name"))) if held.get("target_name") else "",
+                ) if str(p or "").strip()),
+                language=language, permission_keys=permission_keys,
+                target_name=str(held.get("target_name") or "") or None,
+            )
         if _names_a_serial(message) and (_looks_like_a_question(message) or len(_normalise(message)) <= 40) and _oa_allows(
             ctx.oa, "warranty.read"
         ) and not _is_register_request(message) and not any(t in message.lower() for t in SERIAL_REGISTER_TRIGGERS):
@@ -20536,7 +20762,18 @@ async def _route_chat_message(
         if cleanup_reply is not None:
             return cleanup_reply
         lead_target = _lead_delete_target(message)
+        if lead_target is None and any(t in (message or "").lower() for t in LEAD_DELETE_TRIGGERS):
+            # "อย่าเพิ่งลบ Lead สมชาย": the verb sits inside a refusal, so the
+            # head match misses it — the guard still answers (audit [70]).
+            refused_lead = _intent_guard_reply(message, action="record_delete", language=language, triggers=LEAD_DELETE_TRIGGERS)
+            if refused_lead is not None:
+                return refused_lead
         if lead_target is not None:
+            held_lead = _intent_guard_reply(message, action="record_delete", language=language, triggers=LEAD_DELETE_TRIGGERS)
+            if held_lead is not None:
+                # "ลบ Lead สมชาย ได้ไหม" asks; "อย่าเพิ่งลบ Lead สมชาย" refuses
+                # (audit [69]/[70]) — neither reaches the confirmation.
+                return held_lead
             return await _handle_lead_archive_request(
                 client, ctx=ctx, license_id=license_id, name=lead_target or None,
                 permission_keys=permission_keys, language=language,
@@ -21864,7 +22101,7 @@ async def _route_chat_message(
         return await _handle_deal_stage_command(
             client, license_id=license_id, deal_code=deal_code, target_stage=target_stage,
             permission_keys=permission_keys, language=language, actor_id=ctx.chann_uid,
-            message=message,
+            message=message, ctx=ctx,
             )
 
     # What the previous turn was still waiting for, if anything. Loaded before
@@ -22219,7 +22456,14 @@ async def _model_road(
             # the flow is dropped, and the reply says so — a silent switch
             # reads as the assistant losing the thread (owner test, 8 Sep 2026).
             switched_from = pending_intent
-    carried = _abandoned_flow(switched_from) or abandoned
+    if switched_from is not None and str(switched_from.get("entity") or "") == str(intent.get("entity") or ""):
+        # The same form restated ("สร้างดีลเลย" over the deal form that was
+        # asking whom) abandons nothing new: the customer draft it was
+        # carrying stays with it (R3, 15 ก.ย. 2569 — it was replaced by the
+        # deal form itself and สามเสน was "ไม่พบ").
+        carried = (switched_from.get("fields") or {}).get("_abandoned") or abandoned
+    else:
+        carried = _abandoned_flow(switched_from) or abandoned
     notice = _switch_notice(switched_from, message, language, intent) if switched_from else ""
 
     # ... but never start collecting for something this LINE cannot do at
@@ -22246,6 +22490,7 @@ async def _model_road(
                   "service_report": "service_report", "warranty": "warranty"}.get(str(intent.get("entity") or ""))
         if ref and wanted and str(ref.get("entity_type") or "") == wanted and ref.get("code"):
             intent = {**intent, "fields": {**(intent.get("fields") or {}), "code": str(ref.get("code"))}, "missing": []}
+    intent = _with_the_name_after_the_head(intent, message)
     # Missing fields come first: never refuse a request we did not understand.
     missing = _prune_missing(intent.get("missing") or [], intent, message)
     if missing == ["target_name"] and not (intent.get("fields") or {}).get("target_name") and carried is None:
@@ -22475,19 +22720,23 @@ async def _execute_intent(
     # Domain execution. Phase 9 adds real customer/deal CRUD; everything
     # else still falls through to the stub below until its own phase lands.
     if intent.get("entity") == "customer":
-        if str(intent.get("action") or "") == "create" and not (intent.get("fields") or {}).get("first_name"):
-            head = re.match(r"^\s*(?:ลูกค้าใหม่|เพิ่มลูกค้าใหม่|เพิ่มลูกค้า|สร้างลูกค้า)\s+(.+)$", (message or "").strip())
-            if head:
-                # "ลูกค้าใหม่ สามเสน": the model refused a district-like word
-                # as a name; the guide's own example says it IS the name
-                # (audit verify, 15 ก.ย. 2569).
-                words = [w for w in re.sub(r"[\d\-+().]{6,}", " ", head.group(1)).split() if not re.fullmatch(r"[\d\-+().]+", w)]
-                if words:
-                    fields = dict(intent.get("fields") or {})
-                    fields["first_name"] = words[0]
-                    if len(words) > 1 and not fields.get("last_name"):
-                        fields["last_name"] = " ".join(words[1:])
-                    intent = {**intent, "fields": fields}
+        intent = _with_the_name_after_the_head(intent, message)
+        if str(intent.get("action") or "") in READ_ACTIONS and not _named_customer(intent.get("fields") or {}) \
+                and any(w in (message or "") for w in ("ล่าสุด", "คนล่าสุด", "latest", "newest", "most recent")):
+            # "ลูกค้าล่าสุด" is the newest customer, not the whole list
+            # (converse customer-single t4).
+            try:
+                rows = await client.list_customers(str(license_id))
+            except Exception:  # noqa: BLE001
+                rows = []
+            rows = [r for r in rows if str(r.get("stage") or "") != "archived"]
+            if rows:
+                rows.sort(key=lambda r: str(r.get("created_at") or ""), reverse=False)
+                newest = max(rows, key=lambda r: (str(r.get("created_at") or ""), str(r.get("customer_id") or "")))
+                return await _handle_customer_detail(
+                    client, license_id=license_id, code=str(newest.get("customer_id") or newest.get("id") or ""),
+                    permission_keys=list(permission_keys or []) or ["customer.read"], language=language, ctx=ctx,
+                )
         return await _handle_customer_intent(
             client, intent=intent, ctx=ctx, license_id=license_id, language=language,
             permission_keys=permission_keys,
@@ -23434,6 +23683,7 @@ def _lead_delete_target(message: str) -> str | None:
     if trigger is None:
         return None
     text = (message or "").strip()[len(trigger):].strip()
+    text = re.sub(r"\s*(ได้ไหม|ได้มั้ย|ได้หรือไม่|ยังไง|อย่างไร|ไหม|มั้ย)\s*(ครับ|คะ|ค่ะ)?\s*$", "", text).strip()
     changed = True
     while changed and text:
         changed = False
@@ -24003,8 +24253,32 @@ async def _resolve_draft_customer_deal_confirm(
     deal_fields = dict(fields.get("deal_fields") or {})
     name = _flow_name(draft)
     label = _missing_label(missing, language)
-    if _matches_any(message, DEAL_CONTEXT_NO) or _matches_any(message, DUPLICATE_CANCEL_PHRASES):
+    typed_the_label = _normalise(message) in (
+        _normalise(_t(DRAFT_CUSTOMER_NO_LABEL, language)), "ใส่เบอร์ก่อน", "ใส่เบอร์", "เบอร์ก่อน", "ใส่นามสกุลก่อน", "กรอกก่อน",
+    )
+    from .phone import phone_problem
+    typed_a_phone = "phone" in missing and re.fullmatch(r"[\d\-+ .()๐-๙]{8,}", (message or "").strip()) is not None \
+        and not phone_problem((message or "").strip())
+    if _matches_any(message, DEAL_CONTEXT_NO) or _matches_any(message, DUPLICATE_CANCEL_PHRASES) or typed_the_label or typed_a_phone:
         # Back to the customer, with the deal to follow once it is complete.
+        # The button's own label typed ("ใส่เบอร์ก่อน"), or the phone itself,
+        # is that answer too (R3, 15 ก.ย. 2569).
+        if typed_a_phone:
+            # The phone answers the form directly — no model call needed.
+            held_draft = {**draft, "phone": (message or "").strip(), "_then_deal": deal_fields}
+            still = [m for m in missing if m != "phone"]
+            if still:
+                await client.set_pending_intent(
+                    ctx.chann_uid, ctx.oa, action="create", entity="customer",
+                    fields=held_draft, missing=still, ttl_seconds=PENDING_INTENT_TTL_S,
+                )
+                return ChatReply(text=ask_for_missing(still, language))
+            await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
+            return await _execute_intent(
+                client, intent={"action": "create", "entity": "customer", "fields": held_draft, "missing": []},
+                ctx=ctx, license_id=license_id, message=message, permission_keys=permission_keys,
+                language=language, abandoned=None, ai_client=None,
+            )
         await client.set_pending_intent(
             ctx.chann_uid, ctx.oa, action="create", entity="customer",
             fields={**draft, "_then_deal": deal_fields}, missing=missing, ttl_seconds=PENDING_INTENT_TTL_S,
