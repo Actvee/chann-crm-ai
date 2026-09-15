@@ -11,6 +11,7 @@ import { FieldRow } from "../_field-row";
 import { shortDate } from "../_list-controls";
 import { ProfileCard } from "../_profile-card";
 import { ShopSwitcher } from "../_shop-switcher";
+import { ListFilters, matchesQuery, optionsFrom } from "../_filters";
 import { Ticket, TicketRow } from "../_tickets";
 import { Membership, completeLiffRedirect, initLiffSession, proxyHeaders } from "../_shared";
 
@@ -86,6 +87,8 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
   const [busy, setBusy] = useState(false);
+  const [ticketQuery, setTicketQuery] = useState("");
+  const [ticketStatus, setTicketStatus] = useState("");
 
   const [issue, setIssue] = useState("");
   const [issueSerial, setIssueSerial] = useState("");
@@ -413,6 +416,17 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
     await loadChat(token, next.license_id).catch(() => undefined);
   }
 
+  // The repair list, narrowed by what the customer types or the status
+  // they pick; the rows are their own jobs only, already loaded.
+  const shownTickets = tickets.filter(
+    (x) =>
+      (!ticketStatus || x.status === ticketStatus) &&
+      matchesQuery(ticketQuery, [
+        x.ticket_number, x.issue_description, x.service_address, x.serial_number,
+        x.product_name, statusLabel(x.status),
+      ]),
+  );
+
   return (
     <div data-theme="customer">
       <AppShell
@@ -683,13 +697,22 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
                 {t.dashboard.customer.viewReports}
               </a>
             </div>
-            {tickets.length === 0 ? (
+            {tickets.length > 0 && (
+              <ListFilters
+                query={ticketQuery}
+                onQuery={setTicketQuery}
+                status={ticketStatus}
+                statuses={optionsFrom(t.dashboard.tickets.status as Record<string, string>)}
+                onStatus={setTicketStatus}
+              />
+            )}
+            {shownTickets.length === 0 ? (
               <div className="empty">
-                <p>{t.dashboard.customer.noRepairs}</p>
+                <p>{tickets.length === 0 ? t.dashboard.customer.noRepairs : t.dashboard.noMatch}</p>
               </div>
             ) : (
               <ul className="list">
-                {tickets.map((ticket) => (
+                {shownTickets.map((ticket) => (
                   <li key={ticket.id} className="card">
                     <TicketRow
                       ticket={ticket}

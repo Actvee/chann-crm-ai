@@ -63,6 +63,14 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
   const [chatTimeout, setChatTimeout] = useState("");
   const [leadCleanupDays, setLeadCleanupDays] = useState("0");
   const [policySaving, setPolicySaving] = useState(false);
+  // Job + approval SLA (owner, 15 ก.ย. 2569) — the same license_settings
+  // rows chat sets with "ตั้ง SLA …"; minutes except the approval hours.
+  const [slaUnassigned, setSlaUnassigned] = useState("120");
+  const [slaUnaccepted, setSlaUnaccepted] = useState("60");
+  const [slaLateCheckin, setSlaLateCheckin] = useState("30");
+  const [slaEscalate, setSlaEscalate] = useState("60");
+  const [slaApproval, setSlaApproval] = useState("24");
+  const [slaSaving, setSlaSaving] = useState(false);
   // E6: handing the shop to someone else. The owner picks a member; the
   // member accepts on their own menu; only then does it take effect.
   const [members, setMembers] = useState<Member[]>([]);
@@ -124,6 +132,15 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
     setChatTimeout(quiet ? String(quiet.setting_value) : "60");
     const cleanup = rows.find((r) => r.setting_key === "lead_auto_archive_days");
     setLeadCleanupDays(cleanup ? String(cleanup.setting_value) : "0");
+    const slaOf = (key: string, fallback: string) => {
+      const row = rows.find((r) => r.setting_key === key);
+      return row ? String(row.setting_value) : fallback;
+    };
+    setSlaUnassigned(slaOf("job_sla_unassigned_minutes", "120"));
+    setSlaUnaccepted(slaOf("job_sla_unaccepted_minutes", "60"));
+    setSlaLateCheckin(slaOf("job_sla_late_checkin_minutes", "30"));
+    setSlaEscalate(slaOf("sla_escalate_minutes", "60"));
+    setSlaApproval(slaOf("approval_sla_hours", "24"));
   }, [licenseId, token]);
 
   const loadTransfer = useCallback(async () => {
@@ -182,6 +199,41 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
       say(t.common.error, "error");
     } finally {
       setPolicySaving(false);
+    }
+  }
+
+  async function saveSla() {
+    const values: [string, string][] = [
+      ["job_sla_unassigned_minutes", slaUnassigned], ["job_sla_unaccepted_minutes", slaUnaccepted],
+      ["job_sla_late_checkin_minutes", slaLateCheckin], ["sla_escalate_minutes", slaEscalate],
+      ["approval_sla_hours", slaApproval],
+    ];
+    for (const [key, raw] of values) {
+      const n = Number(raw);
+      const limit = key === "approval_sla_hours" ? 720 : 10080;
+      if (!Number.isInteger(n) || n < 0 || n > limit) {
+        say(c.slaInvalid, "error");
+        return;
+      }
+    }
+    setSlaSaving(true);
+    try {
+      for (const [key, raw] of values) {
+        const response = await fetch(`/api/phase2/licenses/${licenseId}/settings/${key}`, {
+          method: "PUT",
+          headers: proxyHeaders(token, licenseId),
+          body: JSON.stringify({ setting_value: Number(raw) }),
+        });
+        if (!response.ok) {
+          say(await failureText(response), "error");
+          return;
+        }
+      }
+      say(c.slaSaved, "ok");
+    } catch {
+      say(t.common.error, "error");
+    } finally {
+      setSlaSaving(false);
     }
   }
 
@@ -467,6 +519,48 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
                 onClick={() => void saveChatPolicy()}
               >
                 {policySaving ? t.dashboard.related.saving : c.chatPolicySave}
+              </button>
+            </div>
+          </dl>
+        </section>
+      )}
+
+      {autoAccept !== null && canEdit && (
+        <section className="section" style={{ marginTop: 16 }}>
+          <div className="section-head">
+            <h2>{c.slaPolicy}</h2>
+          </div>
+          <p className="hint" style={{ marginBottom: 10 }}>{c.slaHint}</p>
+          <dl className="fields">
+            {([
+              ["sla-unassigned", c.slaUnassigned, slaUnassigned, setSlaUnassigned, 10080],
+              ["sla-unaccepted", c.slaUnaccepted, slaUnaccepted, setSlaUnaccepted, 10080],
+              ["sla-late-checkin", c.slaLateCheckin, slaLateCheckin, setSlaLateCheckin, 10080],
+              ["sla-escalate", c.slaEscalate, slaEscalate, setSlaEscalate, 10080],
+              ["sla-approval", c.slaApproval, slaApproval, setSlaApproval, 720],
+            ] as [string, string, string, (v: string) => void, number][]).map(([id, label, value, set, max]) => (
+              <div className="field" key={id}>
+                <label htmlFor={id}>{label}</label>
+                <input
+                  id={id}
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  max={max}
+                  value={value}
+                  onChange={(e) => set(e.target.value)}
+                />
+              </div>
+            ))}
+            <div className="actions">
+              <button
+                type="button"
+                className="btn"
+                data-variant="primary"
+                disabled={slaSaving}
+                onClick={() => void saveSla()}
+              >
+                {slaSaving ? t.dashboard.related.saving : c.slaSave}
               </button>
             </div>
           </dl>

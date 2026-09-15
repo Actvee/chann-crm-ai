@@ -6,6 +6,7 @@ import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { CsvImport } from "../_csv-import";
 import { FieldRow } from "../../_field-row";
+import { ListFilters, matchesQuery, optionsFrom } from "../../_filters";
 import { shortDate } from "../../_list-controls";
 import { PickerOption, SearchablePicker } from "../../_searchable-picker";
 import { useFailureText } from "../_format";
@@ -68,6 +69,10 @@ export default function SalesWarranties({ liffId }: { liffId: string }) {
   // not by scrolling.
   const [serialQuery, setSerialQuery] = useState("");
   const [searchedSerial, setSearchedSerial] = useState("");
+  // The serial search above asks the server for one sticker anywhere in
+  // the book; these narrow the page already loaded, by anything on a row.
+  const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
 
   const [serial, setSerial] = useState("");
   const [productId, setProductId] = useState("");
@@ -180,6 +185,14 @@ export default function SalesWarranties({ liffId }: { liffId: string }) {
   }
 
   const canCreate = !session.suspended && permissions.has("warranty.create");
+  const visible = rows.filter(
+    (row) =>
+      (!statusFilter || (row.status ?? "") === statusFilter) &&
+      matchesQuery(query, [
+        row.serial_number, row.product_name, row.warranty_number, row.contact_name,
+        row.contact_code,
+      ]),
+  );
 
   return (
     <SalesShell
@@ -297,19 +310,26 @@ export default function SalesWarranties({ liffId }: { liffId: string }) {
       <section className="section">
         <div className="section-head">
           <h2>
-            {copy.title} ({rows.length})
+            {copy.title} ({visible.length})
           </h2>
         </div>
+        <ListFilters
+          query={query}
+          onQuery={setQuery}
+          status={statusFilter}
+          statuses={optionsFrom(copy.status as Record<string, string>)}
+          onStatus={setStatusFilter}
+        />
         {!searchedSerial && rows.length >= PAGE && (
           <p className="count">{s.errors.showingLatest.replace("{count}", String(rows.length))}</p>
         )}
-        {rows.length === 0 ? (
+        {visible.length === 0 ? (
           <div className="empty">
-            <p>{copy.empty}</p>
+            <p>{rows.length === 0 ? copy.empty : t.dashboard.noMatch}</p>
           </div>
         ) : (
           <ul className="list">
-            {rows.map((row) => (
+            {visible.map((row) => (
               <li key={row.id} className="card">
                 <div className="card-title">
                   {row.serial_number}

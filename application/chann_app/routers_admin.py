@@ -591,6 +591,13 @@ async def run_chat_sweep(
         summary["jobs"] = await job_sla.sweep_jobs(client)
     except Exception:  # noqa: BLE001
         logging.getLogger(__name__).exception("job sweep inside the chat sweep failed")
+    # …and about reports nobody is approving (approval SLA, 15 ก.ย. 2569).
+    try:
+        from .services import approval_sla
+
+        summary["approvals"] = await approval_sla.sweep_reports(client)
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).exception("approval sweep inside the chat sweep failed")
     return summary
 
 

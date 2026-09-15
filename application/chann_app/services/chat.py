@@ -4072,6 +4072,128 @@ CHAT_CATCH_UP = {
 CHAT_POLICY_SLA_PHRASES = ("ตั้งค่าเวลาตอบแชท", "ตั้งเวลาตอบแชท", "เวลาตอบแชท", "chat answer time", "chat sla")
 CHAT_POLICY_TIMEOUT_PHRASES = ("ตั้งค่าปิดแชทเมื่อเงียบ", "ตั้งปิดแชทเมื่อเงียบ", "ปิดแชทเมื่อเงียบ", "chat quiet close", "chat timeout")
 CHAT_POLICY_VIEW = ("ตั้งค่าแชท", "นโยบายแชท", "การตั้งค่าแชท", "chat policy", "chat settings")
+# The job and approval SLA (owner, 15 ก.ย. 2569): "ตั้ง SLA งานไม่มีคนรับ 1 ชม.
+# ช่างไม่ตอบ 30 นาที เลยนัด 15 นาที แจ้งเจ้าของหลัง 1 ชม. อนุมัติค้าง 4 ชม." —
+# numbers read by the code, never by the router model. setting.manage.
+SLA_SET_PHRASES = ("ตั้งค่า sla", "ตั้ง sla", "กำหนด sla", "set sla", "sla:", "ตั้ง SLA", "ตั้งค่า SLA")
+SLA_VIEW_PHRASES = ("ดู sla", "sla ปัจจุบัน", "sla ของร้าน", "sla ตอนนี้", "show sla", "sla", "ดู SLA", "SLA")
+_SLA_CLAUSES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("unassigned", ("ไม่มีคนรับ", "ยังไม่มอบหมาย", "ไม่ได้มอบหมาย", "ไม่มีคนรับผิดชอบ", "unassigned", "nobody assigned")),
+    ("unaccepted", ("ช่างไม่ตอบ", "ไม่ตอบรับ", "ยังไม่ตอบรับ", "ยังไม่รับงาน", "ช่างยังไม่รับ", "unaccepted", "not accepted")),
+    ("no_checkin", ("เลยนัด", "เลยเวลานัด", "ไม่เช็คอิน", "ยังไม่เช็คอิน", "late", "no check-in", "no checkin")),
+    ("escalate", ("แจ้งเจ้าของ", "ส่งต่อเจ้าของ", "ยกระดับ", "escalate", "escalation")),
+    ("approval", ("อนุมัติค้าง", "รออนุมัติ", "อนุมัติ", "approval", "approve")),
+)
+_SLA_NUMBER_RE = re.compile(
+    r"(?P<n>\d+(?:[.,]\d+)?)\s*(?P<unit>ชั่วโมง|ชม\.?|hours?|hrs?|h\b|นาที|น\.|minutes?|mins?|m\b)|(?P<off>ปิด|off|ไม่ต้อง)",
+    re.I,
+)
+SLA_STATE = {
+    "th": (
+        "SLA ของร้าน:\n"
+        "· งานไม่มีคนรับ เตือนหลัง {unassigned}\n"
+        "· มอบหมายแล้วช่างไม่ตอบรับ เตือนหลัง {unaccepted}\n"
+        "· เลยเวลานัดยังไม่เช็คอิน เตือนหลัง {no_checkin}\n"
+        "· ยังไม่ขยับ → แจ้งเจ้าของ/แอดมิน หลังจากนั้นอีก {escalate}\n"
+        "· รายงานรออนุมัติ เตือนผู้อนุมัติหลัง {approval}\n"
+        "เปลี่ยน: \"ตั้ง SLA งานไม่มีคนรับ 1 ชม. ช่างไม่ตอบ 30 นาที เลยนัด 15 นาที แจ้งเจ้าของหลัง 1 ชม. อนุมัติค้าง 4 ชม.\" (ใส่เฉพาะที่จะเปลี่ยน · \"ปิด\" = ไม่เตือน)"
+    ),
+    "en": (
+        "The shop's SLA:\n"
+        "· job with nobody assigned — reminded after {unassigned}\n"
+        "· assigned but not accepted — after {unaccepted}\n"
+        "· past the appointment with no check-in — after {no_checkin}\n"
+        "· still unmoved → owner/admins told after a further {escalate}\n"
+        "· report awaiting approval — approvers reminded after {approval}\n"
+        "Change: \"set SLA unassigned 1 h, not accepted 30 min, late 15 min, escalate 1 h, approval 4 h\" (\"off\" disables one)"
+    ),
+}
+SLA_SAVED = {"th": "บันทึก SLA แล้ว ({changed})\n", "en": "SLA saved ({changed}).\n"}
+SLA_NOTHING_PARSED = {
+    "th": "ยังอ่านตัวเลขไม่ได้ครับ พิมพ์เป็นคู่ เช่น \"ตั้ง SLA งานไม่มีคนรับ 1 ชม. ช่างไม่ตอบ 30 นาที เลยนัด 15 นาที อนุมัติค้าง 4 ชม.\"",
+    "en": "No numbers found — e.g. \"set SLA unassigned 1 h, not accepted 30 min, late 15 min, approval 4 h\".",
+}
+_SLA_LABELS = {
+    "unassigned": {"th": "งานไม่มีคนรับ", "en": "unassigned"}, "unaccepted": {"th": "ช่างไม่ตอบรับ", "en": "not accepted"},
+    "no_checkin": {"th": "เลยนัดไม่เช็คอิน", "en": "late check-in"}, "escalate": {"th": "แจ้งเจ้าของหลัง", "en": "escalate after"},
+    "approval": {"th": "อนุมัติค้าง", "en": "approval"},
+}
+
+
+def _sla_span(minutes: int, language: str, *, hours_unit: bool = False) -> str:
+    if minutes <= 0:
+        return "ปิด" if language != "en" else "off"
+    if hours_unit:
+        return f"{minutes} ชม." if language != "en" else f"{minutes} h"
+    if minutes % 60 == 0:
+        return f"{minutes // 60} ชม." if language != "en" else f"{minutes // 60} h"
+    return f"{minutes} นาที" if language != "en" else f"{minutes} min"
+
+
+def parse_sla_sentence(message: str) -> dict[str, int]:
+    """"งานไม่มีคนรับ 1 ชม. ช่างไม่ตอบ 30 นาที …" → {"unassigned": 60, "unaccepted": 30, …}
+    (minutes; "approval" in hours; 0 = off). A clause is its keyword and the
+    first number/unit after it, before the next keyword."""
+    text = (message or "")
+    lowered = text.lower()
+    hits: list[tuple[int, str]] = []
+    for rule, words in _SLA_CLAUSES:
+        for w in words:
+            i = lowered.find(w)
+            if i != -1:
+                hits.append((i, rule))
+                break
+    hits.sort()
+    out: dict[str, int] = {}
+    for pos, (start, rule) in enumerate(hits):
+        end = hits[pos + 1][0] if pos + 1 < len(hits) else len(text)
+        clause = text[start:end]
+        m = _SLA_NUMBER_RE.search(clause)
+        if not m:
+            continue
+        if m.group("off"):
+            out[rule] = 0
+            continue
+        number = float(m.group("n").replace(",", "."))
+        unit = (m.group("unit") or "").lower()
+        is_hours = unit.startswith(("ชั่วโมง", "ชม", "hour", "hr", "h"))
+        if rule == "approval":
+            out[rule] = max(1, int(round(number if is_hours else number / 60)))
+        else:
+            out[rule] = int(round(number * 60 if is_hours else number))
+    return out
+
+
+async def _maybe_job_sla_setting(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
+    permission_keys: list[str], language: str,
+) -> ChatReply | None:
+    from .job_sla import SLA_SETTING_KEYS, sla_settings
+
+    text = (message or "").strip()
+    lowered = text.lower()
+    setting = next((p for p in SLA_SET_PHRASES if lowered.startswith(p)), None)
+    viewing = setting is None and _matches_phrase(text, SLA_VIEW_PHRASES)
+    if setting is None and not viewing:
+        return None
+    if "setting.manage" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    head = ""
+    if setting is not None:
+        parsed = parse_sla_sentence(text[len(setting):])
+        if not parsed:
+            return ChatReply(text=_t(SLA_NOTHING_PARSED, language))
+        changed = []
+        for rule, value in parsed.items():
+            await client.put_license_setting(str(license_id), SLA_SETTING_KEYS[rule], value, actor_id=ctx.chann_uid)
+            changed.append(f"{_t(_SLA_LABELS[rule], language)} {_sla_span(value, language, hours_unit=(rule == 'approval'))}")
+        head = _t(SLA_SAVED, language).format(changed=" · ".join(changed))
+    sla = await sla_settings(client, str(license_id))
+    return ChatReply(text=head + _t(SLA_STATE, language).format(
+        unassigned=_sla_span(sla["unassigned"], language), unaccepted=_sla_span(sla["unaccepted"], language),
+        no_checkin=_sla_span(sla["no_checkin"], language), escalate=_sla_span(sla["escalate"], language),
+        approval=_sla_span(sla["approval"], language, hours_unit=True),
+    ))
 CHAT_POLICY_STATE = {
     "th": (
         "นโยบายแชทของร้าน:\n"
@@ -11505,6 +11627,9 @@ def _is_policy_command(message: str) -> bool:
     tests the dispatcher uses, so the two can never disagree."""
     lowered = (message or "").lower()
     if any(t in lowered for t in ASSIGN_POLICY_TRIGGERS + APPROVAL_POLICY_TRIGGERS):
+        return True
+    if any(lowered.startswith(p) for p in SLA_SET_PHRASES) or _matches_phrase(message, SLA_VIEW_PHRASES):
+        # "ตั้ง SLA งานไม่มีคนรับ 1 ชม. …": numbers the code reads itself.
         return True
     return _matches_phrase(
         message,
@@ -21010,6 +21135,12 @@ async def _route_chat_message(
         )
         if setting_reply is not None:
             return setting_reply
+        sla_reply = await _maybe_job_sla_setting(
+            client, ctx=ctx, license_id=license_id, message=message,
+            permission_keys=permission_keys, language=language,
+        )
+        if sla_reply is not None:
+            return sla_reply
         policy_reply = await _maybe_chat_policy_setting(
             client, ctx=ctx, license_id=license_id, message=message,
             permission_keys=permission_keys, language=language,

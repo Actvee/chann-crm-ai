@@ -42,7 +42,7 @@ steps:
     - issue_description
     max_lines: 15
     contains: วันไหน
-- send: 15 ก.ย. 2569 บ่าย 9
+- send: พรุ่งนี้ บ่าย 9
   expect:
     is_not:
     - generic_error
@@ -57,7 +57,7 @@ steps:
     - 09:00
     max_lines: 15
     contains: ไม่เข้าใจเวลา
-- send: 15 ก.ย. 2569 บ่าย 2
+- send: พรุ่งนี้ บ่าย 2
   expect:
     is_not:
     - generic_error

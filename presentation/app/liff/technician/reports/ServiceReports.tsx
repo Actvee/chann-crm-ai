@@ -4,6 +4,7 @@ import { useCallback, useState } from "react";
 
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
+import { ListFilters, matchesQuery, optionsFrom } from "../../_filters";
 import { AppShell } from "../../sales/_components";
 import { Audience, fetchPermissions, initLiffSession, openExternal, proxyHeaders } from "../../_shared";
 
@@ -58,6 +59,8 @@ export default function ServiceReports({
   const [licenseId, setLicenseId] = useState("");
   const [token, setToken] = useState("");
   const [busyId, setBusyId] = useState("");
+  const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
 
@@ -194,6 +197,25 @@ export default function ServiceReports({
 
   const statusLabel = (code: string) =>
     (t.dashboard.tickets.status as Record<string, string>)[code] ?? code;
+  const reportStatusLabel = (code: string) =>
+    (t.dashboard.reports.status as Record<string, string>)[code] ?? "—";
+
+  // Narrowed in the browser over what was loaded: by the report's own
+  // status, and by anything printed on the card — the customer, the
+  // ticket, what was found and what was done.
+  const visible = reports.filter((report) => {
+    const ticket = tickets[report.ticket_id];
+    const data = report.report_data ?? {};
+    return (
+      (!statusFilter || report.status === statusFilter) &&
+      matchesQuery(query, [
+        report.report_id, reportStatusLabel(report.status), ticket?.ticket_number,
+        audience === "customer" ? "" : ticket?.customer_name,
+        ticket?.issue_description, ticket?.service_address,
+        data.found_issue, data.work_done, data.parts_changed, data.notes,
+      ])
+    );
+  });
 
   // The back link must be explicit per audience: an undefined `back` falls
   // through to AppShell's default (the sales menu) and would send a
@@ -214,13 +236,20 @@ export default function ServiceReports({
         // their own jobs only, scoped by the server.
         <p className="card-meta">{t.dashboard.reports.customerIntro}</p>
       )}
-      {reports.length === 0 ? (
+      <ListFilters
+        query={query}
+        onQuery={setQuery}
+        status={statusFilter}
+        statuses={optionsFrom(t.dashboard.reports.status as Record<string, string>)}
+        onStatus={setStatusFilter}
+      />
+      {visible.length === 0 ? (
         <div className="empty">
-          <p>{t.dashboard.reports.empty}</p>
+          <p>{reports.length === 0 ? t.dashboard.reports.empty : t.dashboard.noMatch}</p>
         </div>
       ) : (
         <ul className="list">
-          {reports.map((report) => {
+          {visible.map((report) => {
             const ticket = tickets[report.ticket_id];
             const data = report.report_data ?? {};
             return (
@@ -247,9 +276,7 @@ export default function ServiceReports({
                           : "proposed"
                     }
                   >
-                    {(t.dashboard.reports.status as Record<string, string>)[
-                      report.status
-                    ] ?? "—"}
+                    {reportStatusLabel(report.status)}
                   </span>
                 </div>
 

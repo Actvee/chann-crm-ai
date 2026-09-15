@@ -43,7 +43,7 @@ steps:
     - issue_description
     max_lines: 15
     contains: วันไหน
-- send: 15 ก.ย. 2569 บ่ายสี่ครึ่ง
+- send: พรุ่งนี้ บ่ายสี่ครึ่ง
   expect:
     is_not:
     - generic_error

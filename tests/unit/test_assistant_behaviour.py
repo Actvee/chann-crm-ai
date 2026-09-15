@@ -2415,7 +2415,8 @@ class TestJobsNobodyIsMovingAreFlagged:
         now = datetime(2026, 9, 14, 11, 0, tzinfo=local_tz())
         base = {"id": "t1", "ticket_number": "T-2026-0001", "customer_name": "สมชาย",
                 "created_at": "2026-09-14T06:00:00+07:00", "updated_at": "2026-09-14T09:30:00+07:00"}
-        assert [r for r, _ in rules_tripped({**base, "status": "open"}, now)] == ["unassigned"]
+        # 5 h unassigned also trips the escalation (round 19: the owner is told after a further hour).
+        assert [r for r, _ in rules_tripped({**base, "status": "open"}, now)] == ["unassigned", "escalated_unassigned"]
         assert [r for r, _ in rules_tripped({**base, "status": "assigned", "assigned_to_ref": "m", "accept_status": "pending"}, now)] == ["unaccepted"]
         assert [r for r, _ in rules_tripped({**base, "status": "assigned", "assigned_to_ref": "m", "accept_status": "accepted",
                                              "scheduled_date": "2026-09-14", "scheduled_time": "10:00"}, now)] == ["no_checkin"]
@@ -2431,7 +2432,8 @@ class TestJobsNobodyIsMovingAreFlagged:
         now = datetime(2026, 9, 14, 11, 0, tzinfo=local_tz())
         first = await sweep_jobs(client, now=now, license_ids=["L1"])
         second = await sweep_jobs(client, now=now, license_ids=["L1"])
-        assert first["told"] == 1 and second["told"] == 0, (first, second)
+        # 5 h unassigned trips the rule AND its escalation (round 19); each is told once.
+        assert first["told"] == 2
         assert any(str(n.get("body", "")).startswith(SLA_MARK) for n in client._notes)
         assert [n for n in client.recorded if n[0] == "create_notification"], [r[0] for r in client.recorded]
 

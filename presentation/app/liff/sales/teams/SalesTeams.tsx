@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { FieldRow } from "../../_field-row";
+import { ListFilters, matchesQuery } from "../../_filters";
 import { useFailureText } from "../_format";
 import { proxyHeaders } from "../_lib";
 import { useSalesSession } from "../_session";
@@ -46,6 +47,7 @@ export default function SalesTeams({ liffId }: { liffId: string }) {
   const [busy, setBusy] = useState(false);
   const [newTeam, setNewTeam] = useState("");
   const [newGroup, setNewGroup] = useState("");
+  const [query, setQuery] = useState("");
   const [picked, setPicked] = useState<Record<string, string>>({});
   const [pickedForGroup, setPickedForGroup] = useState<Record<string, string>>({});
 
@@ -240,6 +242,23 @@ export default function SalesTeams({ liffId }: { liffId: string }) {
       loadGroups,
     );
 
+  // A team (or group) shows whole when its name matches; otherwise it
+  // shows narrowed to the members who do, so a person is found by name,
+  // phone or role wherever they sit.
+  const nameMatches = (name: string) => matchesQuery(query, [name]);
+  const memberMatches = (member: Technician & { role?: string }) =>
+    matchesQuery(query, [member.display_name, member.phone, member.role]);
+  const visibleTeams = teams.flatMap((team) => {
+    const all = members[team.id] ?? [];
+    const rows = nameMatches(team.team_name) ? all : all.filter(memberMatches);
+    return rows.length > 0 || nameMatches(team.team_name) ? [{ team, rows }] : [];
+  });
+  const visibleGroups = groups.flatMap((group) => {
+    const all = groupMembers[group.id] ?? [];
+    const rows = nameMatches(group.group_name) ? all : all.filter(memberMatches);
+    return rows.length > 0 || nameMatches(group.group_name) ? [{ group, rows }] : [];
+  });
+
   const unassigned = (teamId: string) => {
     const inTeam = new Set((members[teamId] ?? []).map((m) => m.id));
     return technicians.filter((tech) => !inTeam.has(tech.id));
@@ -259,6 +278,8 @@ export default function SalesTeams({ liffId }: { liffId: string }) {
       statusTone={tone}
     >
       <p className="page-intro">{copy.intro}</p>
+
+      <ListFilters query={query} onQuery={setQuery} />
 
       {canManage && (
         <section className="section">
@@ -290,8 +311,12 @@ export default function SalesTeams({ liffId }: { liffId: string }) {
         <div className="empty">
           <p>{copy.empty}</p>
         </div>
+      ) : visibleTeams.length === 0 ? (
+        <div className="empty">
+          <p>{t.dashboard.noMatch}</p>
+        </div>
       ) : (
-        teams.map((team) => (
+        visibleTeams.map(({ team, rows }) => (
           <section key={team.id} className="section">
             <div className="section-head">
               <h2>{team.team_name}</h2>
@@ -307,13 +332,13 @@ export default function SalesTeams({ liffId }: { liffId: string }) {
                 </button>
               )}
             </div>
-            {(members[team.id] ?? []).length === 0 ? (
+            {rows.length === 0 ? (
               <div className="empty">
                 <p>{copy.noMembers}</p>
               </div>
             ) : (
               <ul className="list">
-                {(members[team.id] ?? []).map((member) => (
+                {rows.map((member) => (
                   <li key={member.id} className="card">
                     <div className="card-title">
                       {member.display_name}
@@ -426,8 +451,12 @@ export default function SalesTeams({ liffId }: { liffId: string }) {
             <div className="empty">
               <p>{s.groups.empty}</p>
             </div>
+          ) : visibleGroups.length === 0 ? (
+            <div className="empty">
+              <p>{t.dashboard.noMatch}</p>
+            </div>
           ) : (
-            groups.map((group) => (
+            visibleGroups.map(({ group, rows }) => (
               <section key={group.id} className="section">
                 <div className="section-head">
                   <h2>{group.group_name}</h2>
@@ -441,13 +470,13 @@ export default function SalesTeams({ liffId }: { liffId: string }) {
                     {s.groups.deleteGroup}
                   </button>
                 </div>
-                {(groupMembers[group.id] ?? []).length === 0 ? (
+                {rows.length === 0 ? (
                   <div className="empty">
                     <p>{copy.noMembers}</p>
                   </div>
                 ) : (
                   <ul className="list">
-                    {(groupMembers[group.id] ?? []).map((member) => (
+                    {rows.map((member) => (
                       <li key={member.id} className="card">
                         <div className="card-title">{member.display_name}</div>
                         <div className="card-meta">

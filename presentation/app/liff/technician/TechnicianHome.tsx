@@ -10,6 +10,7 @@ import { AppShell } from "../sales/_components";
 import { FieldRow } from "../_field-row";
 import { ProfileCard } from "../_profile-card";
 import { ShopSwitcher } from "../_shop-switcher";
+import { ListFilters, matchesQuery, optionsFrom } from "../_filters";
 import { Ticket, TicketRow } from "../_tickets";
 import { Membership, completeLiffRedirect, fetchPermissions, initLiffSession, proxyHeaders } from "../_shared";
 
@@ -51,6 +52,8 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
   const [busyId, setBusyId] = useState("");
+  const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
   const [reportFor, setReportFor] = useState<Ticket | null>(null);
   const [declineFor, setDeclineFor] = useState<Ticket | null>(null);
   const [declineReason, setDeclineReason] = useState("");
@@ -403,11 +406,22 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
     }
   }
 
-  const mine = tickets.filter(
+  // One search and status filter over every section below: a technician
+  // with thirty jobs finds "the one on Rama 9" without reading each list.
+  const shown = tickets.filter(
+    (x) =>
+      (!statusFilter || x.status === statusFilter) &&
+      matchesQuery(query, [
+        x.ticket_number, x.issue_description, x.customer_name, x.customer_phone,
+        x.service_address, x.serial_number, x.product_name, statusLabel(x.status),
+      ]),
+  );
+  const filtering = Boolean(query.trim() || statusFilter);
+  const mine = shown.filter(
     (x) => x.assigned_to_ref === memberId && x.accept_status === "accepted",
   );
   // Given to me by CS and not yet answered: accept (claim) or decline.
-  const offered = tickets.filter(
+  const offered = shown.filter(
     (x) =>
       x.assigned_to_ref === memberId &&
       x.accept_status !== "accepted" &&
@@ -415,7 +429,7 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
       x.status !== "cancelled",
   );
   // Given to a team I am on, not yet accepted by its lead (12.4).
-  const offeredToTeam = tickets.filter(
+  const offeredToTeam = shown.filter(
     (x) =>
       x.assigned_target_type === "technician_team" &&
       x.accept_status !== "accepted" &&
@@ -423,7 +437,7 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
       x.status !== "cancelled",
   );
   // Accepted for the team, waiting for one of us to take it.
-  const teamOpen = tickets.filter(
+  const teamOpen = shown.filter(
     (x) =>
       x.assigned_target_type === "technician_team" &&
       x.accept_status === "accepted" &&
@@ -435,7 +449,7 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
   // the one I had just taken looked like it was still open (owner, 3
   // Sep). Ticket statuses are open/assigned/in_progress/completed/
   // cancelled; "closed" was never one.
-  const open = tickets.filter(
+  const open = shown.filter(
     (x) =>
       x.status !== "completed" &&
       x.status !== "cancelled" &&
@@ -477,6 +491,14 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
           />
         )}
 
+        <ListFilters
+          query={query}
+          onQuery={setQuery}
+          status={statusFilter}
+          statuses={optionsFrom(t.dashboard.tickets.status as Record<string, string>)}
+          onStatus={setStatusFilter}
+        />
+
         <section className="section">
           <div className="section-head">
             <h2>
@@ -488,7 +510,7 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
           </div>
           {mine.length === 0 ? (
             <div className="empty">
-              <p>{t.dashboard.technician.noJobs}</p>
+              <p>{filtering ? t.dashboard.noMatch : t.dashboard.technician.noJobs}</p>
             </div>
           ) : (
             <ul className="list">
@@ -777,7 +799,7 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
           </div>
           {open.length === 0 ? (
             <div className="empty">
-              <p>{t.dashboard.technician.noOpenJobs}</p>
+              <p>{filtering ? t.dashboard.noMatch : t.dashboard.technician.noOpenJobs}</p>
             </div>
           ) : (
             <ul className="list">

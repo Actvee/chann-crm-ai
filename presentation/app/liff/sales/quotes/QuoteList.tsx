@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Badge, Count, Empty } from "../_components";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
+import { ListFilters, matchesQuery, optionsFrom } from "../../_filters";
 import { InlineCreateForm } from "../../_inline-create";
 import {
   ListControls, byNewest, byOldest, useListControls,
@@ -36,6 +37,8 @@ export default function QuoteList({ liffId }: { liffId: string }) {
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
   const [busyId, setBusyId] = useState("");
   const [busy, setBusy] = useState(false);
+  const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
   const [openDeals, setOpenDeals] = useState<{ id: string; label: string; keywords: string }[]>([]);
 
   const say = useCallback((message: string, kind?: "ok" | "error") => {
@@ -224,7 +227,16 @@ export default function QuoteList({ liffId }: { liffId: string }) {
       compare: (a: Quote, b: Quote) => b.quote_id.localeCompare(a.quote_id),
     },
   ];
-  const controls = useListControls(quotes, sorts, "newest");
+  const filtered = quotes.filter(
+    (quote) =>
+      (!statusFilter || quote.status === statusFilter) &&
+      matchesQuery(query, [
+        quote.quote_id,
+        statusLabel(quote.status),
+        quote.generated_document_id ? t.dashboard.quotes.issued : t.dashboard.quotes.notIssued,
+      ]),
+  );
+  const controls = useListControls(filtered, sorts, "newest");
   const visibleQuotes = controls.visible;
   const can = (key: string) => !session.suspended && permissions.has(key);
   // Issuing changes state, so it needs quote.update — the key the route
@@ -243,6 +255,14 @@ export default function QuoteList({ liffId }: { liffId: string }) {
       status={status}
       statusTone={tone}
     >
+      <ListFilters
+        query={query}
+        onQuery={setQuery}
+        status={statusFilter}
+        statuses={optionsFrom(t.quote.status as Record<string, string>)}
+        onStatus={setStatusFilter}
+      />
+
       <ListControls
         sorts={sorts}
         sortKey={controls.sortKey}
@@ -276,7 +296,7 @@ export default function QuoteList({ liffId }: { liffId: string }) {
       )}
 
       {visibleQuotes.length === 0 ? (
-        <Empty message={t.dashboard.quotes.empty} />
+        <Empty message={quotes.length === 0 ? t.dashboard.quotes.empty : t.dashboard.noMatch} />
       ) : (
         <ul className="list">
           {visibleQuotes.map((quote) => (

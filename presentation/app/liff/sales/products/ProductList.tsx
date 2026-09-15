@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { FieldRow } from "../../_field-row";
+import { ListFilters, matchesQuery } from "../../_filters";
 import { Count, Empty } from "../_components";
 import { CsvImport } from "../_csv-import";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
@@ -54,6 +55,7 @@ export default function ProductList({ liffId }: { liffId: string }) {
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
   const [query, setQuery] = useState("");
+  const [category, setCategory] = useState("");
 
   const say = useCallback((message: string, kind?: "ok" | "error") => {
     setStatus(message);
@@ -85,14 +87,19 @@ export default function ProductList({ liffId }: { liffId: string }) {
     );
   }, [session.ready, load, say, t]);
 
-  const needle = query.trim().toLowerCase();
-  const visible = needle
-    ? products.filter((product) =>
-        [product.product_name, product.product_id, product.sku]
-          .map((value) => String(value ?? "").toLowerCase())
-          .some((value) => value.includes(needle)),
-      )
-    : products;
+  // The categories the catalogue actually uses, so the select never
+  // offers one with nothing in it; no categories, no select.
+  const categories = Array.from(
+    new Set(products.map((product) => (product.category ?? "").trim()).filter(Boolean)),
+  ).sort((a, b) => a.localeCompare(b, "th"));
+  const visible = products.filter(
+    (product) =>
+      (!category || (product.category ?? "").trim() === category) &&
+      matchesQuery(query, [
+        product.product_name, product.product_id, product.sku, product.category,
+        product.description,
+      ]),
+  );
 
   async function saveProduct() {
     // Both are required by the Data tier. Catching it here means the
@@ -146,15 +153,19 @@ export default function ProductList({ liffId }: { liffId: string }) {
       status={status}
       statusTone={tone}
     >
-      <label className="field">
-        <span>{t.dashboard.search}</span>
-        <input
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder={t.dashboard.products.searchHint}
-          type="search"
-        />
-      </label>
+      <ListFilters
+        query={query}
+        onQuery={setQuery}
+        placeholder={t.dashboard.products.searchHint}
+        status={category}
+        statuses={
+          categories.length > 0
+            ? categories.map((value) => ({ value, label: value }))
+            : undefined
+        }
+        statusLabel={t.dashboard.products.category}
+        onStatus={setCategory}
+      />
 
       <Count shown={visible.length} total={products.length} />
       {products.length >= PAGE && (
@@ -249,7 +260,9 @@ export default function ProductList({ liffId }: { liffId: string }) {
           message={
             products.length === 0
               ? t.dashboard.products.empty
-              : `${t.dashboard.products.noMatch}: “${query}”`
+              : query
+                ? `${t.dashboard.products.noMatch}: “${query}”`
+                : t.dashboard.products.noMatch
           }
         />
       ) : (

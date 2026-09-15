@@ -8,6 +8,7 @@ import { useLanguage } from "@/lib/i18n/LanguageProvider";
 import { useSalesSession } from "../_session";
 import { SalesShell } from "../_shell";
 import { FieldRow } from "../../_field-row";
+import { ListFilters, matchesQuery, optionsFrom } from "../../_filters";
 import { openExternal, proxyHeaders } from "../../_shared";
 
 type Step = {
@@ -53,6 +54,8 @@ export default function ApprovalQueue({ liffId }: { liffId: string }) {
   const [busyId, setBusyId] = useState("");
   const [rejecting, setRejecting] = useState("");
   const [reason, setReason] = useState("");
+  const [query, setQuery] = useState("");
+  const [stepStatus, setStepStatus] = useState("");
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
 
@@ -156,6 +159,21 @@ export default function ApprovalQueue({ liffId }: { liffId: string }) {
   const canReject = !session.suspended && permissions.has("approval.reject");
   const canManage = !session.suspended && permissions.has("approval.manage");
 
+  // The queue is what the server says is waiting for this person; the
+  // filter finds one report in it by its code, the customer, the job or
+  // what the technician wrote.
+  const visible = rows.filter((row) => {
+    const data = row.report?.report_data ?? {};
+    return (
+      (!stepStatus || row.step.status === stepStatus) &&
+      matchesQuery(query, [
+        row.report?.report_id, row.ticket?.ticket_number, row.ticket?.customer_name,
+        row.ticket?.issue_description, row.ticket?.service_address,
+        data.found_issue, data.work_done, data.parts_changed, data.technician_name,
+      ])
+    );
+  });
+
   return (
     <SalesShell
       session={session}
@@ -175,13 +193,21 @@ export default function ApprovalQueue({ liffId }: { liffId: string }) {
         </div>
       )}
 
-      {rows.length === 0 ? (loaded && tone !== "error" ? (
+      <ListFilters
+        query={query}
+        onQuery={setQuery}
+        status={stepStatus}
+        statuses={optionsFrom(t.dashboard.approvals.status as Record<string, string>)}
+        onStatus={setStepStatus}
+      />
+
+      {visible.length === 0 ? (loaded && tone !== "error" ? (
         <div className="empty">
-          <p>{t.dashboard.approvals.empty}</p>
+          <p>{rows.length === 0 ? t.dashboard.approvals.empty : t.dashboard.noMatch}</p>
         </div>
       ) : null) : (
         <ul className="list">
-          {rows.map((row) => {
+          {visible.map((row) => {
             const data = row.report?.report_data ?? {};
             const code = row.report?.report_id ?? "";
             const busy = busyId === row.step.id;

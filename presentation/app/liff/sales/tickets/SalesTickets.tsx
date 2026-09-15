@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { FieldRow } from "../../_field-row";
+import { ListFilters, matchesQuery, optionsFrom } from "../../_filters";
 import { Ticket, formatWhen, machineLine, ticketStage } from "../../_tickets";
 import { dispatchFieldLabels, useFailureText } from "../_format";
 import { proxyHeaders } from "../_lib";
@@ -32,6 +33,7 @@ const PAGE = 500;
 // What "not finished" means when the finished ones are hidden: fetched
 // per status so a long history cannot push a live job out of the window.
 const OPEN_STATUSES = ["open", "assigned", "in_progress"];
+const DONE_STATUSES = ["completed", "cancelled"];
 
 /**
  * The dispatcher's view: which tickets are waiting, what is stopping
@@ -58,6 +60,8 @@ export default function SalesTickets({ liffId }: { liffId: string }) {
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
   const [busyId, setBusyId] = useState("");
   const [showDone, setShowDone] = useState(false);
+  const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
   const [target, setTarget] = useState<Record<string, string>>({});
   const [editing, setEditing] = useState<string>("");
   const [draft, setDraft] = useState<Draft>({
@@ -235,9 +239,6 @@ export default function SalesTickets({ liffId }: { liffId: string }) {
     if (ok) setConfirmCancel("");
   }
 
-  const visible = tickets.filter(
-    (x) => showDone || (x.status !== "completed" && x.status !== "cancelled"),
-  );
   // Each control on the key its route checks (review C7/C9): dispatch is
   // ticket.assign, cancelling is ticket.close, editing the gate's fields
   // is ticket.update — and ticket.update still covers all three for the
@@ -255,6 +256,16 @@ export default function SalesTickets({ liffId }: { liffId: string }) {
     }
     return technicians.find((tech) => tech.id === x.assigned_to_ref)?.display_name ?? "";
   };
+  const visible = tickets.filter(
+    (x) =>
+      (showDone || !DONE_STATUSES.includes(x.status)) &&
+      (!statusFilter || x.status === statusFilter) &&
+      matchesQuery(query, [
+        x.ticket_number, x.customer_name, x.customer_phone, x.issue_description,
+        x.service_address, x.serial_number, x.product_name, statusLabel(x.status),
+        targetLabel(x),
+      ]),
+  );
 
   return (
     <SalesShell
@@ -266,22 +277,36 @@ export default function SalesTickets({ liffId }: { liffId: string }) {
       status={status}
       statusTone={tone}
     >
-      <div className="actions" style={{ justifyContent: "flex-end" }}>
+      <ListFilters
+        query={query}
+        onQuery={setQuery}
+        status={statusFilter}
+        statuses={optionsFrom(copy.status as Record<string, string>)}
+        onStatus={(value) => {
+          setStatusFilter(value);
+          // Asking for finished jobs means fetching them: they are not
+          // downloaded until someone wants them.
+          if (DONE_STATUSES.includes(value)) setShowDone(true);
+        }}
+      >
         <button
           type="button"
           className="btn"
           data-variant="quiet"
-          onClick={() => setShowDone(!showDone)}
+          onClick={() => {
+            if (showDone && DONE_STATUSES.includes(statusFilter)) setStatusFilter("");
+            setShowDone(!showDone);
+          }}
         >
           {showDone ? copy.hideDone : copy.showDone}
         </button>
-      </div>
+      </ListFilters>
       {tickets.length >= PAGE && (
         <p className="count">{s.errors.showingLatest.replace("{count}", String(tickets.length))}</p>
       )}
       {visible.length === 0 ? (
         <div className="empty">
-          <p>{copy.empty}</p>
+          <p>{tickets.length === 0 ? copy.empty : t.dashboard.noMatch}</p>
         </div>
       ) : (
         <ul className="list">

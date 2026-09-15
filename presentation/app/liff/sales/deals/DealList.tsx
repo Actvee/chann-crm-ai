@@ -7,6 +7,7 @@ import { Badge, Count, Empty } from "../_components";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { FieldRow } from "../../_field-row";
+import { ListFilters, matchesQuery, optionsFrom } from "../../_filters";
 import { InlineCreateForm } from "../../_inline-create";
 import {
   ListControls, byNewest, byOldest, shortDate, useListControls,
@@ -28,6 +29,7 @@ type Deal = {
   expected_close_date?: string | null;
   amount?: string | number | null;
   currency?: string | null;
+  contact_id?: string | null;
 };
 
 /** The deal's own amount when the salesperson gave one; otherwise the line items. */
@@ -69,7 +71,9 @@ export default function DealList({ liffId }: { liffId: string }) {
     { id: string; name: string; keywords?: string }[]
   >([]);
   const [busyId, setBusyId] = useState("");
-  const [openOnly, setOpenOnly] = useState(false);
+  const [query, setQuery] = useState("");
+  // "" is every deal, "open" the work queue, otherwise one stage.
+  const [stageFilter, setStageFilter] = useState("");
   // Why a deal was lost, asked inline (review C20): window.prompt is
   // silently a no-op inside some LINE webviews, which made "ปิดไม่สำเร็จ"
   // a button that did nothing.
@@ -212,12 +216,23 @@ export default function DealList({ liffId }: { liffId: string }) {
     void setStage(deal, stage);
   }
 
-  const stageFiltered = openOnly
-    ? // Filtering on the two terminal stages rather than listing the open
-      // ones means a stage added later counts as open by default, which is
-      // the safer direction to be wrong in for a work queue.
-      deals.filter((deal) => !["won", "lost"].includes(deal.stage))
-    : deals;
+  // The customer's name is on the row only when the picker was loaded
+  // (deal.create); everyone else still finds a deal by code or note.
+  const contactName = (deal: Deal) =>
+    contacts.find((contact) => contact.id === deal.contact_id)?.name ?? "";
+  const stageFiltered = deals.filter(
+    (deal) =>
+      (stageFilter === "open"
+        ? // Filtering on the two terminal stages rather than listing the open
+          // ones means a stage added later counts as open by default, which is
+          // the safer direction to be wrong in for a work queue.
+          !["won", "lost"].includes(deal.stage)
+        : !stageFilter || deal.stage === stageFilter) &&
+      matchesQuery(query, [
+        deal.deal_id, deal.notes, stageLabel(deal.stage), contactName(deal),
+        deal.amount, deal.expected_close_date,
+      ]),
+  );
 
   const sorts = [
     { key: "newest", label: t.dashboard.list.newest, compare: byNewest<Deal> },
@@ -252,24 +267,17 @@ export default function DealList({ liffId }: { liffId: string }) {
       status={status}
       statusTone={tone}
     >
-      <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-        <button
-          type="button"
-          className="btn"
-          data-variant={openOnly ? undefined : "primary"}
-          onClick={() => setOpenOnly(false)}
-        >
-          {t.dashboard.deals.all}
-        </button>
-        <button
-          type="button"
-          className="btn"
-          data-variant={openOnly ? "primary" : undefined}
-          onClick={() => setOpenOnly(true)}
-        >
-          {t.dashboard.deals.openOnly}
-        </button>
-      </div>
+      <ListFilters
+        query={query}
+        onQuery={setQuery}
+        placeholder={t.dashboard.deals.searchHint}
+        status={stageFilter}
+        statuses={[
+          { value: "open", label: t.dashboard.deals.openOnly },
+          ...optionsFrom(t.deal.stage as Record<string, string>),
+        ]}
+        onStatus={setStageFilter}
+      />
 
       <ListControls
         sorts={sorts}
@@ -350,7 +358,9 @@ export default function DealList({ liffId }: { liffId: string }) {
           message={
             deals.length === 0
               ? t.dashboard.deals.empty
-              : t.dashboard.deals.noOpen
+              : stageFilter === "open" && !query
+                ? t.dashboard.deals.noOpen
+                : t.dashboard.noMatch
           }
         />
       ) : (

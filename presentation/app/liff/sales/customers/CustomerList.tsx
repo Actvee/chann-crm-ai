@@ -8,6 +8,7 @@ import { CsvImport } from "../_csv-import";
 import { Badge, Count, Empty } from "../_components";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
+import { ListFilters, matchesQuery } from "../../_filters";
 import { InlineCreateForm } from "../../_inline-create";
 import {
   ListControls, byNewest, byOldest, useListControls,
@@ -48,6 +49,7 @@ export default function CustomerList({ liffId }: { liffId: string }) {
   const [busy, setBusy] = useState(false);
   const [busyId, setBusyId] = useState("");
   const [query, setQuery] = useState("");
+  const [stage, setStage] = useState("");
 
   const say = useCallback((message: string, kind?: "ok" | "error") => {
     setStatus(message);
@@ -162,14 +164,14 @@ export default function CustomerList({ liffId }: { liffId: string }) {
   // Filtered in the browser rather than by refetching: the tenant-scoped
   // list is already loaded and SMB-scale, so a round trip per keystroke
   // would add latency for no benefit.
-  const needle = query.trim().toLowerCase();
-  const searched = needle
-    ? customers.filter((customer) =>
-        [fullName(customer), customer.phone, customer.email, customer.customer_id]
-          .map((value) => String(value ?? "").toLowerCase())
-          .some((value) => value.includes(needle)),
-      )
-    : customers;
+  const searched = customers.filter(
+    (customer) =>
+      (!stage || customer.stage === stage) &&
+      matchesQuery(query, [
+        fullName(customer), customer.phone, customer.email, customer.customer_id,
+        stageLabel(customer.stage),
+      ]),
+  );
 
   const sorts = [
     { key: "newest", label: t.dashboard.list.newest, compare: byNewest<Customer> },
@@ -195,15 +197,17 @@ export default function CustomerList({ liffId }: { liffId: string }) {
       status={status}
       statusTone={tone}
     >
-      <label className="field">
-        <span>{t.dashboard.search}</span>
-        <input
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder={t.dashboard.customers.searchHint}
-          type="search"
-        />
-      </label>
+      <ListFilters
+        query={query}
+        onQuery={setQuery}
+        placeholder={t.dashboard.customers.searchHint}
+        status={stage}
+        statuses={[
+          { value: "lead", label: t.customer.lead },
+          { value: "contact", label: t.customer.title },
+        ]}
+        onStatus={setStage}
+      />
 
       <ListControls
         sorts={sorts}
@@ -247,7 +251,9 @@ export default function CustomerList({ liffId }: { liffId: string }) {
           message={
             customers.length === 0
               ? t.dashboard.customers.empty
-              : `${t.dashboard.customers.noMatch}: “${query}”`
+              : query
+                ? `${t.dashboard.customers.noMatch}: “${query}”`
+                : t.dashboard.customers.noMatch
           }
         />
       ) : (
