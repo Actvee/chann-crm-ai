@@ -58,12 +58,14 @@ class _ToDocx(HTMLParser):
         self._rows: list[list[str]] | None = None
         self._row: list[str] | None = None
         self._cell: list[str] | None = None
-        self._header = False
         self._seen_th = False
         # Text sitting between cells — which is exactly where
         # `{{#line_items}}` and `{{/line_items}}` land, since the sanitiser
         # keeps them wrapped around the <tr> rather than inside a cell.
         self._loose: list[str] = []
+        # Loose text collected before a row opened, folded into that
+        # row's first cell when the row closes.
+        self._prefix = ""
 
     # -- paragraph accumulation
 
@@ -123,9 +125,8 @@ class _ToDocx(HTMLParser):
                 self._row.append(" ".join("".join(self._cell).split()))
                 self._cell = None
             elif tag == "tr" and self._row is not None:
-                prefix = getattr(self, "_prefix", "")
-                if prefix and self._row:
-                    self._row[0] = f"{prefix}{self._row[0]}"
+                if self._prefix and self._row:
+                    self._row[0] = f"{self._prefix}{self._row[0]}"
                 self._prefix = ""
                 self._rows.append(self._row)
                 self._row = None

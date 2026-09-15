@@ -91,9 +91,11 @@ export function useSalesSession(liffId: string, say: Say) {
         return;
       }
       const me = await fetchMe(started.token, licenseId);
+      // Suspended (Phase 18) and soft-deleted (round 18) are both read-only.
+      const readOnly = new Set(["suspended", "deleted"]);
       const suspended =
-        me.licenseStatus === "suspended" ||
-        started.memberships[0]?.license_status === "suspended";
+        readOnly.has(me.licenseStatus ?? "") ||
+        readOnly.has(started.memberships[0]?.license_status ?? "");
       setSession({
         token: started.token,
         memberships: started.memberships,

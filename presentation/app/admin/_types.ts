@@ -10,8 +10,12 @@ export type TenantSummary = {
   license_code: string;
   company_name: string;
   company_code: string | null;
-  status: "trial" | "active" | "suspended" | string;
-  trial_expires_at: string | null;
+  status: "trial" | "active" | "suspended" | "deleted" | string;
+  /** When the subscription (trial or paid) ends — round 18 renamed it
+   *  from trial_expires_at because an active shop has a deadline too. */
+  expires_at: string | null;
+  /** Set while the company is soft-deleted (status "deleted"). */
+  deleted_at?: string | null;
   created_at: string | null;
   owner_chann_uid: string | null;
   owner_name: string | null;
@@ -26,6 +30,8 @@ export type TenantSummary = {
 export type TenantMember = {
   chann_uid: string;
   role: string;
+  /** "sales" | "technician" — which OA the row is for. */
+  channel?: string;
   status: string;
   display_name: string | null;
   joined_at: string | null;
@@ -37,6 +43,8 @@ export type TenantDetail = TenantSummary & {
   company_email: string | null;
   company_address: string | null;
   tax_id: string | null;
+  /** The operator's own notes (platform-only; never shown to the tenant). */
+  admin_notes?: string | null;
   members_detail: TenantMember[];
 };
 
@@ -49,10 +57,18 @@ export type TenantEditFields = {
   company_email: string;
   company_address: string;
   tax_id: string;
+  admin_notes: string;
   /** YYYY-MM-DD in Bangkok, or "" for no deadline. */
-  trial_expires_at: string;
-  status: "trial" | "active" | "suspended" | string;
+  expires_at: string;
+  status: "trial" | "active" | "suspended" | "deleted" | string;
 };
+
+/** Is the subscription's end already behind us? */
+export function isExpired(value: string | null | undefined): boolean {
+  if (!value) return false;
+  const t = new Date(value).getTime();
+  return !Number.isNaN(t) && t < Date.now();
+}
 
 /** An ISO instant → the Bangkok calendar day for a <input type="date">. */
 export function bangkokDay(value: string | null | undefined): string {

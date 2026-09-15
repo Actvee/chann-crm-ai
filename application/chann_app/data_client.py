@@ -744,14 +744,20 @@ class DataClient:
     async def execute_assignment(
         self, license_id: str, *, scope: str, entity_type: str, entity_id: str,
         context: dict | None = None, actor_id: str | None = None,
+        team_name: str | None = None,
     ) -> dict:
+        """`team_name` is a team the caller already chose: the engine then
+        only picks who inside it (round 18)."""
+        body = {
+            "scope": scope, "entity_type": entity_type,
+            "entity_id": entity_id, "context": context or {},
+        }
+        if team_name:
+            body["team_name"] = team_name
         resp = await self._client.post(
             f"{self._base}/internal/v1/licenses/{license_id}/assignment-rules/execute",
             headers=self._headers_for(actor_id),
-            json={
-                "scope": scope, "entity_type": entity_type,
-                "entity_id": entity_id, "context": context or {},
-            },
+            json=body,
         )
         return self._unwrap(resp)
 
@@ -825,11 +831,59 @@ class DataClient:
         return self._unwrap(resp)
 
     async def update_tenant(self, license_id: str, changes: dict, actor_id: str | None = None) -> dict:
-        """Operator edits (status, trial deadline, shop details) — one PATCH,
-        audited by the Data tier under the admin's id."""
+        """Operator edits (status, subscription deadline, shop details,
+        admin notes) — one PATCH, audited by the Data tier under the
+        admin's id."""
         resp = await self._client.patch(
             f"{self._base}/internal/v1/platform/tenants/{license_id}",
             json=changes, headers=self._headers_for(actor_id),
+        )
+        return self._unwrap(resp)
+
+    # ---------------------------------------------------------- round 18
+    async def extend_tenant(self, license_id: str, days: int, actor_id: str | None = None) -> dict:
+        """Renew the subscription by `days`; a suspended tenant reopens."""
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/platform/tenants/{license_id}/extend",
+            json={"days": int(days)}, headers=self._headers_for(actor_id),
+        )
+        return self._unwrap(resp)
+
+    async def delete_tenant(self, license_id: str, *, purge: bool = False, actor_id: str | None = None) -> dict:
+        """Soft delete (status "deleted", members removed) or, with purge,
+        every row of the company."""
+        resp = await self._client.delete(
+            f"{self._base}/internal/v1/platform/tenants/{license_id}",
+            params={"purge": "true" if purge else "false"}, headers=self._headers_for(actor_id),
+        )
+        return self._unwrap(resp)
+
+    async def platform_set_member_role(
+        self, license_id: str, chann_uid: str, role_name: str, actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.patch(
+            f"{self._base}/internal/v1/platform/tenants/{license_id}/members/{chann_uid}/role",
+            json={"role_name": role_name}, headers=self._headers_for(actor_id),
+        )
+        return self._unwrap(resp)
+
+    async def platform_set_member_status(
+        self, license_id: str, chann_uid: str, status: str, actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.patch(
+            f"{self._base}/internal/v1/platform/tenants/{license_id}/members/{chann_uid}/status",
+            json={"status": status}, headers=self._headers_for(actor_id),
+        )
+        return self._unwrap(resp)
+
+    async def platform_move_member(
+        self, license_id: str, chann_uid: str, *, target_license_id: str, role_name: str,
+        actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/platform/tenants/{license_id}/members/{chann_uid}/move",
+            json={"target_license_id": target_license_id, "role_name": role_name},
+            headers=self._headers_for(actor_id),
         )
         return self._unwrap(resp)
 
@@ -1970,20 +2024,27 @@ class DataClient:
         )
         return self._unwrap(resp)
 
-    async def expire_due_trials(self) -> list[dict]:
-        """Trials past their date are suspended; the licenses that were."""
+    async def expire_due_licenses(self) -> list[dict]:
+        """Trials and subscriptions past their date are suspended; the
+        licenses that were, each with `status_before`. The path keeps its
+        trial-era name (scheduler.tf points at the App-tier twin)."""
         resp = await self._client.post(
             f"{self._base}/internal/v1/platform/trials/expire", headers=self._headers,
         )
         return self._unwrap(resp) or []
 
-    async def trials_expiring(self, on_day) -> list[dict]:
-        """Trials ending on this Bangkok calendar day, with the owner to tell."""
+    async def licenses_expiring(self, on_day) -> list[dict]:
+        """Trials and subscriptions ending on this Bangkok calendar day,
+        with the owner to tell and the status to word it by."""
         resp = await self._client.get(
             f"{self._base}/internal/v1/platform/trials/expiring",
             headers=self._headers, params={"on_day": str(on_day)},
         )
         return self._unwrap(resp) or []
+
+    # Pre-round-18 names.
+    expire_due_trials = expire_due_licenses
+    trials_expiring = licenses_expiring
 
     async def expire_overdue_quotes(self, license_id: str) -> dict:
         resp = await self._client.post(

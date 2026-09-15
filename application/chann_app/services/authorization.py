@@ -46,7 +46,8 @@ class TenantPrincipal:
     audience: str = "sales"
     # Phase 18: "suspended" means read-only. Carried so a route that must
     # decide for itself (a write disguised as a GET) can, and so the
-    # permissions endpoint can tell the page.
+    # permissions endpoint can tell the page. Round 18: a soft-deleted
+    # company ("deleted") is gated exactly like a suspended one.
     license_status: str = "active"
 
     @property
@@ -55,7 +56,7 @@ class TenantPrincipal:
 
     @property
     def is_suspended(self) -> bool:
-        return self.license_status == "suspended"
+        return self.license_status in READ_ONLY_STATUSES
 
     def require_any(self, *permission_keys: str) -> None:
         """Any one of several keys. For routes whose natural key was added
@@ -76,10 +77,14 @@ class TenantPrincipal:
             )
 
 
+# Read-only tenant statuses: suspended (Phase 18) and soft-deleted (round 18).
+READ_ONLY_STATUSES = ("suspended", "deleted")
+
+
 def refuse_if_suspended(license_status: str | None, method: str | None) -> None:
-    """A suspended shop is read-only: 423 Locked with a body the pages can
-    translate, for any non-read method."""
-    if (license_status or "active") != "suspended":
+    """A suspended (or soft-deleted) shop is read-only: 423 Locked with a
+    body the pages can translate, for any non-read method."""
+    if (license_status or "active") not in READ_ONLY_STATUSES:
         return
     if method is None or method.upper() in READ_METHODS:
         return

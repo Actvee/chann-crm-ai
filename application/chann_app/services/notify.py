@@ -37,6 +37,9 @@ TYPE_TO_OA = {
     # Phase 17.5.4: the tenant owner hears about the trial deadline.
     "trial_expiring": "sales",
     "trial_expired": "sales",
+    # Round 18: the paid subscription ends the same way.
+    "subscription_expiring": "sales",
+    "subscription_expired": "sales",
     "transfer_request": "sales",
     "sla_warning": "technician",
     "followup_due": "sales",

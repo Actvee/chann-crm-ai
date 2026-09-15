@@ -91,8 +91,10 @@ None of that moves to the model. Ever.
 any keyword table for a fresh sentence; the tables run only when the model answers
 `suggest`. What stays deterministic, by design: a pending answer (a check-in question, the
 report being written, an accept/decline waiting, a customer's address or date), a
-conversation with the shop, small talk, a greeting, a rich-menu tile, the help menu, and
-the "คุยกับร้าน …" prefix. Measured over the 1,168-utterance corpus through the real router:
+conversation with the shop, small talk, a greeting, a rich-menu tile, the help menu, the
+"คุยกับร้าน …" prefix, and (14 ก.ย.) a configuration command that carries free text for
+its OWN model call — "ตั้งกฎมอบหมาย …", "ตั้งการอนุมัติ …" and their confirm/show words:
+the router's model read "ช่างแอร์ให้ทีม AC" as "create a team called AC" and created it. Measured over the 1,168-utterance corpus through the real router:
 
 | OA | model reads | rule decides | share |
 |---|---|---|---|
@@ -199,3 +201,29 @@ environment by default; ask for it.
   stands until the prompt says how to express a transition.)
 - Moving `_sales_interest_item` to the model road: the deal-create field shape carries no
   product or quantity, so the model's natural answer cannot be executed.
+
+## Which model, and when (round 18, 15 ก.ย. 2569)
+
+Prices are OpenRouter's list on 15 ก.ย. 2569 (USD per million tokens, in / out), read
+from `/api/v1/models` with the project's key. Three tiers, three env vars — the code
+already picks `OPENROUTER_MODEL` (thinking off) for every chat read and
+`OPENROUTER_MODEL_REASONING` (thinking on) for the ad-hoc report; an image tier would
+be a third var and one new call site.
+
+| tier | today | recommendation | why |
+|---|---|---|---|
+| chat read (every message, 4 s budget) | `google/gemini-3.1-flash-lite` (0.25 / 1.50) | keep; second choice `qwen/qwen3.6-plus` (0.33 / 1.95, 1M ctx) | the router needs a fast JSON reader, not a thinker; the corpus is 85% model road on this model already |
+| reasoning (ad-hoc report, policy → rule, template design) | `deepseek/deepseek-v4-pro` (1.60 / 3.20) per spec | **`anthropic/claude-sonnet-5`** (2.00 / 10.00, 1M ctx, reads images and files) | Thai policy sentences → rule JSON, report query specs and HTML template drafts are exactly where a stronger reader pays for itself; called a few times a day, so the output price is irrelevant; `claude-opus-5` (5 / 25) only if Sonnet's drafts are not good enough |
+| image generation (new) | — | **`google/gemini-3.1-flash-image`** (0.50 / 3.00, image in+out) | cheapest image-out model on the list that also takes an image in (a rendered quote → a styled preview, a product photo → a catalogue card); `gemini-3-pro-image` (2 / 12) for print-quality marketing pieces; OpenAI's `gpt-5-image` (10 / 10) is four to twenty times the price for the same job |
+
+Where a smarter model would be used first: (1) `policy_to_rule` and `approval_policy` —
+one call, the person reviews the result, a wrong reading is expensive; (2) the report
+query spec (Phase 17); (3) `documents/design.draft_template` — a Word-quality layout
+from one sentence; (4) a future "explain this customer's history" summary. The chat
+router stays on the cheap tier: it is called 1,000× more often and its job is to read,
+not to think.
+
+Image generation is not wired yet. The one honest use today is the document preview
+("ดูตัวอย่าง" as a picture in LINE instead of a link) and marketing cards for the
+customer OA's "ดูสินค้า"; both are one `complete()`-style call with `modalities:
+["image","text"]` on OpenRouter and a stored PNG behind `asset_link`.

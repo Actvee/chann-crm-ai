@@ -23,6 +23,7 @@ from ..cache import (
     k_admin_session,
     k_identity,
     k_last_customer_ref,
+    k_license_patterns,
     k_recent_turns,
     k_last_entity_ref,
     k_member,
@@ -77,7 +78,7 @@ from ..repositories.phase15 import (
     ChatSessionRepository,
 )
 from ..repositories.phase165 import PdpaConflict, PdpaNotFound, PdpaRepository
-from ..repositories.phase18 import PlatformNotFound, PlatformRepository
+from ..repositories.phase18 import PlatformConflict, PlatformNotFound, PlatformRepository
 from ..repositories.phase17 import ReportQueryRepository, ReportSpecInvalid
 from ..repositories.phase16 import (
     DisplayPreferenceRepository,
@@ -125,6 +126,11 @@ from ..repositories.phase6 import (
 )
 from ..schemas import (
     ArchiveInactiveLeadsIn,
+    LicenseExpiredOut,
+    PlatformMemberMoveIn,
+    PlatformMemberRoleIn,
+    PlatformMemberStatusIn,
+    TenantExtendIn,
     ReportQueryIn,
     ReportResultOut,
     TenantMemberOut,
@@ -1901,16 +1907,19 @@ def set_license_status(
 
 @router.get("/platform/trials/expiring", response_model=list[TrialExpiringOut])
 def trials_expiring(on_day: date, session: Session = Depends(get_session)):
-    """Trials ending on this Bangkok calendar day (17.5.4 pre-warnings)."""
-    return RegistrationRepository(session).trials_expiring_on(on_day)
+    """Trials AND subscriptions ending on this Bangkok calendar day
+    (17.5.4 pre-warnings; round 18 widened it to active tenants). The
+    path keeps its name — scheduler.tf points at it."""
+    return RegistrationRepository(session).licenses_expiring_on(on_day)
 
 
-@router.post("/platform/trials/expire", response_model=list[LicenseOut])
+@router.post("/platform/trials/expire", response_model=list[LicenseExpiredOut])
 def expire_due_trials(session: Session = Depends(get_session)):
-    """Sweep for the trial deadline. Suspends; never deletes."""
+    """Sweep for the subscription deadline, trial and active alike.
+    Suspends; never deletes. Each row says what it was before."""
     try:
-        rows = RegistrationRepository(session).expire_due_trials()
-        for row in rows:
+        pairs = RegistrationRepository(session).expire_due_licenses()
+        for row, before in pairs:
             AuditRepository(session).write(
                 license_id=row.id,
                 entity_type="license",
@@ -1918,11 +1927,14 @@ def expire_due_trials(session: Session = Depends(get_session)):
                 actor_type="system",
                 action="update",
                 field_changes=diff_fields(
-                    {"status": "trial"}, {"status": "suspended"}
+                    {"status": before}, {"status": "suspended"}
                 ),
             )
         session.commit()
-        return [LicenseOut.model_validate(r, from_attributes=True) for r in rows]
+        return [
+            LicenseExpiredOut(**LicenseOut.model_validate(r, from_attributes=True).model_dump(), status_before=before)
+            for r, before in pairs
+        ]
     except Exception as exc:
         session.rollback()
         raise _phase65_http_error(exc)
@@ -3058,6 +3070,22 @@ def create_document_template_version(
 ):
     scope = TenantScope(license_id=license_id)
     try:
+        created_by = payload.created_by
+        uploader = payload.created_by_chann_uid or x_actor_id
+        if created_by is None and uploader:
+            # The Application tier knows the uploader by chann_uid; the
+            # column wants the member row. Resolved here, within the
+            # license, the same way a follow-up's owner is defaulted from
+            # X-Actor-Id. A uid with no membership leaves it null rather
+            # than failing the upload.
+            member = session.execute(
+                select(LicenseMember).where(
+                    LicenseMember.license_id == license_id,
+                    LicenseMember.chann_uid == uploader,
+                )
+            ).scalars().first()
+            if member is not None:
+                created_by = member.id
         row = DocumentTemplateRepository(session).create_draft_version(
             scope, template_id,
             source_docx_path=payload.source_docx_path,
@@ -3066,7 +3094,7 @@ def create_document_template_version(
             compiled_template_path=payload.compiled_template_path,
             renderer=payload.renderer, renderer_mode=payload.renderer_mode,
             smartbrowz_template_id=payload.smartbrowz_template_id,
-            created_by=payload.created_by,
+            created_by=created_by,
         )
         AuditRepository(session).write(
             license_id=license_id, entity_type="document_template_version", entity_id=row.id,
@@ -3588,6 +3616,11 @@ def list_licenses(
     query = select(License)
     if status:
         query = query.where(License.status == status)
+    else:
+        # A soft-deleted company (round 18) is gone for every scheduled
+        # job, whatever the caller excluded — only an explicit
+        # status="deleted" lists them.
+        query = query.where(License.status != "deleted")
     if exclude_status:
         # Excluding is usually what a caller means: a tenant's license
         # defaults to "trial", so an include-filter on "active" quietly
@@ -3711,19 +3744,29 @@ def execute_assignment(
         # Everything from here to commit is serialised per tenant.
         repo.lock_license(scope)
 
-        matched_team = assignment_engine.match_team(rule, payload.context)
+        rule_scope = str(payload.scope or "technician")
+        forced = (payload.team_name or "").strip() or None
+        if forced:
+            # The caller already chose the team ("มอบหมาย T-… ให้ทีมแอร์"):
+            # the rule only decides WHO inside it (round 18, 14 Sep 2026).
+            matched_team = forced
+        else:
+            matched_team = assignment_engine.match_team(rule, payload.context)
         if matched_team:
-            candidates = repo.team_members(scope, team_name=matched_team)
+            candidates = repo.team_members(scope, team_name=matched_team, rule_scope=rule_scope)
         else:
             # No criterion matched: fall back to everyone who could do this
             # kind of work, rather than refusing. A rule that does not
             # mention a case is a gap in the policy, not a reason to leave
-            # the job unowned.
-            candidates = repo.active_members(scope)
+            # the job unowned. "Could do this kind of work" is the OA the
+            # membership is on — a technician rule must not fall back to
+            # the sales staff.
+            candidates = repo.active_members(scope, channel=rule_scope)
 
+        entity_type = str(payload.entity_type or "deal")
         loads = repo.current_loads(
             scope, [c["id"] for c in candidates], on_day=date.today(),
-            entity_type=str(payload.entity_type or "deal"),
+            entity_type=entity_type,
         )
         outcome = assignment_engine.choose(
             rule, candidates, loads,
@@ -3731,8 +3774,15 @@ def execute_assignment(
             owner_candidates=repo.owner_members(scope),
         )
 
-        if outcome.member_id and payload.entity_type == "deal":
-            repo.assign_deal(scope, payload.entity_id, uuid.UUID(outcome.member_id))
+        if outcome.member_id:
+            picked = uuid.UUID(outcome.member_id)
+            if entity_type == "deal":
+                repo.assign_deal(scope, payload.entity_id, picked)
+            elif entity_type == "customer":
+                repo.assign_customer(scope, payload.entity_id, picked)
+            # Tickets are dispatched by the caller through the completeness
+            # gate; the stamp is still the engine's, so round_robin moves on.
+            repo.touch_assigned(scope, picked)
 
         AuditRepository(session).write(
             license_id=license_id,
@@ -5273,7 +5323,7 @@ def platform_tenant(license_id: uuid.UUID, session: Session = Depends(get_sessio
     payload.update({
         "legal_name": data.get("legal_name"), "company_phone": data.get("company_phone"),
         "company_email": data.get("company_email"), "company_address": data.get("company_address"),
-        "tax_id": data.get("tax_id"),
+        "tax_id": data.get("tax_id"), "admin_notes": data.get("admin_notes"),
         "members_detail": [TenantMemberOut(**m).model_dump() for m in members],
     })
     return payload
@@ -5293,9 +5343,15 @@ def platform_tenant_update(
     """The operator edits a tenant: status, trial deadline, shop details.
     Audited as a cross-tenant platform_admin row with the field diff, then
     the same payload the GET returns so the page can redraw at once."""
-    changes = payload.model_dump(exclude_unset=True, exclude={"clear_trial_expires_at"})
-    if payload.clear_trial_expires_at:
-        changes["trial_expires_at"] = None
+    changes = payload.model_dump(
+        exclude_unset=True, exclude={"clear_expires_at", "clear_trial_expires_at", "trial_expires_at"},
+    )
+    # The pre-round-18 names still work: an older Application tier keeps
+    # editing the deadline while the new one speaks `expires_at`.
+    if "trial_expires_at" in payload.model_fields_set and "expires_at" not in changes:
+        changes["expires_at"] = payload.trial_expires_at
+    if payload.clear_expires_at or payload.clear_trial_expires_at:
+        changes["expires_at"] = None
     if not changes:
         raise HTTPException(status_code=422, detail={"error": "nothing_to_update"})
     try:
@@ -5315,6 +5371,226 @@ def platform_tenant_update(
     )
     session.commit()
     return platform_tenant(license_id, session)
+
+
+def _platform_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, PlatformNotFound):
+        return HTTPException(status_code=404, detail={"error": "not_found", "message": str(exc)})
+    if isinstance(exc, PlatformConflict):
+        return HTTPException(status_code=409, detail={"error": "conflict", "message": str(exc)})
+    if isinstance(exc, ValueError):
+        return HTTPException(status_code=422, detail={"error": "invalid", "message": str(exc)})
+    if isinstance(exc, HTTPException):
+        return exc
+    log.exception("unhandled platform error: %s", exc)
+    return HTTPException(status_code=500, detail="internal error")
+
+
+@router.post("/platform/tenants/{license_id}/extend")
+def platform_tenant_extend(
+    license_id: uuid.UUID,
+    payload: TenantExtendIn,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    """Round 18: renew the subscription — expires_at = max(now, expiry) +
+    days. A suspended tenant becomes active again; the audit row says so."""
+    try:
+        before, row = PlatformRepository(session).extend(license_id, payload.days)
+        after = {k: getattr(row, k) for k in before}
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="license", entity_id=license_id,
+            actor_type="platform_admin", actor_id=x_actor_id or None, action="update",
+            field_changes={
+                **(diff_fields(
+                    {k: _auditable(v) for k, v in before.items()}, {k: _auditable(v) for k, v in after.items()},
+                ) or {}),
+                "extended_days": payload.days,
+            },
+            cross_tenant=True,
+        )
+        session.commit()
+    except Exception as exc:
+        session.rollback()
+        raise _platform_error(exc)
+    return platform_tenant(license_id, session)
+
+
+@router.delete("/platform/tenants/{license_id}")
+def platform_tenant_delete(
+    license_id: uuid.UUID,
+    purge: bool = False,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    """Round 18. Soft delete (default): status "deleted", deleted_at now,
+    every member removed; reversible through PATCH status. purge=true:
+    every row of the company is gone from Postgres and Redis, after one
+    cross-tenant audit row (license_id NULL — the license no longer
+    exists to point at; the company's own audit rows are detached the
+    same way and survive)."""
+    try:
+        repo = PlatformRepository(session)
+        if not purge:
+            before, row, removed = repo.soft_delete(license_id)
+            AuditRepository(session).write(
+                license_id=license_id, entity_type="license", entity_id=license_id,
+                actor_type="platform_admin", actor_id=x_actor_id or None, action="delete",
+                field_changes={
+                    **(diff_fields(
+                        {"status": before["status"]}, {"status": row.status},
+                    ) or {}),
+                    "members_removed": [m.chann_uid for m in removed],
+                },
+                cross_tenant=True,
+            )
+            session.commit()
+            keys: list[str] = []
+            for m in removed:
+                keys += _member_cache_keys(license_id, m.chann_uid)
+            cache.invalidate(*keys)
+            return platform_tenant(license_id, session)
+        summary = repo.purge(license_id)
+        AuditRepository(session).write(
+            license_id=None, entity_type="license", entity_id=license_id,
+            actor_type="platform_admin", actor_id=x_actor_id or None, action="delete",
+            field_changes={"purge": True, **summary},
+            cross_tenant=True,
+        )
+        session.commit()
+    except Exception as exc:
+        session.rollback()
+        raise _platform_error(exc)
+    cleared = cache.invalidate_matching(*k_license_patterns(str(license_id)))
+    return {"id": str(license_id), "purged": True, "redis_keys_cleared": cleared, **summary}
+
+
+@router.patch("/platform/tenants/{license_id}/members/{chann_uid}/role")
+def platform_member_role(
+    license_id: uuid.UUID,
+    chann_uid: str,
+    payload: PlatformMemberRoleIn,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    """Round 18: the platform changes a member's role. Owner stays with
+    break-glass (409 either direction)."""
+    try:
+        before, member = PlatformRepository(session).set_member_role(license_id, chann_uid, payload.role_name)
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="license_member", entity_id=member.id,
+            actor_type="platform_admin", actor_id=x_actor_id or None, action="update",
+            field_changes=diff_fields(before, {"role": member.role, "channel": member.channel}),
+            cross_tenant=True,
+        )
+        session.commit()
+    except Exception as exc:
+        session.rollback()
+        raise _platform_error(exc)
+    cache.invalidate(*_member_cache_keys(license_id, chann_uid))
+    return _member_out(session, TenantScope(license_id=license_id), member)
+
+
+@router.patch("/platform/tenants/{license_id}/members/{chann_uid}/status", response_model=MemberStatusOut)
+def platform_member_status(
+    license_id: uuid.UUID,
+    chann_uid: str,
+    payload: PlatformMemberStatusIn,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    """Round 18: remove / reactivate from the console, with the tenant
+    path's semantics (owner → 409, a removed technician's jobs return to
+    the queue) and its cache invalidation."""
+    try:
+        before, member, unassigned = PlatformRepository(session).set_member_status(license_id, chann_uid, payload.status)
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="license_member", entity_id=member.id,
+            actor_type="platform_admin", actor_id=x_actor_id or None, action="status",
+            field_changes=diff_fields(before, {"status": member.status, "channel": member.channel})
+            or {"status": {"old": before["status"], "new": member.status}},
+            cross_tenant=True,
+        )
+        for ticket in unassigned:
+            AuditRepository(session).write(
+                license_id=license_id, entity_type="service_ticket", entity_id=ticket.id,
+                actor_type="platform_admin", actor_id=x_actor_id or None, action="assign",
+                field_changes={"assigned_to_ref": {"old": str(member.id), "new": None}},
+                cross_tenant=True,
+            )
+        session.commit()
+    except Exception as exc:
+        session.rollback()
+        raise _platform_error(exc)
+    cache.invalidate(
+        *_member_cache_keys(license_id, chann_uid),
+        k_pending_intent(chann_uid, member.channel),
+        k_last_customer_ref(str(license_id), chann_uid, member.channel),
+        k_last_entity_ref(str(license_id), chann_uid, member.channel),
+    )
+    return _member_out(
+        session, TenantScope(license_id=license_id), member, model=MemberStatusOut,
+        unassigned_tickets=[{"id": str(t.id), "ticket_number": t.ticket_number} for t in unassigned],
+    )
+
+
+@router.post("/platform/tenants/{license_id}/members/{chann_uid}/move")
+def platform_member_move(
+    license_id: uuid.UUID,
+    chann_uid: str,
+    payload: PlatformMemberMoveIn,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    """Round 18: one transaction — removed here, added there with the
+    given role on the same channel; audited on both licenses."""
+    try:
+        moved = PlatformRepository(session).move_member(
+            license_id, chann_uid, target_license_id=payload.target_license_id, role_name=payload.role_name,
+        )
+        source, target = moved["source"], moved["target"]
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="license_member", entity_id=source.id,
+            actor_type="platform_admin", actor_id=x_actor_id or None, action="status",
+            field_changes={
+                "status": {"old": moved["source_before"], "new": source.status},
+                "moved_to": str(payload.target_license_id),
+            },
+            cross_tenant=True,
+        )
+        for ticket in moved["unassigned"]:
+            AuditRepository(session).write(
+                license_id=license_id, entity_type="service_ticket", entity_id=ticket.id,
+                actor_type="platform_admin", actor_id=x_actor_id or None, action="assign",
+                field_changes={"assigned_to_ref": {"old": str(source.id), "new": None}},
+                cross_tenant=True,
+            )
+        AuditRepository(session).write(
+            license_id=payload.target_license_id, entity_type="license_member", entity_id=target.id,
+            actor_type="platform_admin", actor_id=x_actor_id or None, action="create",
+            field_changes={
+                "role": {"old": None, "new": target.role}, "channel": target.channel,
+                "moved_from": str(license_id),
+            },
+            cross_tenant=True,
+        )
+        session.commit()
+    except Exception as exc:
+        session.rollback()
+        raise _platform_error(exc)
+    cache.invalidate(
+        *_member_cache_keys(license_id, chann_uid),
+        *_member_cache_keys(payload.target_license_id, chann_uid),
+        k_pending_intent(chann_uid, source.channel),
+        k_last_customer_ref(str(license_id), chann_uid, source.channel),
+        k_last_entity_ref(str(license_id), chann_uid, source.channel),
+    )
+    return {
+        "source": _member_out(session, TenantScope(license_id=license_id), source).model_dump(mode="json"),
+        "target": _member_out(session, TenantScope(license_id=payload.target_license_id), target).model_dump(mode="json"),
+        "target_company_name": moved["target_company_name"],
+        "unassigned_tickets": [{"id": str(t.id), "ticket_number": t.ticket_number} for t in moved["unassigned"]],
+    }
 
 
 @router.get("/platform/audit", response_model=list[AuditLogOut])

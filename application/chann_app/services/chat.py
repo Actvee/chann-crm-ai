@@ -968,7 +968,11 @@ _TENANT_STATUS_LABEL = {
     "trial": {"th": "ทดลองใช้", "en": "trial"},
     "active": {"th": "ใช้งานอยู่", "en": "active"},
     "suspended": {"th": "ถูกระงับ", "en": "suspended"},
+    "deleted": {"th": "ถูกลบ", "en": "deleted"},
 }
+# Statuses whose expiry date is shown on the card (round 18: the product is
+# a subscription, so an active shop has an end date too).
+_TENANT_DATED_STATUSES = ("trial", "active")
 SHOP_CARD_HEAD = {
     "th": "ร้าน: {name}\nรหัสร้าน: {code}\nสถานะ: {status}",
     "en": "Shop: {name}\nShop code: {code}\nStatus: {status}",
@@ -986,23 +990,32 @@ SHOP_CARD_FOOT = {
 }
 
 
+def _tenant_expiry_date(tenant: dict | None) -> str:
+    """The subscription's end as dd/mm/yyyy in Bangkok time, or ""."""
+    raw = (tenant or {}).get("expires_at") or (tenant or {}).get("trial_expires_at")
+    if not raw:
+        return ""
+    try:
+        when = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return ""
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return when.astimezone(timezone(timedelta(hours=7))).strftime("%d/%m/%Y")
+
+
 def _tenant_status_line(tenant: dict | None, language: str) -> str:
-    """"ทดลองใช้ (ถึง 30 ก.ย. 2569)" / "ใช้งานอยู่" / "ถูกระงับ" — what the test
-    team asked to see on the card (V.8.2, 9 ก.ย. 2569) and what the guide
-    had promised."""
+    """"ทดลองใช้ (ถึง 30/09/2026)" / "ใช้งานอยู่ (ถึง 30/09/2026)" / "ถูกระงับ"
+    — what the test team asked to see on the card (V.8.2, 9 ก.ย. 2569);
+    round 18 dates the active subscription the same way as the trial."""
     tenant = tenant or {}
     status = str(tenant.get("status") or "").lower()
     if status not in _TENANT_STATUS_LABEL:
         return "—"
     text = _t(_TENANT_STATUS_LABEL[status], language)
-    raw = tenant.get("trial_expires_at")
-    if status == "trial" and raw:
-        try:
-            from .thai_datetime import format_thai_date
-            when = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
-            text += _t(SHOP_CARD_TRIAL_UNTIL, language).format(until=format_thai_date(when.date()))
-        except (ValueError, TypeError):
-            pass
+    until = _tenant_expiry_date(tenant) if status in _TENANT_DATED_STATUSES else ""
+    if until:
+        text += _t(SHOP_CARD_TRIAL_UNTIL, language).format(until=until)
     return text
 
 
@@ -2019,7 +2032,11 @@ def _reminder_subject(message: str, code: str) -> str:
     from .thai_datetime import _THAI_MONTHS, _THAI_WEEKDAYS
 
     text = ENTITY_CODE_RE.sub("", message or "")
-    for trigger in REMINDER_TRIGGERS + QUOTE_REISSUE_PHRASES:
+    # Longest first, and the compound forms the triggers do not list:
+    # "นัด" alone turned "ลงนัดหมาย" into "ลง หมาย".
+    for trigger in sorted(
+        ("ลงนัดหมาย", "นัดหมาย", "ลงนัด") + REMINDER_TRIGGERS + QUOTE_REISSUE_PHRASES, key=len, reverse=True,
+    ):
         text = text.replace(trigger, " ")
     # Digits and separators belong to the date/time, which is stored
     # structurally; keeping them here would duplicate it in the text.
@@ -2032,7 +2049,13 @@ def _reminder_subject(message: str, code: str) -> str:
         + ("โมงเช้า", "โมง", "ทุ่ม", "เช้า", "สาย", "เที่ยง", "บ่าย", "เย็น", "ค่ำ")
         + _WHEN_ONLY_WORDS
     ):
-        text = text.replace(word, " ")
+        if len(word) <= 2 and "." not in word:
+            # "กค", "สค", "กย": two letters that live inside ordinary words
+            # ("ลูกค้า" holds "กค"). Only a month when a day number or a
+            # space sits beside it.
+            text = re.sub(rf"(?<=[\d\s]){re.escape(word)}(?=[\d\s]|$)|^{re.escape(word)}(?=[\d\s])", " ", text)
+        else:
+            text = text.replace(word, " ")
     subject = " ".join(text.split()).strip(" ·-:")
     # One stray character is noise, not a subject.
     return subject if len(subject) >= 3 else ""
@@ -2062,6 +2085,75 @@ REMINDER_LIST_EMPTY_FOR = {
     "th": "ยังไม่มีนัดหมายของ {code}",
     "en": "No appointments for {code} yet.",
 }
+# A day named in the question is the whole question: "พรุ่งนี้มีนัดอะไรบ้าง"
+# listed every appointment in the diary (tester, 14 ก.ย. 2569 — six this
+# month, one tomorrow, all six shown).
+REMINDER_LIST_HEAD_DAY = {
+    "th": "นัด{label} ({date}) {count} รายการ",
+    "en": "{count} appointment(s) {label} ({date})",
+}
+REMINDER_LIST_EMPTY_DAY = {
+    "th": "{label} ({date}) ไม่มีนัด",
+    "en": "Nothing scheduled {label} ({date}).",
+}
+_DIARY_DAY_WORDS = (
+    ("มะรืน", 2, {"th": "มะรืนนี้", "en": "the day after tomorrow"}),
+    ("พรุ่งนี้", 1, {"th": "พรุ่งนี้", "en": "tomorrow"}),
+    ("tomorrow", 1, {"th": "พรุ่งนี้", "en": "tomorrow"}),
+    ("วันนี้", 0, {"th": "วันนี้", "en": "today"}),
+    ("today", 0, {"th": "วันนี้", "en": "today"}),
+)
+_DIARY_SPAN_WORDS = (
+    ("สัปดาห์นี้", "week", {"th": "สัปดาห์นี้", "en": "this week"}),
+    ("อาทิตย์นี้", "week", {"th": "สัปดาห์นี้", "en": "this week"}),
+    ("this week", "week", {"th": "สัปดาห์นี้", "en": "this week"}),
+    ("เดือนนี้", "month", {"th": "เดือนนี้", "en": "this month"}),
+    ("this month", "month", {"th": "เดือนนี้", "en": "this month"}),
+)
+
+
+def _diary_window(message: str, today: date | None = None) -> tuple[date, date, dict] | None:
+    """(first day, last day, label) named by the question, or None when it
+    names no day: "พรุ่งนี้", "วันนี้", "มะรืน", "สัปดาห์นี้", "เดือนนี้",
+    a weekday or a calendar date."""
+    from .thai_datetime import parse_thai_date
+
+    text = (message or "").lower()
+    if not text:
+        return None
+    today = today or local_today()
+    for word, kind, label in _DIARY_SPAN_WORDS:
+        if word in text:
+            if kind == "week":
+                start = today - timedelta(days=today.weekday())
+                return start, start + timedelta(days=6), label
+            start = today.replace(day=1)
+            nxt = (start + timedelta(days=32)).replace(day=1)
+            return start, nxt - timedelta(days=1), label
+    for word, offset, label in _DIARY_DAY_WORDS:
+        if word in text:
+            day = today + timedelta(days=offset)
+            return day, day, label
+    # A weekday or a date, when the sentence carries one: parse_thai_date
+    # answers today for a dateless sentence, so only a date word counts.
+    if re.search(r"วันที่|\d{1,2}\s*[/.-]\s*\d{1,2}|จันทร์|อังคาร|พุธ|พฤหัส|ศุกร์|เสาร์|อาทิตย์(?!นี้)", text):
+        day = parse_thai_date(message, today)
+        if day is not None:
+            from .thai_datetime import format_thai_date
+
+            label = {"th": f"วันที่ {format_thai_date(day)}", "en": f"on {format_thai_date(day)}"}
+            return day, day, label
+    return None
+
+
+def _in_window(row: dict, window: tuple[date, date, dict]) -> bool:
+    try:
+        day = date.fromisoformat(str(row.get("due_date") or ""))
+    except ValueError:
+        return False
+    return window[0] <= day <= window[1]
+
+
 REMINDER_LIST_HEAD = {
     "th": "นัดหมายที่จะถึง {count} รายการ",
     "en": "{count} upcoming",
@@ -2071,8 +2163,10 @@ REMINDER_LIST_HEAD = {
 async def _handle_reminder_list(
     client: DataClient, *, ctx: ResolvedContext, license_id,
     permission_keys: list[str], language: str, message: str = "",
+    window: tuple[date, date, dict] | None = None,
 ) -> ChatReply:
-    """What is coming up, soonest first — for one record when one is meant."""
+    """What is coming up, soonest first — for one record when one is meant,
+    for one day or span when the question names it."""
     if "followup.read" not in set(permission_keys):
         if "ticket.read" in set(permission_keys):
             # CS: their appointments are the scheduled visits.
@@ -2080,6 +2174,8 @@ async def _handle_reminder_list(
                 client, license_id=license_id, permission_keys=permission_keys, language=language, days=7,
             )
         return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    if window is None:
+        window = _diary_window(message)
 
     try:
         scope = await _record_scope(
@@ -2131,6 +2227,28 @@ async def _handle_reminder_list(
                 ("เพิ่มนัด", f"เตือน {code} พรุ่งนี้"),
                 ("ดูทั้งหมด", "นัดหมายทั้งหมด"),
             ],
+        )
+
+    if window is not None:
+        # The day asked about, everyone's: "พรุ่งนี้มีนัดอะไรบ้าง" is a
+        # question about the diary, and the answer is exactly that day.
+        from .thai_datetime import format_thai_date
+
+        first, last, label = window
+        shown = sorted(
+            (r for r in rows if _in_window(r, window)),
+            key=lambda r: (str(r.get("due_date") or "9999-12-31"), str(r.get("due_time") or "")),
+        )
+        when = format_thai_date(first) if first == last else f"{format_thai_date(first)} – {format_thai_date(last)}"
+        if not shown:
+            return ChatReply(
+                text=_t(REMINDER_LIST_EMPTY_DAY, language).format(label=_t(label, language), date=when),
+                quick_replies=[("นัดหมายทั้งหมด", "นัดหมายทั้งหมด")],
+            )
+        lines = [await _reminder_list_line(client, str(license_id), row, language) for row in shown[:LIST_LIMIT]]
+        return ChatReply(
+            text=_t(REMINDER_LIST_HEAD_DAY, language).format(label=_t(label, language), date=when, count=len(shown))
+            + "\n" + "\n".join(lines)
         )
 
     # Mine first, then everyone's — a salesperson opening this wants their
@@ -2716,7 +2834,7 @@ async def _customer_named_in(
 async def _handle_reminder_create(  # noqa: PLR0913
     client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
     permission_keys: list[str], language: str, actor_id: str,
-    target: tuple[str, str, str] | None = None,
+    target: tuple[str, str, str] | None = None, subject: str | None = None,
 ) -> ChatReply:
     from .thai_datetime import (
         format_thai_date, format_thai_time, looks_like_a_time_attempt,
@@ -2790,7 +2908,11 @@ async def _handle_reminder_create(  # noqa: PLR0913
         # this, "นัดดูสินค้าวันนี้ตอน 3 โมง" was reduced to a date and a
         # time, and the reminder that arrived days later could only say
         # "customer" — true, and useless.
-        subject = _reminder_subject(message, code)
+        # The model's reading of WHAT the appointment is about comes first;
+        # cutting it out of the sentence is the fallback, and a poor one —
+        # "ลงนัดหมายกับลูกค้า Hannah วันที่ 17 เดือนนี้ให้หน่อย" became
+        # "Hannah ลง หมายกับลู ้า Hannah เดือนนี้ให้หน่อย" (tester, 14 ก.ย.).
+        subject = (subject or "").strip() or _reminder_subject(message, code)
         if subject:
             payload["notes"] = subject
         await client.create_follow_up(license_id, payload, actor_id=actor_id)
@@ -7968,11 +8090,20 @@ async def _handle_ticket_assign(
             )
 
         teams = await client.list_technician_teams(license_id)
-        team = next(
-            (t for t in teams
-             if str(t.get("team_name", "")).lower() == target_text.lower()), None,
-        )
+        team = _team_matching_name(teams, target_text)
         if team is not None:
+            # A team with an active technician rule: the rule picks WHO in
+            # the team (strategy, daily cap) and the job goes to that
+            # person. Without a rule the team is told as a whole and the
+            # first to accept takes it — the owner asked which of the two
+            # happens (14 Sep 2026); now the answer is "the rule, if you
+            # set one".
+            by_rule = await _assign_within_team_by_rule(
+                client, ctx=ctx, license_id=license_id, ticket=ticket,
+                code=code, team_name=str(team.get("team_name") or target_text), language=language,
+            )
+            if by_rule is not None:
+                return by_rule
             target_type, target_ref, label = "technician_team", str(team["id"]), target_text
         else:
             # A person, by name. Teams are the common case but a shop with
@@ -8043,6 +8174,10 @@ TICKET_AUTO_ASSIGNED = {
     "th": "มอบหมาย {code} ให้ {name} แล้ว (เลือกโดยกฎมอบหมาย)\n{reason}",
     "en": "Assigned {code} to {name} by rule.\n{reason}",
 }
+TICKET_TEAM_RULE_ASSIGNED = {
+    "th": "มอบหมาย {code} ให้ {name} ({team}) แล้ว — กฎมอบหมายเลือกให้\n{reason}",
+    "en": "Assigned {code} to {name} ({team}) — picked by the assignment rule.\n{reason}",
+}
 TICKET_AUTO_FAILED = {
     "th": "เลือกช่างอัตโนมัติไม่ได้: {reason}\nลองระบุทีมหรือชื่อช่างแทน",
     "en": "Could not choose automatically: {reason}",
@@ -8091,6 +8226,89 @@ async def _find_member_by_name(client: DataClient, license_id: str, name: str):
     # Two people called สมชาย is not a reason to pick one — the job would
     # go to the wrong person's day.
     return matches[0] if len(matches) == 1 else matches
+
+
+def _team_matching_name(teams: list[dict], text: str) -> dict | None:
+    """The team whose name is `text`, with or without the word ทีม/team on
+    either side: the target parser strips "ให้ทีม", so a team CALLED
+    "ทีมแอร์" was never found from "มอบหมาย … ให้ทีมแอร์" (round 18)."""
+    def bare(name: str) -> str:
+        name = " ".join(str(name or "").split()).lower()
+        return re.sub(r"^(?:ทีม|team)\s*", "", name)
+
+    wanted = bare(text)
+    if not wanted:
+        return None
+    return next((t for t in teams if bare(t.get("team_name", "")) == wanted), None)
+
+
+async def _has_active_rule(client: DataClient, license_id: str, scope: str) -> bool:
+    try:
+        rules = await client.get_assignment_rules(str(license_id))
+    except Exception:  # noqa: BLE001
+        log.exception("could not read assignment rules")
+        return False
+    return any(r.get("is_active") and str(r.get("scope") or "") == scope for r in rules or [])
+
+
+async def _assign_within_team_by_rule(
+    client: DataClient, *, ctx: ResolvedContext, license_id: str, ticket: dict,
+    code: str, team_name: str, language: str,
+) -> ChatReply | None:
+    """None when there is no technician rule (the caller broadcasts to the
+    team as before); otherwise the engine picks one member of that team
+    and the reply says who and why. An engine that finds nobody in the
+    team also returns None — the broadcast is the better fallback than a
+    refusal, since a lead can still claim it."""
+    if not await _has_active_rule(client, license_id, "technician"):
+        return None
+    try:
+        outcome = await client.execute_assignment(
+            license_id, scope="technician",
+            entity_type="service_ticket", entity_id=str(ticket["id"]),
+            context={
+                "product": {
+                    "category": ticket.get("product_category"),
+                    "name": ticket.get("product_name"),
+                },
+                "ticket": {"serial_number": ticket.get("serial_number")},
+            },
+            actor_id=ctx.chann_uid, team_name=team_name,
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("rule-based pick inside team %s failed", team_name)
+        return None
+    member_id = outcome.get("member_id")
+    if not member_id or outcome.get("used_fallback"):
+        # Nobody active in the team (the engine fell back to the owner):
+        # the team broadcast is what the person asked for; keep it.
+        return None
+    try:
+        result = await client.assign_ticket(
+            license_id, str(ticket["id"]),
+            target_type="technician", target_ref=str(member_id), actor_id=ctx.chann_uid,
+        )
+    except DataTierError as exc:
+        detail = exc.structured or {}
+        if detail.get("error") == "dispatch_blocked":
+            return ChatReply(
+                text=_t(TICKET_DISPATCH_BLOCKED, language).format(
+                    missing=", ".join(detail.get("missing") or [])
+                ),
+                quick_replies=[("ดูข้อมูลงาน", f"ข้อมูลงาน {code}")],
+            )
+        log.exception("rule-based assignment could not be applied")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    from .sales_dispatch import _member_label
+
+    name, _uid = await _member_label(client, license_id, str(member_id))
+    await _notify_assigned_ticket(client, license_id, result, name, language)
+    return ChatReply(
+        text=_t(TICKET_TEAM_RULE_ASSIGNED, language).format(
+            code=code, team=team_name, name=name, reason=outcome.get("reason") or "",
+        ),
+        entity_type="service_ticket", entity_id=str(result.get("id") or ""),
+    )
 
 
 async def _assign_ticket_automatically(
@@ -9162,11 +9380,20 @@ async def _handle_assignment_policy(
     except Exception:
         log.exception("could not read teams for a policy translation")
         teams = []
+    try:
+        groups = await client.list_sales_groups(license_id)
+    except Exception:
+        log.exception("could not read sales groups for a policy translation")
+        groups = []
 
+    # Both lists: a sales rule names a sales group, a technician rule a
+    # technician team, and a team that does not exist is refused here
+    # rather than saved to assign nobody (round 18).
     rule, problems = await policy_to_rule(
         policy,
         teams=[str(t.get("team_name")) for t in teams if t.get("team_name")],
-        client=ai_client,
+        sales_groups=[str(g.get("group_name")) for g in groups if g.get("group_name")],
+        client=ai_client, language=language,
     )
     if rule is None:
         return ChatReply(
@@ -10627,7 +10854,26 @@ def _deterministic_reason(message: str, oa: str, early_pending: dict | None) -> 
         return "button"
     if _is_help_request(message, oa):
         return "help"
+    if oa == "sales" and _is_policy_command(message):
+        return "policy"
     return None
+
+
+def _is_policy_command(message: str) -> bool:
+    """Configuration commands that carry free text for ANOTHER model call:
+    "ตั้งกฎมอบหมาย ช่างแอร์ให้ทีม AC วันละ 5 งาน", "ตั้งการอนุมัติ …",
+    and their confirm/show words. The policy text goes to a model on
+    purpose; the command that carries it must not, or the router's model
+    reads "ช่างแอร์ให้ทีม AC" as "create a team called AC" and does it
+    (measured on DEV's model, 14 Sep 2026: it created the team). The same
+    tests the dispatcher uses, so the two can never disagree."""
+    lowered = (message or "").lower()
+    if any(t in lowered for t in ASSIGN_POLICY_TRIGGERS + APPROVAL_POLICY_TRIGGERS):
+        return True
+    return _matches_phrase(
+        message,
+        ASSIGN_CONFIRM + ASSIGN_POLICY_SHOW + APPROVAL_POLICY_CONFIRM + APPROVAL_POLICY_SHOW,
+    )
 
 
 def _is_menu_tile(message: str, oa: str | None = None) -> bool:
@@ -12488,6 +12734,16 @@ async def _handle_report_intent(
         not _any(_REPORT_SALES_WORDS, said)
         and any(p in period for p in ("today", "tomorrow", "week", "วันนี้", "พรุ่งนี้", "สัปดาห์", "อาทิตย์"))
     ):
+        window = _diary_window(message) or _diary_window(period)
+        if window is not None and "followup.read" in set(permission_keys) and (
+            "นัด" in (message or "") or "appointment" in (message or "").lower()
+        ):
+            # "พรุ่งนี้มีนัดอะไรบ้าง" is the diary for that day, not the
+            # week's work list.
+            return await _handle_reminder_list(
+                client, ctx=ctx, license_id=license_id, message=message,
+                permission_keys=permission_keys, language=language, window=window,
+            )
         days = 1 if any(p in period for p in ("today", "วันนี้", "tomorrow", "พรุ่งนี้")) else 7
         return await _handle_work_list(
             client, license_id=license_id, permission_keys=permission_keys,
@@ -12762,6 +13018,7 @@ async def _handle_ai_understood_intent(
         # perfectly well (12:03, 2 Sep — the model returned no date and the
         # assistant answered "ไม่เข้าใจวันที่" to a message containing one).
         text = _joined("เตือน", due, target, fields.get("notes"), message)
+        subject = str(fields.get("notes") or "").strip() or None
         resolved = None
         if target and _find_entity_code(message) is None:
             # A named customer is a target in its own right — waiting for a
@@ -12781,7 +13038,7 @@ async def _handle_ai_understood_intent(
         return await _handle_reminder_create(
             client, ctx=ctx, license_id=license_id, message=text,
             permission_keys=permission_keys, language=language,
-            actor_id=ctx.chann_uid, target=resolved,
+            actor_id=ctx.chann_uid, target=resolved, subject=subject,
         )
 
     if entity == "followup" and action == "read":
@@ -12996,6 +13253,15 @@ async def _handle_line_item_intent(
         )
         if handled is not None:
             return handled
+
+    if price is not None and not code and name and "product.manage" in set(permission_keys):
+        # No deal or quote named and none in view: "แก้ราคาสินค้าเก้าอี้เป็น
+        # 299" is the CATALOGUE price when the shop sells an item of that
+        # name (tester, 14 ก.ย. 2569 — asked "แก้ของดีลไหน" instead).
+        if not await _last_entity_ref(client, ctx):
+            saved = await _catalogue_price_change(client, ctx=ctx, license_id=license_id, name=name, price=price, language=language)
+            if saved is not None:
+                return saved
 
     if price is not None:
         trigger = "แก้ราคา"
@@ -15778,6 +16044,26 @@ CUSTOMER_PROFILE_TEXT = {
 _NOT_SET = {"th": "ยังไม่ระบุ", "en": "not set"}
 
 
+async def _route_created_customer(
+    client: DataClient, license_id, row: dict, *, ctx: ResolvedContext, language: str,
+) -> str:
+    """Hand a customer just created on the Sales OA to the sales rule
+    (services/sales_dispatch) and return the line to append to the
+    creator's confirmation — "" when nothing was routed."""
+    from .sales_dispatch import route_new_customer, routed_line
+
+    try:
+        picked = await route_new_customer(
+            client, str(license_id), row, source="staff",
+            actor_chann_uid=ctx.chann_uid, language=language,
+        )
+    except Exception:  # noqa: BLE001 — the customer exists; routing is best-effort
+        log.exception("sales routing failed for %s", row.get("id"))
+        return ""
+    line = routed_line(picked, language)
+    return f"\n{line}" if line else ""
+
+
 async def _member_id_of(client: DataClient, license_id, ctx: ResolvedContext) -> str | None:
     """The caller's member id for owner_member_id on records they create
     (principle 6) — nothing set it until 6 Sep 2026."""
@@ -16487,6 +16773,7 @@ async def _handle_customer_intent(
                 return ChatReply(text=_t(CUSTOMER_NEEDS_SOMETHING, language), intent=intent)
             raise
         await _remember_customer(client, ctx, row)
+        routed = await _route_created_customer(client, license_id, row, ctx=ctx, language=language)
 
         then_deal = fields.get("_then_deal")
         if then_deal is not None:
@@ -16496,7 +16783,7 @@ async def _handle_customer_intent(
                 client, contact=row, fields=dict(then_deal), ctx=ctx, license_id=license_id, language=language,
             )
             return ChatReply(
-                text=_t(CUSTOMER_CREATED, language).format(name=f" {_display_name(row)} ") + "\n" + deal_reply.text,
+                text=_t(CUSTOMER_CREATED, language).format(name=f" {_display_name(row)} ") + routed + "\n" + deal_reply.text,
                 entity_type=deal_reply.entity_type or "customer", entity_id=deal_reply.entity_id or row["id"],
                 intent=intent, quick_replies=deal_reply.quick_replies,
             )
@@ -16507,7 +16794,7 @@ async def _handle_customer_intent(
         # one tap.
         reply_text = _t(CUSTOMER_CREATED, language).format(
             name=f" {_display_name(row)} "
-        )
+        ) + routed
         # From the note, which after recover_free_text holds the person's
         # own words rather than the model's retyping of them.
         from .thai_datetime import parse_thai_date
@@ -17402,6 +17689,42 @@ def _means_the_catalogue(message: str) -> bool:
         return True
     # A deal or a quotation named in the sentence settles it the other way.
     return False
+
+
+CATALOGUE_PRICE_CHANGED = {
+    "th": "แก้ราคาสินค้า {name} (รหัส {code}) เป็น {price} บาทแล้ว",
+    "en": "Catalogue price of {name} ({code}) is now {price}.",
+}
+
+
+async def _catalogue_price_change(
+    client: DataClient, *, ctx: ResolvedContext, license_id, name: str, price, language: str,
+) -> ChatReply | None:
+    """Change one catalogue item's price, or None when no single item is
+    named — the caller then asks which deal or quote was meant."""
+    product = await _find_one_product(client, str(license_id), name)
+    if not product:
+        return None
+    try:
+        amount = float(str(price).replace(",", ""))
+    except (TypeError, ValueError):
+        return None
+    payload = {
+        "product_name": product.get("product_name"), "sku": product.get("sku"),
+        "category": product.get("category"), "unit_price": amount,
+        "description": product.get("description"),
+    }
+    try:
+        row = await client.upsert_product(str(license_id), str(product.get("product_id")), payload, actor_id=ctx.chann_uid)
+    except Exception:  # noqa: BLE001
+        log.exception("catalogue price change failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    return ChatReply(
+        text=_t(CATALOGUE_PRICE_CHANGED, language).format(
+            name=row.get("product_name") or name, code=row.get("product_id") or "", price=f"{amount:,.0f}",
+        ),
+        entity_type="product", entity_id=str(row.get("id") or ""),
+    )
 
 
 async def _find_one_product(client: DataClient, license_id: str, named: str) -> dict | None:
@@ -18806,8 +19129,9 @@ async def _route_chat_message(
 
     # Phase 18 — a suspended tenant is read-only: nothing new through chat.
     # A person's own PDPA rights (above) still work; those are against the
-    # platform, not the shop.
-    if str(member.get("license_status") or "active") == "suspended":
+    # platform, not the shop. Round 18: a soft-deleted company is gated
+    # the same way (its members are removed, so this is belt and braces).
+    if str(member.get("license_status") or "active") in ("suspended", "deleted"):
         return ChatReply(
             text=_t(TENANT_SUSPENDED, language).format(company=member.get("company_name") or ""),
         )
@@ -20843,16 +21167,25 @@ async def _model_road(
     intent = _as_the_technician_means_it(intent, ctx, message)
     _note_road(road="model", action=intent.get("action"), entity=intent.get("entity"))
     switched_from = None
+    question_in_flow = False
     if _is_continuation(pending_intent, intent):
         intent = _merge_pending(pending_intent, intent)
     elif (
         pending_intent is not None and pending_intent.get("missing")
         and pending_intent.get("entity") in _CREATE_FLOW_ENTITIES and intent.get("action") != "suggest"
     ):
-        # A different request while a create flow waited for its answer:
-        # the flow is dropped, and the reply says so — a silent switch reads
-        # as the assistant losing the thread (owner test, 8 Sep 2026).
-        switched_from = pending_intent
+        if str(intent.get("action") or "") in _QUESTION_ACTIONS:
+            # "นัดพรุ่งนี้" → "กรุณาระบุชื่อลูกค้า" → "พรุ่งนี้มีนัดอะไรบ้าง":
+            # a question asked in the middle of a form is answered, and the
+            # form stays open — it is not a switch, and "เปลี่ยนจากตั้งนัด
+            # เป็นตั้งนัดแล้วครับ" in front of the diary was nonsense
+            # (owner test, 14 ก.ย. 2569).
+            question_in_flow = True
+        else:
+            # A different request while a create flow waited for its answer:
+            # the flow is dropped, and the reply says so — a silent switch
+            # reads as the assistant losing the thread (owner test, 8 Sep 2026).
+            switched_from = pending_intent
     carried = _abandoned_flow(switched_from) or abandoned
     notice = _switch_notice(switched_from, message, language, intent) if switched_from else ""
 
@@ -20905,8 +21238,9 @@ async def _model_road(
         return ChatReply(text=notice + ask_for_missing(missing, language), intent=intent)
 
     # Nothing outstanding any more: whatever was open is either now complete
-    # or has been abandoned for a new request. Either way it must not linger.
-    if pending_intent is not None:
+    # or has been abandoned for a new request. Either way it must not linger
+    # — except a form the person only paused to ask something.
+    if pending_intent is not None and not question_in_flow:
         await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
     if (intent.get("fields") or {}).get("_abandoned") is not None:
         # Carried through the pending intent; handed on beside the intent,
@@ -22495,12 +22829,22 @@ def _abandoned_flow(pending: dict | None) -> dict | None:
             "missing": list(pending.get("missing") or [])}
 
 
+# Reading, never writing: a sentence with one of these actions asked in the
+# middle of a form is a question, not a change of plan.
+_QUESTION_ACTIONS = frozenset({"read", "list", "search", "check", "count"})
+
+
 def _switch_notice(pending: dict, message: str, language: str, intent: dict | None = None) -> str:
     flow = _t(FLOW_LABELS.get(str(pending.get("entity") or ""), {"th": "รายการเดิม", "en": "the previous request"}), language)
     new = ""
     if intent and str(intent.get("action") or "") == "create" and str(intent.get("entity") or "") in FLOW_LABELS:
         new = _t(FLOW_LABELS[str(intent["entity"])], language)
-    return _t(FLOW_SWITCHED, language).format(flow=flow, new=new or _new_command_label(message, language))
+    new = new or _new_command_label(message, language)
+    if new == flow:
+        # "เปลี่ยนจากตั้งนัดเป็นตั้งนัด" says nothing; the reply itself shows
+        # the new request took over.
+        return ""
+    return _t(FLOW_SWITCHED, language).format(flow=flow, new=new)
 
 
 def _draft_matches_name(draft: dict | None, name: str) -> bool:
@@ -22582,6 +22926,7 @@ async def _resolve_draft_customer_deal_confirm(
         return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
     await _remember_customer(client, ctx, row)
     created = _t(CUSTOMER_CREATED, language).format(name=f" {_display_name(row)} ")
+    created += await _route_created_customer(client, license_id, row, ctx=ctx, language=language)
     deal_reply = await _apply_deal_create(
         client, contact=row, fields=deal_fields, ctx=ctx, license_id=license_id, language=language,
     )
@@ -22629,7 +22974,10 @@ def _capability_group_asked(message: str) -> str | None:
 def _is_general_capability_question(message: str) -> bool:
     lowered = (message or "").strip().lower()
     return (
-        ("ทำอะไร" in lowered or "ทําอะไร" in lowered or "what can" in lowered or "what does" in lowered)
+        # "ทำไร" is how "ทำอะไร" is typed in a hurry ("ทำไรได้บ้างอะ",
+        # tester 14 ก.ย. 2569).
+        ("ทำอะไร" in lowered or "ทําอะไร" in lowered or "ทำไร" in lowered or "ทําไร" in lowered
+         or "what can" in lowered or "what does" in lowered)
         and ("ได้บ้าง" in lowered or "ได้ไหม" in lowered or "do" in lowered)
     ) or lowered in ("ระบบทำอะไรได้บ้าง", "คุณสามารถทำอะไรได้บ้าง", "ทำอะไรได้บ้าง")
 
@@ -22938,6 +23286,9 @@ async def _bulk_create_one(client: DataClient, license_id: str, ctx: ResolvedCon
             return "skipped", {"existing_code": structured.get("existing_code", "")}
         log.warning("bulk customer add failed for %s: %s", label, exc)
         return "failed", {"reason": label}
+    # Each one goes through the sales rule like a single add would; the
+    # summary stays a count, the assignee is told by notification.
+    await _route_created_customer(client, license_id, row, ctx=ctx, language=language)
     return "saved", row
 
 
@@ -23446,11 +23797,19 @@ async def _template_asset_link(store, *, path: str, content: bytes, content_type
     from .assets import asset_link
 
     try:
-        await store.put(key=path, content=content, content_type=content_type)
+        stored = await store.put(key=path, content=content, content_type=content_type)
     except Exception:
         log.exception("could not store a designed-template asset at %s", path)
         return None
-    return asset_link(path, content_type=content_type, filename=filename)
+    # The link must carry the path the store REPORTS (gs://bucket/…), not
+    # the key it was asked for: the download route hands that path back to
+    # the store, which refuses anything outside its bucket — so the "ดู
+    # ตัวอย่าง"/Word buttons of an AI-designed template answered
+    # "stored path '…-design.docx' does not belong to bucket …"
+    # (tester, 14 ก.ย. 2569).
+    return asset_link(
+        getattr(stored, "path", None) or path, content_type=content_type, filename=filename,
+    )
 
 
 async def _template_draft_reply(

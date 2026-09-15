@@ -26,7 +26,7 @@ API = "/api/v1"
 ADMIN_ID = str(uuid.uuid4())
 TENANT = {
     "id": "11111111-1111-1111-1111-111111111111", "license_code": "LIC-1", "company_name": "ร้านเย็นสบาย",
-    "company_code": "ABCD2345", "status": "active", "trial_expires_at": None, "created_at": "2026-09-01T00:00:00+00:00",
+    "company_code": "ABCD2345", "status": "active", "expires_at": None, "created_at": "2026-09-01T00:00:00+00:00",
     "owner_chann_uid": "CHN-OWNER", "owner_name": "สมชาย", "members": 3, "customers": 12, "tickets": 20,
     "open_tickets": 4, "deals": 5, "last_activity_at": None,
 }
@@ -96,6 +96,35 @@ class _FakeClient:
 
     async def list_pdpa_requests(self, *, status=None, chann_uid=None):
         return []
+
+    # ---- round 18
+    async def extend_tenant(self, license_id, days, actor_id=None):
+        self.calls.append(("extend_tenant", license_id, days, actor_id))
+        if self.status == "suspended":
+            self.status = "active"
+        return {**TENANT, "status": self.status, "expires_at": "2026-10-31T16:59:59+00:00"}
+
+    async def delete_tenant(self, license_id, *, purge=False, actor_id=None):
+        self.calls.append(("delete_tenant", license_id, purge, actor_id))
+        if purge:
+            return {"id": license_id, "purged": True, "redis_keys_cleared": 3, "rows": {"customers": 12}}
+        self.status = "deleted"
+        return {**TENANT, "status": "deleted", "deleted_at": "2026-09-14T00:00:00+00:00"}
+
+    async def platform_set_member_role(self, license_id, chann_uid, role_name, actor_id=None):
+        self.calls.append(("platform_set_member_role", license_id, chann_uid, role_name, actor_id))
+        return {"id": str(uuid.uuid4()), "chann_uid": chann_uid, "role": role_name, "status": "active", "channel": "sales"}
+
+    async def platform_set_member_status(self, license_id, chann_uid, status, actor_id=None):
+        self.calls.append(("platform_set_member_status", license_id, chann_uid, status, actor_id))
+        return {"id": str(uuid.uuid4()), "chann_uid": chann_uid, "role": "sales", "status": status, "channel": "sales",
+                "unassigned_tickets": []}
+
+    async def platform_move_member(self, license_id, chann_uid, *, target_license_id, role_name, actor_id=None):
+        self.calls.append(("platform_move_member", license_id, chann_uid, target_license_id, role_name, actor_id))
+        return {"source": {"chann_uid": chann_uid, "status": "removed"},
+                "target": {"chann_uid": chann_uid, "status": "active", "role": role_name},
+                "target_company_name": "ร้านบี", "unassigned_tickets": []}
 
 
 @pytest.fixture
@@ -183,7 +212,7 @@ class TestTenantManagement:
 
     def test_unknown_status_is_refused(self, world):
         client, _, _ = world
-        res = client.patch(f"{API}/platform/tenants/{TENANT['id']}", json={"status": "deleted"}, headers=_login(client))
+        res = client.patch(f"{API}/platform/tenants/{TENANT['id']}", json={"status": "archived"}, headers=_login(client))
         assert res.status_code == 422
 
     def test_unknown_tenant_is_404(self, world):
@@ -234,7 +263,12 @@ class TestIsolation:
 
     def test_the_admin_api_has_no_business_writes(self):
         """The operator reads tenants and audit, flips a status, transfers
-        an owner — never edits a tenant's customers, deals or tickets."""
+        an owner, manages members and the subscription (round 18) — never
+        edits a tenant's customers, deals or tickets. The round-18 routes
+        live under /platform/tenants/{id}/(extend|members/...) and the
+        DELETE of the tenant itself; none of them touch business
+        records, so the business-word check below still holds for them
+        without an exemption."""
         import ast
 
         source = (ROOT / "application/chann_app/routers_admin.py").read_text(encoding="utf-8")
@@ -335,7 +369,7 @@ class TestTenantEdit:
         client, fake, _ = world
         res = client.patch(
             f"{API}/platform/tenants/{TENANT['id']}",
-            json={"company_name": " ร้านเย็นสบาย 2 ", "company_phone": "021234567", "trial_expires_at": "2026-09-30", "status": "active"},
+            json={"company_name": " ร้านเย็นสบาย 2 ", "company_phone": "021234567", "expires_at": "2026-09-30", "status": "active"},
             headers=_login(client),
         )
         assert res.status_code == 200, res.text
@@ -345,19 +379,152 @@ class TestTenantEdit:
         assert changes["company_name"] == "ร้านเย็นสบาย 2" and changes["company_phone"] == "021234567"
         assert changes["status"] == "active"
         # A bare day is the END of that Bangkok day, not its first second.
-        assert changes["trial_expires_at"] == "2026-09-30T23:59:59+07:00"
+        assert changes["expires_at"] == "2026-09-30T23:59:59+07:00"
 
     def test_an_empty_trial_day_clears_the_deadline(self, world):
         client, fake, _ = world
-        res = client.patch(f"{API}/platform/tenants/{TENANT['id']}", json={"trial_expires_at": ""}, headers=_login(client))
+        res = client.patch(f"{API}/platform/tenants/{TENANT['id']}", json={"expires_at": ""}, headers=_login(client))
         assert res.status_code == 200
         changes = [c for c in fake.calls if c[0] == "update_tenant"][0][2]
-        assert changes == {"clear_trial_expires_at": True}
+        assert changes == {"clear_expires_at": True}
 
     def test_refusals_are_explained(self, world):
         client, _, _ = world
         headers = _login(client)
         assert client.patch(f"{API}/platform/tenants/{TENANT['id']}", json={"company_name": "  "}, headers=headers).status_code == 422
-        assert client.patch(f"{API}/platform/tenants/{TENANT['id']}", json={"trial_expires_at": "30/09/2026"}, headers=headers).status_code == 422
+        assert client.patch(f"{API}/platform/tenants/{TENANT['id']}", json={"expires_at": "30/09/2026"}, headers=headers).status_code == 422
         assert client.patch(f"{API}/platform/tenants/{TENANT['id']}", json={"company_email": "not-an-email"}, headers=headers).status_code == 422
         assert client.patch(f"{API}/platform/tenants/{TENANT['id']}", json={}, headers=headers).status_code == 422
+
+
+class TestSubscriptionRound18:
+    """Round 18: the product is a subscription — expiry for every status,
+    renewal, admin notes, soft delete / purge, and member management
+    from the console."""
+
+    def test_expires_at_is_the_name_and_the_old_one_still_works(self, world):
+        client, fake, _ = world
+        headers = _login(client)
+        res = client.patch(f"{API}/platform/tenants/{TENANT['id']}", json={"expires_at": "2026-12-31"}, headers=headers)
+        assert res.status_code == 200, res.text
+        changes = [c for c in fake.calls if c[0] == "update_tenant"][-1][2]
+        assert changes == {"expires_at": "2026-12-31T23:59:59+07:00"}
+        res = client.patch(f"{API}/platform/tenants/{TENANT['id']}", json={"trial_expires_at": "2026-12-31"}, headers=headers)
+        assert res.status_code == 200
+        assert [c for c in fake.calls if c[0] == "update_tenant"][-1][2] == {"expires_at": "2026-12-31T23:59:59+07:00"}
+        res = client.patch(f"{API}/platform/tenants/{TENANT['id']}", json={"expires_at": None}, headers=headers)
+        assert [c for c in fake.calls if c[0] == "update_tenant"][-1][2] == {"clear_expires_at": True}
+
+    def test_admin_notes_go_through_the_patch(self, world):
+        client, fake, _ = world
+        res = client.patch(f"{API}/platform/tenants/{TENANT['id']}", json={"admin_notes": " ชำระแล้วถึงสิ้นปี "}, headers=_login(client))
+        assert res.status_code == 200
+        assert [c for c in fake.calls if c[0] == "update_tenant"][-1][2] == {"admin_notes": "ชำระแล้วถึงสิ้นปี"}
+
+    def test_extend_renews_and_reopens_a_suspended_tenant(self, world):
+        client, fake, _ = world
+        headers = _login(client)
+        fake.status = "suspended"
+        res = client.post(f"{API}/platform/tenants/{TENANT['id']}/extend", json={"days": 30}, headers=headers)
+        assert res.status_code == 200, res.text
+        assert ("extend_tenant", TENANT["id"], 30, ADMIN_ID) in fake.calls
+        assert res.json()["status"] == "active"
+        for bad in ({"days": 0}, {"days": 5000}, {"days": "many"}, {}):
+            assert client.post(f"{API}/platform/tenants/{TENANT['id']}/extend", json=bad, headers=headers).status_code == 422, bad
+        assert client.post(f"{API}/platform/tenants/{TENANT['id']}/extend", json={"days": 30}).status_code == 401
+
+    def test_extend_passes_the_data_tiers_refusal(self, world):
+        from chann_app.data_client import DataTierError
+
+        client, fake, _ = world
+
+        async def refuse(license_id, days, actor_id=None):
+            raise DataTierError(409, "deleted", {"error": "conflict", "message": "a deleted company cannot be extended"})
+
+        fake.extend_tenant = refuse
+        res = client.post(f"{API}/platform/tenants/{TENANT['id']}/extend", json={"days": 30}, headers=_login(client))
+        assert res.status_code == 409 and res.json()["detail"]["reason"]["error"] == "conflict"
+
+    def test_soft_delete_by_default_and_deleted_is_a_listable_status(self, world):
+        client, fake, _ = world
+        headers = _login(client)
+        res = client.delete(f"{API}/platform/tenants/{TENANT['id']}", headers=headers)
+        assert res.status_code == 200, res.text
+        assert ("delete_tenant", TENANT["id"], False, ADMIN_ID) in fake.calls
+        assert res.json()["status"] == "deleted"
+        assert client.get(f"{API}/platform/tenants?status_filter=deleted", headers=headers).json()[0]["status"] == "deleted"
+        # Restoring goes through the ordinary PATCH.
+        res = client.patch(f"{API}/platform/tenants/{TENANT['id']}", json={"status": "active"}, headers=headers)
+        assert res.status_code == 200 and ("set_license_status", TENANT["id"], "active", ADMIN_ID) in fake.calls
+
+    def test_purge_needs_break_glass_and_is_forwarded(self, world):
+        client, fake, _ = world
+        res = client.delete(f"{API}/platform/tenants/{TENANT['id']}?purge=true",
+                            headers=_token_without(fake, "platform.admin.break_glass"))
+        assert res.status_code == 403
+        assert not [c for c in fake.calls if c[0] == "delete_tenant"]
+        res = client.delete(f"{API}/platform/tenants/{TENANT['id']}?purge=true", headers=_login(client))
+        assert res.status_code == 200 and res.json()["purged"] is True
+        assert ("delete_tenant", TENANT["id"], True, ADMIN_ID) in fake.calls
+        assert client.delete(f"{API}/platform/tenants/{TENANT['id']}").status_code == 401
+
+    def test_member_role_from_the_console_never_owner(self, world):
+        client, fake, _ = world
+        headers = _login(client)
+        res = client.patch(f"{API}/platform/tenants/{TENANT['id']}/members/CHN-STAFF/role", json={"role": "admin"}, headers=headers)
+        assert res.status_code == 200 and res.json()["role"] == "admin"
+        assert ("platform_set_member_role", TENANT["id"], "CHN-STAFF", "admin", ADMIN_ID) in fake.calls
+        res = client.patch(f"{API}/platform/tenants/{TENANT['id']}/members/CHN-STAFF/role", json={"role": "owner"}, headers=headers)
+        assert res.status_code == 409 and res.json()["detail"]["error"] == "owner_via_break_glass"
+        assert client.patch(f"{API}/platform/tenants/{TENANT['id']}/members/CHN-STAFF/role", json={}, headers=headers).status_code == 422
+
+    def test_member_status_from_the_console(self, world):
+        from chann_app.data_client import DataTierError
+
+        client, fake, _ = world
+        headers = _login(client)
+        res = client.patch(f"{API}/platform/tenants/{TENANT['id']}/members/CHN-STAFF/status", json={"status": "removed"}, headers=headers)
+        assert res.status_code == 200 and res.json()["status"] == "removed"
+        assert ("platform_set_member_status", TENANT["id"], "CHN-STAFF", "removed", ADMIN_ID) in fake.calls
+        assert client.patch(f"{API}/platform/tenants/{TENANT['id']}/members/CHN-STAFF/status", json={"status": "gone"}, headers=headers).status_code == 422
+
+        async def owner(license_id, chann_uid, status, actor_id=None):
+            raise DataTierError(409, "owner", {"error": "conflict", "message": "the owner cannot be removed or demoted"})
+
+        fake.platform_set_member_status = owner
+        res = client.patch(f"{API}/platform/tenants/{TENANT['id']}/members/CHN-OWNER/status", json={"status": "removed"}, headers=headers)
+        assert res.status_code == 409 and "owner" in res.json()["detail"]["reason"]["message"]
+
+    def test_member_move_to_another_company(self, world):
+        client, fake, _ = world
+        headers = _login(client)
+        target = str(uuid.uuid4())
+        res = client.post(f"{API}/platform/tenants/{TENANT['id']}/members/CHN-STAFF/move",
+                          json={"target_license_id": target, "role": "sales"}, headers=headers)
+        assert res.status_code == 200, res.text
+        assert res.json()["target"]["role"] == "sales" and res.json()["target_company_name"] == "ร้านบี"
+        assert ("platform_move_member", TENANT["id"], "CHN-STAFF", target, "sales", ADMIN_ID) in fake.calls
+        assert client.post(f"{API}/platform/tenants/{TENANT['id']}/members/CHN-STAFF/move",
+                           json={"target_license_id": TENANT["id"], "role": "sales"}, headers=headers).status_code == 422
+        assert client.post(f"{API}/platform/tenants/{TENANT['id']}/members/CHN-STAFF/move",
+                           json={"target_license_id": target, "role": "owner"}, headers=headers).status_code == 409
+        assert client.post(f"{API}/platform/tenants/{TENANT['id']}/members/CHN-STAFF/move",
+                           json={"role": "sales"}, headers=headers).status_code == 422
+
+    async def test_a_member_of_a_deleted_shop_is_stopped_like_a_suspended_one(self):
+        client = FakeDataClient()
+        ctx = _ctx(primary_role="sales", oa="sales")
+        ctx.memberships[0]["license_status"] = "deleted"
+        reply = await handle_chat_message(client, message="ลูกค้าใหม่ สมชาย 0812345678", ctx=ctx)
+        assert "ระงับ" in reply.text
+        assert not [r for r in client.recorded if r[0] in ("create_customer", "create_ticket")]
+
+    def test_the_principal_treats_deleted_as_read_only(self):
+        from fastapi import HTTPException
+
+        from chann_app.services.authorization import refuse_if_suspended
+
+        refuse_if_suspended("deleted", "GET")
+        with pytest.raises(HTTPException) as exc:
+            refuse_if_suspended("deleted", "POST")
+        assert exc.value.status_code == 423

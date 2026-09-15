@@ -148,7 +148,17 @@ class License(TimestampMixin, Base):
     # licenses always get one.
     company_code: Mapped[str | None] = mapped_column(String(8), unique=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="trial")
-    trial_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # When the subscription (trial or paid) ends. Round 18 renamed it from
+    # `trial_expires_at`: the product is sold as a subscription, so an
+    # "active" tenant has a deadline too and the same sweep suspends both.
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Soft delete (status "deleted"): set when the operator deletes the
+    # company, cleared when the status is set back to trial/active. A purge
+    # removes the row entirely.
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # The platform operator's own notes about this tenant. Never returned
+    # to the tenant — only the admin console reads it.
+    admin_notes: Mapped[str | None] = mapped_column(Text)
     # Who self-registered this tenant. Used for the 1-LINE-1-company limit
     # instead of a unique index on license_members.role='owner', because
     # ownership can legitimately be transferred (Phase 2) and the limit is
@@ -211,6 +221,11 @@ class LicenseMember(TimestampMixin, Base):
     joined_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+    # When the assignment engine last handed this person a record (round
+    # 18, 14 Sep 2026). "round_robin" sorted on a key nothing ever wrote,
+    # so it was "the lowest member id, forever"; this is the memory the
+    # strategy needs, stamped by the engine endpoint only.
+    last_assigned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     license: Mapped["License"] = relationship(back_populates="members")
     identity: Mapped["ChannIdentity"] = relationship(back_populates="memberships")

@@ -33,13 +33,22 @@ Shape:
   "no_active_fallback": "assign_to_owner_or_admin"}}
 
 scope is "technician" or "sales" — technician for repair/installation/
-service work, sales for deals and customers.
+service work (jobs, tickets), sales for new customers and leads. The
+scope follows the team the person names: a technician team means
+"technician", a sales group means "sales".
 
 Each match_criteria entry is:
   {{"field": "...", "operator": "...", "value": ..., "assign_to_team": "..."}}
 
 field is a dotted path into the record being assigned. Use only:
-  product.category, product.name, customer.stage, deal.stage, deal.value
+  for technician rules: product.category, product.name
+  for sales rules: customer.stage, customer.source
+customer.stage is "lead" for a new lead; customer.source is one of
+  line (the customer linked the shop on LINE themselves), staff (a
+  staff member typed them in), csv (imported), dashboard.
+A policy that names no condition ("แจกงานให้ทีม X สลับกัน") has an
+empty match_criteria and assign_to_team is carried on a single entry
+with field "customer.stage", operator "not_equals", value "".
 
 operator MUST be one of: equals, not_equals, in, contains, gt, gte, lt, lte
 Any other operator is invalid and will be rejected.
@@ -62,7 +71,8 @@ If the policy does not state something, leave the key out rather than
 guessing a value. A missing capacity_constraint means no limit, which is
 a real and common answer.
 
-Current teams in this company: {teams}
+Technician teams in this company: {teams}
+Sales groups in this company: {sales_groups}
 """
 
 
@@ -77,8 +87,43 @@ def _strip_fences(raw: str) -> str:
     return text.strip()
 
 
+TEAM_UNKNOWN = {
+    "th": "ไม่มี{kind}ชื่อ \"{name}\" ในร้าน (ที่มี: {known})",
+    "en": "There is no {kind} named \"{name}\" (existing: {known})",
+}
+KIND_LABEL = {
+    "technician": {"th": "ทีมช่าง", "en": "technician team"},
+    "sales": {"th": "กลุ่มขาย", "en": "sales group"},
+}
+
+
+def team_problems(rule: dict, *, teams: list[str], sales_groups: list[str], language: str = "th") -> list[str]:
+    """Every assign_to_team must be a team that exists for the rule's
+    scope. The model is told the lists, but a policy can still name a
+    team that was never created ("ให้ทีมขายองค์กร") — and a saved rule
+    pointing at nothing would confirm "บันทึกแล้ว" and then assign nobody,
+    forever (round 18, 14 Sep 2026)."""
+    scope = str(rule.get("scope") or "technician")
+    known = sales_groups if scope == "sales" else teams
+    lowered = {k.strip().lower(): k for k in known}
+    problems: list[str] = []
+    for item in rule.get("match_criteria") or []:
+        name = str(item.get("assign_to_team") or "").strip()
+        if name and name.lower() not in lowered:
+            problems.append(
+                TEAM_UNKNOWN[language if language in TEAM_UNKNOWN else "th"].format(
+                    kind=KIND_LABEL[scope][language if language in ("th", "en") else "th"],
+                    name=name, known=", ".join(known) if known else "-",
+                )
+            )
+        elif name:
+            item["assign_to_team"] = lowered[name.lower()]
+    return problems
+
+
 async def policy_to_rule(
-    policy: str, *, teams: list[str], scope_hint: str | None = None, client=None,
+    policy: str, *, teams: list[str], sales_groups: list[str] | None = None,
+    scope_hint: str | None = None, client=None, language: str = "th",
 ) -> tuple[dict | None, list[str]]:
     """(rule, problems). A rule is only returned when it validates.
 
@@ -86,7 +131,11 @@ async def policy_to_rule(
     what was wrong with their policy — "I did not understand 'sounds like'"
     is actionable, an exception is not.
     """
-    prompt = SYSTEM_PROMPT.format(teams=", ".join(teams) if teams else "(none yet)")
+    sales_groups = list(sales_groups or [])
+    prompt = SYSTEM_PROMPT.format(
+        teams=", ".join(teams) if teams else "(none yet)",
+        sales_groups=", ".join(sales_groups) if sales_groups else "(none yet)",
+    )
     if scope_hint:
         prompt += f"\nThe person is configuring the '{scope_hint}' scope.\n"
 
@@ -114,6 +163,8 @@ async def policy_to_rule(
         rule["scope"] = scope_hint
 
     problems = validate_rule(rule)
+    if not problems:
+        problems = team_problems(rule, teams=teams, sales_groups=sales_groups, language=language)
     return (None, problems) if problems else (rule, [])
 
 

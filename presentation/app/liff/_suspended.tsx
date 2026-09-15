@@ -26,7 +26,7 @@ export function SuspendedNotice({
 }) {
   const { t } = useLanguage();
   const shop = shopOf(memberships, current);
-  if (!shop || shop.license_status !== "suspended") return null;
+  if (!shop || !READ_ONLY.has(shop.license_status ?? "")) return null;
   return (
     <div className="callout" role="status" data-tone="warn">
       <strong>{t.dashboard.suspended.title.replace("{shop}", shop.company_name)}</strong>
@@ -35,6 +35,9 @@ export function SuspendedNotice({
   );
 }
 
+/** Read-only shop statuses: suspended (Phase 18) and soft-deleted (round 18). */
+const READ_ONLY = new Set(["suspended", "deleted"]);
+
 export function isSuspended(memberships: Membership[], current?: string | null): boolean {
-  return shopOf(memberships, current)?.license_status === "suspended";
+  return READ_ONLY.has(shopOf(memberships, current)?.license_status ?? "");
 }

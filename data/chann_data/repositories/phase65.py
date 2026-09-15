@@ -38,7 +38,14 @@ TRIAL_DAYS = 30
 # seed_reference.py keys the owner role off this exact name, and Phase 2 keys
 # `is_owner` off it too. Defined once here rather than repeated as a literal.
 OWNER_ROLE_NAME = "owner"
-LICENSE_STATUSES = frozenset({"trial", "active", "suspended"})
+LICENSE_STATUSES = frozenset({"trial", "active", "suspended", "deleted"})
+# Statuses the subscription sweep watches: a deadline on either one
+# suspends the tenant when it passes. Suspended and deleted are never
+# re-suspended.
+EXPIRING_STATUSES = ("trial", "active")
+# Read-only / not-for-customers: what "suspended" has always gated, and a
+# soft-deleted company is gated the same way everywhere.
+INACTIVE_STATUSES = ("suspended", "deleted")
 
 
 class RegistrationConflict(RuntimeError):
@@ -92,7 +99,7 @@ class RegistrationRepository:
             company_name=company_name,
             company_code=self._unique_company_code(),
             status="trial",
-            trial_expires_at=datetime.now(timezone.utc) + timedelta(days=trial_days),
+            expires_at=datetime.now(timezone.utc) + timedelta(days=trial_days),
             created_by_chann_uid=created_by_chann_uid,
         )
         self._s.add(license_row)
@@ -385,7 +392,7 @@ class RegistrationRepository:
             self._s.execute(
                 select(License)
                 .where(
-                    License.status != "suspended",
+                    License.status.not_in(INACTIVE_STATUSES),
                     or_(
                         License.company_name.ilike(pattern),
                         License.company_code == q.upper(),
@@ -404,7 +411,7 @@ class RegistrationRepository:
         ).scalars().first()
         if license_row is None:
             raise RegistrationNotFound("company code not found")
-        if license_row.status == "suspended":
+        if license_row.status in INACTIVE_STATUSES:
             raise RegistrationConflict("this company is not accepting customers")
 
         existing = self._s.execute(
@@ -442,24 +449,28 @@ class RegistrationRepository:
         if row is None:
             raise RegistrationNotFound("license not found")
         row.status = status
+        # A soft delete stamps when; any way back out of it clears the stamp
+        # (round 18) — "deleted_at set but status active" must not exist.
+        row.deleted_at = datetime.now(timezone.utc) if status == "deleted" else None
         self._s.flush()
         return row
 
-    def trials_expiring_on(self, day) -> list[dict]:
-        """Trials whose deadline falls on this Bangkok calendar day, with
-        who to tell (the owner; the creator when no owner row exists yet).
-        Master Spec 17.5.4: a notice 3 days and 1 day before the trial
-        ends (review E3 — nothing ever sent one)."""
+    def licenses_expiring_on(self, day) -> list[dict]:
+        """Trial AND active licenses whose deadline falls on this Bangkok
+        calendar day, with who to tell (the owner; the creator when no
+        owner row exists yet) and the status so the caller can word the
+        notice. Master Spec 17.5.4 for trials; round 18 widened it to the
+        paid subscription, which ends the same way."""
         from .localtime import bangkok_date
 
         rows = self._s.execute(
             select(License).where(
-                License.status == "trial", License.trial_expires_at.is_not(None),
+                License.status.in_(EXPIRING_STATUSES), License.expires_at.is_not(None),
             ).order_by(License.created_at)
         ).scalars().all()
         out = []
         for row in rows:
-            if bangkok_date(row.trial_expires_at) != day:
+            if bangkok_date(row.expires_at) != day:
                 continue
             owner = self._s.execute(
                 select(LicenseMember.chann_uid).where(
@@ -470,13 +481,18 @@ class RegistrationRepository:
             ).scalars().first()
             out.append({
                 "id": row.id, "license_code": row.license_code, "company_name": row.company_name,
-                "trial_expires_at": row.trial_expires_at,
+                "status": row.status, "expires_at": row.expires_at,
                 "owner_chann_uid": owner or row.created_by_chann_uid,
             })
         return out
 
-    def expire_due_trials(self, *, now: datetime | None = None) -> list[License]:
-        """Suspend trials past their date. Suspended means read-only, not deleted.
+    # The trial-only names, kept as thin aliases for older callers.
+    trials_expiring_on = licenses_expiring_on
+
+    def expire_due_licenses(self, *, now: datetime | None = None) -> list[tuple[License, str]]:
+        """Suspend trial and active licenses past their date. Suspended
+        means read-only, not deleted. Returns (row, status_before) pairs
+        so the caller can audit and word the notice per status.
 
         `now` is injectable so the sweep is testable without freezing the clock.
         """
@@ -485,15 +501,21 @@ class RegistrationRepository:
             self._s.execute(
                 select(License)
                 .where(
-                    License.status == "trial",
-                    License.trial_expires_at.is_not(None),
-                    License.trial_expires_at <= moment,
+                    License.status.in_(EXPIRING_STATUSES),
+                    License.expires_at.is_not(None),
+                    License.expires_at <= moment,
                 )
                 .with_for_update()
             ).scalars()
         )
+        out = []
         for row in due:
+            out.append((row, row.status))
             row.status = "suspended"
         if due:
             self._s.flush()
-        return due
+        return out
+
+    def expire_due_trials(self, *, now: datetime | None = None) -> list[License]:
+        """Older name; the rows only, like before."""
+        return [row for row, _ in self.expire_due_licenses(now=now)]

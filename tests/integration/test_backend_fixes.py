@@ -114,7 +114,7 @@ class TestE3TrialsExpiringOnABangkokDay:
         moment = datetime(2026, 9, 10, 17, 30, tzinfo=timezone.utc)
         with tenant["session"]() as session:
             row = session.get(License, tenant["license_id"])
-            row.trial_expires_at = moment
+            row.expires_at = moment
             session.commit()
         with tenant["session"]() as session:
             repo = RegistrationRepository(session)
@@ -124,14 +124,24 @@ class TestE3TrialsExpiringOnABangkokDay:
             assert on_11[0]["owner_chann_uid"] == tenant["owner_uid"]
             assert on_11[0]["company_name"].startswith("Fixes")
 
-    def test_a_suspended_or_active_license_is_not_listed(self, tenant):
+    def test_an_active_license_is_listed_and_a_suspended_one_is_not(self, tenant):
+        """Round 18: the product is sold as a subscription, so an ACTIVE
+        licence with an end date expires like a trial; only a suspended
+        (or deleted) one is out of the sweep's sight."""
         from chann_data.models import License
         from chann_data.repositories.phase65 import RegistrationRepository
 
         with tenant["session"]() as session:
             row = session.get(License, tenant["license_id"])
-            row.trial_expires_at = datetime(2026, 9, 12, 5, 0, tzinfo=timezone.utc)
+            row.expires_at = datetime(2026, 9, 12, 5, 0, tzinfo=timezone.utc)
             row.status = "active"
+            session.commit()
+        with tenant["session"]() as session:
+            listed = [r for r in RegistrationRepository(session).trials_expiring_on(date(2026, 9, 12)) if r["id"] == tenant["license_id"]]
+            assert listed and listed[0]["status"] == "active", listed
+        with tenant["session"]() as session:
+            row = session.get(License, tenant["license_id"])
+            row.status = "suspended"
             session.commit()
         with tenant["session"]() as session:
             assert not [r for r in RegistrationRepository(session).trials_expiring_on(date(2026, 9, 12)) if r["id"] == tenant["license_id"]]
@@ -249,7 +259,7 @@ class TestDataRoutes:
         with tenant["session"]() as session:
             row = session.get(License, tenant["license_id"])
             row.status = "trial"
-            row.trial_expires_at = datetime(2026, 10, 1, 3, 0, tzinfo=timezone.utc)
+            row.expires_at = datetime(2026, 10, 1, 3, 0, tzinfo=timezone.utc)
             session.commit()
         response = client.get("/internal/v1/platform/trials/expiring", params={"on_day": "2026-10-01"}, headers=headers)
         assert response.status_code == 200

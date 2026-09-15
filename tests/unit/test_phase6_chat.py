@@ -586,8 +586,17 @@ class FakeDataClient:
                 return row
         return {"id": ticket_id, **fields}
 
-    async def execute_assignment(self, license_id, *, scope, entity_type, entity_id, context=None, actor_id=None):
+    async def execute_assignment(
+        self, license_id, *, scope, entity_type, entity_id, context=None, actor_id=None, team_name=None,
+    ):
+        # Records the whole request: the old tuple dropped entity_type, which
+        # is how "service_ticket" vs "ticket" went unnoticed (round 18).
         self.recorded.append(("execute_assignment", license_id, scope, entity_id))
+        self.assignment_requests = getattr(self, "assignment_requests", [])
+        self.assignment_requests.append({
+            "scope": scope, "entity_type": entity_type, "entity_id": entity_id,
+            "context": context or {}, "team_name": team_name,
+        })
         return dict(getattr(self, "_assignment_outcome", {"member_id": None, "reason": "no rule"}))
 
     async def set_ticket_status(self, license_id, ticket_id, status, actor_id=None):

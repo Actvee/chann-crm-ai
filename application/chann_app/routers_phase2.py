@@ -2282,12 +2282,21 @@ async def create_customer(
     body = payload.model_dump(exclude_none=True)
     body["owner_member_id"] = await _member_of(client, license_id, principal)
     try:
-        return await client.create_customer(
+        row = await client.create_customer(
             license_id, body,
             actor_id=principal.chann_uid,
         )
     except DataTierError as exc:
         raise _propagate(exc)
+    # The sales rule, when the shop set one (round 18): a customer added by
+    # the owner or CS from the dashboard is handed to a salesperson the
+    # same way a job is handed to a technician.
+    from .services.sales_dispatch import route_new_customer
+
+    await route_new_customer(
+        client, license_id, row, source="dashboard", actor_chann_uid=principal.chann_uid,
+    )
+    return row
 
 
 class OwnerIn(BaseModel):
@@ -3198,10 +3207,9 @@ async def upload_document_template(
         TemplateRejected, frame, sanitise, split_frame,
     )
     from .services.documents.docx import (
-        DocxConversionError, convert_docx_to_html,
+        DocxConversionError, convert_docx_to_html, docx_warnings,
     )
-    from .services.documents.fill import unknown_placeholders
-    from .services.documents.samples import sample_snapshot
+    from .services.documents.fill import unknown_blocks, unknown_placeholders
     from .services.storage.base import DocumentStoreNotConfigured, get_document_store
 
     _require_same_tenant(principal, license_id)
@@ -3219,6 +3227,10 @@ async def upload_document_template(
 
     source_name = (payload.filename or "").strip()
     docx_bytes: bytes | None = None
+    # Sentences for the shop about a file that WAS accepted: things that
+    # will not come out the way the Word file looks. Reported, never
+    # refused — a header that is only a page number is fine to lose.
+    warnings: list[str] = []
 
     if payload.docx_base64:
         try:
@@ -3239,6 +3251,10 @@ async def upload_document_template(
             # 400 with the converter's own sentence: "something went
             # wrong" on a Word file leaves the shop with nothing to try.
             raise HTTPException(status_code=400, detail=exc.detail)
+        # Headers and footers: mammoth does not read them, so a logo
+        # placed there vanishes from the template. Said here, at upload,
+        # rather than discovered on the first quotation.
+        warnings.extend(docx_warnings(docx_bytes))
     else:
         html = payload.html or ""
         if not html.strip():
@@ -3329,6 +3345,11 @@ async def upload_document_template(
                 "intermediate_model": intermediate,
                 "mapping_schema": {"kind": "placeholders"},
                 "compiled_template_path": stored.path,
+                # Who uploaded it. The Data tier's column is a
+                # license_members.id; the tier resolves this uid to the
+                # member row within the license, because the Application
+                # tier knows the person only by chann_uid.
+                "created_by_chann_uid": principal.chann_uid,
             },
             actor_id=principal.chann_uid,
         )
@@ -3336,6 +3357,16 @@ async def upload_document_template(
         raise HTTPException(status_code=503, detail=str(exc))
     except DataTierError as exc:
         raise _propagate(exc)
+
+    blocks = unknown_blocks(html)
+    if blocks:
+        # A `{{#something}}` that is not the line-item block prints as
+        # literal text on every document made from this template.
+        warnings.append(
+            "พบเครื่องหมายบล็อกที่ระบบไม่รู้จัก จะพิมพ์ออกมาเป็นข้อความตามที่เขียน: "
+            + ", ".join("{{" + b + "}}" for b in blocks)
+            + " — บล็อกที่ใช้ได้มีเพียง {{#line_items}} … {{/line_items}}"
+        )
 
     return {
         "template_id": str(existing["id"]),
@@ -3349,6 +3380,10 @@ async def upload_document_template(
         "unknown_placeholders": unknown_placeholders(
             html, _template_sample(payload.document_type),
         ),
+        # Sentences, in Thai, about what will differ from the Word file
+        # (see `docx_warnings`) and about block markers that will print
+        # raw. The dashboard shows them under the blank-placeholder list.
+        "warnings": warnings,
     }
 
 
@@ -3505,6 +3540,7 @@ async def set_document_template_active(
 async def list_document_template_versions(
     license_id: str,
     template_id: str,
+    request: Request,
     principal: TenantPrincipal = Depends(get_tenant_principal),
     client: DataClient = Depends(get_data_client),
 ):
@@ -3534,6 +3570,14 @@ async def list_document_template_versions(
     # original bytes are stored, and by nothing else.
     from .services.assets import asset_link
 
+    # The same fallback the document-link route uses: PUBLIC_BASE_URL has
+    # no default and is not set in dev, and without it `asset_link`
+    # answers None — so the download button silently vanished on every
+    # environment but production. The request already carries the origin
+    # it arrived on; the setting still wins when set (a custom domain in
+    # front of Cloud Run).
+    base = (settings.public_base_url or "").rstrip("/") or str(request.base_url).rstrip("/")
+
     for version in versions:
         model = version.get("intermediate_model") or {}
         source = str(version.get("source_docx_path") or "")
@@ -3541,6 +3585,7 @@ async def list_document_template_versions(
             asset_link(
                 source, content_type=DOCX_CONTENT_TYPE,
                 filename=str(model.get("filename") or "template.docx"),
+                base_url=base or None,
             )
             if str(model.get("kind") or "") == "docx_upload"
             else None

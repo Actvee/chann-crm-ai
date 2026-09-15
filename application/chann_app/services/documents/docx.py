@@ -20,20 +20,30 @@ paragraphs, runs, lists, tables and images, and nothing that executes.
 from __future__ import annotations
 
 import io
+import logging
 import re
 import zipfile
 
 from .html import _FONT_IMPORT, _FONT_STACK
+
+log = logging.getLogger(__name__)
 
 # 2 MB of Word. A quotation layout with a letterhead logo is well under
 # it; anything larger is a document with photographs in it, and it has to
 # survive being base64'd through a JSON body as well.
 MAX_DOCX_BYTES = 2_000_000
 
-# The compiled HTML shares the upload route's existing cap, so a .docx and
-# a .html template are held to the same limit on the thing that actually
-# renders.
-MAX_COMPILED_CHARS = 512_000
+# The compiled HTML. 2,000,000 characters, matching MAX_DOCX_BYTES above:
+# mammoth inlines every image as a base64 data: URI, which is 4/3 of the
+# bytes the image occupied in the zip, so a letterhead .docx that passed
+# the 2 MB input cap can legitimately compile to more than the 512,000
+# characters this used to be and was refused AFTER being accepted. SmartBrowz
+# renders HTML documents of this size without complaint (it is the size of
+# the .docx itself, which it never sees), and the stored template is read
+# once per issued document, not per page view. Anything past this is a
+# document with photographs in it, and the sentence in
+# `_refuse_compiled_size` says so.
+MAX_COMPILED_CHARS = 2_000_000
 
 # --- what the file is allowed to become once it is opened ------------------
 #
@@ -95,6 +105,25 @@ _ANY_TAG = re.compile(r"<[^>]+>")
 # `polish_converted_html` for why it has to move.
 _ROW_WITH_MARKERS = re.compile(
     r"<tr>(?P<body>(?:(?!</?tr\b).)*?)</tr>", re.DOTALL,
+)
+
+# A block marker as a person may have typed it in Word: `{{ #line_items }}`,
+# `{{#Line_Items}}`, `{{# line_items}}`. All of them mean the one thing
+# and all of them used to print as literal text, because the hoist above
+# and `fill.py` matched the exact canonical spelling.
+_LOOSE_BLOCK_MARKER = re.compile(r"\{\{\s*([#/])\s*([A-Za-z_]+)\s*\}\}")
+
+# Word keeps headers and footers in their own parts, and mammoth reads
+# only word/document.xml — so a logo or a company address placed in the
+# header disappears from the compiled template without a word. These
+# find the parts that actually carry something.
+_HEADER_FOOTER_PART = re.compile(r"^word/(?:header|footer)\d*\.xml$")
+_PART_TEXT = re.compile(r"<w:t(?:\s[^>]*)?>([^<]*)</w:t>")
+_PART_IMAGE = re.compile(r"<w:drawing\b|<v:imagedata\b|\br:embed=")
+
+HEADER_FOOTER_WARNING_TH = (
+    "หัวกระดาษ/ท้ายกระดาษของไฟล์ Word จะไม่ถูกนำมาใช้ — "
+    "ย้ายโลโก้หรือข้อความนั้นมาไว้ในเนื้อหาเอกสาร"
 )
 
 
@@ -279,7 +308,20 @@ def convert_docx_to_html(data: bytes, *, filename: str = "") -> str:
     """
     check_docx_bytes(data, filename=filename)
 
-    import mammoth
+    try:
+        import mammoth
+    except ImportError:
+        # A deployment without the converter installed. The shop cannot
+        # fix this and should not see a 500 for it; they get the same
+        # kind of sentence every other refusal here gives, and the log
+        # gets the traceback that names the missing module.
+        log.exception("mammoth is not installed; cannot convert a .docx")
+        raise _reject(
+            "ระบบยังไม่พร้อมแปลงไฟล์ Word ในขณะนี้ กรุณาลองใหม่ภายหลัง "
+            "หรือแจ้งผู้ดูแลระบบ",
+            "the Word converter is not available on this server — try "
+            "again later or contact the administrator",
+        )
 
     try:
         result = mammoth.convert_to_html(io.BytesIO(data))
@@ -324,19 +366,76 @@ def convert_docx_to_html(data: bytes, *, filename: str = "") -> str:
 
     html = polish_converted_html(body)
     if len(html) > MAX_COMPILED_CHARS:
-        raise _reject(
-            "เอกสารนี้ใหญ่เกินไปหลังแปลง มักเกิดจากรูปภาพความละเอียดสูงในเอกสาร "
-            "ลองย่อรูปหรือลบรูปที่ไม่จำเป็นออกแล้วอัปโหลดใหม่",
-            "the converted document is too large — this is almost always "
-            "high-resolution images; shrink or remove them and try again",
-        )
+        raise _refuse_compiled_size(html)
     return html
+
+
+def _refuse_compiled_size(html: str) -> DocxConversionError:
+    """Why the compiled document is over the cap, in the shop's terms.
+
+    When there is an image in it, the image is the reason — mammoth
+    inlines every picture as base64, and text alone cannot reach two
+    million characters — so the sentence names the images and says to
+    shrink them. Without one, saying "shrink your images" would send
+    someone looking for pictures that are not there.
+    """
+    size_kb = len(html) // 1024
+    limit_kb = MAX_COMPILED_CHARS // 1024
+    if "<img" in html:
+        return _reject(
+            f"เอกสารนี้ใหญ่เกินไปหลังแปลง ({size_kb} KB เกิน {limit_kb} KB) "
+            "สาเหตุคือรูปภาพในเอกสาร — ลองย่อรูป (ลดความละเอียด) "
+            "หรือลบรูปที่ไม่จำเป็นออก แล้วอัปโหลดใหม่",
+            f"the converted document is too large ({size_kb} KB, limit "
+            f"{limit_kb} KB) because of the images in it — shrink them "
+            "(reduce their resolution) or remove the ones not needed, and "
+            "upload again",
+        )
+    return _reject(
+        f"เอกสารนี้ใหญ่เกินไปหลังแปลง ({size_kb} KB เกิน {limit_kb} KB) "
+        "ลองตัดเนื้อหาที่ไม่จำเป็นออกแล้วอัปโหลดใหม่",
+        f"the converted document is too large ({size_kb} KB, limit "
+        f"{limit_kb} KB) — remove content that is not needed and upload "
+        "again",
+    )
+
+
+def docx_warnings(data: bytes) -> list[str]:
+    """What a shop should hear about this file even though it was accepted.
+
+    Today, one thing: a header or footer with something in it. mammoth
+    reads only the document body, so a logo, a company address or a page
+    number placed in Word's header or footer is simply absent from the
+    compiled template — and nothing said so until the first quotation
+    came out without the letterhead. The zip is inspected directly for
+    header/footer parts carrying text or an image; empty parts (Word
+    writes them for a document that once had a header) do not count.
+
+    Called after `check_docx_bytes` has bounded the file, so reading the
+    parts is safe. Anything unreadable here is not a reason to refuse a
+    file the converter already accepted: the answer is then simply no
+    warning.
+    """
+    warnings: list[str] = []
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            for name in archive.namelist():
+                if not _HEADER_FOOTER_PART.match(name):
+                    continue
+                xml = archive.read(name).decode("utf-8", errors="replace")
+                has_text = any(t.strip() for t in _PART_TEXT.findall(xml))
+                if has_text or _PART_IMAGE.search(xml):
+                    warnings.append(HEADER_FOOTER_WARNING_TH)
+                    break
+    except (zipfile.BadZipFile, OSError, ValueError):
+        log.warning("could not inspect header/footer parts", exc_info=True)
+    return warnings
 
 
 def polish_converted_html(body: str) -> str:
     """The single place mammoth's output is adapted to the fill engine.
 
-    Three repairs, all of them for things Word does that HTML authors
+    Four repairs, all of them for things Word does that HTML authors
     never do by hand:
 
     1. **Rejoin split placeholders.** Word breaks a typed word into runs
@@ -347,7 +446,16 @@ def polish_converted_html(body: str) -> str:
        is stripped. Only inline tags, and only within one placeholder, so
        nothing outside the braces is touched.
 
-    2. **Hoist the line-item markers out of the table row.** A person
+    2. **Normalise the line-item markers.** `{{ #line_items }}`,
+       `{{#Line_Items}}` and `{{# line_items}}` are what people type; the
+       hoist below and `fill.py` match the canonical `{{#line_items}}`.
+       Every block marker is rewritten to its canonical spelling — inner
+       whitespace stripped, name lowercased — so that is what gets stored,
+       and a marker that would otherwise print raw on a PDF repeats the
+       row instead. A marker naming a block that does not exist is left
+       for `fill.unknown_placeholders` to report.
+
+    3. **Hoist the line-item markers out of the table row.** A person
        building a quotation in Word puts `{{#line_items}}` in the first
        cell of the row that should repeat and `{{/line_items}}` in the
        last. Left where they are, the block repeats the cell CONTENTS and
@@ -355,7 +463,7 @@ def polish_converted_html(body: str) -> str:
        the row itself repeats, which is what the person meant and what
        they would have written in HTML.
 
-    3. **Frame it as a printable document.** mammoth returns a fragment
+    4. **Frame it as a printable document.** mammoth returns a fragment
        with no font, no page size and no table borders. The Thai font is
        fetched rather than assumed for the reason `html.py` gives: a
        renderer without one produces boxes, and the failure is silent.
@@ -369,8 +477,15 @@ def polish_converted_html(body: str) -> str:
     checked, which is a different thing from being enforced.
     """
     html = _rejoin_split_placeholders(body)
+    html = _normalise_block_markers(html)
     html = _hoist_row_markers(html)
     return _frame_document(html)
+
+
+def _normalise_block_markers(html: str) -> str:
+    return _LOOSE_BLOCK_MARKER.sub(
+        lambda m: "{{" + m.group(1) + m.group(2).lower() + "}}", html,
+    )
 
 
 def _rejoin_split_placeholders(html: str) -> str:

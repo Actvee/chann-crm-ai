@@ -136,6 +136,10 @@ export default function DocumentTemplates({ liffId }: { liffId: string }) {
   const [docxBytes, setDocxBytes] = useState(0);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
+  // Whole sentences from the server about an upload that was accepted
+  // but will differ from the file — a Word header that is not read, a
+  // block marker that will print raw. Shown beside the blank list.
+  const [notes, setNotes] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
@@ -144,6 +148,22 @@ export default function DocumentTemplates({ liffId }: { liffId: string }) {
     setStatus(message);
     setTone(kind);
   }, []);
+
+  /** A thrown error as a sentence in the status line.
+   *
+   *  Every action below used try/finally with no catch and was called as
+   *  `void action()`: a network failure or a proxy that answered
+   *  non-JSON left the button re-enabled and the status line saying
+   *  whatever it said before, so the page looked as though nothing had
+   *  been pressed. The server's own sentence when it gave one, the
+   *  generic one otherwise — never silence. */
+  const fail = useCallback(
+    (error: unknown) => {
+      const reason = error instanceof Error && error.message ? error.message : "";
+      say(reason ? `${t.common.error}: ${reason}` : t.common.error, "error");
+    },
+    [say, t],
+  );
 
   const typeLabel = useCallback(
     (type: string) =>
@@ -215,6 +235,7 @@ export default function DocumentTemplates({ liffId }: { liffId: string }) {
     }
     setBusy(true);
     setWarnings([]);
+    setNotes([]);
     try {
       const response = await fetch(
         `/api/phase2/licenses/${licenseId}/document-templates/upload`,
@@ -253,11 +274,13 @@ export default function DocumentTemplates({ liffId }: { liffId: string }) {
       }
       const result = (await response.json()) as {
         unknown_placeholders?: string[];
+        warnings?: string[];
       };
       // Reported, not blocking. A placeholder that resolves to nothing
       // may be deliberate — but finding out here beats finding out from
       // a customer holding a document with a gap in it.
       setWarnings(result.unknown_placeholders ?? []);
+      setNotes(result.warnings ?? []);
       setHtml("");
       setDocx("");
       setDocxName("");
@@ -265,6 +288,8 @@ export default function DocumentTemplates({ liffId }: { liffId: string }) {
       setName("");
       await load();
       say(t.dashboard.templates.uploaded, "ok");
+    } catch (error) {
+      fail(error);
     } finally {
       setBusy(false);
     }
@@ -290,6 +315,8 @@ export default function DocumentTemplates({ liffId }: { liffId: string }) {
         ...versions,
         [template.id]: (await response.json()) as TemplateVersion[],
       });
+    } catch (error) {
+      fail(error);
     } finally {
       setBusy(false);
     }
@@ -306,7 +333,13 @@ export default function DocumentTemplates({ liffId }: { liffId: string }) {
         { method: "POST", headers: proxyHeaders(token, licenseId) },
       );
       if (!response.ok) {
-        say(`${t.common.error} (${response.status})`, "error");
+        const detail = await response.json().catch(() => ({}));
+        say(
+          typeof detail.detail === "string"
+            ? detail.detail
+            : `${t.common.error} (${response.status})`,
+          "error",
+        );
         return;
       }
       await loadVersions(template);
@@ -314,6 +347,8 @@ export default function DocumentTemplates({ liffId }: { liffId: string }) {
       // rather than leaving the page asserting the old one.
       await load();
       say(t.dashboard.templates.published, "ok");
+    } catch (error) {
+      fail(error);
     } finally {
       setBusy(false);
     }
@@ -354,6 +389,8 @@ export default function DocumentTemplates({ liffId }: { liffId: string }) {
         active ? t.dashboard.templates.chosen : t.dashboard.templates.builtinChosen,
         "ok",
       );
+    } catch (error) {
+      fail(error);
     } finally {
       setBusy(false);
     }
@@ -445,6 +482,8 @@ export default function DocumentTemplates({ liffId }: { liffId: string }) {
       // so rather than looking as though nothing happened.
       await loadVersions(template);
       say("");
+    } catch (error) {
+      fail(error);
     } finally {
       setBusy(false);
     }
@@ -591,6 +630,16 @@ export default function DocumentTemplates({ liffId }: { liffId: string }) {
               <li key={placeholder}>
                 <code>{`{{${placeholder}}}`}</code>
               </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {notes.length > 0 && (
+        <div className="info-note" data-testid="upload-notes">
+          <ul>
+            {notes.map((note) => (
+              <li key={note}>{note}</li>
             ))}
           </ul>
         </div>

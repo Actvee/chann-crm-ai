@@ -35,7 +35,7 @@
 ALTER TABLE licenses
   ADD COLUMN company_code VARCHAR(8) UNIQUE NOT NULL,
   ADD COLUMN status VARCHAR(32) NOT NULL DEFAULT 'trial',  -- trial|active|suspended
-  ADD COLUMN trial_expires_at TIMESTAMPTZ;
+  ADD COLUMN expires_at TIMESTAMPTZ;   -- named trial_expires_at until 0028_subscription_expiry (round 18)
 
 -- CHECK: status IN ('trial','active','suspended')
 
@@ -73,7 +73,7 @@ Self-service เปิดช่องให้สร้าง tenant ขยะ�
 
 - **1 `chann_uid` เป็น owner ได้มากสุด 1 license** — เช็คตอนสร้าง ไม่ใช่ตอน redeem
   (เป็น member ของหลาย license ได้ตามปกติ ข้อจำกัดนี้คุมเฉพาะการ *สร้าง*)
-- license ใหม่เริ่มที่ `status='trial'`, `trial_expires_at = now() + 30 วัน`
+- license ใหม่เริ่มที่ `status='trial'`, `expires_at = now() + 30 วัน`
 - ข้อจำกัดนี้บังคับที่ระดับ **application logic + partial unique index** ไม่ใช่
   แค่ใน code path เดียว เพราะ webhook อาจถูกยิงซ้ำพร้อมกัน
 
@@ -110,7 +110,7 @@ Phase 6.5 **ไม่ทำ billing** แค่วางสถานะไว้
 [เปิดบริษัทใหม่]
     → slot-filling: ชื่อบริษัท (บังคับ), เบอร์ติดต่อ (ไม่บังคับ)
     → เช็ค 1-LINE-1-บริษัท
-    → สร้าง license (status=trial, trial_expires_at=+30d, company_code สุ่ม)
+    → สร้าง license (status=trial, expires_at=+30d, company_code สุ่ม)
     → seed default role templates ทั้ง 4 (owner/admin/member/cs)
     → สร้าง license_members: คนนี้ = owner
     → audit log: entity=license action=create
@@ -145,7 +145,7 @@ Phase 6.5 **ไม่ทำ billing** แค่วางสถานะไว้
 
 ```
 test_license_self_registration:
-  - สร้าง license ใหม่ → เป็น owner, status=trial, trial_expires_at ≈ +30d
+  - สร้าง license ใหม่ → เป็น owner, status=trial, expires_at ≈ +30d
   - company_code ถูกสร้าง ไม่ซ้ำกับใคร
   - default role templates ครบ 4 role
   - identity เดิมสร้าง license ที่สอง → ถูกปฏิเสธ
@@ -194,7 +194,7 @@ test_trial_expiry:
 - **depends-on:** Phase 1 (identity), 2 (role templates + permission), 6 (chat engine)
 - **blocks:** Phase 8 (ต้องเป็นสมาชิกก่อนถึงแก้ profile ได้), และในทางปฏิบัติคือ
   ทุก phase ที่ต้องการ tenant จริงที่ไม่ได้สร้างด้วย SQL มือ
-- **เกี่ยวข้องกับ:** Phase 17.5 (Billing) — 6.5 วางแค่ `status` + `trial_expires_at`
+- **เกี่ยวข้องกับ:** Phase 17.5 (Billing) — 6.5 วางแค่ `status` + `expires_at`
   ไม่ออกแบบ billing; 17.5 ต่อยอดจากตรงนี้
 
 ### 6.5.11 ของเดิมที่ยกมาใช้ได้ (โปรเจกต์ Chann CRM AI เวอร์ชันก่อน)

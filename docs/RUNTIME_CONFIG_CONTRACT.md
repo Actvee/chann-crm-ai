@@ -40,7 +40,7 @@
 |---|---|---|
 | `DATA_BASE_URL` | DERIVED_AT_DEPLOY | internal Data Tier endpoint |
 | `ADMIN_SECRET` | REQUIRED_NOT_CONFIGURED | shared secret for the internal Data Tier API (`X-Internal-Secret`) |
-| `REMINDER_SWEEP_SECRET` | REQUIRED_FOR_SCHEDULED_JOBS | static `X-Sweep-Secret` Cloud Scheduler sends to the sweep endpoints (reminders, quotes/warranties expiry, chat SLA, trials); unset = every sweep refuses (`routers_admin.require_scheduler`) |
+| `REMINDER_SWEEP_SECRET` | REQUIRED_FOR_SCHEDULED_JOBS | static `X-Sweep-Secret` Cloud Scheduler sends to the sweep endpoints (reminders, quotes/warranties expiry, chat SLA, subscription/trial expiry at `/platform/trials/expire`); unset = every sweep refuses (`routers_admin.require_scheduler`) |
 | `LINE_CUSTOMER_CHANNEL_SECRET` | REQUIRED_NOT_CONFIGURED | verify Customer OA webhook |
 | `LINE_CUSTOMER_CHANNEL_ACCESS_TOKEN` | REQUIRED_NOT_CONFIGURED | push/reply Customer OA, rich-menu linking |
 | `LINE_SALES_CHANNEL_SECRET` | REQUIRED_NOT_CONFIGURED | verify Sales OA webhook |

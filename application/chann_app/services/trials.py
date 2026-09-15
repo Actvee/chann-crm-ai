@@ -1,16 +1,21 @@
-"""Master Spec 17.5.4 — the trial's clock.
+"""Master Spec 17.5.4 — the subscription's clock (trial and paid).
 
 A new tenant gets 30 days (phase65.TRIAL_DAYS). The Data Tier could
 suspend an overdue trial since Phase 6.5, but nothing ever called it and
-nobody was warned first (review E3, 6 Sep 2026). This sweep, run daily
-by Cloud Scheduler (scheduler.tf, Asia/Bangkok):
+nobody was warned first (review E3, 6 Sep 2026). Round 18: the product
+is sold as a subscription, so an ACTIVE tenant has an `expires_at` too
+and the same sweep handles both. This sweep, run daily by Cloud
+Scheduler (scheduler.tf, Asia/Bangkok — the job still posts to
+/platform/trials/expire):
 
-  * tells the owner 3 days and 1 day before the trial ends
-    (`trial_expiring`, dual delivery through the usual notify path);
+  * tells the owner 3 days and 1 day before the deadline
+    (`trial_expiring` for a trial, `subscription_expiring` for a paid
+    tenant; dual delivery through the usual notify path);
   * suspends what is past its date and tells the owner that too
-    (`trial_expired`) — suspended means read-only, never deleted.
+    (`trial_expired` / `subscription_expired`) — suspended means
+    read-only, never deleted.
 
-Both notices point at the license row (a UUID) so the day's duplicate
+Every notice points at the license row (a UUID) so the day's duplicate
 guard (announced_today) can recognise a Scheduler retry.
 """
 from __future__ import annotations
@@ -27,6 +32,8 @@ BANGKOK_TZ = timezone(timedelta(hours=7))
 WARN_DAYS_BEFORE = (3, 1)
 TYPE_EXPIRING = "trial_expiring"
 TYPE_EXPIRED = "trial_expired"
+TYPE_SUBSCRIPTION_EXPIRING = "subscription_expiring"
+TYPE_SUBSCRIPTION_EXPIRED = "subscription_expired"
 
 EXPIRING = {
     "th": "ทดลองใช้ของ {company} จะหมดอายุใน {days} วัน ({date}) — ติดต่อทีมงานเพื่อเปิดใช้งานต่อ ไม่งั้นร้านจะถูกระงับ (อ่านได้อย่างเดียว)",
@@ -36,6 +43,27 @@ EXPIRED = {
     "th": "ทดลองใช้ของ {company} หมดอายุแล้ว — ร้านอยู่ในโหมดอ่านอย่างเดียว ติดต่อทีมงานเพื่อเปิดใช้งานต่อ",
     "en": "The trial for {company} has ended — the shop is now read-only. Contact us to reactivate it.",
 }
+SUBSCRIPTION_EXPIRING = {
+    "th": "การใช้งานระบบของ {company} จะหมดอายุใน {days} วัน ({date}) — ต่ออายุกับทีมงานเพื่อใช้งานต่อ ไม่งั้นร้านจะถูกระงับ (อ่านได้อย่างเดียว)",
+    "en": "The subscription for {company} ends in {days} day(s) ({date}). Renew with us to keep the shop active; otherwise it becomes read-only.",
+}
+SUBSCRIPTION_EXPIRED = {
+    "th": "การใช้งานระบบของ {company} หมดอายุแล้ว — ร้านอยู่ในโหมดอ่านอย่างเดียว ติดต่อทีมงานเพื่อต่ออายุ",
+    "en": "The subscription for {company} has ended — the shop is now read-only. Contact us to renew it.",
+}
+
+
+def _wording(row: dict) -> tuple[str, dict, str, dict]:
+    """(expiring type, expiring text, expired type, expired text) for the
+    status the row had while it still ran: a trial keeps the trial
+    wording; anything else is the paid subscription. An expired row
+    already reads "suspended", so `status_before` is what counts."""
+    status = str(row.get("status_before") or row.get("status") or "").lower()
+    if status == "active":
+        return TYPE_SUBSCRIPTION_EXPIRING, SUBSCRIPTION_EXPIRING, TYPE_SUBSCRIPTION_EXPIRED, SUBSCRIPTION_EXPIRED
+    # "trial", or a row from a Data tier that does not say (already
+    # "suspended" with no status_before): the trial wording, as before.
+    return TYPE_EXPIRING, EXPIRING, TYPE_EXPIRED, EXPIRED
 
 
 def _fmt_date(value) -> str:
@@ -100,26 +128,28 @@ async def sweep_trials(client: DataClient, *, today=None) -> dict:
     for days in WARN_DAYS_BEFORE:
         day = today + timedelta(days=days)
         try:
-            rows = await client.trials_expiring(day)
+            rows = await client.licenses_expiring(day)
         except Exception:  # noqa: BLE001
-            log.exception("could not list trials ending on %s", day)
+            log.exception("could not list licenses ending on %s", day)
             summary["failed"] += 1
             continue
         for row in rows:
+            type_expiring, text_expiring, _, _ = _wording(row)
             if await _tell_owner(
-                client, row, type=TYPE_EXPIRING, text=EXPIRING, summary=summary,
-                days=days, date=_fmt_date(row.get("trial_expires_at")),
+                client, row, type=type_expiring, text=text_expiring, summary=summary,
+                days=days, date=_fmt_date(row.get("expires_at") or row.get("trial_expires_at")),
             ):
                 summary["warned"][str(days)] += 1
 
     try:
-        expired = await client.expire_due_trials()
+        expired = await client.expire_due_licenses()
     except Exception:  # noqa: BLE001
-        log.exception("trial expiry sweep could not suspend overdue trials")
+        log.exception("expiry sweep could not suspend overdue licenses")
         summary["failed"] += 1
         expired = []
     for row in expired:
         summary["expired"] += 1
         summary["expired_ids"].append(str(row.get("id") or ""))
-        await _tell_owner(client, row, type=TYPE_EXPIRED, text=EXPIRED, summary=summary)
+        _, _, type_expired, text_expired = _wording(row)
+        await _tell_owner(client, row, type=type_expired, text=text_expired, summary=summary)
     return summary

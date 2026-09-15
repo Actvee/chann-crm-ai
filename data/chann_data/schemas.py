@@ -360,17 +360,24 @@ class LicenseOut(BaseModel):
     company_name: str
     company_code: str | None
     status: str
-    trial_expires_at: datetime | None
+    expires_at: datetime | None
     created_by_chann_uid: str | None
 
 
 class TrialExpiringOut(BaseModel):
-    """A trial ending on the asked-for day, and who to tell (17.5.4)."""
+    """A trial or subscription ending on the asked-for day, and who to
+    tell (17.5.4; round 18 added `status` so the caller can word it)."""
     id: uuid.UUID
     license_code: str
     company_name: str
-    trial_expires_at: datetime | None
+    status: str = "trial"
+    expires_at: datetime | None
     owner_chann_uid: str | None
+
+
+class LicenseExpiredOut(LicenseOut):
+    """A license the sweep just suspended, with what it was before."""
+    status_before: str = "trial"
 
 
 class CompanyProfileOut(BaseModel):
@@ -468,15 +475,19 @@ class CustomerLinkOut(BaseModel):
 
 
 class LicenseStatusIn(BaseModel):
-    status: Literal["trial", "active", "suspended"]
+    status: Literal["trial", "active", "suspended", "deleted"]
 
 
 class TenantUpdateIn(BaseModel):
-    """A platform operator edits one tenant (18.1): its status, the trial
-    deadline and the shop's own details. Every field is optional and only
-    what is sent changes; `clear_trial_expires_at` removes the deadline,
-    because "not sent" and "set to nothing" must stay distinguishable."""
-    status: Literal["trial", "active", "suspended"] | None = None
+    """A platform operator edits one tenant (18.1): its status, the
+    subscription deadline and the shop's own details. Every field is
+    optional and only what is sent changes; `clear_expires_at` removes
+    the deadline, because "not sent" and "set to nothing" must stay
+    distinguishable. `trial_expires_at` / `clear_trial_expires_at` are the
+    pre-round-18 names, still accepted as aliases."""
+    status: Literal["trial", "active", "suspended", "deleted"] | None = None
+    expires_at: datetime | None = None
+    clear_expires_at: bool = False
     trial_expires_at: datetime | None = None
     clear_trial_expires_at: bool = False
     company_name: str | None = None
@@ -485,6 +496,25 @@ class TenantUpdateIn(BaseModel):
     company_email: str | None = None
     company_address: str | None = None
     tax_id: str | None = None
+    admin_notes: str | None = None
+
+
+class TenantExtendIn(BaseModel):
+    """Round 18: renew the subscription by this many days."""
+    days: int = Field(ge=1, le=3650)
+
+
+class PlatformMemberRoleIn(BaseModel):
+    role_name: str
+
+
+class PlatformMemberStatusIn(BaseModel):
+    status: Literal["active", "removed"]
+
+
+class PlatformMemberMoveIn(BaseModel):
+    target_license_id: uuid.UUID
+    role_name: str
 
 
 # ---------------------------------------------------------------- Phase 7
@@ -832,6 +862,10 @@ class AssignmentRequestIn(BaseModel):
     entity_type: str
     entity_id: uuid.UUID
     context: dict = {}
+    # A team the caller has already chosen ("มอบหมาย T-… ให้ทีมแอร์"): the
+    # engine then only picks WHO inside it, by the rule's strategy and
+    # capacity, instead of matching criteria to find the team.
+    team_name: str | None = None
 
 
 class AssignmentResultOut(BaseModel):
@@ -1085,6 +1119,11 @@ class DocumentTemplateVersionIn(BaseModel):
     renderer_mode: str = "html_convert"
     smartbrowz_template_id: str | None = None
     created_by: uuid.UUID | None = None
+    # The uploader as the Application tier knows them. `created_by` is a
+    # license_members.id, which that tier does not have; the router
+    # resolves this uid to the member row within the license when
+    # `created_by` itself is not given.
+    created_by_chann_uid: str | None = None
 
 
 class DocumentTemplateVersionOut(BaseModel):
@@ -1257,7 +1296,8 @@ class TenantSummaryOut(BaseModel):
     company_name: str
     company_code: str | None
     status: str
-    trial_expires_at: datetime | None
+    expires_at: datetime | None
+    deleted_at: datetime | None = None
     created_at: datetime | None
     owner_chann_uid: str | None
     owner_name: str | None

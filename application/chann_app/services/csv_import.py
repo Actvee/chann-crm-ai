@@ -188,6 +188,10 @@ async def import_customers(client: DataClient, *, license_id: str, text: str, ac
             payload = {k: item[k] for k in ("first_name", "last_name", "phone", "email", "address", "notes") if item.get(k)}
             row = await client.create_customer(license_id, payload, actor_id=actor_id)
             saved += 1
+            # Imported customers are new work for the sales team (round 18).
+            from .sales_dispatch import route_new_customer
+
+            await route_new_customer(client, license_id, row, source="csv", actor_chann_uid=actor_id)
             results.append({"row": item["_row"], "key": row.get("customer_id") or key, "status": "saved", "message": ""})
         except DataTierError as exc:
             structured = getattr(exc, "structured", None) or {}

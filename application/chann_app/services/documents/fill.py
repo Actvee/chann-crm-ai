@@ -22,14 +22,38 @@ _PLACEHOLDER = re.compile(r"\{\{\s*([a-z_]+(?:\.[a-z_]+)*)\s*\}\}", re.IGNORECAS
 
 # The one repeating construct: everything between the markers is emitted
 # once per line item, with {{item.field}} resolved against that item.
+# Spacing and case inside the braces are tolerated for the same reason the
+# placeholder regex tolerates them: `{{ #line_items }}` typed in Word is
+# not a different instruction, and treating it as literal text printed
+# the marker itself on a customer's PDF.
 _ROW_BLOCK = re.compile(
-    r"\{\{#line_items\}\}(.*?)\{\{/line_items\}\}", re.DOTALL | re.IGNORECASE,
+    r"\{\{\s*#\s*line_items\s*\}\}(.*?)\{\{\s*/\s*line_items\s*\}\}",
+    re.DOTALL | re.IGNORECASE,
 )
+
+# Any block marker at all — `{{#name}}` or `{{/name}}`, however spaced or
+# cased — so the ones that are NOT the line-item block can be reported
+# instead of printing raw. The only block this engine knows is
+# `line_items`; anything else is a typo or a construct that does not
+# exist here, and either way it comes out on paper unless someone is
+# told before publishing.
+_BLOCK_MARKER = re.compile(r"\{\{\s*([#/])\s*([a-z_]+)\s*\}\}", re.IGNORECASE)
+KNOWN_BLOCKS = frozenset({"line_items"})
 
 
 def _read_path(data: dict, path: str):
+    """The value at a dotted path, or None.
+
+    The path is lowercased here, in the ONE place every lookup goes
+    through, because the placeholder regex is case-insensitive and
+    `placeholders_in` lowercases what it reports. Resolving the path as
+    typed meant `{{Company.Name}}` validated clean at upload and preview
+    — the check lowercased it — and then filled blank on the customer's
+    PDF, because the filler did not. Validation and filling must agree on
+    what a placeholder means, and they agree here.
+    """
     value = data
-    for part in path.split("."):
+    for part in path.lower().split("."):
         if not isinstance(value, dict):
             return None
         value = value.get(part)
@@ -92,8 +116,31 @@ def placeholders_in(template: str) -> set[str]:
     return {m.group(1).lower() for m in _PLACEHOLDER.finditer(body)}
 
 
+def unknown_blocks(template: str) -> list[str]:
+    """Every block marker that names a block this engine does not have.
+
+    Reported as written — `#line_item`, `/Line_Items` — so the person can
+    find the exact thing they typed. `{{#line_items}}` is the only block;
+    a marker with any other name would print as literal text on the
+    document, and until now nothing said so.
+    """
+    found = []
+    for match in _BLOCK_MARKER.finditer(template):
+        kind, name = match.group(1), match.group(2)
+        if name.lower() in KNOWN_BLOCKS:
+            continue
+        marker = f"{kind}{name}"
+        if marker not in found:
+            found.append(marker)
+    return found
+
+
 def unknown_placeholders(template: str, sample: dict) -> list[str]:
-    """The paths that resolve to nothing against a real snapshot."""
+    """The paths that resolve to nothing against a real snapshot — and,
+    after them, any block marker that is not the line-item block
+    (`unknown_blocks`), because both are things that come out wrong on
+    paper and both are found here, before publishing, or by a customer.
+    """
     unknown = []
     for path in sorted(placeholders_in(template)):
         if path.startswith("item."):
@@ -108,4 +155,5 @@ def unknown_placeholders(template: str, sample: dict) -> list[str]:
             continue
         if _read_path(sample, path) is None:
             unknown.append(path)
+    unknown.extend(unknown_blocks(template))
     return unknown

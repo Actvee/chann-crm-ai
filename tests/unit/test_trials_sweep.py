@@ -36,12 +36,12 @@ class _Client:
     async def aclose(self):
         pass
 
-    async def trials_expiring(self, on_day):
+    async def licenses_expiring(self, on_day):
         if self._expiring_raises:
             raise self._expiring_raises
         return list(self._expiring.get(on_day, []))
 
-    async def expire_due_trials(self):
+    async def expire_due_licenses(self):
         self.expire_calls += 1
         return list(self._overdue)
 
@@ -82,8 +82,8 @@ def no_push(monkeypatch):
 class TestWarnings:
     async def test_three_and_one_day_notices_go_to_the_owner(self, no_push):
         client = _Client(expiring={
-            TODAY + timedelta(days=3): [{"id": LIC_A, "company_name": "ร้านเอ", "trial_expires_at": "2026-09-09T02:00:00+00:00", "owner_chann_uid": "CHN-A"}],
-            TODAY + timedelta(days=1): [{"id": LIC_B, "company_name": "Shop B", "trial_expires_at": "2026-09-07T02:00:00+00:00", "owner_chann_uid": "CHN-B"}],
+            TODAY + timedelta(days=3): [{"id": LIC_A, "company_name": "ร้านเอ", "expires_at": "2026-09-09T02:00:00+00:00", "owner_chann_uid": "CHN-A"}],
+            TODAY + timedelta(days=1): [{"id": LIC_B, "company_name": "Shop B", "expires_at": "2026-09-07T02:00:00+00:00", "owner_chann_uid": "CHN-B"}],
         })
         summary = await trials.sweep_trials(client, today=TODAY)
         assert summary["warned"] == {"3": 1, "1": 1} and summary["expired"] == 0
@@ -120,6 +120,23 @@ class TestExpiry:
         note = client.notifications[-1]
         assert note["type"] == "trial_expired" and note["target_chann_uid"] == "CHN-A"
         assert "หมดอายุแล้ว" in note["message"]
+
+    async def test_an_active_subscription_gets_the_subscription_wording(self, no_push):
+        """Round 18: the product is a subscription, so an active tenant
+        past its date is suspended too — worded as a renewal, not a trial."""
+        client = _Client(
+            expiring={TODAY + timedelta(days=3): [
+                {"id": LIC_B, "company_name": "Shop B", "status": "active", "expires_at": "2026-09-09T02:00:00+00:00", "owner_chann_uid": "CHN-A"},
+            ]},
+            overdue=[{"id": LIC_A, "company_name": "ร้านเอ", "status": "suspended", "status_before": "active", "created_by_chann_uid": "CHN-A"}],
+        )
+        summary = await trials.sweep_trials(client, today=TODAY)
+        assert summary["warned"]["3"] == 1 and summary["expired"] == 1 and summary["expired_ids"] == [LIC_A]
+        warned = next(n for n in client.notifications if n["type"] == "subscription_expiring")
+        assert "การใช้งานระบบของ Shop B จะหมดอายุใน 3 วัน (09/09/2026)" in warned["message"] and "ต่ออายุ" in warned["message"]
+        expired = next(n for n in client.notifications if n["type"] == "subscription_expired")
+        assert expired["target_chann_uid"] == "CHN-A" and "การใช้งานระบบของ ร้านเอ หมดอายุแล้ว" in expired["message"]
+        assert not [n for n in client.notifications if n["type"].startswith("trial_")]
 
     async def test_a_failed_warning_query_does_not_stop_the_suspension(self, no_push):
         client = _Client(overdue=[{"id": LIC_A, "company_name": "A", "created_by_chann_uid": "CHN-A"}], expiring_raises=RuntimeError("data tier down"))

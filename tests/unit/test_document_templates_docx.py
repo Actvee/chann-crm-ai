@@ -321,8 +321,15 @@ class _Store:
         self.objects: dict[str, bytes] = dict(seed or {})
 
     async def put(self, *, key, content, content_type=None):
+        from chann_app.services.storage.base import StoredDocument, sha256_hex
+
         self.objects[key] = content
-        return type("Stored", (), {"path": f"gs://test-bucket/{key}"})()
+        # The real store's return type: the quote issuer records
+        # `.sha256` and `.size` of what it stored, so a bare object with
+        # only a path cannot carry the end-to-end test through issuing.
+        return StoredDocument(
+            path=f"gs://test-bucket/{key}", sha256=sha256_hex(content), size=len(content),
+        )
 
     async def get(self, *, path):
         key = path.removeprefix("gs://test-bucket/")
@@ -721,3 +728,311 @@ class TestTheVersionListLinksBackToTheWordFile:
         assert assets.asset_link("builtin://none") is None
         assert assets.asset_link("upload://html") is None
         assert assets.asset_link("gs://test-bucket/a.docx") is not None
+
+
+# ------------------------------------------------------- round 18 defects
+
+def _header_part(text: str = "", *, image: bool = False) -> dict[str, str]:
+    """A Word header part, as Word writes it, with or without content."""
+    body = _p(_r(text)) if text else _p()
+    if image:
+        body += (
+            '<w:p><w:r><w:drawing><wp:inline xmlns:wp="x"/></w:drawing></w:r></w:p>'
+        )
+    return {
+        "word/header1.xml":
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            f'<w:hdr xmlns:w="{_W}">{body}</w:hdr>',
+    }
+
+
+class TestBlockMarkerSpelling:
+    @pytest.mark.parametrize("open_marker,close_marker", [
+        ("{{ #line_items }}", "{{ /line_items }}"),
+        ("{{#Line_Items}}", "{{/Line_Items}}"),
+        ("{{# line_items}}", "{{/ line_items}}"),
+    ])
+    def test_the_canonical_marker_is_what_gets_stored(self, open_marker, close_marker):
+        """Round 18, defect 2: a loosely typed marker passed through as
+        literal text and printed raw on the PDF."""
+        out = polish_converted_html(f"<p>{open_marker}x{close_marker}</p>")
+        assert "{{#line_items}}x{{/line_items}}" in out
+        assert open_marker not in out or open_marker == "{{#line_items}}"
+
+    def test_a_loosely_typed_marker_in_a_word_table_still_hoists_and_repeats(self):
+        table = (
+            "<w:tbl><w:tr>"
+            f"<w:tc>{_p(_r('{{ #Line_Items }}{{item.product_name}}'))}</w:tc>"
+            f"<w:tc>{_p(_r('{{item.line_total}}{{ /line_items }}'))}</w:tc>"
+            "</w:tr></w:tbl>" + _p(_r(""))
+        )
+        html = convert_docx_to_html(_docx(table), filename="q.docx")
+        assert "{{#line_items}}<tr>" in html and "</tr>{{/line_items}}" in html
+        filled = fill_template(html, sample_snapshot("quote"))
+        assert filled.count("<tr>") == 2
+        assert "{{" not in filled
+
+    def test_an_unknown_block_name_is_reported_on_upload(self, store):
+        http = _app(_Client())
+        response = http.post(_url("/upload"), json={
+            "template_name": "x",
+            "html": "<p>{{#line_item}}{{item.product_name}}{{/line_item}}</p>",
+        })
+        assert response.status_code == 201, response.text
+        body = response.json()
+        assert "#line_item" in body["unknown_placeholders"]
+        assert any("{{#line_item}}" in w for w in body["warnings"])
+
+
+class TestTheDownloadLinkWithoutAPublicBaseUrl:
+    def test_the_link_is_built_from_the_request_when_the_setting_is_unset(
+        self, previewable, monkeypatch,
+    ):
+        """Round 18, defect 3: PUBLIC_BASE_URL has no default, and the
+        versions route passed no base_url — so the download button was
+        absent everywhere but production."""
+        from chann_app import config as app_config
+
+        monkeypatch.setattr(app_config.settings, "public_base_url", "")
+        monkeypatch.setattr(app_config.settings, "jwt_secret", "unit-test-secret")
+        http, _client, _ = previewable
+        rows = http.get(_url(f"/{TEMPLATE_ID}/versions")).json()
+        # TestClient's base is http://testserver.
+        assert rows[0]["source_docx_url"].startswith("http://testserver/api/v1/assets/")
+
+    def test_the_setting_still_wins_when_set(self, previewable, monkeypatch):
+        from chann_app import config as app_config
+
+        monkeypatch.setattr(app_config.settings, "public_base_url", "https://x.test")
+        monkeypatch.setattr(app_config.settings, "jwt_secret", "unit-test-secret")
+        http, _client, _ = previewable
+        rows = http.get(_url(f"/{TEMPLATE_ID}/versions")).json()
+        assert rows[0]["source_docx_url"].startswith("https://x.test/api/v1/assets/")
+
+
+class TestHeadersAndFootersAreNamedAsLost:
+    """Round 18, defect 4: mammoth reads only the body, so a letterhead
+    placed in Word's header vanished from the template in silence."""
+
+    def _upload(self, store, content):
+        return _app(_Client()).post(_url("/upload"), json={
+            "template_name": "หัวจดหมาย",
+            "docx_base64": base64.b64encode(content).decode(),
+            "filename": "q.docx",
+        })
+
+    def test_a_header_with_text_produces_a_warning(self, store):
+        content = _docx(_p(_r("เรียน {{customer.name}}")), parts=_header_part("บริษัท ชาญ แอร์"))
+        response = self._upload(store, content)
+        assert response.status_code == 201, response.text
+        warnings = response.json()["warnings"]
+        assert any("หัวกระดาษ" in w for w in warnings), warnings
+
+    def test_a_header_with_only_an_image_produces_the_warning_too(self, store):
+        content = _docx(_p(_r("x")), parts=_header_part(image=True))
+        assert any("หัวกระดาษ" in w for w in self._upload(store, content).json()["warnings"])
+
+    def test_an_empty_header_part_does_not(self, store):
+        """Word writes an empty header part for a document that once had
+        one; warning about it would teach people to ignore the warning."""
+        content = _docx(_p(_r("x")), parts=_header_part(""))
+        response = self._upload(store, content)
+        assert response.status_code == 201, response.text
+        assert response.json()["warnings"] == []
+
+    def test_the_helper_alone(self):
+        from chann_app.services.documents.docx import HEADER_FOOTER_WARNING_TH, docx_warnings
+
+        assert docx_warnings(_docx(_p(_r("x")), parts=_header_part("ท้าย"))) == [
+            HEADER_FOOTER_WARNING_TH,
+        ]
+        assert docx_warnings(_docx(_p(_r("x")))) == []
+
+
+class TestTheCompiledSizeCap:
+    """Round 18, defect 5: 512,000 characters was less than what a
+    letterhead .docx under the 2 MB input cap compiles to once its
+    images are inlined, and the refusal did not say the images were why."""
+
+    def test_the_cap_matches_the_input_cap(self):
+        from chann_app.services.documents.docx import MAX_COMPILED_CHARS
+
+        assert MAX_COMPILED_CHARS == MAX_DOCX_BYTES == 2_000_000
+
+    def test_a_document_with_images_is_told_the_images_are_the_cause(self):
+        from chann_app.services.documents.docx import _refuse_compiled_size
+
+        error = _refuse_compiled_size("<p>x</p><img src='data:image/png;base64,AAAA'>")
+        assert "รูปภาพ" in error.message_th and "images" in error.message_en
+        assert "ย่อรูป" in error.message_th
+
+    def test_a_text_only_document_is_not_told_to_shrink_images(self):
+        from chann_app.services.documents.docx import _refuse_compiled_size
+
+        error = _refuse_compiled_size("<p>text</p>")
+        assert "images" not in error.message_en
+        assert "รูปภาพ" not in error.message_th
+
+    def test_the_cap_is_still_enforced(self, monkeypatch):
+        from chann_app.services.documents import docx as docx_module
+
+        monkeypatch.setattr(docx_module, "MAX_COMPILED_CHARS", 100)
+        with pytest.raises(DocxConversionError) as caught:
+            convert_docx_to_html(_docx(_p(_r("สวัสดี"))), filename="q.docx")
+        assert "too large" in caught.value.message_en
+
+
+class TestAMissingConverter:
+    """Round 18, defect 6: `import mammoth` was unguarded, so a deployment
+    without it answered 500 to every Word upload."""
+
+    def test_it_is_a_user_facing_rejection_not_a_crash(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "mammoth", None)
+        with pytest.raises(DocxConversionError) as caught:
+            convert_docx_to_html(_docx(_p(_r("x"))), filename="q.docx")
+        assert "Word" in caught.value.message_th
+        assert "not available" in caught.value.message_en
+
+    def test_the_route_answers_400_with_the_sentence(self, store, monkeypatch):
+        monkeypatch.setitem(sys.modules, "mammoth", None)
+        response = _app(_Client()).post(_url("/upload"), json={
+            "template_name": "x",
+            "docx_base64": base64.b64encode(_docx(_p(_r("x")))).decode(),
+            "filename": "q.docx",
+        })
+        assert response.status_code == 400
+        assert "Word" in response.json()["detail"]
+
+
+class TestTheUploaderIsRecorded:
+    def test_created_by_chann_uid_travels_with_the_version(self, store):
+        """Round 18, hygiene: the Data tier resolves this to the member
+        row; the Application tier has to send it."""
+        client = _Client()
+        _app(client).post(_url("/upload"), json={
+            "template_name": "x", "html": "<p>{{company.name}}</p>",
+        })
+        assert client.versions[-1]["created_by_chann_uid"] == "CHN-S-000001"
+
+
+# ------------------------------------------ upload → publish → ออกเอกสาร
+
+class TestFromWordFileToIssuedQuote:
+    """The seam nobody tested: a real synthetic .docx goes through the
+    upload route, is published, and the chat command "ออกเอกสาร" renders
+    a quote from it. The HTML handed to the renderer must carry the
+    filled values and one row per line item."""
+
+    async def test_the_uploaded_layout_is_what_the_customer_receives(
+        self, store, monkeypatch,
+    ):
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from test_phase6_chat import FakeDataClient, _ctx  # noqa: E402
+
+        import chann_app.services.quote_issue as qi
+        from chann_app.services import chat
+
+        class _IssuingClient(FakeDataClient):
+            def __init__(self, **kw):
+                super().__init__(**kw)
+                self.documents: list[dict] = []
+
+            async def record_generated_document(self, license_id, payload, actor_id=None):
+                row = {"id": f"doc-{len(self.documents) + 1}", **payload}
+                self.documents.append(row)
+                return row
+
+            async def link_quote_document(self, license_id, quote_id, document_id, actor_id=None):
+                return {}
+
+            async def transition_quote_status(self, license_id, quote_id, status, actor_id=None):
+                return {}
+
+        client = _IssuingClient(
+            role="sales",
+            permission_keys=["customer.read", "deal.read", "quote.create", "quote.update",
+                             "setting.manage"],
+            customers=[{
+                "id": "CUST-1", "customer_id": "C-2026-0001", "first_name": "สมชาย",
+                "last_name": "ใจดี", "phone": "0812345678", "address": "1 ถนน",
+            }],
+            deals=[{
+                "id": "DEAL-1", "deal_id": "D-2026-0001", "stage": "proposed",
+                "contact_id": "CUST-1", "notes": None,
+                "products": [
+                    {"product_name": "พัดลม", "qty": 2, "quoted_unit_price": "1500.00"},
+                    {"product_name": "ค่าติดตั้ง", "qty": 1, "quoted_unit_price": "500.00"},
+                ],
+            }],
+            quotes=[{
+                "id": "QUOTE-1", "quote_id": "Q-2026-0001", "status": "sent",
+                "deal_id": "DEAL-1", "contact_id": "CUST-1", "items": [], "total": "3500.00",
+            }],
+            company_profile={
+                "legal_name": "บริษัท ทดสอบ จำกัด", "company_name": "ร้านทดสอบ",
+                "tax_id": "0105558123456", "company_address": "99/1",
+                "company_phone": "021234567", "company_email": "a@b.com",
+                "vat_rate": "0.07",
+            },
+        )
+
+        # 1. Upload a real synthetic Word file.
+        table = (
+            "<w:tbl><w:tr>"
+            f"<w:tc>{_p(_r('{{#line_items}}{{item.index}}'))}</w:tc>"
+            f"<w:tc>{_p(_r('{{item.product_name}}'))}</w:tc>"
+            f"<w:tc>{_p(_r('{{item.line_total}}{{/line_items}}'))}</w:tc>"
+            "</w:tr></w:tbl>"
+        )
+        content = _docx(
+            _p(_r("{{company.name}}")) + _p(_r("เรียน {{customer.name}} {{customer.first_name}}"))
+            + table + _p(_r("รวม {{totals.grand_total}}"))
+        )
+        http = _app(client)
+        uploaded = http.post(_url("/upload"), json={
+            "template_name": "ของร้าน", "document_type": "quote",
+            "docx_base64": base64.b64encode(content).decode(), "filename": "q.docx",
+        })
+        assert uploaded.status_code == 201, uploaded.text
+        body = uploaded.json()
+        # `customer.first_name` is not in the snapshot vocabulary (the
+        # snapshot carries `customer.name`), and the upload says so.
+        assert body["unknown_placeholders"] == ["customer.first_name"]
+
+        # 2. Publish it.
+        published = http.post(
+            _url(f"/{body['template_id']}/versions/{body['version_id']}/publish"),
+        )
+        assert published.status_code == 200, published.text
+        assert published.json()["status"] == "published"
+
+        # 3. Issue the quote through chat, with the renderer stubbed.
+        class _Renderer:
+            name = "smartbrowz"
+            last_html = ""
+
+            async def render(self, html, options, idempotency_key):
+                from chann_app.services.pdf.base import PdfResult
+
+                self.last_html = html
+                return PdfResult(content=b"%PDF-1.4 fake", url=None, renderer=self.name)
+
+        renderer = _Renderer()
+        monkeypatch.setattr(qi, "get_document_store", lambda *a, **k: store)
+        monkeypatch.setattr(qi, "get_renderer", lambda *a, **k: renderer)
+
+        reply = await chat.handle_chat_message(
+            client, ctx=_ctx(primary_role="sales", oa="sales"),
+            message="ออกเอกสาร Q-2026-0001", language="th",
+        )
+        assert "เรียบร้อย" in (reply.text or ""), reply.text
+
+        html = renderer.last_html
+        assert "บริษัท ทดสอบ จำกัด" in html          # {{company.name}}
+        assert "เรียน สมชาย ใจดี" in html             # {{customer.name}}
+        assert html.count("<tr>") == 2                # one row per line item
+        assert "พัดลม" in html and "ค่าติดตั้ง" in html
+        assert "3000.00" in html and "500.00" in html  # item.line_total
+        assert "3745.00" in html                      # totals.grand_total
+        assert "{{" not in html
+        assert len(client.documents) == 1

@@ -6,15 +6,15 @@
    "rule": 113
   },
   "sales": {
-   "read": 500,
-   "rule": 40
+   "read": 499,
+   "rule": 41
   },
   "technician": {
    "read": 261,
    "rule": 23
   }
  },
- "reached_model": 992,
+ "reached_model": 991,
  "roads": {
   "customer\t15/9 10.30": true,
   "customer\t55555 โอเค": false,
@@ -691,7 +691,7 @@
   "sales\tทำอะไรกับดีลได้บ้าง": false,
   "sales\tทำใบเสนอราคายังไง": true,
   "sales\tทำใบเสนอราคาให้สมชายหน่อย": true,
-  "sales\tทำไรกับลูกค้าได้บ้าง": true,
+  "sales\tทำไรกับลูกค้าได้บ้าง": false,
   "sales\tทีมช่างครับ": true,
   "sales\tที่อยู่บริษัท 99 ถ.สุขุมวิท กทม": true,
   "sales\tนัดสมชาย ศุกร์นี้ บ่าย 2": true,

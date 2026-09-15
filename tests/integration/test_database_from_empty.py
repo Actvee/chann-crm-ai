@@ -1129,7 +1129,7 @@ class TestPhase65TenantRegistration:
             )
             license_id = row.id
             assert row.status == "trial"
-            assert row.trial_expires_at is not None
+            assert row.expires_at is not None
             assert row.company_code and len(row.company_code) == 8
             # must be typeable off a phone screen / over the phone
             assert not set(row.company_code) & set("01OIL")
@@ -1158,7 +1158,7 @@ class TestPhase65TenantRegistration:
 
             # trial deadline ~30 days out
             lic = session.get(License, license_id)
-            delta = lic.trial_expires_at - lic.created_at
+            delta = lic.expires_at - lic.created_at
             assert 29 <= delta.days <= 30
 
         # one LINE identity, one company
@@ -1667,7 +1667,7 @@ class TestPhase65TenantRegistration:
             )
             license_id = lic.id
             # backdate the deadline rather than sleeping 30 days
-            lic.trial_expires_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+            lic.expires_at = datetime.now(timezone.utc) - timedelta(minutes=1)
             session.commit()
 
         with Session(migrated_db) as session:

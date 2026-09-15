@@ -3,14 +3,17 @@ import { notFound } from "next/navigation";
 import { ADMIN } from "@/lib/admin-copy";
 import { ApplicationError } from "@/lib/api";
 
-import { adminCall, fmtDate, type AuditRow, type TenantDetail } from "../../_server";
+import { adminCall, fmtDate, type AuditRow, type TenantDetail, type TenantSummary } from "../../_server";
 import { TenantActions } from "./TenantActions";
+import { TenantDelete } from "./TenantDelete";
 import { TenantEdit } from "./TenantEdit";
+import { TenantMembers } from "./TenantMembers";
 
 const copy = ADMIN.tenant;
 
-/** Phase 18 — one tenant: who is in it, how big it is, and the two
- *  operator actions (suspend/reopen, break-glass owner transfer). */
+/** Phase 18 — one tenant: who is in it, how big it is, and what the
+ *  operator may do: suspend/reopen, renew, break-glass owner transfer,
+ *  manage members, delete the company (round 18). */
 export default async function AdminTenant({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   let tenant: TenantDetail;
@@ -21,6 +24,8 @@ export default async function AdminTenant({ params }: { params: Promise<{ id: st
     throw error;
   }
   const audit = await adminCall<AuditRow[]>(`/api/v1/platform/audit?license_id=${id}&limit=20`);
+  // Every other live company, for "move this member to…".
+  const tenants = await adminCall<TenantSummary[]>("/api/v1/platform/tenants");
   const activeMembers = tenant.members_detail.filter((m) => m.status === "active");
 
   return (
@@ -48,31 +53,18 @@ export default async function AdminTenant({ params }: { params: Promise<{ id: st
         <TenantActions
           licenseId={tenant.id}
           status={tenant.status}
+          expiresAt={tenant.expires_at}
           ownerChannUid={tenant.owner_chann_uid}
           members={activeMembers}
         />
       </div>
 
-      <section className="pa-card">
-        <h2>{copy.membersTitle} ({tenant.members_detail.length})</h2>
-        <div className="pa-table-wrap">
-          <table className="pa-table">
-            <thead><tr><th>{copy.memberColumns.name}</th><th>{copy.memberColumns.uid}</th><th>{copy.memberColumns.role}</th><th>{copy.memberColumns.status}</th><th>{copy.memberColumns.joined}</th></tr></thead>
-            <tbody>
-              {tenant.members_detail.length === 0 && <tr><td colSpan={5} className="pa-empty">{copy.membersEmpty}</td></tr>}
-              {tenant.members_detail.map((m) => (
-                <tr key={m.chann_uid}>
-                  <td>{m.display_name ?? <span className="pa-muted">—</span>}</td>
-                  <td className="mono">{m.chann_uid}</td>
-                  <td>{m.role}{m.chann_uid === tenant.owner_chann_uid ? ` ${copy.ownerTag}` : ""}</td>
-                  <td><span className={`pa-chip pa-chip-${m.status === "active" ? "active" : "rejected"}`}>{m.status}</span></td>
-                  <td>{fmtDate(m.joined_at)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
+      <TenantMembers
+        licenseId={tenant.id}
+        ownerChannUid={tenant.owner_chann_uid}
+        members={tenant.members_detail}
+        tenants={tenants}
+      />
 
       <section className="pa-card">
         <h2>{copy.auditTitle}</h2>
@@ -94,6 +86,13 @@ export default async function AdminTenant({ params }: { params: Promise<{ id: st
           </table>
         </div>
       </section>
+
+      <TenantDelete
+        licenseId={tenant.id}
+        companyName={tenant.company_name}
+        companyCode={tenant.company_code}
+        status={tenant.status}
+      />
     </>
   );
 }

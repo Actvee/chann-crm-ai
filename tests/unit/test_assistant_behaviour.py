@@ -2210,8 +2210,12 @@ class TestOneShopCard:
 
     def test_the_trial_is_dated_on_the_card(self):
         from chann_app.services.chat import _tenant_status_line
-        line = _tenant_status_line({"status": "trial", "trial_expires_at": "2026-09-30T00:00:00+00:00"}, "th")
-        assert line.startswith("ทดลองใช้") and "30 ก.ย. 2569" in line
+        line = _tenant_status_line({"status": "trial", "expires_at": "2026-09-30T00:00:00+00:00"}, "th")
+        assert line == "ทดลองใช้ (ถึง 30/09/2026)", line
+        # Round 18: the paid subscription is dated the same way.
+        assert _tenant_status_line({"status": "active", "expires_at": "2026-12-31T16:59:59+00:00"}, "th") == "ใช้งานอยู่ (ถึง 31/12/2026)"
+        assert _tenant_status_line({"status": "active", "expires_at": None}, "th") == "ใช้งานอยู่"
+        assert _tenant_status_line({"status": "suspended", "expires_at": "2026-09-30T00:00:00+00:00"}, "th") == "ถูกระงับ"
         assert _tenant_status_line({"status": "suspended"}, "th") == "ถูกระงับ"
         assert _tenant_status_line(None, "th") == "—"
 
@@ -2587,3 +2591,376 @@ class TestTheCustomerHearsTheSignOff:
         await approval._notify_customer_of_approval(client, "L1", report, "https://x/report.pdf")
         told = [n for n in client.recorded if n[0] == "create_notification" and "CHN-C-9" in str(n)]
         assert told and "T-2026-0001" in str(told[-1]) and "report.pdf" in str(told[-1]), client.recorded
+
+
+# ---------------------------------------------------------------- round 18
+# Assignment rules that actually run: the policy command never reaches the
+# router's model, a team assignment lets the rule pick the person, and a new
+# customer goes to a salesperson the way a job goes to a technician.
+
+
+def _rule_ai(**overrides):
+    from test_phase6_chat import _ai
+    import httpx
+    rule = {
+        "version": 1, "scope": "technician",
+        "match_criteria": [{"field": "product.category", "operator": "equals",
+                            "value": "AC", "assign_to_team": "AC Team"}],
+        "selection_strategy": "least_load",
+        "capacity_constraint": {"max_per_day": 5, "mode": "hard_block"},
+    }
+    rule.update(overrides)
+    return httpx.AsyncClient(transport=_ai(json.dumps(rule)))
+
+
+class TestAPolicyCommandNeverGoesToTheRouterModel:
+    """DEV's model read "ตั้งกฎมอบหมาย ช่างแอร์ให้ทีม AC วันละ 5 งาน" as
+    "create a team called AC" and did it (14 Sep 2026): the sentence
+    reached the router's model before the policy dispatcher."""
+
+    def test_the_gate_names_the_reason(self):
+        assert chat._deterministic_reason("ตั้งกฎมอบหมาย ช่างแอร์ให้ทีม AC วันละ 5 งาน", "sales", None) == "policy"
+        assert chat._deterministic_reason("ตั้งการอนุมัติ ใบเสนอราคาเกิน 50000 ต้องให้เจ้าของอนุมัติ", "sales", None) == "policy"
+        assert chat._deterministic_reason("ยืนยันกฎ", "sales", None) == "policy"
+        assert chat._deterministic_reason("ดูกฎมอบหมาย", "sales", None) == "policy"
+        # Not on the Technician OA, and not an ordinary sentence.
+        assert chat._deterministic_reason("ตั้งกฎมอบหมาย …", "technician", None) is None
+        assert chat._deterministic_reason("มอบหมาย T-2026-0001 ให้ทีมแอร์", "sales", None) is None
+
+    @pytest.mark.asyncio
+    async def test_the_policy_is_translated_not_executed(self):
+        from test_phase6_chat import FakeDataClient, _ctx
+        from chann_app.services.chat import handle_chat_message
+        client = FakeDataClient(permission_keys=["setting.manage", "team.manage"])
+        client._teams = [{"id": "team-1", "team_name": "AC Team"}]
+        # The only model call is the policy translation: whatever the router
+        # model would have said, no team is created and a rule is offered.
+        reply = await handle_chat_message(
+            client, message="ตั้งกฎมอบหมาย ช่างแอร์ให้ทีม AC Team วันละ 5 งาน",
+            ctx=_ctx(), ai_client=_rule_ai(),
+        )
+        assert not [r for r in client.recorded if r[0] == "create_technician_team"], client.recorded
+        assert "ยืนยันกฎ" in [q[0] for q in reply.quick_replies], reply.text
+
+
+class TestARuleMayOnlyNameATeamThatExists:
+    @pytest.mark.asyncio
+    async def test_an_unknown_sales_group_is_refused_with_the_list(self):
+        from test_phase6_chat import FakeDataClient, _ctx
+        from chann_app.services.chat import handle_chat_message
+        client = FakeDataClient(permission_keys=["setting.manage"])
+        client._sales_groups = [{"id": "sg-1", "group_name": "ขาย A"}]
+        reply = await handle_chat_message(
+            client, message="ตั้งกฎมอบหมาย ลูกค้าใหม่ให้ทีมขายองค์กร", ctx=_ctx(),
+            ai_client=_rule_ai(scope="sales", match_criteria=[{
+                "field": "customer.stage", "operator": "equals", "value": "lead",
+                "assign_to_team": "ทีมขายองค์กร"}], capacity_constraint=None),
+        )
+        assert "ไม่มีกลุ่มขายชื่อ" in reply.text and "ขาย A" in reply.text, reply.text
+        assert not [r for r in client.recorded if r[0] == "upsert_assignment_rule"]
+
+    @pytest.mark.asyncio
+    async def test_a_known_group_is_offered_in_its_own_spelling(self):
+        from test_phase6_chat import FakeDataClient, _ctx
+        from chann_app.services.chat import handle_chat_message
+        client = FakeDataClient(permission_keys=["setting.manage"])
+        client._sales_groups = [{"id": "sg-1", "group_name": "ขาย A"}]
+        reply = await handle_chat_message(
+            client, message="ตั้งกฎมอบหมาย ลูกค้าใหม่ให้กลุ่ม ขาย a สลับกัน", ctx=_ctx(),
+            ai_client=_rule_ai(scope="sales", selection_strategy="round_robin", match_criteria=[{
+                "field": "customer.stage", "operator": "equals", "value": "lead",
+                "assign_to_team": "ขาย a"}], capacity_constraint=None),
+        )
+        assert "ฝ่ายขาย" in reply.text and "ทีม ขาย A" in reply.text, reply.text
+
+
+class TestATeamAssignmentLetsTheRulePickThePerson:
+    def _client(self):
+        from test_phase6_chat import FakeDataClient
+        client = FakeDataClient(permission_keys=["ticket.update", "ticket.assign"])
+        client._tickets = [{"id": "tk-1", "ticket_number": "T-2026-0001", "status": "open",
+                            "product_category": "AC", "product_name": "แอร์ 18000 BTU"}]
+        client._teams = [{"id": "team-1", "team_name": "ทีมแอร์"}]
+        client._members = [{"id": "m9", "chann_uid": "CHN-T-000009", "role": "technician",
+                            "status": "active", "display_name": "ช่างเก่ง"}]
+        return client
+
+    @pytest.mark.asyncio
+    async def test_with_a_rule_one_member_of_the_team_gets_it(self):
+        from test_phase6_chat import _ctx
+        from chann_app.services.chat import handle_chat_message
+        client = self._client()
+        client._assignment_rules = [{"id": "r1", "scope": "technician", "is_active": True, "rules_json": {}}]
+        client._assignment_outcome = {"member_id": "m9", "reason": "selected by least_load; load 0/5", "matched_team": "ทีมแอร์"}
+        reply = await handle_chat_message(client, message="มอบหมาย T-2026-0001 ให้ทีมแอร์", ctx=_ctx())
+        asked = client.assignment_requests[-1]
+        assert asked["team_name"] == "ทีมแอร์" and asked["entity_type"] == "service_ticket", asked
+        assert asked["context"]["product"]["category"] == "AC"
+        assigned = [r for r in client.recorded if r[0] == "assign_ticket"][-1]
+        assert assigned[3] == "technician" and assigned[4] == "m9", assigned
+        assert "ช่างเก่ง" in reply.text and "ทีมแอร์" in reply.text and "กฎมอบหมาย" in reply.text, reply.text
+
+    @pytest.mark.asyncio
+    async def test_without_a_rule_the_whole_team_is_told(self):
+        from test_phase6_chat import _ctx
+        from chann_app.services.chat import handle_chat_message
+        client = self._client()
+        await handle_chat_message(client, message="มอบหมาย T-2026-0001 ให้ทีมแอร์", ctx=_ctx())
+        assert not getattr(client, "assignment_requests", [])
+        assigned = [r for r in client.recorded if r[0] == "assign_ticket"][-1]
+        assert assigned[3] == "technician_team", assigned
+
+    @pytest.mark.asyncio
+    async def test_a_rule_that_finds_nobody_in_the_team_falls_back_to_the_broadcast(self):
+        from test_phase6_chat import _ctx
+        from chann_app.services.chat import handle_chat_message
+        client = self._client()
+        client._assignment_rules = [{"id": "r1", "scope": "technician", "is_active": True, "rules_json": {}}]
+        client._assignment_outcome = {"member_id": "owner-1", "reason": "no active candidate in scope; assigned to owner/admin", "used_fallback": True}
+        await handle_chat_message(client, message="มอบหมาย T-2026-0001 ให้ทีมแอร์", ctx=_ctx())
+        assigned = [r for r in client.recorded if r[0] == "assign_ticket"][-1]
+        assert assigned[3] == "technician_team", assigned
+
+
+class TestANewCustomerGoesToTheSalesRule:
+    def _client(self):
+        from test_phase6_chat import FakeDataClient
+        client = FakeDataClient(permission_keys=["customer.create", "customer.read"])
+        client._assignment_rules = [{"id": "r2", "scope": "sales", "is_active": True, "rules_json": {}}]
+        client._assignment_outcome = {"member_id": "m2", "reason": "selected by round_robin"}
+        client._members = [{"id": "m2", "chann_uid": "CHN-S-000002", "role": "sales", "status": "active", "display_name": "พี่ขาย"}]
+        return client
+
+    def _create_ai(self):
+        from test_phase6_chat import _ai
+        import httpx
+        return httpx.AsyncClient(transport=_ai(json.dumps({
+            "action": "create", "entity": "customer",
+            "fields": {"first_name": "สมชาย", "last_name": "ใจดี", "phone": "0812345678"}, "missing": []})))
+
+    @pytest.mark.asyncio
+    async def test_the_owner_adds_a_customer_and_the_rule_hands_it_out(self):
+        from test_phase6_chat import _ctx
+        from chann_app.services.chat import handle_chat_message
+        client = self._client()
+        reply = await handle_chat_message(
+            client, message="เพิ่มลูกค้า สมชาย ใจดี 0812345678", ctx=_ctx(), ai_client=self._create_ai(),
+        )
+        asked = client.assignment_requests[-1]
+        assert asked["scope"] == "sales" and asked["entity_type"] == "customer", asked
+        assert asked["context"]["customer"] == {"stage": "lead", "source": "staff"}, asked
+        assert "พี่ขาย" in reply.text and "กฎมอบหมาย" in reply.text, reply.text
+        told = [r for r in client.recorded if r[0] == "create_notification"]
+        assert told and told[-1][3] == "customer_assigned" and told[-1][2] == "CHN-S-000002", told
+
+    @pytest.mark.asyncio
+    async def test_a_salesperson_keeps_the_customer_they_added(self, monkeypatch):
+        from test_phase6_chat import _ctx
+        from chann_app.services.chat import handle_chat_message
+        client = self._client()
+
+        async def as_sales(license_id, chann_uid, channel=None):
+            return {"id": "m2", "chann_uid": chann_uid, "role": "sales", "status": "active"}
+        monkeypatch.setattr(client, "get_member", as_sales)
+        reply = await handle_chat_message(
+            client, message="เพิ่มลูกค้า สมชาย ใจดี 0812345678", ctx=_ctx(), ai_client=self._create_ai(),
+        )
+        assert not getattr(client, "assignment_requests", []), reply.text
+        assert "กฎมอบหมาย" not in reply.text
+
+    @pytest.mark.asyncio
+    async def test_without_a_sales_rule_nothing_changes(self):
+        from test_phase6_chat import _ctx
+        from chann_app.services.chat import handle_chat_message
+        client = self._client()
+        client._assignment_rules = []
+        reply = await handle_chat_message(
+            client, message="เพิ่มลูกค้า สมชาย ใจดี 0812345678", ctx=_ctx(), ai_client=self._create_ai(),
+        )
+        assert not getattr(client, "assignment_requests", []), reply.text
+
+    @pytest.mark.asyncio
+    async def test_a_customer_who_linked_on_line_is_routed_too(self):
+        from chann_app.services.onboarding import after_customer_linked
+        from test_backend_fixes import _Client, _shop
+        client = _Client(permission_keys=["customer.create"])
+        _shop(client)
+        client._assignment_rules = [{"id": "r2", "scope": "sales", "is_active": True, "rules_json": {}}]
+        client._assignment_outcome = {"member_id": "m2", "reason": "selected by round_robin"}
+        client._members = [{"id": "m2", "chann_uid": "CHN-S-000002", "role": "sales", "status": "active", "display_name": "พี่ขาย"}]
+        client._profiles = {"CHN-C-000001": {"first_name": "สมหญิง", "last_name": "ดีใจ", "phone": "0899999999"}}
+        client._settings = [{"setting_key": "auto_accept_new_customers", "setting_value": True}]
+        result = await after_customer_linked(client, license_id=LICENSE_ID, chann_uid="CHN-C-000001", display_name="สมหญิง")
+        assert result["created"] is True, result
+        asked = client.assignment_requests[-1]
+        assert asked["context"]["customer"]["source"] == "line", asked
+        # The salesperson is told, and the shop's own notice names them.
+        texts = [n.get("message") or "" for n in client.notifications]
+        assert any("ตามกฎมอบหมาย" in t for t in texts), texts
+
+
+# ------------------------------------------------ owner's diary test, 14 ก.ย.
+# "ลงนัดหมายกับลูกค้าสิงสระ วันที่ 17" → "พรุ่งนี้มีนัดอะไรบ้าง" listed every
+# appointment; "นัดพรุ่งนี้" opened a form and the next question was
+# answered as "เปลี่ยนจากตั้งนัดเป็นตั้งนัดแล้วครับ"; the note on the
+# reminder read "Hannah ลง หมายกับลู ้า Hannah เดือนนี้ให้หน่อย".
+
+
+def _diary_client(**kw):
+    from datetime import timedelta
+    from test_phase6_chat import FakeDataClient
+    from chann_app.services.thai_datetime import local_today
+    client = FakeDataClient(permission_keys=["followup.read", "followup.create", "customer.read", "deal.read", "ticket.read"], **kw)
+    today = local_today()
+    client._follow_ups = [
+        {"id": "FU-1", "entity_type": "customer", "entity_id": "CUST-1", "due_date": (today + timedelta(days=1)).isoformat(),
+         "due_time": "09:00:00", "notes": "สิงสระ", "status": "pending", "owner_chann_uid": "CHN-S-000001"},
+        {"id": "FU-2", "entity_type": "customer", "entity_id": "CUST-1", "due_date": (today + timedelta(days=2)).isoformat(),
+         "due_time": "09:00:00", "notes": "สุดใจ", "status": "pending", "owner_chann_uid": "CHN-S-000001"},
+    ]
+    return client, today
+
+
+class TestADayNamedInTheQuestionIsTheWholeQuestion:
+    def test_the_window_is_read_from_the_sentence(self):
+        from datetime import date, timedelta
+        today = date(2026, 9, 16)
+        assert chat._diary_window("พรุ่งนี้มีนัดอะไรบ้าง", today)[:2] == (date(2026, 9, 17), date(2026, 9, 17))
+        assert chat._diary_window("วันนี้มีนัดไหม", today)[:2] == (today, today)
+        assert chat._diary_window("นัดสัปดาห์นี้", today)[:2] == (date(2026, 9, 14), date(2026, 9, 20))
+        assert chat._diary_window("มีนัดเดือนนี้กี่นัด", today)[:2] == (date(2026, 9, 1), date(2026, 9, 30))
+        assert chat._diary_window("นัดวันที่ 18", today)[:2] == (date(2026, 9, 18), date(2026, 9, 18))
+        assert chat._diary_window("นัดหมายทั้งหมด", today) is None
+        assert today + timedelta(days=1) == date(2026, 9, 17)
+
+    @pytest.mark.asyncio
+    async def test_tomorrow_lists_only_tomorrow_on_the_model_road(self):
+        from test_phase6_chat import _ai, _ctx
+        from chann_app.services.chat import handle_chat_message
+        import httpx
+        client, today = _diary_client()
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "read", "entity": "report", "fields": {"type": "agenda", "period": "tomorrow"}, "missing": []})))
+        reply = await handle_chat_message(client, message="พรุ่งนี้มีนัดอะไรบ้าง", ctx=_ctx(), ai_client=ai)
+        assert "สิงสระ" in reply.text and "สุดใจ" not in reply.text, reply.text
+        assert "พรุ่งนี้" in reply.text and "1 รายการ" in reply.text, reply.text
+
+    @pytest.mark.asyncio
+    async def test_tomorrow_lists_only_tomorrow_as_a_followup_read(self):
+        from test_phase6_chat import _ai, _ctx
+        from chann_app.services.chat import handle_chat_message
+        import httpx
+        client, today = _diary_client()
+        ai = httpx.AsyncClient(transport=_ai(json.dumps({"action": "read", "entity": "followup", "fields": {}, "missing": []})))
+        reply = await handle_chat_message(client, message="นัดหมายพรุ่งนี้", ctx=_ctx(), ai_client=ai)
+        assert "สิงสระ" in reply.text and "สุดใจ" not in reply.text, reply.text
+
+    @pytest.mark.asyncio
+    async def test_a_day_with_nothing_says_which_day(self):
+        from test_phase6_chat import _ai, _ctx
+        from chann_app.services.chat import handle_chat_message
+        import httpx
+        client, today = _diary_client()
+        ai = httpx.AsyncClient(transport=_ai(json.dumps({"action": "read", "entity": "followup", "fields": {}, "missing": []})))
+        reply = await handle_chat_message(client, message="วันนี้มีนัดไหม", ctx=_ctx(), ai_client=ai)
+        assert reply.text.startswith("วันนี้") and "ไม่มีนัด" in reply.text, reply.text
+        assert "นัดหมายทั้งหมด" in [q[1] for q in reply.quick_replies]
+
+    @pytest.mark.asyncio
+    async def test_the_whole_diary_is_still_there(self):
+        from test_phase6_chat import _ai, _ctx
+        from chann_app.services.chat import handle_chat_message
+        import httpx
+        client, today = _diary_client()
+        ai = httpx.AsyncClient(transport=_ai(json.dumps({"action": "read", "entity": "followup", "fields": {}, "missing": []})))
+        reply = await handle_chat_message(client, message="นัดหมายทั้งหมด", ctx=_ctx(), ai_client=ai)
+        assert "สิงสระ" in reply.text and "สุดใจ" in reply.text and "2 รายการ" in reply.text, reply.text
+
+
+class TestAQuestionMidFormIsNotASwitch:
+    @pytest.mark.asyncio
+    async def test_the_diary_is_answered_and_the_form_stays_open(self):
+        from test_phase6_chat import _ai, _ctx
+        from chann_app.services.chat import handle_chat_message
+        import httpx
+        client, today = _diary_client()
+        await client.set_pending_intent("CHN-S-000001", "sales", action="create", entity="followup",
+                                        fields={"due_date": (today + __import__("datetime").timedelta(days=1)).isoformat()},
+                                        missing=["target_name"])
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "read", "entity": "report", "fields": {"type": "agenda", "period": "tomorrow"}, "missing": []})))
+        reply = await handle_chat_message(client, message="พรุ่งนี้มีนัดอะไรบ้าง", ctx=_ctx(), ai_client=ai)
+        assert "เปลี่ยนจาก" not in reply.text, reply.text
+        assert "สิงสระ" in reply.text, reply.text
+        assert await client.get_pending_intent("CHN-S-000001", "sales") is not None, "the form was dropped"
+
+    def test_a_switch_to_the_same_flow_says_nothing(self):
+        pending = {"entity": "followup", "action": "create", "missing": ["target_name"]}
+        assert chat._switch_notice(pending, "นัดพรุ่งนี้", "th", {"action": "create", "entity": "followup"}) == ""
+        assert chat._switch_notice(pending, "สร้างดีล", "th", {"action": "create", "entity": "deal"}).startswith("เปลี่ยนจาก")
+
+
+class TestTheReminderKeepsWhatItIsAbout:
+    def test_month_abbreviations_do_not_eat_ordinary_words(self):
+        subject = chat._reminder_subject("ลงนัดหมายกับลูกค้า Hannah วันที่ 17 เดือนนี้ให้หน่อย", "C-2026-0004")
+        assert "ลูกค้า" in subject and "ลู ้า" not in subject, subject
+        assert subject.startswith("กับลูกค้า") or "Hannah" in subject, subject
+
+    @pytest.mark.asyncio
+    async def test_the_models_reading_of_the_subject_is_kept(self):
+        from test_phase6_chat import _ai, _ctx
+        from chann_app.services.chat import handle_chat_message
+        import httpx
+        client, today = _diary_client(customers=[{"id": "CUST-1", "customer_id": "C-2026-0022", "first_name": "สิงสระ", "last_name": "วานนุสร", "phone": "0811111111", "stage": "lead"}])
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "create", "entity": "followup",
+             "fields": {"target_name": "สิงสระ", "due_date": today.replace(day=min(28, today.day)).isoformat(), "notes": "นัดหมายลูกค้า"}, "missing": []})))
+        reply = await handle_chat_message(client, message="ลงนัดหมายกับลูกค้าสิงสระ วันที่ 28 ให้หน่อย", ctx=_ctx(), ai_client=ai)
+        created = [r for r in client.recorded if r[0] == "create_follow_up"]
+        if not created:
+            pytest.skip(f"the fixture could not book: {reply.text}")
+        # recover_free_text swaps the model's retyping for the person's own
+        # words, so either spelling is fine — what must not appear is the
+        # sentence with letters cut out of it.
+        notes = str(created[-1][2].get("notes") or "")
+        assert notes in ("นัดหมายลูกค้า", "นัดหมายกับลูกค้า"), created[-1]
+
+
+class TestACataloguePriceChangesWithoutADeal:
+    @pytest.mark.asyncio
+    async def test_a_named_product_and_no_deal_in_view_is_the_catalogue(self):
+        from test_phase6_chat import FakeDataClient, _ai, _ctx
+        from chann_app.services.chat import handle_chat_message
+        import httpx
+        client = FakeDataClient(permission_keys=["product.manage", "product.read", "deal.read", "deal.update", "quote.read", "quote.update"])
+        client._products = [{"id": "P-1", "product_id": "CHAIR1", "product_name": "เก้าอี้", "unit_price": 350, "sku": None, "category": None, "description": None}]
+        ai = httpx.AsyncClient(transport=_ai(json.dumps(
+            {"action": "update", "entity": "line_item", "fields": {"target_name": "เก้าอี้", "quoted_unit_price": 299}, "missing": []})))
+        reply = await handle_chat_message(client, message="แก้ราคาสินค้าเก้าอี้เป็น 299", ctx=_ctx(), ai_client=ai)
+        saved = [r for r in client.recorded if r[0] == "upsert_product"]
+        assert saved and float(saved[-1][3].get("unit_price")) == 299.0, (reply.text, client.recorded[-5:])
+        assert "299" in reply.text and "เก้าอี้" in reply.text, reply.text
+
+    def test_the_colloquial_capability_question_is_help(self):
+        assert chat._deterministic_reason("ทำไรได้บ้างอะ", "sales", None) == "help"
+        assert chat._deterministic_reason("ทำไรได้บ้าง", "sales", None) == "help"
+
+
+class TestADesignedTemplatesFileLinksToWhereItIsStored:
+    @pytest.mark.asyncio
+    async def test_the_link_carries_the_stores_path(self, monkeypatch):
+        from chann_app.services import assets
+        from chann_app.services.storage.base import StoredDocument
+        seen = {}
+
+        class Store:
+            async def put(self, *, key, content, content_type):
+                return StoredDocument(path=f"gs://chann1-document-actvee-dev/{key}", sha256="x", size=len(content))
+
+        def link(path, **kw):
+            seen["path"] = path
+            return "https://example/asset"
+        monkeypatch.setattr(assets, "asset_link", link)
+        url = await chat._template_asset_link(Store(), path="lic/templates/t/v-design.docx", content=b"x", content_type="application/x")
+        assert url == "https://example/asset"
+        assert seen["path"] == "gs://chann1-document-actvee-dev/lic/templates/t/v-design.docx", seen

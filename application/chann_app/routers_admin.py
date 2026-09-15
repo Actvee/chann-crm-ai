@@ -653,9 +653,10 @@ async def run_trial_sweep(
     client: DataClient = Depends(get_data_client),
 ):
     """Master Spec 17.5.4: warn the owner 3 days and 1 day before a trial
-    ends, then suspend what is overdue. Same shared-secret auth as the
-    other sweeps; the Data Tier has been able to suspend since Phase 6.5
-    but nothing called it (review E3)."""
+    OR a paid subscription ends, then suspend what is overdue (round 18:
+    the path keeps its trial-era name because scheduler.tf points at it).
+    Same shared-secret auth as the other sweeps; the Data Tier has been
+    able to suspend since Phase 6.5 but nothing called it (review E3)."""
     from .services.trials import sweep_trials
 
     return await sweep_trials(client)
@@ -813,7 +814,7 @@ def _admin_uuid(admin: dict) -> str | None:
 # The platform's own operator: every tenant, one tenant, suspend/reopen,
 # the cross-tenant audit trail, and break-glass by body (18.3).
 
-TENANT_STATUSES = ("trial", "active", "suspended")
+TENANT_STATUSES = ("trial", "active", "suspended", "deleted")
 
 
 @router.get("/platform/tenants")
@@ -840,7 +841,11 @@ async def platform_tenant(
     return row
 
 
-TENANT_TEXT_FIELDS = ("company_name", "legal_name", "company_phone", "company_email", "company_address", "tax_id")
+TENANT_TEXT_FIELDS = (
+    "company_name", "legal_name", "company_phone", "company_email", "company_address", "tax_id",
+    # Round 18: the operator's own notes — platform-only, never shown to the tenant.
+    "admin_notes",
+)
 _BANGKOK = timezone(timedelta(hours=7))
 
 
@@ -858,7 +863,7 @@ def _trial_deadline(value) -> tuple[bool, "datetime | None"]:
         parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
         return False, parsed if parsed.tzinfo else parsed.replace(tzinfo=_BANGKOK)
     except ValueError:
-        raise HTTPException(status_code=422, detail={"error": "invalid_trial_expires_at",
+        raise HTTPException(status_code=422, detail={"error": "invalid_expires_at",
                                                       "message": "use YYYY-MM-DD or an ISO date-time"})
 
 
@@ -870,14 +875,16 @@ async def platform_tenant_update(
     client: DataClient = Depends(get_data_client),
 ):
     """Suspend / reopen (18.1) and, since 7 Sep 2026, edit the tenant:
-    trial deadline and the shop's own details. A status-only body keeps
-    the original status route; anything more goes through one audited
-    PATCH on the Data tier."""
+    the subscription deadline and the shop's own details. A status-only
+    body keeps the original status route; anything more goes through one
+    audited PATCH on the Data tier. Round 18: `expires_at` is the name
+    (`trial_expires_at` still accepted), `admin_notes` is editable, and a
+    status of trial/active on a soft-deleted tenant restores it."""
     new_status = body.get("status")
     if new_status is not None:
         new_status = str(new_status).strip()
         if new_status not in TENANT_STATUSES:
-            raise HTTPException(status_code=422, detail="status must be one of trial, active, suspended")
+            raise HTTPException(status_code=422, detail="status must be one of trial, active, suspended, deleted")
     changes: dict = {}
     for key in TENANT_TEXT_FIELDS:
         if key in body:
@@ -887,12 +894,13 @@ async def platform_tenant_update(
         raise HTTPException(status_code=422, detail={"error": "company_name_required"})
     if "company_email" in changes and changes["company_email"] and "@" not in changes["company_email"]:
         raise HTTPException(status_code=422, detail={"error": "invalid_company_email"})
-    if "trial_expires_at" in body:
-        clear, deadline = _trial_deadline(body.get("trial_expires_at"))
+    expiry_key = "expires_at" if "expires_at" in body else ("trial_expires_at" if "trial_expires_at" in body else None)
+    if expiry_key:
+        clear, deadline = _trial_deadline(body.get(expiry_key))
         if clear:
-            changes["clear_trial_expires_at"] = True
+            changes["clear_expires_at"] = True
         else:
-            changes["trial_expires_at"] = deadline.isoformat()
+            changes["expires_at"] = deadline.isoformat()
     actor = str(admin.get("sub") or "")
     try:
         if not changes:
@@ -905,6 +913,130 @@ async def platform_tenant_update(
     except DataTierError as exc:
         code = exc.status_code if 400 <= exc.status_code < 500 else 502
         raise HTTPException(status_code=code, detail={"error": "tenant_update_failed", "reason": exc.detail}) from exc
+
+
+def _platform_refusal(exc: DataTierError, error: str) -> HTTPException:
+    """The Data tier's own status and reason for a 4xx; 502 otherwise."""
+    code = exc.status_code if 400 <= exc.status_code < 500 else 502
+    return HTTPException(status_code=code, detail={"error": error, "reason": exc.structured or exc.detail})
+
+
+@router.post("/platform/tenants/{license_id}/extend")
+async def platform_tenant_extend(
+    license_id: str,
+    body: dict,
+    admin: dict = Depends(require_admin),
+    client: DataClient = Depends(get_data_client),
+):
+    """Round 18: renew the subscription — expires_at = max(now, current
+    expiry) + days (1..3650). The status stays; a suspended tenant
+    reopens."""
+    try:
+        days = int(body.get("days"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail={"error": "invalid_days", "message": "days must be 1..3650"})
+    if not 1 <= days <= 3650:
+        raise HTTPException(status_code=422, detail={"error": "invalid_days", "message": "days must be 1..3650"})
+    try:
+        return await client.extend_tenant(license_id, days, actor_id=str(admin.get("sub") or ""))
+    except DataTierError as exc:
+        raise _platform_refusal(exc, "tenant_extend_failed") from exc
+
+
+@router.delete("/platform/tenants/{license_id}")
+async def platform_tenant_delete(
+    license_id: str,
+    purge: bool = False,
+    admin: dict = Depends(require_admin),
+    client: DataClient = Depends(get_data_client),
+):
+    """Round 18: soft delete by default (status "deleted", members
+    removed, hidden from the list, reversible through PATCH status);
+    purge=true removes every row of the company for good. Purging
+    needs the break_glass permission — it is the one irreversible thing
+    the console can do."""
+    if purge and "platform.admin.break_glass" not in admin.get("permissions", []):
+        raise HTTPException(status_code=403, detail="permission required: platform.admin.break_glass")
+    try:
+        return await client.delete_tenant(license_id, purge=purge, actor_id=str(admin.get("sub") or ""))
+    except DataTierError as exc:
+        raise _platform_refusal(exc, "tenant_delete_failed") from exc
+
+
+# ------------------------------------------- members from the console (round 18)
+
+@router.patch("/platform/tenants/{license_id}/members/{chann_uid}/role")
+async def platform_member_role(
+    license_id: str,
+    chann_uid: str,
+    body: dict,
+    admin: dict = Depends(require_admin),
+    client: DataClient = Depends(get_data_client),
+):
+    """Any role but owner (owner moves through break-glass only; the
+    Data tier answers 409 for either direction)."""
+    role = str(body.get("role") or body.get("role_name") or "").strip()
+    if not role:
+        raise HTTPException(status_code=422, detail={"error": "role_required"})
+    if role.lower() == "owner":
+        raise HTTPException(status_code=409, detail={
+            "error": "owner_via_break_glass",
+            "reason": "the owner role is only assigned through break-glass transfer",
+        })
+    try:
+        return await client.platform_set_member_role(license_id, chann_uid, role, actor_id=str(admin.get("sub") or ""))
+    except DataTierError as exc:
+        raise _platform_refusal(exc, "member_role_failed") from exc
+
+
+@router.patch("/platform/tenants/{license_id}/members/{chann_uid}/status")
+async def platform_member_status(
+    license_id: str,
+    chann_uid: str,
+    body: dict,
+    admin: dict = Depends(require_admin),
+    client: DataClient = Depends(get_data_client),
+):
+    """Remove or reactivate. The owner's row is refused (409); a removed
+    technician's open jobs return to the queue and come back in
+    `unassigned_tickets`."""
+    new_status = str(body.get("status") or "").strip()
+    if new_status not in ("active", "removed"):
+        raise HTTPException(status_code=422, detail={"error": "invalid_status", "message": "status must be active or removed"})
+    try:
+        return await client.platform_set_member_status(license_id, chann_uid, new_status, actor_id=str(admin.get("sub") or ""))
+    except DataTierError as exc:
+        raise _platform_refusal(exc, "member_status_failed") from exc
+
+
+@router.post("/platform/tenants/{license_id}/members/{chann_uid}/move")
+async def platform_member_move(
+    license_id: str,
+    chann_uid: str,
+    body: dict,
+    admin: dict = Depends(require_admin),
+    client: DataClient = Depends(get_data_client),
+):
+    """Removed here, added to the target with the given role on the same
+    channel — one Data-tier transaction, audited on both licenses.
+    Owner rows are refused; so is someone already in the target."""
+    target = str(body.get("target_license_id") or "").strip()
+    role = str(body.get("role") or body.get("role_name") or "").strip()
+    if not target or not role:
+        raise HTTPException(status_code=422, detail={"error": "target_and_role_required"})
+    if target == license_id:
+        raise HTTPException(status_code=422, detail={"error": "same_company"})
+    if role.lower() == "owner":
+        raise HTTPException(status_code=409, detail={
+            "error": "owner_via_break_glass",
+            "reason": "the owner role is only assigned through break-glass transfer",
+        })
+    try:
+        return await client.platform_move_member(
+            license_id, chann_uid, target_license_id=target, role_name=role, actor_id=str(admin.get("sub") or ""),
+        )
+    except DataTierError as exc:
+        raise _platform_refusal(exc, "member_move_failed") from exc
 
 
 @router.get("/platform/audit")

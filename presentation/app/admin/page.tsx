@@ -2,7 +2,9 @@ import { ADMIN } from "@/lib/admin-copy";
 
 import { adminCall, fmtDate, type TenantSummary } from "./_server";
 
-const STATUSES = ["", "active", "trial", "suspended"] as const;
+// "deleted" is only listed when asked for: the Application tier hides
+// soft-deleted companies from the default list (round 18).
+const STATUSES = ["", "active", "trial", "suspended", "deleted"] as const;
 const copy = ADMIN.tenants;
 
 /** Phase 18.1 — every tenant, searchable, with its size at a glance. */
@@ -42,7 +44,7 @@ export default async function AdminTenants({
         </div>
         <div className="pa-metric">
           <div className="pa-metric-label">{copy.suspended}</div>
-          <div className="pa-metric-value">{count("suspended")}</div>
+          <div className="pa-metric-value">{count("suspended")}{status === "deleted" && <small>{copy.deletedShort} {count("deleted")}</small>}</div>
         </div>
         <div className="pa-metric">
           <div className="pa-metric-label">{copy.members}</div>

@@ -68,12 +68,12 @@ class TestPlatformRepositoryUpdate:
         deadline = datetime(2026, 9, 30, 16, 59, 59, tzinfo=timezone.utc)
         with Session(migrated_db) as session:
             before, row = PlatformRepository(session).update(
-                license_id, {"company_phone": " 021234567 ", "trial_expires_at": deadline, "status": "active"},
+                license_id, {"company_phone": " 021234567 ", "expires_at": deadline, "status": "active"},
             )
             session.commit()
             assert before["company_phone"] is None and before["status"] == "trial"
             assert row.company_phone == "021234567" and row.status == "active"
-            assert row.trial_expires_at == deadline
+            assert row.expires_at == deadline
         with Session(migrated_db) as session:
             data = PlatformRepository(session).tenant(license_id)
             assert data["company_phone"] == "021234567" and data["status"] == "active"
@@ -84,8 +84,10 @@ class TestPlatformRepositoryUpdate:
 
         with Session(migrated_db) as session:
             repo = PlatformRepository(session)
+            # "deleted" became a real status in round 18 (soft delete); an
+            # unknown word is still refused.
             with pytest.raises(ValueError):
-                repo.update(license_id, {"status": "deleted"})
+                repo.update(license_id, {"status": "bogus"})
             with pytest.raises(ValueError):
                 repo.update(license_id, {"company_name": "   "})
             with pytest.raises(ValueError):
@@ -107,22 +109,54 @@ class TestDataRoute:
     def test_patch_audits_a_cross_tenant_row_and_returns_the_tenant(self, migrated_db, license_id, data_client):
         res = data_client.patch(
             f"/internal/v1/platform/tenants/{license_id}",
-            json={"company_name": "Edited Shop", "trial_expires_at": "2026-10-15T23:59:59+07:00"},
+            json={"company_name": "Edited Shop", "expires_at": "2026-10-15T23:59:59+07:00"},
             headers={"X-Actor-Id": "admin-1"},
         )
         assert res.status_code == 200, res.text
         body = res.json()
-        assert body["company_name"] == "Edited Shop" and body["trial_expires_at"].startswith("2026-10-15T")
+        assert body["company_name"] == "Edited Shop" and body["expires_at"].startswith("2026-10-15T")
         assert "members_detail" in body
         audit = data_client.get(f"/internal/v1/platform/audit?license_id={license_id}&cross_tenant=true").json()
         row = [r for r in audit if r["action"] == "update" and r["entity_type"] == "license"][0]
         assert row["actor_type"] == "platform_admin" and row["actor_id"] == "admin-1"
         assert row["field_changes"]["company_name"]["new"] == "Edited Shop"
-        assert "trial_expires_at" in row["field_changes"]
+        assert "expires_at" in row["field_changes"]
 
     def test_clearing_the_deadline_and_empty_bodies(self, migrated_db, license_id, data_client):
-        res = data_client.patch(f"/internal/v1/platform/tenants/{license_id}", json={"clear_trial_expires_at": True})
-        assert res.status_code == 200 and res.json()["trial_expires_at"] is None
+        res = data_client.patch(f"/internal/v1/platform/tenants/{license_id}", json={"clear_expires_at": True})
+        assert res.status_code == 200 and res.json()["expires_at"] is None
         assert data_client.patch(f"/internal/v1/platform/tenants/{license_id}", json={}).status_code == 422
         assert data_client.patch(f"/internal/v1/platform/tenants/{license_id}", json={"status": "gone"}).status_code == 422
         assert data_client.patch(f"/internal/v1/platform/tenants/{uuid.uuid4()}", json={"company_name": "x"}).status_code == 404
+
+
+class TestRound18Fields:
+    """Round 18 — NOT RUN in the authoring session (no Postgres); the
+    data route speaks `expires_at`, accepts the old name, and carries
+    `admin_notes` / `deleted_at`."""
+
+    def test_old_name_alias_and_admin_notes(self, migrated_db, license_id, data_client):
+        res = data_client.patch(f"/internal/v1/platform/tenants/{license_id}",
+                                json={"trial_expires_at": "2026-11-30T23:59:59+07:00", "admin_notes": " paid to Nov "})
+        assert res.status_code == 200, res.text
+        body = res.json()
+        assert body["expires_at"].startswith("2026-11-30T") and body["admin_notes"] == "paid to Nov"
+        assert data_client.patch(f"/internal/v1/platform/tenants/{license_id}", json={"clear_trial_expires_at": True}).json()["expires_at"] is None
+
+    def test_extend_and_delete_routes(self, migrated_db, license_id, data_client):
+        res = data_client.post(f"/internal/v1/platform/tenants/{license_id}/extend", json={"days": 30}, headers={"X-Actor-Id": "admin-1"})
+        assert res.status_code == 200, res.text and res.json()["expires_at"]
+        assert data_client.post(f"/internal/v1/platform/tenants/{license_id}/extend", json={"days": 0}).status_code == 422
+        res = data_client.delete(f"/internal/v1/platform/tenants/{license_id}", headers={"X-Actor-Id": "admin-1"})
+        assert res.status_code == 200 and res.json()["status"] == "deleted" and res.json()["deleted_at"]
+        assert all(m["status"] == "removed" for m in res.json()["members_detail"])
+        assert data_client.get("/internal/v1/platform/tenants").json() == [] or license_id not in {
+            r["id"] for r in data_client.get("/internal/v1/platform/tenants").json()}
+        assert data_client.post(f"/internal/v1/platform/tenants/{license_id}/extend", json={"days": 30}).status_code == 409
+        res = data_client.patch(f"/internal/v1/platform/tenants/{license_id}", json={"status": "active"})
+        assert res.status_code == 200 and res.json()["status"] == "active" and res.json()["deleted_at"] is None
+        res = data_client.delete(f"/internal/v1/platform/tenants/{license_id}?purge=true", headers={"X-Actor-Id": "admin-1"})
+        assert res.status_code == 200 and res.json()["purged"] is True
+        assert data_client.get(f"/internal/v1/platform/tenants/{license_id}").status_code == 404
+        audit = data_client.get("/internal/v1/platform/audit?cross_tenant=true&action=delete").json()
+        assert any(r["entity_id"] == str(license_id) and r["license_id"] is None for r in audit)

@@ -100,6 +100,26 @@ class Cache:
         except redis.RedisError:
             log.warning("cache invalidation failed for keys=%s", keys)
 
+    def invalidate_matching(self, *patterns: str) -> int:
+        """Delete every key matching the glob patterns (SCAN, never KEYS).
+        Best-effort like invalidate(): a purge that could not clear Redis
+        still purged Postgres, and every per-license key has a TTL anyway.
+        Returns how many keys went."""
+        gone = 0
+        try:
+            for pattern in patterns:
+                batch: list[str] = []
+                for key in self.client.scan_iter(match=pattern, count=500):
+                    batch.append(key)
+                    if len(batch) >= 500:
+                        gone += int(self.client.delete(*batch) or 0)
+                        batch = []
+                if batch:
+                    gone += int(self.client.delete(*batch) or 0)
+        except redis.RedisError:
+            log.warning("cache pattern invalidation failed for patterns=%s", patterns)
+        return gone
+
     def invalidate_required(self, *keys: str) -> None:
         try:
             if keys:
@@ -125,6 +145,21 @@ def k_permissions(license_id: str, chann_uid: str, channel: str = "sales") -> st
 
 def k_license_setting(license_id: str, setting_key: str) -> str:
     return f"license_setting:{license_id}:{setting_key}"
+
+
+def k_license_patterns(license_id: str) -> tuple[str, ...]:
+    """Every per-license key family, as glob patterns, for a purge (round
+    18). Kept next to the builders so a new per-license key is added here
+    in the same edit. `active_tenant` is per person and not listed: it is
+    only honoured while the id is still among the person's memberships."""
+    return (
+        f"license_member:{license_id}:*",
+        f"permissions:{license_id}:*",
+        f"license_setting:{license_id}:*",
+        f"recent_turns:{license_id}:*",
+        f"last_customer_ref:{license_id}:*",
+        f"last_entity_ref:{license_id}:*",
+    )
 
 
 def k_admin_session(session_id: str) -> str:

@@ -20,9 +20,12 @@ from sqlalchemy.orm import Session
 
 from ..models import (
     AssignmentRule,
+    Customer,
     Deal,
     License,
     LicenseMember,
+    SalesGroup,
+    SalesGroupMember,
     TechnicianTeam,
     TechnicianTeamMember,
 )
@@ -31,6 +34,18 @@ from .tenant_scope import TenantScope
 
 class AssignmentRuleNotFound(Exception):
     pass
+
+
+def _candidate(member: LicenseMember) -> dict:
+    """What the engine sees of a member. `last_assigned_at` is the
+    round_robin key (0029); a never-assigned member sorts first."""
+    stamp = member.last_assigned_at
+    return {
+        "id": str(member.id),
+        "chann_uid": member.chann_uid,
+        "role": member.role,
+        "last_assigned_at": stamp.isoformat() if stamp else "",
+    }
 
 
 class AssignmentRuleRepository:
@@ -86,7 +101,7 @@ class AssignmentRuleRepository:
     # ------------------------------------------------------------ members
 
     def team_members(
-        self, scope: TenantScope, *, team_name: str,
+        self, scope: TenantScope, *, team_name: str, rule_scope: str = "technician",
     ) -> list[dict]:
         """Active members of a named team, as plain dicts for the engine.
 
@@ -94,26 +109,41 @@ class AssignmentRuleRepository:
         testable without a database — the ordering and capacity logic is
         where the bugs would be, and it should not need a session to
         exercise.
+
+        A "sales" rule names a sales GROUP (Phase 7), a "technician" rule a
+        technician TEAM (Phase 12): until round 18 (14 Sep 2026) only the
+        team tables were consulted, so a sales rule could never find
+        anyone.
         """
-        rows = self._s.execute(
-            select(LicenseMember, TechnicianTeamMember)
-            .join(
-                TechnicianTeamMember,
-                TechnicianTeamMember.member_id == LicenseMember.id,
+        if rule_scope == "sales":
+            query = (
+                select(LicenseMember)
+                .join(SalesGroupMember, SalesGroupMember.member_id == LicenseMember.id)
+                .join(SalesGroup, SalesGroup.id == SalesGroupMember.group_id)
+                .where(
+                    LicenseMember.license_id == scope.license_id,
+                    SalesGroup.license_id == scope.license_id,
+                    SalesGroup.group_name == team_name,
+                    LicenseMember.status == "active",
+                )
             )
-            .join(TechnicianTeam, TechnicianTeam.id == TechnicianTeamMember.team_id)
-            .where(
-                LicenseMember.license_id == scope.license_id,
-                TechnicianTeam.license_id == scope.license_id,
-                TechnicianTeam.team_name == team_name,
-                LicenseMember.status == "active",
+        else:
+            query = (
+                select(LicenseMember)
+                .join(
+                    TechnicianTeamMember,
+                    TechnicianTeamMember.member_id == LicenseMember.id,
+                )
+                .join(TechnicianTeam, TechnicianTeam.id == TechnicianTeamMember.team_id)
+                .where(
+                    LicenseMember.license_id == scope.license_id,
+                    TechnicianTeam.license_id == scope.license_id,
+                    TechnicianTeam.team_name == team_name,
+                    LicenseMember.status == "active",
+                )
             )
-            .order_by(LicenseMember.id)
-        ).all()
-        return [
-            {"id": str(member.id), "chann_uid": member.chann_uid, "role": member.role}
-            for member, _link in rows
-        ]
+        rows = self._s.execute(query.order_by(LicenseMember.id)).scalars().all()
+        return [_candidate(member) for member in rows]
 
     def team_members_with_lead(
         self, scope: TenantScope, *, team_id: uuid.UUID,
@@ -159,17 +189,38 @@ class AssignmentRuleRepository:
         ).scalars()
         return list(rows)
 
-    def active_members(self, scope: TenantScope, *, role: str | None = None) -> list[dict]:
+    def active_members(
+        self, scope: TenantScope, *, role: str | None = None, channel: str | None = None,
+    ) -> list[dict]:
+        """`channel` is the OA the membership belongs to ("sales" |
+        "technician") — the same words as a rule's scope, which is what
+        the no-criterion-matched fallback filters on. Without it the
+        fallback pool for a technician rule was the whole staff list,
+        salespeople included (round 18)."""
         query = select(LicenseMember).where(
             LicenseMember.license_id == scope.license_id,
             LicenseMember.status == "active",
         )
         if role:
             query = query.where(LicenseMember.role == role)
+        if channel:
+            query = query.where(LicenseMember.channel == channel)
         return [
-            {"id": str(m.id), "chann_uid": m.chann_uid, "role": m.role}
+            _candidate(m)
             for m in self._s.execute(query.order_by(LicenseMember.id)).scalars()
         ]
+
+    def touch_assigned(self, scope: TenantScope, member_id: uuid.UUID, *, now: datetime | None = None) -> None:
+        """Stamp the member the engine just picked, so round_robin has the
+        memory its ordering reads (0029)."""
+        row = self._s.execute(
+            select(LicenseMember).where(
+                LicenseMember.id == member_id, LicenseMember.license_id == scope.license_id,
+            )
+        ).scalars().first()
+        if row is not None:
+            row.last_assigned_at = now or datetime.now(timezone.utc)
+            self._s.flush()
 
     def owner_members(self, scope: TenantScope) -> list[dict]:
         """Who to fall back to when nobody else can take the work.
@@ -187,7 +238,7 @@ class AssignmentRuleRepository:
             )
             .order_by(LicenseMember.role, LicenseMember.id)
         ).scalars()
-        return [{"id": str(m.id), "chann_uid": m.chann_uid, "role": m.role} for m in rows]
+        return [_candidate(m) for m in rows]
 
     # ----------------------------------------------------------- capacity
 
@@ -222,10 +273,12 @@ class AssignmentRuleRepository:
         ids = [uuid.UUID(m) for m in member_ids]
         start = datetime.combine(on_day, time.min, tzinfo=timezone.utc)
         end = start + timedelta(days=1)
-        if entity_type == "ticket":
+        if entity_type in ("ticket", "service_ticket"):
             # Technicians own no deals, so their load was always 0 and the
             # per-day cap never bit (review, 6 Sep 2026): count the jobs
-            # given to them for that day.
+            # given to them for that day. Both spellings: the caller says
+            # "service_ticket" (the entity's own name), and the one-word
+            # form here silently sent it down the deal branch (round 18).
             from ..models import ServiceTicket
             from sqlalchemy import and_, or_
 
@@ -248,6 +301,21 @@ class AssignmentRuleRepository:
             ).all()
             loads = {str(member_id): count for member_id, count in rows}
             return {m: loads.get(m, 0) for m in member_ids}
+        if entity_type == "customer":
+            # A sales rule hands out new customers (leads): the day's load
+            # is how many the person was given today.
+            rows = self._s.execute(
+                select(Customer.owner_member_id, func.count(Customer.id))
+                .where(
+                    Customer.license_id == scope.license_id,
+                    Customer.owner_member_id.in_(ids),
+                    Customer.created_at >= start,
+                    Customer.created_at < end,
+                )
+                .group_by(Customer.owner_member_id)
+            ).all()
+            loads = {str(member_id): count for member_id, count in rows}
+            return {m: loads.get(m, 0) for m in member_ids}
         rows = self._s.execute(
             select(Deal.owner_member_id, func.count(Deal.id))
             .where(
@@ -261,6 +329,18 @@ class AssignmentRuleRepository:
         loads = {str(member_id): count for member_id, count in rows}
         # Absent means zero, and the engine should not have to know that.
         return {m: loads.get(m, 0) for m in member_ids}
+
+    def assign_customer(
+        self, scope: TenantScope, customer_id: uuid.UUID, member_id: uuid.UUID,
+    ) -> Customer:
+        row = self._s.execute(
+            select(Customer).where(Customer.id == customer_id, Customer.license_id == scope.license_id)
+        ).scalars().first()
+        if row is None:
+            raise AssignmentRuleNotFound("customer not found in this tenant")
+        row.owner_member_id = member_id
+        self._s.flush()
+        return row
 
     def assign_deal(
         self, scope: TenantScope, deal_id: uuid.UUID, member_id: uuid.UUID,

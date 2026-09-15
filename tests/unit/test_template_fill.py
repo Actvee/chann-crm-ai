@@ -11,12 +11,15 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "application"))
 
 from chann_app.services.documents.fill import (  # noqa: E402
     fill_template,
     placeholders_in,
+    unknown_blocks,
     unknown_placeholders,
 )
 
@@ -146,3 +149,48 @@ class TestPlaceholderReporting:
         <p>{{totals.grand_total}}</p>
         """
         assert unknown_placeholders(template, SNAPSHOT) == []
+
+
+class TestCaseOfAPlaceholder:
+    """The regex is case-insensitive and the validator lowercases what it
+    reports — so `{{Company.Name}}` validated clean at upload and preview
+    and then filled BLANK on the customer's PDF, because the filler
+    looked the path up exactly as typed. Round 18, defect 1."""
+
+    def test_a_capitalised_placeholder_fills_the_same_as_a_lowercase_one(self):
+        snapshot = {"company": {"name": "ร้านแอร์ดี"}}
+        assert fill_template("{{Company.Name}}", snapshot) == fill_template(
+            "{{company.name}}", snapshot,
+        ) == "ร้านแอร์ดี"
+
+    def test_validation_and_filling_agree(self):
+        """What the validator passes, the filler must fill."""
+        template = "{{Quote.Quote_ID}} {{#line_items}}{{Item.Name}}{{/line_items}}"
+        assert unknown_placeholders(template, SNAPSHOT) == []
+        assert fill_template(template, SNAPSHOT) == "Q-2026-0001 พัดลมค่าติดตั้ง"
+
+
+class TestMalformedBlockMarkers:
+    """`{{ #line_items }}` and `{{#Line_Items}}` used to pass through as
+    literal text and print on the PDF, unreported. Round 18, defect 2."""
+
+    @pytest.mark.parametrize("open_marker,close_marker", [
+        ("{{ #line_items }}", "{{ /line_items }}"),
+        ("{{#Line_Items}}", "{{/Line_Items}}"),
+        ("{{# line_items}}", "{{/ line_items}}"),
+    ])
+    def test_a_loosely_typed_row_block_still_repeats(self, open_marker, close_marker):
+        out = fill_template(
+            f"{open_marker}<li>{{{{item.name}}}}</li>{close_marker}", SNAPSHOT,
+        )
+        assert out == "<li>พัดลม</li><li>ค่าติดตั้ง</li>"
+
+    def test_a_block_that_does_not_exist_is_reported(self):
+        unknown = unknown_placeholders(
+            "{{#line_item}}{{item.name}}{{/line_item}} {{ #Rows }}x{{/rows}}", SNAPSHOT,
+        )
+        assert "#line_item" in unknown and "/line_item" in unknown
+        assert "#Rows" in unknown and "/rows" in unknown
+
+    def test_the_line_item_block_is_not_reported_however_it_is_spelled(self):
+        assert unknown_blocks("{{ #Line_Items }}x{{/line_items}}") == []

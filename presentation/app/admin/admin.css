@@ -153,6 +153,7 @@
 .pa-chip-active { background: var(--pa-accent-soft); color: #86efac; border-color: #1f5a3a; }
 .pa-chip-trial { background: var(--pa-info-soft); color: #93c5fd; border-color: #24467a; }
 .pa-chip-suspended { background: var(--pa-danger-soft); color: #fca5a5; border-color: #7f2e2e; }
+.pa-chip-deleted { background: var(--pa-muted); color: var(--pa-ink-soft); border-color: var(--pa-line-strong); text-decoration: line-through; }
 .pa-chip-pending { background: var(--pa-warn-soft); color: #fcd34d; border-color: #6b4f0e; }
 .pa-chip-completed { background: var(--pa-accent-soft); color: #86efac; border-color: #1f5a3a; }
 .pa-chip-rejected, .pa-chip-processing { background: var(--pa-muted); color: var(--pa-ink-soft); border-color: var(--pa-line-strong); }

@@ -108,6 +108,15 @@ async def after_customer_linked(
             log.exception("auto-create of a linked customer failed")
     created = customer is not None
     customer_code = str((customer or {}).get("customer_id") or "")
+    # A customer who arrived on their own is exactly the work the sales
+    # rule exists to hand out (round 18). Best-effort, after the row exists.
+    routed = None
+    if customer is not None and not linked:
+        from .sales_dispatch import route_new_customer
+
+        routed = await route_new_customer(
+            client, license_id, customer, source="line", actor_chann_uid=None, language=language,
+        )
 
     head = f"ลูกค้าใหม่ผูกร้านผ่าน LINE: {shown}" + (f" · {phone}" if phone else "")
     head_en = f"New customer linked via LINE: {shown}" + (f" · {phone}" if phone else "")
@@ -117,6 +126,9 @@ async def after_customer_linked(
     elif created:
         text = head + "\nเพิ่มเข้ารายชื่อลูกค้าให้แล้ว (ตั้งค่ารับลูกค้าใหม่อัตโนมัติ: เปิด)"
         text_en = head_en + "\nAdded to your customer list (auto-accept new customers: on)"
+        if routed:
+            text += f"\nมอบหมายให้ {routed.get('name')} ดูแล (ตามกฎมอบหมาย)"
+            text_en += f"\nAssigned to {routed.get('name')} by the assignment rule"
     elif auto:
         text = (
             f"ลูกค้าใหม่ผูกร้านผ่าน LINE: {shown}\n"

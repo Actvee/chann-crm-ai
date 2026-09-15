@@ -20,15 +20,17 @@ function fieldsOf(tenant: TenantDetail): TenantEditFields {
     company_email: tenant.company_email ?? "",
     company_address: tenant.company_address ?? "",
     tax_id: tenant.tax_id ?? "",
-    trial_expires_at: bangkokDay(tenant.trial_expires_at),
+    admin_notes: tenant.admin_notes ?? "",
+    expires_at: bangkokDay(tenant.expires_at),
     status: tenant.status,
   };
 }
 
 /** The shop's details, readable at a glance and editable in place: name,
- *  legal name, phone, email, address, tax id, the trial deadline and the
- *  trial/active status. Suspending stays with the actions card. Until
- *  7 Sep 2026 none of this could be changed from the console. */
+ *  legal name, phone, email, address, tax id, the subscription's end
+ *  date (any status — round 18), the operator's own notes and the
+ *  trial/active status. Suspending stays with the actions card; a
+ *  soft-deleted company is restored here by picking trial/active. */
 export function TenantEdit({ tenant }: { tenant: TenantDetail }) {
   const router = useRouter();
   const initial = fieldsOf(tenant);
@@ -92,9 +94,11 @@ export function TenantEdit({ tenant }: { tenant: TenantDetail }) {
           <dt>{copy.email}</dt><dd>{tenant.company_email ?? "—"}</dd>
           <dt>{edit.address_shown}</dt><dd>{tenant.company_address ?? "—"}</dd>
           <dt>{edit.taxId_shown}</dt><dd>{tenant.tax_id ?? "—"}</dd>
-          <dt>{copy.trialUntil}</dt><dd>{fmtDate(tenant.trial_expires_at)}</dd>
+          <dt>{copy.trialUntil}</dt><dd>{fmtDate(tenant.expires_at)}</dd>
+          {tenant.deleted_at && <><dt>{copy.deletedAt}</dt><dd>{fmtDate(tenant.deleted_at)}</dd></>}
           <dt>{copy.created}</dt><dd>{fmtDate(tenant.created_at)}</dd>
           <dt>{copy.lastActivity}</dt><dd>{fmtDate(tenant.last_activity_at)}</dd>
+          <dt>{copy.adminNotes}</dt><dd style={{ whiteSpace: "pre-wrap" }}>{tenant.admin_notes?.trim() ? tenant.admin_notes : "—"}</dd>
         </dl>
         {note && <p className={`pa-note pa-note-${note.tone}`} role="status">{note.text}</p>}
       </section>
@@ -124,7 +128,7 @@ export function TenantEdit({ tenant }: { tenant: TenantDetail }) {
           <textarea value={form.company_address} onChange={(e) => set("company_address", e.target.value)} disabled={busy} />
         </label>
         <label className="pa-field">{edit.trialUntil}
-          <input type="date" value={form.trial_expires_at} onChange={(e) => set("trial_expires_at", e.target.value)} disabled={busy} />
+          <input type="date" value={form.expires_at} onChange={(e) => set("expires_at", e.target.value)} disabled={busy} />
           <span className="pa-muted" style={{ fontSize: 12 }}>{edit.trialHint}</span>
         </label>
         <label className="pa-field">{edit.status}
@@ -132,8 +136,13 @@ export function TenantEdit({ tenant }: { tenant: TenantDetail }) {
             <option value="trial">{ADMIN.status.trial}</option>
             <option value="active">{ADMIN.status.active}</option>
             {tenant.status === "suspended" && <option value="suspended">{ADMIN.status.suspended}</option>}
+            {tenant.status === "deleted" && <option value="deleted">{ADMIN.status.deleted}</option>}
           </select>
           <span className="pa-muted" style={{ fontSize: 12 }}>{edit.statusHint}</span>
+        </label>
+        <label className="pa-field" style={{ flexBasis: "100%" }}>{edit.adminNotes}
+          <textarea value={form.admin_notes} onChange={(e) => set("admin_notes", e.target.value)} disabled={busy} rows={3} />
+          <span className="pa-muted" style={{ fontSize: 12 }}>{edit.adminNotesHint}</span>
         </label>
       </div>
       <div className="pa-actions" style={{ marginTop: 12 }}>

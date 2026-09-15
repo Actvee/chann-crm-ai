@@ -6,32 +6,62 @@ import { useRouter } from "next/navigation";
 import { ADMIN } from "@/lib/admin-copy";
 
 import { adminCall } from "../../_client";
-import type { TenantMember } from "../../_types";
+import { fmtDate, isExpired, type TenantMember } from "../../_types";
 
 type Note = { text: string; tone: "ok" | "error" } | null;
 const copy = ADMIN.tenant.actions;
 
-/** The two things an operator may do to a tenant (18.1, 18.4). Both ask
- *  for a confirmation; both are audited by the Data tier. */
+/** What an operator may do to a tenant: suspend/reopen (18.1), renew the
+ *  subscription (round 18), break-glass owner transfer (18.4). Every
+ *  action asks for a confirmation; every one is audited by the Data tier. */
 export function TenantActions({
   licenseId,
   status,
+  expiresAt,
   ownerChannUid,
   members,
 }: {
   licenseId: string;
   status: string;
+  expiresAt: string | null;
   ownerChannUid: string | null;
   members: TenantMember[];
 }) {
   const router = useRouter();
-  const [busy, setBusy] = useState<"" | "status" | "transfer">("");
+  const [busy, setBusy] = useState<"" | "status" | "extend" | "transfer">("");
   const [note, setNote] = useState<Note>(null);
   const [target, setTarget] = useState("");
   const suspended = status === "suspended";
+  const deleted = status === "deleted";
+  const expired = isExpired(expiresAt);
   const candidates = members.filter((m) => m.chann_uid !== ownerChannUid);
 
+  async function extend(days: number, { reopen = false } = {}) {
+    if (!window.confirm(reopen ? copy.confirmReopenExpired : copy.confirmExtend(days))) return;
+    setBusy(reopen ? "status" : "extend");
+    setNote(null);
+    try {
+      const res = await adminCall(`/api/admin/tenants/${licenseId}/extend`, { days });
+      if (!res.ok) {
+        if (res.status === 401) return;
+        setNote({ text: res.reason ? `${copy.failed} · ${copy.reason(res.reason)}` : copy.failed, tone: "error" });
+        return;
+      }
+      const until = (res.body as { expires_at?: string | null } | null)?.expires_at ?? null;
+      setNote({ text: reopen ? copy.reopenedExtended : copy.extended(days, fmtDate(until)), tone: "ok" });
+      router.refresh();
+    } finally {
+      setBusy("");
+    }
+  }
+
   async function setStatus(next: "active" | "suspended") {
+    // Reopening a shop whose subscription already ended would suspend it
+    // again on the next sweep — so the reopen renews 30 days and says so.
+    if (next === "active" && expired) {
+      await extend(30, { reopen: true });
+      return;
+    }
     if (!window.confirm(next === "suspended" ? copy.confirmSuspend : copy.confirmReopen)) return;
     setBusy("status");
     setNote(null);
@@ -79,18 +109,37 @@ export function TenantActions({
   return (
     <section className="pa-card">
       <h2>{copy.title}</h2>
-      <div className="pa-actions">
-        {suspended ? (
-          <button type="button" className="pa-btn pa-btn-primary" disabled={busy !== ""} onClick={() => void setStatus("active")}>
-            {busy === "status" ? copy.working : copy.reopen}
-          </button>
-        ) : (
-          <button type="button" className="pa-btn pa-btn-danger" disabled={busy !== ""} onClick={() => void setStatus("suspended")}>
-            {busy === "status" ? copy.working : copy.suspend}
-          </button>
-        )}
-      </div>
+      {deleted ? (
+        <p className="pa-note pa-note-error" role="status">{copy.deletedNote}</p>
+      ) : (
+        <div className="pa-actions">
+          {suspended ? (
+            <button type="button" className="pa-btn pa-btn-primary" disabled={busy !== ""} onClick={() => void setStatus("active")}>
+              {busy === "status" ? copy.working : copy.reopen}
+            </button>
+          ) : (
+            <button type="button" className="pa-btn pa-btn-danger" disabled={busy !== ""} onClick={() => void setStatus("suspended")}>
+              {busy === "status" ? copy.working : copy.suspend}
+            </button>
+          )}
+        </div>
+      )}
       <p className="pa-muted" style={{ margin: "8px 0 18px", fontSize: 13 }}>{copy.note}</p>
+
+      <h2>{copy.subscriptionTitle}</h2>
+      <p style={{ margin: "0 0 8px" }}>
+        {copy.expiresOn}: <strong>{expiresAt ? fmtDate(expiresAt) : copy.noExpiry}</strong>
+        {expired && <span className="pa-chip pa-chip-suspended" style={{ marginLeft: 8 }}>{copy.expired}</span>}
+      </p>
+      <div className="pa-actions">
+        <button type="button" className="pa-btn pa-btn-primary" disabled={busy !== "" || deleted} onClick={() => void extend(30)}>
+          {busy === "extend" ? copy.working : copy.extend30}
+        </button>
+        <button type="button" className="pa-btn" disabled={busy !== "" || deleted} onClick={() => void extend(365)}>
+          {busy === "extend" ? copy.working : copy.extend365}
+        </button>
+      </div>
+      <p className="pa-muted" style={{ margin: "8px 0 18px", fontSize: 13 }}>{copy.extendNote}</p>
 
       <h2>{copy.breakGlassTitle}</h2>
       <div className="pa-filters" style={{ marginBottom: 0 }}>
