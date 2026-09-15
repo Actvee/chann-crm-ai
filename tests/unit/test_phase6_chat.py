@@ -998,6 +998,12 @@ class FakeDataClient:
             "deal_id": deal_id, "contact_id": payload["contact_id"],
             "stage": "new", "owner_member_id": None, "notes": payload.get("notes"),
             "products": [],
+            # Mirrors DealOut (audit, 15 ก.ย. 2569): the real row keeps the
+            # value and the close date, and the amount filters read them —
+            # a fake that dropped them made "ดีลเกิน 1 หมื่น" answer "ไม่มี"
+            # right after a 15,000 deal was created.
+            "amount": payload.get("amount"), "currency": payload.get("currency") or "THB",
+            "expected_close_date": payload.get("expected_close_date"),
         }
         self._deals.append(row)
         return row

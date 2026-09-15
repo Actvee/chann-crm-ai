@@ -3371,3 +3371,122 @@ class TestADifferentApplianceIsANewMatterEvenOnTheSameSerial:
         assert chat._same_machine_as(job, "ตู้เย็นไม่เย็น", "ONLY00001") is False
         assert chat._same_machine_as(job, "แอร์มีเสียงดัง", "ONLY00001") is True
         assert chat._same_machine_as(job, "น้ำหยด", "ONLY00001") is True
+
+
+class TestCompoundThaiAmountsAreOneNumber:
+    def test_two_magnitude_groups_fold(self):
+        assert chat._normalise_message("มูลค่า 1 หมื่น 5 พัน") == "มูลค่า 15000"
+        assert chat._normalise_message("มูลค่า 2 แสน 5 หมื่น") == "มูลค่า 250000"
+        assert chat._normalise_message("ดีลเกิน 1 หมื่น 5 พัน 500") == "ดีลเกิน 15500"
+        # One group is left to the amount reader, a size is untouched.
+        assert chat._normalise_message("มูลค่า 1 หมื่น") == "มูลค่า 1 หมื่น"
+        assert chat._normalise_message("แอร์ 12000 BTU 2 เครื่อง") == "แอร์ 12000 BTU 2 เครื่อง"
+
+
+class TestInterestAfterViewingACustomerOffersADeal:
+    @pytest.mark.asyncio
+    async def test_the_line_item_reading_becomes_the_deal_offer(self):
+        from test_phase6_chat import FakeDataClient, _ai, _ctx
+        from chann_app.services.chat import handle_chat_message
+        import httpx
+        # deal.update too: the model's line_item reading passes the deal
+        # gate first, as it would for a real salesperson.
+        client = FakeDataClient(permission_keys=["customer.read", "deal.create", "deal.read", "deal.update", "product.read"],
+                                customers=[{"id": "CUST-3", "customer_id": "C-2026-0003", "first_name": "วิชัย", "last_name": "มั่นคง", "phone": "0861234567", "stage": "lead"}])
+        view = httpx.AsyncClient(transport=_ai(json.dumps({"action": "read", "entity": "customer", "fields": {"target_name": "วิชัย"}, "missing": []})))
+        await handle_chat_message(client, message="ขอดูข้อมูลคุณวิชัยหน่อยค่ะ", ctx=_ctx(), ai_client=view)
+        # DEV's model read the next sentence as a line item.
+        line = httpx.AsyncClient(transport=_ai(json.dumps({"action": "create", "entity": "line_item", "fields": {"target_name": "พัดลม", "qty": 1}, "missing": []})))
+        reply = await handle_chat_message(client, message="ลูกค้าคนนี้สนใจพัดลม 1 ตัว", ctx=_ctx(), ai_client=line)
+        assert "สร้างดีล" in reply.text and "วิชัย" in reply.text, reply.text
+        assert [send for _l, send in reply.quick_replies] == ["ใช่", "ไม่ใช่"], reply.quick_replies
+        assert not [r for r in client.recorded if r[0] == "set_pending_intent" and r[3] == "line_item"], reply.text
+
+
+class TestACodeFiledAsANameIsStillACode:
+    @pytest.mark.asyncio
+    async def test_editing_a_phone_by_code_in_thai_digits(self):
+        from test_phase6_chat import FakeDataClient, _ai, _ctx
+        from chann_app.services.chat import handle_chat_message
+        import httpx
+        client = FakeDataClient(permission_keys=["customer.read", "customer.update"],
+                                customers=[{"id": "CUST-2", "customer_id": "C-2026-0002", "first_name": "วิชัย", "last_name": "มั่นคง", "phone": "0861234567", "stage": "lead"}])
+        ai = httpx.AsyncClient(transport=_ai(json.dumps({"action": "update", "entity": "customer", "fields": {"target_name": "C-2026-0002", "phone": "0899999999"}, "missing": []})))
+        reply = await handle_chat_message(client, message="แก้เบอร์ C-2026-0002 เป็น ๐๘๙๙๙๙๙๙๙๙", ctx=_ctx(), ai_client=ai)
+        saved = [r for r in client.recorded if r[0] == "update_customer"]
+        assert saved and saved[-1][3].get("phone") == "0899999999", (reply.text, client.recorded[-4:])
+        assert "ไม่พบ" not in reply.text, reply.text
+
+
+class TestADealsStatedValueCounts:
+    def test_a_deal_without_lines_is_worth_its_amount(self):
+        from decimal import Decimal
+        assert chat._deal_value({"amount": "15000", "products": []}) == Decimal("15000")
+        assert chat._deal_value({"amount": "15000", "products": [{"quoted_unit_price": "1200", "qty": 2}]}) == Decimal("2400")
+        assert chat._deal_value({"products": []}) == Decimal("0")
+
+    @pytest.mark.asyncio
+    async def test_the_amount_query_sees_it(self):
+        from test_phase6_chat import FakeDataClient, _ai, _ctx
+        from chann_app.services.chat import handle_chat_message
+        import httpx
+        client = FakeDataClient(permission_keys=["deal.read", "customer.read"],
+                                deals=[{"id": "DEAL-1", "deal_id": "D-2026-0001", "stage": "new", "contact_id": "CUST-1", "notes": None, "products": [], "amount": "15000"},
+                                       {"id": "DEAL-2", "deal_id": "D-2026-0002", "stage": "new", "contact_id": "CUST-1", "notes": None, "products": [], "amount": "3000"}])
+        ai = httpx.AsyncClient(transport=_ai(json.dumps({"action": "read", "entity": "deal", "fields": {"min_amount": 10000}, "missing": []})))
+        reply = await handle_chat_message(client, message="ดีลเกิน 1 หมื่น", ctx=_ctx(), ai_client=ai)
+        assert "D-2026-0001" in reply.text and "D-2026-0002" not in reply.text, reply.text
+
+
+class TestACustomersCancelWaitsThroughAQuestion:
+    def _client(self):
+        from test_phase6_chat import FakeDataClient
+        client = FakeDataClient(role="customer", permission_keys=[])
+        client._tickets = [{"id": "t1", "ticket_number": "T-2026-0001", "status": "assigned", "assigned_to_ref": "m-tech-1",
+                            "assigned_target_type": "technician", "accept_status": "accepted", "customer_chann_uid": "CHN-S-000001",
+                            "customer_name": "สมหญิง", "issue_description": "แอร์ไม่เย็น", "scheduled_date": "2026-09-17", "scheduled_time": "10:00"}]
+        client._members = [{"id": "m-tech-1", "chann_uid": "CHN-T-000001", "role": "technician", "status": "active", "display_name": "สมศักดิ์"}]
+        return client
+
+    @pytest.mark.asyncio
+    async def test_a_question_is_answered_and_the_confirmation_stays(self):
+        from test_phase6_chat import _ctx
+        from chann_app.services.chat import handle_chat_message
+        client = self._client()
+        ctx = _ctx(oa="customer", primary_role="customer")
+        first = await handle_chat_message(client, message="ยกเลิกงาน T-2026-0001", ctx=ctx)
+        assert "ใช่ไหม" in first.text, first.text
+        asked = await handle_chat_message(client, message="ขอถามก่อน ช่างที่จะมาชื่ออะไรคะ", ctx=ctx)
+        assert "สมศักดิ์" in asked.text and "ยังรอยืนยัน" in asked.text, asked.text
+        assert not [r for r in client.recorded if r[0] == "create_ticket"], asked.text
+        pending = await client.get_pending_intent("CHN-S-000001", "customer")
+        assert pending and pending.get("entity") == "customer_ticket", pending
+        done = await handle_chat_message(client, message="ยืนยันยกเลิกงาน T-2026-0001", ctx=ctx)
+        assert "ยกเลิก" in done.text, done.text
+
+    @pytest.mark.asyncio
+    async def test_the_status_names_the_technician(self):
+        from test_phase6_chat import _ctx
+        from chann_app.services.chat import handle_chat_message
+        client = self._client()
+        ctx = _ctx(oa="customer", primary_role="customer")
+        reply = await handle_chat_message(client, message="สถานะ T-2026-0001", ctx=ctx)
+        assert "ช่าง: สมศักดิ์" in reply.text, reply.text
+
+
+class TestASearchWhileAProductListIsOpen:
+    @pytest.mark.asyncio
+    async def test_a_new_search_replaces_the_list(self):
+        from test_phase6_chat import FakeDataClient, _ctx
+        from chann_app.services.chat import handle_chat_message
+        client = FakeDataClient(role="customer", permission_keys=[],
+                                storefront_results=[{"product_name": "พัดลม 18 นิ้ว", "company_name": "บริษัททดสอบ", "license_id": "L1", "unit_price": "1200"},
+                                                    {"product_name": "แอร์ 12000 BTU", "company_name": "บริษัททดสอบ", "license_id": "L1", "unit_price": "15900"}])
+        ctx = _ctx(oa="customer", primary_role="customer")
+        first = await handle_chat_message(client, message="สินค้าทั้งหมด", ctx=ctx)
+        assert "พิมพ์หมายเลข" in first.text, first.text
+        again = await handle_chat_message(client, message="ค้นหา พัดลม", ctx=ctx)
+        assert "พัดลม" in again.text and "ยังไม่แน่ใจ" not in again.text, again.text
+        picked = await handle_chat_message(client, message="2", ctx=ctx)
+        assert "บันทึกความสนใจ" in picked.text and "แอร์ 12000 BTU" in picked.text, picked.text
+        assert [r for r in client.recorded if r[0] == "storefront_record_interest"], picked.text
