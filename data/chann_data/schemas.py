@@ -35,6 +35,10 @@ class MembershipOut(BaseModel):
     # refuses new work and says so, instead of treating the person as
     # unregistered.
     license_status: str = "active"
+    # Round 19b: when the subscription (or trial) ends — the company page
+    # and the shop card say so and how to renew (owner, 15 ก.ย. 2569:
+    # "ยังไม่มีบอกเลยว่า license หมดอายุหรือต้องต่อตอนไหน").
+    license_expires_at: datetime | None = None
     # The license_members row id. Anything that acts AS this member needs
     # it — claiming a ticket, owning a follow-up — and a client holding
     # only chann_uid would have to look it up on every action.

@@ -329,3 +329,5 @@ class TestMembershipCarriesMemberId:
         rows = response.json()
         assert rows, "the fixture tenant's owner should have a membership"
         assert rows[0].get("member_id"), "member_id was not populated"
+        # Round 19b: the company page reads the licence's expiry from here.
+        assert "license_expires_at" in rows[0], rows[0]

@@ -28,6 +28,9 @@ export type SalesSession = {
   channUid: string;
   /** Phase 18: a suspended shop is read-only; every write is refused with 423. */
   suspended: boolean;
+  /** Round 19b: the shop's status and when it expires — the company page says so. */
+  licenseStatus: string;
+  licenseExpiresAt: string | null;
   /** True once token, shop and permissions are all known. */
   ready: boolean;
 };
@@ -40,6 +43,8 @@ const EMPTY: SalesSession = {
   isOwner: false,
   channUid: "",
   suspended: false,
+  licenseStatus: "active",
+  licenseExpiresAt: null,
   ready: false,
 };
 
@@ -104,6 +109,8 @@ export function useSalesSession(liffId: string, say: Say) {
         isOwner: me.isOwner,
         channUid: me.channUid,
         suspended,
+        licenseStatus: me.licenseStatus || started.memberships[0]?.license_status || "active",
+        licenseExpiresAt: started.memberships[0]?.license_expires_at ?? null,
         ready: true,
       });
     } catch (error) {

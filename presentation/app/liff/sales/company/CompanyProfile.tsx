@@ -202,6 +202,18 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
     }
   }
 
+  function subscriptionUntilText(): string {
+    const raw = session.licenseExpiresAt;
+    if (!raw) return c.subscriptionNoExpiry;
+    const when = new Date(raw);
+    if (Number.isNaN(when.getTime())) return c.subscriptionNoExpiry;
+    const days = Math.floor((when.getTime() - Date.now()) / 86400000);
+    const date = when.toLocaleDateString("th-TH", { timeZone: "Asia/Bangkok", day: "numeric", month: "short", year: "numeric" });
+    if (days < 0) return c.subscriptionExpired.replace("{date}", date);
+    const left = c.subscriptionDaysLeft.replace("{date}", date).replace("{days}", String(days));
+    return days <= 7 ? `${left} ${c.subscriptionSoon}` : left;
+  }
+
   async function saveSla() {
     const values: [string, string][] = [
       ["job_sla_unassigned_minutes", slaUnassigned], ["job_sla_unaccepted_minutes", slaUnaccepted],
@@ -357,6 +369,23 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
       {profile && !canEdit && !session.suspended && (
         <p className="card-meta" style={{ marginBottom: 12 }}>{s.company.readOnly}</p>
       )}
+
+      <section className="section" style={{ marginBottom: 16 }}>
+        <div className="section-head">
+          <h2>{c.subscriptionTitle}</h2>
+        </div>
+        <dl className="fields">
+          <div className="field">
+            <span>{c.subscriptionStatus}</span>
+            <strong>{c.subscriptionStatuses[session.licenseStatus as keyof typeof c.subscriptionStatuses] ?? session.licenseStatus}</strong>
+          </div>
+          <div className="field">
+            <span>{c.subscriptionUntil}</span>
+            <strong>{subscriptionUntilText()}</strong>
+          </div>
+        </dl>
+        <p className="hint">{c.subscriptionRenewHint.replace("{code}", session.memberships[0]?.license_code ?? "")}</p>
+      </section>
 
       <form onSubmit={save}>
         <fieldset disabled={!canEdit} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>

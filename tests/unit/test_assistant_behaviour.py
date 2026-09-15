@@ -2210,11 +2210,15 @@ class TestOneShopCard:
 
     def test_the_trial_is_dated_on_the_card(self):
         from chann_app.services.chat import _tenant_status_line
-        line = _tenant_status_line({"status": "trial", "expires_at": "2026-09-30T00:00:00+00:00"}, "th")
-        assert line == "ทดลองใช้ (ถึง 30/09/2026)", line
-        # Round 18: the paid subscription is dated the same way.
-        assert _tenant_status_line({"status": "active", "expires_at": "2026-12-31T16:59:59+00:00"}, "th") == "ใช้งานอยู่ (ถึง 31/12/2026)"
-        assert _tenant_status_line({"status": "active", "expires_at": None}, "th") == "ใช้งานอยู่"
+        from datetime import datetime, timezone
+        today = datetime(2026, 9, 15, 5, 0, tzinfo=timezone.utc)
+        line = _tenant_status_line({"status": "trial", "expires_at": "2026-09-30T00:00:00+00:00"}, "th", today=today)
+        assert line == "ทดลองใช้ (ถึง 30/09/2026 · เหลือ 14 วัน)", line
+        # Round 18: the paid subscription is dated the same way; round 19b says how long is left.
+        assert _tenant_status_line({"status": "active", "expires_at": "2026-12-31T16:59:59+00:00"}, "th", today=today) == "ใช้งานอยู่ (ถึง 31/12/2026 · เหลือ 107 วัน)"
+        assert _tenant_status_line({"status": "active", "expires_at": None}, "th") == "ใช้งานอยู่ (ไม่กำหนดวันหมดอายุ)"
+        assert "⚠️ ใกล้หมดอายุ" in _tenant_status_line({"status": "active", "expires_at": "2026-09-18T00:00:00+00:00"}, "th", today=today)
+        assert _tenant_status_line({"status": "active", "expires_at": "2026-09-10T00:00:00+00:00"}, "th", today=today) == "หมดอายุแล้ว (ตั้งแต่ 10/09/2026)"
         assert _tenant_status_line({"status": "suspended", "expires_at": "2026-09-30T00:00:00+00:00"}, "th") == "ถูกระงับ"
         assert _tenant_status_line({"status": "suspended"}, "th") == "ถูกระงับ"
         assert _tenant_status_line(None, "th") == "—"

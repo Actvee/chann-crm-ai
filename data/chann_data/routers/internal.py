@@ -574,6 +574,7 @@ def list_memberships(
                 status="active",
                 channel="customer",
                 license_status=shop.status,
+                license_expires_at=getattr(shop, "expires_at", None),
             )
             for shop in shops
         ]
@@ -590,6 +591,7 @@ def list_memberships(
             status=m.status,
             channel=m.channel,
             license_status=m.license.status,
+            license_expires_at=m.license.expires_at,
         )
         for m in members
     ]

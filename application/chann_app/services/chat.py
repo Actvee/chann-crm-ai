@@ -1009,7 +1009,14 @@ SHOP_CARD_HEAD = {
     "th": "ร้าน: {name}\nรหัสร้าน: {code}\nสถานะ: {status}",
     "en": "Shop: {name}\nShop code: {code}\nStatus: {status}",
 }
-SHOP_CARD_TRIAL_UNTIL = {"th": " (ถึง {until})", "en": " (until {until})"}
+SHOP_CARD_TRIAL_UNTIL = {"th": " (ถึง {until} · เหลือ {days} วัน)", "en": " (until {until} · {days} days left)"}
+SHOP_CARD_UNTIL_SOON = {"th": " (ถึง {until} · เหลือ {days} วัน ⚠️ ใกล้หมดอายุ)", "en": " (until {until} · {days} days left ⚠️ expiring soon)"}
+SHOP_CARD_EXPIRED = {"th": "หมดอายุแล้ว (ตั้งแต่ {until})", "en": "expired (since {until})"}
+SHOP_CARD_NO_EXPIRY = {"th": " (ไม่กำหนดวันหมดอายุ)", "en": " (no expiry set)"}
+SHOP_CARD_RENEW = {
+    "th": "ต่ออายุ/เปลี่ยนวันหมดอายุ: ผู้ดูแลระบบ Chann ตั้งให้ได้ที่ Admin > บริษัท > แก้ไข (แจ้งรหัสร้าน {code})",
+    "en": "Renewal / expiry changes: the Chann administrator sets them under Admin > Company > Edit (quote shop code {code}).",
+}
 SHOP_CARD_FOOT = {
     "th": (
         "รหัสร้านใช้ให้ลูกค้าพิมพ์ใน LINE บริการลูกค้าเพื่อผูกกับร้าน · ช่างเข้าร่วมด้วยรหัสเชิญ "
@@ -1022,33 +1029,46 @@ SHOP_CARD_FOOT = {
 }
 
 
-def _tenant_expiry_date(tenant: dict | None) -> str:
-    """The subscription's end as dd/mm/yyyy in Bangkok time, or ""."""
+def _tenant_expiry(tenant: dict | None) -> datetime | None:
+    """The subscription's end, timezone-aware, or None."""
     raw = (tenant or {}).get("expires_at") or (tenant or {}).get("trial_expires_at")
     if not raw:
-        return ""
+        return None
     try:
         when = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
     except (ValueError, TypeError):
-        return ""
-    if when.tzinfo is None:
-        when = when.replace(tzinfo=timezone.utc)
-    return when.astimezone(timezone(timedelta(hours=7))).strftime("%d/%m/%Y")
+        return None
+    return when if when.tzinfo is not None else when.replace(tzinfo=timezone.utc)
 
 
-def _tenant_status_line(tenant: dict | None, language: str) -> str:
-    """"ทดลองใช้ (ถึง 30/09/2026)" / "ใช้งานอยู่ (ถึง 30/09/2026)" / "ถูกระงับ"
-    — what the test team asked to see on the card (V.8.2, 9 ก.ย. 2569);
-    round 18 dates the active subscription the same way as the trial."""
+def _tenant_expiry_date(tenant: dict | None) -> str:
+    """The subscription's end as dd/mm/yyyy in Bangkok time, or ""."""
+    when = _tenant_expiry(tenant)
+    return when.astimezone(timezone(timedelta(hours=7))).strftime("%d/%m/%Y") if when else ""
+
+
+def _tenant_status_line(tenant: dict | None, language: str, *, today: datetime | None = None) -> str:
+    """"ใช้งานอยู่ (ถึง 30/09/2026 · เหลือ 15 วัน)" / "…⚠️ ใกล้หมดอายุ" within a
+    week / "หมดอายุแล้ว (ตั้งแต่ …)" / "ใช้งานอยู่ (ไม่กำหนดวันหมดอายุ)" / "ถูกระงับ"
+    — the test team asked for the date (V.8.2, 9 ก.ย. 2569) and the owner
+    for how long is left and when to renew (15 ก.ย. 2569)."""
     tenant = tenant or {}
     status = str(tenant.get("status") or "").lower()
     if status not in _TENANT_STATUS_LABEL:
         return "—"
     text = _t(_TENANT_STATUS_LABEL[status], language)
-    until = _tenant_expiry_date(tenant) if status in _TENANT_DATED_STATUSES else ""
-    if until:
-        text += _t(SHOP_CARD_TRIAL_UNTIL, language).format(until=until)
-    return text
+    if status not in _TENANT_DATED_STATUSES:
+        return text
+    when = _tenant_expiry(tenant)
+    if when is None:
+        return text + _t(SHOP_CARD_NO_EXPIRY, language)
+    now = today or datetime.now(timezone.utc)
+    until = _tenant_expiry_date(tenant)
+    days = int((when - now).total_seconds() // 86400)
+    if when <= now:
+        return _t(SHOP_CARD_EXPIRED, language).format(until=until)
+    table = SHOP_CARD_UNTIL_SOON if days <= 7 else SHOP_CARD_TRIAL_UNTIL
+    return text + _t(table, language).format(until=until, days=max(days, 0))
 
 
 async def _handle_shop_card(
@@ -1076,6 +1096,7 @@ async def _handle_shop_card(
         return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
     text = (
         _t(SHOP_CARD_HEAD, language).format(name=name, code=code, status=_tenant_status_line(tenant, language))
+        + "\n" + _t(SHOP_CARD_RENEW, language).format(code=code)
         + "\n" + _format_company_profile(profile, language)
         + "\n\n" + _t(SHOP_CARD_FOOT, language)
     )

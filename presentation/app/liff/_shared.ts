@@ -19,6 +19,8 @@ export type Membership = {
   member_id?: string | null;
   /** "suspended" = read-only shop (Phase 18); absent or "active" otherwise. */
   license_status?: string | null;
+  /** Round 19b: when the subscription or trial ends (ISO), null when unset. */
+  license_expires_at?: string | null;
 };
 
 type LiffApi = {

@@ -148,6 +148,7 @@ async def liff_me(
         "active_license_id": chosen[0]["license_id"] if len(chosen) == 1 else None,
         # Phase 18 — the dashboards show a read-only notice for a suspended shop.
         "license_status": (chosen[0].get("license_status") or "active") if len(chosen) == 1 else None,
+        "license_expires_at": chosen[0].get("license_expires_at") if len(chosen) == 1 else None,
     }
 
 
