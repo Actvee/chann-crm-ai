@@ -17,7 +17,7 @@ import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -404,10 +404,24 @@ class RegistrationRepository:
         )
 
     def link_customer(self, *, chann_uid: str, company_code: str) -> CustomerLicenseLink:
-        """Bind a customer to a shop. Idempotent. Grants no permissions."""
+        """Bind a customer to a shop. Idempotent. Grants no permissions.
+
+        EITHER code identifies the shop. A licence carries two: the
+        `company_code` a customer was meant to type, and the `license_code`
+        the shop's own card calls "รหัสร้าน" — and that card tells the shop
+        to give THAT one to customers. So the code shops hand out was the
+        one this lookup refused, and every customer who typed it was told
+        "ไม่พบรหัสนี้" (owner's transcript, 16 ก.ย. 2569: COV9URCZ refused
+        twice, while the shop's own name linked to that same shop).
+        """
         code = (company_code or "").strip().upper()
         license_row = self._s.execute(
-            select(License).where(License.company_code == code)
+            select(License).where(
+                or_(
+                    func.upper(License.company_code) == code,
+                    func.upper(License.license_code) == code,
+                )
+            )
         ).scalars().first()
         if license_row is None:
             raise RegistrationNotFound("company code not found")

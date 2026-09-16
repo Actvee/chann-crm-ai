@@ -621,6 +621,22 @@ class FakeDataClient:
                 return dict(w)
         raise DataTierError(404, "serial is not registered at this shop")
 
+    async def platform_tenant(self, license_id):
+        """Production always has a tenant row behind a licence. The fake used
+        to have no method at all, so the shop card swallowed the exception
+        and fell back to printing the license_code as the customer's code —
+        exactly the bug round 19v is about (a fake more generous than
+        production hides it)."""
+        if getattr(self, "_tenant", "missing") != "missing":
+            return self._tenant
+        return {
+            "id": LICENSE_ID, "license_code": "TESTCO", "company_code": "TESTCUST",
+            "company_name": "บริษัททดสอบ", "status": "active", "expires_at": None,
+            "deleted_at": None, "created_at": None, "owner_chann_uid": None,
+            "owner_name": None, "members": 1, "customers": 0, "tickets": 0,
+            "open_tickets": 0, "deals": 0, "last_activity_at": None,
+        }
+
     async def get_active_tenant(self, chann_uid, oa):
         return getattr(self, "_active_tenant", {}).get((chann_uid, oa))
 

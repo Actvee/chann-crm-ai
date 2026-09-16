@@ -2199,7 +2199,10 @@ class TestOneShopCard:
         shop = await self._say("ข้อมูลร้าน")
         company = await self._say("ข้อมูลบริษัท")
         assert shop.text == company.text, (shop.text, company.text)
-        assert "รหัสร้าน:" in shop.text and "สถานะ:" in shop.text and "ชื่อนิติบุคคล" in shop.text
+        # Round 19v split the one "รหัสร้าน" line into the two codes a licence
+        # really has, each labelled for what it is.
+        assert "รหัสสำหรับลูกค้า:" in shop.text and "รหัสร้าน:" in shop.text
+        assert "สถานะ:" in shop.text and "ชื่อนิติบุคคล" in shop.text
 
     @pytest.mark.asyncio
     async def test_the_models_reading_lands_on_the_same_card(self):

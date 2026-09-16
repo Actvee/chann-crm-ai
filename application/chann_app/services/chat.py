@@ -1009,18 +1009,6 @@ TECHNICIAN_LIST_PHRASES = (
 )
 # "ตั้งค่า" on its own: the company profile is where the settings live.
 SETTINGS_PHRASES = ("ตั้งค่า", "ตั้งค่าร้าน", "การตั้งค่า", "ตั้งค่าบริษัท", "settings", "setting", "config", "การตั้งค่าร้าน")
-SHOP_INFO_TEXT = {
-    "th": (
-        "ร้าน: {name}\nรหัสร้าน: {code}\n{contact}"
-        "\nรหัสนี้ใช้ให้ลูกค้าพิมพ์ใน LINE บริการลูกค้าเพื่อผูกกับร้าน "
-        "ส่วนช่างเข้าร่วมด้วยรหัสเชิญ (พิมพ์ \"ขอรหัสเชิญช่าง\")"
-    ),
-    "en": (
-        "Shop: {name}\nShop code: {code}\n{contact}"
-        "\nCustomers type this code in the customer LINE to link to the shop; "
-        "technicians join with an invite code (\"technician invite code\")"
-    ),
-}
 TECHNICIAN_LIST_HEAD = {"th": "ช่างในร้าน ({n} คน):", "en": "Technicians ({n}):"}
 TECHNICIAN_LIST_EMPTY = {
     "th": "ยังไม่มีช่างในร้าน ให้ช่างเพิ่มเพื่อน LINE ช่างแล้วพิมพ์รหัสเชิญ (พิมพ์ \"ขอรหัสเชิญช่าง\" เพื่อออกรหัส)",
@@ -1037,9 +1025,11 @@ _TENANT_STATUS_LABEL = {
 # Statuses whose expiry date is shown on the card (round 18: the product is
 # a subscription, so an active shop has an end date too).
 _TENANT_DATED_STATUSES = ("trial", "active")
+# Both codes, on ONE line: a LINE bubble over 15 lines is not read, and
+# this card was already at the limit (simulate-phrasings, round 19v).
 SHOP_CARD_HEAD = {
-    "th": "ร้าน: {name}\nรหัสร้าน: {code}\nสถานะ: {status}",
-    "en": "Shop: {name}\nShop code: {code}\nStatus: {status}",
+    "th": "ร้าน: {name}\nรหัสสำหรับลูกค้า: {customer_code} · รหัสร้าน: {code}\nสถานะ: {status}",
+    "en": "Shop: {name}\nCustomer code: {customer_code} · Shop code: {code}\nStatus: {status}",
 }
 SHOP_CARD_TRIAL_UNTIL = {"th": " (ถึง {until} · เหลือ {days} วัน)", "en": " (until {until} · {days} days left)"}
 SHOP_CARD_UNTIL_SOON = {"th": " (ถึง {until} · เหลือ {days} วัน ⚠️ ใกล้หมดอายุ)", "en": " (until {until} · {days} days left ⚠️ expiring soon)"}
@@ -1050,13 +1040,16 @@ SHOP_CARD_RENEW = {
     "en": "Renewal / expiry changes: the Chann administrator sets them under Admin > Company > Edit (quote shop code {code}).",
 }
 SHOP_CARD_FOOT = {
+    # The trailing comma in the English value used to make it a one-tuple,
+    # which the concatenation below then refused (round 19v).
     "th": (
-        "รหัสร้านใช้ให้ลูกค้าพิมพ์ใน LINE บริการลูกค้าเพื่อผูกกับร้าน · ช่างเข้าร่วมด้วยรหัสเชิญ "
-        "(พิมพ์ \"ขอรหัสเชิญช่าง\") · แก้ข้อมูลที่ หน้าจอ > ข้อมูลบริษัท"
+        "ลูกค้าพิมพ์ \"รหัสสำหรับลูกค้า\" ใน LINE บริการลูกค้าเพื่อผูกกับร้าน (รหัสร้านก็ใช้ได้) · "
+        "ช่างเข้าร่วมด้วยรหัสเชิญ (พิมพ์ \"ขอรหัสเชิญช่าง\") · แก้ข้อมูลที่ หน้าจอ > ข้อมูลบริษัท"
     ),
     "en": (
-        "Customers type the shop code in the customer LINE to link; technicians join with an "
-        "invite (\"technician invite\") · edit at Dashboard > Company",
+        "Customers type the customer code in the customer LINE to link (the shop code works "
+        "too) · technicians join with an invite (\"technician invite\") · edit at "
+        "Dashboard > Company"
     ),
 }
 
@@ -1121,13 +1114,23 @@ async def _handle_shop_card(
         tenant = await client.platform_tenant(str(license_id))
     except Exception:  # noqa: BLE001 — the status line is a courtesy
         log.warning("could not read the tenant for the shop card")
+    # The code a CUSTOMER types is the licence's company_code; this card
+    # used to print the license_code under "รหัสร้าน" and tell the shop to
+    # hand THAT to customers, which the link then refused (owner's
+    # transcript, 16 ก.ย. 2569). Both are shown now, each labelled for
+    # what it is — and since this round either one links, so a shop that
+    # already gave out the wrong one is no longer wrong.
+    customer_code = str((tenant or {}).get("company_code") or "") or code
     try:
         profile = await client.get_company_profile(str(license_id)) or {}
     except Exception:
         log.exception("company profile read failed")
         return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
     text = (
-        _t(SHOP_CARD_HEAD, language).format(name=name, code=code, status=_tenant_status_line(tenant, language))
+        _t(SHOP_CARD_HEAD, language).format(
+            name=name, code=code, customer_code=customer_code,
+            status=_tenant_status_line(tenant, language),
+        )
         + "\n" + _t(SHOP_CARD_RENEW, language).format(code=code)
         + "\n" + _format_company_profile(profile, language)
         + "\n\n" + _t(SHOP_CARD_FOOT, language)
@@ -9038,9 +9041,9 @@ SINGLE_SHOP = {
 #: 16 ก.ย. 2569: "ถ้าจะเข้าร่วมร้านอื่น พิมพ์รหัสเชิญของร้านนั้นได้เลย").
 SINGLE_SHOP_CUSTOMER = {
     "th": "ตอนนี้คุณเป็นลูกค้าของ {company} ร้านเดียวครับ\n"
-          "จะผูกอีกร้าน พิมพ์ได้เลย: รหัสร้าน (8 ตัว ขึ้นต้นด้วย CO) · ชื่อร้าน · หรือหมายเลขเครื่อง (S/N) ที่ซื้อจากร้านนั้น",
+          "จะผูกอีกร้าน พิมพ์ได้เลย: รหัสร้าน 8 ตัวที่ร้านให้มา · ชื่อร้าน · หรือหมายเลขเครื่อง (S/N) ที่ซื้อจากร้านนั้น",
     "en": "You are a customer of {company} only.\n"
-          "To add another shop, type its shop code (8 characters starting CO), its name, "
+          "To add another shop, type the 8-character code the shop gave you, its name, "
           "or the serial number of something you bought there.",
 }
 ADD_ANOTHER_SHOP_HINT = {
@@ -9048,8 +9051,11 @@ ADD_ANOTHER_SHOP_HINT = {
     "en": "To add another shop, say \"add another shop\".",
 }
 LINK_ANOTHER_SHOP_ASK = {
-    "th": "ได้ครับ — พิมพ์อย่างใดอย่างหนึ่งของร้านที่จะผูกเพิ่ม: รหัสร้าน (8 ตัว ขึ้นต้นด้วย CO) · ชื่อร้าน · หรือหมายเลขเครื่อง (S/N) ที่ซื้อจากร้านนั้น",
-    "en": "Sure — type one of these for the shop you want to add: its shop code (8 characters starting CO), "
+    # "8 ตัว ขึ้นต้นด้วย CO" described only one of the two codes a licence
+    # has, and a shop handing out the other one made the sentence read as a
+    # refusal in advance (round 19v). Either code works, so say 8 characters.
+    "th": "ได้ครับ — พิมพ์อย่างใดอย่างหนึ่งของร้านที่จะผูกเพิ่ม: รหัสร้าน 8 ตัวที่ร้านให้มา · ชื่อร้าน · หรือหมายเลขเครื่อง (S/N) ที่ซื้อจากร้านนั้น",
+    "en": "Sure — type one of these for the shop you want to add: the 8-character code the shop gave you, "
           "its name, or the serial number of something you bought there.",
 }
 LINK_ANOTHER_ALREADY = {
@@ -19095,7 +19101,12 @@ _WHICH_SHOPS_WORDS = (
 
 
 def _asks_which_shops(text: str) -> bool:
-    canon = _canonical(text).replace(" ", "")
+    # "ร้านค้าของฉัน" is the same question as "ร้านของฉัน" with the ordinary
+    # word for a shop spelled out in full, and it used to miss every phrase
+    # here and fall through to the contact card (owner's transcript,
+    # 16 ก.ย. 2569, 20:00). Fold the longer spelling into the shorter one
+    # once, rather than doubling the table.
+    canon = _canonical(text).replace(" ", "").replace("ร้านค้า", "ร้าน")
     return any(w.replace(" ", "") in canon for w in _WHICH_SHOPS_WORDS)
 
 

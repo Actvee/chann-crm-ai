@@ -40,19 +40,46 @@ SERIAL_RE = re.compile(r"\b([A-Z0-9][A-Z0-9\-]{5,31})\b", re.IGNORECASE)
 # customer who typed one was told "ไม่พบหมายเลข … ในระบบ" by the serial
 # path below. Found from the owner's own transcript, 16 ก.ย. 2569:
 # "COV9URCZ" → "ไม่พบหมายเลข COV9URCZ ในระบบครับ".
-COMPANY_CODE_RE = re.compile(r"^CO[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{6}$")
+_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+COMPANY_CODE_RE = re.compile(rf"^CO[{_ALPHABET}]{{6}}$")
+#: The OTHER code a licence carries: `company_code`, eight characters of the
+#: same alphabet, which the shop lists next to its name when a customer
+#: searches ("• ร้านสมชาย — ABCD2345") and is then told to type. Eight
+#: letters is NOT a distinctive shape — "WARRANTY" is eight letters of this
+#: very alphabet — so it is read as a code only where a shop was just
+#: listed or a link was just asked for, never as a bare sentence on its own
+#: (chat corpus, round 19v). `link_customer` resolves either code.
+PLAIN_SHOP_CODE_RE = re.compile(rf"^[{_ALPHABET}]{{8}}$")
+
+
+def _code_token(text: str) -> str:
+    token = re.sub(r"[\s\-]", "", (text or "").upper())
+    return re.sub(r"^C0", "CO", token)
 
 
 def as_company_code(text: str) -> str:
     """The shop code in this text, or "".
 
-    Forgiving about the two things people do when copying a code off a
-    screen: spaces or dashes, and a zero for the O of the "CO" prefix (the
-    alphabet has neither O nor 0, so a leading "C0" can only be that).
+    Only the unambiguous "CO" + six shape: nothing else in this system
+    looks like one, so it links wherever it is typed. Forgiving about the
+    two things people do when copying a code off a screen: spaces or
+    dashes, and a zero for the O of the "CO" prefix (the alphabet has
+    neither O nor 0, so a leading "C0" can only be that).
     """
-    token = re.sub(r"[\s\-]", "", (text or "").upper())
-    token = re.sub(r"^C0", "CO", token)
+    token = _code_token(text)
     return token if COMPANY_CODE_RE.match(token) else ""
+
+
+def as_shop_code_when_asked(text: str) -> str:
+    """The shop code in this text when a shop code is what was asked for.
+
+    Accepts the `company_code` shape too — the one a customer reads off
+    the list this system just printed. Never call it on a sentence nobody
+    was asked for: eight letters is a shape ordinary words have.
+    """
+    token = _code_token(text)
+    return token if COMPANY_CODE_RE.match(token) or PLAIN_SHOP_CODE_RE.match(token) else ""
+
 
 WELCOME = {
     "th": (
@@ -188,6 +215,14 @@ SERIAL_UNKNOWN_HERE = {
         "it yet. Type the shop's name or 8-character code and I will link you and "
         "register the machine."
     ),
+}
+#: Owner, 16 ก.ย. 2569, right after linking a second shop: "หลังจากผูกเสร็จ
+#: แล้วจะดูรายการร้านค้าที่ผูก แต่ระบบตอบไม่ถูกต้อง และยังไม่รู้ว่าจะสลับร้าน
+#: ไปมายังไง" — the moment a second shop exists is the moment to say the
+#: words, in the reply that created it.
+LINKED_NOW_SEVERAL = {
+    "th": "\n\nตอนนี้คุณอยู่กับ {n} ร้าน — กำลังคุยกับ \"{name}\" · พิมพ์ \"ร้านค้าของฉัน\" เพื่อดูรายการ หรือ \"เปลี่ยนร้าน\" เพื่อสลับ",
+    "en": "\n\nYou are now with {n} shops — talking to \"{name}\" · type \"my shops\" for the list, or \"switch shop\" to change.",
 }
 LINKED_NEXT_CUSTOMER = {
     "th": "\n\nพิมพ์หมายเลขเครื่อง (S/N) เพื่อลงทะเบียนสินค้า แล้วแจ้งซ่อมได้เลย หรือพิมพ์ \"งานของฉัน\" เพื่อดูสถานะ",
@@ -581,6 +616,13 @@ async def _link_and_continue(
             log.exception("could not make the newly linked shop the active one")
 
     linked = _t(LINKED, language).format(name=name)
+    try:
+        mine = await client.my_shops(ctx.chann_uid)
+    except Exception:  # noqa: BLE001 — the link stands either way
+        log.exception("could not count the customer's shops after linking")
+        mine = []
+    if len(mine or []) > 1:
+        linked += _t(LINKED_NOW_SEVERAL, language).format(n=len(mine), name=name)
 
     # 16.4: the shop's side — a CRM record at once when the shop opted
     # in, a note to CS otherwise. Best effort: the link already stands.
@@ -690,6 +732,22 @@ async def _handle_customer(
                 else f"Serial {serial} is registered at several shops — type the code:"
             )
             return f"{header}\n{listed}"
+
+        # A bare token nobody registered as a serial may be the OTHER code
+        # a licence has — the `company_code` this system prints beside a
+        # shop's name ("• ร้านสมชาย — ABCD2345") under "พิมพ์รหัสร้านเพื่อผูก".
+        # Typing exactly what was asked for used to be answered
+        # "ไม่พบหมายเลข … ในระบบ" (round 19v).
+        plain = as_shop_code_when_asked(text)
+        if plain:
+            attempt = await _link_and_continue(
+                client, ctx, company_code=plain, language=language,
+            )
+            # Not a code after all: carry on reading the message as what
+            # it probably is, rather than answering "ไม่พบรหัสนี้" to a
+            # word that was never a code.
+            if attempt != _t(BAD_CODE, language):
+                return attempt
 
         # A bare serial nobody registered: say so, rather than treating
         # the serial as a fault description.

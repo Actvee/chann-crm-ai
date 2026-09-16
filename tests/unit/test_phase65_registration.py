@@ -14,6 +14,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "application"))
 
+from chann_app.data_client import DataTierError  # noqa: E402
 from chann_app.services.identity import ResolvedContext, TenantResolution  # noqa: E402
 from chann_app.services.registration import (  # noqa: E402
     COMPANY_CODE_RE,
@@ -54,7 +55,8 @@ class FakeRegClient:
                 "consent_version": version, "anonymized_at": None}
 
 
-    def __init__(self, *, created=None, member=None, link=None, shops=None, raises=None):
+    def __init__(self, *, created=None, member=None, link=None, shops=None, raises=None,
+                 known_codes=None):
         self._created = created or {
             "company_name": "ร้านสมชาย", "company_code": "ABCD2345"
         }
@@ -62,6 +64,7 @@ class FakeRegClient:
         self._link = link or {"company_name": "ร้านสมชาย", "license_id": "lic-1"}
         self._shops = shops if shops is not None else []
         self._raises = raises
+        self.known_codes = {c.upper() for c in known_codes} if known_codes is not None else None
         self.calls: list[str] = []
 
     async def create_license(self, **kw):
@@ -80,6 +83,11 @@ class FakeRegClient:
         self.calls.append("link_customer")
         if self._raises:
             raise self._raises
+        # Production refuses a code no licence has. Left open by default so
+        # the tests written before round 19v still read the same; a test
+        # that cares passes known_codes and gets production's answer.
+        if self.known_codes is not None and str(kw.get("company_code") or "").upper() not in self.known_codes:
+            raise DataTierError(404, "company code not found")
         return self._link
 
     async def search_shops(self, q, limit=10):
@@ -258,7 +266,9 @@ class TestCustomerRegistration:
             client, message="COV9URCZ", ctx=_ctx(), audience="customer"
         )
         assert "ผูกกับร้าน" in reply
-        assert client.calls == ["link_customer"]
+        # my_shops: round 19v counts them, so linking a SECOND shop can say
+        # how to list and switch between them.
+        assert client.calls == ["link_customer", "my_shops"]
 
     async def test_name_search_lists_shops_with_codes(self):
         client = FakeRegClient(shops=[
