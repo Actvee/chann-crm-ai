@@ -26,13 +26,13 @@ _EN: Record sold units — "register product SN12345678 aircon for Somchai" — 
 
 ## 3. งานซ่อม: มอบหมาย
 
-ลูกค้าแจ้งซ่อมแล้วคุณได้ LINE พร้อมชื่อเครื่องและสถานะประกัน · "รายการงาน" ดูคิว · "มอบหมาย T-2026-0001 ให้ทีม แอร์" (ต้องมีชื่อ เบอร์ ที่อยู่ นัดครบ ระบบบอกถ้าขาด) · ไม่ต้องพิมพ์เลขเต็มก็ได้: "มอบหมาย 0001 ให้ช่าง" หรือ reply ข้อความแจ้งซ่อมนั้นแล้วพิมพ์ "มอบหมายให้ช่าง" ระบบจะถามว่าให้ช่างคนไหนพร้อมปุ่มเลือก · ลูกค้าขอเลื่อนนัดมา: reply ข้อความแจ้งเตือนนั้นแล้วพิมพ์ "เลื่อนได้" ระบบเลื่อนให้ตามเวลาที่ลูกค้าขอและแจ้งลูกค้า (หรือพิมพ์ "เลื่อนนัด T-… พรุ่งนี้ 10 โมง" เพื่อกำหนดเอง) · เคสที่จบได้เองไม่ต้องใช้ช่าง: "ปิดงาน T-2026-0001" ปิดได้เลยไม่ต้องเช็คอิน จะบันทึกด้วยก็ได้ "ปิดงาน T-2026-0001 สาเหตุ ฟิวส์ขาด แก้ไข เปลี่ยนฟิวส์" · หรือทำบนแดชบอร์ด > งานซ่อม
+ลูกค้าแจ้งซ่อมแล้วคุณได้ LINE พร้อมชื่อเครื่องและสถานะประกัน · "รายการงาน" ดูคิว · "มอบหมาย T-2026-0001 ให้ทีม แอร์" (ต้องมีชื่อ เบอร์ ที่อยู่ นัดครบ ระบบบอกถ้าขาด) · ไม่ต้องพิมพ์เลขเต็มก็ได้: "มอบหมาย 0001 ให้ช่าง" หรือ reply ข้อความแจ้งซ่อมนั้นแล้วพิมพ์ "มอบหมายให้ช่าง" ระบบจะถามว่าให้ช่างคนไหนพร้อมปุ่มเลือก · งานที่ลูกค้าแจ้งเองจะรอร้านก่อน ช่างยังไม่เห็น: มอบหมายเจาะจง หรือ "เปิดให้ช่างรับ T-2026-0001" ให้ช่างทุกคนเห็นแล้วใครรับก่อนได้ (ต้องมีที่อยู่และนัดครบเหมือนมอบหมาย) · พอลูกค้ากรอกที่อยู่/นัดครบ คุณได้ LINE อีกครั้งพร้อมอาการ · ลูกค้าขอเลื่อนนัดมา: reply ข้อความแจ้งเตือนนั้นแล้วพิมพ์ "เลื่อนได้" ระบบเลื่อนให้ตามเวลาที่ลูกค้าขอและแจ้งลูกค้า (หรือพิมพ์ "เลื่อนนัด T-… พรุ่งนี้ 10 โมง" เพื่อกำหนดเอง) · เคสที่จบได้เองไม่ต้องใช้ช่าง: "ปิดงาน T-2026-0001" ปิดได้เลยไม่ต้องเช็คอิน จะบันทึกด้วยก็ได้ "ปิดงาน T-2026-0001 สาเหตุ ฟิวส์ขาด แก้ไข เปลี่ยนฟิวส์" · หรือทำบนแดชบอร์ด > งานซ่อม
 
 พิมพ์: `มอบหมาย T-2026-0001 ให้ทีม แอร์`
 
 [IMAGE: sales-dispatch — หน้าจอ 'งานซ่อม' บนแดชบอร์ด การ์ดงาน T-2026-0001 มีช่อง 'มอบหมายให้…' เลือกทีมแอร์ และปุ่มมอบหมายสีเขียว]
 
-_EN: Repairs: dispatch — You hear when a customer reports, with the machine and its warranty state · "tickets" for the queue · "assign T-2026-0001 to team AC" (name, phone, address, appointment required — it tells you what is missing) · the short number works too, and so does replying to the report and typing "assign to a technician" — it asks which one · a customer asked to move the visit: reply to that notice with "ok to move" and the job moves to the time they asked, customer told (or "reschedule T-… tomorrow 10:00" to set your own) · a case settled without a technician: "close job T-2026-0001" closes it, no check-in; add "cause … fix …" if you like · or dashboard > tickets_
+_EN: Repairs: dispatch — You hear when a customer reports, with the machine and its warranty state · "tickets" for the queue · "assign T-2026-0001 to team AC" (name, phone, address, appointment required — it tells you what is missing) · the short number works too, and so does replying to the report and typing "assign to a technician" — it asks which one · a job the customer reported waits for the shop, technicians do not see it yet: assign it, or "open T-2026-0001 to technicians" so all of them see it and the first to accept takes it (address and appointment required, as for assigning) · when the customer completes the address/appointment you hear again, with the fault · a customer asked to move the visit: reply to that notice with "ok to move" and the job moves to the time they asked, customer told (or "reschedule T-… tomorrow 10:00" to set your own) · a case settled without a technician: "close job T-2026-0001" closes it, no check-in; add "cause … fix …" if you like · or dashboard > tickets_
 
 ## 4. แชทลูกค้า
 
@@ -46,13 +46,13 @@ _EN: Customer chats — A customer who taps "talk to the shop" appears under hom
 
 ## 5. งานซ่อม: ตรวจรายงาน
 
-ช่างปิดงานแล้วคุณได้ LINE · "รายการรออนุมัติ" · "อนุมัติ SR-2026-0001" หรือ "ตีกลับ SR-… เหตุผล" · ผ่านครบ → ลูกค้าได้แบบประเมิน + PDF รายงานออกอัตโนมัติ · ตั้งขั้นตอน: "ตั้งการอนุมัติ" · **ลูกค้ารู้ตั้งแต่ช่างปิดงานแล้วว่างานเสร็จและช่างทำอะไรไป** (ยังไม่ได้ส่ง PDF ให้) ถ้าคุณตีกลับ ระบบจะบอกลูกค้าว่าต้องให้ช่างกลับไปดูอีกครั้ง — เหตุผลที่คุณพิมพ์ส่งถึงช่างเท่านั้น
+ช่างปิดงานแล้วคุณได้ LINE · "รายการรออนุมัติ" · "อนุมัติ SR-2026-0001" หรือ "ตีกลับ SR-… เหตุผล" · เจ้าของร้าน (หรือคนที่ตั้งกฎอนุมัติได้) เห็นและอนุมัติแทนได้ทุกขั้น แม้ขั้นนั้นรอคนอื่นอยู่ — รายงานจึงไม่ค้าง · ผ่านครบ → ลูกค้าได้แบบประเมิน + PDF รายงานออกอัตโนมัติ · ตั้งขั้นตอน: "ตั้งการอนุมัติ" · **ลูกค้ารู้ตั้งแต่ช่างปิดงานแล้วว่างานเสร็จและช่างทำอะไรไป** (ยังไม่ได้ส่ง PDF ให้) ถ้าคุณตีกลับ ระบบจะบอกลูกค้าว่าต้องให้ช่างกลับไปดูอีกครั้ง — เหตุผลที่คุณพิมพ์ส่งถึงช่างเท่านั้น
 
 พิมพ์: `อนุมัติ SR-2026-0001`
 
 [IMAGE: sales-approve — การ์ดรายงาน SR-2026-0001: ปัญหาที่พบ / สิ่งที่แก้ไข พร้อมปุ่ม 'อนุมัติ' สีเขียว และ 'ตีกลับ' สีเทา]
 
-_EN: Repairs: review reports — "pending approvals" · "approve SR-2026-0001" or "reject SR-… reason" · all steps passed → the customer gets the survey and the PDF is produced · "approval policy" to change the flow · the customer already heard, at check-out, that the job was finished and what was done (no PDF yet); rejecting tells them the technician is coming back, and your reason goes only to the technician_
+_EN: Repairs: review reports — "pending approvals" · "approve SR-2026-0001" or "reject SR-… reason" · the owner (or anyone who may manage the approval rules) sees and can act on every step, even one waiting on someone else — nothing stays stuck · all steps passed → the customer gets the survey and the PDF is produced · "approval policy" to change the flow · the customer already heard, at check-out, that the job was finished and what was done (no PDF yet); rejecting tells them the technician is coming back, and your reason goes only to the technician_
 
 ## 6. ลูกค้า ดีล ใบเสนอราคา
 

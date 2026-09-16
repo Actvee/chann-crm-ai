@@ -3973,6 +3973,30 @@ def assign_ticket(
         raise _ticket_error(exc)
 
 
+@router.post("/licenses/{license_id}/tickets/{ticket_id}/release", response_model=TicketOut)
+def release_ticket(
+    license_id: uuid.UUID,
+    ticket_id: uuid.UUID,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    """The shop opens a held job to every technician (round 19f)."""
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = ServiceTicketRepository(session).release(scope, ticket_id)
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="service_ticket", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="update",
+            field_changes=diff_fields({"visibility": "private"}, {"visibility": "public"}),
+        )
+        session.commit()
+        session.refresh(row)
+        return row
+    except Exception as exc:
+        session.rollback()
+        raise _ticket_error(exc)
+
+
 @router.post("/licenses/{license_id}/tickets/{ticket_id}/claim", response_model=TicketOut)
 def claim_ticket(
     license_id: uuid.UUID,
@@ -4420,13 +4444,16 @@ def open_approval_steps(
 @router.get("/licenses/{license_id}/approval-steps/pending")
 def pending_approval_steps(
     license_id: uuid.UUID, member_id: uuid.UUID | None = None, roles: str = "",
+    everything: bool = False,
     session: Session = Depends(get_session),
 ):
     from ..repositories.phase14 import ApprovalRepository
 
     scope = TenantScope(license_id=license_id)
     role_names = [r for r in roles.split(",") if r]
-    rows = ApprovalRepository(session).pending_for(scope, member_id=member_id, role_names=role_names)
+    rows = ApprovalRepository(session).pending_for(
+        scope, member_id=member_id, role_names=role_names, everything=everything,
+    )
     return [_step_out(s) for s in rows]
 
 
@@ -4460,6 +4487,7 @@ def act_on_approval_step(
             member_id=uuid.UUID(member_id) if member_id else None,
             role_names=list(payload.get("roles") or []),
             reason=payload.get("reason"),
+            override=bool(payload.get("override")),
         )
         AuditRepository(session).write(
             license_id=license_id, entity_type="service_report", entity_id=step.entity_id,

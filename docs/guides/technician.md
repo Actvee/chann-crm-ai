@@ -16,13 +16,13 @@ _EN: Join the shop (once) — Get a technician invite code from the shop and typ
 
 ## 2. รับงาน
 
-พิมพ์ "งานที่เปิดรับ" แล้วกดปุ่มงาน หรือพิมพ์ "รับงาน T-2026-0001" · งานที่ CS มอบหมายตรงมาจะมีปุ่ม รับ/ปฏิเสธ · งานของทีม: หัวหน้ากด "รับงาน" ให้ทีมก่อน แล้วสมาชิกดู "งานของทีม" และรับต่อ · รับไม่ได้: "ปฏิเสธงาน T-… เหตุผล"
+พิมพ์ "งานที่เปิดรับ" แล้วกดปุ่มงาน หรือพิมพ์ "รับงาน T-2026-0001" (เห็นเฉพาะงานที่ CS เปิดรับหรือมอบหมายมา งานที่ลูกค้าเพิ่งแจ้งจะรอ CS ก่อน) · งานที่ CS มอบหมายตรงมาจะมีปุ่ม รับ/ปฏิเสธ · งานของทีม: หัวหน้ากด "รับงาน" ให้ทีมก่อน แล้วสมาชิกดู "งานของทีม" และรับต่อ · รับไม่ได้: "ปฏิเสธงาน T-… เหตุผล"
 
 พิมพ์: `รับงาน T-2026-0001`
 
 [IMAGE: tech-take — การ์ดรายการงานที่เปิดรับ 2 งาน แต่ละงานมีปุ่ม 'รับงาน' สีน้ำเงิน และงานหนึ่งมีป้าย 'มอบหมายให้คุณ']
 
-_EN: Take a job — "open jobs" then tap one, or "claim T-2026-0001". A job given to you directly has accept/decline. Can't: "decline job T-… reason"._
+_EN: Take a job — "open jobs" then tap one, or "claim T-2026-0001" (only jobs the shop opened or assigned appear — a fresh customer report waits for CS). A job given to you directly has accept/decline. Can't: "decline job T-… reason"._
 
 ## 3. เช็คอินเมื่อถึงหน้างาน
 

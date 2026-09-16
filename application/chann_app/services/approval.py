@@ -81,6 +81,11 @@ async def actor_of(client: DataClient, license_id: str, chann_uid: str) -> dict:
         "member_id": str(context.get("member_id") or ""),
         "roles": roles,
         "chann_uid": chann_uid,
+        # The owner, and anyone who may manage the approval rules, can act
+        # on any current step: a step waiting on one named member who never
+        # acts left reports stuck and "อนุมัติ" answered "not yours"
+        # (owner, 16 ก.ย. 2569).
+        "override": bool(context.get("is_owner")) or "approval.manage" in set(context.get("permission_keys") or []),
     }
 
 
@@ -214,6 +219,7 @@ async def pending_for_actor(client: DataClient, *, license_id: str, chann_uid: s
     actor = await actor_of(client, str(license_id), chann_uid)
     return await client.pending_approval_steps(
         str(license_id), member_id=actor["member_id"] or None, roles=actor["roles"],
+        everything=bool(actor.get("override")),
     )
 
 
@@ -233,7 +239,7 @@ async def act(
     result = await client.act_on_approval_step(
         license_id, step_id, approve=approve,
         member_id=actor["member_id"] or None, roles=actor["roles"],
-        reason=reason, actor_id=actor_chann_uid,
+        reason=reason, actor_id=actor_chann_uid, override=bool(actor.get("override")),
     )
     result = dict(result or {})
     result["survey_sent"] = False

@@ -2448,6 +2448,9 @@ async def create_ticket(
         # Filed from the customer app: the ticket is theirs, whatever the
         # body says — that is what makes it show on their own list.
         body["customer_chann_uid"] = principal.chann_uid
+        # A customer's report waits for the shop (owner, 16 ก.ย. 2569):
+        # private until CS assigns it or opens it to the technicians.
+        body["visibility"] = "private"
     else:
         # Logged by staff: the CS who took the call owns it (principle 6),
         # which is what the "ticket_owner" approval step keys on.
@@ -2510,6 +2513,29 @@ async def assign_ticket_from_dashboard(
         await _notify_assigned_ticket(client, license_id, row, label, "th")
     except Exception:  # noqa: BLE001 — the assignment stands; the notice is best effort
         log.exception("could not tell the assignee about a dashboard dispatch")
+    return row
+
+
+@router.post("/licenses/{license_id}/tickets/{ticket_id}/release")
+async def release_ticket_from_dashboard(
+    license_id: str,
+    ticket_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Open a held job to every technician from the queue (round 19f) —
+    the other half of dispatching, next to assigning it to one of them."""
+    _require_same_tenant(principal, license_id)
+    principal.require_any("ticket.assign", "ticket.update")
+    try:
+        row = await client.release_ticket(license_id, ticket_id, actor_id=principal.chann_uid)
+    except DataTierError as exc:
+        raise _propagate(exc)
+    try:
+        from .services.chat import _notify_released_ticket
+        await _notify_released_ticket(client, license_id, row, "th")
+    except Exception:  # noqa: BLE001 — the release stands; the notice is best effort
+        log.exception("could not tell the technicians about a released job")
     return row
 
 

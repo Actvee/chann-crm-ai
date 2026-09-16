@@ -322,6 +322,26 @@ class ServiceTicketRepository:
         self._s.flush()
         return row
 
+    def release(self, scope: TenantScope, ticket_id: uuid.UUID) -> ServiceTicket:
+        """Open a held job to every technician (round 19f, owner 16 ก.ย. 2569:
+        a customer's report waits for the shop — CS either assigns it or
+        opens it to the pool; technicians do not pick it up on their own).
+        The dispatch gate applies as it does to assign: an incomplete job
+        is not put in front of technicians either."""
+        row = self._get_locked(scope, ticket_id)
+        if row is None:
+            raise TicketNotFound("ticket not found in this tenant")
+        if row.status in ("completed", "cancelled"):
+            raise TicketConflict(f"a {row.status} ticket cannot be opened to technicians")
+        if row.accept_status == "accepted" and row.assigned_to_ref:
+            raise TicketConflict("this ticket has already been accepted")
+        blockers = self.dispatch_blockers(row)
+        if blockers:
+            raise DispatchBlocked(blockers, self.dispatch_missing_fields(row))
+        row.visibility = "public"
+        self._s.flush()
+        return row
+
     def claim(
         self, scope: TenantScope, ticket_id: uuid.UUID, *, member_id: uuid.UUID,
     ) -> ServiceTicket:

@@ -192,6 +192,20 @@ export default function SalesTickets({ liffId }: { liffId: string }) {
     );
   }
 
+  /** Round 19f: a customer's report is held from the technicians until
+   *  the shop assigns it or opens it to all of them. */
+  function release(ticket: Ticket) {
+    return send(
+      ticket,
+      () =>
+        fetch(`/api/phase2/licenses/${licenseId}/tickets/${ticket.id}/release`, {
+          method: "POST",
+          headers: proxyHeaders(token, licenseId),
+        }),
+      copy.released,
+    );
+  }
+
   function startEdit(ticket: Ticket) {
     setEditing(ticket.id);
     setDraft({
@@ -344,6 +358,11 @@ export default function SalesTickets({ liffId }: { liffId: string }) {
                       : ` · ${copy.awaitingAccept}`}
                 </div>
               )}
+              {!ticket.assigned_to_ref && ticket.status !== "completed" && ticket.status !== "cancelled" && (
+                <div className="card-meta">
+                  {ticket.visibility === "private" ? copy.heldByShop : copy.openToAll}
+                </div>
+              )}
               {blockers[ticket.id] && (
                 <div className="card-meta" data-tone="error">
                   {copy.blocked}: {blockers[ticket.id].join(", ")}
@@ -388,6 +407,16 @@ export default function SalesTickets({ liffId }: { liffId: string }) {
                       >
                         {busyId === ticket.id ? t.dashboard.related.saving : copy.assign}
                       </button>
+                      {!ticket.assigned_to_ref && ticket.visibility === "private" && (
+                        <button
+                          type="button"
+                          className="btn"
+                          disabled={busyId !== ""}
+                          onClick={() => void release(ticket)}
+                        >
+                          {copy.release}
+                        </button>
+                      )}
                     </>
                   )}
                   {canEdit && (

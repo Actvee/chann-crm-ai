@@ -652,6 +652,13 @@ class DataClient:
         )
         return self._unwrap(resp)
 
+    async def release_ticket(self, license_id: str, ticket_id: str, actor_id: str | None = None) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/tickets/{ticket_id}/release",
+            headers=self._headers_for(actor_id),
+        )
+        return self._unwrap(resp)
+
     async def claim_ticket(
         self, license_id: str, ticket_id: str, member_id: str,
         actor_id: str | None = None,
@@ -2158,12 +2165,15 @@ class DataClient:
 
     async def pending_approval_steps(
         self, license_id: str, *, member_id: str | None = None, roles: list[str] | tuple[str, ...] = (),
+        everything: bool = False,
     ) -> list[dict]:
         params: dict = {}
         if member_id:
             params["member_id"] = member_id
         if roles:
             params["roles"] = ",".join(roles)
+        if everything:
+            params["everything"] = "true"
         resp = await self._client.get(
             f"{self._base}/internal/v1/licenses/{license_id}/approval-steps/pending",
             headers=self._headers, params=params,
@@ -2183,14 +2193,14 @@ class DataClient:
     async def act_on_approval_step(
         self, license_id: str, step_id: str, *, approve: bool,
         member_id: str | None = None, roles: list[str] | tuple[str, ...] = (),
-        reason: str | None = None, actor_id: str | None = None,
+        reason: str | None = None, actor_id: str | None = None, override: bool = False,
     ) -> dict:
         resp = await self._client.post(
             f"{self._base}/internal/v1/licenses/{license_id}/approval-steps/{step_id}/act",
             headers=self._headers_for(actor_id),
             json={
                 "approve": approve, "member_id": member_id,
-                "roles": list(roles), "reason": reason,
+                "roles": list(roles), "reason": reason, "override": override,
             },
         )
         return self._unwrap(resp)

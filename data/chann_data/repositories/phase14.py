@@ -206,6 +206,7 @@ class ApprovalRepository:
 
     def pending_for(
         self, scope: TenantScope, *, member_id: uuid.UUID | None, role_names: list[str],
+        everything: bool = False,
     ) -> list[ApprovalStep]:
         """Steps this member may act on NOW — their own, or their roles' —
         and only the lowest pending order per entity, so step 2 is not
@@ -219,6 +220,11 @@ class ApprovalRepository:
         first_pending: dict[uuid.UUID, ApprovalStep] = {}
         for row in rows:
             first_pending.setdefault(row.entity_id, row)
+        if everything:
+            # The owner (or approval.manage) sees every current step, not
+            # only their own: a step waiting on one named member who never
+            # acts left reports stuck for hours (owner, 16 ก.ย. 2569).
+            return list(first_pending.values())
         mine = []
         for row in first_pending.values():
             if row.approver_type == "user" and member_id is not None \
@@ -242,6 +248,7 @@ class ApprovalRepository:
     def act(
         self, scope: TenantScope, step_id: uuid.UUID, *, approve: bool,
         member_id: uuid.UUID | None, role_names: list[str], reason: str | None = None,
+        override: bool = False,
     ) -> tuple[ApprovalStep, str, SatisfactionSurvey | None]:
         """Approve or reject one step. Returns (step, report_status, survey).
 
@@ -282,7 +289,7 @@ class ApprovalRepository:
              and step.approver_ref == str(member_id))
             or (step.approver_type == "role" and step.approver_ref in role_names)
         )
-        if not allowed:
+        if not allowed and not override:
             raise ApprovalConflict("not this member's step to act on")
 
         step.status = "approved" if approve else "rejected"

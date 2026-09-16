@@ -217,12 +217,14 @@ class FakeDataClient:
             created.append(dict(step))
         return created
 
-    async def pending_approval_steps(self, license_id, *, member_id=None, roles=()):
+    async def pending_approval_steps(self, license_id, *, member_id=None, roles=(), everything=False):
         self._approval_state()
         lowest = {}
         for s in sorted(self._approval_steps, key=lambda s: s["step_order"]):
             if s["status"] == "pending" and s["entity_id"] not in lowest:
                 lowest[s["entity_id"]] = s
+        if everything:
+            return [dict(s) for s in lowest.values()]
         return [
             dict(s) for s in lowest.values()
             if (s["approver_type"] == "user" and s["approver_ref"] == str(member_id))
@@ -234,7 +236,7 @@ class FakeDataClient:
         return [dict(s) for s in sorted(self._approval_steps, key=lambda s: s["step_order"])
                 if s["entity_id"] == entity_id]
 
-    async def act_on_approval_step(self, license_id, step_id, *, approve, member_id=None, roles=(), reason=None, actor_id=None):
+    async def act_on_approval_step(self, license_id, step_id, *, approve, member_id=None, roles=(), reason=None, actor_id=None, override=False):
         from chann_app.data_client import DataTierError
 
         self._approval_state()
@@ -246,7 +248,7 @@ class FakeDataClient:
             raise DataTierError(409, "step already acted on")
         mine = (step["approver_type"] == "user" and step["approver_ref"] == str(member_id)) or (
             step["approver_type"] == "role" and step["approver_ref"] in set(roles))
-        if not mine:
+        if not mine and not override:
             raise DataTierError(409, "not this member's step to act on")
         step["status"] = "approved" if approve else "rejected"
         step["acted_by"] = member_id
@@ -685,6 +687,18 @@ class FakeDataClient:
         return {"id": "sr-1", "report_id": "SR-2026-0001", "ticket_id": ticket_id,
                 "technician_member_id": member_id, "status": "submitted",
                 "report_data": dict(report_data)}
+
+    async def release_ticket(self, license_id, ticket_id, actor_id=None):
+        self.recorded.append(("release_ticket", license_id, ticket_id))
+        blocked = getattr(self, "_dispatch_error", None)
+        if blocked:
+            from chann_app.data_client import DataTierError
+            raise DataTierError(409, str(blocked), blocked)
+        for t in getattr(self, "_tickets", []):
+            if t.get("id") == ticket_id:
+                t["visibility"] = "public"
+                return dict(t)
+        return {"id": ticket_id, "visibility": "public"}
 
     async def claim_ticket(self, license_id, ticket_id, member_id, actor_id=None):
         self.recorded.append(("claim_ticket", license_id, ticket_id, member_id))

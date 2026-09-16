@@ -666,7 +666,10 @@ def database_url() -> str:
     from .bootstrap import REPO_ROOT
 
     suffix = re.sub(r"[^a-z0-9_]", "_", REPO_ROOT.name.lower())[:24] or "worktree"
-    return str(url.set(database=f"chann_agent_test_{suffix}"))
+    # render_as_string: str() masks the password as "***" (SQLAlchemy 2),
+    # which is how every db-backed run on a password-protected server failed
+    # with "password authentication failed for user" (16 ก.ย. 2569).
+    return url.set(database=f"chann_agent_test_{suffix}").render_as_string(hide_password=False)
 
 
 def ensure_database(url: str) -> None:
@@ -681,7 +684,7 @@ def ensure_database(url: str) -> None:
 
     target = make_url(url)
     admin = create_engine(
-        str(target.set(database="postgres")), future=True,
+        target.set(database="postgres").render_as_string(hide_password=False), future=True,
         isolation_level="AUTOCOMMIT",
     )
     try:

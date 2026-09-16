@@ -145,7 +145,7 @@ METHOD_ACTIONS = {"GET": "read", "POST": "create", "PATCH": "update",
 # claiming a ticket, not creating one. Reading the method alone got every
 # one of these wrong on the first run of this script.
 VERB_SEGMENTS = {
-    "claim": "claim", "close": "close", "assign": "assign",
+    "claim": "claim", "close": "close", "assign": "assign", "release": "release",
     "promote": "promote", "archive": "archive", "void": "update",
     "issue": "update", "status": "update", "check-in": "check_in",
     "check-out": "check_out", "link": "read", "preview": "read",

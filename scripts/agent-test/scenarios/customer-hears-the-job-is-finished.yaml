@@ -66,6 +66,21 @@ steps:
       status: 200
       not_contains: ["ticket_completed", "ช่างทำเสร็จแล้ว"]
 
+  # Round 19f (owner, 16 ก.ย. 2569): a customer's report waits for the shop —
+  # the technician does not see it until CS opens it or assigns it.
+  - send: "งานที่เปิดรับ"
+    expect:
+      not_contains: "T-2026-0001"
+      is_not: [permission, generic_error]
+
+  - send:
+      message: "เปิดให้ช่างรับ T-2026-0001"
+      oa: sales
+      role: owner
+    expect:
+      contains: "เปิดงาน T-2026-0001 ให้ช่างรับแล้ว"
+      is_not: [not_found, permission, generic_error, not_sure]
+
   - send: "งานที่เปิดรับ"
     expect:
       contains: "T-2026-0001"

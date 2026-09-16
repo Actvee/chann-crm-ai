@@ -143,6 +143,7 @@ ACTION_PERMISSIONS: dict[tuple[str, str], str] = {
     ("create", "ticket"): "ticket.create",
     ("update", "ticket"): "ticket.update",
     ("assign", "ticket"): "ticket.assign",
+    ("release", "ticket"): "ticket.assign",
     ("close", "ticket"): "ticket.close",
     ("read", "quote"): "quote.read",
     ("create", "quote"): "quote.create",
@@ -6254,6 +6255,7 @@ async def _handle_customer_report(
                 log.exception("could not save a customer's appointment")
                 return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
 
+            await _notify_report_completed(client, license_id, str(ticket_id), language)
             return ChatReply(
                 text=_t(REPORT_SCHEDULED, language).format(
                     date=format_thai_date(due_date),
@@ -6636,6 +6638,9 @@ async def _handle_customer_report(
             {
                 "issue_description": text,
                 "customer_chann_uid": ctx.chann_uid,
+                # A customer's report waits for the shop (owner, 16 ก.ย. 2569):
+                # private until CS assigns it or opens it to the technicians.
+                "visibility": "private",
                 # Prefilled from the profile where it exists — a customer
                 # who registered once should not retype their phone number
                 # every time something breaks.
@@ -7372,6 +7377,47 @@ async def _dispatchers(client: DataClient, license_id: str, members: list[dict])
         if "ticket.assign" in set(context.get("permission_keys") or []):
             out.append(m)
     return out
+
+
+REPORT_COMPLETED_NOTICE = {
+    "th": "ลูกค้าแจ้งข้อมูลครบแล้ว {code}\n{who}\n{issue}\nที่อยู่: {address} · นัด: {when}\nมอบหมาย: \"มอบหมาย {code} ให้ <ชื่อช่าง/ทีม>\" · หรือเปิดให้ช่างรับเอง: \"เปิดให้ช่างรับ {code}\"",
+    "en": "The customer completed the report {code}\n{who}\n{issue}\nAddress: {address} · Appointment: {when}\nAssign: \"assign {code} to <technician/team>\" · or open it to all: \"open {code} to technicians\"",
+}
+
+
+async def _notify_report_completed(client: DataClient, license_id: str, ticket_id: str, language: str) -> None:
+    """The customer filled in the address and the appointment: whoever
+    dispatches hears again, with the fault and the two things they can do
+    (tester, 16 ก.ย. 2569: only the incomplete report reached the shop).
+    Best-effort."""
+    try:
+        ticket = await client.get_ticket(license_id, ticket_id)
+        if ticket is None:
+            return
+        members = await client.list_members(license_id)
+    except Exception:  # noqa: BLE001
+        log.exception("could not announce a completed report %s", ticket_id)
+        return
+    code = str(ticket.get("ticket_number") or "")
+    who = ticket.get("customer_name") or "—"
+    issue = ticket.get("issue_description") or ""
+    address = ticket.get("service_address") or "—"
+    when = _ticket_when(ticket) or "—"
+    for member in await _dispatchers(client, license_id, members):
+        chann_uid = str(member.get("chann_uid") or "")
+        if not chann_uid:
+            continue
+        try:
+            line_target = await client.line_target_of(chann_uid)
+            await send_notification(
+                client, license_id=license_id, target_chann_uid=chann_uid, target_line_user_id=line_target,
+                type="ticket_ready",
+                message=_t(REPORT_COMPLETED_NOTICE, "th").format(code=code, who=who, issue=issue, address=address, when=when),
+                message_en=_t(REPORT_COMPLETED_NOTICE, "en").format(code=code, who=who, issue=issue, address=address, when=when),
+                entity_type="service_ticket", entity_id=ticket_id, oa="sales",
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("could not tell %s the report is complete", chann_uid)
 
 
 async def _notify_new_ticket(
@@ -8784,6 +8830,127 @@ async def _ask_who_to_assign(
     )
 
 
+TICKET_RELEASED = {
+    "th": "เปิดงาน {code} ให้ช่างรับแล้ว แจ้งช่าง {count} คนทาง LINE ใครรับก่อนได้งาน\n(หรือมอบหมายเจาะจง: \"มอบหมาย {code} ให้ สมศักดิ์\")",
+    "en": "Job {code} is open to the technicians — {count} told in LINE; first to accept takes it.\n(Or assign one directly: \"assign {code} to Somsak\")",
+}
+TICKET_RELEASE_NEEDS_CODE = {
+    "th": "จะเปิดงานไหนให้ช่างรับครับ พิมพ์ เช่น \"เปิดให้ช่างรับ T-2026-0001\" (ดูเลขงานที่ \"รายการงาน\")",
+    "en": "Which job? e.g. \"open T-2026-0001 to technicians\" (\"tickets\" lists them)",
+}
+TICKET_RELEASE_TAKEN = {
+    "th": "งาน {code} มีช่างรับแล้ว ({who}) ไม่ต้องเปิดรับอีกครับ",
+    "en": "Job {code} has already been accepted ({who}).",
+}
+TICKET_HELD_BY_SHOP = {
+    "th": "งาน {code} ยังไม่เปิดให้รับครับ รอ CS มอบหมายหรือเปิดรับก่อน (ดูงานที่รับได้ที่ \"งานที่เปิดรับ\")",
+    "en": "Job {code} is not open yet — the shop assigns it or opens it first (\"open jobs\" lists what you can take).",
+}
+TICKET_RELEASED_NOTICE = {
+    "th": "งานเปิดรับ {code}\n{who}\n{issue}\n{address}\nนัด: {when}\nพิมพ์ \"รับงาน {code}\" เพื่อรับ (ใครรับก่อนได้งาน)",
+    "en": "Open job {code}\n{who}\n{issue}\n{address}\nAppointment: {when}\nType \"claim {code}\" to take it (first come, first served)",
+}
+
+
+async def _notify_released_ticket(client: DataClient, license_id: str, ticket: dict, language: str) -> int:
+    """Every active technician hears a job was opened to them; returns how
+    many were told. Best-effort, like the other announcements."""
+    try:
+        members = await client.list_members(license_id)
+    except Exception:  # noqa: BLE001
+        log.exception("could not list technicians for a released job")
+        return 0
+    technicians = [
+        m for m in members
+        if str(m.get("role") or "").lower() == "technician" and str(m.get("status") or "active") == "active"
+    ]
+    code = str(ticket.get("ticket_number") or "")
+    told = 0
+    for member in technicians:
+        chann_uid = str(member.get("chann_uid") or "")
+        if not chann_uid:
+            continue
+        try:
+            line_target = await client.line_target_of(chann_uid)
+            await send_notification(
+                client, license_id=license_id, target_chann_uid=chann_uid, target_line_user_id=line_target,
+                type="ticket_released",
+                message=_t(TICKET_RELEASED_NOTICE, "th").format(
+                    code=code, who=ticket.get("customer_name") or "—", issue=ticket.get("issue_description") or "",
+                    address=ticket.get("service_address") or "—", when=_ticket_when(ticket) or "—",
+                ),
+                message_en=_t(TICKET_RELEASED_NOTICE, "en").format(
+                    code=code, who=ticket.get("customer_name") or "—", issue=ticket.get("issue_description") or "",
+                    address=ticket.get("service_address") or "—", when=_ticket_when(ticket) or "—",
+                ),
+                entity_type="service_ticket", entity_id=str(ticket.get("id") or ""), oa="technician",
+            )
+            told += 1
+        except Exception:  # noqa: BLE001
+            log.exception("could not tell %s about a released job", chann_uid)
+    return told
+
+
+async def _handle_ticket_release(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
+    permission_keys: list[str], language: str,
+) -> ChatReply:
+    """"เปิดให้ช่างรับ T-…": the shop opens a held job to every technician
+    (round 19f). Dispatching's other half — the same permission as assign,
+    the same completeness gate."""
+    if "ticket.assign" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    license_id = str(license_id)
+    match = TICKET_CODE_RE.search(message or "")
+    code = match.group(1).upper() if match else ""
+    if not code:
+        ref = await _last_entity_ref(client, ctx)
+        if ref and str(ref.get("entity_type") or "") in ("ticket", "service_ticket"):
+            code = str(ref.get("code") or "")
+    if not code:
+        return ChatReply(
+            text=_t(TICKET_RELEASE_NEEDS_CODE, language),
+            quick_replies=[("รายการงาน", "รายการงาน")],
+        )
+    try:
+        tickets = await client.list_tickets(license_id)
+    except Exception:
+        log.exception("could not list tickets to release one")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    ticket = next((t for t in tickets if str(t.get("ticket_number") or "").upper() == code), None)
+    if ticket is None:
+        return ChatReply(text=_t(NOT_FOUND_BY_CODE, language).format(what="งาน", code=code))
+    if str(ticket.get("status") or "") in ("completed", "cancelled"):
+        return ChatReply(text=_t(TICKET_ALREADY_CLOSED, language).format(
+            code=code, state=_label(TICKET_STATUS_LABELS, ticket.get("status"), language),
+        ))
+    if str(ticket.get("accept_status") or "") == "accepted" and ticket.get("assigned_to_ref"):
+        return ChatReply(text=_t(TICKET_RELEASE_TAKEN, language).format(code=code, who=ticket.get("assigned_to_name") or "-"))
+    try:
+        row = await client.release_ticket(license_id, str(ticket["id"]), actor_id=ctx.chann_uid)
+    except DataTierError as exc:
+        detail = exc.structured or {}
+        if detail.get("error") == "dispatch_blocked":
+            return ChatReply(
+                text=_t(TICKET_DISPATCH_BLOCKED, language).format(
+                    missing=", ".join(detail.get("missing") or [])
+                ),
+                quick_replies=[("ดูข้อมูลงาน", f"ข้อมูลงาน {code}")],
+            )
+        log.exception("ticket release failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    except Exception:
+        log.exception("ticket release failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    told = await _notify_released_ticket(client, license_id, {**ticket, **(row or {})}, language)
+    await _remember_entity(client, ctx, entity_type="ticket", entity_id=str(ticket.get("id") or ""), code=code)
+    return ChatReply(
+        text=_t(TICKET_RELEASED, language).format(code=code, count=told),
+        entity_type="ticket", entity_id=str(ticket.get("id") or ""),
+        quick_replies=[("ข้อมูลงาน", f"ข้อมูลงาน {code}"), ("รายการงาน", "รายการงาน")],
+    )
+
+
 async def _handle_ticket_assign(
     client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
     trigger: str, permission_keys: list[str], language: str,
@@ -9334,6 +9501,11 @@ async def _handle_ticket_claim(
     except DataTierError as exc:
         if "team lead accepts" in str(exc.detail or ""):
             return ChatReply(text=_t(TICKET_TEAM_LEAD_FIRST, language).format(code=code))
+        if "not open to you" in str(exc.detail or ""):
+            return ChatReply(
+                text=_t(TICKET_HELD_BY_SHOP, language).format(code=code),
+                quick_replies=[("งานที่เปิดรับ", "งานที่เปิดรับ")],
+            )
         return _field_service_failure(
             exc, code=code, language=language, template=TICKET_CLAIM_FAILED,
         )
@@ -9709,6 +9881,10 @@ APPROVAL_APPROVED = {
     "th": "อนุมัติ {code} แล้ว{next}",
     "en": "Approved {code}.{next}",
 }
+APPROVAL_ON_BEHALF = {
+    "th": "\n(อนุมัติแทนขั้นของ {who} ในฐานะเจ้าของร้าน/ผู้ดูแลกฎอนุมัติ)",
+    "en": "\n(Approved on behalf of {who}, as the owner / approval manager.)",
+}
 APPROVAL_POLICY_ROLE_EMPTY = {
     "th": "ขั้นที่ให้บทบาท \"{role}\" อนุมัติ: ตอนนี้ยังไม่มีสมาชิกที่เป็น {role} จึงไม่มีใครอนุมัติได้ — เชิญคนเข้าบทบาทนี้ก่อน หรือใช้บทบาทอื่น",
     "en": "The step for role \"{role}\": no active member holds {role}, so nobody could approve it — invite someone into that role first, or use another role",
@@ -9938,6 +10114,19 @@ async def _handle_approval_act(
         client, ctx, entity_type="service_report",
         entity_id=str(report.get("id") or ""), code=report_code,
     )
+    on_behalf = ""
+    try:
+        actor = await approval_service.actor_of(client, license_id, ctx.chann_uid)
+        theirs = (
+            (step.get("approver_type") == "user" and str(step.get("approver_ref") or "") == str(actor.get("member_id") or ""))
+            or (step.get("approver_type") == "role" and str(step.get("approver_ref") or "") in set(actor.get("roles") or []))
+        )
+        if not theirs:
+            members = await client.list_members(license_id)
+            names = [str(m.get("display_name") or m.get("chann_uid") or "") for m in approval_service.approvers_for(step, members)]
+            on_behalf = _t(APPROVAL_ON_BEHALF, language).format(who=", ".join(n for n in names if n) or str(step.get("approver_ref") or ""))
+    except Exception:  # noqa: BLE001
+        on_behalf = ""
     if approve:
         status = result.get("report_status")
         if status == "approved":
@@ -9949,7 +10138,7 @@ async def _handle_approval_act(
             # step named a role no member holds — the report sat "submitted"
             # and the customer heard nothing). Said here, and the owner told.
             tail = _t(APPROVAL_NEXT_NOBODY, language).format(who=result.get("next_step_ref") or "?", code=report_code)
-        text = _t(APPROVAL_APPROVED, language).format(code=report_code, next=tail)
+        text = _t(APPROVAL_APPROVED, language).format(code=report_code, next=tail) + on_behalf
         if result.get("document_url"):
             text += f"\nPDF (7 วัน): {result['document_url']}"
     else:
@@ -11725,6 +11914,32 @@ CUSTOMER_EDIT_WHOSE = {
     "th": "แก้ของลูกค้าคนไหนครับ พิมพ์ชื่อหรือรหัสลูกค้า (เช่น \"แก้เบอร์ สมชาย เป็น 0891234567\") · ข้อมูลของคุณเองแก้ได้ที่ Dashboard > สมาชิกในร้าน",
     "en": "Which customer? Type the name or code (e.g. \"change Somchai's phone to 0891234567\") · your own details are edited on the dashboard.",
 }
+
+
+_OPEN_TO_TECHNICIANS_WORDS = (
+    "เปิดให้ช่างรับ", "ให้ช่างรับ", "ให้ช่างมารับ", "เปิดรับ", "ปล่อยงาน", "ปล่อยให้ช่าง", "เปิดให้ช่าง",
+    "ให้ช่างทุกคน", "ช่างคนไหนก็ได้", "ใครก็ได้", "open to technicians", "release", "to the pool",
+)
+
+
+def _asks_to_open_to_technicians(message: str) -> bool:
+    """"เปิดให้ช่างรับ T-…" / "ปล่อยงาน T-… ให้ช่างรับ": the pool, not one
+    technician — no name is missing."""
+    compact = _normalise(message)
+    return any(w.replace(" ", "") in compact for w in _OPEN_TO_TECHNICIANS_WORDS)
+
+
+def _assign_to_the_pool(intent: dict, message: str, oa: str) -> dict:
+    """The model reads "เปิดให้ช่างรับ T-…" as assign/ticket missing the
+    technician's name (ask-model, 16 ก.ย. 2569). Nobody is missing — the
+    job goes to every technician — so the missing gate must not ask."""
+    verb = ACTION_ALIASES.get(str(intent.get("action") or "").lower(), str(intent.get("action") or "").lower())
+    if oa != "sales" or str(intent.get("entity") or "") != "ticket" or verb != "assign":
+        return intent
+    fields = intent.get("fields") or {}
+    if fields.get("target_name") or fields.get("target") or not _asks_to_open_to_technicians(message):
+        return intent
+    return {"action": "release", "entity": "ticket", "fields": {"code": fields.get("code")}, "missing": []}
 
 
 def _shop_close_as_a_ticket_update(intent: dict, message: str, oa: str) -> dict:
@@ -13983,6 +14198,11 @@ async def _handle_ai_understood_intent(
             return await _handle_ticket_claim(
                 client, ctx=ctx, license_id=license_id,
                 message=_joined("รับงาน", code),
+                permission_keys=permission_keys, language=language,
+            )
+        if action == "release" or (action == "assign" and not target and _asks_to_open_to_technicians(message)):
+            return await _handle_ticket_release(
+                client, ctx=ctx, license_id=license_id, message=_joined(message, code),
                 permission_keys=permission_keys, language=language,
             )
         if action == "assign":
@@ -21115,6 +21335,11 @@ async def _route_chat_message(
     # that carries it must not, or "ตั้งกฎมอบหมาย" could be parsed as
     # something else entirely.
     if ctx.oa == "sales":
+        if _asks_to_open_to_technicians(message) and TICKET_CODE_RE.search(message or ""):
+            return await _handle_ticket_release(
+                client, ctx=ctx, license_id=license_id, message=message,
+                permission_keys=permission_keys, language=language,
+            )
         if _matches_phrase(message, ASSIGN_CONFIRM):
             return await _handle_assignment_confirm(
                 client, ctx=ctx, license_id=license_id,
@@ -23132,6 +23357,7 @@ async def _model_road(
     intent = _staff_profile_edit_as_customer(intent, message, ctx.oa)
     intent = await _product_price_as_the_line_in_view(client, ctx, license_id, intent)
     intent = _shop_close_as_a_ticket_update(intent, message, ctx.oa)
+    intent = _assign_to_the_pool(intent, message, ctx.oa)
     # Missing fields come first: never refuse a request we did not understand.
     missing = _prune_missing(intent.get("missing") or [], intent, message)
     if missing == ["target_name"] and not (intent.get("fields") or {}).get("target_name") and carried is None:
