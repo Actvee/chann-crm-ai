@@ -652,19 +652,26 @@ class DataClient:
 
     async def assign_ticket(
         self, license_id: str, ticket_id: str, *, target_type: str, target_ref: str,
-        actor_id: str | None = None,
+        actor_id: str | None = None, by_member_id: str | None = None,
     ) -> dict:
         resp = await self._client.post(
             f"{self._base}/internal/v1/licenses/{license_id}/tickets/{ticket_id}/assign",
             headers=self._headers_for(actor_id),
-            json={"target_type": target_type, "target_ref": target_ref},
+            json={
+                "target_type": target_type, "target_ref": target_ref,
+                **({"by_member_id": by_member_id} if by_member_id else {}),
+            },
         )
         return self._unwrap(resp)
 
-    async def release_ticket(self, license_id: str, ticket_id: str, actor_id: str | None = None) -> dict:
+    async def release_ticket(
+        self, license_id: str, ticket_id: str, actor_id: str | None = None,
+        by_member_id: str | None = None,
+    ) -> dict:
         resp = await self._client.post(
             f"{self._base}/internal/v1/licenses/{license_id}/tickets/{ticket_id}/release",
             headers=self._headers_for(actor_id),
+            json={"by_member_id": by_member_id} if by_member_id else {},
         )
         return self._unwrap(resp)
 

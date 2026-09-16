@@ -125,23 +125,56 @@ READ_TICKET = {"action": "read", "entity": "ticket", "fields": {"code": "T-2026-
 
 
 class TestTheRecordDecidesWhichShopAnswers:
-    async def test_a_job_from_the_other_shop_is_answered_by_that_shop(self):
+    """Round 19p: it ASKS. Owner, 16 ก.ย. 2569: "ถ้าจะสลับต้องถามผู้ใช้ให้
+    ยืนยันก่อน และเตรียมกรณีโดนขัดจังหวะระหว่างถามด้วย" — which shop a
+    message lands in decides whose records are read and written."""
+
+    async def test_a_job_from_the_other_shop_is_offered_not_taken(self):
         client = _two_shops()
         reply = await handle_chat_message(
             client, message="งาน T-2026-0007 ถึงไหนแล้วครับ", ctx=_in_shop_a(),
             ai_client=_reads(READ_TICKET),
         )
-        assert "ร้าน ข" in reply.text, reply.text
+        assert "ร้าน ข" in reply.text and "T-2026-0007" in reply.text, reply.text
+        assert "ไหม" in reply.text, reply.text
+        assert not [w for w in client.recorded if w[0] == "set_active_tenant"], client.recorded
+        assert any(label.startswith("สลับไป") for label, _send in reply.quick_replies), reply.quick_replies
+
+    async def test_saying_yes_switches_and_answers_what_was_asked(self):
+        client = _two_shops()
+        ctx = _in_shop_a()
+        await handle_chat_message(
+            client, message="งาน T-2026-0007 ถึงไหนแล้วครับ", ctx=ctx, ai_client=_reads(READ_TICKET),
+        )
+        reply = await handle_chat_message(client, message="ใช่", ctx=ctx, ai_client=_reads(READ_TICKET))
+        stored = [w for w in client.recorded if w[0] == "set_active_tenant"]
+        assert stored and str(stored[-1][3]) == SHOP_B, client.recorded
+        # The sentence they already typed is answered in the shop that holds it.
         assert "T-2026-0007" in reply.text, reply.text
 
-    async def test_the_choice_is_remembered_so_the_next_message_lands_there(self):
+    async def test_saying_no_keeps_the_shop_they_are_in(self):
         client = _two_shops()
+        ctx = _in_shop_a()
         await handle_chat_message(
-            client, message="งาน T-2026-0007 ถึงไหนแล้วครับ", ctx=_in_shop_a(),
-            ai_client=_reads(READ_TICKET),
+            client, message="งาน T-2026-0007 ถึงไหนแล้วครับ", ctx=ctx, ai_client=_reads(READ_TICKET),
         )
-        stored = [w for w in client.recorded if w[0] == "set_active_tenant"]
-        assert stored and str(stored[-1][3]) == SHOP_B, stored
+        reply = await handle_chat_message(client, message="ไม่ต้อง", ctx=ctx, ai_client=_reads(READ_TICKET))
+        assert not [w for w in client.recorded if w[0] == "set_active_tenant"], client.recorded
+        assert "ร้าน ก" in reply.text, reply.text
+
+    async def test_an_interruption_drops_the_question_and_is_answered_here(self):
+        client = _two_shops()
+        ctx = _in_shop_a()
+        await handle_chat_message(
+            client, message="งาน T-2026-0007 ถึงไหนแล้วครับ", ctx=ctx, ai_client=_reads(READ_TICKET),
+        )
+        reply = await handle_chat_message(
+            client, message="ข้อมูลของฉัน", ctx=ctx,
+            ai_client=_reads({"action": "read", "entity": "profile", "fields": {}, "missing": []}),
+        )
+        assert not [w for w in client.recorded if w[0] == "set_active_tenant"], client.recorded
+        assert "ข้อมูลของคุณ" in reply.text, reply.text
+        assert [w for w in client.recorded if w[0] == "clear_pending_intent"], client.recorded
 
     async def test_a_job_of_the_shop_we_are_in_does_not_move_anything(self):
         client = _two_shops()
@@ -209,7 +242,9 @@ class TestKnowingWhichShopsYouAreWith:
             client, message="ผมอยู่กับร้านไหนบ้าง", ctx=alone,
             ai_client=_reads({"action": "switch", "entity": "shop", "fields": {}, "missing": []}),
         )
-        assert "ร้าน ก" in reply.text and not reply.quick_replies, (reply.text, reply.quick_replies)
+        assert "ร้าน ก" in reply.text, reply.text
+        # Round 19p: with one shop the answer also says how to add another.
+        assert ("ผูกอีกร้าน", "ผูกอีกร้าน") in reply.quick_replies, reply.quick_replies
 
 
 class TestLinkingASecondShop:

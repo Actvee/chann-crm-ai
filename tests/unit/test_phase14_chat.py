@@ -133,7 +133,9 @@ class TestApprovingInChat:
         await _submit(c)
         reply = await handle_chat_message(c, message="รายการรออนุมัติ", ctx=_ctx(primary_role="cs", oa="sales"))
         assert "SR-2026-0001" in reply.text and "สมหญิง" in reply.text
-        assert ("SR-2026-0001", "อนุมัติ SR-2026-0001") in reply.quick_replies
+        # Round 19p: the label says what the button does, not just the number —
+        # the owner's testers pressed it expecting to open the report.
+        assert ("อนุมัติ SR-2026-0001", "อนุมัติ SR-2026-0001") in reply.quick_replies
 
     @pytest.mark.asyncio
     async def test_approving_the_only_step_sends_the_survey(self, pushes):

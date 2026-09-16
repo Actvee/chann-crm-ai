@@ -168,7 +168,8 @@ class _Client(FakeDataClient):
     async def aclose(self):
         pass
 
-    async def assign_ticket(self, license_id, ticket_id, *, target_type, target_ref, actor_id=None):
+    async def assign_ticket(self, license_id, ticket_id, *, target_type, target_ref, actor_id=None,
+                            by_member_id=None):
         self.recorded.append(("assign_ticket", ticket_id, target_type, target_ref))
         return {"id": ticket_id, "ticket_number": "T-2026-0001", "status": "assigned"}
 

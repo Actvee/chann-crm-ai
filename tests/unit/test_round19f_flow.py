@@ -79,7 +79,9 @@ class TestTheShopOpensAJobToTheTechnicians:
         reply, calls = await _say(client, "เปิดให้ช่างรับ T-2026-0005", RELEASE_READING)
         assert [c for c in calls if c[0] == "release_ticket"], reply.text
         assert "เปิดงาน T-2026-0005 ให้ช่างรับแล้ว" in reply.text and "แจ้งช่าง 2 คน" in reply.text, reply.text
-        told = [c for c in calls if c[0] == "create_notification"]
+        # Only the technicians' notice; the other dispatchers get their own
+        # "this one is handled" line since round 19p.
+        told = [c for c in calls if c[0] == "create_notification" and "ticket_released" in str(c)]
         assert len(told) == 2 and all("รับงาน T-2026-0005" in str(c) for c in told), told
         assert not [c for c in calls if c[0] == "set_pending_intent"], "no 'ให้ใคร' question"
 

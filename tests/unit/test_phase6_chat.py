@@ -738,12 +738,24 @@ class FakeDataClient:
             rows = [r for r in rows if str(r.get("status") or "") == status]
         return rows
 
-    async def assign_ticket(self, license_id, ticket_id, *, target_type, target_ref, actor_id=None):
-        self.recorded.append(("assign_ticket", license_id, ticket_id, target_type, target_ref))
+    async def assign_ticket(self, license_id, ticket_id, *, target_type, target_ref, actor_id=None,
+                            by_member_id=None):
+        self.recorded.append(("assign_ticket", license_id, ticket_id, target_type, target_ref, by_member_id))
         blocked = getattr(self, "_dispatch_error", None)
         if blocked:
             from chann_app.data_client import DataTierError
             raise DataTierError(409, str(blocked), blocked)
+        for t in getattr(self, "_tickets", []):
+            if t.get("id") == ticket_id:
+                t["assigned_target_type"] = target_type
+                t["assigned_to_ref"] = target_ref
+                t["status"] = "assigned"
+                # Mirrors ServiceTicketRepository.assign (round 19p): the
+                # dispatcher takes an unowned job, so a later approval step
+                # on "CS เจ้าของงาน" has a person.
+                if by_member_id and not t.get("owner_member_id"):
+                    t["owner_member_id"] = by_member_id
+                return dict(t)
         return {"id": ticket_id, "ticket_number": "T-2026-0001"}
 
     async def check_in_ticket(self, license_id, ticket_id, *, member_id, gps_lat=None, gps_lng=None, photo_url=None, actor_id=None):
@@ -767,8 +779,8 @@ class FakeDataClient:
                 "technician_member_id": member_id, "status": "submitted",
                 "report_data": dict(report_data)}
 
-    async def release_ticket(self, license_id, ticket_id, actor_id=None):
-        self.recorded.append(("release_ticket", license_id, ticket_id))
+    async def release_ticket(self, license_id, ticket_id, actor_id=None, by_member_id=None):
+        self.recorded.append(("release_ticket", license_id, ticket_id, by_member_id))
         blocked = getattr(self, "_dispatch_error", None)
         if blocked:
             from chann_app.data_client import DataTierError
@@ -776,6 +788,8 @@ class FakeDataClient:
         for t in getattr(self, "_tickets", []):
             if t.get("id") == ticket_id:
                 t["visibility"] = "public"
+                if by_member_id and not t.get("owner_member_id"):
+                    t["owner_member_id"] = by_member_id
                 return dict(t)
         return {"id": ticket_id, "visibility": "public"}
 
@@ -2824,7 +2838,7 @@ class TestPhase9Storefront:
              "company_name": "ร้าน A"},
         ])
         reply = await maybe_handle_storefront(
-            client, message="ABCD2345",
+            client, message="COV9URCZ",  # a real shop code's shape (round 19p)
             ctx=_ctx(primary_role="customer", oa="customer"), language="th",
         )
         assert reply is None
@@ -6611,6 +6625,9 @@ class TestButtonsTheSystemWritesDoNotNeedTheAI:
         triggers += list(module.SHOP_INFO_PHRASES)
         triggers += list(module.WARRANTY_BOOK_PHRASES)
         triggers += list(module.SWITCH_TENANT_PHRASES)
+        # "ใช้ร้าน COB" — the chooser's own payload, read by
+        # _membership_named (round 19p put one on a button of its own).
+        triggers += list(module._USE_TENANT_PREFIXES)
         triggers += list(module.TEAM_LIST_PHRASES)
         triggers += list(module.TICKET_REJECT_TRIGGERS)
         triggers += list(module.LANGUAGE_TO_EN) + list(module.LANGUAGE_TO_TH)
@@ -6650,6 +6667,9 @@ class TestButtonsTheSystemWritesDoNotNeedTheAI:
             "ยกเลิกทั้งสองรายการ",
             # the offered address (_SAME_ADDRESS_PHRASES), round 19h
             "ที่อยู่เดิม",
+            # round 19p: read by _asks_to_join_another_shop, in the
+            # dispatcher and in the customer road
+            "ผูกอีกร้าน",
         }
         remaining = [t for t in dead if t not in handled_by_literal]
         assert not remaining, f"buttons that lead nowhere: {remaining}"

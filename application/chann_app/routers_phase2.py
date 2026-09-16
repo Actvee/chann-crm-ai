@@ -2591,6 +2591,8 @@ async def assign_ticket_from_dashboard(
         row = await client.assign_ticket(
             license_id, ticket_id, target_type=target_type, target_ref=target_ref,
             actor_id=principal.chann_uid,
+            # Whoever dispatches an unowned job takes it (round 19p).
+            by_member_id=await _member_of(client, license_id, principal),
         )
     except DataTierError as exc:
         raise _propagate(exc)
@@ -2622,7 +2624,10 @@ async def release_ticket_from_dashboard(
     _require_same_tenant(principal, license_id)
     principal.require_any("ticket.assign", "ticket.update")
     try:
-        row = await client.release_ticket(license_id, ticket_id, actor_id=principal.chann_uid)
+        row = await client.release_ticket(
+            license_id, ticket_id, actor_id=principal.chann_uid,
+            by_member_id=await _member_of(client, license_id, principal),
+        )
     except DataTierError as exc:
         raise _propagate(exc)
     try:

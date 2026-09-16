@@ -755,6 +755,13 @@ class TicketPatchIn(BaseModel):
 class TicketAssignIn(BaseModel):
     target_type: str
     target_ref: uuid.UUID
+    #: The member dispatching. A customer's report has no owner at the
+    #: shop; whoever dispatches it takes it (round 19p).
+    by_member_id: uuid.UUID | None = None
+
+
+class TicketReleaseIn(BaseModel):
+    by_member_id: uuid.UUID | None = None
 
 
 class TicketMemberActionIn(BaseModel):

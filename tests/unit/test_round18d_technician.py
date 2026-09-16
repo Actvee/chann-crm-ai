@@ -303,7 +303,7 @@ class TestTheTypedNameFinishesTheAssignment:
         await handle_chat_message(client, message="มอบหมาย T-2026-0001", ctx=ctx, ai_client=ai)
         reply = await handle_chat_message(client, message="สมศักดิ์", ctx=ctx, ai_client=ai)
         assigned = _recorded(client, "assign_ticket")
-        assert assigned == [("assign_ticket", LICENSE_ID, "t1", "technician", "m-tech-1")], client.recorded
+        assert [a[:5] for a in assigned] == [("assign_ticket", LICENSE_ID, "t1", "technician", "m-tech-1")], client.recorded
         assert "มอบหมาย T-2026-0001 ให้ สมศักดิ์ ใจดี แล้ว" in reply.text, reply.text
         assert await client.get_pending_intent("CHN-S-000001", "sales") is None
 
@@ -347,7 +347,7 @@ class TestAutomaticAssignmentNamesThePerson:
             client, message="มอบหมาย T-2026-0001 อัตโนมัติ", ctx=_ctx(), ai_client=_model(ASSIGN_AUTO),
         )
         assert client.assignment_requests[-1]["entity_id"] == "t1", client.assignment_requests
-        assert _recorded(client, "assign_ticket") == [("assign_ticket", LICENSE_ID, "t1", "technician", "m-tech-1")], client.recorded
+        assert [a[:5] for a in _recorded(client, "assign_ticket")] == [("assign_ticket", LICENSE_ID, "t1", "technician", "m-tech-1")], client.recorded
         assert "มอบหมาย T-2026-0001 ให้ สมศักดิ์ แล้ว" in reply.text and "กฎมอบหมาย" in reply.text, reply.text
         assert "m-tech-1" not in reply.text and "CHN-T-000001" not in reply.text, reply.text
 
@@ -359,6 +359,6 @@ class TestAutomaticAssignmentNamesThePerson:
         reply = await handle_chat_message(
             client, message="มอบหมาย T-2026-0001 อัตโนมัติ", ctx=_ctx(), ai_client=_model(SUGGEST),
         )
-        assert _recorded(client, "assign_ticket") == [("assign_ticket", LICENSE_ID, "t1", "technician", "m-tech-1")], client.recorded
+        assert [a[:5] for a in _recorded(client, "assign_ticket")] == [("assign_ticket", LICENSE_ID, "t1", "technician", "m-tech-1")], client.recorded
         assert "มอบหมาย T-2026-0001 ให้ สมศักดิ์ ใจดี แล้ว" in reply.text, reply.text
         assert "m-tech-1" not in reply.text and "CHN-T-000001" not in reply.text, reply.text

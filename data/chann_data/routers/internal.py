@@ -232,6 +232,7 @@ from ..schemas import (
     TicketOut,
     TicketPhotoIn,
     TicketPhotoOut,
+    TicketReleaseIn,
     TicketPhotoPatch,
     TicketPatchIn,
     TicketStatusIn,
@@ -3960,6 +3961,7 @@ def assign_ticket(
         row = ServiceTicketRepository(session).assign(
             scope, ticket_id,
             target_type=payload.target_type, target_ref=payload.target_ref,
+            by_member_id=payload.by_member_id,
         )
         AuditRepository(session).write(
             license_id=license_id, entity_type="service_ticket", entity_id=row.id,
@@ -3980,13 +3982,16 @@ def assign_ticket(
 def release_ticket(
     license_id: uuid.UUID,
     ticket_id: uuid.UUID,
+    payload: TicketReleaseIn | None = None,
     session: Session = Depends(get_session),
     x_actor_id: str = Header(default=""),
 ):
     """The shop opens a held job to every technician (round 19f)."""
     scope = TenantScope(license_id=license_id)
     try:
-        row = ServiceTicketRepository(session).release(scope, ticket_id)
+        row = ServiceTicketRepository(session).release(
+            scope, ticket_id, by_member_id=(payload.by_member_id if payload else None),
+        )
         AuditRepository(session).write(
             license_id=license_id, entity_type="service_ticket", entity_id=row.id,
             actor_type="user", actor_id=x_actor_id or None, action="update",

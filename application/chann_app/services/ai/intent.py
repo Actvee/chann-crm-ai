@@ -227,9 +227,15 @@ does not exist anywhere else the model can check against):
   action="claim": the speaker is taking the job themselves. fields may
     include code (a T- reference). Examples: "ขอรับงานนี้", "ผมไปเอง",
     "เดี๋ยวผมจัดการให้".
-  action="assign": giving it to someone else. fields may include
+  action="assign": giving it to someone else BY NAME. fields may include
     target_name (a person or team) and code. Examples: "ให้ทีมแอร์ไปทำ",
     "ส่งงานนี้ให้ช่างสมชาย", "จัดคนไปหน่อย".
+  action="release": opening the job to ALL technicians — nobody is named
+    and whoever takes it first gets it. fields may include code. This is
+    the shop speaking, not a technician: "รับ" here is the technicians
+    receiving the job, never the speaker taking it, so it is NEVER claim.
+    Examples: "เปิดให้ช่างรับ T-2026-0001", "ปล่อยงานนี้ให้ช่างรับ",
+    "เปิดงานให้ช่างมารับ", "ใครว่างมารับได้เลย".
   action="update": fields may include scheduled_date, scheduled_time,
     service_address, status. Examples: "เลื่อนไปพรุ่งนี้บ่าย", "ลูกค้า
     ขอเปลี่ยนที่อยู่".

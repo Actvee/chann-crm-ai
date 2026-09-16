@@ -182,10 +182,17 @@ class TestCodeShapes:
         assert not INVITE_CODE_RE.match("ABCDEFGH")      # too short (company)
         assert not INVITE_CODE_RE.match("ABCDEFGHJ0")    # 0 is excluded
 
-    def test_company_code_is_eight_chars(self):
-        assert COMPANY_CODE_RE.match("ABCD2345")
-        assert not COMPANY_CODE_RE.match("ABCDEFGHJK")   # too long (invite)
-        assert not COMPANY_CODE_RE.match("ABCD234I")     # I is excluded
+    def test_company_code_is_the_shape_the_generator_makes(self):
+        # "CO" + six of the no-confusables alphabet
+        # (phase65._unique_license_code). This test used to assert eight
+        # characters OF that alphabet — which excludes "O" — so it passed
+        # while no real code could match, and every customer who typed one
+        # was answered "ไม่พบหมายเลข … ในระบบ" (owner's transcript,
+        # 16 ก.ย. 2569: "COV9URCZ").
+        assert COMPANY_CODE_RE.match("COV9URCZ")
+        assert not COMPANY_CODE_RE.match("ABCD2345")     # no CO prefix
+        assert not COMPANY_CODE_RE.match("COABCDEFGH")   # too long (invite)
+        assert not COMPANY_CODE_RE.match("COABC23I")     # I is excluded
 
 
 class TestSalesRegistration:
@@ -248,7 +255,7 @@ class TestCustomerRegistration:
     async def test_company_code_links_the_shop(self):
         client = FakeRegClient()
         reply = await handle_registration(
-            client, message="ABCD2345", ctx=_ctx(), audience="customer"
+            client, message="COV9URCZ", ctx=_ctx(), audience="customer"
         )
         assert "ผูกกับร้าน" in reply
         assert client.calls == ["link_customer"]

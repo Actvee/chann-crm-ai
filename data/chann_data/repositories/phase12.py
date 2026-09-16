@@ -274,9 +274,15 @@ class ServiceTicketRepository:
 
     def assign(
         self, scope: TenantScope, ticket_id: uuid.UUID, *,
-        target_type: str, target_ref: uuid.UUID,
+        target_type: str, target_ref: uuid.UUID, by_member_id: uuid.UUID | None = None,
     ) -> ServiceTicket:
-        """Send a ticket to a technician or a team, if it is ready to go."""
+        """Send a ticket to a technician or a team, if it is ready to go.
+
+        `by_member_id` is the person dispatching. A job a CUSTOMER reported
+        has no owner at the shop, and with several CS that means nobody is
+        responsible for it and a later "CS เจ้าของงาน" approval step points
+        at no one (owner, 16 ก.ย. 2569: "จะทำยังไงถ้า CS มีหลายคน"). The one
+        who dispatches it takes it, unless someone already owns it."""
         if target_type not in TARGET_TYPES:
             raise TicketConflict(f"unknown assignment target: {target_type!r}")
 
@@ -319,10 +325,14 @@ class ServiceTicketRepository:
         # Reset on every assignment: a ticket handed to someone new has not
         # been accepted by them, whatever the previous assignee said.
         row.accept_status = "pending"
+        if by_member_id is not None and row.owner_member_id is None:
+            row.owner_member_id = by_member_id
         self._s.flush()
         return row
 
-    def release(self, scope: TenantScope, ticket_id: uuid.UUID) -> ServiceTicket:
+    def release(
+        self, scope: TenantScope, ticket_id: uuid.UUID, *, by_member_id: uuid.UUID | None = None,
+    ) -> ServiceTicket:
         """Open a held job to every technician (round 19f, owner 16 ก.ย. 2569:
         a customer's report waits for the shop — CS either assigns it or
         opens it to the pool; technicians do not pick it up on their own).
@@ -339,6 +349,8 @@ class ServiceTicketRepository:
         if blockers:
             raise DispatchBlocked(blockers, self.dispatch_missing_fields(row))
         row.visibility = "public"
+        if by_member_id is not None and row.owner_member_id is None:
+            row.owner_member_id = by_member_id
         self._s.flush()
         return row
 

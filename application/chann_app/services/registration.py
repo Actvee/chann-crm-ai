@@ -33,7 +33,26 @@ CUSTOMER_PENDING_TTL_S = 3600
 # strict would reject real ones. An unknown serial simply finds nothing.
 SERIAL_RE = re.compile(r"\b([A-Z0-9][A-Z0-9\-]{5,31})\b", re.IGNORECASE)
 
-COMPANY_CODE_RE = re.compile(r"^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{8}$")
+# A shop code is "CO" + 6 characters of the no-confusables alphabet
+# (data/chann_data/repositories/phase65.py: CODE_ALPHABET, _unique_license_code).
+# The pattern here used to be eight characters OF that alphabet — which
+# excludes "O" — so it could not match a single real code, and every
+# customer who typed one was told "ไม่พบหมายเลข … ในระบบ" by the serial
+# path below. Found from the owner's own transcript, 16 ก.ย. 2569:
+# "COV9URCZ" → "ไม่พบหมายเลข COV9URCZ ในระบบครับ".
+COMPANY_CODE_RE = re.compile(r"^CO[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{6}$")
+
+
+def as_company_code(text: str) -> str:
+    """The shop code in this text, or "".
+
+    Forgiving about the two things people do when copying a code off a
+    screen: spaces or dashes, and a zero for the O of the "CO" prefix (the
+    alphabet has neither O nor 0, so a leading "C0" can only be that).
+    """
+    token = re.sub(r"[\s\-]", "", (text or "").upper())
+    token = re.sub(r"^C0", "CO", token)
+    return token if COMPANY_CODE_RE.match(token) else ""
 
 WELCOME = {
     "th": (
@@ -618,9 +637,10 @@ async def _link_and_continue(
 async def _handle_customer(
     client: DataClient, text: str, ctx: ResolvedContext, language: str
 ):
-    if COMPANY_CODE_RE.match(text.upper()):
+    code = as_company_code(text)
+    if code:
         return await _link_and_continue(
-            client, ctx, company_code=text.upper(), language=language,
+            client, ctx, company_code=code, language=language,
         )
     if INVITE_CODE_RE.match(text.upper()):
         # A staff invite typed by a customer (test team, 11 ก.ย. 2569: it

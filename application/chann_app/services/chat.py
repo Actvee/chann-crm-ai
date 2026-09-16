@@ -42,7 +42,7 @@ from .identity import ResolvedContext, TenantResolution, member_channel
 # goes through it (review v3, 9-10 Sep 2026 — B01-B04, B07).
 from .capabilities import CUSTOMER_CREATE, capability
 from .intent_guard import ASK, intent_to_act
-from .registration import COMPANY_CODE_RE
+from .registration import COMPANY_CODE_RE, as_company_code
 from . import storefront as storefront_service
 from . import live_chat
 from . import pdpa as pdpa_service
@@ -4186,6 +4186,7 @@ async def _maybe_forward_to_shop(
     if not text or _is_customer_command(text) or _is_bare_serial(text) or _is_small_talk(text) or len(text) < 2 \
             or _matches_phrase(text, CUSTOMER_CONTACT_PHRASES) \
             or _record_named_in(text) is not None \
+            or _asks_which_shops(text) or _asks_to_join_another_shop(text) or as_company_code(text) \
             or (_asks_shop_contact(text) and any(w in text for w in ("ที่ไหน", "ที่อยู่", "แผนที่", "เบอร์", "โทร", "อีเมล", "ไลน์"))):
         # "ร้านอยู่ที่ไหน" after the contact card is the card again, not a
         # message forwarded to the shop (audit verify, 15 ก.ย. 2569);
@@ -6456,14 +6457,20 @@ async def _customer_model_road(
         return None
     if entity == "shop":
         if action == "switch":
+            # "ลงทะเบียนอีกร้าน" also comes back as switch (ask-model,
+            # 16 ก.ย. 2569) and is not one: the person wants to JOIN a shop
+            # they are not with yet (round 19p).
+            if _asks_to_join_another_shop(message):
+                return await _offer_to_link_another_shop(client, ctx=ctx, language=language)
             # "ผมอยู่กับร้านไหนบ้าง" / "ขอเปลี่ยนไปร้านอื่น" (round 19n).
             # One list answers both: the shops this person is with, the
             # active one marked, a button each. With only one shop there is
-            # nothing to choose and the name is the answer.
+            # nothing to choose — say which it is, and how to add another.
             return _tenant_chooser(ctx, language, include_current=True) if ctx.alternatives else ChatReply(
-                text=_t(SINGLE_SHOP, language).format(
+                text=_t(SINGLE_SHOP_CUSTOMER, language).format(
                     company=(ctx.memberships[0].get("company_name") if ctx.memberships else "") or "-",
                 ),
+                quick_replies=[("ผูกอีกร้าน", "ผูกอีกร้าน"), ("งานของฉัน", "งานของฉัน")],
             )
         if action == "chat":
             return await _handle_customer_chat_start(
@@ -6475,6 +6482,21 @@ async def _customer_model_road(
             # it is, only the answer is the list of their shops rather than
             # one shop's phone number. Converted here, downstream of the
             # model, the way every other reading is (round 19n).
+            if _asks_to_join_another_shop(message):
+                return await _offer_to_link_another_shop(client, ctx=ctx, language=language)
+            if _asks_which_shops(message) and not ctx.alternatives:
+                # One shop, and they asked which. The card that lists their
+                # details names it ("ลูกค้าของ: …") and is the answer this
+                # question has always had; what it lacked was the way to add
+                # another, and lately it was not reached at all — the
+                # contact card (an address) answered instead (owner's
+                # transcript, 16 ก.ย. 2569).
+                card = await _handle_customer_profile_view(
+                    client, ctx=ctx, license_id=license_id, language=language,
+                )
+                card.text += "\n\n" + _t(ADD_ANOTHER_SHOP_HINT, language)
+                card.quick_replies = ([("ผูกอีกร้าน", "ผูกอีกร้าน")] + list(card.quick_replies))[:4]
+                return card
             if _asks_which_shops(message) and ctx.alternatives:
                 # Only when there IS more than one: with a single shop the
                 # profile card already names it, and taking the sentence
@@ -8856,6 +8878,114 @@ SINGLE_SHOP = {
     "th": "บัญชีนี้อยู่ร้าน {company} ร้านเดียวครับ ถ้าจะเข้าร่วมร้านอื่น พิมพ์รหัสเชิญของร้านนั้นได้เลย",
     "en": "This account belongs to {company} only. To join another shop, type that shop's invite code.",
 }
+#: The same sentence for a CUSTOMER, who joins a shop with the SHOP's code
+#: (or its name, or a serial it sold) — never a staff invite code. The
+#: staff wording was being read out to customers (owner's transcript,
+#: 16 ก.ย. 2569: "ถ้าจะเข้าร่วมร้านอื่น พิมพ์รหัสเชิญของร้านนั้นได้เลย").
+SINGLE_SHOP_CUSTOMER = {
+    "th": "ตอนนี้คุณเป็นลูกค้าของ {company} ร้านเดียวครับ\n"
+          "จะผูกอีกร้าน พิมพ์ได้เลย: รหัสร้าน (8 ตัว ขึ้นต้นด้วย CO) · ชื่อร้าน · หรือหมายเลขเครื่อง (S/N) ที่ซื้อจากร้านนั้น",
+    "en": "You are a customer of {company} only.\n"
+          "To add another shop, type its shop code (8 characters starting CO), its name, "
+          "or the serial number of something you bought there.",
+}
+ADD_ANOTHER_SHOP_HINT = {
+    "th": "จะผูกอีกร้าน พิมพ์ \"ผูกอีกร้าน\" ได้เลยครับ",
+    "en": "To add another shop, say \"add another shop\".",
+}
+LINK_ANOTHER_SHOP_ASK = {
+    "th": "ได้ครับ — พิมพ์อย่างใดอย่างหนึ่งของร้านที่จะผูกเพิ่ม: รหัสร้าน (8 ตัว ขึ้นต้นด้วย CO) · ชื่อร้าน · หรือหมายเลขเครื่อง (S/N) ที่ซื้อจากร้านนั้น",
+    "en": "Sure — type one of these for the shop you want to add: its shop code (8 characters starting CO), "
+          "its name, or the serial number of something you bought there.",
+}
+LINK_ANOTHER_ALREADY = {
+    "th": "ผูกกับร้าน {company} ไว้อยู่แล้วครับ · พิมพ์ \"เปลี่ยนร้าน\" เพื่อสลับไปคุยกับร้านนั้น",
+    "en": "You are already linked to {company} — say \"change shop\" to talk to them.",
+}
+#: "ลงทะเบียนอีกร้าน", "ขอผูกกับร้านอื่นด้วย" — the model reads these as
+#: shop/switch (ask-model, 16 ก.ย. 2569), which they are not: the person is
+#: asking to JOIN one, and until now the answer named a staff invite code.
+_JOIN_ANOTHER_SHOP_WORDS = (
+    "อีกร้าน", "ร้านอื่น", "ร้านที่สอง", "เพิ่มร้าน", "ผูกร้านใหม่", "ผูกอีก", "ลงทะเบียนร้าน",
+    "add another shop", "another shop", "second shop", "link another",
+)
+
+
+LINK_ANOTHER_TTL_S = 600
+
+
+async def _offer_to_link_another_shop(
+    client: DataClient, *, ctx: ResolvedContext, language: str,
+) -> ChatReply:
+    """Ask for the shop, and hold the question open.
+
+    Until round 19p the registration road — code, shop name, serial — was
+    reachable only by someone with NO shop, so a customer already linked to
+    one could not join a second at all: "ลงทะเบียนอีกร้าน" was answered with
+    a staff invite code they do not have (owner's transcript, 16 ก.ย. 2569).
+    """
+    try:
+        await client.set_pending_intent(
+            ctx.chann_uid, ctx.oa, action="link", entity="link_another_shop",
+            fields={}, missing=["shop"], ttl_seconds=LINK_ANOTHER_TTL_S,
+        )
+    except Exception:  # noqa: BLE001 — the invitation still stands
+        log.exception("could not hold the add-a-shop question open")
+    return ChatReply(text=_t(LINK_ANOTHER_SHOP_ASK, language))
+
+
+async def _maybe_link_another_shop(
+    client: DataClient, *, ctx: ResolvedContext, message: str, language: str,
+) -> ChatReply | None:
+    """The shop named after "ผูกอีกร้าน", or a shop code typed at any time.
+
+    A code is unambiguous — nothing else in this system looks like
+    "CO" + six — so it links whenever it is typed. Anything else only
+    counts while the question is open, and is handed to the registration
+    road, which already knows how to read a name or a serial.
+    """
+    from . import registration
+
+    text = (message or "").strip()
+    code = as_company_code(text)
+    pending = None
+    if not code:
+        try:
+            pending = await client.get_pending_intent(ctx.chann_uid, ctx.oa)
+        except Exception:  # noqa: BLE001
+            pending = None
+        if not pending or str(pending.get("entity") or "") != "link_another_shop":
+            return None
+        if _is_customer_command(text) or len(text) < 2:
+            # They changed their mind: drop the question rather than
+            # reading "งานของฉัน" as a shop name.
+            await _drop_pending_quietly(client, ctx)
+            return None
+    already = next(
+        (m for m in [*ctx.memberships, *ctx.alternatives]
+         if code and str(m.get("license_code") or "").upper() == code),
+        None,
+    )
+    if already is not None:
+        if pending is not None:
+            await _drop_pending_quietly(client, ctx)
+        return ChatReply(
+            text=_t(LINK_ANOTHER_ALREADY, language).format(
+                company=already.get("company_name") or already.get("license_code") or "-",
+            ),
+            quick_replies=[("เปลี่ยนร้าน", "เปลี่ยนร้าน")],
+        )
+    if pending is not None:
+        await _drop_pending_quietly(client, ctx)
+    reply = await registration._handle_customer(client, text, ctx, language)
+    if isinstance(reply, ChatReply):
+        return reply
+    return ChatReply(text=str(reply))
+
+
+def _asks_to_join_another_shop(text: str) -> bool:
+    canon = _canonical(text).replace(" ", "")
+    return any(w.replace(" ", "") in canon for w in _JOIN_ANOTHER_SHOP_WORDS)
 # The shipped roles in words (review, 6 Sep 2026, B15: "ร้าน: บริษัททดสอบ (sales)").
 ROLE_LABELS = {
     "owner": {"th": "เจ้าของร้าน", "en": "owner"},
@@ -9553,6 +9683,63 @@ TICKET_RELEASED_NOTICE = {
 }
 
 
+DISPATCH_HANDLED_NOTICE = {
+    "th": "งาน {code} {what} โดย {who} — ไม่ต้องจัดการซ้ำครับ",
+    "en": "Job {code} was {what} by {who} — no need to handle it again.",
+}
+DISPATCH_HANDLED_WHAT = {
+    "released": {"th": "เปิดให้ช่างรับแล้ว", "en": "opened to the technicians"},
+    "assigned": {"th": "มอบหมายให้ {target} แล้ว", "en": "assigned to {target}"},
+}
+
+
+async def _notify_dispatch_handled(
+    client: DataClient, license_id: str, ticket: dict, *, what: str, actor_chann_uid: str,
+    target: str = "", language: str = "th",
+) -> None:
+    """The OTHER dispatchers hear that this job is dealt with.
+
+    Owner, 16 ก.ย. 2569: "จะทำยังไงถ้า CS มีหลายคน". Everyone holding
+    ticket.assign is told when a customer reports a job, and until now
+    nothing told them when one of them had acted — so two people worked
+    the same queue item and the second assignment quietly moved the job to
+    a different technician. Best-effort, and never sent to the person who
+    just did it.
+    """
+    code = str(ticket.get("ticket_number") or "")
+    if not code:
+        return
+    try:
+        members = await client.list_members(license_id)
+        dispatchers = await _dispatchers(client, license_id, members)
+    except Exception:  # noqa: BLE001
+        log.exception("could not tell the other dispatchers about %s", code)
+        return
+    actor = next((m for m in members if str(m.get("chann_uid") or "") == str(actor_chann_uid)), None)
+    by = str((actor or {}).get("display_name") or (actor or {}).get("first_name") or "-")
+    for member in dispatchers:
+        chann_uid = str(member.get("chann_uid") or "")
+        if not chann_uid or chann_uid == str(actor_chann_uid):
+            continue
+        try:
+            line_target = await client.line_target_of(chann_uid)
+            await send_notification(
+                client, license_id=license_id, target_chann_uid=chann_uid,
+                target_line_user_id=line_target, type="ticket_dispatch_handled",
+                message=_t(DISPATCH_HANDLED_NOTICE, "th").format(
+                    code=code, who=by,
+                    what=_t(DISPATCH_HANDLED_WHAT[what], "th").format(target=target or "-"),
+                ),
+                message_en=_t(DISPATCH_HANDLED_NOTICE, "en").format(
+                    code=code, who=by,
+                    what=_t(DISPATCH_HANDLED_WHAT[what], "en").format(target=target or "-"),
+                ),
+                entity_type="service_ticket", entity_id=str(ticket.get("id") or ""),
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("could not tell %s that %s is handled", chann_uid, code)
+
+
 async def _notify_released_ticket(client: DataClient, license_id: str, ticket: dict, language: str) -> int:
     """Every active technician hears a job was opened to them; returns how
     many were told. Best-effort, like the other announcements."""
@@ -9628,7 +9815,14 @@ async def _handle_ticket_release(
     if str(ticket.get("accept_status") or "") == "accepted" and ticket.get("assigned_to_ref"):
         return ChatReply(text=_t(TICKET_RELEASE_TAKEN, language).format(code=code, who=ticket.get("assigned_to_name") or "-"))
     try:
-        row = await client.release_ticket(license_id, str(ticket["id"]), actor_id=ctx.chann_uid)
+        row = await client.release_ticket(
+            license_id, str(ticket["id"]), actor_id=ctx.chann_uid,
+            # A customer's report reaches the shop owned by nobody. The CS
+            # who opens it to the technicians takes it, so with several CS
+            # there is someone responsible — and a later "CS เจ้าของงาน"
+            # approval step has a person to point at (owner, 16 ก.ย. 2569).
+            by_member_id=await _member_id_of(client, license_id, ctx),
+        )
     except DataTierError as exc:
         detail = exc.structured or {}
         if detail.get("error") == "dispatch_blocked":
@@ -9644,6 +9838,10 @@ async def _handle_ticket_release(
         log.exception("ticket release failed")
         return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
     told = await _notify_released_ticket(client, license_id, {**ticket, **(row or {})}, language)
+    await _notify_dispatch_handled(
+        client, license_id, {**ticket, **(row or {})}, what="released",
+        actor_chann_uid=ctx.chann_uid, language=language,
+    )
     await _remember_entity(client, ctx, entity_type="ticket", entity_id=str(ticket.get("id") or ""), code=code)
     return ChatReply(
         text=_t(TICKET_RELEASED, language).format(code=code, count=told),
@@ -9793,6 +9991,7 @@ async def _handle_ticket_assign(
         result = await client.assign_ticket(
             license_id, str(ticket["id"]),
             target_type=target_type, target_ref=target_ref, actor_id=ctx.chann_uid,
+            by_member_id=await _member_id_of(client, license_id, ctx),
         )
     except DataTierError as exc:
         # The gate's own answer, passed through: it names WHICH fields are
@@ -9815,6 +10014,10 @@ async def _handle_ticket_assign(
     # ticket is only visible to someone who happens to open the dashboard,
     # which for a job with an appointment time is too late to be useful.
     await _notify_assigned_ticket(client, license_id, result, label, language)
+    await _notify_dispatch_handled(
+        client, license_id, result, what="assigned", actor_chann_uid=ctx.chann_uid,
+        target=label, language=language,
+    )
 
     return ChatReply(
         text=_t(TICKET_ASSIGNED, language).format(code=code, target=label),
@@ -10767,8 +10970,12 @@ async def _handle_approval_list(
     ]
     return ChatReply(
         text="\n".join(lines),
+        # The label says what the button DOES. It used to be the report's
+        # number alone, which reads as "open this one" — and approved it
+        # (owner, 16 ก.ย. 2569: "พอกดแล้วเป็นการอนุมัติไปเลย ผู้ใช้อาจจะ
+        # สับสนคิดว่าแค่จะกดดูข้อมูล … เพิ่มคำว่าอนุมัติไปหน้าตัวเลข SR").
         quick_replies=[
-            (str(report.get("report_id") or ""), f"อนุมัติ {report.get('report_id')}")
+            (f"อนุมัติ {report.get('report_id')}"[:20], f"อนุมัติ {report.get('report_id')}")
             for _, report, _ in candidates[:4] if report.get("report_id")
         ],
     )
@@ -12701,17 +12908,33 @@ def _asks_to_open_to_technicians(message: str) -> bool:
     return any(w.replace(" ", "") in compact for w in _OPEN_TO_TECHNICIANS_WORDS)
 
 
+#: Every verb the model has been seen to put on "เปิดให้ช่างรับ T-…".
+#: `assign` (ask-model, 16 ก.ย. 2569) and `claim` — the sentence contains
+#: "รับ", and read as the speaker taking the job it answered the CS with
+#: the TECHNICIAN's refusal: "งาน T-… ยังไม่เปิดให้รับครับ รอ CS มอบหมาย
+#: หรือเปิดรับก่อน", i.e. telling the CS to wait for themselves (DEV log
+#: 16 ก.ย. 07:49 and 10:19, oa=sales action=claim chars=101 — the owner
+#: reported it the same afternoon).
+_POOL_VERBS = ("assign", "claim", "update", "release")
+
+
 def _assign_to_the_pool(intent: dict, message: str, oa: str) -> dict:
-    """The model reads "เปิดให้ช่างรับ T-…" as assign/ticket missing the
-    technician's name (ask-model, 16 ก.ย. 2569). Nobody is missing — the
-    job goes to every technician — so the missing gate must not ask."""
+    """"เปิดให้ช่างรับ T-…" on the shop's LINE is the pool, whatever verb
+    the model chose. Nobody is missing — the job goes to every technician —
+    so the missing gate must not ask, and nobody is claiming it."""
     verb = ACTION_ALIASES.get(str(intent.get("action") or "").lower(), str(intent.get("action") or "").lower())
-    if oa != "sales" or str(intent.get("entity") or "") != "ticket" or verb != "assign":
+    if oa != "sales" or str(intent.get("entity") or "") != "ticket" or verb not in _POOL_VERBS:
         return intent
     fields = intent.get("fields") or {}
+    # A name means one technician was asked for by name: that is an
+    # assignment, and this conversion must keep its hands off it.
     if fields.get("target_name") or fields.get("target") or not _asks_to_open_to_technicians(message):
         return intent
-    return {"action": "release", "entity": "ticket", "fields": {"code": fields.get("code")}, "missing": []}
+    code = fields.get("code") or ""
+    if not code:
+        found = TICKET_CODE_RE.search(message or "")
+        code = found.group(1).upper() if found else ""
+    return {"action": "release", "entity": "ticket", "fields": {"code": code}, "missing": []}
 
 
 def _shop_close_as_a_ticket_update(intent: dict, message: str, oa: str) -> dict:
@@ -17582,10 +17805,25 @@ def _tenant_chooser(ctx: ResolvedContext, language: str, *, include_current: boo
 
 
 TENANT_HERE_NOW = {"th": " (คุยอยู่ตอนนี้)", "en": " (talking to this one now)"}
+#: Round 19n switched shops by itself and said so. Owner, 16 ก.ย. 2569:
+#: "ถ้าจะสลับต้องถามผู้ใช้ให้ยืนยันก่อน และเตรียมกรณีโดนขัดจังหวะระหว่างถาม
+#: ด้วย" — the shop a message lands in decides which company's records are
+#: read and written, so it is not a thing to change on someone's behalf.
 RECORD_IS_AT_ANOTHER_SHOP = {
-    "th": "เรื่องนี้อยู่ที่ {name} — สลับให้แล้วครับ (กลับได้ด้วย \"เปลี่ยนร้าน\")",
-    "en": "That one belongs to {name} — switched for you (say \"change shop\" to go back).",
+    "th": "เรื่อง {code} อยู่ที่ {name} ครับ ตอนนี้คุยอยู่กับ {here}\nสลับไปคุยกับ {name} ไหมครับ",
+    "en": "{code} belongs to {name}; you are talking to {here}.\nSwitch to {name}?",
 }
+RECORD_SWITCH_YES = ("สลับ", "สลับเลย", "ใช่", "ตกลง", "โอเค", "เอาเลย", "ได้", "yes", "ok", "switch", "go ahead")
+RECORD_SWITCH_NO = ("ไม่สลับ", "ไม่ต้อง", "ไม่ใช่", "ไม่", "อยู่ที่เดิม", "no", "stay", "cancel")
+RECORD_SWITCH_DONE = {
+    "th": "สลับมาที่ {name} แล้วครับ",
+    "en": "Switched to {name}.",
+}
+RECORD_SWITCH_KEPT = {
+    "th": "ไม่สลับครับ ยังคุยกับ {here} เหมือนเดิม",
+    "en": "Staying with {here}.",
+}
+RECORD_SWITCH_TTL_S = 600
 
 
 async def _shop_holding(client: DataClient, license_id: str, kind: str, code: str) -> bool:
@@ -17640,19 +17878,114 @@ async def _follow_the_record_to_its_shop(
     for membership in ctx.alternatives:
         other = str(membership.get("license_id") or "")
         if other and await _shop_holding(client, other, kind, code):
-            try:
-                await client.set_active_tenant(ctx.chann_uid, ctx.oa, other)
-            except Exception:  # noqa: BLE001 — answering in the right shop still beats not
-                log.exception("could not store the shop a record pulled us into")
-            moved = replace(
-                ctx,
-                memberships=[membership],
-                alternatives=[m for m in [*ctx.memberships, *ctx.alternatives]
-                              if str(m.get("license_id")) != other],
-                resolution=TenantResolution.SINGLE,
-            )
-            return moved, membership
+            # Nothing is stored here: the switch is the person's to make
+            # (owner, 16 ก.ย. 2569). This only says WHICH shop holds it.
+            return _ctx_in_shop(ctx, membership), membership
     return None
+
+
+def _ctx_in_shop(ctx: ResolvedContext, membership: dict) -> ResolvedContext:
+    """The same person, talking to this shop."""
+    here = str(membership.get("license_id") or "")
+    return replace(
+        ctx,
+        memberships=[membership],
+        alternatives=[m for m in [*ctx.memberships, *ctx.alternatives]
+                      if str(m.get("license_id")) != here],
+        resolution=TenantResolution.SINGLE,
+    )
+
+
+async def _ask_to_switch_shop(
+    client: DataClient, *, ctx: ResolvedContext, moved: tuple[ResolvedContext, dict],
+    message: str, language: str,
+) -> ChatReply:
+    """"เรื่อง T-… อยู่ที่ ร้าน ข — สลับไปคุยกับ ร้าน ข ไหมครับ".
+
+    The sentence that named the record is held with the question, so
+    answering "ใช่" does what they asked for in the shop that holds it,
+    without them retyping it.
+    """
+    _there, membership = moved
+    name = str(membership.get("company_name") or membership.get("license_code") or "")
+    here = str((ctx.memberships[0].get("company_name") if ctx.memberships else "") or "")
+    named = _record_named_in(message)
+    try:
+        await client.set_pending_intent(
+            ctx.chann_uid, ctx.oa, action="switch", entity="shop_switch",
+            fields={
+                "license_id": str(membership.get("license_id") or ""),
+                "company_name": name,
+                "message": (message or "")[:500],
+            },
+            missing=["confirm"], ttl_seconds=RECORD_SWITCH_TTL_S,
+        )
+    except Exception:  # noqa: BLE001 — the question still stands, it just will not be remembered
+        log.exception("could not hold the shop-switch question open")
+    return ChatReply(
+        text=_t(RECORD_IS_AT_ANOTHER_SHOP, language).format(
+            code=(named[1] if named else "-"), name=name, here=here or "-",
+        ),
+        quick_replies=[
+            (f"สลับไป {name}"[:20], f"ใช้ร้าน {membership.get('license_code') or name}"),
+            ("ไม่สลับ", "ไม่สลับ"),
+        ],
+    )
+
+
+async def _answer_to_the_shop_switch(
+    client: DataClient, *, ctx: ResolvedContext, message: str, language: str, ai_client=None,
+) -> ChatReply | None:
+    """Yes, no, or something else entirely.
+
+    The third case is the one the owner asked for ("เตรียมกรณีโดนขัดจังหวะ
+    ระหว่างถามด้วย"): a question about switching shops must never swallow
+    the next sentence. It is dropped and the sentence is handled where the
+    person already is — including when the sentence names the OTHER shop's
+    record again, which simply asks once more.
+    """
+    try:
+        pending = await client.get_pending_intent(ctx.chann_uid, ctx.oa)
+    except Exception:  # noqa: BLE001
+        return None
+    if not pending or str(pending.get("entity") or "") != "shop_switch":
+        return None
+    fields = pending.get("fields") or {}
+    text = (message or "").strip()
+    here = str((ctx.memberships[0].get("company_name") if ctx.memberships else "") or "-")
+    name = str(fields.get("company_name") or "")
+    wanted = str(fields.get("license_id") or "")
+    membership = next(
+        (m for m in [*ctx.memberships, *ctx.alternatives] if str(m.get("license_id")) == wanted), None,
+    )
+    if _is_a_plain_no(text) or _matches_phrase(text, RECORD_SWITCH_NO):
+        await _drop_pending_quietly(client, ctx)
+        return ChatReply(text=_t(RECORD_SWITCH_KEPT, language).format(here=here))
+    # "ใช้ร้าน COB" is the button's own payload, and naming the shop is as
+    # plain a yes as "ใช่".
+    picked = _membership_named(text, [membership] if membership else [], explicit_only=True)
+    said_yes = _is_a_plain_yes(text) or _matches_phrase(text, RECORD_SWITCH_YES) or picked is not None
+    if not said_yes or membership is None:
+        # Interrupted: the question goes, the sentence stays theirs.
+        await _drop_pending_quietly(client, ctx)
+        return None
+    await _drop_pending_quietly(client, ctx)
+    try:
+        await client.set_active_tenant(ctx.chann_uid, ctx.oa, wanted)
+    except Exception:  # noqa: BLE001
+        log.exception("could not store the shop the person switched to")
+    there = _ctx_in_shop(ctx, membership)
+    _note_road(road="switched_shop")
+    held = str(fields.get("message") or "")
+    reply = ChatReply(text=_t(RECORD_SWITCH_DONE, language).format(name=name or "-"))
+    if held:
+        answered = await _route_chat_message(
+            client, message=held, ctx=there, language=language,
+            ai_client=ai_client, followed_a_record=True,
+        )
+        answered.text = f"{reply.text}\n\n{answered.text or ''}"
+        return answered
+    return reply
 
 
 async def _switch_tenant(
@@ -18205,6 +18538,9 @@ MISSING_FIELD_LABELS = {
     "lost_reason": {"th": "เหตุผลที่แพ้", "en": "why it was lost"},
     "when": {"th": "วันและเวลาใหม่", "en": "the new date and time"},
     "code": {"th": "รหัสรายการ", "en": "the record's code"},
+    # Round 19p: the shop a customer wants to add — by code, by name, or by
+    # the serial of something they bought there.
+    "shop": {"th": "ร้านที่จะผูกเพิ่ม (รหัสร้าน ชื่อร้าน หรือ S/N)", "en": "the shop to add (its code, its name, or a serial)"},
     "stage": {"th": "สถานะดีล", "en": "the deal stage"},
     "status": {"th": "สถานะ", "en": "the status"},
     "found_issue": {"th": "สิ่งที่พบ", "en": "what was found"},
@@ -21233,7 +21569,7 @@ async def maybe_handle_storefront(
         # search term is never intercepted, so shop-code/shop-name lookup
         # in the registration flow is completely unaffected.
         text = (message or "").strip()
-        if len(text) < 2 or COMPANY_CODE_RE.match(text.upper()):
+        if len(text) < 2 or as_company_code(text):
             return None
         if _is_customer_command(text) or _is_menu_tile(text) or _looks_like_fault(text) or _looks_like_phone(text):
             # A tile, a command, a fault: not a product to search for.
@@ -22237,19 +22573,18 @@ async def _route_chat_message(
     # does not exist. Runs once: after the move the record IS in the active
     # shop, and `followed_a_record` makes that a promise rather than a hope.
     if not followed_a_record and ctx.alternatives:
+        # An answer to the question below, if one is open. Checked before
+        # anything else reads the sentence: "ใช่" means the switch, and
+        # nothing else, while it is being asked.
+        answered = await _answer_to_the_shop_switch(
+            client, ctx=ctx, message=message, language=language, ai_client=ai_client,
+        )
+        if answered is not None:
+            return answered
         moved = await _follow_the_record_to_its_shop(client, ctx, message)
         if moved is not None:
-            there, membership = moved
-            _note_road(road="followed_record")
-            reply = await _route_chat_message(
-                client, message=message, ctx=there, language=language,
-                ai_client=ai_client, abandoned=abandoned, followed_a_record=True,
-            )
-            notice = _t(RECORD_IS_AT_ANOTHER_SHOP, language).format(
-                name=membership.get("company_name") or membership.get("license_code") or "",
-            )
-            reply.text = f"{notice}\n\n{reply.text or ''}"
-            return reply
+            _note_road(road="ask_to_switch")
+            return await _ask_to_switch_shop(client, ctx=ctx, moved=moved, message=message, language=language)
 
     # A map link IS a location message, whatever LINE calls it. The
     # technician standing in the customer's soi pastes the pin they already
@@ -23238,6 +23573,18 @@ async def _route_chat_message(
                 text=_t(SMALL_TALK_REPLY, language),
                 quick_replies=[("แจ้งซ่อม", "แจ้งซ่อม"), ("งานของฉัน", "งานของฉัน")],
             )
+        # A shop code is a token, not a sentence: "COV9URCZ" means one
+        # thing, and it means it whether or not this person already has a
+        # shop (round 19p — until then a linked customer could not add a
+        # second shop at all, and a real code was answered "ไม่พบหมายเลข …
+        # ในระบบ" because the pattern could not match one).
+        if as_company_code(message):
+            linked_by_code = await _maybe_link_another_shop(
+                client, ctx=ctx, message=message, language=language,
+            )
+            if linked_by_code is not None:
+                _note_road(road="shop_code")
+                return linked_by_code
         # MODEL FIRST on the customer OA (11 ก.ย. 2569), the third channel.
         # What stays closed: a report flow waiting for its answer (the
         # fault after "แจ้งซ่อม", an address, a serial, a date), any other
@@ -23318,6 +23665,14 @@ async def _route_chat_message(
         # customer_contact pending is open, and it declines a tile, a bare
         # serial and small talk itself, so tapping "ติดต่อร้าน" twice still
         # re-prompts rather than forwarding the word "ติดต่อร้าน".
+        # A shop code, or the shop named after "ผูกอีกร้าน" — before the
+        # contact prompt, which would otherwise relay it to the shop they
+        # are already with (round 19p).
+        linked_another = await _maybe_link_another_shop(
+            client, ctx=ctx, message=message, language=language,
+        )
+        if linked_another is not None:
+            return linked_another
         forwarded_first = await _maybe_forward_to_shop(
             client, ctx=ctx, license_id=license_id, message=message, language=language,
         )
@@ -23326,6 +23681,8 @@ async def _route_chat_message(
         # The rich-menu tiles that are not a fault report. Each is an
         # exact phrase, tested before the catch-all that would otherwise
         # turn the tile's label into a repair job.
+        if _asks_to_join_another_shop(message):
+            return await _offer_to_link_another_shop(client, ctx=ctx, language=language)
         if _matches_phrase(message, CUSTOMER_CONTACT_PHRASES + ("ข้อมูลบริษัท", "ข้อมูลร้าน", "shop info")) or (
             _asks_shop_contact(message) and not _looks_like_fault(message) and not _is_reschedule_request(message)
         ):
