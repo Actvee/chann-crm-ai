@@ -2002,6 +2002,12 @@ class PhotoUploadIn(BaseModel):
     multipart dependency and the same shape the signature uses."""
     image: str
     photo_type: str = "evidence"
+    # What the list calls it. The dashboard sends the file's own name.
+    caption: str | None = None
+
+
+class PhotoPatchIn(BaseModel):
+    caption: str | None = None
 
 
 def _decode_data_url(data_url: str) -> tuple[bytes, str]:
@@ -2075,9 +2081,70 @@ async def upload_ticket_photo(
         return await store_ticket_photo(
             client, license_id=license_id, ticket_id=ticket_id, content=content,
             content_type=content_type, photo_type=photo_type, uploaded_by_member_id=member_id,
+            caption=payload.caption,
         )
     except PhotoRefused as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+async def _photo_of_my_ticket(client: DataClient, principal: TenantPrincipal, license_id: str, ticket_id: str) -> None:
+    """A customer may only touch pictures on their own job."""
+    if not principal.is_customer:
+        return
+    rows = await client.list_tickets(license_id)
+    if not any(
+        str(t.get("id")) == ticket_id and str(t.get("customer_chann_uid") or "") == principal.chann_uid
+        for t in rows
+    ):
+        raise HTTPException(status_code=404, detail="ticket not found")
+
+
+@router.patch("/licenses/{license_id}/tickets/{ticket_id}/photos/{photo_id}")
+async def name_ticket_photo(
+    license_id: str,
+    ticket_id: str,
+    photo_id: str,
+    payload: PhotoPatchIn,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """13.1 — what the picture is called in the list."""
+    _require_same_tenant(principal, license_id)
+    # ticket.update for everyone, customers included — which no customer
+    # holds. Attaching a picture is theirs to do; what is already on the
+    # job is the shop's record, and chat draws the same line.
+    principal.require("ticket.update")
+    await _photo_of_my_ticket(client, principal, license_id, ticket_id)
+    try:
+        return await client.name_ticket_photo(
+            license_id, ticket_id, photo_id, payload.caption, actor_id=principal.chann_uid,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.delete("/licenses/{license_id}/tickets/{ticket_id}/photos/{photo_id}")
+async def delete_ticket_photo(
+    license_id: str,
+    ticket_id: str,
+    photo_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """13.1 — take a picture off the job (owner, 16 ก.ย. 2569: attaching
+    one was possible from the first day, removing one never was)."""
+    from .services.photos import remove_ticket_photo
+
+    _require_same_tenant(principal, license_id)
+    principal.require("ticket.update")
+    await _photo_of_my_ticket(client, principal, license_id, ticket_id)
+    try:
+        return await remove_ticket_photo(
+            client, license_id=license_id, ticket_id=ticket_id, photo_id=photo_id,
+            actor_id=principal.chann_uid,
+        )
     except DataTierError as exc:
         raise _propagate(exc)
 

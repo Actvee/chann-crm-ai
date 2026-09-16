@@ -141,6 +141,14 @@ ACTION_PERMISSIONS: dict[tuple[str, str], str] = {
     ("delete", "followup"): "followup.update",
     ("read", "ticket"): "ticket.read",
     ("create", "ticket"): "ticket.create",
+    # The pictures ON a job. Attaching one has worked since 13.1 (send it
+    # in chat, or from the home screen); listing and removing them had no
+    # verb at all until the owner asked for both, 16 ก.ย. 2569. Removing
+    # takes ticket.update — the same permission the job's other edits do —
+    # and naming one is that same edit.
+    ("read", "photo"): "ticket.read",
+    ("update", "photo"): "ticket.update",
+    ("delete", "photo"): "ticket.update",
     ("update", "ticket"): "ticket.update",
     ("assign", "ticket"): "ticket.assign",
     ("release", "ticket"): "ticket.assign",
@@ -5553,6 +5561,54 @@ PHOTO_FAILED = {
     "th": "รับรูปไม่สำเร็จ ลองส่งใหม่อีกครั้งครับ",
     "en": "Could not take the picture — please send it again.",
 }
+# Owner, 16 ก.ย. 2569: "พอกดแนบรูปแล้วน่าจะมีขึ้นโชว์เป็นรายการชื่อให้หน่อย
+# ว่าแนบรูปอะไรไปบ้าง … ยังไม่ได้เพิ่มการลบรูปที่แนบออก". Attaching has
+# worked since 13.1; seeing what is attached, and taking one off, had no
+# words at all.
+PHOTO_LIST_HEADER = {
+    "th": "รูปที่แนบกับงาน {code} ({n} รูป)",
+    "en": "Pictures on {code} ({n})",
+}
+PHOTO_LIST_EMPTY = {
+    "th": "งาน {code} ยังไม่มีรูปแนบครับ ส่งรูปเข้ามาในแชทนี้ได้เลย",
+    "en": "{code} has no pictures yet — send one to this chat and it goes on the job.",
+}
+PHOTO_LIST_LINE = {
+    "th": "{i}. {name} · {kind} · {when}",
+    "en": "{i}. {name} · {kind} · {when}",
+}
+PHOTO_KIND_LABELS = {
+    "checkin": {"th": "ตอนเช็คอิน", "en": "check-in"},
+    "checkout": {"th": "ตอนปิดงาน", "en": "check-out"},
+    "evidence": {"th": "หน้างาน", "en": "on site"},
+}
+PHOTO_UNNAMED = {"th": "รูปที่ {i}", "en": "picture {i}"}
+PHOTO_WHICH_ONE = {
+    "th": "รูปไหนครับ งาน {code} มี {n} รูป — พิมพ์เช่น \"ลบรูปที่ 2\"",
+    "en": "Which one? {code} has {n} — say e.g. \"delete photo 2\".",
+}
+PHOTO_NO_SUCH = {
+    "th": "งาน {code} มี {n} รูป ไม่มีรูปที่ {i} ครับ",
+    "en": "{code} has {n} pictures, so there is no picture {i}.",
+}
+PHOTO_DELETED = {
+    "th": "ลบ \"{name}\" ออกจากงาน {code} แล้วครับ เหลือ {n} รูป",
+    "en": "Removed \"{name}\" from {code}. {n} left.",
+}
+PHOTO_DELETE_FAILED = {
+    "th": "ลบรูปไม่สำเร็จครับ ลองใหม่อีกครั้ง",
+    "en": "The picture could not be removed — please try again.",
+}
+PHOTO_NAMED = {
+    "th": "เรียกรูปที่ {i} ของงาน {code} ว่า \"{name}\" แล้วครับ",
+    "en": "Picture {i} on {code} is now called \"{name}\".",
+}
+PHOTO_LIST_BUTTON = {"th": "ดูรูปที่แนบ", "en": "see the pictures"}
+PHOTO_DELETE_BUTTON = {"th": "ลบรูปที่ {i}", "en": "delete photo {i}"}
+PHOTO_NAME_MISSING = {
+    "th": "จะให้เรียกรูปนี้ว่าอะไรครับ พิมพ์เช่น \"ตั้งชื่อรูปที่ 1 ว่า ก่อนซ่อม\"",
+    "en": "What should it be called? e.g. \"name photo 1 before the repair\".",
+}
 
 
 LOCATION_NO_JOB = {
@@ -5680,6 +5736,192 @@ async def handle_incoming_image(
         text=_t(PHOTO_ATTACHED, language).format(code=ticket.get("ticket_number") or "", n=count),
         entity_type="service_ticket", entity_id=str(ticket.get("id") or ""),
     )
+
+
+def _photo_name(row: dict, position: int, language: str) -> str:
+    """What to call this picture in a list — what someone named it, the
+    file's own name when it came from a phone, or "รูปที่ 3"."""
+    name = str(row.get("caption") or "").strip()
+    return name or _t(PHOTO_UNNAMED, language).format(i=position)
+
+
+def _photo_when(row: dict) -> str:
+    """"16/09 10:22" in Bangkok time, or "—" when the row carries no stamp."""
+    raw = str(row.get("taken_at") or row.get("created_at") or "")
+    try:
+        when = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return "—"
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return when.astimezone(timezone(timedelta(hours=7))).strftime("%d/%m %H:%M")
+
+
+def _photo_index_in(fields: dict, message: str) -> int | None:
+    """Which picture the person means, counting from 1 (-1 = the last).
+
+    The model returns it; a button's payload carries it in the words. A
+    number nobody said is never invented — the handler asks instead."""
+    raw = fields.get("index")
+    if raw in (None, ""):
+        found = re.search(r"(?:รูปที่|ภาพที่|photo|picture)\s*(-?\d+)", message or "", re.I)
+        raw = found.group(1) if found else None
+        if raw is None and _matches_phrase(message, ("รูปแรก", "ภาพแรก", "first photo", "first picture")):
+            raw = 1
+        elif raw is None and _matches_phrase(message, ("รูปสุดท้าย", "ภาพสุดท้าย", "last photo", "last picture")):
+            raw = -1
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+    return value or None
+
+
+async def _ticket_for_photos(
+    client: DataClient, license_id: str, ctx: ResolvedContext, message: str,
+) -> tuple[dict | None, dict | None]:
+    """(member, ticket) for a question about a job's pictures.
+
+    The same three ways every other job command finds its ticket: the code
+    if one was said, the single job this person is on, or the job already
+    in view — a technician asking "รูปที่แนบไปมีอะไรบ้าง" says none of the
+    three out loud."""
+    member, ticket, _inferred = await _ticket_for_action(
+        client, license_id, ctx, message, prefer_status=("in_progress", "assigned"),
+    )
+    if ticket is not None:
+        return member, ticket
+    ref = await _last_entity_ref(client, ctx)
+    if ref and str(ref.get("entity_type") or "") == "service_ticket":
+        rows = await _tickets_this_person_may_see(client, license_id, ctx, member)
+        wanted = str(ref.get("entity_id") or "")
+        return member, next((t for t in rows if str(t.get("id")) == wanted), None)
+    return member, None
+
+
+async def _handle_ticket_photos(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str, action: str,
+    fields: dict, permission_keys: list[str], language: str,
+) -> ChatReply:
+    """The pictures on a job: what is attached, taking one off, naming one.
+
+    Owner, 16 ก.ย. 2569 — the dashboard was to list what had been attached
+    and let someone remove it, "และเช็คเรื่องการทำงานแบบนี้ผ่านแชทด้วย":
+    the same three things said in words, because a technician standing on
+    site has the chat open and not a browser.
+    """
+    license_id = str(license_id)
+    held = set(permission_keys)
+    writing = action in ("delete", "update")
+    if writing and "ticket.update" not in held:
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    if not writing and "ticket.read" not in held:
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    said = " ".join(p for p in (str(fields.get("code") or ""), message) if str(p or "").strip())
+    try:
+        member, ticket = await _ticket_for_photos(client, license_id, ctx, said)
+    except DataTierError:
+        log.exception("could not look for the job a picture question is about")
+        return ChatReply(text=_t(PHOTO_NO_JOB_CUSTOMER if ctx.oa == "customer" else PHOTO_NO_JOB, language))
+    if ticket is None:
+        return ChatReply(text=_t(PHOTO_NO_JOB_CUSTOMER if ctx.oa == "customer" else PHOTO_NO_JOB, language))
+    code = str(ticket.get("ticket_number") or "")
+    ticket_id = str(ticket.get("id") or "")
+    try:
+        rows = [p for p in await client.list_ticket_photos(license_id, ticket_id) if p.get("photo_url")]
+    except DataTierError:
+        log.exception("could not list the pictures on %s", code)
+        rows = []
+    total = len(rows)
+    if not total:
+        return ChatReply(
+            text=_t(PHOTO_LIST_EMPTY, language).format(code=code),
+            entity_type="service_ticket", entity_id=ticket_id,
+        )
+
+    index = _photo_index_in(fields, said)
+    if writing:
+        if index is None:
+            return ChatReply(
+                text=_photo_list_text(rows, code, language) + "\n"
+                     + _t(PHOTO_WHICH_ONE, language).format(code=code, n=total),
+                entity_type="service_ticket", entity_id=ticket_id,
+                quick_replies=_photo_buttons(rows, code, language),
+            )
+        position = total + 1 + index if index < 0 else index
+        if not 1 <= position <= total:
+            return ChatReply(
+                text=_t(PHOTO_NO_SUCH, language).format(code=code, n=total, i=index),
+                entity_type="service_ticket", entity_id=ticket_id,
+            )
+        row = rows[position - 1]
+        name = _photo_name(row, position, language)
+        if action == "update":
+            caption = str(fields.get("caption") or "").strip()
+            if not caption:
+                return ChatReply(text=_t(PHOTO_NAME_MISSING, language),
+                                 entity_type="service_ticket", entity_id=ticket_id)
+            try:
+                await client.name_ticket_photo(
+                    license_id, ticket_id, str(row.get("id") or ""), caption[:200],
+                    actor_id=ctx.chann_uid,
+                )
+            except DataTierError:
+                log.exception("could not name a picture on %s", code)
+                return ChatReply(text=_t(PHOTO_DELETE_FAILED, language))
+            return ChatReply(
+                text=_t(PHOTO_NAMED, language).format(i=position, code=code, name=caption[:200]),
+                entity_type="service_ticket", entity_id=ticket_id,
+                quick_replies=[(_t(PHOTO_LIST_BUTTON, language), f"ดูรูปที่แนบ {code}")],
+            )
+        from .photos import remove_ticket_photo
+
+        try:
+            await remove_ticket_photo(
+                client, license_id=license_id, ticket_id=ticket_id,
+                photo_id=str(row.get("id") or ""), actor_id=ctx.chann_uid,
+            )
+        except DataTierError:
+            log.exception("could not remove a picture from %s", code)
+            return ChatReply(text=_t(PHOTO_DELETE_FAILED, language))
+        left = [r for r in rows if str(r.get("id")) != str(row.get("id"))]
+        text = _t(PHOTO_DELETED, language).format(name=name, code=code, n=len(left))
+        if left:
+            text += "\n" + _photo_list_text(left, code, language)
+        return ChatReply(
+            text=text, entity_type="service_ticket", entity_id=ticket_id,
+            quick_replies=_photo_buttons(left, code, language),
+        )
+
+    return ChatReply(
+        text=_photo_list_text(rows, code, language),
+        entity_type="service_ticket", entity_id=ticket_id,
+        quick_replies=_photo_buttons(rows, code, language),
+    )
+
+
+def _photo_list_text(rows: list[dict], code: str, language: str) -> str:
+    lines = [_t(PHOTO_LIST_HEADER, language).format(code=code, n=len(rows))]
+    for i, row in enumerate(rows, start=1):
+        lines.append(_t(PHOTO_LIST_LINE, language).format(
+            i=i, name=_photo_name(row, i, language),
+            kind=_label(PHOTO_KIND_LABELS, row.get("photo_type"), language),
+            when=_photo_when(row),
+        ))
+    return "\n".join(lines)
+
+
+def _photo_buttons(rows: list[dict], code: str, language: str) -> list[tuple[str, str]]:
+    """One button per picture, up to three — "ลบรูปที่ 2" typed out is the
+    same sentence the model reads, so the button and the words meet at the
+    same handler."""
+    out: list[tuple[str, str]] = []
+    for i in range(1, min(len(rows), 3) + 1):
+        out.append((
+            _t(PHOTO_DELETE_BUTTON, language).format(i=i),
+            (f"ลบรูปที่ {i} ของงาน {code}" if language != "en" else f"delete photo {i} on {code}"),
+        ))
+    return out
 
 
 def _looks_like_a_question(text: str) -> bool:
@@ -12625,7 +12867,11 @@ _HOW_TO_WORDS = ("ยังไง", "ทำไง", "อย่างไร", "�
 # The generic ones above ("มีอะไรบ้าง", "ทำอะไรได้") are about the system only
 # when no record type is named: "ดีลมีอะไรบ้าง" is a list request.
 _HELP_GENERIC = ("มีอะไรบ้าง", "ทำอะไรได้", "ทําอะไรได้", "ช่วยอะไรได้", "มีฟังก์ชัน", "มีเมนู")
-_ENTITY_WORDS = ("ลูกค้า", "ดีล", "งาน", "สินค้า", "ใบเสนอ", "นัด", "ทีม", "ช่าง", "ประกัน", "รายงาน", "บันทึก", "เตือน")
+# "รูป"/"ภาพ" joined the list in round 19l: "รูปที่แนบไปมีอะไรบ้าง" names a
+# record type as plainly as "ดีลมีอะไรบ้าง" does, and without it the
+# technician asking what is on their job got the nine-topic manual.
+_ENTITY_WORDS = ("ลูกค้า", "ดีล", "งาน", "สินค้า", "ใบเสนอ", "นัด", "ทีม", "ช่าง", "ประกัน", "รายงาน", "บันทึก", "เตือน",
+                 "รูป", "ภาพ", "photo", "picture")
 
 
 def _is_help_request(message: str, oa: str = "") -> bool:
@@ -14750,6 +14996,16 @@ async def _handle_ai_understood_intent(
                 message=_joined("ออกรายงาน", code),
                 permission_keys=permission_keys, language=language,
             )
+
+    if entity == "photo":
+        # "รูปที่แนบไปมีอะไรบ้าง" / "ลบรูปที่ 2" — the pictures on a job
+        # (round 19l). Attaching one is an image message, not a sentence,
+        # so create never arrives here.
+        return await _handle_ticket_photos(
+            client, ctx=ctx, license_id=license_id, message=_joined(code, message),
+            action=action if action in ("delete", "update") else "read",
+            fields=fields, permission_keys=permission_keys, language=language,
+        )
 
     if entity == "approval":
         # "ผ่านได้เลย SR-2026-0001" / "รายงานนี้ไม่ผ่าน ภาพไม่ครบ": the
@@ -24532,7 +24788,7 @@ async def _execute_intent(
     if mismatch is not None:
         return mismatch
     _drop_invented_values(intent)
-    if intent.get("entity") in ("ticket", "service_report", "followup", "warranty", "approval"):
+    if intent.get("entity") in ("ticket", "service_report", "followup", "warranty", "approval", "photo"):
         # "approval" was handled inside _handle_ai_understood_intent and
         # never dispatched TO it: "มีอะไรรอผมตรวจบ้าง" and "อนุมัติ
         # SR-2026-0001" passed the gate and fell to the stub below, with
@@ -24948,6 +25204,8 @@ ENTITY_DASHBOARD_PAGE: dict[str, tuple[str, dict[str, str]]] = {
     "quote": ("quotes", {"th": "ใบเสนอราคา", "en": "Quotes"}),
     "product": ("products", {"th": "สินค้า", "en": "Products"}),
     "ticket": ("tickets", {"th": "งานซ่อม", "en": "Jobs"}),
+    # A picture lives on a job, so the job's page is where to go for it.
+    "photo": ("tickets", {"th": "งานซ่อม", "en": "Jobs"}),
     "service_report": ("reports", {"th": "รายงานบริการ", "en": "Service reports"}),
     "approval": ("approvals", {"th": "รออนุมัติ", "en": "Approvals"}),
     "warranty": ("warranties", {"th": "การรับประกัน", "en": "Warranties"}),

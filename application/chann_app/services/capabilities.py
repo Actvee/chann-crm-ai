@@ -193,6 +193,20 @@ WARRANTY_CREATE = Capability(
     never_needed=("target_name", "product_name", "warranty_end", "warranty_start"),
 )
 
+#: The pictures on a job (round 19l). The job is never asked for: the
+#: technician saying "เอารูปแรกออก" is standing on it, and the handler finds
+#: it the same way check-in and check-out do. Which picture IS asked for
+#: when no number was said — removing the wrong one is not undoable.
+PHOTO_READ = Capability(action="read", entity="photo", never_needed=("code", "index"))
+PHOTO_DELETE = Capability(
+    action="delete", entity="photo", required=("index",), optional=("code",),
+    never_needed=("code",),
+)
+PHOTO_UPDATE = Capability(
+    action="update", entity="photo", required=("index", "caption"), optional=("code",),
+    never_needed=("code",),
+)
+
 REGISTRY: dict[tuple[str, str], Capability] = {
     (c.entity, c.action): c for c in (
         WARRANTY_CREATE,
@@ -200,6 +214,7 @@ REGISTRY: dict[tuple[str, str], Capability] = {
         APPROVAL_APPROVE, APPROVAL_REJECT,
         TICKET_CLAIM, TICKET_READ, TICKET_UPDATE, TICKET_ASSIGN, LINE_ITEM_CREATE, LINE_ITEM_UPDATE, SERVICE_REPORT_CHECK_IN, SERVICE_REPORT_CHECK_OUT,
         SERVICE_REPORT_CREATE,
+        PHOTO_READ, PHOTO_DELETE, PHOTO_UPDATE,
     )
 }
 

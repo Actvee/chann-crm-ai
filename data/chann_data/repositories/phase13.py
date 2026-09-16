@@ -63,6 +63,7 @@ class FieldServiceRepository:
         ticket_id: uuid.UUID,
         photo_url: str,
         photo_type: str = "evidence",
+        caption: str | None = None,
         gps_lat: Decimal | float | str | None = None,
         gps_lng: Decimal | float | str | None = None,
         taken_at: datetime | None = None,
@@ -86,6 +87,7 @@ class FieldServiceRepository:
             ticket_id=ticket_id,
             photo_url=photo_url,
             photo_type=photo_type,
+            caption=(caption or None),
             taken_at=taken_at or datetime.now(timezone.utc),
             # Converted through str so a float that arrived over JSON does
             # not carry its binary rounding into a NUMERIC column.
@@ -109,6 +111,50 @@ class FieldServiceRepository:
         return list(
             self._s.execute(query.order_by(TicketPhoto.created_at)).scalars()
         )
+
+    def _photo(self, scope: TenantScope, ticket_id: uuid.UUID, photo_id: uuid.UUID) -> TicketPhoto:
+        row = self._s.execute(
+            select(TicketPhoto).where(
+                TicketPhoto.id == photo_id,
+                TicketPhoto.ticket_id == ticket_id,
+                TicketPhoto.license_id == scope.license_id,
+            )
+        ).scalars().first()
+        if row is None:
+            raise ReportNotFound("photo not found on this ticket")
+        return row
+
+    def name_photo(
+        self, scope: TenantScope, ticket_id: uuid.UUID, photo_id: uuid.UUID, *, caption: str | None,
+    ) -> TicketPhoto:
+        """What the picture is called in a list. Owner, 16 ก.ย. 2569: the
+        person who attached five pictures should be able to tell them
+        apart afterwards."""
+        row = self._photo(scope, ticket_id, photo_id)
+        row.caption = (caption or "").strip()[:200] or None
+        self._s.flush()
+        return row
+
+    def delete_photo(
+        self, scope: TenantScope, ticket_id: uuid.UUID, photo_id: uuid.UUID,
+    ) -> dict:
+        """Take a picture off the job, and say what went so the tier above
+        can drop the stored object too. The row is deleted rather than
+        flagged: an attachment removed by mistake is re-attached, and one
+        removed on purpose (the wrong customer's living room) must
+        actually go.
+
+        Returns a plain dict — the ORM row is gone after the flush, and a
+        caller that reads it afterwards gets a DetachedInstanceError."""
+        row = self._photo(scope, ticket_id, photo_id)
+        gone = {
+            "id": str(row.id), "ticket_id": str(row.ticket_id),
+            "photo_url": row.photo_url, "photo_type": row.photo_type,
+            "caption": row.caption,
+        }
+        self._s.delete(row)
+        self._s.flush()
+        return gone
 
     # --------------------------------------------------------- check-in
 

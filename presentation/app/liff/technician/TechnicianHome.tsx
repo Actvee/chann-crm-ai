@@ -21,6 +21,16 @@ type ServiceReport = {
   created_at?: string | null;
 };
 
+/** A picture on a job. `url` is an asset link good for an hour. */
+type TicketPhoto = {
+  id: string;
+  photo_type?: string | null;
+  caption?: string | null;
+  created_at?: string | null;
+  taken_at?: string | null;
+  url?: string | null;
+};
+
 /**
  * The technician's home — their own, not the sales dashboard reskinned.
  *
@@ -55,6 +65,13 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [reportFor, setReportFor] = useState<Ticket | null>(null);
+  // Owner, 16 ก.ย. 2569: attaching a picture said "แนบแล้ว" and showed
+  // nothing — so nobody could tell what had gone on the job, and there
+  // was no way to take one off. The list opens by itself after an upload.
+  const [photos, setPhotos] = useState<Record<string, TicketPhoto[]>>({});
+  const [photosFor, setPhotosFor] = useState("");
+  const [renamingId, setRenamingId] = useState("");
+  const [renameTo, setRenameTo] = useState("");
   const [declineFor, setDeclineFor] = useState<Ticket | null>(null);
   const [declineReason, setDeclineReason] = useState("");
   // The three things a service report says (Data Tier REPORT_REQUIRED:
@@ -299,11 +316,96 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
         return;
       }
       say(`${ticket.ticket_number} — ${t.dashboard.technician.photoAdded}`, "ok");
+      // Show what is now on the job. Attaching used to end here, which is
+      // how five pictures became five identical confirmations.
+      setPhotosFor(ticket.id);
+      await loadPhotos(ticket.id);
     } catch {
       say(t.dashboard.technician.photoFailed, "error");
     } finally {
       setBusyId("");
     }
+  }
+
+  /** What is attached to this job, with a link each (good for an hour). */
+  const loadPhotos = useCallback(
+    async (ticketId: string) => {
+      if (!licenseId || !token) return;
+      try {
+        const response = await fetch(
+          `/api/phase2/licenses/${licenseId}/tickets/${ticketId}/photos`,
+          { headers: proxyHeaders(token, licenseId, "technician") },
+        );
+        if (!response.ok) throw new Error(String(response.status));
+        const rows = (await response.json()) as TicketPhoto[];
+        setPhotos((current) => ({ ...current, [ticketId]: rows }));
+      } catch {
+        say(t.dashboard.technician.photoListFailed, "error");
+      }
+    },
+    [licenseId, token, say, t],
+  );
+
+  async function togglePhotos(ticket: Ticket) {
+    if (photosFor === ticket.id) {
+      setPhotosFor("");
+      return;
+    }
+    setPhotosFor(ticket.id);
+    await loadPhotos(ticket.id);
+  }
+
+  async function removePhoto(ticket: Ticket, photo: TicketPhoto) {
+    setBusyId(ticket.id);
+    try {
+      const response = await fetch(
+        `/api/phase2/licenses/${licenseId}/tickets/${ticket.id}/photos/${photo.id}`,
+        { method: "DELETE", headers: proxyHeaders(token, licenseId, "technician") },
+      );
+      if (!response.ok) throw new Error(String(response.status));
+      say(t.dashboard.technician.photoRemoved, "ok");
+      await loadPhotos(ticket.id);
+    } catch {
+      say(t.dashboard.technician.photoRemoveFailed, "error");
+    } finally {
+      setBusyId("");
+    }
+  }
+
+  async function renamePhoto(ticket: Ticket, photo: TicketPhoto) {
+    const caption = renameTo.trim();
+    setBusyId(ticket.id);
+    try {
+      const response = await fetch(
+        `/api/phase2/licenses/${licenseId}/tickets/${ticket.id}/photos/${photo.id}`,
+        {
+          method: "PATCH",
+          headers: { ...proxyHeaders(token, licenseId, "technician"), "Content-Type": "application/json" },
+          body: JSON.stringify({ caption }),
+        },
+      );
+      if (!response.ok) throw new Error(String(response.status));
+      setRenamingId("");
+      setRenameTo("");
+      await loadPhotos(ticket.id);
+    } catch {
+      say(t.dashboard.technician.photoRenameFailed, "error");
+    } finally {
+      setBusyId("");
+    }
+  }
+
+  function photoName(photo: TicketPhoto, position: number) {
+    const name = (photo.caption ?? "").trim();
+    return name || t.dashboard.technician.photoUnnamed.replace("{i}", String(position));
+  }
+
+  function photoWhen(photo: TicketPhoto) {
+    const raw = photo.taken_at ?? photo.created_at ?? "";
+    const when = raw ? new Date(raw) : null;
+    return when && !Number.isNaN(when.getTime())
+      ? when.toLocaleString(undefined, { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })
+      : "—";
   }
 
   /** 12.4: say no; the job returns to CS, nobody is auto-assigned. */
@@ -567,7 +669,91 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
                           }}
                         />
                       </label>
+                      <button
+                        type="button"
+                        className="btn"
+                        data-variant="quiet"
+                        aria-expanded={photosFor === ticket.id}
+                        onClick={() => void togglePhotos(ticket)}
+                      >
+                        {t.dashboard.technician.photoList}
+                        {photos[ticket.id] ? ` (${photos[ticket.id].length})` : ""}
+                      </button>
                     </div>
+                  )}
+                  {photosFor === ticket.id && (
+                    <ul className="list" data-list="photos">
+                      {(photos[ticket.id] ?? []).length === 0 ? (
+                        <li className="empty">
+                          <p>{t.dashboard.technician.photoNone}</p>
+                        </li>
+                      ) : (
+                        (photos[ticket.id] ?? []).map((photo, position) => (
+                          <li key={photo.id} className="row">
+                            <div className="row-main">
+                              {renamingId === photo.id ? (
+                                <input
+                                  aria-label={t.dashboard.technician.photoRename}
+                                  id={`photo-name-${photo.id}`}
+                                  className="input"
+                                  value={renameTo}
+                                  autoFocus
+                                  onChange={(e) => setRenameTo(e.target.value)}
+                                />
+                              ) : (
+                                <b>{photoName(photo, position + 1)}</b>
+                              )}
+                              <span className="muted">
+                                {(t.dashboard.technician.photoKind as Record<string, string>)[
+                                  photo.photo_type ?? "evidence"
+                                ] ?? photo.photo_type}
+                                {" · "}
+                                {photoWhen(photo)}
+                              </span>
+                            </div>
+                            <div className="card-actions">
+                              {photo.url && (
+                                <a className="btn" data-variant="quiet" href={photo.url} target="_blank" rel="noreferrer">
+                                  {t.dashboard.technician.photoOpen}
+                                </a>
+                              )}
+                              {renamingId === photo.id ? (
+                                <button
+                                  type="button"
+                                  className="btn"
+                                  data-variant="primary"
+                                  disabled={busyId !== ""}
+                                  onClick={() => void renamePhoto(ticket, photo)}
+                                >
+                                  {t.dashboard.related.save}
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  className="btn"
+                                  data-variant="quiet"
+                                  onClick={() => {
+                                    setRenamingId(photo.id);
+                                    setRenameTo((photo.caption ?? "").trim());
+                                  }}
+                                >
+                                  {t.dashboard.technician.photoRename}
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                className="btn"
+                                data-variant="quiet"
+                                disabled={busyId !== ""}
+                                onClick={() => void removePhoto(ticket, photo)}
+                              >
+                                {t.dashboard.technician.photoRemove}
+                              </button>
+                            </div>
+                          </li>
+                        ))
+                      )}
+                    </ul>
                   )}
                   {reportFor?.id === ticket.id && (
                     <dl className="fields">

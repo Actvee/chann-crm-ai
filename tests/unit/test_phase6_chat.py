@@ -880,12 +880,40 @@ class FakeDataClient:
         self.recorded.append(("add_ticket_photo", license_id, ticket_id, payload))
         if not hasattr(self, "_photos"):
             self._photos = []
-        row = {"id": f"p-{len(self._photos) + 1}", "ticket_id": ticket_id, **payload}
+        # created_at as the real tier writes it: a list of pictures is
+        # ordered by it, and rows without one sorted at random in chat
+        # while the dashboard (which reads the DB) was in order.
+        row = {
+            "id": f"p-{len(self._photos) + 1}", "ticket_id": ticket_id,
+            "created_at": f"2026-09-16T{10 + len(self._photos):02d}:00:00+00:00",
+            "caption": None, "photo_type": "evidence", **payload,
+        }
         self._photos.append(row)
         return row
 
     async def list_ticket_photos(self, license_id, ticket_id):
         return [p for p in getattr(self, "_photos", []) if p.get("ticket_id") == ticket_id]
+
+    async def name_ticket_photo(self, license_id, ticket_id, photo_id, caption, actor_id=None):
+        self.recorded.append(("name_ticket_photo", license_id, ticket_id, photo_id, caption))
+        from chann_app.data_client import DataTierError
+        for row in getattr(self, "_photos", []):
+            if str(row.get("id")) == str(photo_id) and row.get("ticket_id") == ticket_id:
+                row["caption"] = (caption or "").strip()[:200] or None
+                return row
+        raise DataTierError(404, "photo not found on this ticket")
+
+    async def delete_ticket_photo(self, license_id, ticket_id, photo_id, actor_id=None):
+        self.recorded.append(("delete_ticket_photo", license_id, ticket_id, photo_id))
+        from chann_app.data_client import DataTierError
+        rows = getattr(self, "_photos", [])
+        gone = next((r for r in rows if str(r.get("id")) == str(photo_id) and r.get("ticket_id") == ticket_id), None)
+        if gone is None:
+            # The real tier 404s; a fake that shrugged would let a handler
+            # report "removed" for a picture that is still on the job.
+            raise DataTierError(404, "photo not found on this ticket")
+        self._photos = [r for r in rows if r is not gone]
+        return dict(gone)
 
     async def list_license_settings(self, license_id):
         return list(getattr(self, "_settings", []))

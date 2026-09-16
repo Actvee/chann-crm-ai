@@ -41,6 +41,7 @@ async def store_ticket_photo(
     client: DataClient, *, license_id: str, ticket_id: str, content: bytes,
     content_type: str = "image/jpeg", photo_type: str = "evidence",
     uploaded_by_member_id: str | None = None, gps_lat=None, gps_lng=None,
+    caption: str | None = None,
 ) -> dict:
     """Store the bytes, then record the row (store first: an orphan
     object is findable, a row pointing at nothing is a lie)."""
@@ -60,10 +61,32 @@ async def store_ticket_photo(
         license_id, ticket_id,
         {
             "photo_url": stored.path, "photo_type": photo_type,
+            "caption": (caption or "").strip()[:200] or None,
             "gps_lat": gps_lat, "gps_lng": gps_lng,
             "uploaded_by": uploaded_by_member_id,
         },
     )
+
+
+async def remove_ticket_photo(
+    client: DataClient, *, license_id: str, ticket_id: str, photo_id: str,
+    actor_id: str | None = None,
+) -> dict:
+    """Take a picture off the job: the row first, then the object.
+
+    That order, not the reverse: a row pointing at bytes that are gone is
+    a broken thumbnail on every page that lists it, while bytes with no
+    row are unreachable and cost storage. If the object refuses to go the
+    row still went — the picture is off the job, which is what was asked
+    (owner, 16 ก.ย. 2569: "ยังไม่ได้เพิ่มการลบรูปที่แนบออก")."""
+    gone = await client.delete_ticket_photo(license_id, ticket_id, photo_id, actor_id=actor_id)
+    path = str((gone or {}).get("photo_url") or "")
+    if path:
+        try:
+            await get_document_store().delete(path=path)
+        except Exception:  # noqa: BLE001 — the row is the record
+            log.warning("photo row %s deleted, object %s stayed", photo_id, path)
+    return gone or {}
 
 
 async def photo_links(

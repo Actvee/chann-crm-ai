@@ -1294,6 +1294,25 @@ class DataClient:
         )
         return self._unwrap(resp)
 
+    async def name_ticket_photo(
+        self, license_id: str, ticket_id: str, photo_id: str, caption: str | None,
+        *, actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.patch(
+            f"{self._base}/internal/v1/licenses/{license_id}/tickets/{ticket_id}/photos/{photo_id}",
+            headers=self._headers_for(actor_id), json={"caption": caption},
+        )
+        return self._unwrap(resp)
+
+    async def delete_ticket_photo(
+        self, license_id: str, ticket_id: str, photo_id: str, *, actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.delete(
+            f"{self._base}/internal/v1/licenses/{license_id}/tickets/{ticket_id}/photos/{photo_id}",
+            headers=self._headers_for(actor_id),
+        )
+        return self._unwrap(resp)
+
     async def set_identity_signature(self, chann_uid: str, signature_url: str) -> dict:
         resp = await self._client.put(
             f"{self._base}/internal/v1/identities/{chann_uid}/signature",

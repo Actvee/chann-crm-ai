@@ -805,9 +805,14 @@ class CheckOutIn(BaseModel):
 class TicketPhotoIn(BaseModel):
     photo_url: str
     photo_type: str = "evidence"
+    caption: str | None = None
     gps_lat: float | None = None
     gps_lng: float | None = None
     uploaded_by: uuid.UUID | None = None
+
+
+class TicketPhotoPatch(BaseModel):
+    caption: str | None = None
 
 
 class TicketPhotoOut(BaseModel):
@@ -815,6 +820,7 @@ class TicketPhotoOut(BaseModel):
     ticket_id: uuid.UUID
     photo_url: str
     photo_type: str
+    caption: str | None = None
     taken_at: datetime | None
     gps_lat: Decimal | None
     gps_lng: Decimal | None

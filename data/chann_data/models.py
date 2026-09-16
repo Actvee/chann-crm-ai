@@ -807,6 +807,10 @@ class TicketPhoto(Base):
     )
     photo_url: Mapped[str] = mapped_column(String(512), nullable=False)
     photo_type: Mapped[str] = mapped_column(String(32), nullable=False, default="evidence")
+    # What to call it in a list. The file's own name when it came from a
+    # phone's gallery, or words someone typed instead — a list of five
+    # "รูปที่ 3" tells the person who took them nothing (16 ก.ย. 2569).
+    caption: Mapped[str | None] = mapped_column(String(200))
     taken_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     gps_lat: Mapped[Decimal | None] = mapped_column(Numeric(10, 7))
     gps_lng: Mapped[Decimal | None] = mapped_column(Numeric(10, 7))

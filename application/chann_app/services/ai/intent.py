@@ -247,6 +247,21 @@ does not exist anywhere else the model can check against):
   action="check_out": finishing. Examples: "เสร็จแล้ว", "งานเรียบร้อย",
     "จบงานครับ".
 
+- entity="photo" — the PICTURES already attached to a job, not a new one
+  (a picture is attached by sending it; there is nothing to parse there).
+  action="read": what is attached. fields may include code (a T-
+    reference). Examples: "รูปที่แนบไปมีอะไรบ้าง", "ขอดูรูปงาน T-2026-0001",
+    "แนบรูปไปกี่รูปแล้ว".
+  action="delete": take one off the job. fields may include code and
+    index — the position in the list the person names, counting from 1.
+    Examples: "ลบรูปที่ 2" (index 2), "เอารูปแรกออก" (index 1), "ลบรูป
+    สุดท้ายของงาน T-2026-0001" (index -1 for the last one).
+  action="update": rename one. fields may include code, index and caption
+    (what they want it called). Examples: "ตั้งชื่อรูปที่ 1 ว่า ก่อนซ่อม",
+    "เปลี่ยนชื่อรูปแรกเป็น คอมที่รั่ว".
+  Never invent an index the person did not say; leave it out and the
+  system asks which picture.
+
 - entity="approval" — a CS person passing or refusing a technician's
   service report that is waiting for review.
   action="approve": fields may include code (an SR- reference such as

@@ -232,6 +232,7 @@ from ..schemas import (
     TicketOut,
     TicketPhotoIn,
     TicketPhotoOut,
+    TicketPhotoPatch,
     TicketPatchIn,
     TicketStatusIn,
     LicenseStatusIn,
@@ -4207,6 +4208,64 @@ def list_ticket_photos(
     return FieldServiceRepository(session).list_photos(
         TenantScope(license_id=license_id), ticket_id, photo_type=photo_type,
     )
+
+
+@router.patch(
+    "/licenses/{license_id}/tickets/{ticket_id}/photos/{photo_id}",
+    response_model=TicketPhotoOut,
+)
+def name_ticket_photo(
+    license_id: uuid.UUID,
+    ticket_id: uuid.UUID,
+    photo_id: uuid.UUID,
+    payload: TicketPhotoPatch,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = FieldServiceRepository(session).name_photo(
+            scope, ticket_id, photo_id, caption=payload.caption,
+        )
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="ticket_photo", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="update",
+            field_changes=diff_fields({}, {"caption": row.caption or ""}),
+        )
+        session.commit()
+        session.refresh(row)
+        return row
+    except Exception as exc:
+        session.rollback()
+        raise _field_service_error(exc)
+
+
+@router.delete("/licenses/{license_id}/tickets/{ticket_id}/photos/{photo_id}")
+def delete_ticket_photo(
+    license_id: uuid.UUID,
+    ticket_id: uuid.UUID,
+    photo_id: uuid.UUID,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    """13.1 — take a picture off the job. The audit row keeps what was
+    removed and by whom; the stored object is dropped by the tier above,
+    which is the one that put it there."""
+    scope = TenantScope(license_id=license_id)
+    try:
+        gone = FieldServiceRepository(session).delete_photo(scope, ticket_id, photo_id)
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="ticket_photo", entity_id=uuid.UUID(gone["id"]),
+            actor_type="user", actor_id=x_actor_id or None, action="delete",
+            field_changes=diff_fields(
+                {"photo_url": gone["photo_url"], "caption": gone["caption"] or ""}, {},
+            ),
+        )
+        session.commit()
+        return gone
+    except Exception as exc:
+        session.rollback()
+        raise _field_service_error(exc)
 
 
 @router.post(
