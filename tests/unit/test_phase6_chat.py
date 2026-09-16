@@ -1156,11 +1156,26 @@ class FakeDataClient:
         self.recorded.append(("upsert_product", license_id, product_id, payload, actor_id))
         if self._raises:
             raise self._raises
+        # schemas.ProductIn requires BOTH of these in the body, even though
+        # product_id is in the URL as well. This fake used to accept a
+        # payload without them, so two callers that omitted product_id
+        # passed every test and returned 422 in production — the shop saw
+        # "ขออภัย" (DEV log, 16 ก.ย. 2569 14:43).
+        from chann_app.data_client import DataTierError
+
+        for required in ("product_id", "product_name"):
+            if not payload.get(required):
+                raise DataTierError(
+                    422, f"[{{'type': 'missing', 'loc': ['body', '{required}']}}]",
+                )
         row = {
             "id": f"PROD-{product_id}", "license_id": license_id,
             "product_id": product_id, "product_name": payload["product_name"],
             "sku": payload.get("sku"), "category": payload.get("category"),
             "unit_price": payload.get("unit_price"), "description": payload.get("description"),
+            # The real tier stores and returns this; dropping it here hid
+            # what a caller had actually saved.
+            "warranty_months": payload.get("warranty_months"),
         }
         # The real tier lists what it saved; "เปลี่ยนราคาสินค้า TV40" right
         # after saving TV40 could not find it here (converse, 15 ก.ย. 2569).

@@ -164,3 +164,31 @@ class TestArchivingAProductOverHttp:
         client._products = []
         response = http.post(f"/api/v1/licenses/{LICENSE_ID}/products/NOPE/archive")
         assert response.status_code == 404, response.text
+
+
+class TestProductCsvCarriesTheCover:
+    """Round 19x: PRODUCT_COLUMNS has accepted "ระยะประกัน" all along and the
+    importer never sent it on, so a shop could fill the column in and every
+    product kept the system default."""
+
+    @pytest.mark.asyncio
+    async def test_the_warranty_column_reaches_the_data_tier(self):
+        client = FakeDataClient(permission_keys=["product.manage"])
+        text = "รหัสสินค้า,ชื่อสินค้า,ราคา,ระยะประกัน\nFAN001,พัดลมไอเย็น,3500,6\n"
+        result = await csv_import.import_products(
+            client, license_id=LICENSE_ID, text=text, actor_id="CHN-X",
+        )
+        assert result["saved"] == 1, result
+        payload = [r for r in client.recorded if r[0] == "upsert_product"][0][3]
+        assert payload["warranty_months"] == 6, payload
+        assert payload["product_id"] == "FAN001", payload
+
+    @pytest.mark.asyncio
+    async def test_a_row_without_the_column_leaves_the_period_alone(self):
+        client = FakeDataClient(permission_keys=["product.manage"])
+        text = "รหัสสินค้า,ชื่อสินค้า,ราคา\nFAN002,พัดลมตั้งพื้น,1200\n"
+        await csv_import.import_products(
+            client, license_id=LICENSE_ID, text=text, actor_id="CHN-X",
+        )
+        payload = [r for r in client.recorded if r[0] == "upsert_product"][0][3]
+        assert "warranty_months" not in payload, payload

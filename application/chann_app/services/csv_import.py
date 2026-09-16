@@ -110,12 +110,22 @@ async def import_products(client: DataClient, *, license_id: str, text: str, act
         try:
             if not code or not item.get("product_name"):
                 raise ValueError("product_id and product_name are required")
-            payload = {"product_name": item["product_name"]}
+            # product_id belongs in the BODY as well as the URL
+            # (schemas.ProductIn requires it). Without it every row came
+            # back 422 and an import saved nothing at all — invisible here
+            # because the test fake accepted any payload (DEV log,
+            # 16 ก.ย. 2569).
+            payload = {"product_id": code, "product_name": item["product_name"]}
             for key in ("category", "sku", "description"):
                 if item.get(key):
                     payload[key] = item[key]
             if item.get("unit_price"):
                 payload["unit_price"] = str(float(item["unit_price"].replace(",", "")))
+            # PRODUCT_COLUMNS has taken "ระยะประกัน" since the column list was
+            # written, and nothing ever sent it on: a shop could fill the
+            # column in and the period stayed unset.
+            if item.get("warranty_months"):
+                payload["warranty_months"] = int(str(item["warranty_months"]).strip())
             await client.upsert_product(license_id, code, payload, actor_id=actor_id)
             saved += 1
             results.append({"row": item["_row"], "key": code, "status": "saved", "message": ""})

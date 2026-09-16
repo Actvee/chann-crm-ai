@@ -160,3 +160,38 @@ class TestTheUnitSideSaysItIsOneUnit:
              "fields": {"serial_number": "SN12345678", "purchase_date": "2026-09-01"}, "missing": []},
         )
         assert "เฉพาะเครื่องนี้" not in reply.text, reply.text
+
+
+@pytest.mark.asyncio
+class TestWhatTheDataTierIsActuallySent:
+    """The Data tier requires product_id AND product_name in the body of a
+    product upsert (schemas.ProductIn) even though the id is also in the
+    URL. Two callers here left product_id out; the fake accepted it, every
+    test passed, and DEV answered 422 — the shop saw "ขออภัย"
+    (log, 16 ก.ย. 2569 14:43:35). Pinned so the payload cannot drift back."""
+
+    REQUIRED = ("product_id", "product_name")
+
+    async def test_setting_a_types_cover_sends_the_required_fields(self):
+        client = _shop()
+        await _say(client, "พัดลมตั้งประกัน 6 เดือน", _reads_type("พัดลม", 6))
+        sent = [w for w in client.recorded if w[0] == "upsert_product"]
+        assert sent, client.recorded
+        payload = sent[0][3]
+        for key in self.REQUIRED:
+            assert payload.get(key), (key, payload)
+        assert payload["warranty_months"] == 6, payload
+
+    async def test_changing_a_price_sends_them_too(self):
+        """The same defect, shipped in round 19s and never seen because the
+        fake was more forgiving than production."""
+        client = _shop()
+        await _say(
+            client, "แก้ราคาพัดลมเป็น 1500",
+            {"action": "update", "entity": "product",
+             "fields": {"product_name": "พัดลม", "unit_price": 1500}, "missing": []},
+        )
+        sent = [w for w in client.recorded if w[0] == "upsert_product"]
+        assert sent, client.recorded
+        for key in self.REQUIRED:
+            assert sent[0][3].get(key), (key, sent[0][3])

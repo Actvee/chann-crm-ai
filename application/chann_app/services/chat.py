@@ -21194,8 +21194,10 @@ async def _catalogue_cover_change(
             name=named[:40], months=int(months),
         ))
     payload = {
+        "product_id": str(product.get("product_id") or ""),
         "product_name": product.get("product_name"), "sku": product.get("sku"),
-        "category": product.get("category"), "unit_price": product.get("unit_price"),
+        "category": product.get("category"),
+        "unit_price": (str(product.get("unit_price")) if product.get("unit_price") is not None else None),
         "description": product.get("description"), "warranty_months": int(months),
     }
     try:
@@ -21228,10 +21230,16 @@ async def _catalogue_price_change(
         amount = float(str(price).replace(",", ""))
     except (TypeError, ValueError):
         return None
+    # product_id is REQUIRED by the Data tier (schemas.ProductIn) even
+    # though it is also in the URL. Leaving it out returned 422 and the
+    # shop saw "ขออภัย" — for this price path as well as the cover one
+    # (DEV log, 16 ก.ย. 2569 14:43).
     payload = {
+        "product_id": str(product.get("product_id") or ""),
         "product_name": product.get("product_name"), "sku": product.get("sku"),
         "category": product.get("category"), "unit_price": amount,
         "description": product.get("description"),
+        "warranty_months": product.get("warranty_months"),
     }
     try:
         row = await client.upsert_product(str(license_id), str(product.get("product_id")), payload, actor_id=ctx.chann_uid)
