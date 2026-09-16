@@ -563,6 +563,15 @@ class FakeDataClient:
             if str(w.get("id")) == str(warranty_id):
                 if fields.get("warranty_start"):
                     w["warranty_start"] = fields["warranty_start"]
+                if fields.get("warranty_end"):
+                    # Mirrors WarrantyRepository.set_purchase (round 19t): an
+                    # end date given outright wins over the computed one, and
+                    # cannot fall before the start.
+                    if w.get("warranty_start") and str(fields["warranty_end"]) < str(w["warranty_start"]):
+                        from chann_app.data_client import DataTierError
+                        raise DataTierError(409, "the warranty cannot end before it starts")
+                    w["warranty_end"] = fields["warranty_end"]
+                    return dict(w)
                 if w.get("warranty_start"):
                     from datetime import date as _date
                     y, m, d = (int(x) for x in str(w["warranty_start"])[:10].split("-"))

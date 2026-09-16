@@ -81,6 +81,12 @@ export default function SalesWarranties({ liffId }: { liffId: string }) {
   const [months, setMonths] = useState("");
   // Round 19g: a unit registered without its purchase date gets it here.
   const [dateFor, setDateFor] = useState<Record<string, string>>({});
+  // Round 19t: an existing registration can be corrected — the purchase
+  // date, the period, or the end date itself.
+  const [editing, setEditing] = useState("");
+  const [editStart, setEditStart] = useState("");
+  const [editMonths, setEditMonths] = useState("");
+  const [editEnd, setEditEnd] = useState("");
 
   const say = useCallback((message: string, kind?: "ok" | "error") => {
     setStatus(message);
@@ -149,6 +155,36 @@ export default function SalesWarranties({ liffId }: { liffId: string }) {
       }
     })();
   }, [session.ready, load, loadPickers, permissions, say, t]);
+
+  async function saveCover(row: Warranty) {
+    if (editEnd && editStart && editEnd < editStart) {
+      say(copy.endBeforeStart, "error");
+      return;
+    }
+    setBusy(true);
+    try {
+      const response = await fetch(`/api/phase2/licenses/${licenseId}/warranties/${row.id}`, {
+        method: "PATCH",
+        headers: proxyHeaders(token, licenseId),
+        body: JSON.stringify({
+          warranty_start: editStart || undefined,
+          warranty_months: editMonths.trim() ? Number(editMonths.trim()) : undefined,
+          warranty_end: editEnd || undefined,
+        }),
+      });
+      if (!response.ok) {
+        say(await failureText(response), "error");
+        return;
+      }
+      say(copy.warrantySaved, "ok");
+      setEditing("");
+      await load();
+    } catch {
+      say(copy.actionFailed, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function setPurchaseDate(row: Warranty) {
     const chosen = dateFor[row.id];
@@ -398,6 +434,75 @@ export default function SalesWarranties({ liffId }: { liffId: string }) {
                       {copy.setPurchaseDate}
                     </button>
                   </div>
+                )}
+                {/* A registration with a date was read-only: the period and
+                    the end could not be changed at all, so nobody could try
+                    an expiry (owner's tester, 16 ก.ย. 2569). */}
+                {row.warranty_start && permissions.has("warranty.update") && (
+                  <div className="actions">
+                    <button
+                      type="button"
+                      className="btn"
+                      data-variant="quiet"
+                      aria-expanded={editing === row.id}
+                      onClick={() => {
+                        setEditing(editing === row.id ? "" : row.id);
+                        setEditStart(row.warranty_start ?? "");
+                        setEditEnd(row.warranty_end ?? "");
+                        setEditMonths("");
+                      }}
+                    >
+                      {copy.edit}
+                    </button>
+                  </div>
+                )}
+                {editing === row.id && (
+                  <dl className="fields">
+                    <FieldRow label={copy.warrantyStart}>
+                      {(id) => (
+                        <input
+                          id={id}
+                          type="date"
+                          value={editStart}
+                          onChange={(e) => setEditStart(e.target.value)}
+                        />
+                      )}
+                    </FieldRow>
+                    <FieldRow label={copy.warrantyMonths}>
+                      {(id) => (
+                        <input
+                          id={id}
+                          inputMode="numeric"
+                          value={editMonths}
+                          onChange={(e) => setEditMonths(e.target.value)}
+                        />
+                      )}
+                    </FieldRow>
+                    <FieldRow label={copy.warrantyEnd}>
+                      {(id) => (
+                        <>
+                          <input
+                            id={id}
+                            type="date"
+                            value={editEnd}
+                            onChange={(e) => setEditEnd(e.target.value)}
+                          />
+                          <span className="hint">{copy.editHint}</span>
+                        </>
+                      )}
+                    </FieldRow>
+                    <div className="actions">
+                      <button
+                        type="button"
+                        className="btn"
+                        data-variant="primary"
+                        disabled={busy}
+                        onClick={() => void saveCover(row)}
+                      >
+                        {copy.saveWarranty}
+                      </button>
+                    </div>
+                  </dl>
                 )}
               </li>
             ))}

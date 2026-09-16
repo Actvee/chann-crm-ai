@@ -330,6 +330,12 @@ export const en: Dictionary = {
       purchaseDateSaved: "Purchase date saved — the end date is set",
       warrantyMonths: "Warranty (months)",
       warrantyMonthsHint: "blank = the product's own",
+      edit: "Edit cover",
+      editHint: "Change the purchase date or the period and the end date follows · or set the end date yourself (an extended cover, say)",
+      warrantyEnd: "End date (if you set it yourself)",
+      saveWarranty: "Save",
+      warrantySaved: "Cover saved",
+      endBeforeStart: "The cover cannot end before it starts",
       actionFailed: "Could not save — try again",
     },
     members: {

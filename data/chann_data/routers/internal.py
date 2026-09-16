@@ -4776,11 +4776,15 @@ def set_warranty_purchase(
             scope, warranty_id,
             warranty_start=date.fromisoformat(payload["warranty_start"]) if payload.get("warranty_start") else None,
             warranty_months=int(payload["warranty_months"]) if payload.get("warranty_months") else None,
+            warranty_end=date.fromisoformat(payload["warranty_end"]) if payload.get("warranty_end") else None,
         )
         AuditRepository(session).write(
             license_id=license_id, entity_type="warranty", entity_id=row.id,
             actor_type="user", actor_id=x_actor_id or None, action="update",
-            field_changes=diff_fields({}, {"warranty_start": row.warranty_start.isoformat() if row.warranty_start else None}),
+            field_changes=diff_fields({}, {
+                "warranty_start": row.warranty_start.isoformat() if row.warranty_start else None,
+                "warranty_end": row.warranty_end.isoformat() if row.warranty_end else None,
+            }),
         )
         session.commit()
         session.refresh(row)

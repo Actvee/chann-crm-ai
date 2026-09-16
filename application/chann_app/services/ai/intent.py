@@ -64,6 +64,8 @@ You can read them, so read them:
 - A date goes in as YYYY-MM-DD, resolved against `today` above. Prefer the
   nearest FUTURE day. If the sentence names a weekday that IS today, mean
   next week's.
+- A Thai year (พ.ศ., 25xx) is 543 years ahead of the one you must return:
+  2569 is 2026, 2570 is 2027. "31/12/2570" is 2027-12-31 — never 2070.
 - A time goes in as HH:MM, 24-hour. "บ่ายสอง" is 14:00, "สามโมงครึ่ง" is
   15:30, "ทุ่มนึง" is 19:00.
 - An amount goes in as a plain integer of baht: "สองหมื่นห้า" is 25000,
@@ -298,10 +300,21 @@ does not exist anywhere else the model can check against):
     answer action="suggest" for that.
 
 - entity="warranty" — a product's warranty registration, found by serial
-  number.
+  number. Three different things can be said about its dates, and they are
+  three different fields — never put a period in a date field:
+    purchase_date  — when it was bought (YYYY-MM-DD)
+    warranty_months — how long the cover runs, in MONTHS (a number)
+    warranty_end   — the day the cover ends (YYYY-MM-DD), for cover that
+      does not simply follow from the purchase date plus the period
   action="create": fields may include serial_number, product_name,
-    target_name, warranty_end. Examples: "ลงทะเบียนเครื่อง SN12345 ให้
-    ลูกค้าจุใจ".
+    target_name, purchase_date, warranty_months. Examples: "ลงทะเบียน
+    เครื่อง SN12345 ให้ลูกค้าจุใจ", "ลงทะเบียน SN12345 ซื้อเมื่อ 1 ก.ย. 2569
+    ประกัน 2 ปี" (warranty_months 24).
+  action="update": correcting one of the three above on a registration
+    that exists. Examples: "แก้ประกัน SN12345 เป็น 24 เดือน"
+    (warranty_months 24), "ประกัน SN12345 หมดวันที่ 31/12/2570"
+    (warranty_end 2027-12-31), "วันที่ซื้อ SN12345 คือ 1 ก.ย. 2569"
+    (purchase_date 2026-09-01).
   action="read": fields may include serial_number.
     Examples: "เครื่องนี้ยังอยู่ในประกันไหม", "เช็ค SN12345 หน่อย".
 

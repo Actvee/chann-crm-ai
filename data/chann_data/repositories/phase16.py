@@ -175,15 +175,29 @@ class WarrantyRepository:
     def set_purchase(
         self, scope: TenantScope, warranty_id: uuid.UUID, *,
         warranty_start: date | None, warranty_months: int | None = None,
+        warranty_end: date | None = None,
     ) -> Warranty:
-        """The purchase date given later ("วันที่ซื้อ SN… 1 ก.ย. 2569"), and
-        optionally the period; the end date follows from both."""
+        """The purchase date given later ("วันที่ซื้อ SN… 1 ก.ย. 2569"), the
+        period, or the end date itself.
+
+        The end normally follows from start + period, and that is what the
+        shop wants nine times in ten. `warranty_end` is for the tenth: an
+        extended cover, a goodwill month, a date the manufacturer set — and
+        until now there was no way to type it at all, so nobody could test
+        what happens when a warranty expires (owner's tester, 16 ก.ย. 2569:
+        "ยังแก้ไขใส่ระยะสิ้นสุดประกันไม่ได้ เลยยังไม่ได้เทสดูวันที่สิ้นสุด").
+        An explicit end wins over the computed one; clearing it recomputes.
+        """
         row = self._s.get(Warranty, warranty_id)
         if row is None or row.license_id != scope.license_id:
             raise WarrantyNotFound("warranty not found in this tenant")
         if warranty_start is not None:
             row.warranty_start = warranty_start
-        if row.warranty_start is not None:
+        if warranty_end is not None:
+            if row.warranty_start is not None and warranty_end < row.warranty_start:
+                raise WarrantyConflict("the warranty cannot end before it starts")
+            row.warranty_end = warranty_end
+        elif row.warranty_start is not None:
             row.warranty_end = _end_of(row.warranty_start, self._months_for(scope, row.product_id, warranty_months))
         self._s.flush()
         return row

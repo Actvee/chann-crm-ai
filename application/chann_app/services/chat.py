@@ -798,6 +798,22 @@ async def _team_named(client: DataClient, license_id: str, fragment: str) -> dic
     return loose[0] if len(loose) == 1 else None
 
 
+def _member_name(member: dict, profile: dict | None) -> str:
+    """What to call this person: the name they gave the shop, else the name
+    LINE knows them by, else nothing.
+
+    A technician who joined with an invite code has a member row with
+    LINE's display name and, until they fill one in, no profile at all.
+    Reading only the profile made them unnameable: "เพิ่ม สมศักดิ์ เข้าทีม
+    แอร์" answered "ไม่พบช่างชื่อ สมศักดิ์" while "รายชื่อช่าง" listed them
+    as a raw CHN- id (owner's tester, 16 ก.ย. 2569: "ยังไม่สามารถทดสอบ
+    เพิ่มรายชื่อช่างเข้าทีมได้").
+    """
+    profile = profile or {}
+    given = " ".join(p for p in (profile.get("first_name"), profile.get("last_name")) if p)
+    return given or str(member.get("display_name") or "").strip()
+
+
 async def _technician_named(
     client: DataClient, license_id: str, fragment: str,
 ) -> tuple[dict | None, list[str]]:
@@ -815,9 +831,14 @@ async def _technician_named(
             profile = await client.get_profile(str(m.get("chann_uid") or "")) or {}
         except Exception:
             profile = {}
-        name = " ".join(p for p in (profile.get("first_name"), profile.get("last_name")) if p)
+        name = _member_name(m, profile)
+        uid = str(m.get("chann_uid") or "")
         if name and (fragment in name.lower() or name.lower() in fragment):
             matches.append(({**m, "name": name}, name))
+        elif uid and fragment == uid.lower():
+            # The list shows the id when there is no name at all; typing it
+            # back must work.
+            matches.append(({**m, "name": name or uid}, name or uid))
     if len(matches) == 1:
         return matches[0][0], []
     return None, [n for _m, n in matches]
@@ -1186,9 +1207,7 @@ async def _handle_technician_list(
             profile = await client.get_profile(chann_uid) or {}
         except Exception:
             profile = {}
-        name = " ".join(
-            p for p in (profile.get("first_name"), profile.get("last_name")) if p
-        ) or chann_uid
+        name = _member_name(m, profile) or chann_uid
         phone = f" · {profile['phone']}" if profile.get("phone") else ""
         lines.append(f"· {name}{phone}")
     return ChatReply(
@@ -3673,6 +3692,16 @@ async def _contact_id_of(client: DataClient, license_id: str, chann_uid: str) ->
     return ""
 
 
+WARRANTY_END_SET = {
+    "th": "ตั้งวันหมดประกันของ {serial} เป็น {end} แล้วครับ",
+    "en": "{serial} now expires on {end}.",
+}
+WARRANTY_END_BEFORE_START = {
+    "th": "วันหมดประกันของ {serial} ต้องไม่ก่อนวันที่ซื้อครับ",
+    "en": "{serial}'s cover cannot end before it starts.",
+}
+
+
 async def _handle_warranty_purchase_date(
     client: DataClient, *, ctx: ResolvedContext, license_id, fields: dict, message: str,
     permission_keys: list[str], language: str,
@@ -3689,7 +3718,14 @@ async def _handle_warranty_purchase_date(
     start, months = _purchase_terms(message)
     start = start or str(fields.get("purchase_date") or fields.get("warranty_start") or "").strip()[:10] or None
     months = months or _months_from_fields(fields)
-    if not start and not months:
+    # The end date itself, for cover that does not follow from the purchase
+    # date and a period — an extended warranty, or one the manufacturer
+    # dated (round 19t; the tester could not set it anywhere, so an expiry
+    # could not be tried at all).
+    ends = str(fields.get("warranty_end") or "").strip()[:10] or None
+    if ends and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", ends):
+        ends = None
+    if not start and not months and not ends:
         return ChatReply(text=_t(WARRANTY_PURCHASE_NEEDS_DATE, language).format(serial=serial))
     try:
         rows = await client.list_warranties(license_id, serial_number=serial)
@@ -3701,12 +3737,29 @@ async def _handle_warranty_purchase_date(
         return ChatReply(text=_t(SERIAL_NOT_AT_SHOP, language).format(serial=serial))
     try:
         saved = await client.update_warranty(
-            license_id, str(row["id"]), {"warranty_start": start, "warranty_months": months}, actor_id=ctx.chann_uid,
+            license_id, str(row["id"]),
+            {"warranty_start": start, "warranty_months": months, "warranty_end": ends},
+            actor_id=ctx.chann_uid,
         )
+    except DataTierError as exc:
+        if "end before it starts" in str(exc.detail or ""):
+            return ChatReply(text=_t(WARRANTY_END_BEFORE_START, language).format(serial=serial))
+        log.exception("could not set the cover of %s", serial)
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
     except Exception:
         log.exception("could not set the purchase date of %s", serial)
         return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
     await _remember_entity(client, ctx, entity_type="warranty", entity_id=str(row.get("id") or ""), code=serial)
+    if ends and not start:
+        # They set the end and nothing else: say that, rather than reciting
+        # a purchase date they did not touch.
+        return ChatReply(
+            text=_t(WARRANTY_END_SET, language).format(
+                serial=serial, end=_iso_to_thai_date(saved.get("warranty_end")) or ends,
+            ),
+            entity_type="warranty", entity_id=str(row.get("id") or ""),
+            quick_replies=[("เช็คประกัน", f"เช็คประกัน {serial}")],
+        )
     return ChatReply(
         text=_t(WARRANTY_PURCHASE_SET, language).format(
             date=_iso_to_thai_date(saved.get("warranty_start")) or (start or "-"), serial=serial,

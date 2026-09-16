@@ -1545,7 +1545,13 @@ async def set_warranty_purchase(
     try:
         return await client.update_warranty(
             license_id, warranty_id,
-            {"warranty_start": payload.get("warranty_start"), "warranty_months": payload.get("warranty_months")},
+            {
+                "warranty_start": payload.get("warranty_start"),
+                "warranty_months": payload.get("warranty_months"),
+                # Round 19t: the end date itself, for cover that does not
+                # follow from start + period.
+                "warranty_end": payload.get("warranty_end"),
+            },
             actor_id=principal.chann_uid,
         )
     except DataTierError as exc:
