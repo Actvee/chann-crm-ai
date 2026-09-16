@@ -56,13 +56,13 @@ _EN: Report a fault — Describe what is wrong, e.g. "air con not cooling". The 
 
 ## 6. ดูสถานะ / ขอเลื่อนนัด / ยกเลิก
 
-พิมพ์ "งานของฉัน" หรือ "สถานะการซ่อม" · ขอเลื่อนนัด: "ขอเลื่อนนัดวันศุกร์ บ่าย 2" (ร้านจะเช็คคิวช่างแล้วยืนยันกลับ นัดเดิมยังอยู่จนกว่าร้านจะยืนยัน) · ยกเลิก: "ยกเลิกงาน" (ยกเลิกได้เลย)
+พิมพ์ "งานของฉัน" หรือ "สถานะการซ่อม" · ขอเลื่อนนัด: "ขอเลื่อนนัดวันศุกร์ บ่าย 2" หรือบอกแค่เวลา "เลื่อนนัดเป็น 9 โมงเช้า" (วันเดิม) — ร้านจะเช็คคิวช่างแล้วยืนยันกลับ นัดเดิมยังอยู่จนกว่าร้านจะยืนยัน · ยกเลิก: "ยกเลิกงาน" (ยกเลิกได้เลย)
 
 พิมพ์: `งานของฉัน`
 
 [IMAGE: customer-status — การ์ดสถานะงานซ่อม T-2026-0001 แสดงขั้น รอมอบหมาย → ช่างรับแล้ว → กำลังทำ → เสร็จ พร้อมไอคอนนาฬิกา]
 
-_EN: Status, ask to move, cancel — "my jobs" / "repair status" · ask to move it: "move it to Friday 2pm" (the shop checks the technicians' schedule and confirms; the existing appointment stands until they do) · "cancel job" (cancels straight away)_
+_EN: Status, ask to move, cancel — "my jobs" / "repair status" · ask to move it: "move it to Friday 2pm", or just a time "move it to 9am" (same day) — the shop checks the technicians' schedule and confirms; the existing appointment stands until they do · "cancel job" (cancels straight away)_
 
 ## 7. หลังซ่อมเสร็จ
 

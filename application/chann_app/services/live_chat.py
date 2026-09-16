@@ -143,7 +143,9 @@ async def _push_customer(
             return False
         if text_en and await _customer_language(client, chann_uid) == "en":
             text = text_en
-        await push_text("customer", line_uid, text)
+        # Every line from the shop carries the way out — the tester
+        # (16 ก.ย. 2569) asked for "จบการสนทนา" to be reachable all along.
+        await push_text("customer", line_uid, text, quick_reply=[quick_reply_item("จบการสนทนา", "จบการสนทนา")])
         return True
     except (LineReplyError, Exception):  # noqa: BLE001
         log.exception("could not push a chat line to %s", chann_uid)

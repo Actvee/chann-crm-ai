@@ -71,7 +71,7 @@ def no_push(monkeypatch):
 
     pushed = []
 
-    async def fake_push(oa, to, text, client=None):
+    async def fake_push(oa, to, text, client=None, quick_reply=None):
         pushed.append((oa, to, text))
         return ["mid"]
 

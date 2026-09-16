@@ -40,7 +40,7 @@ class TestProductList:
 
 class TestLiveChatQuiet:
     async def test_a_line_into_a_conversation_gets_no_echo(self, monkeypatch):
-        async def fake_push(oa, to, text, client=None):
+        async def fake_push(oa, to, text, client=None, quick_reply=None):
             return ["mid"]
 
         monkeypatch.setattr(live_chat, "push_text", fake_push)

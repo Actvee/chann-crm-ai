@@ -115,8 +115,8 @@ GUIDES: dict[str, dict] = {
                 # The guide said "เลื่อนนัด: …" as though it happened on the
                 # spot, which is what the road used to do.
                 "body": {
-                    "th": "พิมพ์ \"งานของฉัน\" หรือ \"สถานะการซ่อม\" · ขอเลื่อนนัด: \"ขอเลื่อนนัดวันศุกร์ บ่าย 2\" (ร้านจะเช็คคิวช่างแล้วยืนยันกลับ นัดเดิมยังอยู่จนกว่าร้านจะยืนยัน) · ยกเลิก: \"ยกเลิกงาน\" (ยกเลิกได้เลย)",
-                    "en": "\"my jobs\" / \"repair status\" · ask to move it: \"move it to Friday 2pm\" (the shop checks the technicians' schedule and confirms; the existing appointment stands until they do) · \"cancel job\" (cancels straight away)",
+                    "th": "พิมพ์ \"งานของฉัน\" หรือ \"สถานะการซ่อม\" · ขอเลื่อนนัด: \"ขอเลื่อนนัดวันศุกร์ บ่าย 2\" หรือบอกแค่เวลา \"เลื่อนนัดเป็น 9 โมงเช้า\" (วันเดิม) — ร้านจะเช็คคิวช่างแล้วยืนยันกลับ นัดเดิมยังอยู่จนกว่าร้านจะยืนยัน · ยกเลิก: \"ยกเลิกงาน\" (ยกเลิกได้เลย)",
+                    "en": "\"my jobs\" / \"repair status\" · ask to move it: \"move it to Friday 2pm\", or just a time \"move it to 9am\" (same day) — the shop checks the technicians' schedule and confirms; the existing appointment stands until they do · \"cancel job\" (cancels straight away)",
                 },
                 "commands": ["งานของฉัน", "สถานะการซ่อม", "เลื่อนนัด", "ยกเลิกงาน"],
                 "example": "งานของฉัน",
@@ -243,8 +243,8 @@ GUIDES: dict[str, dict] = {
             {
                 "key": "dispatch", "title": {"th": "งานซ่อม: มอบหมาย", "en": "Repairs: dispatch"},
                 "body": {
-                    "th": "ลูกค้าแจ้งซ่อมแล้วคุณได้ LINE พร้อมชื่อเครื่องและสถานะประกัน · \"รายการงาน\" ดูคิว · \"มอบหมาย T-2026-0001 ให้ทีม แอร์\" (ต้องมีชื่อ เบอร์ ที่อยู่ นัดครบ ระบบบอกถ้าขาด) · ไม่ต้องพิมพ์เลขเต็มก็ได้: \"มอบหมาย 0001 ให้ช่าง\" หรือ reply ข้อความแจ้งซ่อมนั้นแล้วพิมพ์ \"มอบหมายให้ช่าง\" ระบบจะถามว่าให้ช่างคนไหนพร้อมปุ่มเลือก · หรือทำบนแดชบอร์ด > งานซ่อม",
-                    "en": "You hear when a customer reports, with the machine and its warranty state · \"tickets\" for the queue · \"assign T-2026-0001 to team AC\" (name, phone, address, appointment required — it tells you what is missing) · the short number works too, and so does replying to the report and typing \"assign to a technician\" — it asks which one · or dashboard > tickets",
+                    "th": "ลูกค้าแจ้งซ่อมแล้วคุณได้ LINE พร้อมชื่อเครื่องและสถานะประกัน · \"รายการงาน\" ดูคิว · \"มอบหมาย T-2026-0001 ให้ทีม แอร์\" (ต้องมีชื่อ เบอร์ ที่อยู่ นัดครบ ระบบบอกถ้าขาด) · ไม่ต้องพิมพ์เลขเต็มก็ได้: \"มอบหมาย 0001 ให้ช่าง\" หรือ reply ข้อความแจ้งซ่อมนั้นแล้วพิมพ์ \"มอบหมายให้ช่าง\" ระบบจะถามว่าให้ช่างคนไหนพร้อมปุ่มเลือก · ลูกค้าขอเลื่อนนัดมา: reply ข้อความแจ้งเตือนนั้นแล้วพิมพ์ \"เลื่อนได้\" ระบบเลื่อนให้ตามเวลาที่ลูกค้าขอและแจ้งลูกค้า (หรือพิมพ์ \"เลื่อนนัด T-… พรุ่งนี้ 10 โมง\" เพื่อกำหนดเอง) · เคสที่จบได้เองไม่ต้องใช้ช่าง: \"ปิดงาน T-2026-0001\" ปิดได้เลยไม่ต้องเช็คอิน จะบันทึกด้วยก็ได้ \"ปิดงาน T-2026-0001 สาเหตุ ฟิวส์ขาด แก้ไข เปลี่ยนฟิวส์\" · หรือทำบนแดชบอร์ด > งานซ่อม",
+                    "en": "You hear when a customer reports, with the machine and its warranty state · \"tickets\" for the queue · \"assign T-2026-0001 to team AC\" (name, phone, address, appointment required — it tells you what is missing) · the short number works too, and so does replying to the report and typing \"assign to a technician\" — it asks which one · a customer asked to move the visit: reply to that notice with \"ok to move\" and the job moves to the time they asked, customer told (or \"reschedule T-… tomorrow 10:00\" to set your own) · a case settled without a technician: \"close job T-2026-0001\" closes it, no check-in; add \"cause … fix …\" if you like · or dashboard > tickets",
                 },
                 "commands": ["รายการงาน", "มอบหมาย"],
                 "example": "มอบหมาย T-2026-0001 ให้ทีม แอร์",

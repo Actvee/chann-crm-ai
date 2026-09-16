@@ -128,7 +128,7 @@ def _ai(monkeypatch):
 def pushes(monkeypatch):
     sent: list[tuple] = []
 
-    async def fake_push(oa, to, text, client=None):
+    async def fake_push(oa, to, text, client=None, quick_reply=None):
         sent.append((oa, to, text))
         return ["mid"]
 

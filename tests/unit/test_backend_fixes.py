@@ -169,7 +169,7 @@ class TestApprovedReportType:
         client._line_targets = {"CHN-TECH": "Uline"}
         pushed = []
 
-        async def fake_push(oa, to, text, client=None):
+        async def fake_push(oa, to, text, client=None, quick_reply=None):
             pushed.append((oa, to, text))
             return ["mid-1"]
 

@@ -5071,7 +5071,7 @@ class TestFieldServiceChat:
             "assigned_to_ref": "member-1",
         }]
         reply = await handle_chat_message(
-            client, message="ปิดงาน T-2026-0001", ctx=_ctx(),
+            client, message="ปิดงาน T-2026-0001", ctx=_ctx(primary_role="technician"),
         )
         assert "พบปัญหาอะไร" in reply.text
         # Nothing closed yet — the report does not exist until it is filled.
@@ -5083,14 +5083,14 @@ class TestFieldServiceChat:
             "id": "tk-1", "ticket_number": "T-2026-0001", "status": "in_progress",
             "assigned_to_ref": "member-1",
         }]
-        await handle_chat_message(client, message="ปิดงาน T-2026-0001", ctx=_ctx())
-        second = await handle_chat_message(client, message="คอมเพรสเซอร์รั่ว", ctx=_ctx())
+        await handle_chat_message(client, message="ปิดงาน T-2026-0001", ctx=_ctx(primary_role="technician"))
+        second = await handle_chat_message(client, message="คอมเพรสเซอร์รั่ว", ctx=_ctx(primary_role="technician"))
         assert "แก้ไขอะไร" in second.text
-        third = await handle_chat_message(client, message="เปลี่ยนคอมใหม่", ctx=_ctx())
+        third = await handle_chat_message(client, message="เปลี่ยนคอมใหม่", ctx=_ctx(primary_role="technician"))
         # A third question now: parts. Asked because the shop bills for
         # them, skippable because most visits replace nothing.
         assert "อะไหล่" in third.text
-        await handle_chat_message(client, message="ไม่มี", ctx=_ctx())
+        await handle_chat_message(client, message="ไม่มี", ctx=_ctx(primary_role="technician"))
 
         calls = [r for r in client.recorded if r[0] == "check_out_ticket"]
         assert len(calls) == 1
@@ -5120,7 +5120,7 @@ class TestFieldServiceChat:
         reply = await handle_chat_message(
             client,
             message="ปิดงาน T-2026-0001\nพบ: คอมรั่ว\nแก้: เปลี่ยนคอม",
-            ctx=_ctx(),
+            ctx=_ctx(primary_role="technician"),
         )
         calls = [r for r in client.recorded if r[0] == "check_out_ticket"]
         assert len(calls) == 1
@@ -5166,7 +5166,7 @@ class TestTechnicianDoesNotRetypeCodes:
             "assigned_to_ref": "member-1",
         }])
         await handle_chat_message(
-            client, message="ปิดงาน\nพบ: คอมรั่ว\nแก้: เปลี่ยนคอม", ctx=_ctx(),
+            client, message="ปิดงาน\nพบ: คอมรั่ว\nแก้: เปลี่ยนคอม", ctx=_ctx(primary_role="technician"),
         )
         calls = [r for r in client.recorded if r[0] == "check_out_ticket"]
         assert len(calls) == 1
@@ -5204,7 +5204,7 @@ class TestTechnicianDoesNotRetypeCodes:
              "assigned_to_ref": "member-1"},
         ])
         await handle_chat_message(
-            client, message="ปิดงาน T-2026-0002\nพบ: ก\nแก้: ข", ctx=_ctx(),
+            client, message="ปิดงาน T-2026-0002\nพบ: ก\nแก้: ข", ctx=_ctx(primary_role="technician"),
         )
         calls = [r for r in client.recorded if r[0] == "check_out_ticket"]
         assert calls[0][2] == "tk-2"

@@ -1692,13 +1692,14 @@ class TestTheGuardDeclinesWithoutAskingASecondQuestion:
     @pytest.mark.asyncio
     async def test_the_same_shape_still_reaches_the_handler_when_the_time_is_unreadable(self):
         """"ขอเปลี่ยนเวลาเป็นบ่ายสองได้มั้ย" is the same question shape.
-        The amend handler cannot read "บ่ายสอง" as a time and says so — its
-        own message, which is the proof the guard let the sentence through
-        rather than answering it."""
-        text, writes, _ = await _customer_say("ขอเปลี่ยนเวลาเป็นบ่ายสองได้มั้ย")
+        The amend handler answers it as a request to move the visit (since
+        round 19e a time alone keeps the day) — its own message, which is
+        the proof the guard let the sentence through rather than answering
+        it. The visit itself is never moved by the customer."""
+        text, writes, client = await _customer_say("ขอเปลี่ยนเวลาเป็นบ่ายสองได้มั้ย")
         assert "ใช่ไหมครับ? ถ้าใช่" not in text
-        assert "ไม่เข้าใจวันที่" in text
-        assert writes == []
+        assert "ขอเลื่อนงาน" in text and "14:00" in text
+        assert "update_ticket" not in writes and client._tickets[0]["scheduled_date"] == "2026-09-11"
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("message", [

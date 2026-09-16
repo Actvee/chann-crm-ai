@@ -288,6 +288,7 @@ async def push_text(
     to_line_user_id: str,
     text: str,
     client: httpx.AsyncClient | None = None,
+    quick_reply: list[dict] | None = None,
 ) -> list[str]:
     """Unsolicited push — Master Spec 6.8. Returns the sent message ids.
 
@@ -304,7 +305,7 @@ async def push_text(
 
     return await _send(
         LINE_PUSH_URL, oa,
-        {"to": to_line_user_id, "messages": [text_message(text)]},
+        {"to": to_line_user_id, "messages": [text_message(text, quick_reply=quick_reply)]},
         client, "push",
     )
 

@@ -4579,6 +4579,40 @@ async def _ask_new_schedule(
     return ChatReply(text=_t(AMEND_ASK_NEW_DATE, language))
 
 
+CUSTOMER_NOTHING_TO_CONFIRM = {
+    "th": "ไม่มีรายการที่รอยืนยันครับ นัดของงาน {code} ตอนนี้คือ {when}\nถ้าต้องการเลื่อน พิมพ์ เช่น \"เลื่อนนัด {code} พรุ่งนี้ 10 โมง\" (ร้านจะยืนยันให้อีกครั้ง)",
+    "en": "Nothing is waiting for your confirmation. Job {code} is booked for {when}.\nTo move it, type e.g. \"reschedule {code} tomorrow 10:00\" (the shop confirms).",
+}
+
+
+def _is_bare_confirmation(message: str) -> bool:
+    return _normalise(message) in {"ยืนยัน", "ยืนยันครับ", "ยืนยันค่ะ", "ยืนยันคะ", "confirm", "confirmed", "ตกลงยืนยัน", "ยืนยันเลย"}
+
+
+async def _customer_nothing_to_confirm(
+    client: DataClient, *, ctx: ResolvedContext, license_id, language: str,
+) -> ChatReply | None:
+    """"ยืนยัน" with no question open (the shop had just answered the
+    reschedule): say what the appointment is, rather than "ยังไม่แน่ใจว่า
+    ต้องการอะไร" (tester, 16 ก.ย. 2569). None when there is no job to speak of."""
+    try:
+        tickets = await client.list_tickets(str(license_id))
+    except Exception:  # noqa: BLE001
+        return None
+    mine = [
+        t for t in tickets
+        if t.get("customer_chann_uid") == ctx.chann_uid and str(t.get("status")) not in ("completed", "cancelled")
+    ]
+    if not mine:
+        return None
+    ticket = mine[-1]
+    code = str(ticket.get("ticket_number") or "")
+    return ChatReply(
+        text=_t(CUSTOMER_NOTHING_TO_CONFIRM, language).format(code=code, when=_ticket_when(ticket) or "-"),
+        quick_replies=[("งานของฉัน", "งานของฉัน"), ("คุยกับร้าน", "คุยกับร้าน")],
+    )
+
+
 async def _customer_fallback_or_storefront(client: DataClient, ctx: ResolvedContext, text: str, language: str) -> ChatReply:
     """"ค้นหา พัดลม" / "สินค้าทั้งหมด" is the storefront, even when the model
     shrugged at it (audit, 15 ก.ย. 2569: "ยังไม่แน่ใจว่าต้องการอะไร") — the
@@ -6922,6 +6956,14 @@ async def _handle_customer_amend(
     today = local_today()
     source = message if date_text is None else date_text
     due_date = parse_thai_date(source, today) if source else None
+    if due_date is None and source and parse_thai_time(source) is not None:
+        # "เลื่อนนัดเป็น 9 โมงเช้าแทนได้ไหม" names a time and keeps the day
+        # — it was answered "ระบบไม่เข้าใจวันที่" (tester, 16 ก.ย. 2569).
+        try:
+            kept = date.fromisoformat(str(ticket.get("scheduled_date") or ""))
+        except ValueError:
+            kept = None
+        due_date = kept if kept is not None and kept >= today else today
     if due_date is None:
         if source and _looks_like_a_date_attempt(source):
             return ChatReply(text=_t(CUSTOMER_NEEDS_DATE, language))
@@ -7619,6 +7661,95 @@ async def _handle_check_in(
     )
 
 
+SHOP_CLOSE_DONE = {
+    "th": "ปิดงาน {code} แล้ว{details}\nแจ้งลูกค้าให้แล้ว",
+    "en": "Job {code} closed.{details}\nThe customer has been told.",
+}
+SHOP_CLOSE_HINT = {
+    "th": "\n(บันทึกสาเหตุและการแก้ไขได้ด้วย เช่น \"ปิดงาน {code} สาเหตุ ฟิวส์ขาด แก้ไข เปลี่ยนฟิวส์\")",
+    "en": "\n(You can add the cause and the fix: \"close job {code} cause blown fuse fix replaced fuse\")",
+}
+SHOP_CLOSE_CUSTOMER = {
+    "th": "งาน {code} ปิดเรียบร้อยแล้วครับ ขอบคุณที่ใช้บริการ",
+    "en": "Job {code} is now closed. Thank you.",
+}
+_SHOP_CLOSE_CAUSE_RE = re.compile(r"(?:สาเหตุ|พบ|cause|found)\s*[:：]?\s*(.+?)(?=\s*(?:การแก้ไข|แก้ไข|วิธีแก้|แก้|fix)(?:\s*[:：]|\s)|$)", re.I | re.S)
+_SHOP_CLOSE_FIX_RE = re.compile(r"(?:การแก้ไข|แก้ไข|วิธีแก้|แก้|fix)\s*[:：]?\s*(.+)$", re.I | re.S)
+
+
+def _shop_close_details(message: str, code: str) -> tuple[str | None, str | None]:
+    """The optional cause and fix in "ปิดงาน T-… สาเหตุ … แก้ไข …"; text after
+    the code with neither word is the fix."""
+    text = TICKET_CODE_RE.sub(" ", message or "")
+    lowered = text.lower()
+    for trigger in sorted(CHECKOUT_TRIGGERS + CHECKOUT_LOOSE_TRIGGERS, key=len, reverse=True):
+        index = lowered.find(trigger.lower())
+        if index != -1:
+            text = text[:index] + " " + text[index + len(trigger):]
+            break
+    text = " ".join(text.split()).strip(" :·-,")
+    if not text:
+        return None, None
+    cause = _SHOP_CLOSE_CAUSE_RE.search(text)
+    fix = _SHOP_CLOSE_FIX_RE.search(text)
+    if cause is None and fix is None:
+        return None, text[:400]
+    return (cause.group(1).strip()[:400] if cause else None), (fix.group(1).strip()[:400] if fix else None)
+
+
+async def _close_from_the_shop(
+    client: DataClient, *, ctx: ResolvedContext, license_id: str, ticket: dict, message: str,
+    permission_keys: list[str], language: str,
+) -> ChatReply:
+    """The sales/CS side closes a job outright — a case settled on the phone
+    or by a visit that needs no technician report. No check-in, no
+    three-question report; the cause and the fix are optional (owner,
+    16 ก.ย. 2569: "มีช่องให้บันทึกสาเหตุกับการแก้ไขได้ แต่ไม่ได้บังคับ")."""
+    if "ticket.close" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    code = str(ticket.get("ticket_number") or "")
+    ticket_id = str(ticket.get("id") or "")
+    cause, fix = _shop_close_details(message, code)
+    try:
+        await client.set_ticket_status(license_id, ticket_id, "completed", actor_id=ctx.chann_uid)
+    except Exception:
+        log.exception("the shop could not close %s", code)
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    parts = []
+    if cause:
+        parts.append(f"สาเหตุ: {cause}")
+    if fix:
+        parts.append(f"การแก้ไข: {fix}")
+    details = ("\n" + "\n".join(parts)) if parts else ""
+    try:
+        await client.create_note(
+            license_id,
+            {"entity_type": "service_ticket", "entity_id": ticket_id,
+             "body": "[ปิดงานโดยฝ่ายขาย/CS]" + (" " + " · ".join(parts) if parts else "")},
+            actor_id=ctx.chann_uid,
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("could not note the shop's close on %s", code)
+    await _notify_ticket_change(
+        client, license_id, ticket_id,
+        f"ฝ่ายขาย/CS ปิดงาน {code} แล้ว" + (" — " + " · ".join(parts) if parts else ""), language,
+        text_en=f"Sales/CS closed job {code}",
+        customer_text=_t(SHOP_CLOSE_CUSTOMER, "th").format(code=code),
+        customer_text_en=_t(SHOP_CLOSE_CUSTOMER, "en").format(code=code),
+    )
+    await _resolve_customer_requests(
+        client, license_id=license_id, ticket_id=ticket_id, actor_id=ctx.chann_uid, what="ปิดงานโดยฝ่ายขาย/CS",
+    )
+    await _remember_entity(client, ctx, entity_type="ticket", entity_id=ticket_id, code=code)
+    text = _t(SHOP_CLOSE_DONE, language).format(code=code, details=details)
+    if not parts:
+        text += _t(SHOP_CLOSE_HINT, language).format(code=code)
+    return ChatReply(
+        text=text, entity_type="ticket", entity_id=ticket_id,
+        quick_replies=[("ข้อมูลงาน", f"ข้อมูลงาน {code}"), ("รายการงาน", "รายการงาน")],
+    )
+
+
 async def _handle_check_out(
     client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
     permission_keys: list[str], language: str,
@@ -7813,6 +7944,11 @@ async def _handle_check_out(
                 quick_replies=[(f"{t.get('ticket_number')}"[:20], f"ปิดงาน {t.get('ticket_number')}") for t in busy[:4]],
             )
         code = str(ticket.get("ticket_number") or "")
+        if ctx.oa == "sales" and str(ticket.get("status") or "") not in ("completed", "cancelled"):
+            return await _close_from_the_shop(
+                client, ctx=ctx, license_id=license_id, ticket=ticket, message=message,
+                permission_keys=permission_keys, language=language,
+            )
         if str(ticket.get("status") or "") in ("completed", "cancelled"):
             # Finished or cancelled: not "check in first" with a button
             # that would 409 (review, 6 Sep 2026).
@@ -11591,6 +11727,50 @@ CUSTOMER_EDIT_WHOSE = {
 }
 
 
+def _shop_close_as_a_ticket_update(intent: dict, message: str, oa: str) -> dict:
+    """"ปิดงาน T-… สาเหตุ … แก้ไข …" on the sales OA is the shop closing a
+    job, whatever the model called it: read as a service report it was
+    refused for lacking «สร้างใบรายงานบริการ», a technician's permission
+    the CS does not need to close a case they settled themselves."""
+    verb = ACTION_ALIASES.get(str(intent.get("action") or "").lower(), str(intent.get("action") or "").lower())
+    if oa != "sales" or str(intent.get("entity") or "") != "service_report" or verb not in ("create", "update", "check_out"):
+        return intent
+    if not _command_like(message or "", CHECKOUT_TRIGGERS) or not TICKET_CODE_RE.search(message or ""):
+        return intent
+    fields = intent.get("fields") or {}
+    return {
+        "action": "update", "entity": "ticket",
+        "fields": {k: v for k, v in {"code": fields.get("code"), "status": "closed", "found_issue": fields.get("found_issue"),
+                                     "work_done": fields.get("work_done")}.items() if v not in (None, "")},
+        "missing": [],
+    }
+
+
+async def _product_price_as_the_line_in_view(client: DataClient, ctx: ResolvedContext, license_id, intent: dict) -> dict:
+    """"แก้ราคา Air conditioner เป็น 11000" with a quote in view is sometimes
+    read as a catalogue price change missing a product code — and the
+    missing gate then asked for the code (converse, 16 ก.ย. 2569). When the
+    name is a line of the record in view, it is that line's price."""
+    verb = ACTION_ALIASES.get(str(intent.get("action") or "").lower(), str(intent.get("action") or "").lower())
+    if ctx.oa != "sales" or str(intent.get("entity") or "") != "product" or verb != "update":
+        return intent
+    fields = intent.get("fields") or {}
+    name = str(fields.get("product_name") or fields.get("target_name") or fields.get("name") or "").strip()
+    price = next((fields.get(k) for k in ("unit_price", "price", "quoted_unit_price") if fields.get(k) not in (None, "")), None)
+    if not name or price is None:
+        return intent
+    try:
+        kind, _code, entity_id, lines = await _resolve_line_target(client, str(license_id), ctx, "")
+    except Exception:  # noqa: BLE001
+        return intent
+    if kind is None or entity_id is None or not _match_lines(lines, name):
+        return intent
+    return {
+        "action": "update", "entity": "line_item",
+        "fields": {"target_name": name, "quoted_unit_price": price}, "missing": [],
+    }
+
+
 def _staff_profile_edit_as_customer(intent: dict, message: str, oa: str) -> dict:
     """On the sales OA a profile edit that does not say "ของฉัน" is a CUSTOMER
     edit whose customer is still to be named — so the missing gate asks for
@@ -13878,10 +14058,17 @@ async def _handle_ai_understood_intent(
                     message=_joined("ไม่รับงาน", code, fields.get("reason") or fields.get("notes")),
                     permission_keys=permission_keys, language=language,
                 )
-            if status in ("closed", "close", "done", "completed", "complete", "finished"):
+            if status in ("closed", "close", "done", "completed", "complete", "finished") \
+                    or _command_like(message or "", CHECKOUT_TRIGGERS):
+                # The sentence opens with "ปิดงาน": a close even when the
+                # reading carries no status — on the sales OA it fell into
+                # the situation handler and became "ขอเลื่อนนัด" (DEV log,
+                # 16 ก.ย. 2569 10:34). The shop's own words carry the
+                # optional cause and fix, so the sales OA gets the sentence.
                 return await _handle_check_out(
                     client, ctx=ctx, license_id=license_id,
-                    message=_joined("ปิดงาน", code, fields.get("found_issue"), fields.get("work_done")),
+                    message=message if ctx.oa == "sales" and TICKET_CODE_RE.search(message or "")
+                    else _joined("ปิดงาน", code, fields.get("found_issue"), fields.get("work_done")),
                     permission_keys=permission_keys, language=language,
                 )
             # "เลื่อนไปพรุ่งนี้บ่าย", "ลูกค้าขอเปลี่ยนที่อยู่" — the same
@@ -14188,7 +14375,7 @@ async def _handle_line_item_intent(
     name = _strip_item_particles(str(fields.get("target_name") or "").strip())
     code = str(fields.get("code") or "").strip()
 
-    if message and _is_whole_quote_discount(message):
+    if message and (_is_whole_quote_discount(message) or await _discounts_the_quote_in_view(client, ctx, message)):
         # "ลดราคา Q-2026-0001 500 บาท" read as a LINE price: a quote code, a
         # discount verb and an amount, and no product — the whole quote,
         # as the typed road has decided since 6 Sep 2026.
@@ -14369,12 +14556,12 @@ LINE_NEEDS_DEAL = {
 QUOTE_DISCOUNT_TRIGGERS = ("ลดราคาทั้งใบ", "ส่วนลด", "ให้ส่วนลด", "discount")
 
 
-def _is_whole_quote_discount(message: str) -> bool:
+def _is_whole_quote_discount(message: str, in_view: bool = False) -> bool:
     """"ลดราคา Q-2026-0001 500 บาท": a quote code, a discount verb and an
     amount, and nothing else — the whole quote, not a line called "500
     บาท" (review, 6 Sep 2026)."""
     text = message or ""
-    if not re.search(r"(?<![A-Za-z0-9])Q-\d{4}-\d{4}(?![0-9])", text, re.I):
+    if not in_view and not re.search(r"(?<![A-Za-z0-9])Q-\d{4}-\d{4}(?![0-9])", text, re.I):
         return False
     if not re.search(r"ลดราคา|ลด\s|^ลด|discount|ส่วนลด", text.lower()):
         return False
@@ -14542,6 +14729,20 @@ async def _win_the_deal_behind(
     return _t(QUOTE_WON_THE_DEAL, language).format(code=deal.get("deal_id") or deal_id)
 
 
+async def _discounts_the_quote_in_view(client: DataClient, ctx: ResolvedContext, message: str) -> bool:
+    """"ลดราคา 1000 บาท" / "ลดราคาใบเสนอราคา 1000 บาท" right after looking at a
+    quote is that quote's discount — the tester (16 ก.ย. 2569) was asked
+    which LINE to reprice and then met "ไม่พบสินค้า ใบเสนอราคา 1000 บาท",
+    because the check demanded the Q- code in the sentence."""
+    if not _is_whole_quote_discount(message, in_view=True):
+        return False
+    try:
+        ref = await _last_entity_ref(client, ctx)
+    except Exception:  # noqa: BLE001
+        return False
+    return bool(ref and str(ref.get("entity_type") or "") == "quote")
+
+
 async def _handle_quote_discount(
     client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
     permission_keys: list[str], language: str,
@@ -14651,8 +14852,11 @@ async def _handle_line_edit(
             new_qty = max(1, counted)
             text = text.replace(qty_match.group(0), " ")
 
-    for word in ("ใน", "ของ", "ออกจาก", "จาก", "on", "from"):
+    for word in ("ใน", "ของ", "ออกจาก", "จาก"):
         text = text.replace(word, " ")
+    # Whole words only: "Air conditioner" lost both "on"s and became
+    # "Air c diti er" (tester, 16 ก.ย. 2569).
+    text = re.sub(r"\b(?:on|from)\b", " ", text, flags=re.I)
     # "ลบสินค้าพัดลมออก" pointed at a product called "พัดลมออก" (owner test,
     # 8 Sep 2026): the words around the name come off first.
     name = _strip_item_particles(" ".join(text.split()).strip(" :·-,"))
@@ -14686,6 +14890,11 @@ async def _handle_line_edit(
         # Only when there is exactly one: with several, guessing would
         # put a price on the wrong product.
         line = lines[0]
+    # The button repeats the number the sentence already gave — "แก้ราคา
+    # พัดลม เป็น " with the 1000 dropped asked the price a second time
+    # (tester, 16 ก.ย. 2569).
+    given = new_price if new_price is not None else new_qty
+    button_tail = f" เป็น {given}" if given is not None else " เป็น "
     if line is None and not name:
         # Several lines and nothing said which. Listing them is the
         # answer — asking "which one?" without showing the options makes
@@ -14701,7 +14910,7 @@ async def _handle_line_edit(
             quick_replies=[
                 (
                     str(l.get("product_name"))[:20],
-                    f"{trigger}{l.get('product_name')} เป็น ",
+                    f"{trigger}{l.get('product_name')}{button_tail}",
                 )
                 for l in lines[:4]
             ],
@@ -14716,7 +14925,7 @@ async def _handle_line_edit(
                 options="\n".join(f"· {l.get('product_name')}" for l in candidates[:LIST_LIMIT]),
             ),
             quick_replies=[
-                (str(l.get("product_name"))[:20], f"{trigger}{l.get('product_name')} เป็น ")
+                (str(l.get("product_name"))[:20], f"{trigger}{l.get('product_name')}{button_tail}")
                 for l in candidates[:4]
             ],
         )
@@ -19806,6 +20015,35 @@ async def _notify_dispatchers(client: DataClient, license_id: str, text: str, te
     return told
 
 
+_APPROVAL_WORDS = frozenset({
+    "เลื่อนได้", "เลื่อนได้เลย", "เลื่อนได้ครับ", "เลื่อนได้ค่ะ", "ได้", "ได้เลย", "ได้ครับ", "ได้ค่ะ", "ตกลง", "ตกลงครับ",
+    "ตกลงค่ะ", "โอเค", "ok", "okay", "ยืนยัน", "อนุมัติ", "ตามที่ลูกค้าขอ", "ตามลูกค้า", "เลื่อนตามลูกค้า",
+    "ตามนั้น", "ตามนั้นเลย", "approve", "approved", "yes", "fine", "เลื่อนตามที่ขอ", "ตามที่ขอ", "โอเคเลื่อนได้",
+})
+
+
+def _approves_the_customers_time(message: str) -> bool:
+    """"เลื่อนได้" / "ตกลง" / "ตามที่ลูกค้าขอ" with a job code and nothing else."""
+    rest = _normalise(TICKET_CODE_RE.sub(" ", message or ""))
+    rest = re.sub(r"^(?:เลื่อนนัด|เลื่อน)", "", rest) if rest not in ("เลื่อนได้", "เลื่อนได้เลย") else rest
+    return rest in {w.replace(" ", "") for w in _APPROVAL_WORDS}
+
+
+async def _customer_proposed_time(client: DataClient, license_id: str, ticket_id: str, today):
+    """(date, time) the customer asked for on this job, from its outstanding
+    request note, or None."""
+    from .thai_datetime import parse_thai_date, parse_thai_time
+    for request in await _pending_customer_requests(client, license_id, ticket_id, "th"):
+        if "ขอเลื่อนนัด" not in request:
+            continue
+        said = request.split("ขอเลื่อนนัดเป็น", 1)[-1].split("(", 1)[0]
+        when = parse_thai_date(said, today)
+        if when is None:
+            continue
+        return when, (parse_thai_time(said) or time(9, 0))
+    return None
+
+
 async def _handle_technician_situation(
     client: DataClient, *, ctx: ResolvedContext, license_id, message: str, kind: str,
     permission_keys: list[str], language: str,
@@ -19858,6 +20096,14 @@ async def _handle_technician_situation(
     # the new date; only a day AFTER today, or an explicit move, is one.
     dated = re.sub(r"วันนี้(?=ทำ|ไม่|ยัง|เสร็จ|จบ|ไป)|today", " ", message or "")
     new_date = parse_thai_date(dated, today) if kind in ("reschedule", "not_home", "cannot_finish", "need_parts") else None
+    if kind == "reschedule" and new_date is None and _approves_the_customers_time(message):
+        # "T-2026-0005 เลื่อนได้", replying to "ลูกค้าขอเลื่อนนัดงาน … เป็น 17 ก.ย.
+        # 09:00": the time the customer proposed is the time — it was noted
+        # as a new request and the date asked again (tester, 16 ก.ย. 2569).
+        proposed = await _customer_proposed_time(client, license_id, ticket_id, today)
+        if proposed is not None:
+            new_date, proposed_time = proposed
+            message = f"{code} {format_thai_date(new_date)} {proposed_time.strftime('%H:%M')}"
     explicit_move = kind == "reschedule" or "เลื่อน" in _canonical(message) or "มาต่อ" in _canonical(message) or "กลับมา" in _canonical(message)
     if new_date is not None and (new_date > today or (explicit_move and new_date >= today)):
         new_time = parse_thai_time(message)
@@ -21385,6 +21631,18 @@ async def _route_chat_message(
                 client, ctx=ctx, permission_keys=permission_keys, language=language, message=message,
             )
         if _is_small_talk(message):
+            # "ได้ครับ" inside an open conversation with the shop is a line
+            # to the shop, not thanks to the bot — the bot answered
+            # "ยินดีครับ 🙂" and the shop never heard (tester, 16 ก.ย. 2569).
+            try:
+                live_now = await live_chat.live_session(client, license_id=str(license_id), chann_uid=ctx.chann_uid)
+            except Exception:  # noqa: BLE001
+                live_now = None
+            if live_now is not None and not await _customer_report_waiting(client, ctx, message):
+                _note_road(road="live_chat")
+                return await _handle_customer_chat_line(
+                    client, ctx=ctx, license_id=license_id, session=live_now, message=message, language=language,
+                )
             return ChatReply(
                 text=_t(SMALL_TALK_REPLY, language),
                 quick_replies=[("แจ้งซ่อม", "แจ้งซ่อม"), ("งานของฉัน", "งานของฉัน")],
@@ -21426,6 +21684,10 @@ async def _route_chat_message(
             )
             if reading is not None and str(reading.get("action") or "") == "suggest":
                 _note_road(road="suggest→rule")
+                if _is_bare_confirmation(message):
+                    acked = await _customer_nothing_to_confirm(client, ctx=ctx, license_id=license_id, language=language)
+                    if acked is not None:
+                        return acked
             if reading is not None and str(reading.get("action") or "") != "suggest":
                 _note_road(road="model", action=reading.get("action"), entity=reading.get("entity"))
                 answered = await _customer_model_road(
@@ -22013,6 +22275,7 @@ async def _route_chat_message(
             any(t in message.lower() for t in QUOTE_DISCOUNT_TRIGGERS)
             or ("ลดราคา" in message.lower() and "%" in message)
             or _is_whole_quote_discount(message)
+            or await _discounts_the_quote_in_view(client, ctx, message)
         ):
             held = await _guarded_in_context(
                 client, ctx=ctx, license_id=license_id, message=message,
@@ -22569,6 +22832,19 @@ async def _route_chat_message(
             # is deliberately left untouched.
             return _slot_fill_still_open(pending_intent, language)
     if pending_intent is None and _is_small_talk(message):
+        if ctx.oa == "customer":
+            # "ได้ครับ" inside an open conversation with the shop is a line
+            # to the shop, not thanks to the bot — the bot answered
+            # "ยินดีครับ 🙂" and the shop never heard (tester, 16 ก.ย. 2569).
+            try:
+                live_now = await live_chat.live_session(client, license_id=str(license_id), chann_uid=ctx.chann_uid)
+            except Exception:  # noqa: BLE001
+                live_now = None
+            if live_now is not None:
+                _note_road(road="live_chat")
+                return await _handle_customer_chat_line(
+                    client, ctx=ctx, license_id=license_id, session=live_now, message=message, language=language,
+                )
         return ChatReply(text=_t(SMALL_TALK_REPLY, language))
 
     return await _model_road(
@@ -22854,6 +23130,8 @@ async def _model_road(
             intent = {**intent, "fields": {**(intent.get("fields") or {}), "code": str(ref.get("code"))}, "missing": []}
     intent = _with_the_name_after_the_head(intent, message)
     intent = _staff_profile_edit_as_customer(intent, message, ctx.oa)
+    intent = await _product_price_as_the_line_in_view(client, ctx, license_id, intent)
+    intent = _shop_close_as_a_ticket_update(intent, message, ctx.oa)
     # Missing fields come first: never refuse a request we did not understand.
     missing = _prune_missing(intent.get("missing") or [], intent, message)
     if missing == ["target_name"] and not (intent.get("fields") or {}).get("target_name") and carried is None:
