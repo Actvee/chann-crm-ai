@@ -19,6 +19,10 @@ from datetime import datetime, timezone
 SNAPSHOT_VERSION = 1
 
 
+
+#: Kept equal to chat.REPORT_PHOTO_LIMIT by test_round19s_notes.py.
+REPORT_PHOTO_LIMIT = 4
+
 def _name_of(profile: dict | None, fallback: str = "") -> str:
     profile = profile or {}
     name = " ".join(p for p in (profile.get("first_name"), profile.get("last_name")) if p)
@@ -89,7 +93,10 @@ def build_service_report_snapshot(
         },
         # 13.1: evidence from the visit — fetchable links the renderer
         # resolves during the render (signed by the caller).
-        "photos": [str(u) for u in (photos or []) if u][:4],
+        # The first four, and the chat says so when a fifth is attached
+        # (chat.REPORT_PHOTO_LIMIT — the two must agree, or the technician
+        # and the customer see different pictures).
+        "photos": [str(u) for u in (photos or []) if u][:REPORT_PHOTO_LIMIT],
         "approvals": [
             {
                 "name": str(a.get("name") or ""),

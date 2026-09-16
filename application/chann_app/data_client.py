@@ -1606,12 +1606,32 @@ class DataClient:
 
     # ------------------------------------------------------------ Phase 9 CRM
 
+    @staticmethod
+    def _with_a_tidy_phone(fields: dict) -> dict:
+        """One shape for a phone number, whichever door it came in through.
+
+        "092.345.6781" was accepted and stored exactly as typed (owner's
+        tester, 16 ก.ย. 2569: "รูปแบบเบอร์โทรที่บันทึกไม่ถูกเปลี่ยน ออกมา
+        แล้วแปลกๆ"). Dots and dashes also defeat the duplicate check, which
+        compares phone numbers as strings: the same person typed twice, two
+        ways, became two customers.
+        """
+        from .services.phone import normalise_phone
+
+        if not fields or "phone" not in fields:
+            return fields
+        raw = fields.get("phone")
+        if raw in (None, ""):
+            return fields
+        tidy = normalise_phone(str(raw))
+        return {**fields, "phone": tidy} if tidy else fields
+
     async def create_customer(
         self, license_id: str, payload: dict, actor_id: str | None = None,
     ) -> dict:
         resp = await self._client.post(
             f"{self._base}/internal/v1/licenses/{license_id}/customers",
-            headers=self._headers_for(actor_id), json=payload,
+            headers=self._headers_for(actor_id), json=self._with_a_tidy_phone(payload),
         )
         return self._unwrap(resp)
 
@@ -1660,7 +1680,7 @@ class DataClient:
     ) -> dict:
         resp = await self._client.patch(
             f"{self._base}/internal/v1/licenses/{license_id}/customers/{customer_id}",
-            headers=self._headers_for(actor_id), json=fields,
+            headers=self._headers_for(actor_id), json=self._with_a_tidy_phone(fields),
         )
         return self._unwrap(resp)
 

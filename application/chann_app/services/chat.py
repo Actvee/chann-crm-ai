@@ -5645,10 +5645,22 @@ async def _switch_language(client: DataClient, *, ctx: ResolvedContext, language
 
 # ------------------------------------------------- a picture, not words (13.1)
 
+#: The report takes the first REPORT_PHOTO_LIMIT pictures (see
+#: services/documents/report_snapshot.py). Saying "ส่งเพิ่มได้เรื่อยๆ" and
+#: then printing four of them is how the shop and the technician end up
+#: with different ideas of what the customer will see (owner, 16 ก.ย. 2569:
+#: "ควรชี้แจงด้วยว่าแนบไปสูงสุดกี่ภาพ และภาพที่จะถูกนำไปแสดงบนรายงาน
+#: สามารถเลือกได้ไหม").
+REPORT_PHOTO_LIMIT = 4
 PHOTO_ATTACHED = {
     "th": "แนบรูปกับงาน {code} แล้วครับ ({n} รูป) ส่งเพิ่มได้เรื่อยๆ",
     "en": "Photo attached to {code} ({n} so far). Send more any time.",
 }
+PHOTO_ON_THE_REPORT = {
+    "th": "\nรายงานจะใช้ {limit} รูปแรก — ดูรายการด้วย \"ดูรูปที่แนบ\" และลบรูปที่ไม่ใช้ได้",
+    "en": "\nThe report uses the first {limit} — say \"see the pictures\" to list them and remove any you do not want.",
+}
+PHOTO_ON_THE_REPORT_MARK = {"th": " ← อยู่ในรายงาน", "en": " ← on the report"}
 PHOTO_NO_JOB = {
     "th": "ยังไม่มีงานที่กำลังทำให้แนบรูปครับ รับงานและเช็คอินก่อน แล้วค่อยส่งรูป",
     "en": "No job to attach this to yet — take a job and check in, then send the picture.",
@@ -5865,8 +5877,11 @@ async def handle_incoming_image(
     except Exception:
         log.exception("picture could not be stored")
         return ChatReply(text=_t(PHOTO_FAILED, language))
+    text = _t(PHOTO_ATTACHED, language).format(code=ticket.get("ticket_number") or "", n=count)
+    if count >= REPORT_PHOTO_LIMIT:
+        text += _t(PHOTO_ON_THE_REPORT, language).format(limit=REPORT_PHOTO_LIMIT)
     return ChatReply(
-        text=_t(PHOTO_ATTACHED, language).format(code=ticket.get("ticket_number") or "", n=count),
+        text=text,
         entity_type="service_ticket", entity_id=str(ticket.get("id") or ""),
     )
 
@@ -6036,11 +6051,13 @@ async def _handle_ticket_photos(
 def _photo_list_text(rows: list[dict], code: str, language: str) -> str:
     lines = [_t(PHOTO_LIST_HEADER, language).format(code=code, n=len(rows))]
     for i, row in enumerate(rows, start=1):
+        # Which ones the customer will actually see on the paper.
+        mark = _t(PHOTO_ON_THE_REPORT_MARK, language) if i <= REPORT_PHOTO_LIMIT else ""
         lines.append(_t(PHOTO_LIST_LINE, language).format(
             i=i, name=_photo_name(row, i, language),
             kind=_label(PHOTO_KIND_LABELS, row.get("photo_type"), language),
             when=_photo_when(row),
-        ))
+        ) + mark)
     return "\n".join(lines)
 
 
@@ -13005,6 +13022,46 @@ def _shop_close_as_a_ticket_update(intent: dict, message: str, oa: str) -> dict:
     }
 
 
+async def _price_of_the_product_in_view(
+    client: DataClient, ctx: ResolvedContext, license_id, intent: dict, message: str,
+) -> dict:
+    """"แก้ราคาเป็น 10000" right after looking a product up is that
+    product's catalogue price.
+
+    The mirror of _product_price_as_the_line_in_view below: with a QUOTE in
+    view a bare price is the line's, and with a PRODUCT in view it is the
+    product's. Reading it as a line edit sent the owner's tester an answer
+    about a quote they had not mentioned (16 ก.ย. 2569).
+    """
+    verb = ACTION_ALIASES.get(str(intent.get("action") or "").lower(), str(intent.get("action") or "").lower())
+    if ctx.oa != "sales" or verb != "update":
+        return intent
+    if str(intent.get("entity") or "") not in ("line_item", "quote", "deal", "product"):
+        return intent
+    fields = intent.get("fields") or {}
+    if fields.get("target_name") or fields.get("product_name") or fields.get("name"):
+        return intent
+    if re.search(r"(?<![A-Za-z0-9])[QD]-\d{4}-\d{4}", message or "", re.I):
+        return intent
+    price = next(
+        (fields.get(k) for k in ("unit_price", "price", "quoted_unit_price") if fields.get(k) not in (None, "")),
+        None,
+    )
+    if price is None:
+        return intent
+    try:
+        ref = await _last_entity_ref(client, ctx)
+    except Exception:  # noqa: BLE001
+        return intent
+    if not ref or str(ref.get("entity_type") or "") != "product":
+        return intent
+    return {
+        "action": "update", "entity": "product",
+        "fields": {"product_id": str(ref.get("code") or ""), "unit_price": price},
+        "missing": [],
+    }
+
+
 async def _product_price_as_the_line_in_view(client: DataClient, ctx: ResolvedContext, license_id, intent: dict) -> dict:
     """"แก้ราคา Air conditioner เป็น 11000" with a quote in view is sometimes
     read as a catalogue price change missing a product code — and the
@@ -17498,7 +17555,8 @@ PRODUCT_SEARCH_NONE = {
 
 
 async def _handle_product_list(
-    client: DataClient, *, license_id, permission_keys: list[str], language: str, query: str | None = None,
+    client: DataClient, *, license_id, permission_keys: list[str], language: str,
+    query: str | None = None, ctx: ResolvedContext | None = None,
 ) -> ChatReply:
     """The catalogue — all of it, or the products matching a name
     ("มีสินค้าอะไรบ้างที่เป็น พัดลม", "ค้นหาสินค้า พัดลม")."""
@@ -17533,6 +17591,16 @@ async def _handle_product_list(
         )
 
     shown = products[:LIST_LIMIT]
+    if len(shown) == 1 and ctx is not None:
+        # Looking one product up puts it in view, so "แก้ราคาเป็น 10000" on
+        # the next line is about THAT product. Without this the record in
+        # view was whatever came before — for the owner's tester, a quote,
+        # which answered "ใบเสนอราคา Q-2026-0004 ออกเอกสารแล้ว แก้ไม่ได้"
+        # to a sentence about a product (16 ก.ย. 2569).
+        await _remember_entity(
+            client, ctx, entity_type="product", entity_id=str(shown[0].get("id") or ""),
+            code=str(shown[0].get("product_id") or shown[0].get("sku") or ""),
+        )
     lines = []
     for p in shown:
         price = p.get("unit_price")
@@ -21091,7 +21159,7 @@ async def _handle_product_intent(
         )
         return await _handle_product_list(
             client, license_id=license_id, permission_keys=list(permission_keys or []) or ["product.manage"],
-            language=language, query=query,
+            language=language, query=query, ctx=ctx,
         )
     if action in ("delete", "archive", "remove"):
         return await _handle_product_archive(
@@ -24201,7 +24269,7 @@ async def _route_chat_message(
         if product_query is not None:
             return await _handle_product_list(
                 client, license_id=license_id, permission_keys=permission_keys,
-                language=language, query=product_query,
+                language=language, query=product_query, ctx=ctx,
             )
         # The three trigger-table line branches below — remove, edit and
         # product-add — all write, and none of them was guarded; only the
@@ -24488,7 +24556,7 @@ async def _route_chat_message(
         ):
             return await _handle_product_list(
                 client, license_id=license_id, permission_keys=permission_keys,
-                language=language,
+                language=language, ctx=ctx,
             )
         if _matches_phrase(message, QUOTE_LIST_PHRASES):
             return await _handle_quote_list(
@@ -25127,6 +25195,7 @@ async def _model_road(
             intent = {**intent, "fields": {**(intent.get("fields") or {}), "code": str(ref.get("code"))}, "missing": []}
     intent = _with_the_name_after_the_head(intent, message)
     intent = _staff_profile_edit_as_customer(intent, message, ctx.oa)
+    intent = await _price_of_the_product_in_view(client, ctx, license_id, intent, message)
     intent = await _product_price_as_the_line_in_view(client, ctx, license_id, intent)
     intent = _shop_close_as_a_ticket_update(intent, message, ctx.oa)
     intent = _assign_to_the_pool(intent, message, ctx.oa)
@@ -26142,6 +26211,12 @@ async def _handle_ai_report(
         # nothing to plot"; "the picture could not be made".
         if out.get("chart"):
             images = [out["chart"]]
+            # A link as well as the picture. LINE fetches an image URL
+            # itself and shows nothing at all when that fetch fails — and
+            # a chart that does not appear is indistinguishable from one
+            # that was never made (owner's tester, 16 ก.ย. 2569:
+            # "ขอกราฟได้แต่ภาพไม่ขึ้น"). The link is the way through.
+            text += _t(CHART_ALSO_AS_A_LINK, language).format(url=out["chart"])
         elif not out.get("plottable"):
             text += _t(reports_ai.CHART_NEEDS_GROUPS, language)
         else:
@@ -26153,6 +26228,12 @@ async def _handle_ai_report(
         text=text, images=images, quick_replies=buttons,
         intent={"action": "report", "entity": out["spec"]["entity"]},
     )
+
+
+CHART_ALSO_AS_A_LINK = {
+    "th": "\nถ้ารูปไม่ขึ้น เปิดได้ที่: {url}",
+    "en": "\nIf the picture does not show, open it here: {url}",
+}
 
 
 def _chart_request(message: str) -> dict | None:

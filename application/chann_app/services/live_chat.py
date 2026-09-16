@@ -449,10 +449,21 @@ async def sweep(client: DataClient) -> dict:
             + (waited.replace("เลยกำหนดตอบ", "reply overdue by").replace("นาที", "min") if waited else "")
             + "\nAnswer under home > Customer chats"
         )
-        escalated += await _tell(
+        told = await _tell(
             client, license_id=license_id, members=owner or agents, text=text, text_en=text_en,
             type="sla_warning", session_id=str(session.get("id")), language="th",
         )
+        escalated += told
+        if not told:
+            # The owner reported "ไม่มีการแจ้งเตือนใดๆเลย" (16 ก.ย. 2569) and
+            # nothing in the log could confirm or deny it. An overdue
+            # conversation that reaches nobody is now a line someone can
+            # find: it means the shop has no agent with a LINE target, not
+            # that the clock failed.
+            log.warning(
+                "chat sweep: %s overdue in %s reached nobody (%d agent(s), %d owner(s))",
+                session.get("id"), license_id, len(agents), len(owner),
+            )
         # Owner, 4 Sep: past the answer time the conversation is parked and
         # the customer told; the shop's later answer invites them back.
         try:
@@ -483,4 +494,9 @@ async def sweep(client: DataClient) -> dict:
             text_en=f"💬 Your conversation with {shop} closed after a quiet while. Type \"talk to the shop\" any time.",
         )
         timed_out += 1
+    if (result.get("escalated") or result.get("timed_out")):
+        log.info(
+            "chat sweep: %d overdue → %d told, %d timed out",
+            len(result.get("escalated") or []), escalated, timed_out,
+        )
     return {"escalated": escalated, "timed_out": timed_out}
