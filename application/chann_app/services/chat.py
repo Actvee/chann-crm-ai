@@ -3354,6 +3354,10 @@ WARRANTY_PURCHASE_NEEDS_DATE = {
     "th": "วันที่ซื้อคือวันไหนครับ พิมพ์ เช่น \"วันที่ซื้อ {serial} 1 ก.ย. 2569\"",
     "en": "Which date? e.g. \"purchase date {serial} 2026-09-01\"",
 }
+PRODUCT_LIST_COVER_HINT = {
+    "th": "ตั้งระยะประกันของสินค้าทั้งประเภท: พิมพ์ \"<ชื่อสินค้า> ตั้งประกัน 12 เดือน\" · ทีละเครื่อง: \"ประกัน <S/N> เป็น 12 เดือน\"",
+    "en": "Set a type's cover: \"<product> warranty 12 months\" · one unit: \"warranty <S/N> 12 months\"",
+}
 PRODUCT_WARRANTY_NOTE = {
     "th": " · รับประกัน {months} เดือน (ใช้เป็นค่าเริ่มต้นตอนลงทะเบียนเครื่อง)",
     "en": " · {months}-month warranty (the default when a unit is registered)",
@@ -3734,6 +3738,13 @@ WARRANTY_END_SET = {
     "th": "ตั้งวันหมดประกันของ {serial} เป็น {end} แล้วครับ",
     "en": "{serial} now expires on {end}.",
 }
+#: The other half of round 19w's separation: when a sentence DID name a
+#: serial, say that only that machine moved, and name the sentence that
+#: moves the whole product type.
+WARRANTY_UNIT_ONLY_NOTE = {
+    "th": "(เฉพาะเครื่องนี้ · จะตั้งค่าเริ่มต้นของสินค้าทั้งประเภท พิมพ์ \"{product} ตั้งประกัน {months} เดือน\")",
+    "en": "(this unit only — for every {product}, type \"{product} warranty {months} months\")",
+}
 WARRANTY_END_BEFORE_START = {
     "th": "วันหมดประกันของ {serial} ต้องไม่ก่อนวันที่ซื้อครับ",
     "en": "{serial}'s cover cannot end before it starts.",
@@ -3752,6 +3763,20 @@ async def _handle_warranty_purchase_date(
     match = SERIAL_RE.search(message or "")
     serial = (match.group(1) if match else str(fields.get("serial_number") or "")).upper()
     if not serial:
+        # No serial, but a product name and a period: this is the TYPE's
+        # default, not one machine. The model separates the two by itself
+        # (product_name vs serial_number); until round 19w both landed
+        # here and were answered "ขอหมายเลขเครื่อง (serial)" — including
+        # "สินค้า AC รับประกัน 2 ปี", the sentence round 19u shipped a
+        # checklist for.
+        typed = await _catalogue_cover_change(
+            client, ctx=ctx, license_id=license_id,
+            name=str(fields.get("product_name") or fields.get("product") or ""),
+            months=_months_from_fields(fields) or _warranty_months_in(message or "") or 0,
+            permission_keys=permission_keys, language=language,
+        )
+        if typed is not None:
+            return typed
         return ChatReply(text=_t(WARRANTY_NEEDS_SERIAL, language))
     start, months = _purchase_terms(message)
     start = start or str(fields.get("purchase_date") or fields.get("warranty_start") or "").strip()[:10] or None
@@ -3788,13 +3813,18 @@ async def _handle_warranty_purchase_date(
         log.exception("could not set the purchase date of %s", serial)
         return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
     await _remember_entity(client, ctx, entity_type="warranty", entity_id=str(row.get("id") or ""), code=serial)
+    product_named = str(row.get("product_name") or "").strip()
+    unit_only = (
+        "\n" + _t(WARRANTY_UNIT_ONLY_NOTE, language).format(product=product_named, months=int(months))
+        if months and product_named else ""
+    )
     if ends and not start:
         # They set the end and nothing else: say that, rather than reciting
         # a purchase date they did not touch.
         return ChatReply(
             text=_t(WARRANTY_END_SET, language).format(
                 serial=serial, end=_iso_to_thai_date(saved.get("warranty_end")) or ends,
-            ),
+            ) + unit_only,
             entity_type="warranty", entity_id=str(row.get("id") or ""),
             quick_replies=[("เช็คประกัน", f"เช็คประกัน {serial}")],
         )
@@ -3802,7 +3832,7 @@ async def _handle_warranty_purchase_date(
         text=_t(WARRANTY_PURCHASE_SET, language).format(
             date=_iso_to_thai_date(saved.get("warranty_start")) or (start or "-"), serial=serial,
             end=_iso_to_thai_date(saved.get("warranty_end")) or "-",
-        ),
+        ) + unit_only,
         entity_type="warranty", entity_id=str(row.get("id") or ""),
         quick_replies=[("เช็คประกัน", f"เช็คประกัน {serial}")],
     )
@@ -17707,7 +17737,11 @@ async def _handle_product_list(
             f"{p.get('sku') or p.get('product_id') or '-'} · "
             f"{p.get('product_name') or p.get('name') or '-'}{price_text}{cover}"
         )
-    text = "\n".join(lines) + _truncation_note(len(shown), len(products), language, "products")
+    # The list shows each type's period; this is where the shop learns how
+    # to change it. Round 19w: the owner typed the sentence and was asked
+    # for a serial, because nothing had ever named the sentence that works.
+    text = ("\n".join(lines) + _truncation_note(len(shown), len(products), language, "products")
+            + "\n" + _t(PRODUCT_LIST_COVER_HINT, language))
     return ChatReply(
         text=text,
         quick_replies=[("รายการดีล", "รายการดีล")],
@@ -21117,6 +21151,69 @@ CATALOGUE_PRICE_CHANGED = {
     "th": "แก้ราคาสินค้า {name} (รหัส {code}) เป็น {price} บาทแล้ว",
     "en": "Catalogue price of {name} ({code}) is now {price}.",
 }
+#: Two different things wear the word "ประกัน", and until round 19w the
+#: shop could only reach one of them by typing. Owner, 16 ก.ย. 2569:
+#: "พัดลมตั้งระยะเวลารับประกันเป็น 6 เดือน" → "ขอหมายเลขเครื่อง (serial)",
+#: then "แล้วจะตั้งระยะเวลารับประกันของแต่ละประเภทสินค้ายังไง … ควรออกแบบ
+#: ส่วนนี้ให้แยกกันชัดเจน". So each answer now says WHICH of the two it
+#: changed, and names the sentence for the other one.
+CATALOGUE_COVER_CHANGED = {
+    "th": ("ตั้งระยะประกันของสินค้า {name} (รหัส {code}) เป็น {months} เดือนแล้ว\n"
+           "ใช้กับเครื่องที่ลงทะเบียนหลังจากนี้ — เครื่องที่ลงทะเบียนไปแล้วไม่เปลี่ยน\n"
+           "จะแก้ทีละเครื่อง พิมพ์ \"ประกัน <S/N> เป็น {months} เดือน\""),
+    "en": ("{name} ({code}) now carries {months} months of cover by default.\n"
+           "It applies to units registered from now on — units already on file keep theirs.\n"
+           "For one unit, type \"warranty <S/N> {months} months\"."),
+}
+CATALOGUE_COVER_NO_SUCH_PRODUCT = {
+    "th": ("ไม่พบสินค้าชื่อ \"{name}\" ในรายการครับ · พิมพ์ \"รายการสินค้า\" เพื่อดูชื่อที่มี\n"
+           "ถ้าจะตั้งประกันของเครื่องเดียว พิมพ์ \"ประกัน <S/N> เป็น {months} เดือน\""),
+    "en": ("No catalogue item called \"{name}\" — type \"products\" to see the names.\n"
+           "For a single unit, type \"warranty <S/N> {months} months\"."),
+}
+
+
+async def _catalogue_cover_change(
+    client: DataClient, *, ctx: ResolvedContext, license_id, name: str, months: int,
+    permission_keys: list[str], language: str,
+) -> ChatReply | None:
+    """Set a PRODUCT TYPE's default cover, or None when this is not that.
+
+    The unit-level sentence carries a serial; this one carries a product
+    name and no serial. The model already separates them — it returns
+    `product_name` for one and `serial_number` for the other (ask-model,
+    16 ก.ย. 2569) — so the reading is converted here, downstream, rather
+    than guessed at by a keyword in front of the model.
+    """
+    named = (name or "").strip()
+    if not named or not months or "product.manage" not in set(permission_keys or []):
+        return None
+    product = await _find_one_product(client, str(license_id), named)
+    if not product:
+        return ChatReply(text=_t(CATALOGUE_COVER_NO_SUCH_PRODUCT, language).format(
+            name=named[:40], months=int(months),
+        ))
+    payload = {
+        "product_name": product.get("product_name"), "sku": product.get("sku"),
+        "category": product.get("category"), "unit_price": product.get("unit_price"),
+        "description": product.get("description"), "warranty_months": int(months),
+    }
+    try:
+        row = await client.upsert_product(
+            str(license_id), str(product.get("product_id")), payload, actor_id=ctx.chann_uid,
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("catalogue cover change failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    return ChatReply(
+        text=_t(CATALOGUE_COVER_CHANGED, language).format(
+            name=row.get("product_name") or named,
+            code=row.get("product_id") or "",
+            months=int(row.get("warranty_months") or months),
+        ),
+        entity_type="product", entity_id=str(row.get("id") or ""),
+        quick_replies=[("รายการสินค้า", "รายการสินค้า")],
+    )
 
 
 async def _catalogue_price_change(
