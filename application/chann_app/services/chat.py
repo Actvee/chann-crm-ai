@@ -1452,9 +1452,14 @@ UPCOMING_WORK_PHRASES = (
     "งานที่ต้องติดตาม", "ที่ต้องตาม", "follow ups", "follow-ups",
 )
 
+#: Owner, 16 ก.ย. 2569: "พอบันทึกนัดหมายหรือบันทึกโน้ต ต้องการให้ระบบตอบ
+#: กลับมาใส่เนื้อหาด้วยว่าบันทึกหรือตั้งนัดว่าอะไร เพื่อให้ผู้ใช้เห็นและ
+#: recheck ได้" — the same argument the reminder's date already answered:
+#: what was written is a reading of free text, and only the person who
+#: typed it can tell whether it was read right.
 NOTE_SAVED = {
-    "th": "บันทึกไว้กับ {code} แล้ว",
-    "en": "Noted against {code}.",
+    "th": "บันทึกไว้กับ {code} แล้ว\n\"{body}\"",
+    "en": "Noted against {code}.\n\"{body}\"",
 }
 NOTE_NEEDS_TARGET = {
     "th": "ระบุรหัสด้วยว่าบันทึกกับใคร เช่น \"บันทึกว่า C-2026-0001 ลูกค้าขอส่วนลด\" หรือเปิดดูข้อมูลลูกค้า/ดีลนั้นก่อนแล้วค่อยพิมพ์บันทึกตาม",
@@ -1465,9 +1470,11 @@ NOTE_EMPTY = {
     "en": "No notes for {code} yet.",
 }
 REMINDER_SAVED = {
-    "th": "ตั้งเตือน {code} วันที่ {date}{time} แล้ว",
-    "en": "Reminder set for {code} on {date}{time}.",
+    "th": "ตั้งเตือน {code} วันที่ {date}{time} แล้ว{subject}",
+    "en": "Reminder set for {code} on {date}{time}.{subject}",
 }
+#: The appointment's own words, on its own line — see NOTE_SAVED.
+REMINDER_SAVED_SUBJECT = {"th": "\nเรื่อง: {subject}", "en": "\nAbout: {subject}"}
 REMINDER_NEEDS_DATE = {
     "th": "ไม่เข้าใจวันที่ ลองพิมพ์แบบนี้ดู: \"เตือน D-2026-0001 พรุ่งนี้\" · \"เตือน D-2026-0001 วันศุกร์ บ่าย 2\" · \"เตือน D-2026-0001 15 มี.ค.\"",
     "en": "Could not read the date. Try: \"remind D-2026-0001 tomorrow\" or \"remind D-2026-0001 15 มี.ค. 14:00\".",
@@ -1833,7 +1840,7 @@ async def _handle_note_create(
         return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
 
     return ChatReply(
-        text=_t(NOTE_SAVED, language).format(code=code),
+        text=_t(NOTE_SAVED, language).format(code=code, body=body[:180]),
         entity_type=entity_type, entity_id=entity_id,
         quick_replies=[
             ("ดูบันทึกทั้งหมด", f"ดูบันทึก {code}"),
@@ -1898,7 +1905,7 @@ async def _handle_note_intent(
         return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
 
     return ChatReply(
-        text=_t(NOTE_SAVED, language).format(code=code),
+        text=_t(NOTE_SAVED, language).format(code=code, body=body[:180]),
         entity_type=entity_type, entity_id=entity_id,
         quick_replies=[
             ("ดูบันทึกทั้งหมด", f"ดูบันทึก {code}"),
@@ -3116,6 +3123,8 @@ async def _handle_reminder_create(  # noqa: PLR0913
     return ChatReply(
         text=_t(REMINDER_SAVED, language).format(
             code=code, date=format_thai_date(due_date), time=time_text,
+            subject=(_t(REMINDER_SAVED_SUBJECT, language).format(subject=subject[:180])
+                     if subject else ""),
         ),
         entity_type=entity_type, entity_id=entity_id,
         quick_replies=[("งานวันนี้", "งานวันนี้")],
@@ -13758,6 +13767,134 @@ async def _handle_customer_list(
     )
 
 
+#: Owner, 16 ก.ย. 2569: "เวลาขอดูข้อมูลลูกค้าคนไหนแล้วควรเห็นข้อมูลเช่น
+#: มีบันทึกว่าอะไร, นัดหมายที่จะถึง, มีดีลอะไรบ้างที่เปิดอยู่, ใบเสนอราคา
+#: ควรแจกแจงรายละเอียดสำหรับการแชทถามข้อมูลลูกค้าเยอะกว่านี้". The record
+#: already knew all four; the card showed none of them.
+#:
+#: Each section is capped, because a LINE bubble past 15 lines is not read
+#: (simulate-phrasings). The count is always the true one, so a cap never
+#: reads as "that is all there is".
+CUSTOMER_CARD_SECTION_LIMIT = 2
+CUSTOMER_CARD_NOTES = {"th": "บันทึก ({n}):", "en": "Notes ({n}):"}
+CUSTOMER_CARD_APPOINTMENTS = {"th": "นัดหมายที่จะถึง ({n}):", "en": "Upcoming ({n}):"}
+CUSTOMER_CARD_DEALS = {"th": "ดีลที่เปิดอยู่ ({n}):", "en": "Open deals ({n}):"}
+CUSTOMER_CARD_QUOTES = {"th": "ใบเสนอราคา ({n}):", "en": "Quotes ({n}):"}
+CUSTOMER_CARD_MORE = {"th": "  …อีก {n} รายการ", "en": "  …{n} more"}
+CUSTOMER_CARD_NOTHING_YET = {
+    "th": "ยังไม่มีบันทึก นัดหมาย ดีล หรือใบเสนอราคาของลูกค้ารายนี้",
+    "en": "No notes, appointments, deals or quotes for this customer yet.",
+}
+
+
+def _capped(lines: list[str], total: int, language: str) -> list[str]:
+    """The first few, then how many were left out — never a silent cut."""
+    left = total - len(lines)
+    return lines + ([_t(CUSTOMER_CARD_MORE, language).format(n=left)] if left > 0 else [])
+
+
+async def _customer_activity(
+    client: DataClient, *, license_id: str, customer: dict, language: str,
+) -> list[str]:
+    """The four things a person asking about a customer wants to know.
+
+    Every read is best effort and independent: a customer card that fails
+    because the quotes endpoint hiccuped would be worse than one missing
+    its quotes line.
+    """
+    rows: list[str] = []
+    customer_row_id = str(customer.get("id") or "")
+    limit = CUSTOMER_CARD_SECTION_LIMIT
+
+    try:
+        notes = await client.list_notes(license_id, "customer", customer_row_id, limit=20)
+    except Exception:  # noqa: BLE001
+        log.exception("customer card: notes")
+        notes = []
+    if notes:
+        newest = sorted(notes, key=lambda n: str(n.get("created_at") or ""), reverse=True)
+        rows.append(_t(CUSTOMER_CARD_NOTES, language).format(n=len(notes)))
+        rows += _capped(
+            [f"  • {_short_date(n.get('created_at'))}{str(n.get('body') or '').strip()[:60]}"
+             for n in newest[:limit]],
+            len(notes), language,
+        )
+
+    try:
+        follow_ups = await client.list_follow_ups(license_id, status="pending")
+    except Exception:  # noqa: BLE001
+        log.exception("customer card: follow-ups")
+        follow_ups = []
+    mine = [
+        f for f in follow_ups
+        if str(f.get("entity_type") or "") == "customer"
+        and str(f.get("entity_id") or "") == customer_row_id
+    ]
+    if mine:
+        mine.sort(key=lambda f: (str(f.get("due_date") or ""), str(f.get("due_time") or "")))
+        rows.append(_t(CUSTOMER_CARD_APPOINTMENTS, language).format(n=len(mine)))
+        rows += _capped([f"  • {_appointment_line(f)}" for f in mine[:limit]], len(mine), language)
+
+    try:
+        deals = await client.list_deals(license_id, contact_id=customer_row_id)
+    except Exception:  # noqa: BLE001
+        log.exception("customer card: deals")
+        deals = []
+    open_deals = [
+        d for d in deals
+        if str(d.get("stage") or "").lower() not in ("won", "lost") and not d.get("archived_at")
+    ]
+    if open_deals:
+        rows.append(_t(CUSTOMER_CARD_DEALS, language).format(n=len(open_deals)))
+        rows += _capped(
+            [f"  • {d.get('deal_id') or '-'} · "
+             f"{_label(DEAL_STAGE_LABELS, d.get('stage'), language)}{_amount_tail(d.get('amount'))}"
+             for d in open_deals[:limit]],
+            len(open_deals), language,
+        )
+
+    deal_ids = {str(d.get("id")) for d in deals}
+    if deal_ids:
+        try:
+            quotes = [q for q in await client.list_quotes(license_id)
+                      if str(q.get("deal_id") or "") in deal_ids]
+        except Exception:  # noqa: BLE001
+            log.exception("customer card: quotes")
+            quotes = []
+        if quotes:
+            quotes.sort(key=lambda q: str(q.get("created_at") or ""), reverse=True)
+            rows.append(_t(CUSTOMER_CARD_QUOTES, language).format(n=len(quotes)))
+            rows += _capped(
+                [f"  • {q.get('quote_id') or '-'} · "
+                 f"{_label(QUOTE_STATUS_LABELS, q.get('status'), language)}"
+                 for q in quotes[:limit]],
+                len(quotes), language,
+            )
+    return rows
+
+
+def _short_date(value) -> str:
+    """"16 ก.ย. " in front of a line, or "" when there is no date."""
+    text = str(value or "")[:10]
+    return f"{_iso_to_thai_date(text)} " if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text) else ""
+
+
+def _appointment_line(follow_up: dict) -> str:
+    when = _iso_to_thai_date(str(follow_up.get("due_date") or "")[:10]) or "-"
+    at = str(follow_up.get("due_time") or "")[:5]
+    about = str(follow_up.get("notes") or "").strip()[:50]
+    return f"{when}{' ' + at if at else ''}{' · ' + about if about else ''}"
+
+
+def _amount_tail(amount) -> str:
+    if amount in (None, ""):
+        return ""
+    try:
+        return f" · {Decimal(str(amount)):,.0f}"
+    except (ArithmeticError, ValueError):
+        return ""
+
+
 async def _handle_customer_detail(
     client: DataClient, *, license_id, code: str, permission_keys: list[str], language: str,
     ctx: ResolvedContext | None = None,
@@ -13828,10 +13965,16 @@ async def _handle_customer_detail(
     ]
     for field_name, label in (
         ("phone", "Phone" if en else "โทร"), ("email", "Email" if en else "อีเมล"),
-        ("address", "Address" if en else "ที่อยู่"), ("notes", "Notes" if en else "บันทึก"),
+        ("address", "Address" if en else "ที่อยู่"),
+        ("notes", "On file" if en else "หมายเหตุในระเบียน"),
     ):
         if customer.get(field_name):
             rows.append(f"{label}: {customer[field_name]}")
+
+    activity = await _customer_activity(
+        client, license_id=str(license_id), customer=customer, language=language,
+    )
+    rows += activity or [_t(CUSTOMER_CARD_NOTHING_YET, language)]
 
     return ChatReply(
         text="\n".join(rows),
@@ -13839,6 +13982,8 @@ async def _handle_customer_detail(
         entity_id=str(customer.get("id") or ""),
         quick_replies=[
             ("สร้างดีล", f"สร้างดีลให้ {_customer_name(customer)}"),
+            ("ดูบันทึกทั้งหมด", f"ดูบันทึก {customer.get('customer_id')}"),
+            ("นัดหมายของคนนี้", f"นัดหมายของ {_customer_name(customer)}"),
             ("รายชื่อลูกค้า", "รายชื่อลูกค้า"),
         ],
     )

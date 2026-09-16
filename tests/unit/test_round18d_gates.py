@@ -156,7 +156,12 @@ class TestTheGateNamesTheTypedRoads:
         assert len(notes) == 1, client.recorded
         assert notes[0][2] == {"entity_type": "customer", "entity_id": "CUST-1", "body": "เขาจะมาดูสินค้าวันที่ 22"}
         assert not [r for r in client.recorded if r[0] == "create_follow_up"], client.recorded
-        assert reply.text == NOTE_SAVED["th"].format(code="C-2026-0001"), reply.text
+        # Round 19y: the answer says back WHAT was noted, so the person who
+        # typed it can catch a misread ("ต้องการให้ระบบตอบกลับมาใส่เนื้อหา
+        # ด้วย … เพื่อให้ผู้ใช้เห็นและ recheck ได้", owner 16 ก.ย. 2569).
+        assert reply.text == NOTE_SAVED["th"].format(
+            code="C-2026-0001", body="เขาจะมาดูสินค้าวันที่ 22",
+        ), reply.text
 
 
 # ---------------------------------------------------------------- item 2
