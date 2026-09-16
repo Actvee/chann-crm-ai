@@ -4296,6 +4296,10 @@ CUSTOMER_CHAT_PHRASES = (
 CUSTOMER_CHAT_END_PHRASES = (
     "จบการสนทนา", "จบแชท", "ปิดแชท", "ปิดการสนทนา", "end chat", "close chat",
 )
+CHAT_MENU_PAUSED = {
+    "th": "ส่งข้อความให้ร้านแล้วครับ — ระหว่างคุยกับร้าน เมนูอื่นจะยังไม่ทำงาน\nพิมพ์ \"จบการสนทนา\" เมื่อคุยเสร็จ แล้วใช้เมนูได้ตามปกติ",
+    "en": "Sent to the shop. While the conversation is open the other menus stay out of the way — type \"end chat\" when you are done.",
+}
 CHAT_OPEN_FAILED = {
     "th": "ขออภัย เปิดการสนทนากับร้านไม่ได้ในขณะนี้ กรุณาลองใหม่อีกครั้ง",
     "en": "Sorry — the conversation with the shop could not be opened right now. Please try again.",
@@ -5011,6 +5015,9 @@ REPORT_ADDRESS_REQUIRED = {
 }
 _UNAVAILABLE_HINTS = ("ไม่ได้", "ไม่สะดวก", "ไม่ว่าง", "ไม่อยู่", "ติดธุระ", "can't make", "cannot make", "not free")
 _SAME_ADDRESS_PHRASES = (
+    # The offered address is answered with a plain yes as often as with the
+    # words themselves (round 19h).
+    "ใช่", "ใช่ครับ", "ใช่ค่ะ", "ตกลง", "ที่นี่", "ที่นี่ครับ", "ใช้ที่อยู่นี้", "ใช้ที่นี่", "yes", "yes please", "use that",
     "ที่อยู่เดิม", "ที่เดิม", "เหมือนเดิม", "ที่อยู่เดียวกัน", "ที่อยู่เดียวกับครั้งก่อน", "ตามที่อยู่เดิม",
     "same address", "same as before", "same place",
 )
@@ -5216,7 +5223,7 @@ async def _customer_report_waiting(client: DataClient, ctx: ResolvedContext, mes
         return False
     entity = pending.get("entity")
     missing = pending.get("missing") or []
-    if entity == "pending_customer_message":
+    if entity in ("pending_customer_message", "profile"):
         return True
     if entity == "customer_ticket":
         if "schedule" in missing:
@@ -5578,7 +5585,7 @@ async def handle_incoming_location(
         )
         if member is not None and ticket is None:
             assigned = [
-                t for t in await client.list_tickets(license_id, visible_to=str(member["id"]))
+                t for t in await _tickets_this_person_may_see(client, license_id, ctx, member)
                 if str(t.get("assigned_to_ref") or "") == str(member["id"])
                 and str(t.get("status") or "") == "assigned"
             ]
@@ -5733,6 +5740,10 @@ CUSTOMER_REPORT_HINTS = (
     "ไม่เย็น", "น้ำรั่ว", "รั่ว", "เสียงดัง", "broken", "not working", "repair",
 )
 
+REPORT_TAKEN_WITH_ADDRESS = {
+    "th": "รับแจ้งแล้วครับ เลขงาน {code}\n\"{issue}\"{machine}\n\nที่อยู่ที่มีในระบบ: {address}\nให้ช่างไปที่นี่ไหมครับ (ตอบ \"ใช่\" หรือพิมพ์ที่อยู่ใหม่มาได้เลย)",
+    "en": "Logged as {code}.\n\"{issue}\"{machine}\n\nOn file: {address}\nShould the technician go there? (\"yes\", or type a different address.)",
+}
 REPORT_TAKEN = {
     # {machine} is the unit the fault is about, or a plain statement that
     # none is attached — a customer who was just asked which machine is
@@ -6901,12 +6912,27 @@ async def _handle_customer_report(
     # after the first line sat unseen for good (review, 6 Sep 2026).
     await _notify_new_ticket(client, license_id, str(ticket["id"]), language)
 
+    # The address the shop already has, offered rather than asked for again
+    # (owner, 16 ก.ย. 2569: "ถ้าข้อมูลส่วนตัวมีที่อยู่อยู่แล้ว ต้องถามด้วยว่า
+    # จะใช้ที่อยู่ตามข้อมูลส่วนตัวหรือกรอกใหม่").
+    known_address = await _previous_customer_address(
+        client, ctx, license_id, exclude_ticket_id=str(ticket.get("id") or ""),
+    )
+    machine_line = ticket_machine.machine_suffix(
+        ticket_machine.attach([ticket], _by_serial(warranty))[0], language,
+    )
+    if known_address:
+        return ChatReply(
+            text=_t(REPORT_TAKEN_WITH_ADDRESS, language).format(
+                code=ticket.get("ticket_number"), issue=text[:80], machine=machine_line,
+                address=known_address[:120],
+            ),
+            entity_type="service_ticket", entity_id=str(ticket.get("id") or ""),
+            quick_replies=[("ใช้ที่อยู่นี้", "ที่อยู่เดิม")],
+        )
     return ChatReply(
         text=_t(REPORT_TAKEN, language).format(
-            code=ticket.get("ticket_number"), issue=text[:80],
-            machine=ticket_machine.machine_suffix(
-                ticket_machine.attach([ticket], _by_serial(warranty))[0], language,
-            ),
+            code=ticket.get("ticket_number"), issue=text[:80], machine=machine_line,
         ),
         entity_type="service_ticket", entity_id=str(ticket.get("id") or ""),
     )
@@ -7792,11 +7818,31 @@ async def _resolve_ticket_for_member(
     member = await client.get_member(license_id, ctx.chann_uid, channel=member_channel(ctx.oa))
     if member is None:
         return None, None
-    tickets = await client.list_tickets(license_id, visible_to=str(member["id"]))
+    tickets = await _tickets_this_person_may_see(client, license_id, ctx, member)
     ticket = next(
         (t for t in tickets if str(t.get("ticket_number", "")).upper() == code), None,
     )
     return member, ticket
+
+
+async def _tickets_this_person_may_see(
+    client: DataClient, license_id, ctx: ResolvedContext, member: dict | None,
+) -> list[dict]:
+    """Every job this person may act on, on THIS channel.
+
+    `visible_to` is the technician's rule (12.1): a technician browsing
+    must not read the address and phone number of a colleague's private
+    job. It is not the shop's rule — sales and CS hold ticket.read for the
+    whole tenant and are the ones who dispatch. Passing it on the sales OA
+    was invisible until round 19f made a customer's own report private:
+    from then on "งานซ่อม" answered "ตอนนี้ไม่มีงานเปิดรับ" while the job
+    the customer had just reported sat in the queue, and the dashboard
+    (which never filtered) showed it (owner, 16 ก.ย. 2569).
+    """
+    license_id = str(license_id)
+    if ctx.oa == "technician" and member and member.get("id"):
+        return await client.list_tickets(license_id, visible_to=str(member["id"]))
+    return await client.list_tickets(license_id)
 
 
 async def _ticket_for_action(
@@ -7818,7 +7864,7 @@ async def _ticket_for_action(
     if member is None:
         return None, None, False
 
-    tickets = await client.list_tickets(license_id, visible_to=str(member["id"]))
+    tickets = await _tickets_this_person_may_see(client, license_id, ctx, member)
 
     match = TICKET_CODE_RE.search(message or "")
     if match:
@@ -7865,7 +7911,7 @@ async def _handle_check_in(
             # Nothing, or several: say which (review, 6 Sep 2026 — the old
             # reply gave "ปิดงาน" as the example for a check-in).
             mine = [
-                t for t in await client.list_tickets(license_id, visible_to=str(member["id"]))
+                t for t in await _tickets_this_person_may_see(client, license_id, ctx, member)
                 if str(t.get("assigned_to_ref") or "") == str(member["id"])
                 and str(t.get("status") or "") in ("assigned", "in_progress")
             ]
@@ -7888,7 +7934,7 @@ async def _handle_check_in(
             # without asking (audit verify, 15 ก.ย. 2569). Two candidates
             # means asking.
             busy = [
-                t for t in await client.list_tickets(license_id, visible_to=str(member["id"]))
+                t for t in await _tickets_this_person_may_see(client, license_id, ctx, member)
                 if str(t.get("assigned_to_ref") or "") == str(member["id"])
                 and str(t.get("status") or "") == "in_progress" and str(t.get("id")) != str(ticket.get("id"))
             ]
@@ -8069,7 +8115,7 @@ async def _handle_check_out(
                 wanted = switch.group(1).upper()
                 try:
                     member = await client.get_member(license_id, ctx.chann_uid, channel=member_channel(ctx.oa))
-                    tickets = await client.list_tickets(license_id, visible_to=str((member or {}).get("id") or ""))
+                    tickets = await _tickets_this_person_may_see(client, license_id, ctx, member)
                 except Exception:
                     tickets = []
                 target = next((t for t in tickets if str(t.get("ticket_number") or "").upper() == wanted), None)
@@ -8209,7 +8255,7 @@ async def _handle_check_out(
             # The jobs in progress as buttons, as check-in does — a
             # technician in a hallway should not retype a code (audit verify).
             busy = [] if member is None else [
-                t for t in await client.list_tickets(license_id, visible_to=str(member["id"]))
+                t for t in await _tickets_this_person_may_see(client, license_id, ctx, member)
                 if str(t.get("assigned_to_ref") or "") == str(member["id"]) and str(t.get("status") or "") == "in_progress"
             ]
             listed = "\n".join(
@@ -8660,9 +8706,7 @@ async def _handle_ticket_detail(
         code = match.group(1).upper()
         try:
             member = await client.get_member(str(license_id), ctx.chann_uid, channel=member_channel(ctx.oa))
-            tickets = await client.list_tickets(
-                str(license_id), visible_to=str(member["id"]) if member else None,
-            )
+            tickets = await _tickets_this_person_may_see(client, str(license_id), ctx, member)
         except Exception:
             log.exception("ticket detail failed")
             return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
@@ -8738,6 +8782,22 @@ TICKET_OPEN_EMPTY = {
     "th": "ตอนนี้ไม่มีงานเปิดรับครับ",
     "en": "No open jobs right now.",
 }
+TICKET_QUEUE_EMPTY = {
+    "th": "ตอนนี้ไม่มีงานที่รอมอบหมายครับ (ดูงานทั้งหมดพิมพ์ \"รายการงาน\")",
+    "en": "Nothing is waiting to be dispatched. (\"tickets\" lists them all.)",
+}
+TICKET_HELD_MARK = {"th": "ช่างยังไม่เห็น", "en": "not open to technicians"}
+
+
+def _is_held_for_the_shop(ticket: dict) -> bool:
+    """A job the technicians cannot see yet: nobody assigned, not opened to
+    them (round 19f). The dispatcher's queue marks these — they are the
+    rows only the shop can move."""
+    return (
+        not ticket.get("assigned_to_ref")
+        and str(ticket.get("visibility") or "public") == "private"
+        and str(ticket.get("status") or "") not in ("completed", "cancelled")
+    )
 
 
 def _asks_todays_jobs(message: str) -> bool:
@@ -8770,12 +8830,7 @@ async def _handle_ticket_list(
             member = await client.get_member(license_id, ctx.chann_uid, channel=member_channel(ctx.oa))
             if member is None:
                 return ChatReply(text=_t(TICKET_EMPTY, language))
-            # visible_to, not a plain list: a technician browsing without
-            # it would read the address and phone number of every private
-            # job in the tenant.
-            tickets = await client.list_tickets(
-                license_id, visible_to=str(member["id"]),
-            )
+            tickets = await _tickets_this_person_may_see(client, license_id, ctx, member)
             if mine and not (team_only or open_only):
                 # Mine = assigned to me and not finished. The title said
                 # "งานของฉัน" over every visible job in the tenant
@@ -8822,19 +8877,24 @@ async def _handle_ticket_list(
         log.exception("ticket list failed")
         return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
 
+    dispatching = open_only and ctx.oa == "sales"
     if not tickets:
-        return ChatReply(text=_t(TICKET_TEAM_EMPTY if team_only else TICKET_OPEN_EMPTY if open_only else TICKET_EMPTY, language))
+        empty = TICKET_QUEUE_EMPTY if dispatching else (
+            TICKET_TEAM_EMPTY if team_only else TICKET_OPEN_EMPTY if open_only else TICKET_EMPTY
+        )
+        return ChatReply(text=_t(empty, language))
 
     shown = tickets[:LIST_LIMIT]
     lines = [
         f"{t.get('ticket_number')} · {_label(TICKET_STATUS_LABELS, t.get('status'), language)}"
         + (f" · {t.get('customer_name')}" if t.get("customer_name") else "")
+        + (f" · {_t(TICKET_HELD_MARK, language)}" if dispatching and _is_held_for_the_shop(t) else "")
         for t in shown
     ]
     return ChatReply(
         text="\n".join(lines) + _truncation_note(len(shown), len(tickets), language, "index"),
         list_card=_list_card(
-            title="งานของทีม" if team_only else "งานที่เปิดรับ" if open_only else ("งานของฉัน" if mine else "งานซ่อม"),
+            title="งานของทีม" if team_only else "งานที่รอมอบหมาย" if dispatching else "งานที่เปิดรับ" if open_only else ("งานของฉัน" if mine else "งานซ่อม"),
             section="index", language=language, oa=ctx.oa,
             shown=len(shown), total=len(tickets),
             rows=[
@@ -8849,10 +8909,17 @@ async def _handle_ticket_list(
                     "stage": {"open": "new", "assigned": "proposed",
                               "in_progress": "proposed", "completed": "won",
                               "cancelled": "lost"}.get(str(t.get("status")), ""),
-                    # On the open list the useful tap is to take the job.
-                    "action_label": "รับงาน" if open_only else "ดู",
+                    # On the technician's open list the useful tap is to
+                    # take the job; on the shop's queue it is to dispatch
+                    # the one the technicians cannot see yet.
+                    "action_label": (
+                        "เปิดให้ช่างรับ" if dispatching and _is_held_for_the_shop(t)
+                        else "ดู" if dispatching else "รับงาน" if open_only else "ดู"
+                    ),
                     "action_text": (
-                        f"รับงาน {t.get('ticket_number')}" if open_only
+                        f"เปิดให้ช่างรับ {t.get('ticket_number')}" if dispatching and _is_held_for_the_shop(t)
+                        else f"ข้อมูลงาน {t.get('ticket_number')}" if dispatching
+                        else f"รับงาน {t.get('ticket_number')}" if open_only
                         else f"ข้อมูลงาน {t.get('ticket_number')}"
                     ),
                 }
@@ -9658,7 +9725,7 @@ async def _handle_ticket_claim(
         member = await client.get_member(license_id, ctx.chann_uid, channel=member_channel(ctx.oa))
         if member is None:
             return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
-        tickets = await client.list_tickets(license_id, visible_to=str(member["id"]))
+        tickets = await _tickets_this_person_may_see(client, license_id, ctx, member)
 
         if not code:
             # No code given. Claiming used to demand one, unlike check-in
@@ -9901,7 +9968,7 @@ async def _handle_ticket_reject(
         member = await client.get_member(license_id, ctx.chann_uid, channel=member_channel(ctx.oa))
         if member is None:
             return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
-        tickets = await client.list_tickets(license_id, visible_to=str(member["id"]))
+        tickets = await _tickets_this_person_may_see(client, license_id, ctx, member)
         me = str(member["id"])
         mine_pending = [
             t for t in tickets
@@ -17664,6 +17731,13 @@ def _prune_missing(missing: list[str], intent: dict, message: str) -> list[str]:
     Asking a person for something already on screen is the fastest way to
     make an assistant feel like a form.
     """
+    if str(intent.get("entity") or "") == "profile":
+        # A profile edit needs no particular field: whatever the person
+        # names is what changes. The gate asked for all five and made it
+        # read as a form ("กรุณาระบุชื่อ, นามสกุล, เบอร์โทร, อีเมล, ที่อยู่"),
+        # when the handler's own invitation says it better and holds the
+        # form open (round 19h).
+        return []
     known = capability(str(intent.get("entity") or ""), str(intent.get("action") or ""))
     if known is None:
         return missing
@@ -18282,6 +18356,91 @@ PROFILE_NOTHING_TO_UPDATE = {
     "th": "กรุณาระบุข้อมูลที่ต้องการแก้ไข เช่น ชื่อ เบอร์โทร อีเมล หรือที่อยู่",
     "en": "Please say what to update — name, phone, email, or address.",
 }
+PROFILE_FORM_OPEN = {
+    "th": "ข้อมูลตอนนี้: {current}\nพิมพ์สิ่งที่จะแก้ได้เลย หลายอย่างพร้อมกันก็ได้ครับ\nเช่น \"ชื่อ สมชาย ใจดี ที่อยู่ 99/1 ถ.สุขุมวิท เบอร์โทร 0891234567\"",
+    "en": "Now on file: {current}\nType what to change — several at once is fine.\ne.g. \"name Somchai Jaidee address 99/1 Sukhumvit phone 0891234567\"",
+}
+PROFILE_FORM_NOT_UNDERSTOOD = {
+    "th": "ยังไม่เห็นข้อมูลที่จะแก้ครับ พิมพ์พร้อมชื่อช่อง เช่น \"ชื่อ สมชาย ใจดี ที่อยู่ 99/1 เบอร์โทร 0891234567\" (พิมพ์ \"ยกเลิก\" เพื่อออก)",
+    "en": "I could not see what to change. Label the values, e.g. \"name Somchai Jaidee address 99/1 phone 0891234567\" (\"cancel\" to stop).",
+}
+_PROFILE_FIELD_LABELS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("last_name", ("นามสกุล", "last name", "surname", "family name")),
+    ("first_name", ("ชื่อจริง", "ชื่อ", "first name", "name")),
+    ("phone", ("เบอร์โทรศัพท์", "เบอร์โทร", "เบอร์มือถือ", "เบอร์", "โทรศัพท์", "โทร", "phone", "mobile", "tel")),
+    ("email", ("อีเมล์", "อีเมล", "email", "e-mail", "mail")),
+    ("address", ("ที่อยู่จัดส่ง", "ที่อยู่", "address")),
+)
+
+
+_PROFICE_LABELS_SORTED = tuple(
+    (field, tuple(sorted(labels, key=len, reverse=True)))
+    for field, labels in _PROFILE_FIELD_LABELS
+)
+
+
+def _profile_values_in(message: str) -> dict:
+    """The fields a person typed with their labels, several at a time:
+    "ชื่อ สมชาย ใจดี ที่อยู่ 99/1 ถ.สุขุมวิท เบอร์โทร 0891234567" →
+    {first_name, last_name, address, phone}. Owner, 16 ก.ย. 2569: the
+    profile form took one field at a time and a line with all three was
+    answered "ยังไม่แน่ใจว่าต้องการอะไร" — or, with a chat open, relayed to
+    the shop and never answered at all.
+
+    Labels only: a bare sentence is left to the model, which reads this
+    form correctly when it is in the prompt.
+    """
+    text = " ".join((message or "").replace("\n", " ").split())
+    if not text:
+        return {}
+    lowered = text.lower()
+    hits: list[tuple[int, int, str]] = []
+    taken: list[tuple[int, int]] = []
+    for field, labels in _PROFICE_LABELS_SORTED:
+        for label in labels:
+            start = 0
+            while True:
+                at = lowered.find(label, start)
+                if at == -1:
+                    break
+                end = at + len(label)
+                if any(a <= at < b for a, b in taken) or any(f == field for _, _, f in hits):
+                    start = end
+                    continue
+                after = text[end:end + 1]
+                if after and (after.isalnum() and after.isascii()):
+                    start = end
+                    continue
+                hits.append((at, end, field))
+                taken.append((at, end))
+                start = end
+    if not hits:
+        return {}
+    hits.sort()
+    values: dict[str, str] = {}
+    for index, (_at, end, field) in enumerate(hits):
+        stop = hits[index + 1][0] if index + 1 < len(hits) else len(text)
+        value = text[end:stop].strip(" :：=-,·\t")
+        if not value:
+            continue
+        if field == "phone":
+            digits = re.sub(r"[^0-9+]", "", value)
+            if not _looks_like_phone(digits):
+                continue
+            values["phone"] = digits
+        elif field == "email":
+            found = re.search(r"[^\s]+@[^\s]+\.[^\s]+", value)
+            if not found:
+                continue
+            values["email"] = found.group(0).strip(" .,")
+        elif field == "first_name":
+            parts = value.split()
+            values["first_name"] = parts[0]
+            if len(parts) > 1 and not any(f == "last_name" for _, _, f in hits):
+                values["last_name"] = " ".join(parts[1:])
+        else:
+            values[field] = value
+    return {k: v for k, v in values.items() if v}
 
 # Master Spec 8.1 lists "ลงทะเบียน profile ตัวเอง" under the Customer and
 # Technician OA activity tables only. Sales OA is deliberately excluded: that
@@ -18332,6 +18491,108 @@ def _is_not_found(exc: Exception) -> bool:
     return getattr(exc, "status_code", None) == 404 or "404" in str(exc)
 
 
+async def _profile_summary_line(client: DataClient, ctx: ResolvedContext, language: str) -> str:
+    """"สมชาย ใจดี · 0812345678" — what is on file now, so the person can see
+    what they are changing."""
+    try:
+        profile = await client.get_profile(ctx.chann_uid) or {}
+    except Exception:  # noqa: BLE001
+        profile = {}
+    parts = [
+        " ".join(p for p in (profile.get("first_name"), profile.get("last_name")) if p),
+        str(profile.get("phone") or ""),
+        str(profile.get("email") or ""),
+        str(profile.get("address") or ""),
+    ]
+    shown = " · ".join(p for p in parts if p)
+    return shown or ("ยังไม่มีข้อมูล" if language != "en" else "nothing on file yet")
+
+
+async def _profile_form_answer(
+    client: DataClient, *, ctx: ResolvedContext, license_id, pending: dict, message: str,
+    language: str, ai_client=None,
+) -> ChatReply | None:
+    """The answer to the profile form this system opened.
+
+    Returns None when the line is plainly something else, so the ordinary
+    road takes it. Anything else belongs here: on the customer OA the
+    pending road never asks the model, so a form answer fell through to
+    the fallback — and with a conversation open it was relayed to the shop
+    instead, leaving the customer with no reply at all and the shop with a
+    message it should never have seen (owner, 16 ก.ย. 2569).
+    """
+    text = (message or "").strip()
+    if not text:
+        return None
+    if _is_only_abort_words(text):
+        await _drop_pending_quietly(client, ctx)
+        return ChatReply(text=_t(SLOT_FILL_CANCELLED, language))
+    if _chat_start_text(text) is not None or _matches_phrase(text, CUSTOMER_CHAT_END_PHRASES):
+        # Opening or ending the conversation with the shop: that is about the
+        # conversation, not about this form, and the form waits.
+        return None
+    if _is_customer_command(text) or _is_menu_tile(text, ctx.oa) or _is_new_command(text, ctx.oa):
+        # They moved on — a tile, another command. The form steps aside
+        # rather than reading the next thing they say as an answer to a
+        # question they have left behind.
+        await _drop_pending_quietly(client, ctx)
+        return None
+    held = _intent_guard_reply(text, action="profile_update", language=language, proposed=True)
+    if held is not None:
+        return held
+    values = _profile_values_in(text)
+    if not values:
+        reading = None
+        try:
+            reading = await parse_intent(
+                message=text, chann_uid=ctx.chann_uid, role=ctx.primary_role,
+                license_id=str(license_id), permission_keys=[], language=language,
+                client=ai_client, oa=ctx.oa,
+                pending={
+                    "action": "update", "entity": "profile",
+                    "fields": pending.get("fields") or {},
+                    "missing": pending.get("missing") or list(sorted(PROFILE_EDITABLE_FIELDS)),
+                },
+            )
+        except Exception:  # noqa: BLE001 — an outage must not eat the answer
+            log.info("could not read a profile form answer")
+        if reading is not None:
+            entity = str(reading.get("entity") or "")
+            if entity == "profile":
+                values = {
+                    k: v for k, v in (reading.get("fields") or {}).items()
+                    if k in PROFILE_EDITABLE_FIELDS and v not in (None, "")
+                }
+            elif entity and _is_new_command(text, ctx.oa):
+                # A different request entirely: the form steps aside.
+                await _drop_pending_quietly(client, ctx)
+                return None
+    if not values:
+        try:
+            talking = await live_chat.live_session(
+                client, license_id=str(license_id), chann_uid=ctx.chann_uid,
+            )
+        except Exception:  # noqa: BLE001
+            talking = None
+        if talking is not None:
+            # A line to the shop, not an answer to this form: let it go
+            # where the person is looking (round 19h).
+            return None
+        return ChatReply(text=_t(PROFILE_FORM_NOT_UNDERSTOOD, language))
+    try:
+        await client.update_profile(ctx.chann_uid, values, actor_id=ctx.chann_uid)
+    except Exception as exc:  # noqa: BLE001
+        if _is_conflict(exc):
+            return ChatReply(text=_t(PROFILE_INVALID_VALUE, language))
+        log.exception("could not save a profile form")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    await _drop_pending_quietly(client, ctx)
+    return ChatReply(
+        text=_t(PROFILE_UPDATED, language) + _changed_fields_tail(values, language),
+        entity_type="profile", entity_id=ctx.chann_uid,
+    )
+
+
 async def _handle_profile_intent(
     client: DataClient, *, intent: dict, ctx: ResolvedContext, language: str,
     message: str = "",
@@ -18372,6 +18633,27 @@ async def _handle_profile_intent(
         k: v for k, v in raw_fields.items()
         if k in PROFILE_EDITABLE_FIELDS and v not in (None, "")
     }
+    if not fields and message:
+        # Nothing to write yet: open the form and say what is on file, so
+        # the next line is read with the form in front of the model — which
+        # returns every labelled field at once (measured 16 ก.ย. 2569).
+        typed = _profile_values_in(message)
+        if typed:
+            fields = typed
+        else:
+            try:
+                await client.set_pending_intent(
+                    ctx.chann_uid, ctx.oa, action="update", entity="profile",
+                    fields={}, missing=[], ttl_seconds=PENDING_INTENT_TTL_S,
+                )
+            except Exception:  # noqa: BLE001
+                log.exception("could not open the profile form")
+            return ChatReply(
+                text=_t(PROFILE_FORM_OPEN, language).format(
+                    current=await _profile_summary_line(client, ctx, language),
+                ),
+                intent=intent,
+            )
     if not fields:
         return ChatReply(text=_t(PROFILE_NOTHING_TO_UPDATE, language), intent=intent)
 
@@ -20488,11 +20770,28 @@ _APPROVAL_WORDS = frozenset({
 })
 
 
+_APPROVAL_HINTS = (
+    "เลื่อนได้", "ตกลง", "อนุมัติ", "ยืนยัน", "โอเค", "ตามนั้น", "ตามที่ลูกค้าขอ", "ตามที่ขอ", "ตามลูกค้า",
+    "ได้เลย", "จัดให้", "ok", "okay", "confirm", "approve", "agreed", "fine",
+)
+
+
 def _approves_the_customers_time(message: str) -> bool:
-    """"เลื่อนได้" / "ตกลง" / "ตามที่ลูกค้าขอ" with a job code and nothing else."""
+    """The shop saying yes to the time the customer asked for — "เลื่อนได้",
+    "ตกลง", and the sentences people actually type: "ยืนยันเป็นวันที่ตามนั้น
+    ได้", "โอเคเลื่อนตามที่ลูกค้าขอได้" (owner, 16 ก.ย. 2569 — the model reads
+    all of these as `suggest`, so the rule road answers them).
+
+    Says nothing about which job or when: the caller only acts when that
+    job has an outstanding request, and a sentence carrying its own date is
+    not an approval — it is a new time.
+    """
     rest = _normalise(TICKET_CODE_RE.sub(" ", message or ""))
-    rest = re.sub(r"^(?:เลื่อนนัด|เลื่อน)", "", rest) if rest not in ("เลื่อนได้", "เลื่อนได้เลย") else rest
-    return rest in {w.replace(" ", "") for w in _APPROVAL_WORDS}
+    if not rest or len(rest) > 60:
+        return False
+    if any(ch.isdigit() for ch in rest):
+        return False
+    return any(w.replace(" ", "") in rest for w in _APPROVAL_HINTS)
 
 
 async def _customer_proposed_time(client: DataClient, license_id: str, ticket_id: str, today):
@@ -20508,6 +20807,99 @@ async def _customer_proposed_time(client: DataClient, license_id: str, ticket_id
             continue
         return when, (parse_thai_time(said) or time(9, 0))
     return None
+
+
+RESCHEDULE_APPROVED = {
+    "th": "ยืนยันเลื่อนนัดงาน {code} เป็น {when} แล้วครับ แจ้งลูกค้าและทีมให้แล้ว",
+    "en": "Job {code} moved to {when} as the customer asked — they and the team have been told.",
+}
+RESCHEDULE_WHICH_JOB = {
+    "th": "มีหลายงานที่ลูกค้าขอเลื่อนอยู่ครับ ยืนยันงานไหน",
+    "en": "Several jobs have an outstanding request — which one?",
+}
+
+
+async def _handle_customer_reschedule_approval(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
+    permission_keys: list[str], language: str,
+) -> ChatReply | None:
+    """The shop saying yes to the time a customer asked for, in its own
+    words: "ยืนยันเป็นวันที่ตามนั้นได้" (owner, 16 ก.ย. 2569 — the model reads
+    it as `suggest`, and the reply was "ยังไม่แน่ใจว่าต้องการอะไร" while the
+    customer waited).
+
+    None when no job has an outstanding request, so an ordinary "ยืนยัน"
+    keeps its own meaning elsewhere.
+    """
+    from .thai_datetime import format_thai_date, format_thai_time
+
+    if "ticket.update" not in set(permission_keys):
+        return None
+    license_id = str(license_id)
+    today = local_today()
+    match = TICKET_CODE_RE.search(message or "")
+    code = match.group(1).upper() if match else ""
+    try:
+        tickets = [
+            t for t in await client.list_tickets(license_id)
+            if str(t.get("status") or "") not in ("completed", "cancelled")
+        ]
+    except Exception:  # noqa: BLE001
+        log.exception("could not read the queue to confirm a reschedule")
+        return None
+    if code:
+        wanted = [t for t in tickets if str(t.get("ticket_number") or "").upper() == code]
+    else:
+        ref = await _last_entity_ref(client, ctx)
+        ref_id = str((ref or {}).get("entity_id") or "") if ref and str(ref.get("entity_type") or "") in ("ticket", "service_ticket") else ""
+        wanted = [t for t in tickets if str(t.get("id")) == ref_id] if ref_id else []
+    asked: list[tuple[dict, tuple]] = []
+    for ticket in (wanted or tickets):
+        proposed = await _customer_proposed_time(client, license_id, str(ticket.get("id") or ""), today)
+        if proposed is not None:
+            asked.append((ticket, proposed))
+        if wanted:
+            break
+    if not asked:
+        return None
+    if len(asked) > 1:
+        return ChatReply(
+            text=_t(RESCHEDULE_WHICH_JOB, language),
+            quick_replies=[
+                (str(t.get("ticket_number") or "")[:20], f"{t.get('ticket_number')} เลื่อนได้")
+                for t, _ in asked[:4]
+            ],
+        )
+    ticket, (new_date, new_time) = asked[0]
+    ticket_id = str(ticket.get("id") or "")
+    code = str(ticket.get("ticket_number") or code)
+    try:
+        await client.update_ticket(
+            license_id, ticket_id,
+            {"scheduled_date": new_date.isoformat(), "scheduled_time": new_time.isoformat()},
+            actor_id=ctx.chann_uid,
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("could not confirm the customer's time on %s", code)
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    when = f"{format_thai_date(new_date)} {format_thai_time(new_time)}"
+    await _notify_ticket_change(
+        client, license_id, ticket_id,
+        f"ร้านยืนยันเลื่อนนัด {code} เป็น {when} (ตามที่ลูกค้าขอ)", language,
+        text_en=f"The shop confirmed job {code} for {when}, as the customer asked",
+        customer_text=f"ร้านยืนยันเลื่อนนัดงาน {code} เป็น {when} แล้วครับ",
+        customer_text_en=f"Your job {code} is confirmed for {when}.",
+    )
+    await _resolve_customer_requests(
+        client, license_id=license_id, ticket_id=ticket_id, actor_id=ctx.chann_uid,
+        what=f"ยืนยันเลื่อนนัดเป็น {when}",
+    )
+    await _remember_entity(client, ctx, entity_type="ticket", entity_id=ticket_id, code=code)
+    return ChatReply(
+        text=_t(RESCHEDULE_APPROVED, language).format(code=code, when=when),
+        entity_type="ticket", entity_id=ticket_id,
+        quick_replies=[("ข้อมูลงาน", f"ข้อมูลงาน {code}"), ("รายการงาน", "รายการงาน")],
+    )
 
 
 async def _handle_technician_situation(
@@ -21280,6 +21672,43 @@ async def _route_chat_message(
             if browsed is not None:
                 _note_road(road="pending")
                 return browsed
+        # While the shop is on the other end, every line is theirs. Owner,
+        # 16 ก.ย. 2569: "ถ้าคุยกับร้านค้าอยู่ ฟังก์ชั่นอื่นๆ ให้ไม่ต้องทำงาน
+        # จนกว่าจะจบการสนทนา" — the menus reading a chat line as a command is
+        # how a personal-details answer ended up in the shop's own LINE.
+        # Two things still answer here: the words that end or ask about the
+        # conversation itself (otherwise there is no way out), and the
+        # answer to a question this system asked before it opened.
+        # Reporting a fault is what this channel is FOR (review A14: the
+        # conversation must not swallow the report flow), and naming a job
+        # by its code is an instruction about that job, not chat.
+        # "คุยกับร้าน ราคาแอร์…" carries its first line with it, so the
+        # phrase is matched the way the opener matches it, not exactly.
+        if _chat_start_text(message) is None and not _matches_phrase(
+            message, CUSTOMER_CHAT_END_PHRASES + CUSTOMER_REPORT_BARE,
+        ) and not TICKET_CODE_RE.search(message or "") \
+                and not await _customer_report_waiting(client, ctx, message):
+            try:
+                live_now = await live_chat.live_session(
+                    client, license_id=str(license_id), chann_uid=ctx.chann_uid,
+                )
+            except Exception:  # noqa: BLE001
+                log.exception("live chat lookup failed")
+                live_now = None
+            if live_now is not None:
+                _note_road(road="live_chat")
+                relayed = await _handle_customer_chat_line(
+                    client, ctx=ctx, license_id=license_id, session=live_now,
+                    message=message, language=language,
+                )
+                if _is_customer_command(message) or _is_menu_tile(message, ctx.oa) \
+                        or _looks_like_profile_edit(message):
+                    # A tile or a command word: say where it went, or the
+                    # person is left staring at silence wondering why the
+                    # menu stopped working.
+                    relayed.text = _t(CHAT_MENU_PAUSED, language)
+                    relayed.quick_replies = [("จบการสนทนา", "จบการสนทนา")]
+                return relayed
     else:
         context = await client.authorization_context(
             str(license_id), ctx.chann_uid, channel=member_channel(ctx.oa),
@@ -21287,6 +21716,24 @@ async def _route_chat_message(
         if context is None:
             return ChatReply(text=_t(REPLY_NOT_REGISTERED, language))
         permission_keys = list(context.get("permission_keys") or [])
+
+    # The profile form this system opened, on ANY channel and before the
+    # live-chat relay: the answer belongs to the question that was asked
+    # (round 19h; owner, 16 ก.ย. 2569 — with a conversation open it went to
+    # the shop instead and the customer got no reply at all).
+    if ctx.oa in PROFILE_ELIGIBLE_ROLES:
+        try:
+            profile_form = await client.get_pending_intent(ctx.chann_uid, ctx.oa)
+        except Exception:  # noqa: BLE001
+            profile_form = None
+        if profile_form is not None and str(profile_form.get("entity") or "") == "profile":
+            answered = await _profile_form_answer(
+                client, ctx=ctx, license_id=license_id, pending=profile_form,
+                message=message, language=language, ai_client=ai_client,
+            )
+            if answered is not None:
+                _note_road(road="pending")
+                return answered
 
     # A create flow waiting for its answer (owner, 7 Sep 2026): a different
     # command is confirmed before it replaces the flow; the flow's own
@@ -21581,6 +22028,15 @@ async def _route_chat_message(
     # that carries it must not, or "ตั้งกฎมอบหมาย" could be parsed as
     # something else entirely.
     if ctx.oa == "sales":
+        if _approves_the_customers_time(message) and not any(
+            w in (message or "") for w in ("ลบ", "delete", "ยกเลิก", "กฎ")
+        ):
+            confirmed = await _handle_customer_reschedule_approval(
+                client, ctx=ctx, license_id=license_id, message=message,
+                permission_keys=permission_keys, language=language,
+            )
+            if confirmed is not None:
+                return confirmed
         if _asks_to_chat_with_customer(message):
             return await _handle_shop_chat_start(
                 client, ctx=ctx, license_id=license_id, message=message, intent=None,

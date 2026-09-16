@@ -288,17 +288,37 @@ async def customer_message(
     owner = [m for m in agents if str(m.get("id")) == assigned] if assigned else []
     shown = _shown(session)
     line = f"💬 {shown}: {text.strip()[:300]}"
-    if owner:
-        await _tell(
-            client, license_id=license_id, members=owner, text=line, text_en=line, type="chat_message",
-            session_id=str(session["id"]), language=language,
-        )
-    else:
-        await _tell(
-            client, license_id=license_id, members=agents, text=line, text_en=line, type="chat_message",
-            session_id=str(session["id"]), language=language, line=False,
-        )
+    # Owner, 16 ก.ย. 2569: "ให้มีแจ้งเตือนแค่ตอนแชทเปิดใหม่เข้ามาพร้อมข้อความ
+    # ที่ทักมาตอนแรกก็พอ … ที่เหลือก็ไปแชทในหน้า Dashboard" — and a
+    # conversation the customer REOPENS counts as a new one. Opening it is
+    # announced by start_session; a bare "คุยกับร้าน" carries no words yet,
+    # so the first line typed after it is the one that reaches LINE. Every
+    # line after that is a badge on the chats page.
+    await _tell(
+        client, license_id=license_id, members=owner or agents, text=line, text_en=line,
+        type="chat_message", session_id=str(session["id"]), language=language,
+        line=await _is_the_opening_line(client, license_id, session),
+    )
     return message
+
+
+async def _is_the_opening_line(client: DataClient, license_id: str, session: dict) -> bool:
+    """Is the line just stored the first thing the customer has said since
+    this conversation opened? Best-effort: when the thread cannot be read,
+    say no — a missed push is recoverable on the dashboard, a push per line
+    is what the shop asked us to stop."""
+    try:
+        rows = await client.list_chat_messages(str(license_id), str(session["id"]))
+    except Exception:  # noqa: BLE001
+        log.exception("could not tell whether this is the opening line")
+        return False
+    opened_at = str(session.get("updated_at") or session.get("created_at") or "")
+    said = [
+        r for r in rows
+        if str(r.get("sender_type")) == "customer"
+        and (not opened_at or str(r.get("created_at") or "") >= opened_at)
+    ]
+    return len(said) <= 1
 
 
 async def agent_reply(

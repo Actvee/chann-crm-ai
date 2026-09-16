@@ -60,15 +60,17 @@ class TestACustomersReportWaitsForTheShop:
         assert created is not None, reply.text
         assert created[2].get("visibility") == "private", created[2]
 
-    async def test_a_technician_taking_a_held_job_is_told_to_wait(self, monkeypatch):
+    async def test_a_technician_cannot_take_a_held_job(self):
+        """A held job is not in the technician's visible list at all, so the
+        answer is the deliberate "ไม่พบ" of the privacy rule — the same words
+        as a typo, so a technician cannot discover a job by guessing codes
+        (test_phase6_chat: claiming an invisible ticket does not confirm it
+        exists). Nothing is claimed."""
         client = FakeDataClient(permission_keys=["ticket.read", "ticket.update"])
         client._tickets = [dict(HELD)]
-
-        async def refuse(license_id, ticket_id, member_id, actor_id=None):
-            raise DataTierError(409, "this ticket is not open to you", "this ticket is not open to you")
-        monkeypatch.setattr(client, "claim_ticket", refuse)
-        reply, _ = await _say(client, "รับงาน T-2026-0005", {"action": "claim", "entity": "ticket", "fields": {"code": "T-2026-0005"}, "missing": []}, ctx=_ctx(**TECH))
-        assert "ยังไม่เปิดให้รับ" in reply.text and "T-2026-0005" in reply.text, reply.text
+        reply, calls = await _say(client, "รับงาน T-2026-0005", {"action": "claim", "entity": "ticket", "fields": {"code": "T-2026-0005"}, "missing": []}, ctx=_ctx(**TECH))
+        assert not [c for c in calls if c[0] == "claim_ticket"], reply.text
+        assert "ไม่พบ" in reply.text, reply.text
 
 
 class TestTheShopOpensAJobToTheTechnicians:

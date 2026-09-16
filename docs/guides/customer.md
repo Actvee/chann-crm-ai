@@ -26,33 +26,33 @@ _EN: Browse products / show interest — Type "all products" or "search" and a p
 
 ## 3. คุยกับร้าน
 
-พิมพ์ "คุยกับร้าน" (ต่อด้วยคำถามได้เลย เช่น "คุยกับร้าน ราคาแอร์ 12000 BTU") เจ้าหน้าที่ของร้านจะตอบกลับในแชทนี้ ระหว่างคุย ข้อความที่พิมพ์จะส่งถึงร้านทั้งหมด (ไม่มีข้อความยืนยันทุกครั้ง ถ้าส่งไม่ได้ระบบจะบอก) ไม่เปิดเป็นงานซ่อม กลับมาคุยใหม่ก็ต่อจากแชทเดิม · พิมพ์ "จบการสนทนา" เมื่อเสร็จ ไม่มีข้อความสักพักระบบปิดให้เอง · บนหน้าจอลูกค้ามีช่องแชทเดียวกัน
+ระหว่างคุยกับร้าน ข้อความทุกอย่างจะถึงร้าน เมนูอื่นจะพักไว้ก่อน — พิมพ์ "จบการสนทนา" เมื่อคุยเสร็จแล้วค่อยใช้เมนูต่อ · พิมพ์ "คุยกับร้าน" (ต่อด้วยคำถามได้เลย เช่น "คุยกับร้าน ราคาแอร์ 12000 BTU") เจ้าหน้าที่ของร้านจะตอบกลับในแชทนี้ ระหว่างคุย ข้อความที่พิมพ์จะส่งถึงร้านทั้งหมด (ไม่มีข้อความยืนยันทุกครั้ง ถ้าส่งไม่ได้ระบบจะบอก) ไม่เปิดเป็นงานซ่อม กลับมาคุยใหม่ก็ต่อจากแชทเดิม · พิมพ์ "จบการสนทนา" เมื่อเสร็จ ไม่มีข้อความสักพักระบบปิดให้เอง · บนหน้าจอลูกค้ามีช่องแชทเดียวกัน
 
 พิมพ์: `คุยกับร้าน ราคาแอร์ 12000 BTU เท่าไหร่`
 
 [IMAGE: customer-chat — หน้าจอแชท LINE: ลูกค้าพิมพ์ 'คุยกับร้าน ราคาแอร์ 12000 BTU' บอทตอบ 'เปิดการสนทนากับ ร้านเย็นสบาย แล้ว' แล้วมีข้อความจากร้าน '💬 ร้านเย็นสบาย: 15,900 บาทครับ' ไอคอนคนสวมหูฟังสีส้ม]
 
-_EN: Talk to the shop — Type "talk to the shop" (a question may follow, e.g. "talk to the shop price of a 12000 BTU air con"). A person at the shop answers here. While talking, what you type goes to the shop (no confirmation each time; a failure is reported) and does not open a repair job. Coming back later continues the same conversation. "end chat" when done; it closes itself after a quiet while. The home screen has the same chat box._
+_EN: While a conversation with the shop is open every message reaches them and the other menus stay out of the way — type "end chat" when you are done. Talk to the shop — Type "talk to the shop" (a question may follow, e.g. "talk to the shop price of a 12000 BTU air con"). A person at the shop answers here. While talking, what you type goes to the shop (no confirmation each time; a failure is reported) and does not open a repair job. Coming back later continues the same conversation. "end chat" when done; it closes itself after a quiet while. The home screen has the same chat box._
 
 ## 4. ลงทะเบียนสินค้า (รับประกัน)
 
-พิมพ์ "ลงทะเบียนสินค้า" แล้วตามด้วย S/N ที่ร้านบันทึกไว้ให้ เครื่องจะผูกกับคุณ ถ้าระบบยังไม่รู้จักหมายเลข ให้ติดต่อร้าน · บอกวันที่ซื้อได้ด้วยถ้าร้านยังไม่ได้ใส่: "ลงทะเบียนสินค้า SN12345678 ซื้อเมื่อ 1 ก.ย. 2569"
+แก้ข้อมูลของตัวเอง: พิมพ์ "แก้ไขข้อมูลส่วนตัว" แล้วพิมพ์สิ่งที่จะแก้ หลายช่องพร้อมกันได้ เช่น "ชื่อ สมชาย ใจดี ที่อยู่ 99/1 เบอร์โทร 0891234567" · พิมพ์ "ลงทะเบียนสินค้า" แล้วตามด้วย S/N ที่ร้านบันทึกไว้ให้ เครื่องจะผูกกับคุณ ถ้าระบบยังไม่รู้จักหมายเลข ให้ติดต่อร้าน · บอกวันที่ซื้อได้ด้วยถ้าร้านยังไม่ได้ใส่: "ลงทะเบียนสินค้า SN12345678 ซื้อเมื่อ 1 ก.ย. 2569"
 
 พิมพ์: `ลงทะเบียนสินค้า SN12345678`
 
 [IMAGE: customer-register — หน้าจอแชท: ลูกค้าพิมพ์ 'ลงทะเบียนสินค้า SN12345678' บอทตอบ 'ลงทะเบียน แอร์ (S/N …) เป็นของคุณแล้ว' พร้อมไอคอนโล่สีส้ม]
 
-_EN: Register your product (warranty) — Type "register product" then the S/N the shop recorded. Unknown S/N → contact the shop. Add the purchase date if the shop did not: "register product SN12345678 bought 2026-09-01"._
+_EN: Register your product (warranty) — Your own details: type "edit my profile", then what to change — several at once is fine, e.g. "name Somchai Jaidee address 99/1 phone 0891234567". Type "register product" then the S/N the shop recorded. Unknown S/N → contact the shop. Add the purchase date if the shop did not: "register product SN12345678 bought 2026-09-01"._
 
 ## 5. แจ้งซ่อม
 
-พิมพ์อาการที่เสียมาได้เลย เช่น "แอร์ไม่เย็น" ระบบจะเลือกเครื่องให้ (หรือให้กดเลือกถ้ามีหลายเครื่อง) แล้วบอกกลับว่างานนี้ผูกกับเครื่องไหนและยังอยู่ในประกันหรือไม่ จากนั้นถามที่อยู่และวันเวลานัด · ถ้าไม่มีหมายเลขเครื่อง กด "ไม่มีหมายเลขเครื่อง" ได้ ระบบจะแจ้งว่างานนี้ยังไม่ได้ผูกกับเครื่องที่ลงทะเบียน · ส่งรูปอาการมาในแชทได้ ระบบแนบกับงานให้ช่างดู
+พิมพ์อาการที่เสียมาได้เลย เช่น "แอร์ไม่เย็น" ระบบจะเลือกเครื่องให้ (หรือให้กดเลือกถ้ามีหลายเครื่อง) แล้วบอกกลับว่างานนี้ผูกกับเครื่องไหนและยังอยู่ในประกันหรือไม่ จากนั้นถามที่อยู่ (ถ้ามีที่อยู่ในข้อมูลส่วนตัวแล้ว จะถามว่าใช้ที่อยู่นั้นไหม ตอบ "ใช่" หรือพิมพ์ที่อยู่ใหม่) และวันเวลานัด · ถ้าไม่มีหมายเลขเครื่อง กด "ไม่มีหมายเลขเครื่อง" ได้ ระบบจะแจ้งว่างานนี้ยังไม่ได้ผูกกับเครื่องที่ลงทะเบียน · ส่งรูปอาการมาในแชทได้ ระบบแนบกับงานให้ช่างดู
 
 พิมพ์: `แอร์ไม่เย็น มีน้ำหยด`
 
 [IMAGE: customer-report — แชท 3 ฟอง: ลูกค้า 'แอร์ไม่เย็น' → บอท 'รับแจ้งแล้ว เลขงาน T-2026-0001 ขอที่อยู่' → ลูกค้าพิมพ์ที่อยู่ → บอทถามวันนัด]
 
-_EN: Report a fault — Describe what is wrong, e.g. "air con not cooling". The machine is picked for you (or you tap which one), the reply names it and says whether it is still under warranty, then address and appointment are asked. With no serial, the job is filed and says so._
+_EN: Report a fault — Describe what is wrong, e.g. "air con not cooling". The machine is picked for you (or you tap which one), the reply names it and says whether it is still under warranty, then the address (if your profile has one it is offered — answer "yes" or type another) and the appointment are asked. With no serial, the job is filed and says so._
 
 ## 6. ดูสถานะ / ขอเลื่อนนัด / ยกเลิก
 

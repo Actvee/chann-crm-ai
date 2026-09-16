@@ -133,7 +133,7 @@ class TestChatCheckOutTellsTheCustomer:
 
         rows = _completion_rows(c)
         assert len(rows) == 1, "one completion, one notification"
-        _, license_id, target, _type, message = rows[0]
+        _, license_id, target, _type, message, *_delivery = rows[0]
         assert license_id == LICENSE_ID
         # The recipient is the CUSTOMER, not the technician or the CS.
         assert target == CUSTOMER_UID

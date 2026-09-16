@@ -166,13 +166,28 @@ class TestStartFromChat:
         assert not [r for r in client.recorded if r[0] == "create_ticket"]
         assert reply.text == ""  # silence is the confirmation (owner, 4 Sep)
 
-    async def test_commands_still_work_during_a_conversation(self, pushes):
+    async def test_a_command_during_a_conversation_goes_to_the_shop(self, pushes):
+        """Round 19h, owner 16 ก.ย. 2569: "ถ้าคุยกับร้านค้าอยู่ ฟังก์ชั่นอื่นๆ
+        ให้ไม่ต้องทำงานจนกว่าจะจบการสนทนา". Until then "งานของฉัน" mid-chat ran
+        the menu, which is how a line meant for the shop (and one meant for
+        nobody but the person themselves) went to the wrong place. The line
+        reaches the shop and the reply says the menus are paused, so nobody
+        is left wondering why nothing happened."""
         client = ChatFake(role="customer", permission_keys=[])
         await handle_chat_message(client, message="คุยกับร้าน", ctx=_customer())
         client.recorded.clear()
         reply = await handle_chat_message(client, message="งานของฉัน", ctx=_customer())
+        assert [r for r in client.recorded if r[0] == "add_chat_message"]
+        assert "จบการสนทนา" in reply.text
+        assert not [r for r in client.recorded if r[0] == "list_tickets"]
+
+    async def test_ending_the_conversation_still_works(self, pushes):
+        client = ChatFake(role="customer", permission_keys=[])
+        await handle_chat_message(client, message="คุยกับร้าน", ctx=_customer())
+        client.recorded.clear()
+        reply = await handle_chat_message(client, message="จบการสนทนา", ctx=_customer())
         assert not [r for r in client.recorded if r[0] == "add_chat_message"]
-        assert reply.text
+        assert "จบการสนทนา" in reply.text or "ปิด" in reply.text
 
     async def test_ending_it_closes_and_the_owner_hears(self, pushes):
         client = ChatFake(role="customer", permission_keys=[])

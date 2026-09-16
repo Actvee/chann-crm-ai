@@ -689,7 +689,26 @@ class FakeDataClient:
 
     async def list_tickets(self, license_id, status=None, visible_to=None, limit=None):
         self.recorded.append(("list_tickets", license_id, visible_to))
-        return list(getattr(self, "_tickets", []))
+        rows = list(getattr(self, "_tickets", []))
+        if visible_to:
+            # Mirrors ServiceTicketRepository.list_visible_to: public to
+            # everyone, private only to the member (or their team) it was
+            # given to. The fake used to ignore visible_to entirely, so the
+            # sales OA reading the technicians' filtered list looked fine
+            # here and answered "ไม่มีงานเปิดรับ" on DEV (owner, 16 ก.ย. 2569).
+            teams = {
+                str(r.get("team_id")) for r in getattr(self, "_team_members", [])
+                if str(r.get("member_id")) == str(visible_to)
+            }
+            rows = [
+                r for r in rows
+                if str(r.get("visibility") or "public") == "public"
+                or str(r.get("assigned_to_ref") or "") == str(visible_to)
+                or str(r.get("assigned_to_ref") or "") in teams
+            ]
+        if status:
+            rows = [r for r in rows if str(r.get("status") or "") == status]
+        return rows
 
     async def assign_ticket(self, license_id, ticket_id, *, target_type, target_ref, actor_id=None):
         self.recorded.append(("assign_ticket", license_id, ticket_id, target_type, target_ref))
@@ -912,7 +931,13 @@ class FakeDataClient:
         row = {"id": f"notif-{len(self.recorded)}", "target_chann_uid": target_chann_uid,
                "type": type, "message": message, "entity_type": entity_type,
                "entity_id": entity_id}
-        self.recorded.append(("create_notification", license_id, target_chann_uid, type, message))
+        # delivery_line rides along (round 19h): whether a notification is
+        # PUSHED to LINE or only badged on the dashboard is behaviour, and a
+        # fake that drops it cannot show a chat line reaching the shop's OA.
+        self.recorded.append((
+            "create_notification", license_id, target_chann_uid, type, message,
+            delivery_line, delivery_dashboard,
+        ))
         return row
 
     async def get_last_entity_ref(self, chann_uid, oa, *, license_id):
@@ -1306,6 +1331,12 @@ class FakeDataClient:
                 return row
         return None
 
+    def _chat_clock(self) -> str:
+        """A monotonic stamp for chat rows: the real tier's created_at /
+        updated_at, which the opening-line rule reads."""
+        self._chat_tick = getattr(self, "_chat_tick", 0) + 1
+        return f"2026-09-16T00:00:{self._chat_tick:02d}"
+
     async def open_chat_session(self, license_id, *, customer_chann_uid, product_id=None,
                                 sla_minutes=30, timeout_minutes=60, actor_id=None):
         self.recorded.append(("open_chat_session", license_id, customer_chann_uid, product_id))
@@ -1327,6 +1358,9 @@ class FakeDataClient:
             previous["status"] = "open" if not previous.get("assigned_to") else "assigned"
             previous["closed_at"] = None
             previous["sla_deadline"] = None
+            # The real tier stamps updated_at when it reopens; "the first
+            # line of THIS conversation" is counted from it (round 19h).
+            previous["updated_at"] = self._chat_clock()
             if product_id:
                 previous["product_id"] = product_id
             return {**previous, "_created": True}
@@ -1340,6 +1374,8 @@ class FakeDataClient:
             "assigned_to": None,
             "closed_at": None,
             "sla_deadline": "set",
+            "created_at": self._chat_clock(),
+            "updated_at": self._chat_clock(),
         }
         self._chat_sessions.append(row)
         return {**row, "_created": True}
@@ -1395,6 +1431,9 @@ class FakeDataClient:
             "session_id": str(session_id), "license_id": str(license_id),
             "sender_type": sender_type, "sender_chann_uid": sender_chann_uid,
             "content": content, "content_en": content_en, "is_read": False,
+            # The real rows are timestamped, and whether a line is the
+            # conversation's opening one is read off that (round 19h).
+            "created_at": self._chat_clock(),
         }
         self._chat_messages.append(message)
         if session["status"] in ("open", "assigned"):
@@ -1888,15 +1927,21 @@ class TestPhase8ProfileChat:
         )
         assert "ไม่ถูกต้อง" in reply.text
 
-    async def test_no_fields_asks_what_to_change(self):
+    async def test_no_fields_opens_the_form_and_says_how_to_answer(self):
+        """Round 19h: it used to answer "กรุณาระบุข้อมูลที่ต้องการแก้ไข" and
+        forget, so the values typed next were read with no context — on the
+        customer OA they reached the shop as a chat line instead (owner,
+        16 ก.ย. 2569). The form is held open and shows what is on file."""
         ai = httpx.AsyncClient(transport=_ai(json.dumps(
             {"action": "update", "entity": "profile", "fields": {}, "missing": []})))
         client = FakeDataClient(permission_keys=[])
         reply = await handle_chat_message(
             client, message="แก้โปรไฟล์", ctx=_ctx(primary_role="technician"), ai_client=ai,
         )
-        assert "กรุณาระบุ" in reply.text
+        assert "พิมพ์สิ่งที่จะแก้" in reply.text and "หลายอย่างพร้อมกัน" in reply.text
         assert not any(r[0] == "update_profile" for r in client.recorded)
+        held = await client.get_pending_intent("CHN-S-000001", "technician")
+        assert held and held["entity"] == "profile"
 
     async def test_unknown_field_from_model_is_dropped_not_forwarded(self):
         """If the model puts something outside PROFILE_EDITABLE_FIELDS in
@@ -5024,9 +5069,19 @@ class TestTicketChatFlow:
         and phone number of every private job in the tenant."""
         client = FakeDataClient(permission_keys=["ticket.read"])
         client._tickets = []
-        await handle_chat_message(client, message="งานของฉัน", ctx=_ctx())
+        await handle_chat_message(client, message="งานของฉัน", ctx=_ctx(primary_role="technician"))
         calls = [r for r in client.recorded if r[0] == "list_tickets"]
         assert calls and calls[-1][2] is not None, "visible_to was not passed"
+
+    async def test_the_shops_own_queue_is_not_filtered_by_that_rule(self):
+        """It is the TECHNICIAN's rule. Sales and CS hold ticket.read for the
+        tenant and are the ones who dispatch — filtering their list hid every
+        customer report once those became private (owner, 16 ก.ย. 2569)."""
+        client = FakeDataClient(permission_keys=["ticket.read"])
+        client._tickets = []
+        await handle_chat_message(client, message="งานของฉัน", ctx=_ctx())
+        calls = [r for r in client.recorded if r[0] == "list_tickets"]
+        assert calls and calls[-1][2] is None, "the shop's queue was filtered"
 
     async def test_claiming_an_invisible_ticket_does_not_confirm_it_exists(self):
         """"Not found" and "not yours" are deliberately the same message —
@@ -6537,6 +6592,8 @@ class TestButtonsTheSystemWritesDoNotNeedTheAI:
             "ข้าม",
             # the flow-switch's third button (_FLOW_SWITCH_CANCEL_WORDS)
             "ยกเลิกทั้งสองรายการ",
+            # the offered address (_SAME_ADDRESS_PHRASES), round 19h
+            "ที่อยู่เดิม",
         }
         remaining = [t for t in dead if t not in handled_by_literal]
         assert not remaining, f"buttons that lead nowhere: {remaining}"
