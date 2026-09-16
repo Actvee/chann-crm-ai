@@ -4571,6 +4571,24 @@ def act_on_approval_step(
         raise _approval_error(exc)
 
 
+@router.post("/licenses/{license_id}/surveys/for-ticket/{ticket_id}")
+def open_survey_for_ticket(
+    license_id: uuid.UUID, ticket_id: uuid.UUID, session: Session = Depends(get_session),
+):
+    """Open (or return) the satisfaction survey for a finished job."""
+    from ..repositories.phase14 import ApprovalRepository
+
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = ApprovalRepository(session).open_survey(scope, ticket_id)
+        session.commit()
+        session.refresh(row)
+        return _survey_out(row)
+    except Exception as exc:
+        session.rollback()
+        raise _approval_error(exc)
+
+
 @router.get("/licenses/{license_id}/surveys/pending-for-ticket/{ticket_id}")
 def pending_survey(
     license_id: uuid.UUID, ticket_id: uuid.UUID, session: Session = Depends(get_session),

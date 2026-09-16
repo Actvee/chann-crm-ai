@@ -296,6 +296,18 @@ class ApprovalRepository:
         step.acted_by = member_id
         step.acted_at = datetime.now(timezone.utc)
         step.reason = reason
+        # Written NOW, because the "is anything still pending?" query below
+        # reads the database. The session is created with autoflush=False
+        # (chann_data/db.py), so without this the step just approved is
+        # still `pending` on disk, `remaining` finds it, and the report
+        # stays "submitted" — no document, no survey, and the shop is told
+        # a step remains that nobody can act on. Every FINAL approval on
+        # DEV did this; the integration suite passed because its session
+        # was built with SQLAlchemy's default autoflush=True (round 19r,
+        # owner, 16 ก.ย. 2569: "กดอนุมัติไปแล้วแต่ยังไม่มีแจ้งเตือนไปยัง
+        # ลูกค้าหรือทีมช่าง" and "ทั้งที่ร้านมีแค่คนเดียวแต่ยังขึ้น
+        # 'อนุมัติขั้นถัดไป'").
+        self._s.flush()
 
         report = self._s.get(ServiceReport, step.entity_id)
         if report is None:
@@ -353,6 +365,21 @@ class ApprovalRepository:
             self._s.add(row)
             self._s.flush()
         return row
+
+    def open_survey(self, scope: TenantScope, ticket_id: uuid.UUID) -> SatisfactionSurvey:
+        """The satisfaction survey for a finished job, however it finished.
+
+        Approval creates one when the last step passes; a job the shop
+        closed itself never goes through approval and so never had one —
+        the customer was asked nothing (owner, 16 ก.ย. 2569: "Sale OA
+        ปิดงานแล้วแต่ไม่มีส่งประเมินไปให้ลูกค้า"). Idempotent: one survey
+        per ticket, whoever asks for it.
+        """
+        ticket = self._s.get(ServiceTicket, ticket_id)
+        if ticket is None:
+            raise ApprovalNotFound("ticket not found")
+        scope.assert_owns(ticket.license_id)
+        return self._ensure_survey(scope, ticket_id)
 
     def mark_survey_sent(self, scope: TenantScope, survey_id: uuid.UUID) -> SatisfactionSurvey:
         row = self._s.get(SatisfactionSurvey, survey_id)

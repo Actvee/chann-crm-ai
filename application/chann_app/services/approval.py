@@ -123,8 +123,73 @@ async def on_report_submitted(
             report = {**await _report_by_id(client, license_id, str(report["id"])), **report}
         except Exception:
             log.exception("could not load report %s", report.get("id"))
+    if not steps:
+        # A shop whose approval rule has no steps: there is nobody to wait
+        # for, so the report is finished the moment it is filed. Without
+        # this it sat at "submitted" for ever — no paper for the
+        # technician, no survey for the customer, and nothing saying why
+        # (round 19q, alongside the shop-close survey).
+        await finish_if_nothing_is_pending(client, license_id, report, language)
+        return steps
     await _notify_current_approvers(client, license_id, report, steps, language)
     return steps
+
+
+async def finish_if_nothing_is_pending(
+    client: DataClient, license_id: str, report: dict, language: str = "th",
+) -> bool:
+    """A submitted report with no step left waiting is finished, not stuck.
+
+    Two ways to arrive here: a shop whose approval rule has no steps, and a
+    report whose last step was approved while the reply said otherwise
+    (round 19r — the act read the database before flushing, so the step it
+    had just approved still counted as pending; every final approval on DEV
+    ended this way). Called by the SLA sweep too, so reports already stuck
+    when this shipped heal themselves on the next pass.
+    """
+    report_id = str(report.get("id") or "")
+    try:
+        steps = await client.approval_steps_for_entity(license_id, ENTITY_TYPE, report_id)
+    except Exception:  # noqa: BLE001
+        log.exception("could not read the steps of %s", report.get("report_id"))
+        return False
+    if any(str(s.get("status") or "") == "pending" for s in steps or []):
+        return False
+    if any(str(s.get("status") or "") == "rejected" for s in steps or []):
+        return False
+    log.info(
+        "approval: finishing %s — %d step(s), none pending",
+        report.get("report_id") or report_id, len(steps or []),
+    )
+    await _finish_without_approval(client, license_id, report, language)
+    return True
+
+
+async def _finish_without_approval(
+    client: DataClient, license_id: str, report: dict, language: str,
+) -> None:
+    """The report nobody has to approve: sign it off, paper it, ask the
+    customer how it went — the same three things the last approving step
+    does."""
+    try:
+        await client.set_service_report_status(license_id, str(report["id"]), "approved")
+    except Exception:  # noqa: BLE001 — the rest is still worth doing
+        log.exception("could not approve %s with no steps", report.get("report_id"))
+    url = ""
+    try:
+        url = await issue_report_document(client, license_id=license_id, report=report, actor_id=None)
+    except Exception:  # noqa: BLE001
+        log.exception("could not issue the document for %s", report.get("report_id"))
+    try:
+        await _notify_customer_of_approval(client, license_id, report, url)
+    except Exception:  # noqa: BLE001
+        log.exception("could not tell the customer about %s", report.get("report_id"))
+    try:
+        survey = await client.open_survey_for_ticket(license_id, str(report.get("ticket_id") or ""))
+        if survey:
+            await send_survey(client, license_id=license_id, survey=survey, language=language)
+    except Exception:  # noqa: BLE001
+        log.exception("could not send the survey for %s", report.get("report_id"))
 
 
 async def _notify_current_approvers(

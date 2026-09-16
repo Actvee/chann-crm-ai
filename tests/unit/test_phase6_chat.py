@@ -206,6 +206,17 @@ class FakeDataClient:
                           "rules_json": rules_json, "updated_by": updated_by}
         return dict(self._workflow)
 
+    async def set_service_report_status(self, license_id, report_id, status, actor_id=None):
+        # The real client has had this since phase 13; the fake did not, so
+        # a caller that used it looked like it had worked (round 19q).
+        self.recorded.append(("set_service_report_status", license_id, report_id, status))
+        for report in getattr(self, "_reports", []):
+            if str(report.get("id")) == str(report_id):
+                report["status"] = status
+                return dict(report)
+        from chann_app.data_client import DataTierError
+        raise DataTierError(404, "service report not found")
+
     async def open_approval_steps(self, license_id, report_id):
         self._approval_state()
         self.recorded.append(("open_approval_steps", license_id, report_id))
@@ -281,6 +292,20 @@ class FakeDataClient:
             report["status"] = report_status
         return {"step": dict(step), "report_status": report_status,
                 "survey": dict(survey) if survey else None}
+
+    async def open_survey_for_ticket(self, license_id, ticket_id):
+        # Mirrors ApprovalRepository.open_survey (round 19q): one survey per
+        # ticket, whoever finishes the job — the shop closing it itself, or
+        # the last approval step passing.
+        self._approval_state()
+        self.recorded.append(("open_survey_for_ticket", license_id, ticket_id))
+        survey = next((v for v in self._surveys if v["ticket_id"] == ticket_id), None)
+        if survey is None:
+            survey = {"id": f"survey-{ticket_id}", "ticket_id": ticket_id,
+                      "scale_config_json": {"1": "ไม่ดี", "2": "พอใช้", "3": "ดีเยี่ยม"},
+                      "score": None, "comment": None, "sent_at": None, "submitted_at": None}
+            self._surveys.append(survey)
+        return dict(survey)
 
     async def pending_survey_for_ticket(self, license_id, ticket_id):
         self._approval_state()

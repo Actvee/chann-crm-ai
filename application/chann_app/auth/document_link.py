@@ -82,6 +82,47 @@ def decode_document_token(token: str) -> tuple[str, str]:
     return str(license_id), str(document_id)
 
 
+#: A link goes into a LINE message and has to survive being tapped there.
+#: The template-design link was 612 characters and came back "Signature
+#: verification failed" — the DEV log shows the token arriving with a
+#: 22-character signature where HS256 writes 43, i.e. cut in half on the
+#: way (owner's transcript, 16 ก.ย. 2569, and two 404s at 09:42 and 09:44
+#: that day). Every character in the token is a character in the URL, so
+#: the claims are as short as they can be: one-letter names, the bucket
+#: prefix left off (the store knows its own bucket), and the content type
+#: as a code rather than seventy characters of MIME.
+_CT_CODES = {
+    "a": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "p": "application/pdf",
+    "j": "image/jpeg",
+    "n": "image/png",
+    "w": "image/webp",
+    "g": "image/gif",
+    "h": "text/html; charset=utf-8",
+    "x": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "c": "text/csv; charset=utf-8",
+}
+_CT_BY_TYPE = {v: k for k, v in _CT_CODES.items()}
+_GS = "gs://"
+
+
+def _short_path(path: str) -> str:
+    """The object key without the bucket — 45 characters that never
+    change and need not travel."""
+    from ..config import settings as _s
+
+    prefix = f"{_GS}{_s.gcs_bucket_name}/"
+    return path[len(prefix):] if _s.gcs_bucket_name and path.startswith(prefix) else path
+
+
+def _full_path(short: str) -> str:
+    from ..config import settings as _s
+
+    if short.startswith(_GS) or not _s.gcs_bucket_name:
+        return short
+    return f"{_GS}{_s.gcs_bucket_name}/{short}"
+
+
 def issue_asset_token(
     path: str, content_type: str, ttl_seconds: int = DOCUMENT_LINK_TTL_S,
     *, filename: str | None = None,
@@ -94,15 +135,20 @@ def issue_asset_token(
     if not path:
         raise ValueError("an asset token needs a stored path")
     now = dt.datetime.now(dt.timezone.utc)
-    claims = {
-        "path": str(path),
-        "ct": str(content_type or "application/octet-stream"),
-        "purpose": _ASSET_PURPOSE,
+    ct = str(content_type or "application/octet-stream")
+    claims: dict = {
+        "p": _short_path(str(path)),
+        "u": _ASSET_PURPOSE,
         "iat": now,
         "exp": now + dt.timedelta(seconds=ttl_seconds),
     }
+    code = _CT_BY_TYPE.get(ct)
+    if code:
+        claims["c"] = code
+    else:
+        claims["ct"] = ct
     if filename:
-        claims["fn"] = str(filename)
+        claims["f"] = str(filename)
     return jwt.encode(claims, settings.jwt_secret, algorithm="HS256")
 
 
@@ -116,9 +162,14 @@ def decode_asset_token(token: str) -> tuple[str, str, str | None]:
         raise DocumentLinkInvalid(str(exc)) from exc
     # A document token or an admin session token must not double as an
     # asset link — same reasoning as decode_document_token.
-    if claims.get("purpose") != _ASSET_PURPOSE:
+    # Both spellings: links already in people's chats carry the long one.
+    if claims.get("u", claims.get("purpose")) != _ASSET_PURPOSE:
         raise DocumentLinkInvalid("not an asset link token")
-    path = claims.get("path")
+    path = claims.get("p") or claims.get("path")
     if not path:
         raise DocumentLinkInvalid("token is missing its object path")
-    return str(path), str(claims.get("ct") or "application/octet-stream"), claims.get("fn")
+    content_type = (
+        _CT_CODES.get(str(claims.get("c") or ""))
+        or str(claims.get("ct") or "application/octet-stream")
+    )
+    return _full_path(str(path)), content_type, claims.get("f") or claims.get("fn")

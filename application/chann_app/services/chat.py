@@ -8440,6 +8440,44 @@ def _shop_close_details(message: str, code: str) -> tuple[str | None, str | None
     return (cause.group(1).strip()[:400] if cause else None), (fix.group(1).strip()[:400] if fix else None)
 
 
+SHOP_CLOSE_SURVEY_SENT = {
+    "th": "\nส่งแบบประเมินให้ลูกค้าแล้ว",
+    "en": "\nThe satisfaction survey has gone to the customer.",
+}
+SHOP_CLOSE_SURVEY_NO_LINE = {
+    "th": "\n(ลูกค้ายังไม่ได้ผูก LINE จึงยังไม่ได้ส่งแบบประเมิน)",
+    "en": "\n(The customer has no LINE on file, so no survey was sent.)",
+}
+SHOP_CLOSE_SURVEY_FAILED = {
+    "th": "\n⚠️ ส่งแบบประเมินให้ลูกค้าไม่สำเร็จ ลองใหม่ได้ที่หน้างานซ่อม",
+    "en": "\n⚠️ The satisfaction survey could not be sent.",
+}
+
+
+async def _ask_the_customer_how_it_went(
+    client: DataClient, *, license_id: str, ticket_id: str, language: str,
+) -> str:
+    """Open the job's survey and push it. "sent" | "no_line" | "failed".
+
+    One survey per ticket whoever finishes it, so a job that is closed and
+    later carries an approved report does not ask twice.
+    """
+    from .approval import send_survey
+
+    try:
+        survey = await client.open_survey_for_ticket(license_id, ticket_id)
+    except Exception:  # noqa: BLE001 — the job is closed either way
+        log.exception("could not open the survey for %s", ticket_id)
+        return "failed"
+    if not survey:
+        return "failed"
+    try:
+        return await send_survey(client, license_id=license_id, survey=survey, language=language)
+    except Exception:  # noqa: BLE001
+        log.exception("could not send the survey for %s", ticket_id)
+        return "failed"
+
+
 async def _close_from_the_shop(
     client: DataClient, *, ctx: ResolvedContext, license_id: str, ticket: dict, message: str,
     permission_keys: list[str], language: str,
@@ -8484,7 +8522,18 @@ async def _close_from_the_shop(
         client, license_id=license_id, ticket_id=ticket_id, actor_id=ctx.chann_uid, what="ปิดงานโดยฝ่ายขาย/CS",
     )
     await _remember_entity(client, ctx, entity_type="ticket", entity_id=ticket_id, code=code)
+    # The customer is asked how it went, the same as after an approved
+    # report. A job the shop closed itself never goes through approval, so
+    # nothing ever asked them (owner, 16 ก.ย. 2569: "Sale OA ปิดงานแล้วแต่
+    # ไม่มีส่งประเมินไปให้ลูกค้า ตรงนี้ขาดหายหรือไม่").
+    survey_status = await _ask_the_customer_how_it_went(
+        client, license_id=license_id, ticket_id=ticket_id, language=language,
+    )
     text = _t(SHOP_CLOSE_DONE, language).format(code=code, details=details)
+    text += _t({
+        "sent": SHOP_CLOSE_SURVEY_SENT,
+        "no_line": SHOP_CLOSE_SURVEY_NO_LINE,
+    }.get(survey_status, SHOP_CLOSE_SURVEY_FAILED), language)
     if not parts:
         text += _t(SHOP_CLOSE_HINT, language).format(code=code)
     return ChatReply(

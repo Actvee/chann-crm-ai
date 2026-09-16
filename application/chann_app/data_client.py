@@ -2240,6 +2240,13 @@ class DataClient:
         )
         return self._unwrap(resp)
 
+    async def open_survey_for_ticket(self, license_id: str, ticket_id: str) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/surveys/for-ticket/{ticket_id}",
+            headers=self._headers,
+        )
+        return self._unwrap(resp)
+
     async def pending_survey_for_ticket(self, license_id: str, ticket_id: str) -> dict | None:
         resp = await self._client.get(
             f"{self._base}/internal/v1/licenses/{license_id}"

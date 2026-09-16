@@ -136,3 +136,75 @@ class TestRoute:
         monkeypatch.setattr(storage_base, "get_document_store", lambda *a, **k: storage_base.NullDocumentStore())
         token = document_link.issue_asset_token("gs://b/x.jpg", "image/jpeg")
         assert TestClient(fastapi_app).get(f"/api/v1/assets/{token}").status_code == 503
+
+
+class TestTheLinkIsShortEnoughToSurviveLine:
+    """Owner's transcript, 16 ก.ย. 2569: tapping the Word link in LINE gave
+    `{"detail":"link is not valid: Signature verification failed"}`.
+
+    The DEV log says why: the token arrived with a 22-character signature
+    where HS256 writes 43 — the URL was cut on the way. The template link
+    was 612 characters, because the token carried the full gs:// path, a
+    seventy-character MIME type and long claim names. Nothing about the
+    signature was wrong; there was simply less of it than we sent.
+    """
+
+    TEMPLATE_PATH = (
+        "gs://chann1-document-actvee-dev/a584b4c6-dabd-4db8-baf6-b1e5bfbcb400/templates/"
+        "b46d9352-33d9-4cd0-9ed8-7c03c249de75/96d00918-a8fa-4a60-ab59-4c6d1ec8edfc-design.docx"
+    )
+    DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    BASE = "https://chann-crm-ai-dev-application-6ktjuv4zaq-as.a.run.app/api/v1/assets/"
+
+    @pytest.fixture(autouse=True)
+    def _configured(self, monkeypatch):
+        monkeypatch.setattr(settings, "jwt_secret", "x" * 40)
+        monkeypatch.setattr(settings, "gcs_bucket_name", "chann1-document-actvee-dev")
+
+    def test_the_longest_link_we_send_fits_in_a_line_message(self):
+        token = document_link.issue_asset_token(
+            self.TEMPLATE_PATH, self.DOCX, 604800, filename="quote-template.docx",
+        )
+        # The one that was cut measured 612. Half of that is head-room, not
+        # a target: the limit is LINE's and undocumented.
+        assert len(self.BASE) + len(token) < 500
+
+    def test_it_still_says_exactly_which_object_and_type(self):
+        token = document_link.issue_asset_token(
+            self.TEMPLATE_PATH, self.DOCX, 604800, filename="quote-template.docx",
+        )
+        assert document_link.decode_asset_token(token) == (
+            self.TEMPLATE_PATH, self.DOCX, "quote-template.docx",
+        )
+
+    def test_an_unlisted_content_type_still_travels(self):
+        token = document_link.issue_asset_token(self.TEMPLATE_PATH, "application/zip", 60)
+        path, ct, _fn = document_link.decode_asset_token(token)
+        assert (path, ct) == (self.TEMPLATE_PATH, "application/zip")
+
+    def test_links_already_in_peoples_chats_keep_working(self):
+        """The long spelling, as issued before this change."""
+        import datetime as dt
+
+        now = dt.datetime.now(dt.timezone.utc)
+        old = jwt.encode(
+            {
+                "path": self.TEMPLATE_PATH, "ct": self.DOCX, "purpose": "asset.download",
+                "iat": now, "exp": now + dt.timedelta(hours=1), "fn": "quote-template.docx",
+            },
+            settings.jwt_secret, algorithm="HS256",
+        )
+        assert document_link.decode_asset_token(old) == (
+            self.TEMPLATE_PATH, self.DOCX, "quote-template.docx",
+        )
+
+    def test_a_token_for_another_purpose_is_still_refused(self):
+        import datetime as dt
+
+        now = dt.datetime.now(dt.timezone.utc)
+        wrong = jwt.encode(
+            {"p": "x", "u": "document.download", "iat": now, "exp": now + dt.timedelta(hours=1)},
+            settings.jwt_secret, algorithm="HS256",
+        )
+        with pytest.raises(document_link.DocumentLinkInvalid):
+            document_link.decode_asset_token(wrong)

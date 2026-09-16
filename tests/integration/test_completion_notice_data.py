@@ -49,7 +49,14 @@ def field_shop(migrated_db, monkeypatch):
     from chann_data.models import ChannIdentity, LicenseMember
     from chann_data.repositories.phase65 import RegistrationRepository
 
-    TestSession = sessionmaker(bind=migrated_db, future=True)
+    # The SAME flags production uses (chann_data/db.py): autoflush=False is
+    # what makes "change a row, then query for rows in that state" read the
+    # OLD state, and a harness with autoflush on hid exactly that bug in
+    # approval.act for weeks — every final approval left the report at
+    # "submitted" on DEV while this suite was green (round 19r).
+    TestSession = sessionmaker(
+        bind=migrated_db, future=True, autoflush=False, expire_on_commit=False,
+    )
 
     def _session():
         session = TestSession()

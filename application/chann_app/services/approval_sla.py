@@ -83,6 +83,13 @@ async def sweep_reports(client: DataClient, *, now: datetime | None = None, lice
                 continue
             pending = [s for s in steps or [] if str(s.get("status") or "") == "pending"]
             if not pending:
+                # Submitted, and nothing is waiting: the report is finished
+                # and something lost it (round 19r). Finish it here rather
+                # than leaving the customer without a survey for ever.
+                try:
+                    await approval.finish_if_nothing_is_pending(client, license_id, report)
+                except Exception:  # noqa: BLE001 — the sweep never raises
+                    log.exception("could not finish %s", report.get("report_id"))
                 continue
             current = min(pending, key=lambda s: int(s.get("step_order") or 0))
             since = _parse_dt(current.get("created_at")) or _parse_dt(report.get("updated_at")) or _parse_dt(report.get("created_at"))
