@@ -8536,6 +8536,10 @@ REPORT_PDF_READY = {
     "th": "รายงาน {code} (PDF)\nลิงก์ดาวน์โหลด (ใช้ได้ 7 วัน):\n{url}",
     "en": "Report {code} (PDF)\nDownload link (valid 7 days):\n{url}",
 }
+REPORT_PDF_EXISTING = {
+    "th": "เอกสารของรายงาน {code} (ออกไว้แล้ว)\nลิงก์ดาวน์โหลด (ใช้ได้ 7 วัน):\n{url}",
+    "en": "The document for report {code} (already issued)\nDownload link (valid 7 days):\n{url}",
+}
 REPORT_PDF_NOT_APPROVED = {
     "th": "รายงาน {code} ยังไม่ผ่านการอนุมัติ PDF จะออกให้เมื่อ CS อนุมัติแล้ว",
     "en": "Report {code} is not approved yet — the PDF is produced on approval.",
@@ -8591,6 +8595,7 @@ async def _handle_report_pdf(
         return ChatReply(text=_t(NOT_FOUND_BY_CODE, language).format(what="รายงาน", code=code))
 
     document_id = str(report.get("generated_document_id") or "")
+    already = bool(document_id) and not reissue
     if document_id and not reissue:
         url = document_download_url(license_id, document_id)
     else:
@@ -8612,7 +8617,7 @@ async def _handle_report_pdf(
     if not url:
         return ChatReply(text=_t(QUOTE_ISSUED_NO_LINK, language).format(quote_id=code, sha=""))
     return ChatReply(
-        text=_t(REPORT_PDF_READY, language).format(code=code, url=url),
+        text=_t(REPORT_PDF_EXISTING if already else REPORT_PDF_READY, language).format(code=code, url=url),
         entity_type="service_report", entity_id=str(report.get("id") or ""),
         quick_replies=[("ออกรายงานใหม่", f"ออกรายงานใหม่ {code}")],
     )
@@ -10191,6 +10196,10 @@ APPROVAL_NEXT_SURVEY_SENT = {
     "th": "\nครบทุกขั้นแล้ว ส่งแบบประเมินความพึงพอใจให้ลูกค้าแล้ว",
     "en": "\nAll steps passed — the customer has been sent the survey.",
 }
+APPROVAL_NEXT_SURVEY_FAILED = {
+    "th": "\nครบทุกขั้นแล้ว — ส่งแบบประเมินให้ลูกค้าไม่สำเร็จ (LINE ไม่ตอบ) ระบบบันทึกไว้แล้ว ลองส่งใหม่ภายหลังได้",
+    "en": "\nAll steps passed — the survey could not be delivered (LINE did not answer). It is recorded and can be sent again later.",
+}
 APPROVAL_NEXT_SURVEY_NOT_SENT = {
     "th": "\nครบทุกขั้นแล้ว (ลูกค้าไม่มี LINE ที่ผูกไว้ จึงยังไม่ได้ส่งแบบประเมิน)",
     "en": "\nAll steps passed (the customer has no LINE on file, so no survey was sent).",
@@ -10428,7 +10437,11 @@ async def _handle_approval_act(
     if approve:
         status = result.get("report_status")
         if status == "approved":
-            tail = _t(APPROVAL_NEXT_SURVEY_SENT if result.get("survey_sent") else APPROVAL_NEXT_SURVEY_NOT_SENT, language)
+            tail = _t({
+                "sent": APPROVAL_NEXT_SURVEY_SENT,
+                "no_line": APPROVAL_NEXT_SURVEY_NOT_SENT,
+            }.get(str(result.get("survey_status") or ("sent" if result.get("survey_sent") else "no_line")),
+                  APPROVAL_NEXT_SURVEY_FAILED), language)
         elif result.get("next_approvers"):
             tail = _t(APPROVAL_NEXT_STEP, language).format(who=", ".join(result["next_approvers"]))
         else:
@@ -10443,9 +10456,18 @@ async def _handle_approval_act(
         text = _t(APPROVAL_REJECTED, language).format(
             code=report_code, reason=f": {reason}" if reason else "",
         )
+    # Still waiting on a step? Offer it. Owner, 16 ก.ย. 2569: a report
+    # whose next step named a role nobody holds sat at "submitted", so the
+    # customer never got the survey and the shop saw only a PDF button.
+    # The owner may approve any step (round 19f) — one tap should finish it.
+    buttons = [("รายการรออนุมัติ", "รายการรออนุมัติ")]
+    if approve and result.get("report_status") == "submitted":
+        buttons.insert(0, ("อนุมัติขั้นถัดไป", f"อนุมัติ {report_code}"))
+    elif approve and result.get("report_status") == "approved":
+        buttons.insert(0, ("ดูเอกสาร", f"ออกรายงาน {report_code}"))
     return ChatReply(
         text=text, entity_type="service_report", entity_id=str(report.get("id") or ""),
-        quick_replies=[("รายการรออนุมัติ", "รายการรออนุมัติ")],
+        quick_replies=buttons,
     )
 
 
@@ -21338,7 +21360,12 @@ async def _handle_report_detail(
         pass
     blank = _t(_NOT_SET, language)
     parts = str(data.get("parts_changed") or "")
-    quick = [("ออกรายงาน", f"ออกรายงาน {code}")] if str(report.get("status") or "") == "approved" else []
+    # Owner, 16 ก.ย. 2569: "ถ้าออกเอกสารแล้วเปลี่ยนเป็นคำว่าดูเอกสารแทน" —
+    # the same tap fetches the document either way, but the label should
+    # say which it is about to do.
+    quick = [
+        (("ดูเอกสาร" if report.get("generated_document_id") else "ออกเอกสาร"), f"ออกรายงาน {code}")
+    ] if str(report.get("status") or "") == "approved" else []
     if ctx.oa == "sales" and str(report.get("status") or "") in ("submitted", "pending"):
         quick = [("อนุมัติ", f"อนุมัติ {code}"), ("ไม่อนุมัติ", f"ไม่อนุมัติ {code}")]
     return ChatReply(

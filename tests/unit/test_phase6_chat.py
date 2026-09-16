@@ -173,9 +173,14 @@ class FakeDataClient:
     # flips the report and creates the survey row.
 
     def _approval_state(self):
+        # Each piece on its own: a scenario that seeds only the steps used to
+        # leave the workflow and the surveys unset, and the next call raised
+        # AttributeError (round 19j).
         if not hasattr(self, "_approval_steps"):
             self._approval_steps = []
+        if not hasattr(self, "_surveys"):
             self._surveys = []
+        if not hasattr(self, "_workflow"):
             self._workflow = {
                 "id": "wf-1", "entity_type": "service_report", "is_active": True,
                 "rules_json": {"version": 1, "entity_type": "service_report",

@@ -284,9 +284,11 @@ async def act(
         # got at this moment was the survey.
         await _notify_customer_of_approval(client, license_id, report, result["document_url"])
         if result.get("survey"):
-            result["survey_sent"] = await send_survey(
+            status_of_survey = await send_survey(
                 client, license_id=license_id, survey=result["survey"], language=language,
             )
+            result["survey_status"] = status_of_survey
+            result["survey_sent"] = status_of_survey == "sent"
     elif status == "submitted":
         # More steps: the next approver hears about it now — and the
         # reply can say who, or that nobody can (see _notify_current_approvers).
@@ -426,7 +428,7 @@ async def _notify_submitter(
 
 async def send_survey(
     client: DataClient, *, license_id: str, survey: dict, language: str = "th",
-) -> bool:
+) -> str:
     """Push the 1–3 quick-reply survey to the ticket's customer.
 
     Message actions, not postbacks: tapping sends the digit as text, which
@@ -441,10 +443,10 @@ async def send_survey(
         line_uid = await client.line_target_of(uid) if uid else None
     except Exception:
         log.exception("could not find the customer for survey %s", survey.get("id"))
-        return False
+        return "failed"
     if not line_uid:
         log.info("survey %s recorded but the customer has no LINE target", survey.get("id"))
-        return False
+        return "no_line"
     # The CUSTOMER's language, not the approver's (principle 7; review, 6 Sep 2026).
     try:
         prefs = await client.get_display_preferences(uid) or {}
@@ -464,13 +466,15 @@ async def send_survey(
     try:
         await push_messages("customer", line_uid, [message])
     except LineReplyError as exc:
+        # Round 19j: the shop used to read "the customer has no LINE" for
+        # this too, and concluded the survey is never sent at all.
         log.error("survey push failed for %s: %s", survey.get("id"), exc)
-        return False
+        return "failed"
     try:
         await client.mark_survey_sent(license_id, str(survey["id"]))
     except Exception:
         log.exception("could not mark survey %s as sent", survey.get("id"))
-    return True
+    return "sent"
 
 
 async def pending_survey_for_customer(
