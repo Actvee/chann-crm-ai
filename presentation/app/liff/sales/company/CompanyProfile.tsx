@@ -19,6 +19,7 @@ type Profile = {
   company_address: string | null;
   company_phone: string | null;
   company_email: string | null;
+  open_hours: string | null;
   vat_rate: string | null;
   is_document_ready: boolean;
   missing_for_documents: string[];
@@ -39,6 +40,7 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
       company_address: c.address,
       company_phone: c.phone,
       company_email: c.email,
+      open_hours: c.openHours,
       vat_rate: c.vat,
     })[field] ?? field;
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -51,6 +53,9 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
   const [address, setAddress] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
+  // Customers ask "ร้านเปิดกี่โมง" in chat and until now nothing in the
+  // system held an answer (tester, 16 ก.ย. 2569).
+  const [openHours, setOpenHours] = useState("");
   // Held as a string so an empty box stays distinguishable from a real 0:
   // "not VAT-registered" and "registered at 0%" are different states and
   // are stored differently (null vs 0).
@@ -92,6 +97,7 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
     setAddress(data.company_address ?? "");
     setPhone(data.company_phone ?? "");
     setEmail(data.company_email ?? "");
+    setOpenHours(data.open_hours ?? "");
     if (data.vat_rate === null || data.vat_rate === "") {
       setVatRegistered(false);
       setVatPercent("");
@@ -292,6 +298,7 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
           company_address: address.trim() || null,
           company_phone: phone.trim() || null,
           company_email: email.trim() || null,
+          open_hours: openHours.trim() || null,
           vat_rate_percent: vatRegistered && vatPercent !== "" ? Number(vatPercent) : null,
         }),
       });
@@ -438,6 +445,16 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
             value={email}
             onChange={(event) => setEmail(event.target.value)}
           />
+        </label>
+
+        <label className="field">
+          <span>{c.openHours}</span>
+          <input
+            value={openHours}
+            onChange={(event) => setOpenHours(event.target.value)}
+            placeholder={c.openHoursPlaceholder}
+          />
+          <span className="hint">{c.openHoursHint}</span>
         </label>
 
         <fieldset className="group">

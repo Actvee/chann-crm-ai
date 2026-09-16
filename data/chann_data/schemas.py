@@ -401,6 +401,7 @@ class CompanyProfileOut(BaseModel):
     company_address: str | None
     company_phone: str | None
     company_email: str | None
+    open_hours: str | None = None
     # Fraction, e.g. 0.07 for 7%. None = not VAT-registered (no VAT line at
     # all on the document), which is not the same as 0.
     vat_rate: Decimal | None
@@ -422,6 +423,7 @@ class CompanyProfileIn(BaseModel):
     company_address: str | None = None
     company_phone: str | None = None
     company_email: str | None = None
+    open_hours: str | None = None
     vat_rate: Decimal | None = None
 
 

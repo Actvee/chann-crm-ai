@@ -211,10 +211,18 @@ class WarrantyRepository:
                 f"serial {serial} is already claimed by another customer"
             )
         row.customer_chann_uid = customer_chann_uid
-        if warranty_start is not None and row.warranty_start is None:
-            # The customer knows when they bought it; the shop did not.
-            row.warranty_start = warranty_start
-            row.warranty_end = _end_of(warranty_start, self._months_for(scope, row.product_id, None))
+        if row.warranty_start is None:
+            # The customer knows when they bought it; the shop did not. And
+            # when nobody knows, the cover starts today rather than staying
+            # blank for ever — owner, 16 ก.ย. 2569: "การที่ลูกค้าลงทะเบียน
+            # สินค้าในช่อง OA ควรเริ่มวันรับประกันตั้งแต่ตอนที่ลงทะเบียนเลย
+            # ถ้าไม่มีวันที่". A register full of units with no start date
+            # is a register that cannot answer "ยังอยู่ในประกันไหม", which
+            # is the only question anyone asks it. The real purchase dates
+            # arrive later by CSV (round 19n), and those overwrite this.
+            began = warranty_start or bangkok_today()
+            row.warranty_start = began
+            row.warranty_end = _end_of(began, self._months_for(scope, row.product_id, None))
         self._s.flush()
         return row
 

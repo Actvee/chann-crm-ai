@@ -757,7 +757,7 @@ class CompanyProfileRepository:
 
         allowed = {
             "legal_name", "tax_id", "company_address",
-            "company_phone", "company_email", "vat_rate",
+            "company_phone", "company_email", "vat_rate", "open_hours",
         }
         for key, value in fields.items():
             if key not in allowed:

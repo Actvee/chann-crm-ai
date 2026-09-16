@@ -3286,6 +3286,7 @@ def _company_profile_out(row) -> CompanyProfileOut:
         company_address=row.company_address,
         company_phone=row.company_phone,
         company_email=row.company_email,
+        open_hours=row.open_hours,
         vat_rate=row.vat_rate,
         is_document_ready=not missing,
         missing_for_documents=missing,
@@ -3321,7 +3322,7 @@ def patch_company_profile(
             raise HTTPException(status_code=404, detail="license not found")
         tracked = (
             "legal_name", "tax_id", "company_address",
-            "company_phone", "company_email", "vat_rate",
+            "company_phone", "company_email", "vat_rate", "open_hours",
         )
         before = {f: getattr(existing, f) for f in tracked}
         row = repo.update(scope, payload.model_dump(exclude_unset=True))

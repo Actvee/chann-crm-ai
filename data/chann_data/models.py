@@ -177,6 +177,13 @@ class License(TimestampMixin, Base):
     company_address: Mapped[str | None] = mapped_column(Text)
     company_phone: Mapped[str | None] = mapped_column(String(32))
     company_email: Mapped[str | None] = mapped_column(String(255))
+    # When the shop is open, in the shop's own words ("จ-ส 9:00-18:00",
+    # "ทุกวัน 8 โมง-2 ทุ่ม"). Free text, not a schedule: a customer asking
+    # "ร้านเปิดกี่โมง" wants the sentence the shop would say, and the
+    # system has no business refusing to answer because the hours do not
+    # fit a grid (tester, 16 ก.ย. 2569 — the question had no answer at all
+    # because nowhere in the system held one).
+    open_hours: Mapped[str | None] = mapped_column(String(120))
     # Stored as a fraction (0.0700 = 7%). NULL means "this tenant is not
     # VAT-registered" — a different state from 0%, and one where the document
     # should carry no VAT line at all rather than a zero one. Per-tenant

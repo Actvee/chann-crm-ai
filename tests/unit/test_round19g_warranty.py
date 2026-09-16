@@ -92,8 +92,15 @@ class TestTheCustomerClaimsWithTheDate:
         assert claimed is not None and claimed[2].get("warranty_start") == "2026-09-01", (reply.text, calls)
         assert "2570" in reply.text, reply.text
 
-    async def test_claiming_a_unit_without_a_date_says_so(self):
+    async def test_claiming_a_unit_without_a_date_starts_the_cover_today(self):
+        # Round 19g left the start empty and said so. Owner, 16 ก.ย. 2569:
+        # "ควรเริ่มวันรับประกันตั้งแต่ตอนที่ลงทะเบียนเลยถ้าไม่มีวันที่" — a
+        # register full of units with no start cannot answer the only
+        # question anyone asks it (round 19n).
+        from chann_app.services.thai_datetime import local_today
+
         client = FakeDataClient(permission_keys=["warranty.read", "warranty.create", "ticket.read", "ticket.create"])
         client._warranties = [{"id": "w-1", "warranty_number": "W-2026-0001", "serial_number": "SN12345", "product_name": "แอร์", "status": "active", "warranty_start": None, "warranty_end": None, "customer_chann_uid": None}]
         reply, _ = await _say(client, "ลงทะเบียนสินค้า SN12345", {"action": "create", "entity": "warranty", "fields": {"serial_number": "SN12345"}, "missing": []}, ctx=_ctx(**CUSTOMER))
-        assert "ยังไม่ระบุวันที่ซื้อ" in reply.text, reply.text
+        assert client._warranties[0]["warranty_start"] == local_today().isoformat()
+        assert "เริ่มนับประกันตั้งแต่วันนี้" in reply.text, reply.text

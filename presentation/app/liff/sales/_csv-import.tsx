@@ -13,7 +13,12 @@ type ImportResult = {
   total: number;
   saved: number;
   failed: number;
-  rows: { row: number; key: string; status: "saved" | "error"; message: string }[];
+  // "updated" and "skipped" joined "saved"/"error" when a warranty file
+  // became a way to fill in purchase dates for units already on file
+  // (round 19n).
+  updated?: number;
+  skipped?: number;
+  rows: { row: number; key: string; status: "saved" | "updated" | "skipped" | "error"; message: string }[];
 };
 
 /** A small CSV reader for the sample preview — quoted fields, commas. */
@@ -268,6 +273,7 @@ export function CsvImport({
               .replace("{saved}", String(result.saved))
               .replace("{failed}", String(result.failed))
               .replace("{total}", String(result.total))}
+            {result.updated ? ` · ${copy.updated.replace("{updated}", String(result.updated))}` : ""}
           </p>
           {result.failed > 0 && (
             <div className="tablewrap" style={{ overflowX: "auto" }}>

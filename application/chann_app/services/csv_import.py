@@ -126,22 +126,75 @@ async def import_products(client: DataClient, *, license_id: str, text: str, act
     return {"kind": "products", "total": len(rows), "saved": saved, "failed": len(rows) - saved, "rows": results}
 
 
+async def _registered_already(client: DataClient, license_id: str, serial: str) -> dict | None:
+    """The unit with exactly this serial, or None. Exact, not a search:
+    the lookup is by serial and a near-match would back-fill the purchase
+    date of somebody else's machine."""
+    try:
+        rows = await client.list_warranties(license_id, serial_number=serial)
+    except DataTierError:
+        return None
+    return next(
+        (r for r in rows or [] if str(r.get("serial_number") or "").upper() == serial
+         and str(r.get("status") or "") != "void"),
+        None,
+    )
+
+
 async def import_warranties(client: DataClient, *, license_id: str, text: str, actor_id: str) -> dict:
+    """Register sold units — and fill in the purchase date of ones already
+    registered.
+
+    Owner, 16 ก.ย. 2569: "ใน Sale OA ต้องรองรับการอัพโหลดไฟ csv เข้ามาเพื่อ
+    อัปเดตวันที่ซื้อกับทะเบียนสินค้าเก่าๆด้วยและคำนวณวันหมดสิ้นสุดมาเลยตาม
+    แต่ละสินค้า". Since round 19g a unit may be registered with no purchase
+    date at all, so a shop ends up with a register full of units whose
+    warranty has no start; the spreadsheet they already keep is how the
+    dates arrive. A row whose serial is already on file used to come back
+    "duplicate serial" and change nothing.
+
+    The end date is never in the file: the Data Tier computes it from the
+    start and the product's own warranty period (0030), so one shop-wide
+    rule decides it rather than whatever was typed in a column.
+    """
     rows = _rows(text, WARRANTY_COLUMNS, ("serial_number",))
     results = []
     saved = 0
+    updated = 0
     for item in rows:
         serial = (item.get("serial_number") or "").upper()
         try:
             if not serial:
                 raise ValueError("serial_number is required")
             months = item.get("warranty_months") or ""
+            start = _iso_date(item.get("warranty_start") or "")
+            period = int(float(months)) if months else None
+            existing = await _registered_already(client, license_id, serial)
+            if existing is not None:
+                if not start:
+                    # Nothing to add: the row names a unit already on file
+                    # and carries no date. Said as its own verdict, not as
+                    # an error — the shop re-uploading last month's file
+                    # has done nothing wrong.
+                    results.append({
+                        "row": item["_row"], "key": serial, "status": "skipped",
+                        "message": "already registered",
+                    })
+                    continue
+                await client.update_warranty(
+                    license_id, str(existing.get("id") or ""),
+                    {"warranty_start": start, "warranty_months": period},
+                    actor_id=actor_id,
+                )
+                updated += 1
+                results.append({"row": item["_row"], "key": serial, "status": "updated", "message": ""})
+                continue
             payload = {
                 "serial_number": serial,
                 "product_id": item.get("product_id") or None,
                 "product_name": item.get("product_name") or None,
-                "warranty_start": _iso_date(item.get("warranty_start") or ""),
-                "warranty_months": int(float(months)) if months else None,
+                "warranty_start": start,
+                "warranty_months": period,
             }
             await client.register_warranty(license_id, payload, actor_id=actor_id)
             saved += 1
@@ -151,7 +204,12 @@ async def import_warranties(client: DataClient, *, license_id: str, text: str, a
             results.append({"row": item["_row"], "key": serial, "status": "error", "message": message})
         except (ValueError, KeyError) as exc:
             results.append({"row": item["_row"], "key": serial, "status": "error", "message": str(exc)[:200]})
-    return {"kind": "warranties", "total": len(rows), "saved": saved, "failed": len(rows) - saved, "rows": results}
+    failed = len([r for r in results if r["status"] == "error"])
+    return {
+        "kind": "warranties", "total": len(rows), "saved": saved, "updated": updated,
+        "skipped": len([r for r in results if r["status"] == "skipped"]),
+        "failed": failed, "rows": results,
+    }
 
 
 # ------------------------------------------------ customers (user review, 4 Sep 2026)

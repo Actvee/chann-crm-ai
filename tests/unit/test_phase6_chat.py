@@ -117,6 +117,10 @@ class FakeDataClient:
             "company_address": None,
             "company_phone": None,
             "company_email": None,
+            # The real CompanyProfileOut has carried it since 0032; a fake
+            # without it would let a handler read None where production
+            # reads the shop's hours.
+            "open_hours": None,
             "vat_rate": None,
         }
         self._chat_sessions: list[dict] = []
@@ -537,7 +541,16 @@ class FakeDataClient:
                 if w.get("warranty_start"):
                     from datetime import date as _date
                     y, m, d = (int(x) for x in str(w["warranty_start"])[:10].split("-"))
-                    total = m - 1 + int(fields.get("warranty_months") or 12)
+                    # The real tier takes the period from the product when
+                    # the caller names none (0030); a fake that always used
+                    # 12 would hide a back-fill computing the wrong end for
+                    # a 24-month product (round 19n).
+                    product = next(
+                        (p for p in getattr(self, "_products", [])
+                         if str(p.get("id")) == str(w.get("product_id"))), None,
+                    )
+                    months = fields.get("warranty_months") or (product or {}).get("warranty_months") or 12
+                    total = m - 1 + int(months)
                     w["warranty_end"] = _date(y + total // 12, total % 12 + 1, min(d, 28)).isoformat()
                 return dict(w)
         from chann_app.data_client import DataTierError
@@ -555,11 +568,21 @@ class FakeDataClient:
                 if owner and owner != payload.get("customer_chann_uid"):
                     raise DataTierError(409, "serial already claimed by another customer")
                 w["customer_chann_uid"] = payload.get("customer_chann_uid")
-                if payload.get("warranty_start") and not w.get("warranty_start"):
-                    w["warranty_start"] = payload["warranty_start"]
+                if not w.get("warranty_start"):
+                    # Round 19n: the cover starts the day it is registered
+                    # when nobody said when it was bought, and the period
+                    # comes from the product (0030). A fake that left the
+                    # start empty would hide both.
                     from datetime import date as _date
+
+                    from chann_app.services.thai_datetime import local_today
+                    w["warranty_start"] = payload.get("warranty_start") or local_today().isoformat()
+                    product = next(
+                        (p for p in getattr(self, "_products", [])
+                         if str(p.get("id")) == str(w.get("product_id"))), None,
+                    )
                     y, m, d = (int(x) for x in str(w["warranty_start"])[:10].split("-"))
-                    total = m - 1 + 12
+                    total = m - 1 + int((product or {}).get("warranty_months") or 12)
                     w["warranty_end"] = _date(y + total // 12, total % 12 + 1, min(d, 28)).isoformat()
                 return dict(w)
         raise DataTierError(404, "serial is not registered at this shop")

@@ -552,6 +552,7 @@ class CompanyProfileWriteIn(BaseModel):
     company_address: str | None = None
     company_phone: str | None = None
     company_email: str | None = None
+    open_hours: str | None = None
     vat_rate_percent: Decimal | None = Field(default=None, ge=0, le=100)
 
 

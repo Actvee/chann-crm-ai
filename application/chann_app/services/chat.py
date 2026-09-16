@@ -505,6 +505,7 @@ COMPANY_FIELD_TRIGGERS: list[tuple[tuple[str, ...], str]] = [
     (("ตั้งชื่อนิติบุคคล", "ชื่อนิติบุคคล", "legal name"), "legal_name"),
     (("ตั้งอีเมลบริษัท", "อีเมลบริษัท", "company email"), "company_email"),
     (("ตั้งเบอร์บริษัท", "เบอร์บริษัท", "โทรบริษัท", "company phone"), "company_phone"),
+    (("ตั้งเวลาทำการ", "เวลาทำการ", "เวลาเปิดร้าน", "ร้านเปิดปิด", "opening hours", "open hours"), "open_hours"),
     (("ตั้งภาษีมูลค่าเพิ่ม", "ภาษีมูลค่าเพิ่ม", "ตั้งแวต", "vat"), "vat_rate"),
 ]
 
@@ -521,6 +522,7 @@ COMPANY_PROFILE_LABELS = {
     "company_address": {"th": "ที่อยู่บริษัท", "en": "Company address"},
     "company_phone": {"th": "เบอร์โทรบริษัท", "en": "Company phone"},
     "company_email": {"th": "อีเมลบริษัท", "en": "Company email"},
+    "open_hours": {"th": "เวลาทำการ", "en": "Opening hours"},
     "vat_rate": {"th": "ภาษีมูลค่าเพิ่ม", "en": "VAT rate"},
 }
 
@@ -3599,19 +3601,34 @@ SERIAL_CLAIMED_BY_OTHER = {
 }
 
 
+WARRANTY_STARTED_TODAY = {
+    "th": "\n(เริ่มนับประกันตั้งแต่วันนี้ เพราะยังไม่มีวันที่ซื้อในระบบ — "
+          "ถ้าซื้อมาก่อนหน้านี้ พิมพ์เช่น \"{serial} ซื้อเมื่อ 1/1/2569\" ได้เลยครับ)",
+    "en": "\n(The cover is counted from today, because no purchase date was on file — "
+          "if you bought it earlier, say e.g. \"{serial} bought on 1/1/2026\".)",
+}
+
+
 async def _claim_for_customer(
     client: DataClient, *, ctx: ResolvedContext, license_id: str, serial: str,
     language: str, warranty_start: str | None = None,
 ) -> ChatReply:
     outcome, row = await _claim_serial(client, ctx, license_id, serial, warranty_start=warranty_start)
     if outcome == "ok":
+        text = _t(WARRANTY_CLAIMED, language).format(
+            product=row.get("product_name") or ("เครื่อง" if language != "en" else "Unit"),
+            serial=serial, number=(row.get("warranty_number") or "-"),
+            end=_iso_to_thai_date(row.get("warranty_end")) if row.get("warranty_end")
+            else ("ยังไม่ระบุวันที่ซื้อ" if language != "en" else "no purchase date yet"),
+        )
+        # The cover now starts the day it is registered when nobody said
+        # otherwise (round 19n). Said out loud, with the way to correct it —
+        # a customer who bought it last year must not find that out from an
+        # expiry date that is twelve months too late.
+        if not warranty_start and str(row.get("warranty_start") or "") == local_today().isoformat():
+            text += _t(WARRANTY_STARTED_TODAY, language).format(serial=serial)
         return ChatReply(
-            text=_t(WARRANTY_CLAIMED, language).format(
-                product=row.get("product_name") or ("เครื่อง" if language != "en" else "Unit"),
-                serial=serial, number=(row.get("warranty_number") or "-"),
-                end=_iso_to_thai_date(row.get("warranty_end")) if row.get("warranty_end")
-                else ("ยังไม่ระบุวันที่ซื้อ" if language != "en" else "no purchase date yet"),
-            ),
+            text=text,
             entity_type="warranty", entity_id=str(row.get("id") or ""),
             quick_replies=[("แจ้งซ่อม", "แจ้งซ่อม"), ("ประกันของฉัน", "ประกันของฉัน")],
         )
@@ -4057,10 +4074,40 @@ CUSTOMER_CONTACT_FORWARDED = {
     "th": "พิมพ์เรื่องที่ต้องการติดต่อมาได้เลยครับ ทางร้านจะเห็นข้อความนี้และติดต่อกลับ",
     "en": "Type what you need — the shop will see it and get back to you.",
 }
+CUSTOMER_CONTACT_NOTHING_ON_FILE = {
+    "th": "ทางร้านยังไม่ได้ลงเวลาทำการ ที่อยู่ หรือเบอร์ไว้ในระบบครับ — "
+          "พิมพ์เรื่องที่ต้องการติดต่อมาได้เลย ทางร้านจะเห็นข้อความนี้และติดต่อกลับ",
+    "en": "The shop has not put its hours, address or phone on file yet — "
+          "type what you need and the shop will see it and get back to you.",
+}
+#: Which single detail the question was about, so a card that answers it
+#: does not also recite what the shop has not filled in. "ร้านอยู่ที่ไหน"
+#: with an address on file is answered and nothing more (round 18d fixed
+#: that card; round 19m must not undo it).
+_SHOP_DETAIL_WORDS = (
+    ("open_hours", ("เปิดกี่โมง", "ปิดกี่โมง", "เวลาเปิด", "เวลาปิด", "เวลาทำการ", "เปิดวัน", "ร้านเปิด", "ร้านปิด",
+                    "opening hours", "open hours", "what time")),
+    ("company_phone", ("เบอร์", "โทร", "phone", "contact number")),
+    ("company_email", ("อีเมล", "เมล", "email")),
+    ("company_address", ("อยู่ไหน", "ที่อยู่", "ที่ตั้ง", "แผนที่", "address", "location", "where is")),
+)
+
+
+def _shop_detail_asked(text: str) -> str | None:
+    canon = _canonical(text).replace(" ", "")
+    for field, words in _SHOP_DETAIL_WORDS:
+        if any(w.replace(" ", "") in canon for w in words):
+            return field
+    return None
+CUSTOMER_CONTACT_BLANKS = {
+    "th": "\n(ยังไม่ได้ลงไว้: {fields} — ถามมาได้เลย ทางร้านจะตอบให้)",
+    "en": "\n(Not on file yet: {fields} — ask and the shop will answer.)",
+}
 
 
 async def _handle_customer_contact(
     client: DataClient, *, license_id, language: str, ctx: ResolvedContext | None = None,
+    asked: str = "",
 ) -> ChatReply:
     """The "ติดต่อร้าน" rich-menu tile. It used to fall into the fault-report
     catch-all and file a repair job whose fault was literally "ติดต่อร้าน".
@@ -4076,15 +4123,23 @@ async def _handle_customer_contact(
         profile = None
     profile = profile or {}
     company = str(profile.get("company_name") or "").strip()
-    lines = [
-        f"· {label} {value}"
-        for label, value in (
-            ("โทร" if language == "th" else "Tel", profile.get("company_phone") or profile.get("phone")),
-            ("อีเมล" if language == "th" else "Email", profile.get("company_email") or profile.get("email")),
-            ("ที่อยู่" if language == "th" else "Address", profile.get("company_address")),
-        )
-        if value
-    ]
+    known = (
+        ("open_hours", "เวลาทำการ" if language == "th" else "Hours", profile.get("open_hours")),
+        ("company_phone", "โทร" if language == "th" else "Tel",
+         profile.get("company_phone") or profile.get("phone")),
+        ("company_email", "อีเมล" if language == "th" else "Email",
+         profile.get("company_email") or profile.get("email")),
+        ("company_address", "ที่อยู่" if language == "th" else "Address", profile.get("company_address")),
+    )
+    lines = [f"· {label} {value}" for _f, label, value in known if value]
+    # What the shop has NOT filled in, said out loud. Tester, 16 ก.ย. 2569:
+    # three questions in a row ("ร้านเปิดกี่โมง", "ร้านอยู่ที่ไหน", "เบอร์
+    # ร้าน") were each answered "พิมพ์เรื่องที่ต้องการติดต่อมาได้เลย", which
+    # reads as a bot that will not answer rather than a shop that has not
+    # said. Naming the gap also tells the shop what to fill in, because the
+    # same line goes to them with the message.
+    wanted = _shop_detail_asked(asked)
+    blanks = [label for field, label, value in known if not value and field == wanted]
     if ctx is not None:
         try:
             await client.set_pending_intent(
@@ -4095,11 +4150,14 @@ async def _handle_customer_contact(
             log.exception("could not remember the contact prompt")
     quick = [("คุยกับร้าน", "คุยกับร้าน"), ("แจ้งซ่อม", "แจ้งซ่อม"), ("งานของฉัน", "งานของฉัน")]
     if not company or not lines:
-        return ChatReply(text=_t(CUSTOMER_CONTACT_FORWARDED, language), quick_replies=quick)
-    return ChatReply(
-        text=_t(CUSTOMER_CONTACT_INFO, language).format(company=company, lines="\n".join(lines)),
-        quick_replies=quick,
-    )
+        return ChatReply(
+            text=_t(CUSTOMER_CONTACT_NOTHING_ON_FILE, language) if company else _t(CUSTOMER_CONTACT_FORWARDED, language),
+            quick_replies=quick,
+        )
+    text = _t(CUSTOMER_CONTACT_INFO, language).format(company=company, lines="\n".join(lines))
+    if blanks:
+        text += _t(CUSTOMER_CONTACT_BLANKS, language).format(fields=", ".join(blanks))
+    return ChatReply(text=text, quick_replies=quick)
 
 
 CUSTOMER_CONTACT_TTL_S = 600
@@ -4304,6 +4362,29 @@ CUSTOMER_CHAT_PHRASES = (
 CUSTOMER_CHAT_END_PHRASES = (
     "จบการสนทนา", "จบแชท", "ปิดแชท", "ปิดการสนทนา", "end chat", "close chat",
 )
+# The same thing said the way people say it. Tester, 16 ก.ย. 2569: typing
+# "จบการพูดคุย" was RELAYED TO THE SHOP as a chat line, and only the exact
+# "จบการสนทนา" got out — the one door out of the conversation accepted one
+# spelling. During a live chat nothing reaches the model (every line is
+# relayed by design), so the way out cannot be a reading; it is these words.
+_CHAT_END_RE = re.compile(
+    r"^(?:ขอ)?(?:จบ|ปิด|เลิก|หยุด|พอ)\s*(?:การ)?\s*(?:สนทนา|พูดคุย|คุย|แชท|แค่นี้|เท่านี้)"
+    r"|^(?:end|close|stop|finish)\s*(?:the\s*)?(?:chat|conversation|talk)",
+    re.I,
+)
+
+
+def _ends_the_conversation(message: str) -> bool:
+    text = (message or "").strip()
+    if _matches_phrase(text, CUSTOMER_CHAT_END_PHRASES):
+        return True
+    # Politeness at either end is not part of the instruction: "ขอจบการ
+    # พูดคุยนะครับ", "พอแค่นี้ครับ ขอบคุณมาก".
+    text = re.sub(r"^(?:ขอบคุณ\S*|ครับ|ค่ะ|คะ|นะ|แล้ว)\s*", "", text)
+    text = re.sub(r"(?:นะ)?(?:ครับ|ค่ะ|คะ|จ้า|ฮะ|นะ)\s*$", "", text).strip()
+    return bool(_CHAT_END_RE.match(text))
+
+
 CHAT_MENU_PAUSED = {
     "th": "ส่งข้อความให้ร้านแล้วครับ — ระหว่างคุยกับร้าน เมนูอื่นจะยังไม่ทำงาน\nพิมพ์ \"จบการสนทนา\" เมื่อคุยเสร็จ แล้วใช้เมนูได้ตามปกติ",
     "en": "Sent to the shop. While the conversation is open the other menus stay out of the way — type \"end chat\" when you are done.",
@@ -5043,6 +5124,23 @@ _SAME_ADDRESS_PHRASES = (
 _SPEC_WORDS = ("btu",)
 
 
+#: How the money works, as opposed to what a product costs: when to pay,
+#: how to pay, whether it is free. Tester, 16 ก.ย. 2569: "มาซ่อมต้องจ่ายเงิน
+#: ก่อนไหม" opened a repair job named after the question, because "มาซ่อม"
+#: reads as a request for a visit and nothing weighed the rest of the
+#: sentence. Kept apart from _PRICE_WORDS, which points at the storefront —
+#: a question about paying is for the shop to answer, not the catalogue.
+_PAYMENT_WORDS = (
+    "จ่ายเงิน", "จ่ายก่อน", "จ่ายทีหลัง", "จ่ายยังไง", "มัดจำ", "เก็บเงิน", "เสียเงิน", "ฟรีไหม", "ฟรีหรือเปล่า",
+    "คิดค่า", "โอนเงิน", "เงินสด", "บัตรเครดิต", "pay first", "pay later", "deposit", "free of charge",
+)
+
+
+def _asks_about_paying(text: str) -> bool:
+    lowered = _canonical(text)
+    return any(w in lowered for w in _PAYMENT_WORDS)
+
+
 def _asks_price(text: str) -> bool:
     """"ราคาล้างแอร์", "สอบถามค่าบริการล้างแอร์": a question about money,
     which opened a repair job named after it (review, 6 Sep 2026)."""
@@ -5623,6 +5721,39 @@ LOCATION_NOTED = {
     "th": "ได้รับตำแหน่งแล้วครับ ตอนนี้ระบบใช้ตำแหน่งสำหรับการเช็คอินของช่างเท่านั้น",
     "en": "Location received. Right now locations are used for technician check-ins only.",
 }
+LOCATION_SHORT_LINK = {
+    "th": "ลิงก์แบบย่อยังอ่านพิกัดไม่ได้ครับ — แชร์ตำแหน่งผ่านปุ่ม \"ตำแหน่ง\" ของ LINE "
+          "หรือส่งลิงก์แบบเต็มที่มีตัวเลข เช่น https://maps.google.com/?q=13.7563,100.5018",
+    "en": "A shortened link carries no coordinates — share the location with LINE's location button, "
+          "or send the full link with numbers in it (e.g. https://maps.google.com/?q=13.7563,100.5018).",
+}
+# A pasted map link, in the shapes Google actually produces. !3d/!4d is the
+# PLACE the pin is on; @lat,lng is where the map happens to be centred, so
+# the place wins when both are present. Tester, 16 ก.ย. 2569: "ยังไม่สามารถ
+# ส่งลิงค์ maps แล้วบันทึกพิกัดได้" — only LINE's own location message
+# counted, and a technician on site pastes a link.
+_MAPS_PLACE_RE = re.compile(r"!3d(-?\d{1,2}\.\d+)!4d(-?\d{1,3}\.\d+)")
+_MAPS_PAIR_RE = re.compile(r"(?:[@=]|\bll=|\bq=|^|\s)(-?\d{1,2}\.\d{3,}),\s?(-?\d{1,3}\.\d{3,})")
+_SHORT_MAP_LINK_RE = re.compile(r"(?:maps\.app\.goo\.gl|goo\.gl/maps|g\.co/kgs)/", re.I)
+
+
+def _coordinates_in(text: str) -> tuple[float, float] | None:
+    """(lat, lng) from a pasted map link or a typed pair, or None."""
+    for pattern in (_MAPS_PLACE_RE, _MAPS_PAIR_RE):
+        found = pattern.search(text or "")
+        if not found:
+            continue
+        try:
+            lat, lng = float(found.group(1)), float(found.group(2))
+        except (TypeError, ValueError):
+            continue
+        if -90 <= lat <= 90 and -180 <= lng <= 180 and (lat or lng):
+            return lat, lng
+    return None
+
+
+def _is_a_short_map_link(text: str) -> bool:
+    return bool(_SHORT_MAP_LINK_RE.search(text or "")) and _coordinates_in(text) is None
 
 
 async def handle_incoming_location(
@@ -6329,7 +6460,9 @@ async def _customer_model_road(
                 first_message=(message or "").strip() if _is_complaint(message) else "", language=language,
             )
         if action in READ_ACTIONS:
-            return await _handle_customer_contact(client, license_id=license_id, language=language, ctx=ctx)
+            return await _handle_customer_contact(
+                client, license_id=license_id, language=language, ctx=ctx, asked=message,
+            )
         return None
     if entity in ("product", "quote", "deal") and action in READ_ACTIONS:
         browsed = await maybe_handle_storefront(client, message=message, ctx=ctx, language=language)
@@ -6906,7 +7039,10 @@ async def _handle_customer_report(
     # that was not a command became a ticket. Someone asking about their
     # job gets their job; someone asking something the bot cannot answer
     # gets told the shop will, rather than a new ticket they never wanted.
-    if not forced_fault and (_asks_price(text) or (_strongly_address(text) and not _looks_like_fault(text))):
+    if not forced_fault and (
+        _asks_price(text) or _asks_about_paying(text)
+        or (_strongly_address(text) and not _looks_like_fault(text))
+    ):
         # A price question, or a bare address with no job waiting for one:
         # neither is a fault (review, 6 Sep 2026 — "ราคาล้างแอร์" and
         # "99/1 ถ.สุขุมวิท แขวงคลองตัน" both opened repair jobs).
@@ -18858,7 +18994,7 @@ async def _profile_form_answer(
     if _is_only_abort_words(text):
         await _drop_pending_quietly(client, ctx)
         return ChatReply(text=_t(SLOT_FILL_CANCELLED, language))
-    if _chat_start_text(text) is not None or _matches_phrase(text, CUSTOMER_CHAT_END_PHRASES):
+    if _chat_start_text(text) is not None or _ends_the_conversation(text):
         # Opening or ending the conversation with the shop: that is about the
         # conversation, not about this form, and the form waits.
         return None
@@ -20810,6 +20946,22 @@ STOREFRONT_RESULTS_HEADER = {
     "th": "พบสินค้าดังนี้ พิมพ์หมายเลขเพื่อสนใจสินค้านั้น:",
     "en": "Found these products — type the number to express interest:",
 }
+#: Reaching for one of the options without giving its number ("เอาอันแรก",
+#: "ตัวที่สอง"). Only these keep the list open on a non-number; everything
+#: else drops it, because a customer who has moved on must not be asked for
+#: a number again (tester, 16 ก.ย. 2569).
+_PICK_ONE_WORDS = (
+    "อันแรก", "ตัวแรก", "ชิ้นแรก", "รายการแรก", "อันสุดท้าย", "ตัวสุดท้าย", "อันที่", "ตัวที่", "ข้อที่",
+    "รายการที่", "เอาอัน", "เอาตัว", "สนใจอัน", "สนใจตัว", "first one", "last one", "the first", "the second",
+)
+
+
+def _tries_to_pick_one(text: str) -> bool:
+    """Is this sentence reaching for one of the numbered options?"""
+    canon = _canonical(text)
+    return bool(re.search(r"\d", text or "")) or any(w in canon for w in _PICK_ONE_WORDS)
+
+
 STOREFRONT_INVALID_SELECTION = {
     "th": "กรุณาพิมพ์หมายเลข 1-{n} จากรายการที่แนะนำ",
     "en": "Please type a number from 1 to {n} from the list shown",
@@ -20920,15 +21072,14 @@ async def maybe_handle_storefront(
     if pending is not None and pending.get("entity") == "storefront":
         options = pending.get("fields", {}).get("options") or []
         text = (message or "").strip()
-        if not text.isdigit() and (
-            _is_customer_command(text) or _looks_like_fault(text) or _looks_like_service_request(text)
-            or _looks_like_a_question(text) or _is_only_a_greeting(text) or len(text) > 30
-        ):
-            # Not a pick: the person moved on ("แจ้งซ่อม", "วิธีใช้", a
-            # fault, a question). The list is dropped and the message is
-            # whatever it is — it used to answer "กรุณาพิมพ์หมายเลข" to
-            # everything for five minutes (review, 6 Sep 2026). A short
-            # "เอาอันแรก" is still a pick that needs its number.
+        if not text.isdigit() and not _tries_to_pick_one(text):
+            # Not an attempt to pick: the person moved on, or walked away
+            # ("ไว้จะแจ้งอีกทีนะครับ", "เดี๋ยวแจ้งใหม่ครับ" — tester,
+            # 16 ก.ย. 2569, answered "กรุณาพิมพ์หมายเลข 1-6" twice in a
+            # row). The list is dropped and the message is whatever it is.
+            # Insisting is reserved for a sentence that IS reaching for one
+            # of the options, which is the only case where the number is
+            # what is missing.
             await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
             return None
         if not text.isdigit() or not (1 <= int(text) <= len(options)):
@@ -21954,6 +22105,22 @@ async def _route_chat_message(
     member = ctx.memberships[0]
     early_intent: dict | None = None   # the sales OA's first reading, see below
 
+    # A map link IS a location message, whatever LINE calls it. The
+    # technician standing in the customer's soi pastes the pin they already
+    # have open rather than hunting for LINE's location button, and the
+    # check-in that follows is the same one with the same coordinates
+    # (tester, 16 ก.ย. 2569).
+    if ctx.oa == "technician":
+        here = _coordinates_in(message)
+        if here is not None:
+            _note_road(road="location_link")
+            return await handle_incoming_location(
+                client, ctx=ctx, oa=ctx.oa, latitude=here[0], longitude=here[1], language=language,
+            )
+        if _is_a_short_map_link(message):
+            _note_road(road="location_link")
+            return ChatReply(text=_t(LOCATION_SHORT_LINK, language))
+
     # Phase 16.5 — PDPA rights come before help and before any intent: a
     # person asking for their data, or to be forgotten, is not asking for
     # a permission list. Every OA, every role.
@@ -22030,8 +22197,8 @@ async def _route_chat_message(
         # by its code is an instruction about that job, not chat.
         # "คุยกับร้าน ราคาแอร์…" carries its first line with it, so the
         # phrase is matched the way the opener matches it, not exactly.
-        if _chat_start_text(message) is None and not _matches_phrase(
-            message, CUSTOMER_CHAT_END_PHRASES + CUSTOMER_REPORT_BARE,
+        if _chat_start_text(message) is None and not _ends_the_conversation(message) and not _matches_phrase(
+            message, CUSTOMER_REPORT_BARE,
         ) and not TICKET_CODE_RE.search(message or "") \
                 and not await _customer_report_waiting(client, ctx, message):
             try:
@@ -23017,7 +23184,7 @@ async def _route_chat_message(
             _asks_shop_contact(message) and not _looks_like_fault(message) and not _is_reschedule_request(message)
         ):
             return await _handle_customer_contact(
-                client, license_id=license_id, language=language, ctx=ctx,
+                client, license_id=license_id, language=language, ctx=ctx, asked=message,
             )
         if _matches_phrase(message, CUSTOMER_WARRANTY_MINE_PHRASES) or _matches_phrase(message, tuple(CUSTOMER_WARRANTY_MINE_WORDS)):
             return await _handle_warranty_mine(
@@ -23048,7 +23215,7 @@ async def _route_chat_message(
             return await _handle_customer_chat_start(
                 client, ctx=ctx, license_id=license_id, first_message=chat_first, language=language,
             )
-        if _matches_phrase(message, CUSTOMER_CHAT_END_PHRASES):
+        if _ends_the_conversation(message):
             return await _handle_customer_chat_end(
                 client, ctx=ctx, license_id=license_id, language=language,
             )
