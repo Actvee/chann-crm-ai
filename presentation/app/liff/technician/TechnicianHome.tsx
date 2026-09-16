@@ -59,6 +59,8 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
   const [reportsFailed, setReportsFailed] = useState(false);
   const [shopName, setShopName] = useState("");
   const [shops, setShops] = useState<Membership[]>([]);
+  // Round 19n: several shops and no stored choice → ask, load nothing.
+  const [mustChooseShop, setMustChooseShop] = useState(false);
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
   const [busyId, setBusyId] = useState("");
@@ -133,18 +135,26 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
       }
       const session = await initLiffSession(liffId, "technician");
       if (!session.token) return;
-      const license = session.memberships[0]?.license_id ?? "";
+      const license = session.activeLicenseId || (session.memberships[0]?.license_id ?? "");
       setToken(session.token);
       bindSession({ token: session.token, audience: "technician" });
-      setLicenseId(license);
       if (!session.memberships.length) {
         say(t.liff.noCompany, "error");
         return;
       }
-      const member = session.memberships[0]?.member_id ?? "";
-      setMemberId(member);
-      setShopName(session.memberships[0]?.company_name ?? "");
       setShops(session.memberships);
+      if (session.memberships.length > 1 && !session.activeLicenseId) {
+        // A technician of two shops used to get whichever shop came first
+        // in the list, with that shop's jobs (round 19n).
+        setMustChooseShop(true);
+        say(t.liff.chooseShop, undefined);
+        return;
+      }
+      setLicenseId(license);
+      const chosen = session.memberships.find((m) => m.license_id === license);
+      const member = chosen?.member_id ?? "";
+      setMemberId(member);
+      setShopName(chosen?.company_name ?? "");
       setPermissions(await fetchPermissions(session.token, license, "technician"));
       await load(session.token, license, member);
       say("", undefined);
@@ -495,6 +505,7 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
   async function switchShop(licenseIdNext: string) {
     const next = shops.find((s) => s.license_id === licenseIdNext);
     if (!next) return;
+    setMustChooseShop(false);
     const member = next.member_id ?? "";
     setLicenseId(next.license_id);
     setShopName(next.company_name);
@@ -582,6 +593,15 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
         status={status}
         statusTone={tone}
       >
+        {mustChooseShop && (
+          <section className="section callout" data-tone="warn" role="status">
+            <div className="section-head">
+              <h2>{t.dashboard.customer.shopSwitch}</h2>
+            </div>
+            <p className="card-meta">{t.liff.chooseShop}</p>
+          </section>
+        )}
+
         {shops.length > 1 && (
           <ShopSwitcher
             token={token}
@@ -593,467 +613,473 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
           />
         )}
 
-        <ListFilters
-          query={query}
-          onQuery={setQuery}
-          status={statusFilter}
-          statuses={optionsFrom(t.dashboard.tickets.status as Record<string, string>)}
-          onStatus={setStatusFilter}
-        />
+        {!mustChooseShop && (
+          <ListFilters
+            query={query}
+            onQuery={setQuery}
+            status={statusFilter}
+            statuses={optionsFrom(t.dashboard.tickets.status as Record<string, string>)}
+            onStatus={setStatusFilter}
+          />
+        )}
 
-        <section className="section">
-          <div className="section-head">
-            <h2>
-              {t.dashboard.technician.myJobs} ({mine.length})
-            </h2>
-            <a className="btn" data-variant="quiet" href="/liff/technician/reports">
-              {t.dashboard.technician.myReports}
-            </a>
-          </div>
-          {mine.length === 0 ? (
-            <div className="empty">
-              <p>{filtering ? t.dashboard.noMatch : t.dashboard.technician.noJobs}</p>
+        {!mustChooseShop && (
+          <>
+          <section className="section">
+            <div className="section-head">
+              <h2>
+                {t.dashboard.technician.myJobs} ({mine.length})
+              </h2>
+              <a className="btn" data-variant="quiet" href="/liff/technician/reports">
+                {t.dashboard.technician.myReports}
+              </a>
             </div>
-          ) : (
-            <ul className="list">
-              {mine.map((ticket) => (
-                <li key={ticket.id} className="card">
-                  <TicketRow
-                    ticket={ticket}
-                    statusLabel={
-                      ticket.status === "in_progress"
-                        ? statusLabel(ticket.status)
-                        : t.dashboard.technician.waitingCheckIn
-                    }
-                  />
-                  {canWork && (
-                    <div className="card-actions">
-                      {ticket.status !== "in_progress" && (
+            {mine.length === 0 ? (
+              <div className="empty">
+                <p>{filtering ? t.dashboard.noMatch : t.dashboard.technician.noJobs}</p>
+              </div>
+            ) : (
+              <ul className="list">
+                {mine.map((ticket) => (
+                  <li key={ticket.id} className="card">
+                    <TicketRow
+                      ticket={ticket}
+                      statusLabel={
+                        ticket.status === "in_progress"
+                          ? statusLabel(ticket.status)
+                          : t.dashboard.technician.waitingCheckIn
+                      }
+                    />
+                    {canWork && (
+                      <div className="card-actions">
+                        {ticket.status !== "in_progress" && (
+                          <button
+                            type="button"
+                            className="btn"
+                            data-variant="primary"
+                            disabled={busyId !== ""}
+                            onClick={() => void checkIn(ticket)}
+                          >
+                            {busyId === ticket.id
+                              ? t.dashboard.related.saving
+                              : t.dashboard.technician.checkIn}
+                          </button>
+                        )}
+                        {ticket.status === "in_progress" && (
+                          <button
+                            type="button"
+                            className="btn"
+                            data-variant="primary"
+                            disabled={busyId !== ""}
+                            onClick={() => {
+                              setReportFor(ticket);
+                              resetReport();
+                            }}
+                          >
+                            {t.dashboard.technician.checkOut}
+                          </button>
+                        )}
+                        <label className="btn" data-variant="quiet">
+                          {t.dashboard.technician.addPhoto}
+                          <input
+                            type="file"
+                            accept="image/*"
+                            capture="environment"
+                            hidden
+                            disabled={busyId !== ""}
+                            onChange={(e) => {
+                              void addPhoto(ticket, e.target.files?.[0] ?? null);
+                              e.target.value = "";
+                            }}
+                          />
+                        </label>
                         <button
                           type="button"
                           className="btn"
-                          data-variant="primary"
-                          disabled={busyId !== ""}
-                          onClick={() => void checkIn(ticket)}
+                          data-variant="quiet"
+                          aria-expanded={photosFor === ticket.id}
+                          onClick={() => void togglePhotos(ticket)}
                         >
-                          {busyId === ticket.id
-                            ? t.dashboard.related.saving
-                            : t.dashboard.technician.checkIn}
+                          {t.dashboard.technician.photoList}
+                          {photos[ticket.id] ? ` (${photos[ticket.id].length})` : ""}
                         </button>
-                      )}
-                      {ticket.status === "in_progress" && (
-                        <button
-                          type="button"
-                          className="btn"
-                          data-variant="primary"
-                          disabled={busyId !== ""}
-                          onClick={() => {
-                            setReportFor(ticket);
-                            resetReport();
-                          }}
-                        >
-                          {t.dashboard.technician.checkOut}
-                        </button>
-                      )}
-                      <label className="btn" data-variant="quiet">
-                        {t.dashboard.technician.addPhoto}
-                        <input
-                          type="file"
-                          accept="image/*"
-                          capture="environment"
-                          hidden
-                          disabled={busyId !== ""}
-                          onChange={(e) => {
-                            void addPhoto(ticket, e.target.files?.[0] ?? null);
-                            e.target.value = "";
-                          }}
-                        />
-                      </label>
-                      <button
-                        type="button"
-                        className="btn"
-                        data-variant="quiet"
-                        aria-expanded={photosFor === ticket.id}
-                        onClick={() => void togglePhotos(ticket)}
-                      >
-                        {t.dashboard.technician.photoList}
-                        {photos[ticket.id] ? ` (${photos[ticket.id].length})` : ""}
-                      </button>
-                    </div>
-                  )}
-                  {photosFor === ticket.id && (
-                    <ul className="list" data-list="photos">
-                      {(photos[ticket.id] ?? []).length === 0 ? (
-                        <li className="empty">
-                          <p>{t.dashboard.technician.photoNone}</p>
-                        </li>
-                      ) : (
-                        (photos[ticket.id] ?? []).map((photo, position) => (
-                          <li key={photo.id} className="row">
-                            <div className="row-main">
-                              {renamingId === photo.id ? (
-                                <input
-                                  aria-label={t.dashboard.technician.photoRename}
-                                  id={`photo-name-${photo.id}`}
-                                  className="input"
-                                  value={renameTo}
-                                  autoFocus
-                                  onChange={(e) => setRenameTo(e.target.value)}
-                                />
-                              ) : (
-                                <b>{photoName(photo, position + 1)}</b>
-                              )}
-                              <span className="muted">
-                                {(t.dashboard.technician.photoKind as Record<string, string>)[
-                                  photo.photo_type ?? "evidence"
-                                ] ?? photo.photo_type}
-                                {" · "}
-                                {photoWhen(photo)}
-                              </span>
-                            </div>
-                            <div className="card-actions">
-                              {photo.url && (
-                                <a className="btn" data-variant="quiet" href={photo.url} target="_blank" rel="noreferrer">
-                                  {t.dashboard.technician.photoOpen}
-                                </a>
-                              )}
-                              {renamingId === photo.id ? (
-                                <button
-                                  type="button"
-                                  className="btn"
-                                  data-variant="primary"
-                                  disabled={busyId !== ""}
-                                  onClick={() => void renamePhoto(ticket, photo)}
-                                >
-                                  {t.dashboard.related.save}
-                                </button>
-                              ) : (
+                      </div>
+                    )}
+                    {photosFor === ticket.id && (
+                      <ul className="list" data-list="photos">
+                        {(photos[ticket.id] ?? []).length === 0 ? (
+                          <li className="empty">
+                            <p>{t.dashboard.technician.photoNone}</p>
+                          </li>
+                        ) : (
+                          (photos[ticket.id] ?? []).map((photo, position) => (
+                            <li key={photo.id} className="row">
+                              <div className="row-main">
+                                {renamingId === photo.id ? (
+                                  <input
+                                    aria-label={t.dashboard.technician.photoRename}
+                                    id={`photo-name-${photo.id}`}
+                                    className="input"
+                                    value={renameTo}
+                                    autoFocus
+                                    onChange={(e) => setRenameTo(e.target.value)}
+                                  />
+                                ) : (
+                                  <b>{photoName(photo, position + 1)}</b>
+                                )}
+                                <span className="muted">
+                                  {(t.dashboard.technician.photoKind as Record<string, string>)[
+                                    photo.photo_type ?? "evidence"
+                                  ] ?? photo.photo_type}
+                                  {" · "}
+                                  {photoWhen(photo)}
+                                </span>
+                              </div>
+                              <div className="card-actions">
+                                {photo.url && (
+                                  <a className="btn" data-variant="quiet" href={photo.url} target="_blank" rel="noreferrer">
+                                    {t.dashboard.technician.photoOpen}
+                                  </a>
+                                )}
+                                {renamingId === photo.id ? (
+                                  <button
+                                    type="button"
+                                    className="btn"
+                                    data-variant="primary"
+                                    disabled={busyId !== ""}
+                                    onClick={() => void renamePhoto(ticket, photo)}
+                                  >
+                                    {t.dashboard.related.save}
+                                  </button>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    className="btn"
+                                    data-variant="quiet"
+                                    onClick={() => {
+                                      setRenamingId(photo.id);
+                                      setRenameTo((photo.caption ?? "").trim());
+                                    }}
+                                  >
+                                    {t.dashboard.technician.photoRename}
+                                  </button>
+                                )}
                                 <button
                                   type="button"
                                   className="btn"
                                   data-variant="quiet"
-                                  onClick={() => {
-                                    setRenamingId(photo.id);
-                                    setRenameTo((photo.caption ?? "").trim());
-                                  }}
+                                  disabled={busyId !== ""}
+                                  onClick={() => void removePhoto(ticket, photo)}
                                 >
-                                  {t.dashboard.technician.photoRename}
+                                  {t.dashboard.technician.photoRemove}
                                 </button>
-                              )}
-                              <button
-                                type="button"
-                                className="btn"
-                                data-variant="quiet"
-                                disabled={busyId !== ""}
-                                onClick={() => void removePhoto(ticket, photo)}
-                              >
-                                {t.dashboard.technician.photoRemove}
-                              </button>
-                            </div>
-                          </li>
-                        ))
-                      )}
-                    </ul>
-                  )}
-                  {reportFor?.id === ticket.id && (
-                    <dl className="fields">
-                      <FieldRow label={t.dashboard.reports.foundIssue}>
-                        {(id) => (
-                          // The form appears because they just tapped
-                          // "ปิดงาน"; putting the caret in the first box
-                          // is the next thing they would do anyway.
-                          <textarea
-                            id={id}
-                            rows={2}
-                            autoFocus
-                            value={reportFound}
-                            onChange={(e) => setReportFound(e.target.value)}
-                          />
+                              </div>
+                            </li>
+                          ))
                         )}
-                      </FieldRow>
-                      <FieldRow label={t.dashboard.reports.workDone}>
-                        {(id) => (
-                          <>
+                      </ul>
+                    )}
+                    {reportFor?.id === ticket.id && (
+                      <dl className="fields">
+                        <FieldRow label={t.dashboard.reports.foundIssue}>
+                          {(id) => (
+                            // The form appears because they just tapped
+                            // "ปิดงาน"; putting the caret in the first box
+                            // is the next thing they would do anyway.
                             <textarea
                               id={id}
                               rows={2}
-                              value={reportDone}
-                              onChange={(e) => setReportDone(e.target.value)}
-                              aria-describedby={`${id}-hint`}
+                              autoFocus
+                              value={reportFound}
+                              onChange={(e) => setReportFound(e.target.value)}
                             />
-                            {/* Says why the submit button is not yet
-                                live, rather than leaving a dead button
-                                to be explained by trial. */}
-                            <span id={`${id}-hint`} className="hint">
-                              {t.dashboard.technician.reportHint}
-                            </span>
-                          </>
-                        )}
-                      </FieldRow>
-                      <FieldRow label={t.dashboard.technician.partsOptional}>
-                        {(id) => (
-                          <input
-                            id={id}
-                            value={reportParts}
-                            onChange={(e) => setReportParts(e.target.value)}
-                          />
-                        )}
-                      </FieldRow>
-                      <div className="actions">
-                        <button
-                          type="button"
-                          className="btn"
-                          data-variant="quiet"
-                          disabled={busyId !== ""}
-                          onClick={() => setReportFor(null)}
-                        >
-                          {t.dashboard.related.cancelForm}
-                        </button>
+                          )}
+                        </FieldRow>
+                        <FieldRow label={t.dashboard.reports.workDone}>
+                          {(id) => (
+                            <>
+                              <textarea
+                                id={id}
+                                rows={2}
+                                value={reportDone}
+                                onChange={(e) => setReportDone(e.target.value)}
+                                aria-describedby={`${id}-hint`}
+                              />
+                              {/* Says why the submit button is not yet
+                                  live, rather than leaving a dead button
+                                  to be explained by trial. */}
+                              <span id={`${id}-hint`} className="hint">
+                                {t.dashboard.technician.reportHint}
+                              </span>
+                            </>
+                          )}
+                        </FieldRow>
+                        <FieldRow label={t.dashboard.technician.partsOptional}>
+                          {(id) => (
+                            <input
+                              id={id}
+                              value={reportParts}
+                              onChange={(e) => setReportParts(e.target.value)}
+                            />
+                          )}
+                        </FieldRow>
+                        <div className="actions">
+                          <button
+                            type="button"
+                            className="btn"
+                            data-variant="quiet"
+                            disabled={busyId !== ""}
+                            onClick={() => setReportFor(null)}
+                          >
+                            {t.dashboard.related.cancelForm}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn"
+                            data-variant="primary"
+                            disabled={busyId !== "" || !reportComplete}
+                            onClick={() => void checkOut()}
+                          >
+                            {busyId === ticket.id
+                              ? t.dashboard.related.saving
+                              : t.dashboard.technician.submitReport}
+                          </button>
+                        </div>
+                      </dl>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          {offeredToTeam.length > 0 && (
+            <section className="section callout" data-tone="ok">
+              <div className="section-head">
+                <h2>
+                  {t.dashboard.technician.offeredToTeam} ({offeredToTeam.length})
+                </h2>
+              </div>
+              <ul className="list">
+                {offeredToTeam.map((ticket) => (
+                  <li key={ticket.id} className="card">
+                    <TicketRow ticket={ticket} statusLabel={statusLabel(ticket.status)} />
+                    {canWork && (
+                      <div className="card-actions">
                         <button
                           type="button"
                           className="btn"
                           data-variant="primary"
-                          disabled={busyId !== "" || !reportComplete}
-                          onClick={() => void checkOut()}
+                          disabled={busyId !== ""}
+                          onClick={() => void claim(ticket)}
                         >
-                          {busyId === ticket.id
-                            ? t.dashboard.related.saving
-                            : t.dashboard.technician.submitReport}
+                          {busyId === ticket.id ? t.dashboard.related.saving : t.dashboard.technician.acceptForTeam}
                         </button>
-                      </div>
-                    </dl>
-                  )}
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-
-        {offeredToTeam.length > 0 && (
-          <section className="section callout" data-tone="ok">
-            <div className="section-head">
-              <h2>
-                {t.dashboard.technician.offeredToTeam} ({offeredToTeam.length})
-              </h2>
-            </div>
-            <ul className="list">
-              {offeredToTeam.map((ticket) => (
-                <li key={ticket.id} className="card">
-                  <TicketRow ticket={ticket} statusLabel={statusLabel(ticket.status)} />
-                  {canWork && (
-                    <div className="card-actions">
-                      <button
-                        type="button"
-                        className="btn"
-                        data-variant="primary"
-                        disabled={busyId !== ""}
-                        onClick={() => void claim(ticket)}
-                      >
-                        {busyId === ticket.id ? t.dashboard.related.saving : t.dashboard.technician.acceptForTeam}
-                      </button>
-                      <button
-                        type="button"
-                        className="btn"
-                        data-variant="quiet"
-                        disabled={busyId !== ""}
-                        onClick={() => {
-                          setDeclineFor(ticket);
-                          setDeclineReason("");
-                        }}
-                      >
-                        {t.dashboard.technician.decline}
-                      </button>
-                    </div>
-                  )}
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
-
-        {teamOpen.length > 0 && (
-          <section className="section">
-            <div className="section-head">
-              <h2>
-                {t.dashboard.technician.teamOpen} ({teamOpen.length})
-              </h2>
-            </div>
-            <ul className="list">
-              {teamOpen.map((ticket) => (
-                <li key={ticket.id} className="card">
-                  <TicketRow ticket={ticket} statusLabel={statusLabel(ticket.status)} />
-                  {canWork && (
-                    <div className="card-actions">
-                      <button
-                        type="button"
-                        className="btn"
-                        data-variant="primary"
-                        disabled={busyId !== ""}
-                        onClick={() => void claim(ticket)}
-                      >
-                        {busyId === ticket.id ? t.dashboard.related.saving : t.dashboard.tickets.claim}
-                      </button>
-                    </div>
-                  )}
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
-
-        {offered.length > 0 && (
-          <section className="section callout" data-tone="ok">
-            <div className="section-head">
-              <h2>
-                {t.dashboard.technician.offeredToYou} ({offered.length})
-              </h2>
-            </div>
-            <ul className="list">
-              {offered.map((ticket) => (
-                <li key={ticket.id} className="card">
-                  <TicketRow ticket={ticket} statusLabel={statusLabel(ticket.status)} />
-                  {canWork && (
-                    <div className="card-actions">
-                      <button
-                        type="button"
-                        className="btn"
-                        data-variant="primary"
-                        disabled={busyId !== ""}
-                        onClick={() => void claim(ticket)}
-                      >
-                        {busyId === ticket.id ? t.dashboard.related.saving : t.dashboard.tickets.claim}
-                      </button>
-                      <button
-                        type="button"
-                        className="btn"
-                        data-variant="quiet"
-                        disabled={busyId !== ""}
-                        onClick={() => {
-                          setDeclineFor(ticket);
-                          setDeclineReason("");
-                        }}
-                      >
-                        {t.dashboard.technician.decline}
-                      </button>
-                    </div>
-                  )}
-                  {declineFor?.id === ticket.id && (
-                    <dl className="fields">
-                      <FieldRow label={t.dashboard.technician.declineReason}>
-                        {(id) => (
-                          <input
-                            id={id}
-                            autoFocus
-                            value={declineReason}
-                            onChange={(e) => setDeclineReason(e.target.value)}
-                          />
-                        )}
-                      </FieldRow>
-                      <div className="actions">
                         <button
                           type="button"
                           className="btn"
                           data-variant="quiet"
                           disabled={busyId !== ""}
-                          onClick={() => setDeclineFor(null)}
-                        >
-                          {t.dashboard.related.cancelForm}
-                        </button>
-                        <button
-                          type="button"
-                          className="btn"
-                          data-variant="danger"
-                          disabled={busyId !== ""}
-                          onClick={() => void decline()}
+                          onClick={() => {
+                            setDeclineFor(ticket);
+                            setDeclineReason("");
+                          }}
                         >
                           {t.dashboard.technician.decline}
                         </button>
                       </div>
-                    </dl>
-                  )}
-                </li>
-              ))}
-            </ul>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+
+          {teamOpen.length > 0 && (
+            <section className="section">
+              <div className="section-head">
+                <h2>
+                  {t.dashboard.technician.teamOpen} ({teamOpen.length})
+                </h2>
+              </div>
+              <ul className="list">
+                {teamOpen.map((ticket) => (
+                  <li key={ticket.id} className="card">
+                    <TicketRow ticket={ticket} statusLabel={statusLabel(ticket.status)} />
+                    {canWork && (
+                      <div className="card-actions">
+                        <button
+                          type="button"
+                          className="btn"
+                          data-variant="primary"
+                          disabled={busyId !== ""}
+                          onClick={() => void claim(ticket)}
+                        >
+                          {busyId === ticket.id ? t.dashboard.related.saving : t.dashboard.tickets.claim}
+                        </button>
+                      </div>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+
+          {offered.length > 0 && (
+            <section className="section callout" data-tone="ok">
+              <div className="section-head">
+                <h2>
+                  {t.dashboard.technician.offeredToYou} ({offered.length})
+                </h2>
+              </div>
+              <ul className="list">
+                {offered.map((ticket) => (
+                  <li key={ticket.id} className="card">
+                    <TicketRow ticket={ticket} statusLabel={statusLabel(ticket.status)} />
+                    {canWork && (
+                      <div className="card-actions">
+                        <button
+                          type="button"
+                          className="btn"
+                          data-variant="primary"
+                          disabled={busyId !== ""}
+                          onClick={() => void claim(ticket)}
+                        >
+                          {busyId === ticket.id ? t.dashboard.related.saving : t.dashboard.tickets.claim}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn"
+                          data-variant="quiet"
+                          disabled={busyId !== ""}
+                          onClick={() => {
+                            setDeclineFor(ticket);
+                            setDeclineReason("");
+                          }}
+                        >
+                          {t.dashboard.technician.decline}
+                        </button>
+                      </div>
+                    )}
+                    {declineFor?.id === ticket.id && (
+                      <dl className="fields">
+                        <FieldRow label={t.dashboard.technician.declineReason}>
+                          {(id) => (
+                            <input
+                              id={id}
+                              autoFocus
+                              value={declineReason}
+                              onChange={(e) => setDeclineReason(e.target.value)}
+                            />
+                          )}
+                        </FieldRow>
+                        <div className="actions">
+                          <button
+                            type="button"
+                            className="btn"
+                            data-variant="quiet"
+                            disabled={busyId !== ""}
+                            onClick={() => setDeclineFor(null)}
+                          >
+                            {t.dashboard.related.cancelForm}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn"
+                            data-variant="danger"
+                            disabled={busyId !== ""}
+                            onClick={() => void decline()}
+                          >
+                            {t.dashboard.technician.decline}
+                          </button>
+                        </div>
+                      </dl>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+
+          <section className="section">
+            <div className="section-head">
+              <h2>
+                {t.dashboard.technician.openJobs} ({open.length})
+              </h2>
+            </div>
+            {open.length === 0 ? (
+              <div className="empty">
+                <p>{filtering ? t.dashboard.noMatch : t.dashboard.technician.noOpenJobs}</p>
+              </div>
+            ) : (
+              <ul className="list">
+                {open.map((ticket) => (
+                  <li key={ticket.id} className="card">
+                    <TicketRow
+                      ticket={ticket}
+                      statusLabel={statusLabel(ticket.status)}
+                    />
+                    {canWork && (
+                      <div className="card-actions">
+                        <button
+                          type="button"
+                          className="btn"
+                          data-variant="primary"
+                          disabled={busyId !== ""}
+                          onClick={() => void claim(ticket)}
+                        >
+                          {busyId === ticket.id
+                            ? t.dashboard.related.saving
+                            : t.dashboard.tickets.claim}
+                        </button>
+                      </div>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
           </section>
-        )}
 
-        <section className="section">
-          <div className="section-head">
-            <h2>
-              {t.dashboard.technician.openJobs} ({open.length})
-            </h2>
-          </div>
-          {open.length === 0 ? (
-            <div className="empty">
-              <p>{filtering ? t.dashboard.noMatch : t.dashboard.technician.noOpenJobs}</p>
+          <section className="section">
+            <div className="section-head">
+              <h2>{t.dashboard.technician.recentReports}</h2>
+              <a className="btn" data-variant="quiet" href="/liff/technician/reports">
+                {t.dashboard.technician.allReports}
+              </a>
             </div>
-          ) : (
-            <ul className="list">
-              {open.map((ticket) => (
-                <li key={ticket.id} className="card">
-                  <TicketRow
-                    ticket={ticket}
-                    statusLabel={statusLabel(ticket.status)}
-                  />
-                  {canWork && (
-                    <div className="card-actions">
-                      <button
-                        type="button"
-                        className="btn"
-                        data-variant="primary"
-                        disabled={busyId !== ""}
-                        onClick={() => void claim(ticket)}
+            {reportsFailed ? (
+              <p role="status">{t.dashboard.reports.title}: {t.dashboard.loadFailed}</p>
+            ) : recentReports.length === 0 ? (
+              <div className="empty">
+                <p>{t.dashboard.technician.noReports}</p>
+              </div>
+            ) : (
+              <ul className="list">
+                {recentReports.map((report) => (
+                  <li key={report.id} className="card">
+                    <div className="card-title">
+                      {ticketNumber(report.ticket_id) || report.id.slice(0, 8)}
+                      <span
+                        className="badge"
+                        data-tone={
+                          report.status === "approved"
+                            ? "ok"
+                            : report.status === "rejected"
+                              ? "danger"
+                              : undefined
+                        }
+                        style={{ marginLeft: 8 }}
                       >
-                        {busyId === ticket.id
-                          ? t.dashboard.related.saving
-                          : t.dashboard.tickets.claim}
-                      </button>
+                        {reportStatus(report.status)}
+                      </span>
                     </div>
-                  )}
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-
-        <section className="section">
-          <div className="section-head">
-            <h2>{t.dashboard.technician.recentReports}</h2>
-            <a className="btn" data-variant="quiet" href="/liff/technician/reports">
-              {t.dashboard.technician.allReports}
-            </a>
-          </div>
-          {reportsFailed ? (
-            <p role="status">{t.dashboard.reports.title}: {t.dashboard.loadFailed}</p>
-          ) : recentReports.length === 0 ? (
-            <div className="empty">
-              <p>{t.dashboard.technician.noReports}</p>
-            </div>
-          ) : (
-            <ul className="list">
-              {recentReports.map((report) => (
-                <li key={report.id} className="card">
-                  <div className="card-title">
-                    {ticketNumber(report.ticket_id) || report.id.slice(0, 8)}
-                    <span
-                      className="badge"
-                      data-tone={
-                        report.status === "approved"
-                          ? "ok"
-                          : report.status === "rejected"
-                            ? "danger"
-                            : undefined
-                      }
-                      style={{ marginLeft: 8 }}
-                    >
-                      {reportStatus(report.status)}
-                    </span>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+          </>
+        )}
 
         {token && (
           <ProfileCard token={token} audience="technician" shopName={shopName} />

@@ -114,12 +114,18 @@ export default function ServiceReports({
     try {
       const session = await initLiffSession(liffId, audience);
       if (!session.token) return;
-      const license = session.memberships[0]?.license_id ?? "";
+      // The chosen shop, never the first row (round 19n): this page opens
+      // from the technician home, where the choice has already been made.
+      const license = session.activeLicenseId || (session.memberships[0]?.license_id ?? "");
       setToken(session.token);
       bindSession({ token: session.token, audience });
       setLicenseId(license);
       if (!license) {
         say(t.liff.noCompany, "error");
+        return;
+      }
+      if (session.memberships.length > 1 && !session.activeLicenseId) {
+        say(t.liff.chooseShop, undefined);
         return;
       }
       setPermissions(await fetchPermissions(session.token, license, audience));

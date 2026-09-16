@@ -56,8 +56,13 @@ GUIDES: dict[str, dict] = {
             {
                 "key": "link", "title": {"th": "ผูกกับร้าน", "en": "Link to your shop"},
                 "body": {
-                    "th": "พิมพ์หมายเลขเครื่อง (S/N บนสติกเกอร์) หรือชื่อร้านที่ซื้อ ระบบจะผูกบัญชีให้ ถ้ามีหลายร้านจะมีปุ่มให้เลือก",
-                    "en": "Type the serial number on the sticker, or the shop's name. Several shops → buttons to pick one.",
+                    "th": "พิมพ์หมายเลขเครื่อง (S/N บนสติกเกอร์) หรือชื่อร้านที่ซื้อ ระบบจะผูกบัญชีให้ ถ้ามีหลายร้านจะมีปุ่มให้เลือก · "
+                          "อยู่กับหลายร้านได้ คุยทีละร้าน — ถามว่า \"อยู่กับร้านไหนบ้าง\" เพื่อดูรายชื่อ (มีบอกว่ากำลังคุยกับร้านไหน) "
+                          "พิมพ์ \"เปลี่ยนร้าน\" เพื่อสลับ · ถ้าพิมพ์เลขงานหรือ S/N ของอีกร้าน ระบบจะสลับให้เองแล้วบอกว่าสลับไปร้านไหน",
+                    "en": "Type the serial number on the sticker, or the shop's name. Several shops → buttons to pick one. "
+                          "You can be with several shops and talk to one at a time: ask \"which shops am I with\" for the list "
+                          "(it marks the one you are talking to) and say \"change shop\" to switch. Naming a job or serial that "
+                          "belongs to another of your shops switches you there and says so.",
                 },
                 "commands": ["เปลี่ยนร้าน"],
                 "example": "SN12345678",

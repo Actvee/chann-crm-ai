@@ -23,6 +23,7 @@ export const en: Dictionary = {
     starting: "Starting LIFF…",
     noCompany: "No company is linked to this account yet",
     multipleCompanies: "You belong to several companies — please choose one",
+    chooseShop: "This account is with more than one shop — pick one and the page will show that shop",
     notConfigured: "LIFF ID is not configured",
     initFailed: "LIFF initialisation failed",
     sdkLoadFailed: "Failed to load the LIFF SDK",

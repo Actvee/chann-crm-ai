@@ -552,6 +552,15 @@ async def _link_and_continue(
         except Exception:
             log.exception("could not read the linked shop's name")
 
+    # Typing a shop's code IS choosing that shop. A customer of one shop
+    # who links a second used to stay in the first on their next message —
+    # the code they had just typed decided nothing (round 19n).
+    if license_id:
+        try:
+            await client.set_active_tenant(ctx.chann_uid, "customer", license_id)
+        except Exception:  # noqa: BLE001 — the link stands either way
+            log.exception("could not make the newly linked shop the active one")
+
     linked = _t(LINKED, language).format(name=name)
 
     # 16.4: the shop's side — a CRM record at once when the shop opted

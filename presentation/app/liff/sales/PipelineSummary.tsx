@@ -40,8 +40,12 @@ export default function PipelineSummary({ liffId }: { liffId: string }) {
     try {
       await whenLiffReady();
       const session = await initLiffSession(liffId);
-      const license = session.memberships[0]?.license_id ?? "";
+      // A summary of WHICH shop? With several and none chosen there is no
+      // answer, so the card stays away rather than showing one shop's
+      // pipeline as though it were the whole picture (round 19n).
+      const license = session.activeLicenseId || (session.memberships[0]?.license_id ?? "");
       if (!session.token || !license) { setState("hidden"); return; }
+      if (session.memberships.length > 1 && !session.activeLicenseId) { setState("hidden"); return; }
       const response = await fetch(
         `/api/phase2/licenses/${license}/pipeline`,
         { headers: proxyHeaders(session.token, license) },

@@ -6,13 +6,13 @@
 
 ## 1. ผูกกับร้าน
 
-พิมพ์หมายเลขเครื่อง (S/N บนสติกเกอร์) หรือชื่อร้านที่ซื้อ ระบบจะผูกบัญชีให้ ถ้ามีหลายร้านจะมีปุ่มให้เลือก
+พิมพ์หมายเลขเครื่อง (S/N บนสติกเกอร์) หรือชื่อร้านที่ซื้อ ระบบจะผูกบัญชีให้ ถ้ามีหลายร้านจะมีปุ่มให้เลือก · อยู่กับหลายร้านได้ คุยทีละร้าน — ถามว่า "อยู่กับร้านไหนบ้าง" เพื่อดูรายชื่อ (มีบอกว่ากำลังคุยกับร้านไหน) พิมพ์ "เปลี่ยนร้าน" เพื่อสลับ · ถ้าพิมพ์เลขงานหรือ S/N ของอีกร้าน ระบบจะสลับให้เองแล้วบอกว่าสลับไปร้านไหน
 
 พิมพ์: `SN12345678`
 
 [IMAGE: customer-link — โทรศัพท์เปิด LINE แชทกับร้าน มือถือสติกเกอร์ S/N ของเครื่องใช้ไฟฟ้า ลูกศรชี้จากสติกเกอร์ไปช่องพิมพ์ข้อความ]
 
-_EN: Link to your shop — Type the serial number on the sticker, or the shop's name. Several shops → buttons to pick one._
+_EN: Link to your shop — Type the serial number on the sticker, or the shop's name. Several shops → buttons to pick one. You can be with several shops and talk to one at a time: ask "which shops am I with" for the list (it marks the one you are talking to) and say "change shop" to switch. Naming a job or serial that belongs to another of your shops switches you there and says so._
 
 ## 2. ดูสินค้า / สนใจสินค้า
 

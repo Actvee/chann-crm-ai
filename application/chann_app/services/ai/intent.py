@@ -589,6 +589,10 @@ entity as THEIR OWN record:
     action="chat": they want a person at the shop, are asking whether
       anyone is there, or are complaining. Examples: "ขอคุยกับพนักงาน",
       "แอดมินอยู่ไหม", "มีคนตอบไหม", "บริการแย่มาก".
+    action="switch": WHICH shops they are with, or moving to another one.
+      One LINE account can be a customer of several shops, and only one of
+      them is being talked to at a time. Examples: "ผมอยู่กับร้านไหนบ้าง",
+      "ร้านที่ผูกไว้มีอะไรบ้าง", "ขอเปลี่ยนไปร้านอื่น", "เปลี่ยนร้าน".
 - entity="product", action="read": prices, what is for sale, a product
   they want to buy. Examples: "ราคาแอร์เท่าไหร่", "มีแอร์รุ่นไหนบ้าง",
   "อยากซื้อแอร์".

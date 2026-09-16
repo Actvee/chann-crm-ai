@@ -262,7 +262,8 @@ function MenuSession({
 
   return (
     <>
-      <SuspendedNotice memberships={session.memberships} />
+      {/* The ACTIVE shop's status, not the first row's (review D7). */}
+      <SuspendedNotice memberships={session.memberships} current={session.licenseId} />
       {session.memberships.length > 1 && (
         <ShopSwitcher
           token={session.token}

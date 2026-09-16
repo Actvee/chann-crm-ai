@@ -33,6 +33,10 @@ export type SalesSession = {
   licenseExpiresAt: string | null;
   /** True once token, shop and permissions are all known. */
   ready: boolean;
+  /** Several shops and none of them chosen: the page must ask rather than
+   *  open one of them (round 19n). /me answers with the chosen shop first,
+   *  so memberships[0] looks like an answer even when nobody decided. */
+  mustChooseShop: boolean;
 };
 
 const EMPTY: SalesSession = {
@@ -46,6 +50,7 @@ const EMPTY: SalesSession = {
   licenseStatus: "active",
   licenseExpiresAt: null,
   ready: false,
+  mustChooseShop: false,
 };
 
 type Say = (message: string, kind?: "ok" | "error") => void;
@@ -89,10 +94,20 @@ export function useSalesSession(liffId: string, say: Say) {
     try {
       const started = await initLiffSession(liffId);
       if (!started.token) return; // login redirect in progress
-      const licenseId = started.memberships[0]?.license_id ?? "";
+      const licenseId = started.activeLicenseId || (started.memberships[0]?.license_id ?? "");
       if (!licenseId) {
         setSession({ ...EMPTY, token: started.token, memberships: started.memberships });
         sayRef.current(tRef.current.liff.noCompany, "error");
+        return;
+      }
+      if (started.memberships.length > 1 && !started.activeLicenseId) {
+        // Ask, and load nothing until they say. Chat has asked since
+        // 3 ก.ย.; the screens picked the first row instead.
+        setSession({
+          ...EMPTY, token: started.token, memberships: started.memberships,
+          mustChooseShop: true,
+        });
+        sayRef.current(tRef.current.liff.chooseShop, undefined);
         return;
       }
       const me = await fetchMe(started.token, licenseId);
@@ -112,6 +127,7 @@ export function useSalesSession(liffId: string, say: Say) {
         licenseStatus: me.licenseStatus || started.memberships[0]?.license_status || "active",
         licenseExpiresAt: started.memberships[0]?.license_expires_at ?? null,
         ready: true,
+        mustChooseShop: false,
       });
     } catch (error) {
       sayRef.current(

@@ -15,7 +15,7 @@ from __future__ import annotations
 import contextvars
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from time import monotonic
 from datetime import date, datetime, time, timezone, timedelta
 from decimal import Decimal, InvalidOperation
@@ -4185,6 +4185,7 @@ async def _maybe_forward_to_shop(
     text = (message or "").strip()
     if not text or _is_customer_command(text) or _is_bare_serial(text) or _is_small_talk(text) or len(text) < 2 \
             or _matches_phrase(text, CUSTOMER_CONTACT_PHRASES) \
+            or _record_named_in(text) is not None \
             or (_asks_shop_contact(text) and any(w in text for w in ("ที่ไหน", "ที่อยู่", "แผนที่", "เบอร์", "โทร", "อีเมล", "ไลน์"))):
         # "ร้านอยู่ที่ไหน" after the contact card is the card again, not a
         # message forwarded to the shop (audit verify, 15 ก.ย. 2569);
@@ -6454,12 +6455,31 @@ async def _customer_model_road(
             )
         return None
     if entity == "shop":
+        if action == "switch":
+            # "ผมอยู่กับร้านไหนบ้าง" / "ขอเปลี่ยนไปร้านอื่น" (round 19n).
+            # One list answers both: the shops this person is with, the
+            # active one marked, a button each. With only one shop there is
+            # nothing to choose and the name is the answer.
+            return _tenant_chooser(ctx, language, include_current=True) if ctx.alternatives else ChatReply(
+                text=_t(SINGLE_SHOP, language).format(
+                    company=(ctx.memberships[0].get("company_name") if ctx.memberships else "") or "-",
+                ),
+            )
         if action == "chat":
             return await _handle_customer_chat_start(
                 client, ctx=ctx, license_id=license_id,
                 first_message=(message or "").strip() if _is_complaint(message) else "", language=language,
             )
         if action in READ_ACTIONS:
+            # "ผมอยู่กับร้านไหนบ้าง" comes back as a READ of the shop — which
+            # it is, only the answer is the list of their shops rather than
+            # one shop's phone number. Converted here, downstream of the
+            # model, the way every other reading is (round 19n).
+            if _asks_which_shops(message) and ctx.alternatives:
+                # Only when there IS more than one: with a single shop the
+                # profile card already names it, and taking the sentence
+                # here would answer less than before (corpus, round 19n).
+                return _tenant_chooser(ctx, language, include_current=True)
             return await _handle_customer_contact(
                 client, license_id=license_id, language=language, ctx=ctx, asked=message,
             )
@@ -17541,8 +17561,14 @@ def _tenant_chooser(ctx: ResolvedContext, language: str, *, include_current: boo
     options = list(ctx.memberships) + (list(ctx.alternatives) if include_current else [])
     if not include_current and ctx.resolution is not TenantResolution.MULTIPLE:
         options = list(ctx.memberships) + list(ctx.alternatives)
+    # Which one is being talked to right now, said in the list itself: a
+    # customer of two shops asking "ผมอยู่กับร้านไหนบ้าง" is asking that as
+    # much as they are asking for the names (round 19n).
+    active = str(ctx.license_id or "") if ctx.resolution is TenantResolution.SINGLE else ""
+    here = _t(TENANT_HERE_NOW, language)
     names = "\n".join(
         f"{i}. {m.get('company_name') or m.get('license_code') or '—'}"
+        + (here if active and str(m.get("license_id")) == active else "")
         for i, m in enumerate(options, start=1)
     )
     return ChatReply(
@@ -17553,6 +17579,80 @@ def _tenant_chooser(ctx: ResolvedContext, language: str, *, include_current: boo
             for m in options[:13]
         ],
     )
+
+
+TENANT_HERE_NOW = {"th": " (คุยอยู่ตอนนี้)", "en": " (talking to this one now)"}
+RECORD_IS_AT_ANOTHER_SHOP = {
+    "th": "เรื่องนี้อยู่ที่ {name} — สลับให้แล้วครับ (กลับได้ด้วย \"เปลี่ยนร้าน\")",
+    "en": "That one belongs to {name} — switched for you (say \"change shop\" to go back).",
+}
+
+
+async def _shop_holding(client: DataClient, license_id: str, kind: str, code: str) -> bool:
+    """Does this shop hold the record the sentence named?"""
+    try:
+        if kind == "ticket":
+            rows = await client.list_tickets(license_id)
+            return any(str(r.get("ticket_number") or "").upper() == code for r in rows)
+        if kind == "report":
+            rows = await client.list_service_reports(license_id)
+            return any(str(r.get("report_id") or "").upper() == code for r in rows)
+        if kind == "serial":
+            rows = await client.list_warranties(license_id, serial_number=code)
+            return any(str(r.get("serial_number") or "").upper() == code for r in rows)
+    except Exception:  # noqa: BLE001 — a shop we cannot read is a shop we do not claim
+        log.exception("could not look for %s %s in %s", kind, code, license_id)
+    return False
+
+
+def _record_named_in(message: str) -> tuple[str, str] | None:
+    """(kind, code) for the one record this sentence names, or None."""
+    found = TICKET_CODE_RE.search(message or "")
+    if found:
+        return "ticket", found.group(1).upper()
+    found = SERVICE_REPORT_CODE_RE.search(message or "")
+    if found:
+        return "report", found.group(1).upper()
+    found = SERIAL_RE.search((message or "").upper())
+    if found and any(ch.isdigit() for ch in found.group(1)) and len(found.group(1)) >= 6:
+        return "serial", found.group(1).upper()
+    return None
+
+
+async def _follow_the_record_to_its_shop(
+    client: DataClient, ctx: ResolvedContext, message: str,
+) -> tuple[ResolvedContext, dict] | None:
+    """The person's OTHER shop that holds the record this sentence names.
+
+    A customer of two shops gets a message from shop B ("รายงาน SR-… อนุมัติ
+    แล้ว"), answers it, and the answer used to land in shop A because that
+    is where they last chose to be — the shop that asked never heard, and
+    shop A was told about a job it does not have. The record decides, and
+    only among the person's OWN shops: nothing here reads a tenant this
+    person is not a member of.
+    """
+    named = _record_named_in(message)
+    if named is None or not ctx.alternatives or not ctx.license_id:
+        return None
+    kind, code = named
+    if await _shop_holding(client, str(ctx.license_id), kind, code):
+        return None
+    for membership in ctx.alternatives:
+        other = str(membership.get("license_id") or "")
+        if other and await _shop_holding(client, other, kind, code):
+            try:
+                await client.set_active_tenant(ctx.chann_uid, ctx.oa, other)
+            except Exception:  # noqa: BLE001 — answering in the right shop still beats not
+                log.exception("could not store the shop a record pulled us into")
+            moved = replace(
+                ctx,
+                memberships=[membership],
+                alternatives=[m for m in [*ctx.memberships, *ctx.alternatives]
+                              if str(m.get("license_id")) != other],
+                resolution=TenantResolution.SINGLE,
+            )
+            return moved, membership
+    return None
 
 
 async def _switch_tenant(
@@ -18439,6 +18539,18 @@ CUSTOMER_SHOP_PHRASES = (
     "ลูกค้าร้านไหน", "ร้านของฉัน", "เป็นลูกค้าร้านไหน", "ลูกค้าร้านไหนอยู่", "เป็นลูกค้าร้านไหนอยู่", "ร้านไหน", "ผูกร้านไหน",
     "which shop", "my shop",
 )
+#: "Which shops am I with" as opposed to "how do I reach this one".
+_WHICH_SHOPS_WORDS = (
+    "ร้านไหนบ้าง", "ร้านอะไรบ้าง", "กี่ร้าน", "ร้านทั้งหมด", "ผูกร้านไหน", "ผูกกับร้านไหน", "อยู่กับร้านไหน",
+    "เป็นลูกค้าร้านไหน", "ลูกค้าร้านไหน", "ร้านของฉัน", "ร้านที่ผูก", "which shops", "my shops", "how many shops",
+)
+
+
+def _asks_which_shops(text: str) -> bool:
+    canon = _canonical(text).replace(" ", "")
+    return any(w.replace(" ", "") in canon for w in _WHICH_SHOPS_WORDS)
+
+
 CUSTOMER_PROFILE_TEXT = {
     "th": (
         "ข้อมูลของคุณครับ\n\n"
@@ -18452,6 +18564,10 @@ CUSTOMER_PROFILE_TEXT = {
         "Customer of: {shop}\nRegistered products: {products}\n\n"
         "Change any of it, e.g. \"change my phone to 08x-xxx-xxxx\""
     ),
+}
+CUSTOMER_PROFILE_SHOPS = {
+    "th": "{shop} (คุยอยู่ตอนนี้) · อยู่กับ {others} ด้วย — พิมพ์ \"เปลี่ยนร้าน\" เพื่อสลับ",
+    "en": "{shop} (talking to this one now) · also with {others} — say \"change shop\" to switch",
 }
 _NOT_SET = {"th": "ยังไม่ระบุ", "en": "not set"}
 
@@ -18552,6 +18668,14 @@ async def _handle_customer_profile_view(
         ),
         None,
     ) or blank
+    if ctx.alternatives:
+        # A customer of several shops: the card used to name only the shop
+        # they happened to be in, so the other one was invisible on the one
+        # screen that lists who holds their details (round 19n).
+        others = ", ".join(
+            str(m.get("company_name") or m.get("license_code") or "") for m in ctx.alternatives
+        )
+        shop = _t(CUSTOMER_PROFILE_SHOPS, language).format(shop=shop, others=others)
     listed = ", ".join(
         f"{w.get('product_name') or ''} {w.get('serial_number') or ''}".strip()
         for w in products[:5]
@@ -22059,6 +22183,7 @@ async def _route_chat_message(
     language: str = "th",
     ai_client=None,
     abandoned: dict | None = None,
+    followed_a_record: bool = False,
 ) -> ChatReply:
     """The router: one message, one handler.
 
@@ -22104,6 +22229,27 @@ async def _route_chat_message(
     license_id = ctx.license_id
     member = ctx.memberships[0]
     early_intent: dict | None = None   # the sales OA's first reading, see below
+
+    # A record named in the sentence belongs to one shop, and it may not be
+    # the one this person last chose (round 19n). The record wins, and the
+    # switch is said out loud — silently answering about shop B's job while
+    # standing in shop A is how a customer of two shops gets told their job
+    # does not exist. Runs once: after the move the record IS in the active
+    # shop, and `followed_a_record` makes that a promise rather than a hope.
+    if not followed_a_record and ctx.alternatives:
+        moved = await _follow_the_record_to_its_shop(client, ctx, message)
+        if moved is not None:
+            there, membership = moved
+            _note_road(road="followed_record")
+            reply = await _route_chat_message(
+                client, message=message, ctx=there, language=language,
+                ai_client=ai_client, abandoned=abandoned, followed_a_record=True,
+            )
+            notice = _t(RECORD_IS_AT_ANOTHER_SHOP, language).format(
+                name=membership.get("company_name") or membership.get("license_code") or "",
+            )
+            reply.text = f"{notice}\n\n{reply.text or ''}"
+            return reply
 
     # A map link IS a location message, whatever LINE calls it. The
     # technician standing in the customer's soi pastes the pin they already

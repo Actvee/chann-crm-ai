@@ -205,7 +205,12 @@ export function whenLiffReady(ms = 20_000): Promise<void> {
 export async function initLiffSession(
   liffId: string,
   audience: Audience = "sales",
-): Promise<{ token: string; memberships: Membership[] }> {
+): Promise<{ token: string; memberships: Membership[]; activeLicenseId: string }> {
+  // `activeLicenseId` is the shop this person CHOSE, and "" when they are
+  // in more than one and have chosen none. The difference matters: /me
+  // answers with the chosen shop first, so memberships[0] reads like an
+  // answer even when nobody has decided, and a page that takes it puts a
+  // customer of two shops into one of them without asking (round 19n).
   const liff = getLiff();
   if (!liffId || !liff) {
     // Named per audience: the customer app saying NEXT_PUBLIC_LIFF_SALES_ID
@@ -251,7 +256,7 @@ export async function initLiffSession(
       );
     }
     liff.login({ redirectUri: window.location.href });
-    return { token: "", memberships: [] };
+    return { token: "", memberships: [], activeLicenseId: "" };
   }
 
   const idToken = liff.getIDToken();
@@ -263,8 +268,15 @@ export async function initLiffSession(
     fetch(`/api/liff/${audience}/me`, { headers: { "X-Liff-ID-Token": idToken } }),
   );
   if (!response.ok) throw new Error(`authentication failed (${response.status})`);
-  const me = (await response.json()) as { memberships: Membership[] };
-  return { token: idToken, memberships: me.memberships };
+  const me = (await response.json()) as {
+    memberships: Membership[];
+    active_license_id?: string | null;
+  };
+  return {
+    token: idToken,
+    memberships: me.memberships,
+    activeLicenseId: me.active_license_id ?? "",
+  };
 }
 
 /**

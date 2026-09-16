@@ -25,6 +25,7 @@ export const th = {
     starting: "กำลังเริ่ม LIFF…",
     noCompany: "ยังไม่พบบริษัทที่ผูกไว้",
     multipleCompanies: "คุณเป็นสมาชิกหลายบริษัท กรุณาเลือก",
+    chooseShop: "บัญชีนี้อยู่กับหลายร้าน เลือกร้านก่อนแล้วข้อมูลจะขึ้นตามร้านนั้น",
     notConfigured: "ยังไม่ได้ตั้งค่า LIFF ID",
     initFailed: "เริ่ม LIFF ไม่สำเร็จ",
     sdkLoadFailed: "โหลด LIFF SDK ไม่สำเร็จ",

@@ -78,6 +78,10 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
   // 2026): the storefront and their own details still work; the
   // per-shop sections say how to link one instead of failing with 401.
   const [unlinked, setUnlinked] = useState(false);
+  // Round 19n: with more than one shop and no stored choice the page shows
+  // the switcher and nothing else — a customer must never be put into one
+  // of their shops by row order.
+  const [mustChooseShop, setMustChooseShop] = useState(false);
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [warranties, setWarranties] = useState<Warranty[]>([]);
   // Phase 14-C: the survey card, the home-screen twin of the quick reply
@@ -275,15 +279,25 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
       // the person, not a shop — returning before this left both dead.
       setToken(session.token);
       bindSession({ token: session.token, audience: "customer" });
-      const license = session.memberships[0]?.license_id ?? "";
+      const license = session.activeLicenseId || (session.memberships[0]?.license_id ?? "");
       if (!license) {
         setUnlinked(true);
         say("", undefined);
         return;
       }
-      setLicenseId(license);
-      setShopName(session.memberships[0]?.company_name ?? "");
       setShops(session.memberships);
+      if (session.memberships.length > 1 && !session.activeLicenseId) {
+        // Several shops and none chosen: ask. /me answers with the chosen
+        // shop first, so memberships[0] reads like an answer even when
+        // nobody has decided, and this page used to open that shop and
+        // show its jobs as though they were the only ones (round 19n).
+        setMustChooseShop(true);
+        say(t.liff.chooseShop, undefined);
+        return;
+      }
+      const chosen = session.memberships.find((m) => m.license_id === license);
+      setLicenseId(license);
+      setShopName(chosen?.company_name ?? "");
       await load(session.token, license);
       await loadChat(session.token, license).catch(() => undefined);
       say("", undefined);
@@ -409,6 +423,7 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
   async function switchShop(licenseIdNext: string) {
     const next = shops.find((s) => s.license_id === licenseIdNext);
     if (!next) return;
+    setMustChooseShop(false);
     setLicenseId(next.license_id);
     setShopName(next.company_name);
     say(t.dashboard.customer.shopSwitched, "ok");
@@ -445,6 +460,15 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
               <h2>{t.dashboard.customer.notLinkedTitle}</h2>
             </div>
             <p className="card-meta">{t.dashboard.customer.notLinkedHint}</p>
+          </section>
+        )}
+
+        {mustChooseShop && (
+          <section className="section callout" data-tone="warn" role="status">
+            <div className="section-head">
+              <h2>{t.dashboard.customer.shopSwitch}</h2>
+            </div>
+            <p className="card-meta">{t.liff.chooseShop}</p>
           </section>
         )}
 
@@ -496,7 +520,7 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
           </section>
         )}
 
-        {!unlinked && (
+        {!unlinked && !mustChooseShop && (
           <section className="section">
             <div className="section-head">
               <h2>{t.dashboard.customer.chatTitle}</h2>
@@ -627,7 +651,7 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
           )}
         </section>
 
-        {!unlinked && (
+        {!unlinked && !mustChooseShop && (
           <>
           <section className="section">
             <div className="section-head">
