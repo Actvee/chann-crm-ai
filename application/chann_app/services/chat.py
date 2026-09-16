@@ -3313,6 +3313,36 @@ WARRANTY_NO_PURCHASE_DATE = {
     "th": "\nยังไม่ระบุวันที่ซื้อ จึงยังไม่กำหนดวันหมดประกัน — ใส่ทีหลังได้: \"วันที่ซื้อ {serial} 1 ก.ย. 2569\"",
     "en": "\nNo purchase date yet, so no end date — add it later: \"purchase date {serial} 2026-09-01\"",
 }
+#: Which of the three the cover's length came from.
+WARRANTY_PERIOD_TYPED = {
+    "th": "\nประกัน {months} เดือน (ระบุมากับข้อความนี้)",
+    "en": "\nCover: {months} months (as typed here)",
+}
+WARRANTY_PERIOD_FROM_PRODUCT = {
+    "th": "\nประกัน {months} เดือน (ตามที่ตั้งไว้ในสินค้า {product})",
+    "en": "\nCover: {months} months (the period set on {product})",
+}
+WARRANTY_PERIOD_DEFAULT = {
+    "th": "\nประกัน 12 เดือน (ค่าเริ่มต้นของระบบ — ตั้งต่อสินค้าได้ เช่น \"สินค้า {code} รับประกัน 2 ปี\")",
+    "en": "\nCover: 12 months (the system default — set one per product, e.g. \"product {code} warranty 2 years\")",
+}
+
+
+def _warranty_period_note(typed: int | None, product: dict | None, language: str) -> str:
+    """"ประกัน 24 เดือน (ตามที่ตั้งไว้ในสินค้า แอร์)" — the rule, in the
+    reply, rather than only in the repository."""
+    if typed:
+        return _t(WARRANTY_PERIOD_TYPED, language).format(months=int(typed))
+    months = (product or {}).get("warranty_months")
+    if months:
+        return _t(WARRANTY_PERIOD_FROM_PRODUCT, language).format(
+            months=int(months), product=(product or {}).get("product_name") or "-",
+        )
+    return _t(WARRANTY_PERIOD_DEFAULT, language).format(
+        code=(product or {}).get("product_id") or "FAN01",
+    )
+
+
 WARRANTY_PURCHASE_SET = {
     "th": "บันทึกวันที่ซื้อ {date} ของ S/N {serial} แล้ว คุ้มครองถึง {end}",
     "en": "Purchase date {date} saved for S/N {serial} — covered until {end}",
@@ -3569,6 +3599,11 @@ async def _handle_warranty_register(
         end=("\nคุ้มครองถึง " if language != "en" else "\nCovered until ") + _iso_to_thai_date(row.get("warranty_end"))
         if row.get("warranty_end") else _t(WARRANTY_NO_PURCHASE_DATE, language).format(serial=serial),
     )
+    # Where the period came from, said at the moment it is decided. Owner,
+    # 16 ก.ย. 2569: "ระยะเวลาประกันร้านแก้ได้ แต่เริ่มต้นจะอิงตามแต่ละสินค้า
+    # ที่มีการระบุไว้ว่าสินค้าไหนมีประกันเท่าไร" — the rule has held since
+    # round 19g, and nothing ever told the shop which of the three applied.
+    text += _warranty_period_note(purchase_months, product, language)
     if contact_name:
         code = str(named[2] or "") if named else ""
         text += "\n" + _t(WARRANTY_CUSTOMER_ATTACHED, language).format(
@@ -17658,7 +17693,14 @@ async def _handle_product_list(
     for p in shown:
         price = p.get("unit_price")
         price_text = f" · {Decimal(str(price)):,.2f}" if price not in (None, "") else ""
-        lines.append(f"{p.get('sku') or p.get('product_id') or '-'} · {p.get('product_name') or p.get('name') or '-'}{price_text}")
+        # The period each product hands to the units registered under it —
+        # the shop cannot set a default it cannot see.
+        months = p.get("warranty_months")
+        cover = f" · ประกัน {int(months)} เดือน" if months else ""
+        lines.append(
+            f"{p.get('sku') or p.get('product_id') or '-'} · "
+            f"{p.get('product_name') or p.get('name') or '-'}{price_text}{cover}"
+        )
     text = "\n".join(lines) + _truncation_note(len(shown), len(products), language, "products")
     return ChatReply(
         text=text,

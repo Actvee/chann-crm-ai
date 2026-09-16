@@ -123,3 +123,55 @@ class TestNamingATechnicianWhoHasNoProfileYet:
             ai_client=_reads({"action": "read", "entity": "member", "fields": {}, "missing": []}),
         )
         assert "สมศักดิ์" in reply.text and "CHN-T-000001" not in reply.text, reply.text
+
+
+class TestWhereTheCoverPeriodComesFrom:
+    """Owner, 16 ก.ย. 2569: "ระยะเวลาประกันร้านแก้ได้ แต่เริ่มต้นจะอิงตามแต่ละ
+    สินค้าที่มีการระบุไว้ว่าสินค้าไหนมีประกันเท่าไร".
+
+    That rule has held in the repository since round 19g (typed > the
+    product's own > twelve months). What was missing is that nobody could
+    see which of the three applied, or what a product's own period was.
+    """
+
+    def _shop(self, months):
+        client = FakeDataClient(permission_keys=SHOP_KEYS, role="sales")
+        client._products = [
+            {"id": "p1", "product_id": "AC", "product_name": "แอร์",
+             "warranty_months": months, "unit_price": "15900.00"},
+        ]
+        return client
+
+    async def _register(self, client, message):
+        return await handle_chat_message(
+            client, message=message, ctx=_ctx(oa="sales", primary_role="sales"),
+            ai_client=_reads({"action": "create", "entity": "warranty",
+                              "fields": {"serial_number": "SN9001", "product_name": "แอร์"}, "missing": []}),
+        )
+
+    async def test_the_products_own_period_is_named(self):
+        client = self._shop(24)
+        reply = await self._register(client, "ลงทะเบียนสินค้า SN9001 แอร์ ซื้อเมื่อ 1 ก.ย. 2569")
+        assert "ประกัน 24 เดือน (ตามที่ตั้งไว้ในสินค้า แอร์)" in reply.text, reply.text
+        assert "2571" in reply.text, reply.text
+
+    async def test_a_period_typed_here_wins_and_says_so(self):
+        client = self._shop(24)
+        reply = await self._register(
+            client, "ลงทะเบียนสินค้า SN9001 แอร์ ซื้อเมื่อ 1 ก.ย. 2569 ประกัน 3 ปี",
+        )
+        assert "ประกัน 36 เดือน (ระบุมากับข้อความนี้)" in reply.text, reply.text
+
+    async def test_a_product_with_no_period_falls_back_and_says_how_to_set_one(self):
+        client = self._shop(None)
+        reply = await self._register(client, "ลงทะเบียนสินค้า SN9001 แอร์ ซื้อเมื่อ 1 ก.ย. 2569")
+        assert "ค่าเริ่มต้นของระบบ" in reply.text, reply.text
+        assert "รับประกัน 2 ปี" in reply.text, reply.text
+
+    async def test_the_catalogue_shows_each_products_period(self):
+        client = self._shop(24)
+        reply = await handle_chat_message(
+            client, message="รายการสินค้า", ctx=_ctx(oa="sales", primary_role="sales"),
+            ai_client=_reads({"action": "read", "entity": "product", "fields": {}, "missing": []}),
+        )
+        assert "ประกัน 24 เดือน" in reply.text, reply.text

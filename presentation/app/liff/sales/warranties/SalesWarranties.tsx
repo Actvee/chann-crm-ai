@@ -26,10 +26,18 @@ type Warranty = {
   contact_code?: string | null;
   warranty_start?: string | null;
   warranty_end?: string | null;
+  product_id?: string | null;
   status?: string | null;
 };
 
-type Product = { id: string; product_name: string; product_id?: string | null };
+type Product = {
+  id: string;
+  product_name: string;
+  product_id?: string | null;
+  // The period a unit of this product inherits when nobody types one
+  // (owner, 16 ก.ย. 2569: "เริ่มต้นจะอิงตามแต่ละสินค้า").
+  warranty_months?: number | null;
+};
 type Customer = {
   id: string;
   first_name?: string | null;
@@ -155,6 +163,14 @@ export default function SalesWarranties({ liffId }: { liffId: string }) {
       }
     })();
   }, [session.ready, load, loadPickers, permissions, say, t]);
+
+  /** The period this unit's product hands down, when it says one. */
+  function productMonths(row: Warranty): number | null {
+    const product = products.find(
+      (p) => p.id === row.product_id || (!!row.product_name && p.product_name === row.product_name),
+    );
+    return product?.warranty_months ?? null;
+  }
 
   async function saveCover(row: Warranty) {
     if (editEnd && editStart && editEnd < editStart) {
@@ -470,12 +486,20 @@ export default function SalesWarranties({ liffId }: { liffId: string }) {
                     </FieldRow>
                     <FieldRow label={copy.warrantyMonths}>
                       {(id) => (
-                        <input
-                          id={id}
-                          inputMode="numeric"
-                          value={editMonths}
-                          onChange={(e) => setEditMonths(e.target.value)}
-                        />
+                        <>
+                          <input
+                            id={id}
+                            inputMode="numeric"
+                            placeholder={String(productMonths(row) ?? "")}
+                            value={editMonths}
+                            onChange={(e) => setEditMonths(e.target.value)}
+                          />
+                          <span className="hint">
+                            {productMonths(row)
+                              ? copy.fromProduct.replace("{months}", String(productMonths(row)))
+                              : copy.warrantyMonthsHint}
+                          </span>
+                        </>
                       )}
                     </FieldRow>
                     <FieldRow label={copy.warrantyEnd}>
