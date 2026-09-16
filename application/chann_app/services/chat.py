@@ -12281,9 +12281,66 @@ def _tidy_qty(value: float | None) -> int | float | None:
 
 _PRICE_RE = re.compile(r"(?:ราคา|@|฿)\s*([\d,]+(?:\.\d{1,2})?)\s*(?:บาท|฿|baht)?", re.I)
 
+_ITEM_JOIN_RE = re.compile(r"\s*(?:,|;|\+|\band\b|และ|กับ|แล้วก็|พร้อมกับ|พร้อมทั้ง)\s*", re.I)
+
+
+def _product_clauses(text: str) -> list[str]:
+    """The products a sentence names, one clause each: "เพิ่มพัดลม 1 ตัว และ
+    แอร์ 1 ตัว" → ["เพิ่มพัดลม 1 ตัว", "แอร์ 1 ตัว"]. A sentence is split only
+    when every part carries its own quantity or price — "แอร์และพัดลม 2 ตัว"
+    stays one product, because "แอร์" alone counts nothing. Owner, 16 ก.ย.
+    2569: the two products were read as one called "พัดลม และ แอร์"."""
+    raw = " ".join((text or "").split())
+    if not raw:
+        return []
+    parts = [p.strip(" :·-,") for p in _ITEM_JOIN_RE.split(raw)]
+    parts = [p for p in parts if p]
+    if len(parts) < 2 or not all(_QTY_RE.search(p) or _PRICE_RE.search(p) for p in parts):
+        return [raw]
+    return parts
+
+
+def _line_parts_of_clause(clause: str) -> tuple[str, int, str | None]:
+    """(name, qty, price) of one product clause; qty 1 when it only names
+    the thing, price None when the catalogue has to say."""
+    text = " ".join((clause or "").split())
+    price = None
+    price_match = _PRICE_RE.search(text)
+    if price_match:
+        price = price_match.group(1).replace(",", "")
+        text = text.replace(price_match.group(0), " ")
+    qty = 1
+    qty_match = _QTY_RE.search(text)
+    if qty_match:
+        counted = _whole_qty(qty_match.group(1) or qty_match.group(2))
+        qty = max(1, counted) if counted is not None else 1
+        text = text.replace(qty_match.group(0), " ")
+    text = re.sub(r"(?<![A-Za-z0-9])[QD]-\d{4}-\d{4}(?![0-9])", " ", text, flags=re.I)
+    for word in ("เข้าดีล", "ในดีล", "ให้ดีล", "ในใบเสนอราคา", "เข้าใบเสนอราคา", "to deal", "to the quote", "เข้า"):
+        text = text.replace(word, " ")
+    name = _strip_item_particles(" ".join(text.split()).strip(" :·-,"))
+    name = re.sub(r"^(?:สินค้า)?(?:ใหม่|new)\s+", "", name)
+    return name, qty, price
+
+
+def _joined_replies(replies: list) -> "ChatReply":
+    """Several line replies as one message: every text, the last record
+    and its buttons."""
+    texts = [r.text for r in replies if (r.text or "").strip()]
+    last = next((r for r in reversed(replies) if r.entity_id), replies[-1])
+    buttons = next((r.quick_replies for r in reversed(replies) if r.quick_replies), [])
+    return ChatReply(
+        text="\n".join(texts), entity_type=last.entity_type, entity_id=last.entity_id,
+        quick_replies=list(buttons),
+    )
+
 DEAL_PRODUCT_ADDED = {
     "th": "เพิ่ม {name} × {qty} ราคา {price} เข้าดีล {deal_id} แล้ว\nรวม {total}",
     "en": "Added {name} × {qty} at {price} to {deal_id}. Total {total}",
+}
+QUOTE_PRODUCT_ADDED = {
+    "th": "เพิ่ม {name} × {qty} ราคา {price} เข้าใบเสนอราคา {deal_id} แล้ว\nรวม {total}",
+    "en": "Added {name} × {qty} at {price} to quote {deal_id}. Total {total}",
 }
 DEAL_PRODUCT_NEEDS_DEAL = {
     "th": "เพิ่มสินค้าเข้าดีลไหนครับ พิมพ์ \"เพิ่มสินค้า <ชื่อ> เข้าดีล D-2026-0001\"",
@@ -12924,7 +12981,8 @@ async def _apply_new_line(
             where=_where_label(kind, language), code=code, record_total=record_total,
         )
     else:
-        text = _t(DEAL_PRODUCT_ADDED, language).format(
+        # A line on a quote said "เข้าดีล Q-2026-0001" (converse, 16 ก.ย. 2569).
+        text = _t(QUOTE_PRODUCT_ADDED if kind == "quote" else DEAL_PRODUCT_ADDED, language).format(
             name=row.get("product_name") or name, qty=qty, deal_id=code, price=f"{unit:,.2f}",
             total=f"{unit * qty:,.2f}",
         ) + record_total
@@ -13035,6 +13093,25 @@ async def _handle_line_item_command(
         return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
     where = _where_label(kind, language)
     code = code or ""
+    if op == "add" and not cmd.get("more") and not cmd.get("_one_clause"):
+        clauses = _product_clauses(_strip_polite_tail(re.sub(
+            r"(?<![A-Za-z0-9])[QD]-\d{4}-\d{4}(?![0-9])", " ", message or "", flags=re.I)))
+        if len(clauses) > 1:
+            replies = []
+            for clause in clauses:
+                clause_name, clause_qty, clause_price = _line_parts_of_clause(clause)
+                if not clause_name:
+                    continue
+                one = await _handle_line_item_command(
+                    client, ctx=ctx, license_id=license_id,
+                    cmd={"op": "add", "name": clause_name, "qty": clause_qty, "price": clause_price,
+                         "more": False, "code": code or None, "unit": _item_unit_word(clause), "_one_clause": True},
+                    message=_with_code(clause, code), permission_keys=permission_keys, language=language,
+                )
+                if one is not None:
+                    replies.append(one)
+            if replies:
+                return _joined_replies(replies)
     name = str(cmd.get("name") or "").strip()
     # The number the person actually wrote reaches the guard now, so the
     # guard can do its job: "-1" is refused instead of adding one, and
@@ -14160,6 +14237,16 @@ async def _handle_line_item_intent(
                 if offered is not None:
                     return offered
 
+    if action in ("create", "add") and message and len(_product_clauses(message)) > 1 \
+            and (parsed is None or parsed.get("op") == "add"):
+        handled = await _handle_line_item_command(
+            client, ctx=ctx, license_id=license_id,
+            cmd={"op": "add", "name": name or None, "qty": 1, "price": None, "more": False,
+                 "code": code or None, "unit": _item_unit_word(message)},
+            message=_with_code(message, code), permission_keys=permission_keys, language=language,
+        )
+        if handled is not None:
+            return handled
     if action == "create" and parsed is None:
         # "เพิ่มสินค้า เคสคอมพิวเตอร์ ให้ดีล D-2026-0001 หน่อย" (test team,
         # 10 ก.ย. 2569): read correctly, then asked "กรุณาระบุรายละเอียดที่
@@ -14748,6 +14835,24 @@ async def _handle_deal_product_add(
     for word in ("เข้าดีล", "ในดีล", "ให้ดีล", "to deal", "เข้า"):
         text = text.replace(word, " ")
 
+    clauses = _product_clauses(text)
+    if len(clauses) > 1:
+        replies = []
+        for clause in clauses:
+            clause_name, clause_qty, clause_price = _line_parts_of_clause(clause)
+            if not clause_name:
+                continue
+            replies.append(await _handle_deal_product_add(
+                client, ctx=ctx, license_id=license_id,
+                message=_joined_words(
+                    "เพิ่มสินค้า", clause_name, f"{clause_qty} ตัว",
+                    f"ราคา {clause_price}" if clause_price else "", f"เข้าดีล {deal_code}",
+                ),
+                trigger="เพิ่มสินค้า", permission_keys=permission_keys, language=language,
+            ))
+        if replies:
+            return _joined_replies(replies)
+
     qty = 1
     qty_match = _QTY_RE.search(text)
     price = None
@@ -15173,10 +15278,22 @@ def _product_clause_of_deal_sentence(message: str, target_name: str | None) -> s
             rest = rest.replace(form, " ", 1)
     rest = re.sub(r"^\s*(?:ให้ลูกค้า|ให้|สำหรับ|for)\s+", "", rest)
     cut = len(rest)
-    for word in ("ปิดสิ้นเดือน", "ปิดภายใน", "ปิดวันที่", "ปิด", "คาดว่าจะปิด", "มูลค่า", "ราคารวม", "close", "worth", "value", "แล้วสร้างใบเสนอราคา", "แล้วก็", "และ"):
+    for word in ("ปิดสิ้นเดือน", "ปิดภายใน", "ปิดวันที่", "ปิด", "คาดว่าจะปิด", "มูลค่า", "ราคารวม", "close", "worth", "value", "แล้วสร้างใบเสนอราคา"):
         i = rest.lower().find(word)
         if i != -1 and i < cut:
             cut = i
+    # "พัดลม 50 ตัว และ แอร์ 2 ตัว" is two products; "พัดลม 50 ตัว และนัดพรุ่งนี้"
+    # is a product and something else. The conjunction ends the clause
+    # only when what follows it counts nothing.
+    for word in ("แล้วก็", "และ"):
+        i = rest.lower().find(word)
+        while i != -1 and i < cut:
+            after = rest[i + len(word):cut]
+            if _QTY_RE.search(after) or _PRICE_RE.search(after):
+                i = rest.lower().find(word, i + len(word))
+                continue
+            cut = i
+            break
     rest = re.sub(r"\s+", " ", rest[:cut]).strip(" :·-,")
     if not rest or not (_QTY_RE.search(rest) or _PRICE_RE.search(rest)):
         return None
@@ -19996,9 +20113,27 @@ async def _restore_flow(client: DataClient, ctx: ResolvedContext, original: dict
 CUSTOMER_CODE_RE = re.compile(r"(?<![A-Za-z0-9])(C-\d{4}-\d{4})(?![0-9])", re.IGNORECASE)
 QUOTE_CODE_RE = re.compile(r"(?<![A-Za-z0-9])(Q-\d{4}-\d{4})(?![0-9])", re.IGNORECASE)
 QUOTE_DETAIL_TEXT = {
-    "th": "ใบเสนอราคา {code} · {status}\nดีล: {deal}\nรายการ: {lines} รายการ{discount}{doc}",
-    "en": "Quote {code} · {status}\nDeal: {deal}\nLines: {lines}{discount}{doc}",
+    "th": "ใบเสนอราคา {code} · {status}\nดีล: {deal}\n{lines}{discount}{doc}",
+    "en": "Quote {code} · {status}\nDeal: {deal}\n{lines}{discount}{doc}",
 }
+QUOTE_NO_LINES = {"th": "ยังไม่มีรายการสินค้าในใบเสนอราคานี้", "en": "No line items on this quote yet"}
+
+
+def _quote_lines_block(lines: list[dict], language: str) -> str:
+    """The quote's lines and their sum, laid out like the deal card — the
+    card used to say only "รายการ: 2 รายการ" (owner, 16 ก.ย. 2569)."""
+    if not lines:
+        return _t(QUOTE_NO_LINES, language)
+    items = build_line_items(list(lines))
+    rows = ["Line items:" if language == "en" else "รายการสินค้า:"]
+    for item in items:
+        rows.append(f"  {item['line_no']}. {item['product_name']} × {item['qty']} = {Decimal(item['line_total']):,.2f}")
+    subtotal = sum(Decimal(i["line_total"]) for i in items)
+    rows.append(
+        f"Total: {subtotal:,.2f} THB (before tax)" if language == "en"
+        else f"รวม: {subtotal:,.2f} บาท (ยังไม่รวมภาษี)"
+    )
+    return "\n".join(rows)
 QUOTE_HAS_DOCUMENT = {"th": "\nมีเอกสารแล้ว", "en": "\nDocument issued"}
 
 
@@ -20067,7 +20202,7 @@ async def _handle_quote_detail(
     return ChatReply(
         text=_t(QUOTE_DETAIL_TEXT, language).format(
             code=code, status=_label(QUOTE_STATUS_LABELS, quote.get("status"), language),
-            deal=deal_code or "-", lines=len(lines),
+            deal=deal_code or "-", lines=_quote_lines_block(lines, language),
             discount=_quote_discount_line(quote, language),
             doc=_t(QUOTE_HAS_DOCUMENT, language) if quote.get("generated_document_id") else "",
         ),
@@ -22755,7 +22890,8 @@ async def _model_road(
             missing=missing,
             ttl_seconds=PENDING_INTENT_TTL_S,
         )
-        return ChatReply(text=notice + ask_for_missing(missing, language), intent=intent)
+        left_out = _items_left_for_later(intent, language)
+        return ChatReply(text=notice + ask_for_missing(missing, language) + left_out, intent=intent)
 
     # Nothing outstanding any more: whatever was open is either now complete
     # or has been abandoned for a new request. Either way it must not linger
@@ -22770,14 +22906,67 @@ async def _model_road(
         fields.pop("_abandoned", None)
         intent = {**intent, "fields": fields}
 
-    reply = await _execute_intent(
-        client, intent=intent, ctx=ctx, license_id=license_id, message=message,
-        permission_keys=permission_keys, language=language, abandoned=carried,
-        ai_client=ai_client,
-    )
+    together = _items_read_together(intent)
+    if together:
+        replies = []
+        for item in together:
+            replies.append(await _execute_intent(
+                client, intent=item, ctx=ctx, license_id=license_id, message="",
+                permission_keys=permission_keys, language=language, ai_client=ai_client,
+            ))
+        reply = _joined_replies(replies)
+    else:
+        reply = await _execute_intent(
+            client, intent={k: v for k, v in intent.items() if k != "and_then"}, ctx=ctx,
+            license_id=license_id, message=message,
+            permission_keys=permission_keys, language=language, abandoned=carried,
+            ai_client=ai_client,
+        )
     if notice and (reply.text or "").strip():
         reply.text = notice + reply.text
     return reply
+
+
+_READ_TOGETHER_ENTITIES = ("line_item", "product")
+
+
+def _items_read_together(intent: dict) -> list[dict]:
+    """The readings to run one after another, when the model answered a
+    sentence about several products with one reading per product (16 ก.ย.
+    2569: "เพิ่มพัดลม 2 ตัว และ แอร์ 1 ตัว" → two line_item creates). Each
+    reading carries its own fields, so each runs on the fields alone — the
+    sentence would make every one of them re-read the whole list. Empty
+    when there is one reading, or when the extra readings are not more of
+    the same kind of item — those are dropped rather than guessed at."""
+    more = [m for m in (intent.get("and_then") or []) if isinstance(m, dict)]
+    if not more:
+        return []
+    items = [{k: v for k, v in intent.items() if k != "and_then"}, *more]
+    for item in items:
+        verb = ACTION_ALIASES.get(str(item.get("action") or "").lower(), str(item.get("action") or "").lower())
+        if str(item.get("entity") or "") not in _READ_TOGETHER_ENTITIES or verb != "create":
+            return []
+    return items
+
+
+def _items_left_for_later(intent: dict, language: str) -> str:
+    """When the first of several items still needs a detail, the rest wait
+    — said, not dropped."""
+    names = []
+    for more in intent.get("and_then") or []:
+        fields = (more.get("fields") or {}) if isinstance(more, dict) else {}
+        name = str(fields.get("target_name") or fields.get("product_name") or "").strip()
+        if name:
+            names.append(name)
+    if not names:
+        return ""
+    return _t(ITEMS_LEFT_FOR_LATER, language).format(names=", ".join(names))
+
+
+ITEMS_LEFT_FOR_LATER = {
+    "th": "\n(ส่วน {names} ให้แจ้งเพิ่มอีกครั้งหลังจากรายการนี้บันทึกแล้ว)",
+    "en": "\n({names} can be added once this one is saved.)",
+}
 
 
 async def _execute_intent(

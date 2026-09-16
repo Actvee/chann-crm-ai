@@ -278,6 +278,24 @@ class TestIntentJsonParsing:
         with pytest.raises(AIUnavailable):
             parse_intent_json("I could not do that.")
 
+    def test_several_objects_are_several_readings(self):
+        """DEV's model answers "เพิ่มพัดลม 2 ตัว และ แอร์ 1 ตัว" with one object
+        per product on separate lines (16 ก.ย. 2569) — not "Extra data"."""
+        out = parse_intent_json(
+            '{"action": "create", "entity": "line_item", "fields": {"target_name": "พัดลม", "qty": 2}}\n'
+            '{"action": "create", "entity": "line_item", "fields": {"target_name": "แอร์", "qty": 1}}'
+        )
+        assert out["fields"]["target_name"] == "พัดลม"
+        assert [m["fields"]["target_name"] for m in out["and_then"]] == ["แอร์"]
+        assert out["and_then"][0]["missing"] == []
+
+    def test_a_json_array_is_several_readings_too(self):
+        out = parse_intent_json('[{"action":"read"},{"action":"create","entity":"product"},{"no":"action"}]')
+        assert out["action"] == "read" and [m["entity"] for m in out["and_then"]] == ["product"]
+
+    def test_a_single_object_carries_no_and_then(self):
+        assert "and_then" not in parse_intent_json('{"action":"read"}')
+
     def test_json_without_action_raises(self):
         with pytest.raises(AIUnavailable):
             parse_intent_json('{"entity":"customer"}')

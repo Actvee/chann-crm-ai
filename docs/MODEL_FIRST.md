@@ -85,6 +85,17 @@ The model proposes. Before anything is written, the code checks, in this order:
 
 None of that moves to the model. Ever.
 
+**Several readings of one sentence (round 19d, 16 ก.ย. 2569).** Asked about several
+products at once ("เพิ่มพัดลม 2 ตัว และ แอร์ 1 ตัว"), DEV's model answers with one JSON
+object per product on separate lines. That is a correct reading, not a broken one:
+`parse_intent_json` keeps the first as the intent and the rest under `and_then`, and
+`_model_road` runs them one after another — only when every one of them is a create of
+the same kind of item (`line_item`, `product`). Extra readings of any other kind are
+dropped, never guessed at. When the model instead returns one object and drops the
+second product, the sentence itself still says there were two: `_product_clauses` splits
+it downstream, in the handlers, where each part carries its own quantity or price. Both
+are conversions of the model's reading, not gates in front of it.
+
 ## Where it stands
 
 **All three OAs read first (11 ก.ย. 2569).** `_route_chat_message` asks the model before

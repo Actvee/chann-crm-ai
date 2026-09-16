@@ -53,6 +53,10 @@ def _sales(**kw) -> FakeDataClient:
     return FakeDataClient(permission_keys=KEYS, customers=[dict(c) for c in CUSTOMERS], **kw)
 
 
+def _quoting_sales(**kw) -> FakeDataClient:
+    return FakeDataClient(permission_keys=[*KEYS, "quote.read", "quote.update"], customers=[dict(c) for c in CUSTOMERS], **kw)
+
+
 class TestRegisteringAUnitAsksForTheSerialInWords:
     async def test_the_question_names_the_serial(self):
         """Tester: 'ลงทะเบียน พัดลม ให้ เวหา' was answered 'กรุณาระบุรายละเอียดที่เหลือ'."""
@@ -310,3 +314,119 @@ class TestADealSentenceWithAProductLine:
         reply, writes = await _say(client, "สร้างดีล พัดลม 50 ตัว ปิดสิ้นเดือนนี้", {"action": "create", "entity": "deal", "fields": {"amount": 50, "expected_close_date": "2026-09-30"}, "missing": ["target_name"]})
         assert {"create_deal", "add_deal_product"} <= writes, (reply.text, writes)
         assert "สมหญิง รักดี" in reply.text and "พัดลม × 50" in reply.text and "มูลค่า 50 " not in reply.text, reply.text
+
+
+def _writes(client, since: int, *names: str) -> list:
+    return [r for r in client.recorded[since:] if r[0] in names]
+
+
+class TestSeveralProductsInOneSentence:
+    """Owner, 16 ก.ย. 2569: 'เพิ่มพัดลม 1 ตัว และ แอร์ 1 ตัว' looked for a product called
+    "พัดลม และ แอร์" — on the deal, on the quote and in the catalogue only one product
+    at a time could be added. DEV's model answers such a sentence with one JSON object per
+    product (raw replies read 16 ก.ย.); the parser used to reject that as "Extra data"."""
+
+    DEAL = {"id": "d1", "deal_id": "D-2026-0001", "contact_id": "c1", "stage": "proposed", "amount": 0, "products": []}
+    PRODUCTS = [
+        {"id": "p1", "product_id": "FAN16", "product_name": "พัดลม", "unit_price": 1500},
+        {"id": "p2", "product_id": "AIR12", "product_name": "แอร์", "unit_price": 12000},
+    ]
+    TWO_LINES = {
+        "action": "create", "entity": "line_item", "fields": {"target_name": "พัดลม", "qty": 2}, "missing": [],
+        "and_then": [{"action": "create", "entity": "line_item", "fields": {"target_name": "แอร์", "qty": 1}, "missing": []}],
+    }
+
+    def _with_deal_in_view(self):
+        client = _quoting_sales(deals=[dict(self.DEAL, products=[])])
+        client._products = [dict(p) for p in self.PRODUCTS]
+        return client
+
+    async def test_two_readings_put_two_lines_on_the_deal(self):
+        client = self._with_deal_in_view()
+        await _say(client, "ข้อมูลดีล D-2026-0001", {"action": "read", "entity": "deal", "fields": {"code": "D-2026-0001"}, "missing": []})
+        since = len(client.recorded)
+        reply, _ = await _say(client, "เพิ่มพัดลม 2 ตัว และ แอร์ 1 ตัว", self.TWO_LINES)
+        added = [w[3]["product_name"] for w in _writes(client, since, "add_deal_product")]
+        assert added == ["พัดลม", "แอร์"], (reply.text, added)
+        assert "พัดลม × 2" in reply.text and "แอร์ × 1" in reply.text, reply.text
+        assert reply.entity_type == "deal" and reply.entity_id == "d1"
+
+    async def test_one_reading_that_dropped_the_second_product_still_adds_both(self):
+        """The model sometimes returns only the first product for this sentence — the
+        sentence itself says there are two."""
+        client = self._with_deal_in_view()
+        await _say(client, "ข้อมูลดีล D-2026-0001", {"action": "read", "entity": "deal", "fields": {"code": "D-2026-0001"}, "missing": []})
+        since = len(client.recorded)
+        reply, _ = await _say(client, "เพิ่มพัดลม 1 ตัว และ แอร์ 1 ตัว", {"action": "create", "entity": "line_item", "fields": {"target_name": "พัดลม", "qty": 1}, "missing": []})
+        added = [w[3]["product_name"] for w in _writes(client, since, "add_deal_product")]
+        assert added == ["พัดลม", "แอร์"], (reply.text, added)
+
+    async def test_two_readings_put_two_lines_on_the_quote(self):
+        client = self._with_deal_in_view()
+        client._quotes = [{"id": "QUOTE-1", "quote_id": "Q-2026-0001", "deal_id": "d1", "status": "draft", "generated_document_id": None}]
+        await _say(client, "ข้อมูลใบเสนอราคา Q-2026-0001", {"action": "read", "entity": "quote", "fields": {"code": "Q-2026-0001"}, "missing": []})
+        since = len(client.recorded)
+        reply, _ = await _say(client, "เพิ่มสินค้าในใบเสนอราคา พัดลม 2 ตัว และ แอร์ 1 ตัว", self.TWO_LINES)
+        added = [w[3]["product_name"] for w in _writes(client, since, "add_quote_product")]
+        assert added == ["พัดลม", "แอร์"], (reply.text, added)
+        assert "เข้าใบเสนอราคา Q-2026-0001" in reply.text and "เข้าดีล Q-" not in reply.text, reply.text
+
+    async def test_a_deal_sentence_with_two_products_gets_both_lines(self):
+        client = _sales()
+        client._products = [dict(p) for p in self.PRODUCTS]
+        since = len(client.recorded)
+        reply, writes = await _say(client, "สร้างดีลให้ สมชาย ใจดี พัดลม 50 ตัว และ แอร์ 2 ตัว ปิดสิ้นเดือนนี้", {"action": "create", "entity": "deal", "fields": {"target_name": "สมชาย ใจดี", "expected_close_date": "2026-09-30"}, "missing": []})
+        assert "create_deal" in writes, reply.text
+        added = [w[3]["product_name"] for w in _writes(client, since, "add_deal_product")]
+        assert added == ["พัดลม", "แอร์"], (reply.text, added)
+
+    async def test_two_catalogue_products_in_one_sentence(self):
+        client = _sales()
+        since = len(client.recorded)
+        reply, _ = await _say(client, "เพิ่มสินค้าเข้าคลัง พัดลม รหัส FAN01 ราคา 1500 กับ แอร์ รหัส AIR01 ราคา 12000", {
+            "action": "create", "entity": "product", "fields": {"product_id": "FAN01", "product_name": "พัดลม", "unit_price": 1500}, "missing": [],
+            "and_then": [{"action": "create", "entity": "product", "fields": {"product_id": "AIR01", "product_name": "แอร์", "unit_price": 12000}, "missing": []}],
+        })
+        saved = [w[2] for w in _writes(client, since, "upsert_product")]
+        assert saved == ["FAN01", "AIR01"], (reply.text, saved)
+        assert "FAN01" in reply.text and "AIR01" in reply.text, reply.text
+
+    async def test_the_first_item_missing_a_detail_holds_it_and_says_the_rest_wait(self):
+        client = _sales()
+        reply, _ = await _say(client, "เพิ่มสินค้าใหม่ พัดลม ราคา 1500 บาท และ แอร์ ราคา 12000 บาท", {
+            "action": "create", "entity": "product", "fields": {"product_name": "พัดลม", "unit_price": 1500}, "missing": ["product_id"],
+            "and_then": [{"action": "create", "entity": "product", "fields": {"product_name": "แอร์", "unit_price": 12000}, "missing": ["product_id"]}],
+        })
+        assert not _writes(client, 0, "upsert_product"), reply.text
+        assert "แอร์" in reply.text and "รหัส" in reply.text, reply.text
+        held = await client.get_pending_intent("CHN-S-000001", "sales")
+        assert held and held["entity"] == "product" and held["fields"]["product_name"] == "พัดลม"
+
+    async def test_extra_readings_of_another_kind_are_not_run(self):
+        """Two readings are run together only when they are more of the same kind of
+        item; a note read alongside a customer edit is not a second command."""
+        from chann_app.services.chat import _items_read_together
+        assert _items_read_together({"action": "update", "entity": "customer", "fields": {}, "and_then": [{"action": "create", "entity": "note", "fields": {}}]}) == []
+        assert len(_items_read_together(self.TWO_LINES)) == 2
+        assert _items_read_together({"action": "create", "entity": "line_item", "fields": {}}) == []
+
+
+class TestTheQuoteCardListsItsLines:
+    """Owner, 16 ก.ย. 2569: 'ตอนขอข้อมูลใบเสนอราคา ก็ไม่ละเอียด ไม่มีรายการสินค้าเหมือนดีล'."""
+
+    async def test_lines_and_total_are_on_the_card(self):
+        client = _quoting_sales(deals=[{"id": "d1", "deal_id": "D-2026-0001", "contact_id": "c1", "stage": "proposed", "amount": 0, "products": []}])
+        client._quotes = [{"id": "QUOTE-1", "quote_id": "Q-2026-0001", "deal_id": "d1", "status": "draft", "generated_document_id": None}]
+        client._quote_lines = [
+            {"id": "ql-1", "quote_id": "QUOTE-1", "product_name": "พัดลม", "qty": 2, "quoted_unit_price": 1500},
+            {"id": "ql-2", "quote_id": "QUOTE-1", "product_name": "แอร์", "qty": 1, "quoted_unit_price": 12000},
+        ]
+        reply, _ = await _say(client, "ข้อมูลใบเสนอราคา Q-2026-0001", {"action": "read", "entity": "quote", "fields": {"code": "Q-2026-0001"}, "missing": []})
+        assert "1. พัดลม × 2 = 3,000.00" in reply.text and "2. แอร์ × 1 = 12,000.00" in reply.text, reply.text
+        assert "รวม: 15,000.00 บาท" in reply.text and "ดีล: D-2026-0001" in reply.text, reply.text
+
+    async def test_an_empty_quote_says_so(self):
+        client = _quoting_sales(deals=[{"id": "d1", "deal_id": "D-2026-0001", "contact_id": "c1", "stage": "proposed", "amount": 0, "products": []}])
+        client._quotes = [{"id": "QUOTE-1", "quote_id": "Q-2026-0001", "deal_id": "d1", "status": "draft", "generated_document_id": None}]
+        reply, _ = await _say(client, "ข้อมูลใบเสนอราคา Q-2026-0001", {"action": "read", "entity": "quote", "fields": {"code": "Q-2026-0001"}, "missing": []})
+        assert "ยังไม่มีรายการสินค้า" in reply.text, reply.text

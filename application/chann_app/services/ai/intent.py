@@ -659,25 +659,63 @@ def parse_intent_json(raw: str) -> dict:
             text = text.split("```", 1)[0]
         text = text.strip()
 
-    if not text.startswith("{"):
+    if not text.startswith("{") and not text.startswith("["):
         start = text.find("{")
         end = text.rfind("}")
         if start == -1 or end <= start:
             raise AIUnavailable("model reply contained no JSON object")
         text = text[start : end + 1]
 
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise AIUnavailable(f"model reply was not valid JSON: {exc}") from exc
-
-    if not isinstance(parsed, dict):
+    values = _json_values(text)
+    if len(values) == 1 and isinstance(values[0], list):
+        values = values[0]
+    readings = [v for v in values if isinstance(v, dict)]
+    if not readings:
         raise AIUnavailable("model reply was not a JSON object")
 
+    parsed = _usable_intent(readings[0])
+    if parsed is None:
+        raise AIUnavailable("model reply had no usable 'action'")
+    and_then = [
+        usable for usable in (_usable_intent(r) for r in readings[1:]) if usable is not None
+    ]
+    if and_then:
+        parsed["and_then"] = and_then
+    return parsed
+
+
+def _json_values(text: str) -> list:
+    """Every JSON value in the reply, in order.
+
+    Asked for several products in one sentence ("เพิ่มพัดลม 2 ตัว และ แอร์
+    1 ตัว"), DEV's model answers with one object per product on separate
+    lines. json.loads calls that "Extra data" and the reading was thrown
+    away — the sentence then fell to the typed parser, which read "พัดลม
+    และ แอร์" as one product name (owner, 16 ก.ย. 2569). Several objects
+    are several readings, not a broken one."""
+    decoder = json.JSONDecoder()
+    values: list = []
+    index = 0
+    while index < len(text):
+        while index < len(text) and text[index] in " \r\n\t,":
+            index += 1
+        if index >= len(text):
+            break
+        try:
+            value, index = decoder.raw_decode(text, index)
+        except json.JSONDecodeError as exc:
+            if values:
+                break
+            raise AIUnavailable(f"model reply was not valid JSON: {exc}") from exc
+        values.append(value)
+    return values
+
+
+def _usable_intent(parsed: dict) -> dict | None:
+    """The reading with its shape guaranteed, or None when it has no action."""
     action = parsed.get("action")
     if not isinstance(action, str) or not action.strip():
-        raise AIUnavailable("model reply had no usable 'action'")
-
+        return None
     parsed.setdefault("entity", None)
     parsed.setdefault("fields", {})
     parsed.setdefault("missing", [])
@@ -736,4 +774,7 @@ async def parse_intent(
     fields = intent.get("fields")
     if isinstance(fields, dict):
         intent["fields"] = recover_free_text(fields, message)
+    for more in intent.get("and_then") or []:
+        if isinstance(more.get("fields"), dict):
+            more["fields"] = recover_free_text(more["fields"], message)
     return intent
