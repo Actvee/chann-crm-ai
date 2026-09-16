@@ -296,6 +296,11 @@ async def act(
             steps = await client.approval_steps_for_entity(license_id, ENTITY_TYPE, report_id)
             members = await client.list_members(license_id)
             result["next_step_ref"], result["next_approvers"] = next_approver_names(steps, members)
+            pending_now = [s for s in steps if s.get("status") == "pending"]
+            result["total_steps"] = len(steps)
+            result["next_step_order"] = min(
+                (int(s.get("step_order") or 0) for s in pending_now), default=None,
+            )
             await _notify_current_approvers(client, license_id, report, steps, language)
         except Exception:
             log.exception("could not notify the next approver for %s", report_id)

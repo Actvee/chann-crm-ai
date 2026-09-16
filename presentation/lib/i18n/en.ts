@@ -417,6 +417,7 @@ export const en: Dictionary = {
       settingsTitle: "Approval settings",
       settingsIntro: "Who reviews service reports, and in what order. Write it in plain language; it is turned into steps you can check before saving.",
       currentFlow: "Current flow",
+      currentFlowNote: "This applies to reports filed from now on — a report already filed keeps the steps it was filed under; open that report's card to see its own steps.",
       policyLabel: "Approval policy",
       policyHint: "e.g. the CS who owns the ticket first, then admin",
       savePolicy: "Save flow",

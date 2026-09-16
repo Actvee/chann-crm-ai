@@ -114,3 +114,38 @@ class TestApprovingTellsYouWhatIsLeft:
         client._line_targets = {}
         reply, _ = await _say(client, "อนุมัติ SR-2026-0001", APPROVE)
         assert "ไม่มี LINE" in reply.text, reply.text
+
+
+class TestTheReportShowsItsOwnSteps:
+    """Owner, 16 ก.ย. 2569: the dashboard's "ขั้นตอนปัจจุบัน" read "ขั้น 1: CS
+    เจ้าของงาน" while the report itself waited on a second step — the steps a
+    report carries are the ones it was FILED under, and an approval rule edited
+    afterwards does not rewrite them."""
+
+    TWO_STEPS = [
+        {"id": "step-1", "entity_type": "service_report", "entity_id": "r1", "workflow_id": "wf-1", "step_order": 1,
+         "approver_type": "user", "approver_ref": "MEMBER-1", "status": "pending", "acted_by": None, "acted_at": None, "reason": None},
+        {"id": "step-2", "entity_type": "service_report", "entity_id": "r1", "workflow_id": "wf-1", "step_order": 2,
+         "approver_type": "role", "approver_ref": "manager", "status": "pending", "acted_by": None, "acted_at": None, "reason": None},
+    ]
+
+    async def test_the_card_lists_every_step_and_who_it_waits_on(self):
+        client = _shop(steps=self.TWO_STEPS)
+        reply, _ = await _say(client, "ข้อมูลรายงาน SR-2026-0001", READ_REPORT)
+        assert "ขั้น 1 รออนุมัติ" in reply.text and "ขั้น 2 รออนุมัติ" in reply.text, reply.text
+        assert "บทบาท manager — ยังไม่มีสมาชิก" in reply.text, reply.text
+        assert "ถูกสร้างตอนช่างส่งรายงาน" in reply.text, reply.text
+
+    async def test_approving_one_says_which_step_is_left(self):
+        client = _shop(steps=self.TWO_STEPS)
+        reply, _ = await _say(client, "อนุมัติ SR-2026-0001", APPROVE)
+        assert "เหลือขั้นที่ 2 จาก 2" in reply.text, reply.text
+        assert ("อนุมัติขั้นถัดไป", "อนุมัติ SR-2026-0001") in reply.quick_replies, reply.quick_replies
+
+    async def test_a_finished_report_shows_its_steps_as_approved(self):
+        client = _shop(
+            report=dict(REPORT, status="approved", generated_document_id="doc-1"),
+            steps=[dict(TestTheReportShowsItsOwnSteps.TWO_STEPS[0], status="approved")],
+        )
+        reply, _ = await _say(client, "ข้อมูลรายงาน SR-2026-0001", READ_REPORT)
+        assert "ขั้น 1 อนุมัติแล้ว" in reply.text and "ถูกสร้างตอนช่างส่งรายงาน" not in reply.text, reply.text

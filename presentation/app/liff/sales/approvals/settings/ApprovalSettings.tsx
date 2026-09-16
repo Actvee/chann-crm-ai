@@ -131,6 +131,7 @@ export default function ApprovalSettings({ liffId }: { liffId: string }) {
         <div className="section-head">
           <h2>{t.dashboard.approvals.currentFlow}</h2>
         </div>
+        <p className="page-intro">{t.dashboard.approvals.currentFlowNote}</p>
         {workflow && (
           <pre className="flow-summary">{workflow.summary ?? ""}</pre>
         )}

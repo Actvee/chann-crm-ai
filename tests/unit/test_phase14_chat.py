@@ -227,7 +227,9 @@ class TestApprovingInChat:
         ]
         await _submit(c)
         first = await handle_chat_message(c, message="อนุมัติ SR-2026-0001", ctx=_ctx(primary_role="cs", oa="sales"))
-        assert "ขั้นถัดไป" in first.text
+        # Round 19k: the reply names the step it stops at ("เหลือขั้นที่ 2 จาก 2"),
+        # where it used to say only that it had been passed on.
+        assert "เหลือขั้นที่ 2 จาก 2" in first.text
         assert c._reports[0]["status"] == "submitted"
         assert not [p for p in pushes if p[0] == "messages"]
 

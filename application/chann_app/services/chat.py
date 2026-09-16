@@ -10205,14 +10205,61 @@ APPROVAL_NEXT_SURVEY_NOT_SENT = {
     "en": "\nAll steps passed (the customer has no LINE on file, so no survey was sent).",
 }
 APPROVAL_NEXT_STEP = {
-    "th": "\nส่งต่อให้ขั้นถัดไปแล้ว (ผู้อนุมัติ: {who})",
-    "en": "\nPassed on to the next approver ({who}).",
+    "th": "\nเหลือขั้นที่ {step} จาก {total} (ผู้อนุมัติ: {who})",
+    "en": "\nStep {step} of {total} remains (approver: {who}).",
 }
+APPROVAL_STEPS_LINE = {
+    "th": "\nขั้นตอนของรายงานนี้: {steps}",
+    "en": "\nThis report's steps: {steps}",
+}
+APPROVAL_STEPS_STALE = {
+    "th": "\n(ขั้นตอนนี้ถูกสร้างตอนช่างส่งรายงาน จึงอาจต่างจากกฎอนุมัติที่แก้ไปภายหลัง)",
+    "en": "\n(These steps were created when the report was filed, so they can differ from an approval rule changed afterwards.)",
+}
+_APPROVAL_STEP_STATUS = {
+    "pending": {"th": "รออนุมัติ", "en": "pending"},
+    "approved": {"th": "อนุมัติแล้ว", "en": "approved"},
+    "rejected": {"th": "ตีกลับ", "en": "sent back"},
+}
+
+
+def _approval_steps_line(steps: list[dict], members: list[dict], language: str) -> str:
+    """"ขั้น 1 อนุมัติแล้ว · ขั้น 2 รออนุมัติ (บทบาท cs — ยังไม่มีสมาชิก)".
+
+    The dashboard shows the CURRENT rule; a report carries the steps it was
+    filed under, and the two differ the moment the rule is edited (owner,
+    16 ก.ย. 2569: "ขั้นตอนปัจจุบัน" said one step while the report waited on
+    a second).
+    """
+    from . import approval as approval_service
+
+    rows = sorted(steps or [], key=lambda s: int(s.get("step_order") or 0))
+    if not rows:
+        return ""
+    parts = []
+    for step in rows:
+        status = _t(_APPROVAL_STEP_STATUS.get(str(step.get("status") or ""), _APPROVAL_STEP_STATUS["pending"]), language)
+        who = ""
+        if str(step.get("status") or "") == "pending":
+            names = [
+                str(m.get("display_name") or m.get("chann_uid") or "")
+                for m in approval_service.approvers_for(step, members or [])
+            ]
+            if names:
+                who = f" ({', '.join(n for n in names if n)})"
+            elif str(step.get("approver_type") or "") == "role":
+                who = (f" (บทบาท {step.get('approver_ref')} — ยังไม่มีสมาชิก)" if language != "en"
+                       else f" (role {step.get('approver_ref')} — nobody holds it)")
+        parts.append(f"ขั้น {step.get('step_order')} {status}{who}" if language != "en"
+                     else f"step {step.get('step_order')} {status}{who}")
+    return _t(APPROVAL_STEPS_LINE, language).format(steps=" · ".join(parts))
+
+
 APPROVAL_NEXT_NOBODY = {
-    "th": "\n⚠️ ขั้นถัดไปต้องการ \"{who}\" แต่ยังไม่มีสมาชิกที่เป็นบทบาทนี้ — แจ้งเจ้าของแล้ว "
-          "เจ้าของอนุมัติแทนได้ด้วย \"อนุมัติ {code}\" หรือแก้กฎอนุมัติ",
-    "en": "\n⚠️ The next step needs \"{who}\" and no member holds that role — the owner has been told; "
-          "the owner can approve it with \"approve {code}\", or change the approval rule.",
+    "th": "\n⚠️ เหลือขั้นที่ {step} จาก {total} ซึ่งต้องการ \"{who}\" แต่ยังไม่มีสมาชิกที่เป็นบทบาทนี้ — "
+          "กด \"อนุมัติขั้นถัดไป\" เพื่ออนุมัติแทนในฐานะเจ้าของ หรือแก้กฎอนุมัติ",
+    "en": "\n⚠️ Step {step} of {total} remains and needs \"{who}\", which no member holds — "
+          "tap \"approve the next step\" to approve it as the owner, or change the approval rule.",
 }
 APPROVAL_REJECTED = {
     "th": "ตีกลับ {code} แล้ว{reason}\nแจ้งช่างให้แก้แล้ว",
@@ -10443,12 +10490,18 @@ async def _handle_approval_act(
             }.get(str(result.get("survey_status") or ("sent" if result.get("survey_sent") else "no_line")),
                   APPROVAL_NEXT_SURVEY_FAILED), language)
         elif result.get("next_approvers"):
-            tail = _t(APPROVAL_NEXT_STEP, language).format(who=", ".join(result["next_approvers"]))
+            tail = _t(APPROVAL_NEXT_STEP, language).format(
+                who=", ".join(result["next_approvers"]),
+                step=result.get("next_step_order") or "?", total=result.get("total_steps") or "?",
+            )
         else:
             # A step nobody can act on (DEV, 14 ก.ย. 2569: a chain whose second
             # step named a role no member holds — the report sat "submitted"
             # and the customer heard nothing). Said here, and the owner told.
-            tail = _t(APPROVAL_NEXT_NOBODY, language).format(who=result.get("next_step_ref") or "?", code=report_code)
+            tail = _t(APPROVAL_NEXT_NOBODY, language).format(
+                who=result.get("next_step_ref") or "?", code=report_code,
+                step=result.get("next_step_order") or "?", total=result.get("total_steps") or "?",
+            )
         text = _t(APPROVAL_APPROVED, language).format(code=report_code, next=tail) + on_behalf
         if result.get("document_url"):
             text += f"\nPDF (7 วัน): {result['document_url']}"
@@ -21358,6 +21411,16 @@ async def _handle_report_detail(
         ticket_code = str((ticket or {}).get("ticket_number") or "")
     except Exception:
         pass
+    steps_line = ""
+    try:
+        steps = await client.approval_steps_for_entity(license_id, "service_report", str(report.get("id") or ""))
+        if steps:
+            members = await client.list_members(license_id)
+            steps_line = _approval_steps_line(steps, members, language)
+            if steps_line and any(str(s.get("status") or "") == "pending" for s in steps):
+                steps_line += _t(APPROVAL_STEPS_STALE, language)
+    except Exception:  # noqa: BLE001 — the card is still worth showing
+        log.exception("could not read the approval steps of %s", code)
     blank = _t(_NOT_SET, language)
     parts = str(data.get("parts_changed") or "")
     # Owner, 16 ก.ย. 2569: "ถ้าออกเอกสารแล้วเปลี่ยนเป็นคำว่าดูเอกสารแทน" —
@@ -21373,7 +21436,7 @@ async def _handle_report_detail(
             code=code, status=_label(REPORT_STATUS_LABELS, report.get("status"), language),
             ticket=ticket_code or "-", found=str(data.get("found_issue") or blank)[:120],
             done=str(data.get("work_done") or blank)[:120],
-            parts=_t(REPORT_PARTS_LINE, language).format(parts=parts[:80]) if parts else "",
+            parts=(_t(REPORT_PARTS_LINE, language).format(parts=parts[:80]) if parts else "") + steps_line,
         ),
         entity_type="service_report", entity_id=str(report.get("id") or ""),
         quick_replies=quick,
