@@ -3280,6 +3280,72 @@ WARRANTY_REGISTERED = {
     "th": "ลงทะเบียนรับประกันแล้วครับ\n{number} · {product}{end}",
     "en": "Registered.\n{number} · {product}{end}",
 }
+WARRANTY_NO_PURCHASE_DATE = {
+    "th": "\nยังไม่ระบุวันที่ซื้อ จึงยังไม่กำหนดวันหมดประกัน — ใส่ทีหลังได้: \"วันที่ซื้อ {serial} 1 ก.ย. 2569\"",
+    "en": "\nNo purchase date yet, so no end date — add it later: \"purchase date {serial} 2026-09-01\"",
+}
+WARRANTY_PURCHASE_SET = {
+    "th": "บันทึกวันที่ซื้อ {date} ของ S/N {serial} แล้ว คุ้มครองถึง {end}",
+    "en": "Purchase date {date} saved for S/N {serial} — covered until {end}",
+}
+WARRANTY_PURCHASE_NEEDS_DATE = {
+    "th": "วันที่ซื้อคือวันไหนครับ พิมพ์ เช่น \"วันที่ซื้อ {serial} 1 ก.ย. 2569\"",
+    "en": "Which date? e.g. \"purchase date {serial} 2026-09-01\"",
+}
+PRODUCT_WARRANTY_NOTE = {
+    "th": " · รับประกัน {months} เดือน (ใช้เป็นค่าเริ่มต้นตอนลงทะเบียนเครื่อง)",
+    "en": " · {months}-month warranty (the default when a unit is registered)",
+}
+_PURCHASE_LEAD_RE = re.compile(r"(?:วันที่ซื้อ|ซื้อเมื่อ|ซื้อวันที่|ซื้อตอน|ซื้อ|purchased?(?:\s+on)?|bought(?:\s+on)?)\s*[:：]?\s*", re.I)
+_WARRANTY_PERIOD_RE = re.compile(
+    r"(?:รับประกัน|ประกัน|warranty)\s*[:：]?\s*(\d+)\s*(ปี|เดือน|years?|yrs?|months?|mos?)(?![A-Za-z])|(\d+)\s*(ปี|เดือน|years?|months?)\s*(?:รับประกัน|ประกัน|warranty)",
+    re.I,
+)
+
+
+def _warranty_months_in(text: str) -> int | None:
+    """"ประกัน 2 ปี" → 24, "รับประกัน 18 เดือน" → 18, None when unsaid."""
+    match = _WARRANTY_PERIOD_RE.search(text or "")
+    if not match:
+        return None
+    number = match.group(1) or match.group(3)
+    unit = (match.group(2) or match.group(4) or "").lower()
+    months = int(number) * (12 if unit.startswith(("ปี", "y")) else 1)
+    return months if months > 0 else None
+
+
+def _purchase_terms(text: str, today=None) -> tuple[str | None, int | None]:
+    """(purchase date ISO, warranty months) said in a registration sentence:
+    "ลงทะเบียนสินค้า SN12345 แอร์ ให้ สมชาย ซื้อวันที่ 1 ก.ย. 2569 ประกัน 2 ปี"
+    → ("2026-09-01", 24). Either may be missing (owner, 16 ก.ย. 2569: the
+    date is optional; the period defaults to the product's)."""
+    from .thai_datetime import parse_thai_date
+    months = _warranty_months_in(text)
+    start = None
+    lead = _PURCHASE_LEAD_RE.search(text or "")
+    if lead:
+        clause = (text or "")[lead.end():]
+        clause = _WARRANTY_PERIOD_RE.split(clause)[0]
+        clause = re.split(r"\s+(?:ประกัน|รับประกัน|warranty|ให้|for)\b", clause)[0]
+        when = parse_thai_date(clause.strip(), today or local_today())
+        if when is not None:
+            start = when.isoformat()
+    if start is None:
+        iso = re.search(r"(?<!\d)(20\d{2}-\d{2}-\d{2})(?!\d)", text or "")
+        if iso and lead:
+            start = iso.group(1)
+    return start, months
+
+
+def _months_from_fields(fields: dict) -> int | None:
+    """warranty_months / warranty_period as the model returns them."""
+    raw = fields.get("warranty_months")
+    if raw not in (None, ""):
+        try:
+            return int(float(raw)) or None
+        except (TypeError, ValueError):
+            pass
+    return _warranty_months_in(str(fields.get("warranty_period") or fields.get("warranty") or ""))
 WARRANTY_NEEDS_SERIAL = {
     "th": "ขอหมายเลขเครื่อง (serial) ที่อยู่บนตัวสินค้าด้วยครับ",
     "en": "What is the serial number on the unit?",
@@ -3384,6 +3450,7 @@ async def _handle_warranty_register(
     if ctx.oa == "customer":
         return await _claim_for_customer(
             client, ctx=ctx, license_id=license_id, serial=serial, language=language,
+            warranty_start=_purchase_terms(message)[0],
         )
     if "warranty.create" not in set(permission_keys or []):
         return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
@@ -3437,6 +3504,7 @@ async def _handle_warranty_register(
             )
 
     try:
+        purchase_start, purchase_months = _purchase_terms(message)
         row = await client.register_warranty(
             license_id,
             {
@@ -3445,6 +3513,8 @@ async def _handle_warranty_register(
                 "contact_id": contact_id,
                 "product_id": str(product["id"]) if product else None,
                 "product_name": (product or {}).get("product_name"),
+                "warranty_start": purchase_start,
+                "warranty_months": purchase_months,
             },
             actor_id=ctx.chann_uid,
         )
@@ -3468,7 +3538,7 @@ async def _handle_warranty_register(
         number=(row.get("warranty_number") or "-"),
         product=row.get("product_name") or serial,
         end=("\nคุ้มครองถึง " if language != "en" else "\nCovered until ") + _iso_to_thai_date(row.get("warranty_end"))
-        if row.get("warranty_end") else "",
+        if row.get("warranty_end") else _t(WARRANTY_NO_PURCHASE_DATE, language).format(serial=serial),
     )
     if contact_name:
         code = str(named[2] or "") if named else ""
@@ -3523,15 +3593,16 @@ SERIAL_CLAIMED_BY_OTHER = {
 
 async def _claim_for_customer(
     client: DataClient, *, ctx: ResolvedContext, license_id: str, serial: str,
-    language: str,
+    language: str, warranty_start: str | None = None,
 ) -> ChatReply:
-    outcome, row = await _claim_serial(client, ctx, license_id, serial)
+    outcome, row = await _claim_serial(client, ctx, license_id, serial, warranty_start=warranty_start)
     if outcome == "ok":
         return ChatReply(
             text=_t(WARRANTY_CLAIMED, language).format(
                 product=row.get("product_name") or ("เครื่อง" if language != "en" else "Unit"),
                 serial=serial, number=(row.get("warranty_number") or "-"),
-                end=_iso_to_thai_date(row.get("warranty_end")),
+                end=_iso_to_thai_date(row.get("warranty_end")) if row.get("warranty_end")
+                else ("ยังไม่ระบุวันที่ซื้อ" if language != "en" else "no purchase date yet"),
             ),
             entity_type="warranty", entity_id=str(row.get("id") or ""),
             quick_replies=[("แจ้งซ่อม", "แจ้งซ่อม"), ("ประกันของฉัน", "ประกันของฉัน")],
@@ -3577,14 +3648,60 @@ async def _contact_id_of(client: DataClient, license_id: str, chann_uid: str) ->
     return ""
 
 
+async def _handle_warranty_purchase_date(
+    client: DataClient, *, ctx: ResolvedContext, license_id, fields: dict, message: str,
+    permission_keys: list[str], language: str,
+) -> ChatReply:
+    """"วันที่ซื้อ SN12345 1 ก.ย. 2569": the purchase date (and optionally
+    the period) of a unit registered without one; the end date follows."""
+    if "warranty.update" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    license_id = str(license_id)
+    match = SERIAL_RE.search(message or "")
+    serial = (match.group(1) if match else str(fields.get("serial_number") or "")).upper()
+    if not serial:
+        return ChatReply(text=_t(WARRANTY_NEEDS_SERIAL, language))
+    start, months = _purchase_terms(message)
+    start = start or str(fields.get("purchase_date") or fields.get("warranty_start") or "").strip()[:10] or None
+    months = months or _months_from_fields(fields)
+    if not start and not months:
+        return ChatReply(text=_t(WARRANTY_PURCHASE_NEEDS_DATE, language).format(serial=serial))
+    try:
+        rows = await client.list_warranties(license_id, serial_number=serial)
+    except Exception:
+        log.exception("could not find warranty %s", serial)
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    row = next((r for r in rows if str(r.get("serial_number") or "").upper() == serial), None)
+    if row is None:
+        return ChatReply(text=_t(SERIAL_NOT_AT_SHOP, language).format(serial=serial))
+    try:
+        saved = await client.update_warranty(
+            license_id, str(row["id"]), {"warranty_start": start, "warranty_months": months}, actor_id=ctx.chann_uid,
+        )
+    except Exception:
+        log.exception("could not set the purchase date of %s", serial)
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    await _remember_entity(client, ctx, entity_type="warranty", entity_id=str(row.get("id") or ""), code=serial)
+    return ChatReply(
+        text=_t(WARRANTY_PURCHASE_SET, language).format(
+            date=_iso_to_thai_date(saved.get("warranty_start")) or (start or "-"), serial=serial,
+            end=_iso_to_thai_date(saved.get("warranty_end")) or "-",
+        ),
+        entity_type="warranty", entity_id=str(row.get("id") or ""),
+        quick_replies=[("เช็คประกัน", f"เช็คประกัน {serial}")],
+    )
+
+
 async def _claim_serial(
     client: DataClient, ctx: ResolvedContext, license_id: str, serial: str,
+    warranty_start: str | None = None,
 ) -> tuple[str, dict]:
     """("ok" | "not_found" | "taken" | "error", row)."""
     try:
         row = await client.claim_warranty(
             license_id,
-            {"serial_number": serial, "customer_chann_uid": ctx.chann_uid},
+            {"serial_number": serial, "customer_chann_uid": ctx.chann_uid,
+             **({"warranty_start": warranty_start} if warranty_start else {})},
             actor_id=ctx.chann_uid,
         )
         return "ok", row
@@ -3672,6 +3789,120 @@ def _chat_start_text(message: str) -> str | None:
         if lowered == phrase or lowered.startswith(phrase + " "):
             return text[len(phrase):].strip(" \t:：-—")
     return None
+
+
+_SHOP_CHAT_WORDS = ("คุยกับลูกค้า", "แชทกับลูกค้า", "ทักลูกค้า", "เปิดแชทกับ", "เริ่มแชทกับ", "เปิดห้องแชทกับ", "ส่งข้อความหาลูกค้า",
+                    "chat with the customer", "chat with customer", "message the customer", "talk to the customer", "open a chat with")
+SHOP_CHAT_STARTED = {
+    "th": "เปิดห้องแชทกับ {name} แล้ว{first}\nตอบได้ที่ หน้าจอ > แชทลูกค้า (ตอบใน LINE นี้ไม่ถึงลูกค้า)",
+    "en": "Chat with {name} is open.{first}\nAnswer under home > Customer chats (a reply in this LINE does not reach them).",
+}
+SHOP_CHAT_FIRST_LINE = {"th": "\nส่งให้ลูกค้าแล้ว: \"{text}\"", "en": "\nSent: \"{text}\""}
+SHOP_CHAT_INVITED = {"th": "\nส่งคำเชิญให้ลูกค้าทาง LINE แล้ว", "en": "\nThe customer was invited in LINE."}
+SHOP_CHAT_NO_LINE = {
+    "th": "{name} ยังไม่ได้ผูก LINE กับร้าน จึงเปิดห้องแชทไม่ได้ — ให้ลูกค้าเพิ่มเพื่อน LINE ลูกค้าแล้วพิมพ์รหัสร้านหรือ S/N ก่อน",
+    "en": "{name} has no LINE linked to this shop, so no chat can be opened — have them add the customer OA and type the shop code or S/N first.",
+}
+SHOP_CHAT_WHO = {
+    "th": "จะคุยกับลูกค้าคนไหนครับ พิมพ์ชื่อหรือเลขงาน เช่น \"คุยกับลูกค้า สมชาย\" หรือ \"คุยกับลูกค้า T-2026-0001\"",
+    "en": "Which customer? e.g. \"chat with customer Somchai\" or \"chat with customer T-2026-0001\"",
+}
+
+
+def _asks_to_chat_with_customer(message: str) -> bool:
+    compact = _normalise(message)
+    return any(w.replace(" ", "") in compact for w in _SHOP_CHAT_WORDS)
+
+
+def _shop_chat_first_line(message: str) -> str:
+    """The text after a colon or quotes: "คุยกับลูกค้า สมชาย: พรุ่งนี้ช่างไปได้ไหม"."""
+    text = message or ""
+    for sep in (":", "：", " ว่า ", '"', "“"):
+        if sep in text:
+            tail = text.split(sep, 1)[1].strip(' "”')
+            if tail:
+                return tail[:1000]
+    return ""
+
+
+async def _handle_shop_chat_start(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str, intent: dict | None,
+    permission_keys: list[str], language: str,
+) -> ChatReply:
+    """"คุยกับลูกค้า สมชาย" / "คุยกับลูกค้า T-2026-0001" on the sales OA: open
+    the conversation with a customer the shop knows (round 19g)."""
+    if "chat_session.reply" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    license_id = str(license_id)
+    name = ""
+    chann_uid = ""
+    code_match = TICKET_CODE_RE.search(message or "")
+    if code_match:
+        code = code_match.group(1).upper()
+        try:
+            tickets = await client.list_tickets(license_id)
+        except Exception:
+            tickets = []
+        ticket = next((t for t in tickets if str(t.get("ticket_number") or "").upper() == code), None)
+        if ticket is None:
+            return ChatReply(text=_t(NOT_FOUND_BY_CODE, language).format(what="งาน", code=code))
+        chann_uid = str(ticket.get("customer_chann_uid") or "")
+        name = str(ticket.get("customer_name") or code)
+    else:
+        try:
+            named = await _customer_named_in(client, license_id, message, permission_keys)
+        except _AmbiguousName as exc:
+            return await _name_pick(client, ctx, message, exc, language)
+        except Exception:
+            named = None
+        if not named and intent:
+            target = str((intent.get("fields") or {}).get("target_name") or "").strip()
+            if target:
+                try:
+                    named = await _customer_named_in(client, license_id, target, permission_keys)
+                except _AmbiguousName as exc:
+                    return await _name_pick(client, ctx, message, exc, language)
+                except Exception:
+                    named = None
+        if not named:
+            ref = await _last_entity_ref(client, ctx)
+            if ref and str(ref.get("entity_type") or "") == "customer":
+                named = (None, str(ref.get("entity_id") or ""), str(ref.get("code") or ""))
+        if not named:
+            return ChatReply(
+                text=_t(SHOP_CHAT_WHO, language),
+                quick_replies=[("รายชื่อลูกค้า", "รายชื่อลูกค้า")],
+            )
+        try:
+            customer = await client.get_customer(license_id, str(named[1]))
+        except Exception:
+            customer = None
+        if not customer:
+            return ChatReply(text=_t(CUSTOMER_NOT_FOUND, language).format(name=str(named[2] or "")))
+        chann_uid = str(customer.get("customer_chann_uid") or "")
+        name = _display_name(customer)
+    if not chann_uid:
+        return ChatReply(text=_t(SHOP_CHAT_NO_LINE, language).format(name=name))
+    try:
+        member = await client.get_member(license_id, ctx.chann_uid, channel=member_channel(ctx.oa))
+    except Exception:
+        member = None
+    first = _shop_chat_first_line(message)
+    try:
+        session, _created = await live_chat.start_session_by_shop(
+            client, license_id=license_id, customer_chann_uid=chann_uid,
+            member_id=str((member or {}).get("id") or "") or None, agent_chann_uid=ctx.chann_uid,
+            first_message=first or None, language=language,
+        )
+    except Exception:
+        log.exception("the shop could not open a chat with %s", chann_uid)
+        return ChatReply(text=_t(CHAT_OPEN_FAILED, language))
+    tail = _t(SHOP_CHAT_FIRST_LINE, language).format(text=first[:80]) if first else _t(SHOP_CHAT_INVITED, language)
+    return ChatReply(
+        text=_t(SHOP_CHAT_STARTED, language).format(name=name, first=tail),
+        entity_type="chat_session", entity_id=str(session.get("id") or ""),
+        quick_reply_url=_dashboard_button("chats", language),
+    )
 
 
 async def _handle_customer_chat_start(
@@ -10671,6 +10902,7 @@ DASHBOARD_PATHS = {
     "members": "members",
     "guide": "guide",
     "chats": "chats",
+    "chats": "chats",
     # The document-templates page, so a chat-designed draft can be opened,
     # previewed and published on screen as well as from the reply.
     "templates": "templates",
@@ -14543,6 +14775,12 @@ async def _handle_ai_understood_intent(
                 client, license_id=license_id,
                 permission_keys=permission_keys, language=language,
             )
+
+    if entity == "warranty" and action == "update":
+        return await _handle_warranty_purchase_date(
+            client, ctx=ctx, license_id=license_id, fields=fields, message=message,
+            permission_keys=permission_keys, language=language,
+        )
 
     if entity == "warranty" and action == "create":
         return await _handle_warranty_register(
@@ -19574,7 +19812,7 @@ async def _resolve_product_archive_confirm(
 
 async def _handle_product_intent(
     client: DataClient, *, intent: dict, ctx: ResolvedContext,
-    license_id, language: str, permission_keys: list[str] | None = None,
+    license_id, language: str, permission_keys: list[str] | None = None, message: str = "",
 ) -> ChatReply:
     """Phase 7 master data, made reachable from chat. ProductRepository.
     upsert (already idempotent on product_id since 7.5) means create and
@@ -19607,6 +19845,11 @@ async def _handle_product_intent(
 
     product_id = str(fields.get("product_id") or "").strip()
     product_name = str(fields.get("product_name") or "").strip()
+    if _is_generic_product_word(product_name):
+        # "สินค้า FAN01 รับประกัน 2 ปี" read with product_name="สินค้า": the
+        # word for a product is not its name (converse, 16 ก.ย. 2569).
+        product_name = ""
+        fields = {k: v for k, v in fields.items() if k != "product_name"}
     if action == "update" and (product_id or product_name or fields.get("target_name") or fields.get("name")):
         # "เปลี่ยนราคาสินค้า TV40 เป็น 3900" comes back update/product with
         # the code and the price and no name (measured 15 ก.ย. 2569); the
@@ -19625,6 +19868,7 @@ async def _handle_product_intent(
     if not product_id or not product_name:
         return ChatReply(text=_t(PRODUCT_NEEDS_ID_AND_NAME, language), intent=intent)
 
+    months = _months_from_fields(fields) or _warranty_months_in(message or "")
     payload = {
         "product_id": product_id,
         "product_name": product_name,
@@ -19632,6 +19876,7 @@ async def _handle_product_intent(
         "category": fields.get("category"),
         "unit_price": fields.get("unit_price"),
         "description": fields.get("description"),
+        "warranty_months": months,
     }
     try:
         row = await client.upsert_product(license_id, product_id, payload, actor_id=ctx.chann_uid)
@@ -19639,8 +19884,9 @@ async def _handle_product_intent(
         if _is_conflict(exc):
             return ChatReply(text=_t(PRODUCT_INVALID_VALUE, language), intent=intent)
         raise
+    note = _t(PRODUCT_WARRANTY_NOTE, language).format(months=row.get("warranty_months") or months) if (row.get("warranty_months") or months) else ""
     return ChatReply(
-        text=_t(PRODUCT_SAVED, language).format(name=row["product_name"], code=row["product_id"]),
+        text=_t(PRODUCT_SAVED, language).format(name=row["product_name"], code=row["product_id"]) + note,
         entity_type="product", entity_id=row["id"], intent=intent,
     )
 
@@ -21335,6 +21581,11 @@ async def _route_chat_message(
     # that carries it must not, or "ตั้งกฎมอบหมาย" could be parsed as
     # something else entirely.
     if ctx.oa == "sales":
+        if _asks_to_chat_with_customer(message):
+            return await _handle_shop_chat_start(
+                client, ctx=ctx, license_id=license_id, message=message, intent=None,
+                permission_keys=permission_keys, language=language,
+            )
         if _asks_to_open_to_technicians(message) and TICKET_CODE_RE.search(message or ""):
             return await _handle_ticket_release(
                 client, ctx=ctx, license_id=license_id, message=message,
@@ -23503,6 +23754,13 @@ async def _execute_intent(
         # A customer holds no permission keys; "you have no permissions,
         # ask your admin" is the wrong sentence for them.
         return await _customer_fallback_or_storefront(client, ctx, message, language)
+    if ctx.oa == "sales" and _asks_to_chat_with_customer(message):
+        # "คุยกับลูกค้า สมชาย" is read as looking the customer up; the shop
+        # means opening the conversation (round 19g).
+        return await _handle_shop_chat_start(
+            client, ctx=ctx, license_id=license_id, message=message, intent=intent,
+            permission_keys=permission_keys, language=language,
+        )
     if ctx.oa == "sales" and str(intent.get("entity") or "") == "profile" \
             and ACTION_ALIASES.get(str(intent.get("action") or "").lower(), str(intent.get("action") or "").lower()) == "update" \
             and not _says_own_profile(message):
@@ -23696,7 +23954,7 @@ async def _execute_intent(
     if intent.get("entity") == "product":
         return await _handle_product_intent(
             client, intent=intent, ctx=ctx, license_id=license_id, language=language,
-            permission_keys=permission_keys,
+            permission_keys=permission_keys, message=message,
         )
     if intent.get("entity") == "quote":
         return await _handle_quote_intent(

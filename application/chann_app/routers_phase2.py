@@ -1325,6 +1325,9 @@ class ProductIn(BaseModel):
     category: str | None = None
     unit_price: str | float | None = None
     description: str | None = None
+    # The product's own warranty period, the default for every unit
+    # registered under it (0030).
+    warranty_months: int | None = None
 
 
 class CsvBody(BaseModel):
@@ -1502,7 +1505,8 @@ async def register_warranty(
             return await client.claim_warranty(
                 license_id,
                 {"serial_number": payload.serial_number,
-                 "customer_chann_uid": principal.chann_uid},
+                 "customer_chann_uid": principal.chann_uid,
+                 "warranty_start": payload.warranty_start},
                 actor_id=principal.chann_uid,
             )
         except DataTierError as exc:
@@ -1519,6 +1523,28 @@ async def register_warranty(
                 "warranty_months": payload.warranty_months,
                 "customer_chann_uid": payload.customer_chann_uid,
             },
+            actor_id=principal.chann_uid,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.patch("/licenses/{license_id}/warranties/{warranty_id}")
+async def set_warranty_purchase(
+    license_id: str,
+    warranty_id: str,
+    payload: dict,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """The purchase date given after registration, from the warranties
+    page (0030) — chat says "วันที่ซื้อ SN… 1 ก.ย. 2569"."""
+    _require_same_tenant(principal, license_id)
+    principal.require("warranty.update")
+    try:
+        return await client.update_warranty(
+            license_id, warranty_id,
+            {"warranty_start": payload.get("warranty_start"), "warranty_months": payload.get("warranty_months")},
             actor_id=principal.chann_uid,
         )
     except DataTierError as exc:
@@ -4012,6 +4038,34 @@ async def open_chat_session(
         session, created, _unseen = await live_chat.start_session(
             client, license_id=license_id, chann_uid=principal.chann_uid,
             first_message=payload.content, product_id=payload.product_id,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+    return {**session, "created": created}
+
+
+class ShopChatStartBody(BaseModel):
+    customer_chann_uid: str
+    content: str | None = Field(default=None, max_length=4000)
+
+
+@router.post("/licenses/{license_id}/chat-sessions/start", status_code=201)
+async def start_chat_session_from_shop(
+    license_id: str,
+    payload: ShopChatStartBody,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """The shop opens the conversation from a job or the customer list
+    (round 19g) — the customer hears in LINE; answers still come from the
+    chats page."""
+    _require_same_tenant(principal, license_id)
+    principal.require("chat_session.reply")
+    member_id = await _member_of(client, license_id, principal)
+    try:
+        session, created = await live_chat.start_session_by_shop(
+            client, license_id=license_id, customer_chann_uid=payload.customer_chann_uid,
+            member_id=member_id, agent_chann_uid=principal.chann_uid, first_message=payload.content,
         )
     except DataTierError as exc:
         raise _propagate(exc)

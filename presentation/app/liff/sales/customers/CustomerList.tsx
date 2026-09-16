@@ -29,6 +29,7 @@ type Customer = {
   phone?: string | null;
   email?: string | null;
   created_at?: string | null;
+  customer_chann_uid?: string | null;
 };
 
 function fullName(customer: Customer): string {
@@ -188,6 +189,29 @@ export default function CustomerList({ liffId }: { liffId: string }) {
   // a suspended shop offers none of them (C4).
   const can = (key: string) => !session.suspended && permissions.has(key);
 
+  /** Round 19g: open the conversation with a customer who is linked on LINE. */
+  async function chatWith(customer: Customer) {
+    if (!customer.customer_chann_uid) return;
+    setBusyId(customer.id);
+    try {
+      const response = await fetch(`/api/phase2/licenses/${licenseId}/chat-sessions/start`, {
+        method: "POST",
+        headers: proxyHeaders(token, licenseId),
+        body: JSON.stringify({ customer_chann_uid: customer.customer_chann_uid }),
+      });
+      if (!response.ok) {
+        say(await failureText(response), "error");
+        return;
+      }
+      const opened = (await response.json()) as { id?: string };
+      window.location.assign(`/liff/sales/chats${opened.id ? `?session=${encodeURIComponent(opened.id)}` : ""}`);
+    } catch {
+      say(t.dashboard.loadFailed, "error");
+    } finally {
+      setBusyId("");
+    }
+  }
+
   return (
     <SalesShell
       session={session}
@@ -276,6 +300,18 @@ export default function CustomerList({ liffId }: { liffId: string }) {
                 {customer.email ? ` · ${customer.email}` : ""}
               </div>
               </Link>
+              {customer.customer_chann_uid && can("chat_session.reply") && (
+                <div className="card-actions">
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={busyId === customer.id}
+                    onClick={() => void chatWith(customer)}
+                  >
+                    {t.dashboard.chats.startWithCustomer}
+                  </button>
+                </div>
+              )}
               {customer.stage === "lead" && (can("customer.update") || can("customer.archive")) && (
                 <div className="card-actions">
                   {can("customer.update") && (

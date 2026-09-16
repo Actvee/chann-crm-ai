@@ -36,13 +36,13 @@ _EN: Talk to the shop — Type "talk to the shop" (a question may follow, e.g. "
 
 ## 4. ลงทะเบียนสินค้า (รับประกัน)
 
-พิมพ์ "ลงทะเบียนสินค้า" แล้วตามด้วย S/N ที่ร้านบันทึกไว้ให้ เครื่องจะผูกกับคุณ ถ้าระบบยังไม่รู้จักหมายเลข ให้ติดต่อร้าน
+พิมพ์ "ลงทะเบียนสินค้า" แล้วตามด้วย S/N ที่ร้านบันทึกไว้ให้ เครื่องจะผูกกับคุณ ถ้าระบบยังไม่รู้จักหมายเลข ให้ติดต่อร้าน · บอกวันที่ซื้อได้ด้วยถ้าร้านยังไม่ได้ใส่: "ลงทะเบียนสินค้า SN12345678 ซื้อเมื่อ 1 ก.ย. 2569"
 
 พิมพ์: `ลงทะเบียนสินค้า SN12345678`
 
 [IMAGE: customer-register — หน้าจอแชท: ลูกค้าพิมพ์ 'ลงทะเบียนสินค้า SN12345678' บอทตอบ 'ลงทะเบียน แอร์ (S/N …) เป็นของคุณแล้ว' พร้อมไอคอนโล่สีส้ม]
 
-_EN: Register your product (warranty) — Type "register product" then the S/N the shop recorded. Unknown S/N → contact the shop._
+_EN: Register your product (warranty) — Type "register product" then the S/N the shop recorded. Unknown S/N → contact the shop. Add the purchase date if the shop did not: "register product SN12345678 bought 2026-09-01"._
 
 ## 5. แจ้งซ่อม
 

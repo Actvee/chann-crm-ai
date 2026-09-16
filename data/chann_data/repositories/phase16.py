@@ -37,6 +37,17 @@ WARRANTY_STATUSES = frozenset({"active", "expired", "void"})
 DEFAULT_WARRANTY_MONTHS = 12
 
 
+def _end_of(start: date, months: int) -> date:
+    """`months` after `start`, clamped to the last day of the month (31 Jan
+    + 1 month is the last day of February, not an error)."""
+    end_month = start.month - 1 + int(months)
+    end_year = start.year + end_month // 12
+    end_month = end_month % 12 + 1
+    last_day = [31, 29 if end_year % 4 == 0 and (end_year % 100 != 0 or end_year % 400 == 0)
+                else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][end_month - 1]
+    return date(end_year, end_month, min(start.day, last_day))
+
+
 class WarrantyNotFound(Exception):
     pass
 
@@ -117,17 +128,11 @@ class WarrantyRepository:
                 raise WarrantyNotFound("product not found in this tenant")
             resolved_name = product.product_name
 
-        start = warranty_start or datetime.now(timezone.utc).date()
-        months = warranty_months or DEFAULT_WARRANTY_MONTHS
-        # Month arithmetic without dateutil: add the months to the month
-        # index, then clamp the day so 31 Jan + 1 month is the last day of
-        # February rather than an error.
-        end_month = start.month - 1 + months
-        end_year = start.year + end_month // 12
-        end_month = end_month % 12 + 1
-        last_day = [31, 29 if end_year % 4 == 0 and (end_year % 100 != 0 or end_year % 400 == 0)
-                    else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][end_month - 1]
-        end = date(end_year, end_month, min(start.day, last_day))
+        # No purchase date → no end date yet; the period is the one given,
+        # else the product's own, else the default (0030; owner, 16 ก.ย. 2569).
+        months = self._months_for(scope, product_id, warranty_months)
+        start = warranty_start
+        end = _end_of(start, months) if start else None
 
         row = Warranty(
             id=uuid.uuid4(),
@@ -155,8 +160,37 @@ class WarrantyRepository:
             )
         ).scalars().first()
 
+    def _months_for(self, scope: TenantScope, product_id: uuid.UUID | None, given: int | None) -> int:
+        """The period in months: the one given, else the product's own, else the default."""
+        if given:
+            return int(given)
+        if product_id is not None:
+            product = self._s.execute(
+                select(Product).where(Product.id == product_id, Product.license_id == scope.license_id)
+            ).scalars().first()
+            if product is not None and product.warranty_months:
+                return int(product.warranty_months)
+        return DEFAULT_WARRANTY_MONTHS
+
+    def set_purchase(
+        self, scope: TenantScope, warranty_id: uuid.UUID, *,
+        warranty_start: date | None, warranty_months: int | None = None,
+    ) -> Warranty:
+        """The purchase date given later ("วันที่ซื้อ SN… 1 ก.ย. 2569"), and
+        optionally the period; the end date follows from both."""
+        row = self._s.get(Warranty, warranty_id)
+        if row is None or row.license_id != scope.license_id:
+            raise WarrantyNotFound("warranty not found in this tenant")
+        if warranty_start is not None:
+            row.warranty_start = warranty_start
+        if row.warranty_start is not None:
+            row.warranty_end = _end_of(row.warranty_start, self._months_for(scope, row.product_id, warranty_months))
+        self._s.flush()
+        return row
+
     def claim(
         self, scope: TenantScope, *, serial_number: str, customer_chann_uid: str,
+        warranty_start: date | None = None,
     ) -> Warranty:
         """Attach a customer to a unit the shop already registered.
 
@@ -177,6 +211,10 @@ class WarrantyRepository:
                 f"serial {serial} is already claimed by another customer"
             )
         row.customer_chann_uid = customer_chann_uid
+        if warranty_start is not None and row.warranty_start is None:
+            # The customer knows when they bought it; the shop did not.
+            row.warranty_start = warranty_start
+            row.warranty_end = _end_of(warranty_start, self._months_for(scope, row.product_id, None))
         self._s.flush()
         return row
 

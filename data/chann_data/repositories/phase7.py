@@ -74,6 +74,7 @@ class ProductRepository:
         category: str | None = None,
         unit_price=None,
         description: str | None = None,
+        warranty_months: int | None = None,
     ) -> Product:
         """Idempotent on the business key (7.5: duplicate product_id upserts).
 
@@ -107,6 +108,7 @@ class ProductRepository:
                 category=category,
                 unit_price=price,
                 description=description,
+                warranty_months=warranty_months,
             )
             self._s.add(row)
         else:
@@ -115,6 +117,8 @@ class ProductRepository:
             row.category = category
             row.unit_price = price
             row.description = description
+            if warranty_months is not None:
+                row.warranty_months = warranty_months
             row.archived_at = None
 
         self._s.flush()

@@ -89,8 +89,8 @@ GUIDES: dict[str, dict] = {
             {
                 "key": "register", "title": {"th": "ลงทะเบียนสินค้า (รับประกัน)", "en": "Register your product (warranty)"},
                 "body": {
-                    "th": "พิมพ์ \"ลงทะเบียนสินค้า\" แล้วตามด้วย S/N ที่ร้านบันทึกไว้ให้ เครื่องจะผูกกับคุณ ถ้าระบบยังไม่รู้จักหมายเลข ให้ติดต่อร้าน",
-                    "en": "Type \"register product\" then the S/N the shop recorded. Unknown S/N → contact the shop.",
+                    "th": "พิมพ์ \"ลงทะเบียนสินค้า\" แล้วตามด้วย S/N ที่ร้านบันทึกไว้ให้ เครื่องจะผูกกับคุณ ถ้าระบบยังไม่รู้จักหมายเลข ให้ติดต่อร้าน · บอกวันที่ซื้อได้ด้วยถ้าร้านยังไม่ได้ใส่: \"ลงทะเบียนสินค้า SN12345678 ซื้อเมื่อ 1 ก.ย. 2569\"",
+                    "en": "Type \"register product\" then the S/N the shop recorded. Unknown S/N → contact the shop. Add the purchase date if the shop did not: \"register product SN12345678 bought 2026-09-01\".",
                 },
                 "commands": ["ลงทะเบียนสินค้า", "ประกันของฉัน"],
                 "example": "ลงทะเบียนสินค้า SN12345678",
@@ -232,8 +232,8 @@ GUIDES: dict[str, dict] = {
             {
                 "key": "units", "title": {"th": "บันทึกเครื่องที่ขาย", "en": "Record sold units"},
                 "body": {
-                    "th": "\"ลงทะเบียนสินค้า SN12345678 แอร์ ให้ลูกค้า สมชาย\" — เครื่องผูกกับเรคอร์ดลูกค้าคนนั้นทันที (ระบบตอบ \"ผูกกับลูกค้า สมชาย (C-…) แล้ว\"; ถ้าไม่มีลูกค้าชื่อนั้นระบบถามก่อน ไม่ลงทะเบียนเงียบ ๆ; ไม่ระบุลูกค้าก็ลงทะเบียนได้) ลูกค้าพิมพ์ S/N นี้ใน LINE ลูกค้าเพื่อดูประกันเอง · \"รายการประกัน\" บอกทั้งลูกค้าที่ผูกและว่าผูก LINE แล้วหรือยัง · \"รายการประกัน\" ดูทั้งหมด · เวลาลูกค้าโทรมาแล้วคุณเปิดงานให้ (\"เปิดงานให้ สมชาย แอร์ไม่เย็น\") ระบบจะผูกงานกับเครื่องที่ลูกค้าคนนั้นลงทะเบียนไว้ให้เอง ถ้ามีหลายเครื่องจะมีปุ่มให้เลือก",
-                    "en": "\"register product SN12345678 aircon for Somchai\" — the customer then attaches it by typing the S/N · \"warranties\" lists them · a job you open for them by phone (\"open a job for Somchai, air con not cooling\") is linked to their registered unit, with buttons when they have several",
+                    "th": "\"ลงทะเบียนสินค้า SN12345678 แอร์ ให้ลูกค้า สมชาย\" — เครื่องผูกกับเรคอร์ดลูกค้าคนนั้นทันที (ระบบตอบ \"ผูกกับลูกค้า สมชาย (C-…) แล้ว\"; ถ้าไม่มีลูกค้าชื่อนั้นระบบถามก่อน ไม่ลงทะเบียนเงียบ ๆ; ไม่ระบุลูกค้าก็ลงทะเบียนได้) ลูกค้าพิมพ์ S/N นี้ใน LINE ลูกค้าเพื่อดูประกันเอง · ไม่ต้องใส่วันที่ซื้อก็ได้ (ยังไม่กำหนดวันหมดประกัน) ใส่ทีหลัง \"วันที่ซื้อ SN12345678 1 ก.ย. 2569\" หรือใส่ตั้งแต่แรก \"…ซื้อวันที่ 1 ก.ย. 2569 ประกัน 2 ปี\" · ระยะประกันเริ่มต้นมาจากสินค้าแต่ละตัว: \"สินค้า FAN01 รับประกัน 2 ปี\" (หรือช่องระยะประกันในหน้าสินค้า) · \"รายการประกัน\" บอกทั้งลูกค้าที่ผูกและว่าผูก LINE แล้วหรือยัง · \"รายการประกัน\" ดูทั้งหมด · เวลาลูกค้าโทรมาแล้วคุณเปิดงานให้ (\"เปิดงานให้ สมชาย แอร์ไม่เย็น\") ระบบจะผูกงานกับเครื่องที่ลูกค้าคนนั้นลงทะเบียนไว้ให้เอง ถ้ามีหลายเครื่องจะมีปุ่มให้เลือก",
+                    "en": "\"register product SN12345678 aircon for Somchai\" — the customer then attaches it by typing the S/N · the purchase date is optional (no end date until it is known) — add it later with \"purchase date SN12345678 2026-09-01\" or at once \"… bought 2026-09-01 warranty 2 years\" · the default period comes from the product: \"product FAN01 warranty 2 years\" (or the warranty field on the products page) · \"warranties\" lists them · a job you open for them by phone (\"open a job for Somchai, air con not cooling\") is linked to their registered unit, with buttons when they have several",
                 },
                 "commands": ["ลงทะเบียนสินค้า", "รายการประกัน"],
                 "example": "ลงทะเบียนสินค้า SN12345678 แอร์ ให้ลูกค้า สมชาย",
@@ -254,8 +254,8 @@ GUIDES: dict[str, dict] = {
             {
                 "key": "chats", "title": {"th": "แชทลูกค้า", "en": "Customer chats"},
                 "body": {
-                    "th": "ลูกค้าที่กด \"คุยกับร้าน\" ใน LINE บริการลูกค้า จะขึ้นที่ หน้าจอ > แชทลูกค้า และทุกคนได้ LINE แจ้ง ตอบที่หน้านั้นเท่านั้น (ตอบใน LINE ร้านไม่ถึงลูกค้า) คนแรกที่ตอบเป็นเจ้าของการสนทนา ถ้าปล่อยเกินเวลาตอบ (ค่าเริ่มต้น 15 นาที) ระบบแจ้งลูกค้าว่าจะติดต่อกลับและพักการสนทนา — ตอบทีหลังได้ ลูกค้าจะได้รับคำเชิญให้เปิดแชทต่อ · ลูกค้าเงียบ 1 ชั่วโมงปิดให้เอง · ตั้งเวลาเองได้ด้วย \"ตั้งค่าแชท\" หรือหน้าข้อมูลบริษัท",
-                    "en": "A customer who taps \"talk to the shop\" appears under home > Customer chats, and everyone is pushed a LINE. Answer there only (a reply in the shop's LINE never reaches them). The first to answer owns it. Past the reply time (default 15 min) the customer is told you will get back and the chat is paused — answer later and they are invited to reopen it. An hour of customer silence closes it. Set both with \"chat settings\" or on the company page.",
+                    "th": "ลูกค้าที่กด \"คุยกับร้าน\" ใน LINE บริการลูกค้า จะขึ้นที่ หน้าจอ > แชทลูกค้า และทุกคนได้ LINE แจ้ง ตอบที่หน้านั้นเท่านั้น (ตอบใน LINE ร้านไม่ถึงลูกค้า) คนแรกที่ตอบเป็นเจ้าของการสนทนา · ร้านเริ่มคุยเองก็ได้: \"คุยกับลูกค้า สมชาย\" หรือ \"คุยกับลูกค้า T-2026-0001\" (ใส่ข้อความแรกต่อท้ายได้ \"คุยกับลูกค้า สมชาย: พรุ่งนี้ช่างไปได้ไหม\") หรือกดปุ่ม คุยกับลูกค้า บนหน้างานซ่อม/รายชื่อลูกค้า — ลูกค้าต้องผูก LINE กับร้านแล้ว ถ้าปล่อยเกินเวลาตอบ (ค่าเริ่มต้น 15 นาที) ระบบแจ้งลูกค้าว่าจะติดต่อกลับและพักการสนทนา — ตอบทีหลังได้ ลูกค้าจะได้รับคำเชิญให้เปิดแชทต่อ · ลูกค้าเงียบ 1 ชั่วโมงปิดให้เอง · ตั้งเวลาเองได้ด้วย \"ตั้งค่าแชท\" หรือหน้าข้อมูลบริษัท",
+                    "en": "A customer who taps \"talk to the shop\" appears under home > Customer chats, and everyone is pushed a LINE. Answer there only (a reply in the shop's LINE never reaches them). The first to answer owns it. The shop can open the conversation itself: \"chat with customer Somchai\" or \"chat with customer T-2026-0001\" (a first line may follow a colon), or the Chat with customer button on a job or the customer list — the customer must be linked on LINE. Past the reply time (default 15 min) the customer is told you will get back and the chat is paused — answer later and they are invited to reopen it. An hour of customer silence closes it. Set both with \"chat settings\" or on the company page.",
                 },
                 "commands": ["ตั้งค่ารับลูกค้าใหม่อัตโนมัติ"],
                 "example": "หน้าจอ > แชทลูกค้า",

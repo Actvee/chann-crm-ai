@@ -176,6 +176,22 @@ export default function SalesChats({ liffId }: { liffId: string }) {
       );
   }, [session.ready, session.token, session.licenseId, session.permissions, session.suspended, loadSessions, say, t]);
 
+  // Round 19g: opened from a job or a customer — that conversation is
+  // selected on arrival (?session=<id>).
+  useEffect(() => {
+    if (!token || !licenseId) return;
+    try {
+      const wanted = new URLSearchParams(window.location.search).get("session");
+      if (wanted && wanted !== selectedId) {
+        setSelectedId(wanted);
+        void loadThread(wanted).catch(() => undefined);
+      }
+    } catch {
+      /* no query string to read */
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, licenseId]);
+
   // The clock.
   useEffect(() => {
     if (!token || !licenseId) return;

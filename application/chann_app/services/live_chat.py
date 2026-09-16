@@ -235,6 +235,42 @@ async def start_session(
     return session, created, unseen
 
 
+async def start_session_by_shop(
+    client: DataClient, *, license_id: str, customer_chann_uid: str, member_id: str | None,
+    agent_chann_uid: str, first_message: str | None = None, language: str = "th",
+) -> tuple[dict, bool]:
+    """The shop opens (or rejoins) the conversation with a customer it
+    already knows — from a job or the customer list (tester note, 16 ก.ย.
+    2569). The opener owns it; the customer gets the first line, or an
+    invitation to talk, in their LINE. Returns (session, created)."""
+    sla, timeout = await chat_settings(client, license_id)
+    session = await client.open_chat_session(
+        str(license_id), customer_chann_uid=customer_chann_uid,
+        sla_minutes=sla, timeout_minutes=timeout, actor_id=agent_chann_uid,
+    )
+    created = bool(session.pop("_created", False))
+    if member_id and str(session.get("assigned_to") or "") != str(member_id):
+        try:
+            session = await client.assign_chat_session(
+                str(license_id), str(session["id"]), member_id, actor_id=agent_chann_uid,
+            )
+        except DataTierError as exc:
+            log.warning("could not assign a shop-opened chat session: %s", exc.detail)
+    shop = await company_name(client, license_id)
+    if first_message and first_message.strip():
+        await agent_reply(
+            client, license_id=license_id, session=session, agent_chann_uid=agent_chann_uid,
+            member_id=member_id, text=first_message.strip(), language=language,
+        )
+    else:
+        await _push_customer_invite(
+            client, chann_uid=customer_chann_uid,
+            text=f"💬 {shop} อยากคุยกับคุณครับ แตะ \"คุยกับร้าน\" เพื่อเปิดแชท หรือพิมพ์ข้อความมาได้เลย",
+            text_en=f"💬 {shop} would like to talk to you — tap \"talk to the shop\" or just type here.",
+        )
+    return session, created
+
+
 async def customer_message(
     client: DataClient, *, license_id: str, session: dict, chann_uid: str, text: str,
     language: str = "th",

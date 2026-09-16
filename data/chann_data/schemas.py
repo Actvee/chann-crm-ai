@@ -533,6 +533,7 @@ class ProductIn(BaseModel):
     # float would reintroduce the rounding this column exists to avoid.
     unit_price: str | float | int | None = None
     description: str | None = None
+    warranty_months: int | None = None
 
 
 class ProductOut(BaseModel):
@@ -544,6 +545,7 @@ class ProductOut(BaseModel):
     category: str | None
     unit_price: Decimal | None
     description: str | None
+    warranty_months: int | None = None
     archived_at: datetime | None
     created_at: datetime
 
@@ -683,6 +685,8 @@ class WarrantyClaimIn(BaseModel):
     """A customer attaching themselves to a unit the shop registered."""
     serial_number: str
     customer_chann_uid: str
+    # The customer may know the purchase date the shop did not record (0030).
+    warranty_start: str | None = None
 
 
 class PendingIntentOut(BaseModel):
@@ -1197,8 +1201,9 @@ class WarrantyOut(BaseModel):
     contact_name: str | None = None
     contact_code: str | None = None
     customer_chann_uid: str | None = None
-    warranty_start: str
-    warranty_end: str
+    # None until the purchase date is known (0030).
+    warranty_start: str | None = None
+    warranty_end: str | None = None
     status: str
 
 

@@ -22,6 +22,7 @@ export type Ticket = {
   status: string;
   visibility: string;
   accept_status: string;
+  customer_chann_uid?: string | null;
   issue_description: string;
   customer_name?: string | null;
   customer_phone?: string | null;

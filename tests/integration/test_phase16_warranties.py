@@ -75,8 +75,14 @@ class TestRegistration:
             session.commit()
             assert row.warranty_number.startswith("W-")
             assert row.status == "active"
+            # 0030 (owner, 16 ก.ย. 2569): no purchase date → no end date yet.
+            assert row.warranty_start is None and row.warranty_end is None
+            dated = WarrantyRepository(session).register(
+                shops["a"], serial_number="ABC124", warranty_start=date(2026, 9, 1),
+            )
+            session.commit()
             # A year by default, which is the common floor in Thai retail.
-            assert (row.warranty_end - row.warranty_start).days >= 364
+            assert (dated.warranty_end - dated.warranty_start).days >= 364
 
     def test_an_empty_serial_is_refused(self, shops):
         with shops["session"]() as session:
@@ -371,3 +377,46 @@ class TestClaim:
                 WarrantyRepository(session).claim(
                     shops["a"], serial_number="ATB001", customer_chann_uid="CHN-C-000001",
                 )
+
+
+class TestThePurchaseDateIsOptionalAndThePeriodIsTheProducts:
+    """Round 19g (owner, 16 ก.ย. 2569): a unit registered without its purchase
+    date has no end date until the date is given; each product carries the
+    default period for its units."""
+
+    def test_the_products_period_sets_the_end_date(self, shops):
+        from chann_data.repositories.phase7 import ProductRepository
+        with shops["session"]() as session:
+            product = ProductRepository(session).upsert(
+                shops["a"], product_id="AIR24", product_name="แอร์ 24 เดือน", warranty_months=24,
+            )
+            session.commit()
+            row = WarrantyRepository(session).register(
+                shops["a"], serial_number="P24-001", product_id=product.id, warranty_start=date(2026, 9, 1),
+            )
+            session.commit()
+            assert row.warranty_end == date(2028, 9, 1)
+
+    def test_the_purchase_date_given_later_sets_the_end_date(self, shops):
+        from chann_data.repositories.phase7 import ProductRepository
+        with shops["session"]() as session:
+            product = ProductRepository(session).upsert(
+                shops["a"], product_id="FAN18", product_name="พัดลม 18 เดือน", warranty_months=18,
+            )
+            session.commit()
+            row = WarrantyRepository(session).register(shops["a"], serial_number="LATER-001", product_id=product.id)
+            session.commit()
+            assert row.warranty_end is None
+            row = WarrantyRepository(session).set_purchase(shops["a"], row.id, warranty_start=date(2026, 1, 31))
+            session.commit()
+            assert row.warranty_start == date(2026, 1, 31) and row.warranty_end == date(2027, 7, 31)
+
+    def test_the_customer_claiming_with_a_date_fills_it_in(self, shops):
+        with shops["session"]() as session:
+            row = WarrantyRepository(session).register(shops["a"], serial_number="CLAIM-001")
+            session.commit()
+            claimed = WarrantyRepository(session).claim(
+                shops["a"], serial_number="CLAIM-001", customer_chann_uid="CHN-C-000001", warranty_start=date(2026, 9, 1),
+            )
+            session.commit()
+            assert claimed.warranty_start == date(2026, 9, 1) and claimed.warranty_end == date(2027, 9, 1)

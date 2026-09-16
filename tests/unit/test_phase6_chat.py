@@ -502,15 +502,41 @@ class FakeDataClient:
         # Mirrors the Data Tier (round 18b): the attached customer record
         # comes back by name and code, beside the LINE claim.
         contact = next((c for c in self._customers if str(c.get("id")) == str(payload.get("contact_id") or "")), None)
+        # 0030: the end date follows the purchase date and the period (the
+        # product's own when none is given, else 12 months); none → none.
+        product = next((p for p in getattr(self, "_products", []) if str(p.get("id")) == str(payload.get("product_id") or "")), None)
+        months = payload.get("warranty_months") or (product or {}).get("warranty_months") or 12
+        start = payload.get("warranty_start")
+        end = None
+        if start:
+            from datetime import date as _date
+            y, m, d = (int(x) for x in str(start)[:10].split("-"))
+            total = m - 1 + int(months)
+            end = _date(y + total // 12, total % 12 + 1, min(d, 28)).isoformat()
         row = {
             "id": f"w-{n}", "warranty_number": f"W-2026-{n:04d}", "status": "active",
-            "product_name": None, "warranty_start": None, "warranty_end": None,
-            "customer_chann_uid": None, **payload,
+            "product_name": None, "customer_chann_uid": None, **payload,
+            "warranty_start": start, "warranty_end": end,
             "contact_name": " ".join(p for p in ((contact or {}).get("first_name"), (contact or {}).get("last_name")) if p) or None,
             "contact_code": (contact or {}).get("customer_id"),
         }
         self._warranties.append(row)
         return row
+
+    async def update_warranty(self, license_id, warranty_id, fields, actor_id=None):
+        self.recorded.append(("update_warranty", license_id, warranty_id, fields))
+        for w in getattr(self, "_warranties", []):
+            if str(w.get("id")) == str(warranty_id):
+                if fields.get("warranty_start"):
+                    w["warranty_start"] = fields["warranty_start"]
+                if w.get("warranty_start"):
+                    from datetime import date as _date
+                    y, m, d = (int(x) for x in str(w["warranty_start"])[:10].split("-"))
+                    total = m - 1 + int(fields.get("warranty_months") or 12)
+                    w["warranty_end"] = _date(y + total // 12, total % 12 + 1, min(d, 28)).isoformat()
+                return dict(w)
+        from chann_app.data_client import DataTierError
+        raise DataTierError(404, "warranty not found")
 
     async def claim_warranty(self, license_id, payload, actor_id=None):
         # Mirrors the Data Tier claim: 404 when the shop never recorded
@@ -524,6 +550,12 @@ class FakeDataClient:
                 if owner and owner != payload.get("customer_chann_uid"):
                     raise DataTierError(409, "serial already claimed by another customer")
                 w["customer_chann_uid"] = payload.get("customer_chann_uid")
+                if payload.get("warranty_start") and not w.get("warranty_start"):
+                    w["warranty_start"] = payload["warranty_start"]
+                    from datetime import date as _date
+                    y, m, d = (int(x) for x in str(w["warranty_start"])[:10].split("-"))
+                    total = m - 1 + 12
+                    w["warranty_end"] = _date(y + total // 12, total % 12 + 1, min(d, 28)).isoformat()
                 return dict(w)
         raise DataTierError(404, "serial is not registered at this shop")
 

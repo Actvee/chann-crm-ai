@@ -1988,6 +1988,7 @@ def upsert_product(
             category=payload.category,
             unit_price=payload.unit_price,
             description=payload.description,
+            warranty_months=payload.warranty_months,
         )
         AuditRepository(session).write(
             license_id=license_id,
@@ -4670,10 +4671,40 @@ def _warranty_out(row, contact=None) -> dict:
         "contact_id": str(row.contact_id) if row.contact_id else None,
         "contact_name": name or None,
         "contact_code": getattr(contact, "customer_id", None) if contact is not None else None,
-        "warranty_start": row.warranty_start.isoformat(),
-        "warranty_end": row.warranty_end.isoformat(),
+        "warranty_start": row.warranty_start.isoformat() if row.warranty_start else None,
+        "warranty_end": row.warranty_end.isoformat() if row.warranty_end else None,
         "status": WarrantyRepository.effective_status(row),
     }
+
+
+@router.patch("/licenses/{license_id}/warranties/{warranty_id}")
+def set_warranty_purchase(
+    license_id: uuid.UUID,
+    warranty_id: uuid.UUID,
+    payload: dict,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    """The purchase date (and optionally the period) given after
+    registration; the end date follows (0030)."""
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = WarrantyRepository(session).set_purchase(
+            scope, warranty_id,
+            warranty_start=date.fromisoformat(payload["warranty_start"]) if payload.get("warranty_start") else None,
+            warranty_months=int(payload["warranty_months"]) if payload.get("warranty_months") else None,
+        )
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="warranty", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="update",
+            field_changes=diff_fields({}, {"warranty_start": row.warranty_start.isoformat() if row.warranty_start else None}),
+        )
+        session.commit()
+        session.refresh(row)
+        return _warranty_out(row, _warranty_contacts(session, scope, [row]).get(row.contact_id))
+    except Exception as exc:
+        session.rollback()
+        raise _warranty_error(exc)
 
 
 @router.post("/licenses/{license_id}/warranties/expire-overdue")
@@ -4708,6 +4739,7 @@ def claim_warranty(
         row = WarrantyRepository(session).claim(
             scope, serial_number=payload.serial_number,
             customer_chann_uid=payload.customer_chann_uid,
+            warranty_start=date.fromisoformat(payload.warranty_start) if payload.warranty_start else None,
         )
         AuditRepository(session).write(
             license_id=license_id, entity_type="warranty", entity_id=row.id,

@@ -78,6 +78,9 @@ export default function SalesWarranties({ liffId }: { liffId: string }) {
   const [productId, setProductId] = useState("");
   const [contactId, setContactId] = useState("");
   const [start, setStart] = useState("");
+  const [months, setMonths] = useState("");
+  // Round 19g: a unit registered without its purchase date gets it here.
+  const [dateFor, setDateFor] = useState<Record<string, string>>({});
 
   const say = useCallback((message: string, kind?: "ok" | "error") => {
     setStatus(message);
@@ -147,6 +150,29 @@ export default function SalesWarranties({ liffId }: { liffId: string }) {
     })();
   }, [session.ready, load, loadPickers, permissions, say, t]);
 
+  async function setPurchaseDate(row: Warranty) {
+    const chosen = dateFor[row.id];
+    if (!chosen) return;
+    setBusy(true);
+    try {
+      const response = await fetch(`/api/phase2/licenses/${licenseId}/warranties/${row.id}`, {
+        method: "PATCH",
+        headers: proxyHeaders(token, licenseId),
+        body: JSON.stringify({ warranty_start: chosen }),
+      });
+      if (!response.ok) {
+        say(await failureText(response), "error");
+        return;
+      }
+      say(copy.purchaseDateSaved, "ok");
+      await load();
+    } catch {
+      say(copy.actionFailed, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function register() {
     if (!serial.trim()) return;
     setBusy(true);
@@ -161,6 +187,7 @@ export default function SalesWarranties({ liffId }: { liffId: string }) {
           product_name: product?.product_name,
           contact_id: contactId || undefined,
           warranty_start: start || undefined,
+          warranty_months: months.trim() ? Number(months.trim()) : undefined,
         }),
       });
       if (response.status === 409) {
@@ -175,6 +202,7 @@ export default function SalesWarranties({ liffId }: { liffId: string }) {
       setProductId("");
       setContactId("");
       setStart("");
+      setMonths("");
       say(copy.registered, "ok");
       await load();
     } catch {
@@ -292,6 +320,11 @@ export default function SalesWarranties({ liffId }: { liffId: string }) {
                 <input id={id} type="date" value={start} onChange={(e) => setStart(e.target.value)} />
               )}
             </FieldRow>
+            <FieldRow label={copy.warrantyMonths}>
+              {(id) => (
+                <input id={id} type="number" min={1} value={months} placeholder={copy.warrantyMonthsHint} onChange={(e) => setMonths(e.target.value)} />
+              )}
+            </FieldRow>
             <div className="actions">
               <button
                 type="button"
@@ -346,8 +379,26 @@ export default function SalesWarranties({ liffId }: { liffId: string }) {
                 </div>
                 <div className="card-meta">
                   {row.warranty_number}
-                  {row.warranty_end ? ` · ${copy.expires} ${shortDate(row.warranty_end, locale)}` : ""}
+                  {row.warranty_end ? ` · ${copy.expires} ${shortDate(row.warranty_end, locale)}` : ` · ${copy.noPurchaseDate}`}
                 </div>
+                {!row.warranty_start && permissions.has("warranty.update") && (
+                  <div className="actions">
+                    <input
+                      type="date"
+                      aria-label={copy.warrantyStart}
+                      value={dateFor[row.id] ?? ""}
+                      onChange={(e) => setDateFor({ ...dateFor, [row.id]: e.target.value })}
+                    />
+                    <button
+                      type="button"
+                      className="btn"
+                      disabled={busy || !dateFor[row.id]}
+                      onClick={() => void setPurchaseDate(row)}
+                    >
+                      {copy.setPurchaseDate}
+                    </button>
+                  </div>
+                )}
               </li>
             ))}
           </ul>

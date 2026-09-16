@@ -29,6 +29,7 @@ type Product = {
   category?: string | null;
   unit_price?: string | number | null;
   description?: string | null;
+  warranty_months?: number | null;
 };
 
 // The Data tier's cap; asked for explicitly (review C10) rather than
@@ -36,7 +37,7 @@ type Product = {
 const PAGE = 1000;
 
 const BLANK = {
-  product_id: "", product_name: "", unit_price: "", category: "", sku: "", description: "",
+  product_id: "", product_name: "", unit_price: "", category: "", sku: "", description: "", warranty_months: "",
 };
 
 export default function ProductList({ liffId }: { liffId: string }) {
@@ -123,6 +124,7 @@ export default function ProductList({ liffId }: { liffId: string }) {
             category: draft.category.trim() || null,
             sku: draft.sku.trim() || null,
             description: draft.description.trim() || null,
+            warranty_months: draft.warranty_months.trim() ? Number(draft.warranty_months.trim()) : null,
           }),
         },
       );
@@ -208,6 +210,7 @@ export default function ProductList({ liffId }: { liffId: string }) {
                 ["category", t.dashboard.products.category, ""],
                 ["sku", t.dashboard.products.sku, ""],
                 ["description", t.dashboard.products.description, ""],
+                ["warranty_months", t.dashboard.products.warrantyMonths, "12"],
               ] as const).map(([field, label, placeholder]) => (
                 <FieldRow key={field} label={label}>
                   {(id) => (
@@ -300,6 +303,7 @@ export default function ProductList({ liffId }: { liffId: string }) {
                         category: String(product.category ?? ""),
                         sku: String(product.sku ?? ""),
                         description: String(product.description ?? ""),
+                        warranty_months: product.warranty_months != null ? String(product.warranty_months) : "",
                       });
                       setEditingExisting(true);
                       setAdding(true);

@@ -21,6 +21,7 @@ PRODUCT_COLUMNS = {
     "product_id": ("product_id", "รหัสสินค้า", "code", "รหัส", "id"),
     "product_name": ("product_name", "ชื่อสินค้า", "name", "สินค้า"),
     "unit_price": ("unit_price", "ราคา", "price", "ราคาต่อหน่วย"),
+    "warranty_months": ("warranty_months", "ประกัน(เดือน)", "ระยะประกัน", "warranty months"),
     "category": ("category", "หมวด", "หมวดหมู่", "ประเภท"),
     "sku": ("sku", "รหัสภายใน"),
     "description": ("description", "รายละเอียด", "คำอธิบาย"),

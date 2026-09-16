@@ -777,7 +777,7 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
                       S/N {row.serial_number}
                       {row.warranty_end
                         ? ` · ${t.dashboard.customer.expires} ${shortDate(row.warranty_end)}`
-                        : ""}
+                        : ` · ${t.dashboard.customer.noPurchaseDate}`}
                     </div>
                   </li>
                 ))}

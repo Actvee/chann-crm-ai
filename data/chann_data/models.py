@@ -533,6 +533,9 @@ class Product(TimestampMixin, Base):
     # a defect people notice on an invoice.
     unit_price: Mapped[object | None] = mapped_column(Numeric(18, 2))
     description: Mapped[str | None] = mapped_column(Text)
+    # The product's own warranty period, the default for every unit of it
+    # that is registered (0030; owner, 16 ก.ย. 2569).
+    warranty_months: Mapped[int | None] = mapped_column(Integer, nullable=True)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
@@ -705,8 +708,10 @@ class Warranty(TimestampMixin, Base):
     )
     product_name: Mapped[str | None] = mapped_column(String(255))
     serial_number: Mapped[str] = mapped_column(String(128), nullable=False)
-    warranty_start: Mapped[date] = mapped_column(Date, nullable=False)
-    warranty_end: Mapped[date] = mapped_column(Date, nullable=False)
+    # Both optional since 0030: a unit registered without its purchase
+    # date has no end date yet (owner, 16 ก.ย. 2569).
+    warranty_start: Mapped[date | None] = mapped_column(Date, nullable=True)
+    warranty_end: Mapped[date | None] = mapped_column(Date, nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
     pdf_path: Mapped[str | None] = mapped_column(String(512))
     generated_document_id: Mapped[uuid.UUID | None] = mapped_column(

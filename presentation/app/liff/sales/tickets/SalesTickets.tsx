@@ -192,6 +192,30 @@ export default function SalesTickets({ liffId }: { liffId: string }) {
     );
   }
 
+  /** Round 19g: open the conversation with the job's customer; the thread
+   *  lives on the chats page, so go there. */
+  async function chatWith(ticket: Ticket) {
+    if (!ticket.customer_chann_uid) return;
+    setBusyId(ticket.id);
+    try {
+      const response = await fetch(`/api/phase2/licenses/${licenseId}/chat-sessions/start`, {
+        method: "POST",
+        headers: proxyHeaders(token, licenseId),
+        body: JSON.stringify({ customer_chann_uid: ticket.customer_chann_uid }),
+      });
+      if (!response.ok) {
+        say(await failureText(response), "error");
+        return;
+      }
+      const opened = (await response.json()) as { id?: string };
+      window.location.assign(`/liff/sales/chats${opened.id ? `?session=${encodeURIComponent(opened.id)}` : ""}`);
+    } catch {
+      say(copy.actionFailed, "error");
+    } finally {
+      setBusyId("");
+    }
+  }
+
   /** Round 19f: a customer's report is held from the technicians until
    *  the shop assigns it or opens it to all of them. */
   function release(ticket: Ticket) {
@@ -461,6 +485,18 @@ export default function SalesTickets({ liffId }: { liffId: string }) {
                       {copy.cancel}
                     </button>
                   ))}
+                </div>
+              )}
+              {ticket.customer_chann_uid && can("chat_session.reply") && ticket.status !== "cancelled" && (
+                <div className="card-actions">
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={busyId !== ""}
+                    onClick={() => void chatWith(ticket)}
+                  >
+                    {t.dashboard.chats.startWithCustomer}
+                  </button>
                 </div>
               )}
 
