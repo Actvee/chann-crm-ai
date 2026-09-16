@@ -1826,7 +1826,7 @@ class TestPhase8ProfileChat:
              "fields": {"phone": "0812345678"}, "missing": []})))
         client = FakeDataClient(permission_keys=[])   # holds nothing at all
         reply = await handle_chat_message(
-            client, message="แก้เบอร์เป็น 0812345678", ctx=_ctx(primary_role="technician"), ai_client=ai,
+            client, message="แก้เบอร์ของฉันเป็น 0812345678", ctx=_ctx(primary_role="technician"), ai_client=ai,
         )
         assert "แก้ไขข้อมูลส่วนตัวเรียบร้อยแล้ว" in reply.text
         assert ("update_profile", "CHN-S-000001", {"phone": "0812345678"}, "CHN-S-000001") in client.recorded
@@ -1891,7 +1891,7 @@ class TestProfileEligibilityFollowsTheChannel:
              "fields": {"phone": "0812345678"}, "missing": []})))
         client = FakeDataClient(permission_keys=[])
         reply = await handle_chat_message(
-            client, message="แก้เบอร์เป็น 0812345678",
+            client, message="แก้เบอร์ของฉันเป็น 0812345678",
             ctx=_ctx(primary_role="sales"), ai_client=ai,
         )
         assert "ช่างและลูกค้า" in reply.text
@@ -1906,7 +1906,7 @@ class TestProfileEligibilityFollowsTheChannel:
              "fields": {"phone": "0812345678"}, "missing": []})))
         client = FakeDataClient(permission_keys=[])
         reply = await handle_chat_message(
-            client, message="แก้เบอร์เป็น 0812345678",
+            client, message="แก้เบอร์ของฉันเป็น 0812345678",
             ctx=_ctx(primary_role="sales", oa="customer"), ai_client=ai,
         )
         assert "แก้ไขข้อมูลส่วนตัวเรียบร้อยแล้ว" in reply.text
@@ -1920,7 +1920,7 @@ class TestProfileEligibilityFollowsTheChannel:
              "fields": {"phone": "0812345678"}, "missing": []})))
         client = FakeDataClient(permission_keys=[])
         reply = await handle_chat_message(
-            client, message="แก้เบอร์เป็น 0812345678",
+            client, message="แก้เบอร์ของฉันเป็น 0812345678",
             ctx=_ctx(primary_role="customer", oa="sales"), ai_client=ai,
         )
         assert "แก้ไขข้อมูลส่วนตัวเรียบร้อยแล้ว" not in reply.text
@@ -5262,7 +5262,7 @@ class TestCustomerFaultReport:
         })))
         client = FakeDataClient(permission_keys=[])
         await handle_chat_message(
-            client, message="แก้เบอร์เป็น 0812345678",
+            client, message="แก้เบอร์ของฉันเป็น 0812345678",
             ctx=_ctx(oa="customer"), ai_client=ai,
         )
         assert not [r for r in client.recorded if r[0] == "create_ticket"]

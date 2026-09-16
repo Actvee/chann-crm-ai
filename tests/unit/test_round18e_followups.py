@@ -250,3 +250,63 @@ class TestAHalfMadeCustomerSurvivesTheDealDetour:
         reply, writes = await _say(client, "แซ่ลี้", {"action": "create", "entity": "customer", "fields": {"last_name": "แซ่ลี้"}, "missing": []})
         assert {"create_customer", "create_deal"} <= writes, (reply.text, writes)
         assert "สามเสน แซ่ลี้ (C-2026-0004)" in reply.text or "สามเสน แซ่ลี้" in reply.text, reply.text
+
+
+class TestAPhoneEditOnTheSalesOaIsACustomerEdit:
+    """Owner, 16 ก.ย. 2569: 'แก้เบอร์' on the sales OA — the model read the member's own profile;
+    staff edit customers there (their own details live on the dashboard)."""
+
+    async def test_with_a_customer_in_view_the_edit_lands_on_them(self):
+        client = _sales()
+        await _say(client, "ข้อมูลลูกค้า สมชาย", {"action": "read", "entity": "customer", "fields": {"target_name": "สมชาย"}, "missing": []})
+        reply, writes = await _say(client, "แก้เบอร์ 0891234567", {"action": "update", "entity": "profile", "fields": {"phone": "0891234567"}, "missing": []})
+        assert "update_customer" in writes and "สมชาย ใจดี" in reply.text and "0891234567" in reply.text, reply.text
+        assert "update_profile" not in writes
+
+    async def test_with_nobody_in_view_the_name_is_asked_and_the_edit_waits(self):
+        client = _sales()
+        reply, writes = await _say(client, "แก้เบอร์ 0891234567", {"action": "update", "entity": "profile", "fields": {"phone": "0891234567"}, "missing": []})
+        assert not writes and "ชื่อลูกค้า" in reply.text and "เบอร์โทร" not in reply.text, reply.text
+        pending = await client.get_pending_intent("CHN-S-000001", "sales")
+        assert pending and pending["entity"] == "customer" and pending["missing"] == ["target_name"], pending
+        reply, writes = await _say(client, "สมชาย", {"action": "update", "entity": "customer", "fields": {"target_name": "สมชาย"}, "missing": []})
+        assert "update_customer" in writes and "0891234567" in reply.text, reply.text
+
+    async def test_a_bare_แก้เบอร์_asks_for_the_customer_not_the_members_phone(self):
+        client = _sales()
+        reply, writes = await _say(client, "แก้เบอร์", {"action": "update", "entity": "profile", "fields": {}, "missing": ["phone"]})
+        assert not writes and "ชื่อลูกค้า" in reply.text, reply.text
+        pending = await client.get_pending_intent("CHN-S-000001", "sales")
+        assert pending and pending["entity"] == "customer" and "target_name" in pending["missing"], pending
+
+    async def test_saying_my_own_still_means_the_member(self):
+        client = _sales()
+        reply, writes = await _say(client, "แก้เบอร์ของฉัน 0891234567", {"action": "update", "entity": "profile", "fields": {"phone": "0891234567"}, "missing": []})
+        assert "update_customer" not in writes and "Dashboard" in reply.text, reply.text
+
+
+class TestADealSentenceWithAProductLine:
+    """Owner, 16 ก.ย. 2569: 'สร้างดีล พัดลม 50 ตัว ปิดสิ้นเดือนนี้' made the deal with its close
+    date and no line items — DEV's model keeps the customer and the date and drops the product."""
+
+    def test_the_product_clause_is_cut_out_of_the_sentence(self):
+        from chann_app.services.chat import _product_clause_of_deal_sentence as clause
+        assert clause("สร้างดีลให้ สมชาย พัดลม 50 ตัว ปิดสิ้นเดือนนี้", "สมชาย") == "เพิ่มสินค้า พัดลม 50 ตัว"
+        assert clause("สร้างดีล พัดลม 50 ตัว ปิดสิ้นเดือนนี้", None) == "เพิ่มสินค้า พัดลม 50 ตัว"
+        assert clause("สร้างดีลให้ สมชาย มูลค่า 250,000 ปิดสิ้นเดือนนี้", "สมชาย") is None
+        assert clause("สร้างดีลให้ สมชาย", "สมชาย") is None
+
+    async def test_the_line_is_added_to_the_deal_just_made(self):
+        client = _sales()
+        client._products = [{"id": "p1", "product_id": "FAN16", "product_name": "พัดลม", "unit_price": 1500}]
+        reply, writes = await _say(client, "สร้างดีลให้ สมชาย ใจดี พัดลม 50 ตัว ปิดสิ้นเดือนนี้", {"action": "create", "entity": "deal", "fields": {"target_name": "สมชาย ใจดี", "expected_close_date": "2026-09-30"}, "missing": []})
+        assert {"create_deal", "add_deal_product"} <= writes, (reply.text, writes)
+        assert "พัดลม × 50" in reply.text and "30 ก.ย." in reply.text, reply.text
+
+    async def test_with_the_customer_in_view(self):
+        client = _sales()
+        client._products = [{"id": "p1", "product_id": "FAN16", "product_name": "พัดลม", "unit_price": 1500}]
+        await _say(client, "ข้อมูลลูกค้า สมหญิง", {"action": "read", "entity": "customer", "fields": {"target_name": "สมหญิง"}, "missing": []})
+        reply, writes = await _say(client, "สร้างดีล พัดลม 50 ตัว ปิดสิ้นเดือนนี้", {"action": "create", "entity": "deal", "fields": {"amount": 50, "expected_close_date": "2026-09-30"}, "missing": ["target_name"]})
+        assert {"create_deal", "add_deal_product"} <= writes, (reply.text, writes)
+        assert "สมหญิง รักดี" in reply.text and "พัดลม × 50" in reply.text and "มูลค่า 50 " not in reply.text, reply.text

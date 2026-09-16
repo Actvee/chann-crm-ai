@@ -11585,6 +11585,33 @@ def _with_the_name_after_the_head(intent: dict, message: str) -> dict:
     return {**intent, "fields": fields, "missing": missing}
 
 
+CUSTOMER_EDIT_WHOSE = {
+    "th": "แก้ของลูกค้าคนไหนครับ พิมพ์ชื่อหรือรหัสลูกค้า (เช่น \"แก้เบอร์ สมชาย เป็น 0891234567\") · ข้อมูลของคุณเองแก้ได้ที่ Dashboard > สมาชิกในร้าน",
+    "en": "Which customer? Type the name or code (e.g. \"change Somchai's phone to 0891234567\") · your own details are edited on the dashboard.",
+}
+
+
+def _staff_profile_edit_as_customer(intent: dict, message: str, oa: str) -> dict:
+    """On the sales OA a profile edit that does not say "ของฉัน" is a CUSTOMER
+    edit whose customer is still to be named — so the missing gate asks for
+    the name (and whatever else), not the member's own phone."""
+    if oa != "sales" or str(intent.get("entity") or "") != "profile" or _says_own_profile(message):
+        return intent
+    action = ACTION_ALIASES.get(str(intent.get("action") or "").lower(), str(intent.get("action") or "").lower())
+    if action != "update":
+        return intent
+    fields = dict(intent.get("fields") or {})
+    missing = [m for m in (intent.get("missing") or []) if m not in ("target_name", "customer")]
+    if not fields.get("target_name"):
+        missing = ["target_name"] + missing
+    return {**intent, "entity": "customer", "action": "update", "fields": fields, "missing": missing}
+
+
+def _says_own_profile(message: str) -> bool:
+    said = (message or "").lower().replace(" ", "")
+    return any(w in said for w in ("ของฉัน", "ของผม", "ของดิฉัน", "ของหนู", "ตัวเอง", "ส่วนตัว", "ของตัวเอง", "ของเรา", "myself", "myown", "myphone", "myemail", "myname", "myaddress"))
+
+
 def _note_verb_at_the_start(message: str) -> str | None:
     """The note trigger a sentence OPENS with ("บันทึกว่า…", "note: …"), else
     None. Only the opening verb counts: "ลูกค้าบอกว่าจะจดว่า…" is not a note
@@ -15125,6 +15152,37 @@ def _trailing_product(message: str) -> str | None:
     return None
 
 
+def _product_clause_of_deal_sentence(message: str, target_name: str | None) -> str | None:
+    """The product line inside a create-deal sentence, phrased for the
+    add-product parser: "สร้างดีลให้ สมชาย พัดลม 50 ตัว ปิดสิ้นเดือนนี้" →
+    "เพิ่มสินค้า พัดลม 50 ตัว". The customer, the value and the close-date
+    clause are removed; None when no quantity or price remains."""
+    text = (message or "").strip()
+    lowered = text.lower()
+    head = None
+    for trigger in sorted(DEAL_CREATE_TRIGGERS + DEAL_CREATE_BARE_TRIGGERS, key=len, reverse=True):
+        index = lowered.find(trigger.lower())
+        if index != -1:
+            head = index + len(trigger)
+            break
+    if head is None:
+        return None
+    rest = text[head:].strip(" :·-,")
+    if target_name:
+        for form in (f"ให้ลูกค้า {target_name}", f"ให้ {target_name}", f"ให้{target_name}", target_name):
+            rest = rest.replace(form, " ", 1)
+    rest = re.sub(r"^\s*(?:ให้ลูกค้า|ให้|สำหรับ|for)\s+", "", rest)
+    cut = len(rest)
+    for word in ("ปิดสิ้นเดือน", "ปิดภายใน", "ปิดวันที่", "ปิด", "คาดว่าจะปิด", "มูลค่า", "ราคารวม", "close", "worth", "value", "แล้วสร้างใบเสนอราคา", "แล้วก็", "และ"):
+        i = rest.lower().find(word)
+        if i != -1 and i < cut:
+            cut = i
+    rest = re.sub(r"\s+", " ", rest[:cut]).strip(" :·-,")
+    if not rest or not (_QTY_RE.search(rest) or _PRICE_RE.search(rest)):
+        return None
+    return f"เพิ่มสินค้า {rest}"
+
+
 def _after_deal_conjunction(message: str) -> str | None:
     """The second half of a compound instruction, if there is one.
 
@@ -18347,10 +18405,27 @@ async def _handle_deal_intent(
                     client, ctx=ctx, draft=abandoned, deal_fields=deal_fields, language=language,
                 )
             return err
-        return await _apply_deal_create(
+        created = await _apply_deal_create(
             client, contact=contact, fields=deal_fields, ctx=ctx,
             license_id=license_id, language=language,
         )
+        # "สร้างดีลให้ สมชาย พัดลม 50 ตัว ปิดสิ้นเดือนนี้": the model kept the
+        # customer and the close date and dropped the product (owner,
+        # 16 ก.ย. 2569) — the typed road adds the trailing product line to
+        # the deal it just made; the model road now does the same.
+        clause = _product_clause_of_deal_sentence(message or "", target_name)
+        if clause and created.entity_id and "deal.update" in set(permission_keys or []):
+            follow_on = await _handle_deal_product_add(
+                client, ctx=ctx, license_id=license_id, message=clause,
+                trigger="เพิ่มสินค้า", permission_keys=permission_keys, language=language,
+            )
+            return ChatReply(
+                text=f"{created.text}\n{follow_on.text}",
+                entity_type=follow_on.entity_type or created.entity_type,
+                entity_id=follow_on.entity_id or created.entity_id,
+                quick_replies=follow_on.quick_replies or created.quick_replies,
+            )
+        return created
 
     if action == "archive":
         return await _handle_deal_archive(
@@ -22643,6 +22718,7 @@ async def _model_road(
         if ref and wanted and str(ref.get("entity_type") or "") == wanted and ref.get("code"):
             intent = {**intent, "fields": {**(intent.get("fields") or {}), "code": str(ref.get("code"))}, "missing": []}
     intent = _with_the_name_after_the_head(intent, message)
+    intent = _staff_profile_edit_as_customer(intent, message, ctx.oa)
     # Missing fields come first: never refuse a request we did not understand.
     missing = _prune_missing(intent.get("missing") or [], intent, message)
     if missing == ["target_name"] and not (intent.get("fields") or {}).get("target_name") and carried is None:
@@ -22734,6 +22810,32 @@ async def _execute_intent(
         # A customer holds no permission keys; "you have no permissions,
         # ask your admin" is the wrong sentence for them.
         return await _customer_fallback_or_storefront(client, ctx, message, language)
+    if ctx.oa == "sales" and str(intent.get("entity") or "") == "profile" \
+            and ACTION_ALIASES.get(str(intent.get("action") or "").lower(), str(intent.get("action") or "").lower()) == "update" \
+            and not _says_own_profile(message):
+        # "แก้เบอร์ 0891234567" on the sales OA: the model read the member's
+        # own profile; staff edit CUSTOMERS here (their own details live on
+        # the dashboard) — owner, 16 ก.ย. 2569. The customer in view gets
+        # the edit; otherwise the name is asked for and the edit waits.
+        given = {k: v for k, v in (intent.get("fields") or {}).items() if v not in (None, "")}
+        in_context = await _customer_still_there(client, ctx, license_id)
+        still = [m for m in (intent.get("missing") or []) if m not in ("target_name", "customer")]
+        if in_context is not None and given and not still:
+            intent = {"action": "update", "entity": "customer", "fields": {**given, "target_name": _display_name(in_context)}, "missing": []}
+        else:
+            need = still if in_context is not None else ["target_name"] + still
+            held = dict(given)
+            if in_context is not None:
+                held["target_name"] = _display_name(in_context)
+            try:
+                await client.set_pending_intent(
+                    ctx.chann_uid, ctx.oa, action="update", entity="customer", fields=held, missing=need,
+                    ttl_seconds=PENDING_INTENT_TTL_S,
+                )
+            except Exception:  # noqa: BLE001
+                log.exception("could not hold the customer edit")
+            lead = _t(CUSTOMER_EDIT_WHOSE, language) if in_context is None else ""
+            return ChatReply(text=(lead + "\n" if lead else "") + ask_for_missing(need, language))
     note_head = _note_verb_at_the_start(message) if ctx.oa == "sales" else None
     if note_head and intent.get("action") == "create" and intent.get("entity") in ("followup", "deal", "customer", "ticket"):
         # "บันทึกว่าเขาจะมาดูสินค้าวันที่ 22": the sentence is a note whatever
