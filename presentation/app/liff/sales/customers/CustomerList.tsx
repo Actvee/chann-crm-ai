@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 import { BulkPaste } from "../_bulk-paste";
 import { CsvImport } from "../_csv-import";
 import { Badge, Count, Empty } from "../_components";
+import { ConfirmDialog, useConfirm } from "../_confirm";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { ListFilters, matchesQuery } from "../../_filters";
@@ -48,6 +49,7 @@ export default function CustomerList({ liffId }: { liffId: string }) {
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
   const [busy, setBusy] = useState(false);
+  const { request: confirming, ask, close: closeConfirm } = useConfirm();
   const [busyId, setBusyId] = useState("");
   const [query, setQuery] = useState("");
   const [stage, setStage] = useState("");
@@ -118,7 +120,20 @@ export default function CustomerList({ liffId }: { liffId: string }) {
   /** User review (4 Sep 2026): delete a lead — the platform's soft delete,
    *  confirmed first, behind customer.archive. */
   async function archive(customer: Customer) {
-    if (!window.confirm(t.dashboard.customers.archiveConfirm.replace("{name}", fullName(customer)))) return;
+    // Named, with its code, with what survives it, and with the fact that
+    // this archives rather than erases — window.confirm could say none of
+    // that (round 20d).
+    const copy = t.dashboard.customers;
+    const ok = await ask({
+      action: copy.archiveAction,
+      target: fullName(customer),
+      code: customer.customer_id,
+      affects: [copy.archiveAlsoDeals, copy.archiveAlsoHistory],
+      reversible: copy.archiveKeeps,
+      confirmLabel: copy.archive,
+      cancelLabel: copy.confirmCancel,
+    });
+    if (!ok) return;
     setBusyId(customer.id);
     try {
       const response = await fetch(
@@ -130,7 +145,14 @@ export default function CustomerList({ liffId }: { liffId: string }) {
         return;
       }
       setCustomers((rows) => rows.filter((row) => row.id !== customer.id));
-      say(`${fullName(customer)} — ${t.dashboard.customers.archived}`, "ok");
+      // The success says WHAT went, by name and code — "saved" tells the
+      // person nothing they can check.
+      say(
+        t.dashboard.customers.archivedNamed
+          .replace("{name}", fullName(customer))
+          .replace("{code}", customer.customer_id),
+        "ok",
+      );
     } catch {
       say(t.common.error, "error");
     } finally {
@@ -342,6 +364,16 @@ export default function CustomerList({ liffId }: { liffId: string }) {
           ))}
         </ul>
       )}
+      <ConfirmDialog
+        request={confirming}
+        onClose={closeConfirm}
+        busy={Boolean(busyId)}
+        copy={{
+          cancel: t.dashboard.customers.confirmCancel,
+          confirm: "",
+          permanent: t.dashboard.customers.confirmPermanent,
+        }}
+      />
     </SalesShell>
   );
 }

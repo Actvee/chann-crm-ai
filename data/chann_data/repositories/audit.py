@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime, time
+from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -63,7 +64,9 @@ class AuditRepository:
             actor_type=actor_type,
             actor_id=actor_id,
             action=action,
-            field_changes=field_changes,
+            # Coerced here too: some callers build this dict themselves
+            # rather than through diff_fields.
+            field_changes=jsonable(field_changes),
             # Only ever carried for an AI actor (DB check constraint also
             # enforces this) — Phase 4 is what will actually populate it;
             # every call site today passes None.
@@ -120,6 +123,31 @@ class AuditRepository:
         return list(self._s.execute(stmt).scalars())
 
 
+def jsonable(value):
+    """A value the JSONB column can hold.
+
+    An audit row is JSON. A Decimal, a date, a datetime or a UUID in it
+    raises "Object of type … is not JSON serializable" at flush time and
+    the whole request dies — which is how editing a deal's close date
+    returned 500 and a quote's valid_until returned 502 through the
+    Application tier (DEV, 17 ก.ย. 2569). Every audited write that carries
+    a date or an amount had the same latent fault; coercing here fixes all
+    of them at once rather than one endpoint at a time.
+    """
+    if isinstance(value, Decimal):
+        # str, not float: an amount must survive the round trip exactly.
+        return str(value)
+    if isinstance(value, (datetime, date, time)):
+        return value.isoformat()
+    if isinstance(value, uuid.UUID):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(k): jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [jsonable(v) for v in value]
+    return value
+
+
 def diff_fields(before: dict, after: dict, *, ignore: set[str] = frozenset({"updated_at"})) -> dict:
     """Build the {field: {old, new}} shape Master Spec 3.3 requires.
 
@@ -135,5 +163,5 @@ def diff_fields(before: dict, after: dict, *, ignore: set[str] = frozenset({"upd
             continue
         old, new = before.get(key), after.get(key)
         if old != new:
-            changed[key] = {"old": old, "new": new}
+            changed[key] = {"old": jsonable(old), "new": jsonable(new)}
     return changed

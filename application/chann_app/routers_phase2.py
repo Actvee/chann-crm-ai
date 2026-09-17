@@ -220,7 +220,7 @@ async def create_role(
     _require_same_tenant(principal, license_id)
     principal.require("role.manage")
     try:
-        return await client.create_role(license_id, payload.model_dump(), actor_id=principal.chann_uid)
+        return await client.create_role(license_id, payload.model_dump(mode="json"), actor_id=principal.chann_uid)
     except DataTierError as exc:
         raise _propagate(exc)
 
@@ -236,7 +236,7 @@ async def update_role(
     _require_same_tenant(principal, license_id)
     principal.require("role.manage")
     try:
-        return await client.update_role(license_id, role_name, payload.model_dump(), actor_id=principal.chann_uid)
+        return await client.update_role(license_id, role_name, payload.model_dump(mode="json"), actor_id=principal.chann_uid)
     except DataTierError as exc:
         raise _propagate(exc)
 
@@ -586,7 +586,7 @@ async def patch_company_profile(
     # exclude_unset, so omitting a key leaves it alone while sending an
     # explicit null clears it. That distinction is the whole point for
     # vat_rate, where cleared means "no longer VAT-registered".
-    body = payload.model_dump(exclude_unset=True)
+    body = payload.model_dump(mode="json", exclude_unset=True)
     if "vat_rate_percent" in body:
         percent = body.pop("vat_rate_percent")
         body["vat_rate"] = None if percent is None else percent / Decimal(100)
@@ -1005,7 +1005,7 @@ async def update_deal(
     principal.require("deal.update")
     try:
         return await client.update_deal(
-            license_id, deal_id, payload.model_dump(exclude_unset=True),
+            license_id, deal_id, payload.model_dump(mode="json", exclude_unset=True),
             actor_id=principal.chann_uid,
         )
     except DataTierError as exc:
@@ -1071,7 +1071,7 @@ async def update_customer(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="staff only")
     try:
         return await client.update_customer(
-            license_id, customer_id, payload.model_dump(exclude_unset=True),
+            license_id, customer_id, payload.model_dump(mode="json", exclude_unset=True),
             actor_id=principal.chann_uid,
         )
     except DataTierError as exc:
@@ -1402,7 +1402,7 @@ async def upsert_product(
     principal.require("product.manage")
     try:
         return await client.upsert_product(
-            license_id, product_id, payload.model_dump(exclude_none=True),
+            license_id, product_id, payload.model_dump(mode="json", exclude_none=True),
             actor_id=principal.chann_uid,
         )
     except DataTierError as exc:
@@ -2379,7 +2379,7 @@ async def create_customer(
     enough to tell two customers apart."""
     _require_same_tenant(principal, license_id)
     principal.require("customer.create")
-    body = payload.model_dump(exclude_none=True)
+    body = payload.model_dump(mode="json", exclude_none=True)
     body["owner_member_id"] = await _member_of(client, license_id, principal)
     try:
         row = await client.create_customer(
@@ -2453,7 +2453,7 @@ async def create_deal(
 ):
     _require_same_tenant(principal, license_id)
     principal.require("deal.create")
-    body = payload.model_dump(exclude_none=True)
+    body = payload.model_dump(mode="json", exclude_none=True)
     body["owner_member_id"] = await _member_of(client, license_id, principal)
     try:
         return await client.create_deal(
@@ -2490,7 +2490,7 @@ async def add_deal_product(
     principal.require("deal.update")
     try:
         return await client.add_deal_product(
-            license_id, deal_id, payload.model_dump(exclude_none=True),
+            license_id, deal_id, payload.model_dump(mode="json", exclude_none=True),
             actor_id=principal.chann_uid,
         )
     except DataTierError as exc:
@@ -2510,7 +2510,7 @@ async def create_quote(
 ):
     _require_same_tenant(principal, license_id)
     principal.require("quote.create")
-    body = payload.model_dump()
+    body = payload.model_dump(mode="json")
     body["owner_member_id"] = await _member_of(client, license_id, principal)
     try:
         return await client.create_quote(
@@ -2543,7 +2543,7 @@ async def create_ticket(
     most of them still arrive."""
     _require_same_tenant(principal, license_id)
     principal.require("ticket.create")
-    body = payload.model_dump(exclude_none=True)
+    body = payload.model_dump(mode="json", exclude_none=True)
     if principal.is_customer:
         # Filed from the customer app: the ticket is theirs, whatever the
         # body says — that is what makes it show on their own list.
@@ -3081,7 +3081,7 @@ async def add_quote_product(
     principal.require("quote.update")
     try:
         return await client.add_quote_product(
-            license_id, quote_id, payload.model_dump(exclude_none=True),
+            license_id, quote_id, payload.model_dump(mode="json", exclude_none=True),
             actor_id=principal.chann_uid,
         )
     except DataTierError as exc:
@@ -3101,7 +3101,7 @@ async def update_quote_product(
     principal.require("quote.update")
     try:
         return await client.update_quote_product(
-            license_id, quote_id, line_id, payload.model_dump(exclude_unset=True),
+            license_id, quote_id, line_id, payload.model_dump(mode="json", exclude_unset=True),
             actor_id=principal.chann_uid,
         )
     except DataTierError as exc:
@@ -3228,7 +3228,7 @@ async def update_deal_product(
     principal.require("deal.update")
     try:
         return await client.update_deal_product(
-            license_id, deal_id, line_id, payload.model_dump(exclude_unset=True),
+            license_id, deal_id, line_id, payload.model_dump(mode="json", exclude_unset=True),
             actor_id=principal.chann_uid,
         )
     except DataTierError as exc:
@@ -3900,7 +3900,7 @@ async def set_quote_terms(
     principal.require("quote.update")
     try:
         return await client.set_quote_terms(
-            license_id, quote_id, payload.model_dump(exclude_unset=True),
+            license_id, quote_id, payload.model_dump(mode="json", exclude_unset=True),
             actor_id=principal.chann_uid,
         )
     except DataTierError as exc:
@@ -4103,10 +4103,19 @@ async def list_chat_sessions(
     # The dashboard list is also the platform's most frequent clock tick:
     # overdue answers are escalated and dead conversations closed here,
     # so a shop without a scheduler still gets both.
-    try:
-        await live_chat.sweep(client)
-    except Exception:
-        logging.getLogger(__name__).exception("chat sweep from the dashboard failed")
+    #
+    # Only for the LIVE view, though. The sweep is a write pass over the
+    # open conversations, and running it before every list made opening
+    # "ทั้งหมด" — which then reads up to 200 rows, mostly closed ones —
+    # wait for a write pass whose only subject is the live ones
+    # (owner, 17 ก.ย. 2569: "กดทั้งหมดแล้วมันโหลดแชทที่ปิดไปแล้วขึ้นมาช้า").
+    # Cloud Scheduler calls /platform/chat/sweep every five minutes as
+    # well, so nothing is lost by skipping it on the closed tabs.
+    if wanted == "live":
+        try:
+            await live_chat.sweep(client)
+        except Exception:
+            logging.getLogger(__name__).exception("chat sweep from the dashboard failed")
     try:
         return await client.list_chat_sessions(
             license_id, status=None if wanted == "all" else wanted, limit=200,
