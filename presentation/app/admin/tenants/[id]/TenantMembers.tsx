@@ -7,6 +7,7 @@ import { ADMIN } from "@/lib/admin-copy";
 
 import { adminCall } from "../../_client";
 import { fmtDate, type TenantMember, type TenantSummary } from "../../_types";
+import { ConfirmDialogBase, useConfirm } from "../../../liff/_confirm";
 
 type Note = { text: string; tone: "ok" | "error" } | null;
 const copy = ADMIN.tenant;
@@ -27,6 +28,7 @@ export function TenantMembers({
   tenants: TenantSummary[];
 }) {
   const router = useRouter();
+  const { request: confirming, ask, close: closeConfirm } = useConfirm();
   const [busy, setBusy] = useState("");
   const [note, setNote] = useState<Note>(null);
   const [roles, setRoles] = useState<Record<string, string>>(
@@ -65,12 +67,25 @@ export function TenantMembers({
   async function saveRole(m: TenantMember) {
     const role = (roles[rowKey(m)] ?? "").trim();
     if (!role || role === m.role) return;
-    if (!window.confirm(words.confirmRole(nameOf(m), role))) return;
+    const ok = await ask({
+      action: words.roleAction(role),
+      target: nameOf(m),
+      affects: words.roleAffects,
+      reversible: words.roleKeeps,
+      confirmLabel: words.roleAction(role),
+    });
+    if (!ok) return;
     await call(`role:${rowKey(m)}`, `/api/admin/tenants/${licenseId}/members/${encodeURIComponent(m.chann_uid)}/role`, { role }, () => words.roleSaved);
   }
 
   async function setStatus(m: TenantMember, status: "active" | "removed") {
-    const ok = window.confirm(status === "removed" ? words.confirmRemove(nameOf(m)) : words.confirmReactivate(nameOf(m)));
+    const ok = await ask({
+      action: status === "removed" ? words.removeAction : words.reactivateAction,
+      target: nameOf(m),
+      affects: status === "removed" ? words.removeAffects : undefined,
+      reversible: words.removeKeeps,
+      confirmLabel: status === "removed" ? words.removeAction : words.reactivateAction,
+    });
     if (!ok) return;
     await call(`status:${rowKey(m)}`, `/api/admin/tenants/${licenseId}/members/${encodeURIComponent(m.chann_uid)}/status`, { status }, (body) => {
       const n = ((body as { unassigned_tickets?: unknown[] } | null)?.unassigned_tickets ?? []).length;
@@ -83,7 +98,14 @@ export function TenantMembers({
     const target = targets.find((t) => t.id === moveTarget);
     const role = moveRole.trim();
     if (!target || !role) return;
-    if (!window.confirm(words.confirmMoveText(nameOf(m), target.company_name, role))) return;
+    const ok = await ask({
+      action: words.moveAction(target.company_name),
+      target: nameOf(m),
+      affects: words.moveAffects,
+      permanent: true,
+      confirmLabel: words.moveAction(target.company_name),
+    });
+    if (!ok) return;
     await call(`move:${rowKey(m)}`, `/api/admin/tenants/${licenseId}/members/${encodeURIComponent(m.chann_uid)}/move`,
       { target_license_id: target.id, role }, () => words.moved(target.company_name));
     setMoving("");
@@ -183,6 +205,12 @@ export function TenantMembers({
         </table>
       </div>
       {note && <p className={`pa-note pa-note-${note.tone}`} role="status">{note.text}</p>}
+      <ConfirmDialogBase
+        request={confirming}
+        onClose={closeConfirm}
+        busy={Boolean(busy)}
+        copy={{ cancel: ADMIN.confirm.keepIt, permanent: ADMIN.confirm.cannotUndo }}
+      />
     </section>
   );
 }

@@ -25670,6 +25670,21 @@ async def _model_road(
     # all. Asking a technician for a customer's phone number and then
     # refusing the answer as a sales-only command is worse than saying so at
     # the first message (owner, 10 Sep 2026).
+    # "คืนงาน T-…" on the TECHNICIAN's line is handing their own job back,
+    # not the shop opening one to everybody — in Thai it is the same verb
+    # and the model returns "release" for both. Converted before the
+    # permission gates, because ("release", "ticket") asks for
+    # ticket.assign: a technician trying to give back a job they had
+    # accepted was answered "ต้องมีสิทธิ์ «มอบหมายใบงาน»", a permission
+    # they have no business holding (owner, 17 ก.ย. 2569: "ถ้ารับงานไปแล้ว
+    # ยังไม่เช็คอิน ควรจะสามารถคืนงานได้").
+    if (
+        ctx.oa == "technician"
+        and str(intent.get("action") or "") == "release"
+        and str(intent.get("entity") or "") == "ticket"
+    ):
+        intent = {**intent, "action": "reject"}
+
     gate_needed = required_permission(intent.get("action") or "", intent.get("entity") or "")
     if gate_needed is not None and not _oa_allows(ctx.oa, gate_needed):
         if pending_intent is not None:

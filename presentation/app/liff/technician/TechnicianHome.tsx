@@ -535,6 +535,49 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
   // — which has always excluded them — correctly answered that there were
   // none, so the two disagreed about the same technician (owner,
   // 17 ก.ย. 2569).
+  /** The "why?" form, shown under whichever card is being handed back.
+   *  Rendered in two sections — a job still being offered, and one already
+   *  accepted but not yet checked in — so it lives here rather than being
+   *  written out twice and drifting apart.
+   */
+  function declineForm(ticket: Ticket) {
+    if (declineFor?.id !== ticket.id) return null;
+    return (
+      <dl className="fields">
+        <FieldRow label={t.dashboard.technician.declineReason}>
+          {(id) => (
+            <input
+              id={id}
+              autoFocus
+              value={declineReason}
+              onChange={(e) => setDeclineReason(e.target.value)}
+            />
+          )}
+        </FieldRow>
+        <div className="actions">
+          <button
+            type="button"
+            className="btn"
+            data-variant="quiet"
+            disabled={busyId !== ""}
+            onClick={() => setDeclineFor(null)}
+          >
+            {t.dashboard.related.cancelForm}
+          </button>
+          <button
+            type="button"
+            className="btn"
+            data-variant="danger"
+            disabled={busyId !== ""}
+            onClick={() => void decline()}
+          >
+            {t.dashboard.technician.decline}
+          </button>
+        </div>
+      </dl>
+    );
+  }
+
   const mine = shown.filter(
     (x) =>
       x.assigned_to_ref === memberId &&
@@ -661,6 +704,25 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
                     />
                     {canWork && (
                       <div className="card-actions">
+                        {/* Accepted but not yet arrived: the technician can
+                            still give it back. After check-in they are
+                            standing at the job and the Data tier refuses,
+                            which is why the button disappears then (owner,
+                            17 ก.ย. 2569: "ถ้ารับงานไปแล้วยังไม่เช็คอิน ควร
+                            จะสามารถคืนงานได้เพื่อไม่สะดวก"). */}
+                        {ticket.status !== "in_progress" && (
+                          <button
+                            type="button"
+                            className="btn"
+                            disabled={busyId !== ""}
+                            onClick={() => {
+                              setDeclineFor(ticket);
+                              setDeclineReason("");
+                            }}
+                          >
+                            {t.dashboard.technician.handBack}
+                          </button>
+                        )}
                         {ticket.status !== "in_progress" && (
                           <button
                             type="button"
@@ -714,6 +776,7 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
                         </button>
                       </div>
                     )}
+                    {declineForm(ticket)}
                     {photosFor === ticket.id && (
                       <ul className="list" data-list="photos">
                         {(photos[ticket.id] ?? []).length === 0 ? (
@@ -970,40 +1033,7 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
                         </button>
                       </div>
                     )}
-                    {declineFor?.id === ticket.id && (
-                      <dl className="fields">
-                        <FieldRow label={t.dashboard.technician.declineReason}>
-                          {(id) => (
-                            <input
-                              id={id}
-                              autoFocus
-                              value={declineReason}
-                              onChange={(e) => setDeclineReason(e.target.value)}
-                            />
-                          )}
-                        </FieldRow>
-                        <div className="actions">
-                          <button
-                            type="button"
-                            className="btn"
-                            data-variant="quiet"
-                            disabled={busyId !== ""}
-                            onClick={() => setDeclineFor(null)}
-                          >
-                            {t.dashboard.related.cancelForm}
-                          </button>
-                          <button
-                            type="button"
-                            className="btn"
-                            data-variant="danger"
-                            disabled={busyId !== ""}
-                            onClick={() => void decline()}
-                          >
-                            {t.dashboard.technician.decline}
-                          </button>
-                        </div>
-                      </dl>
-                    )}
+                    {declineForm(ticket)}
                   </li>
                 ))}
               </ul>

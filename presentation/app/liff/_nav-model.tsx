@@ -62,6 +62,13 @@ function glyph(children: ReactNode): ReactNode {
 
 export const ICONS = {
   overview: glyph(<path d="M3 10.6 12 4l9 6.6V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z" />),
+  appointments: glyph(
+    <>
+      <rect x="3.5" y="5" width="17" height="15.5" rx="2" />
+      <path d="M3.5 9.5h17M8 3.5v3M16 3.5v3" />
+      <path d="m9 14.5 2 2 4-4" />
+    </>,
+  ),
   chats: glyph(<path d="M20 14.5a2.5 2.5 0 0 1-2.5 2.5H8.5L4 20.5V6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5z" />),
   customers: glyph(
     <>
@@ -222,6 +229,10 @@ export function navGroups(t: Dictionary, audience: Audience): NavGroup[] {
         { key: "customers", href: "/liff/sales/customers", label: t.customer.title, icon: ICONS.customers, needs: ["customer.read"] },
         { key: "deals", href: "/liff/sales/deals", label: t.deal.title, icon: ICONS.deals, needs: ["deal.read"] },
         { key: "quotes", href: "/liff/sales/quotes", label: t.quote.title, icon: ICONS.quotes, needs: ["quote.read"] },
+        // Appointments existed only inside a customer's or a deal's page,
+        // so seeing the week meant opening records one at a time (owner,
+        // 17 ก.ย. 2569).
+        { key: "appointments", href: "/liff/sales/appointments", label: t.dashboard.appointments.title, icon: ICONS.appointments, needs: ["followup.read"] },
         { key: "products", href: "/liff/sales/products", label: t.product.title, icon: ICONS.products, needs: ["product.read", "product.manage"] },
       ],
     },

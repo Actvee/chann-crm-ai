@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { ADMIN } from "@/lib/admin-copy";
 
 import { adminCall } from "../../_client";
+import { ConfirmDialogBase, useConfirm } from "../../../liff/_confirm";
 
 type Note = { text: string; tone: "ok" | "error" } | null;
 const copy = ADMIN.tenant.delete;
@@ -26,6 +27,7 @@ export function TenantDelete({
   status: string;
 }) {
   const router = useRouter();
+  const { request: confirming, ask, close: closeConfirm } = useConfirm();
   const [typed, setTyped] = useState("");
   const [purge, setPurge] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -40,7 +42,19 @@ export function TenantDelete({
       setNote({ text: copy.alreadyDeleted, tone: "error" });
       return;
     }
-    if (!window.confirm(purge ? copy.confirmPurge(companyName) : copy.confirmSoft(companyName))) return;
+    // The most destructive thing anyone can do in this product: a purge
+    // takes a whole company's customers, jobs, deals and documents out of
+    // the database for good. It says each of those out loud, and the
+    // dialog is red rather than the ordinary green "archived" one.
+    const ok = await ask({
+      action: purge ? copy.purgeAction : copy.softAction,
+      target: companyName,
+      affects: purge ? copy.purgeAffects : copy.softAffects,
+      reversible: purge ? undefined : copy.softKeeps,
+      permanent: purge,
+      confirmLabel: purge ? copy.purgeAction : copy.softAction,
+    });
+    if (!ok) return;
     setBusy(true);
     setNote(null);
     try {
@@ -84,6 +98,12 @@ export function TenantDelete({
         </button>
       </div>
       {note && <p className={`pa-note pa-note-${note.tone}`} role="status">{note.text}</p>}
+      <ConfirmDialogBase
+        request={confirming}
+        onClose={closeConfirm}
+        busy={busy}
+        copy={{ cancel: ADMIN.confirm.keepIt, permanent: ADMIN.confirm.cannotUndo }}
+      />
     </section>
   );
 }

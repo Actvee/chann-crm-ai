@@ -467,6 +467,14 @@ class DealRepository:
                 existing_code=open_deal.deal_id,
             )
 
+        # Opening a deal for someone IS confirming they are a customer, so
+        # the lead becomes a contact here rather than waiting for a second,
+        # separate "ยืนยันลูกค้า" that nobody remembers to type (owner,
+        # 17 ก.ย. 2569: "ถ้าลูกค้าตกลงสร้าง Deal จะต้องกลายเป็น contact
+        # auto ไปเลย"). A record already at "contact" is left alone.
+        if contact.stage == "lead":
+            contact.stage = "contact"
+
         row = Deal(
             id=uuid.uuid4(), license_id=scope.license_id,
             deal_id=self._unique_deal_id(scope), contact_id=contact_id,

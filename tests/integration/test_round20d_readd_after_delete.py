@@ -81,3 +81,79 @@ class TestTheNumberIsFreeAgain:
             repo, scope = self._repo(session)
             with pytest.raises(Phase9Duplicate):
                 repo.create(scope, first_name="คนอื่น", last_name="ใคร", phone="0899999999")
+
+
+@pytest.mark.usefixtures("migrated_db")
+class TestOpeningADealConfirmsTheCustomer:
+    """Owner, 17 ก.ย. 2569: "ถ้าลูกค้าตกลงสร้าง Deal จะต้องกลายเป็น contact
+    auto ไปเลย" — opening a deal for someone IS confirming them, so the
+    lead should not sit at "lead" waiting for a second command."""
+
+    _n = [100]
+
+    @pytest.fixture(autouse=True)
+    def _a_shop(self, migrated_db):
+        from chann_data.models import ChannIdentity
+        from chann_data.repositories.phase65 import RegistrationRepository
+
+        self._n[0] += 1
+        who = f"CHN-DEALSTAGE-{self._n[0]:03d}"
+        with Session(migrated_db) as session:
+            if session.get(ChannIdentity, who) is None:
+                session.add(ChannIdentity(
+                    chann_uid=who, line_user_id=f"line-{who.lower()}", primary_role="sales",
+                ))
+                session.commit()
+        with Session(migrated_db) as session:
+            lic = RegistrationRepository(session).create_license(
+                company_name="ร้านทดสอบดีล", created_by_chann_uid=who,
+            )
+            session.commit()
+            self.license_id = lic.id
+
+    def _repos(self, session):
+        from chann_data.repositories.phase9 import CustomerRepository, DealRepository
+        from chann_data.repositories.tenant_scope import TenantScope
+
+        scope = TenantScope(license_id=self.license_id)
+        return CustomerRepository(session), DealRepository(session), scope
+
+    def test_a_lead_becomes_a_contact(self, migrated_db):
+        from chann_data.models import Customer
+
+        with Session(migrated_db) as session:
+            customers, deals, scope = self._repos(session)
+            lead = customers.create(
+                scope, first_name="สมชาย", last_name="ใจดี", phone="0810000001",
+            )
+            session.commit()
+            assert lead.stage == "lead"
+            lead_id = lead.id
+
+        with Session(migrated_db) as session:
+            _customers, deals, scope = self._repos(session)
+            deals.create(scope, contact_id=lead_id)
+            session.commit()
+
+        with Session(migrated_db) as session:
+            assert session.get(Customer, lead_id).stage == "contact"
+
+    def test_someone_already_a_contact_is_left_alone(self, migrated_db):
+        from chann_data.models import Customer
+
+        with Session(migrated_db) as session:
+            customers, _deals, scope = self._repos(session)
+            row = customers.create(
+                scope, first_name="สมหญิง", last_name="ดี", phone="0810000002",
+                stage="contact",
+            )
+            session.commit()
+            row_id = row.id
+
+        with Session(migrated_db) as session:
+            _customers, deals, scope = self._repos(session)
+            deals.create(scope, contact_id=row_id)
+            session.commit()
+
+        with Session(migrated_db) as session:
+            assert session.get(Customer, row_id).stage == "contact"

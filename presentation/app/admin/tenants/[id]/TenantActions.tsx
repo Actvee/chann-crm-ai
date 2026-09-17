@@ -7,6 +7,7 @@ import { ADMIN } from "@/lib/admin-copy";
 
 import { adminCall } from "../../_client";
 import { fmtDate, isExpired, type TenantMember } from "../../_types";
+import { ConfirmDialogBase, useConfirm } from "../../../liff/_confirm";
 
 type Note = { text: string; tone: "ok" | "error" } | null;
 const copy = ADMIN.tenant.actions;
@@ -28,6 +29,7 @@ export function TenantActions({
   members: TenantMember[];
 }) {
   const router = useRouter();
+  const { request: confirming, ask, close: closeConfirm } = useConfirm();
   const [busy, setBusy] = useState<"" | "status" | "extend" | "transfer">("");
   const [note, setNote] = useState<Note>(null);
   const [target, setTarget] = useState("");
@@ -37,7 +39,13 @@ export function TenantActions({
   const candidates = members.filter((m) => m.chann_uid !== ownerChannUid);
 
   async function extend(days: number, { reopen = false } = {}) {
-    if (!window.confirm(reopen ? copy.confirmReopenExpired : copy.confirmExtend(days))) return;
+    const ok = await ask({
+      action: reopen ? copy.reopenExpiredAction : copy.extendAction(days),
+      target: copy.subscriptionWord,
+      reversible: copy.extendKeeps,
+      confirmLabel: reopen ? copy.reopenExpiredAction : copy.extendAction(days),
+    });
+    if (!ok) return;
     setBusy(reopen ? "status" : "extend");
     setNote(null);
     try {
@@ -62,7 +70,14 @@ export function TenantActions({
       await extend(30, { reopen: true });
       return;
     }
-    if (!window.confirm(next === "suspended" ? copy.confirmSuspend : copy.confirmReopen)) return;
+    const ok = await ask({
+      action: next === "suspended" ? copy.suspendAction : copy.reopenAction,
+      target: copy.shopWord,
+      affects: next === "suspended" ? copy.suspendAffects : copy.reopenAffects,
+      reversible: copy.statusKeeps,
+      confirmLabel: next === "suspended" ? copy.suspendAction : copy.reopenAction,
+    });
+    if (!ok) return;
     setBusy("status");
     setNote(null);
     try {
@@ -83,7 +98,14 @@ export function TenantActions({
     if (!target) return;
     const member = candidates.find((m) => m.chann_uid === target);
     const name = member?.display_name ?? target;
-    if (!window.confirm(copy.confirmTransfer(name))) return;
+    const ok = await ask({
+      action: copy.transferAction,
+      target: name,
+      affects: copy.transferAffects,
+      permanent: true,
+      confirmLabel: copy.transferAction,
+    });
+    if (!ok) return;
     setBusy("transfer");
     setNote(null);
     try {
@@ -161,6 +183,12 @@ export function TenantActions({
       {note && (
         <p className={`pa-note pa-note-${note.tone}`} role="status">{note.text}</p>
       )}
+      <ConfirmDialogBase
+        request={confirming}
+        onClose={closeConfirm}
+        busy={Boolean(busy)}
+        copy={{ cancel: ADMIN.confirm.keepIt, permanent: ADMIN.confirm.cannotUndo }}
+      />
     </section>
   );
 }

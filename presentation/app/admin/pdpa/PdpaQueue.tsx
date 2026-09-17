@@ -7,11 +7,13 @@ import { ADMIN } from "@/lib/admin-copy";
 
 import { adminCall } from "../_client";
 import { fmtDate, type PdpaRequest } from "../_types";
+import { ConfirmDialogBase, useConfirm } from "../../liff/_confirm";
 
 const copy = ADMIN.pdpa;
 
 export function PdpaQueue({ rows }: { rows: PdpaRequest[] }) {
   const router = useRouter();
+  const { request: confirming, ask, close: closeConfirm } = useConfirm();
   const [busy, setBusy] = useState("");
   const [note, setNote] = useState<{ text: string; tone: "ok" | "error" } | null>(null);
   const [newUid, setNewUid] = useState("");
@@ -24,7 +26,14 @@ export function PdpaQueue({ rows }: { rows: PdpaRequest[] }) {
       reason = window.prompt(copy.rejectReason) ?? "";
       if (!reason.trim()) return;
     } else if (request?.request_type === "erasure") {
-      if (!window.confirm(copy.confirmErase(request.chann_uid))) return;
+      const ok = await ask({
+        action: copy.eraseAction,
+        target: request.chann_uid,
+        affects: copy.eraseAffects,
+        permanent: true,
+        confirmLabel: copy.eraseAction,
+      });
+      if (!ok) return;
     }
     setBusy(id);
     setNote(null);
@@ -124,6 +133,12 @@ export function PdpaQueue({ rows }: { rows: PdpaRequest[] }) {
           </tbody>
         </table>
       </div>
+      <ConfirmDialogBase
+        request={confirming}
+        onClose={closeConfirm}
+        busy={Boolean(busy)}
+        copy={{ cancel: ADMIN.confirm.keepIt, permanent: ADMIN.confirm.cannotUndo }}
+      />
     </>
   );
 }

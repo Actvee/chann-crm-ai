@@ -31,7 +31,7 @@ export type ConfirmRequest = {
   /** "C-2026-0001" — shown beside the name so the right row is obvious. */
   code?: string;
   /** What else this touches: "ดีล 2 รายการยังอยู่ · ประวัติงานยังอยู่". */
-  affects?: string[];
+  affects?: readonly string[];
   /** "เก็บถาวร กู้คืนได้" — or, when it truly cannot be undone, say so. */
   reversible?: string;
   /** Anything that is genuinely irreversible turns the dialog red-hot. */
@@ -39,6 +39,24 @@ export type ConfirmRequest = {
   confirmLabel?: string;
   cancelLabel?: string;
 };
+
+/** The LIFF form: the same dialog with the shop app's own words. */
+export function ConfirmDialog(props: {
+  request: (ConfirmRequest & { resolve: (ok: boolean) => void }) | null;
+  onClose: (ok: boolean) => void;
+  busy?: boolean;
+}): ReactNode {
+  // The generic words live in one place, so a caller only has to describe
+  // its own action — every screen spelling "ยกเลิก" itself is how they
+  // drift apart.
+  const { t } = useLanguage();
+  return (
+    <ConfirmDialogBase
+      {...props}
+      copy={{ cancel: t.common.keepIt, permanent: t.common.cannotUndo }}
+    />
+  );
+}
 
 export function useConfirm() {
   const [request, setRequest] = useState<
@@ -57,23 +75,27 @@ export function useConfirm() {
   return { request, ask, close };
 }
 
-export function ConfirmDialog({
+/** The two words every dialog needs, whatever app it is in. */
+export type ConfirmLabels = { cancel: string; permanent: string };
+
+/** The dialog itself, with no opinion about where its words come from.
+ *
+ * The platform console has its own copy and no LanguageProvider, so a
+ * component that reached for the LIFF one would throw the moment an
+ * operator opened it. The labels come in as a prop; each app supplies its
+ * own.
+ */
+export function ConfirmDialogBase({
   request,
   onClose,
+  copy,
   busy = false,
 }: {
   request: (ConfirmRequest & { resolve: (ok: boolean) => void }) | null;
   onClose: (ok: boolean) => void;
+  copy: ConfirmLabels;
   busy?: boolean;
 }): ReactNode {
-  // The generic words live in one place, so a caller only has to describe
-  // its own action — every screen spelling "ยกเลิก" itself is how they
-  // drift apart.
-  const { t } = useLanguage();
-  const copy = {
-    cancel: t.common.keepIt,
-    permanent: t.common.cannotUndo,
-  };
   const cancelRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 

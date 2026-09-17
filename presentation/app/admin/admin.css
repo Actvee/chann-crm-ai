@@ -207,3 +207,52 @@
 @media (prefers-reduced-motion: reduce) {
   .pa * { transition: none !important; }
 }
+
+/* ---------------------------------------------- destructive confirm (.pa)
+   The dialog is shared with the LIFF apps, whose tokens are the light
+   palette in globals.css. Inside the console it has to be dark like
+   everything around it, or a delete confirmation arrives as a white
+   rectangle on a dark screen — which reads as a bug at the exact moment
+   the operator most needs to trust what they are looking at. */
+.pa .confirm-panel {
+  background: var(--pa-card);
+  border-color: var(--pa-line);
+  color: var(--pa-ink);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+}
+
+.pa .confirm-panel[data-permanent="yes"] { border-color: var(--pa-danger); }
+.pa .confirm-code,
+.pa .confirm-affects { color: var(--pa-ink-soft); }
+
+.pa .confirm-reversible {
+  background: var(--pa-accent-soft);
+  border-color: var(--pa-accent);
+  color: var(--pa-ink);
+}
+
+.pa .confirm-reversible[data-permanent="yes"] {
+  background: var(--pa-danger-soft);
+  border-color: var(--pa-danger);
+  color: var(--pa-ink);
+}
+
+.pa .confirm-actions .btn {
+  background: var(--pa-muted);
+  border: 1px solid var(--pa-line-strong);
+  color: var(--pa-ink);
+  border-radius: 8px;
+  padding: 10px 14px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.pa .confirm-actions .btn[data-variant="danger"] {
+  background: var(--pa-danger);
+  border-color: var(--pa-danger);
+  /* Dark ink on the light-red button: white on #f87171 is 2.4:1. */
+  color: #2a0b0b;
+  font-weight: 700;
+}
+
+.pa .confirm-actions .btn:disabled { opacity: 0.55; cursor: default; }
