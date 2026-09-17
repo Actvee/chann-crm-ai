@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
+import { useLanguage } from "@/lib/i18n/LanguageProvider";
+
 /** Asking before something destructive, and saying what it will do.
  *
  * Every destructive action in this dashboard used `window.confirm`, which
@@ -38,8 +40,6 @@ export type ConfirmRequest = {
   cancelLabel?: string;
 };
 
-type Copy = { cancel: string; confirm: string; permanent: string };
-
 export function useConfirm() {
   const [request, setRequest] = useState<
     (ConfirmRequest & { resolve: (ok: boolean) => void }) | null
@@ -60,14 +60,20 @@ export function useConfirm() {
 export function ConfirmDialog({
   request,
   onClose,
-  copy,
   busy = false,
 }: {
   request: (ConfirmRequest & { resolve: (ok: boolean) => void }) | null;
   onClose: (ok: boolean) => void;
-  copy: Copy;
   busy?: boolean;
 }): ReactNode {
+  // The generic words live in one place, so a caller only has to describe
+  // its own action — every screen spelling "ยกเลิก" itself is how they
+  // drift apart.
+  const { t } = useLanguage();
+  const copy = {
+    cancel: t.common.keepIt,
+    permanent: t.common.cannotUndo,
+  };
   const cancelRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -150,7 +156,7 @@ export function ConfirmDialog({
             disabled={busy}
             aria-busy={busy || undefined}
           >
-            {request.confirmLabel ?? `${request.action} ${copy.confirm}`}
+            {request.confirmLabel ?? request.action}
           </button>
         </div>
       </div>

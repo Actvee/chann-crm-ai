@@ -17,6 +17,7 @@ import { openExternal, proxyHeaders } from "../_lib";
 import { useSalesSession } from "../_session";
 import { SalesShell } from "../_shell";
 import { useSalesText } from "../_strings";
+import { ConfirmDialog, useConfirm } from "../../_confirm";
 
 type Quote = {
   created_at?: string | null;
@@ -32,6 +33,7 @@ export default function QuoteList({ liffId }: { liffId: string }) {
   const failureText = useFailureText();
   const statusLabel = (status: string) =>
     (t.quote.status as Record<string, string>)[status] ?? status;
+  const { request: confirming, ask, close: closeConfirm } = useConfirm();
   const [quotes, setQuotes] = useState<Quote[]>([]);
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
@@ -173,15 +175,15 @@ export default function QuoteList({ liffId }: { liffId: string }) {
 
   async function issue(quote: Quote) {
     const already = Boolean(quote.generated_document_id);
-    if (
-      !window.confirm(
-        already
-          ? t.dashboard.quotes.confirmReissue.replace("{code}", quote.quote_id)
-          : t.dashboard.quotes.confirmIssue.replace("{code}", quote.quote_id),
-      )
-    ) {
-      return;
-    }
+    const ok = await ask({
+      action: already ? t.dashboard.quotes.reissueAction : t.dashboard.quotes.issueAction,
+      target: t.dashboard.quotes.quoteWord,
+      code: quote.quote_id,
+      affects: already ? [t.dashboard.quotes.reissueAffects] : [t.dashboard.quotes.issueAffects],
+      reversible: t.dashboard.quotes.issueKeeps,
+      confirmLabel: already ? t.dashboard.quotes.reissueAction : t.dashboard.quotes.issueAction,
+    });
+    if (!ok) return;
     setBusyId(quote.id);
     say(t.dashboard.working);
     try {
@@ -347,6 +349,7 @@ export default function QuoteList({ liffId }: { liffId: string }) {
 
       {!canIssue && !session.suspended && <p className="footnote">{s.quotes.needsUpdate}</p>}
       <p className="footnote">{t.dashboard.quotes.note}</p>
+      <ConfirmDialog request={confirming} onClose={closeConfirm} busy={Boolean(busyId)} />
     </SalesShell>
   );
 }

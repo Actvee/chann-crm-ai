@@ -11,6 +11,7 @@ import { proxyHeaders } from "../_lib";
 import { useSalesSession } from "../_session";
 import { SalesShell } from "../_shell";
 import { useSalesText } from "../_strings";
+import { ConfirmDialog, useConfirm } from "../../_confirm";
 
 type Team = { id: string; team_name: string };
 type Technician = { id: string; chann_uid: string; display_name: string; phone?: string | null };
@@ -36,6 +37,7 @@ export default function SalesTeams({ liffId }: { liffId: string }) {
   const failureText = useFailureText();
   const copy = t.dashboard.teams;
 
+  const { request: confirming, ask, close: closeConfirm } = useConfirm();
   const [teams, setTeams] = useState<Team[]>([]);
   const [members, setMembers] = useState<Record<string, TeamMember[]>>({});
   const [technicians, setTechnicians] = useState<Technician[]>([]);
@@ -165,8 +167,14 @@ export default function SalesTeams({ liffId }: { liffId: string }) {
     }
   }
 
-  const deleteTeam = (teamId: string) =>
-    window.confirm(copy.confirmDeleteTeam) &&
+  const deleteTeam = async (teamId: string, teamName: string) =>
+    (await ask({
+      action: t.common.delete,
+      target: teamName,
+      affects: [copy.deleteTeamAffects],
+      permanent: true,
+      confirmLabel: copy.deleteTeamButton,
+    })) &&
     send(() =>
       fetch(`/api/phase2/licenses/${licenseId}/technician-teams/${teamId}`, {
         method: "DELETE",
@@ -183,8 +191,14 @@ export default function SalesTeams({ liffId }: { liffId: string }) {
       }),
     );
 
-  const removeMember = (teamId: string, memberId: string) =>
-    window.confirm(copy.confirmRemove) &&
+  const removeMember = async (teamId: string, memberId: string, memberName: string) =>
+    (await ask({
+      action: copy.removeMemberAction,
+      target: memberName,
+      affects: [copy.removeMemberAffects],
+      reversible: copy.removeMemberKeeps,
+      confirmLabel: copy.removeMemberAction,
+    })) &&
     send(() =>
       fetch(`/api/phase2/licenses/${licenseId}/technician-teams/${teamId}/members/${memberId}`, {
         method: "DELETE",
@@ -209,8 +223,14 @@ export default function SalesTeams({ liffId }: { liffId: string }) {
     }
   }
 
-  const deleteGroup = (groupId: string) =>
-    window.confirm(s.groups.confirmDelete) &&
+  const deleteGroup = async (groupId: string, groupName: string) =>
+    (await ask({
+      action: t.common.delete,
+      target: groupName,
+      affects: [s.groups.deleteAffects],
+      permanent: true,
+      confirmLabel: s.groups.deleteButton,
+    })) &&
     send(
       () =>
         fetch(`/api/phase2/licenses/${licenseId}/sales-groups/${groupId}`, {
@@ -231,8 +251,13 @@ export default function SalesTeams({ liffId }: { liffId: string }) {
       loadGroups,
     );
 
-  const removeFromGroup = (groupId: string, memberId: string) =>
-    window.confirm(s.groups.confirmRemove) &&
+  const removeFromGroup = async (groupId: string, memberId: string, memberName: string) =>
+    (await ask({
+      action: s.groups.removeAction,
+      target: memberName,
+      reversible: s.groups.removeKeeps,
+      confirmLabel: s.groups.removeAction,
+    })) &&
     send(
       () =>
         fetch(`/api/phase2/licenses/${licenseId}/sales-groups/${groupId}/members/${memberId}`, {
@@ -326,7 +351,7 @@ export default function SalesTeams({ liffId }: { liffId: string }) {
                   className="btn"
                   data-variant="quiet"
                   disabled={busy}
-                  onClick={() => void deleteTeam(team.id)}
+                  onClick={() => void deleteTeam(team.id, team.team_name)}
                 >
                   {copy.deleteTeam}
                 </button>
@@ -365,7 +390,7 @@ export default function SalesTeams({ liffId }: { liffId: string }) {
                           className="btn"
                           data-variant="quiet"
                           disabled={busy}
-                          onClick={() => void removeMember(team.id, member.id)}
+                          onClick={() => void removeMember(team.id, member.id, member.display_name)}
                         >
                           {copy.remove}
                         </button>
@@ -465,7 +490,7 @@ export default function SalesTeams({ liffId }: { liffId: string }) {
                     className="btn"
                     data-variant="quiet"
                     disabled={busy}
-                    onClick={() => void deleteGroup(group.id)}
+                    onClick={() => void deleteGroup(group.id, group.group_name)}
                   >
                     {s.groups.deleteGroup}
                   </button>
@@ -489,7 +514,7 @@ export default function SalesTeams({ liffId }: { liffId: string }) {
                             className="btn"
                             data-variant="quiet"
                             disabled={busy}
-                            onClick={() => void removeFromGroup(group.id, member.id)}
+                            onClick={() => void removeFromGroup(group.id, member.id, member.display_name)}
                           >
                             {copy.remove}
                           </button>
@@ -543,6 +568,7 @@ export default function SalesTeams({ liffId }: { liffId: string }) {
           )}
         </>
       )}
+      <ConfirmDialog request={confirming} onClose={closeConfirm} />
     </SalesShell>
   );
 }

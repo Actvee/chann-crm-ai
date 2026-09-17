@@ -16,6 +16,7 @@ import { openExternal, proxyHeaders } from "../../_lib";
 import { useSalesSession } from "../../_session";
 import { SalesShell } from "../../_shell";
 import { useSalesText } from "../../_strings";
+import { ConfirmDialog, useConfirm } from "../../../_confirm";
 
 type Product = {
   id: string;
@@ -78,6 +79,7 @@ export default function QuoteDetail({
   const s = useSalesText();
   const { money } = useFormatters();
   const failureText = useFailureText();
+  const { request: confirming, ask, close: closeConfirm } = useConfirm();
   const [detail, setDetail] = useState<Detail | null>(null);
   const [lines, setLines] = useState<Product[]>([]);
   const [adding, setAdding] = useState(false);
@@ -171,15 +173,15 @@ export default function QuoteDetail({
   async function issue() {
     if (!detail) return;
     const already = Boolean(detail.quote.generated_document_id);
-    if (
-      !window.confirm(
-        already
-          ? t.dashboard.quotes.confirmReissue.replace("{code}", detail.quote.quote_id)
-          : t.dashboard.quotes.confirmIssue.replace("{code}", detail.quote.quote_id),
-      )
-    ) {
-      return;
-    }
+    const okIssue = await ask({
+      action: already ? t.dashboard.quotes.reissueAction : t.dashboard.quotes.issueAction,
+      target: t.dashboard.quotes.quoteWord,
+      code: quoteId,
+      affects: already ? [t.dashboard.quotes.reissueAffects] : [t.dashboard.quotes.issueAffects],
+      reversible: t.dashboard.quotes.issueKeeps,
+      confirmLabel: already ? t.dashboard.quotes.reissueAction : t.dashboard.quotes.issueAction,
+    });
+    if (!okIssue) return;
     setBusy(true);
     say(t.dashboard.working);
     try {
@@ -207,8 +209,14 @@ export default function QuoteDetail({
 
   async function setQuoteStatus(next: string) {
     const label = statusLabel(next);
-    if (!window.confirm(t.dashboard.quotes.confirmStatus.replace("{status}", label)))
-      return;
+    const ok = await ask({
+      action: t.dashboard.quotes.statusAction.replace("{status}", label),
+      target: t.dashboard.quotes.quoteWord,
+      code: quoteId,
+      reversible: t.dashboard.quotes.statusKeeps,
+      confirmLabel: t.dashboard.quotes.statusAction.replace("{status}", label),
+    });
+    if (!ok) return;
     setBusy(true);
     try {
       const response = await fetch(
@@ -333,7 +341,14 @@ export default function QuoteDetail({
   }
 
   async function removeLine(line: Product) {
-    if (!window.confirm(`${t.common.delete}: ${line.product_name ?? ""}?`)) return;
+    const ok = await ask({
+      action: t.common.delete,
+      target: line.product_name ?? "",
+      affects: [t.dashboard.quotes.removeLineAffects],
+      permanent: true,
+      confirmLabel: t.dashboard.quotes.removeLineButton,
+    });
+    if (!ok) return;
     setBusy(true);
     try {
       const response = await fetch(
@@ -694,6 +709,7 @@ export default function QuoteDetail({
           />
         </>
       )}
+      <ConfirmDialog request={confirming} onClose={closeConfirm} busy={Boolean(busy)} />
     </SalesShell>
   );
 }

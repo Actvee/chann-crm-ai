@@ -8,6 +8,7 @@ import { FieldRow } from "../_field-row";
 import { fullDateTime, shortDate } from "../_list-controls";
 import { proxyHeaders } from "./_lib";
 import { RelatedHeading } from "./_record";
+import { ConfirmDialog, useConfirm } from "../_confirm";
 
 type FollowUp = {
   id: string;
@@ -75,6 +76,7 @@ export function RelatedActivity({
   // add one — reported live (2 Sep) alongside the chat having the same
   // gap. Kept in this component rather than lifted, because nothing
   // above it needs to know.
+  const { request: confirming, ask, close: closeConfirm } = useConfirm();
   const [busy, setBusy] = useState<string | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const [form, setForm] = useState<{ date: string; time: string; note: string } | null>(null);
@@ -246,8 +248,20 @@ export function RelatedActivity({
     const when =
       (shortDate(row.due_date, locale) || row.due_date || "") +
       (row.due_time ? ` ${String(row.due_time).slice(0, 5)}` : "");
-    if (!window.confirm(t.dashboard.related.deleteAppointmentConfirm.replace("{when}", when)))
-      return;
+    const ok = await ask({
+      action: t.common.delete,
+      target: t.dashboard.related.appointmentWord,
+      code: when,
+      // This one really is permanent, and there is a gentler option —
+      // both said, so nobody reaches for delete when they meant cancel.
+      affects: [
+        ...(row.notes ? [row.notes] : []),
+        t.dashboard.related.deleteAppointmentInstead,
+      ],
+      permanent: true,
+      confirmLabel: t.dashboard.related.deleteAppointmentButton,
+    });
+    if (!ok) return;
     setBusy(row.id);
     setFailed(null);
     try {
@@ -587,6 +601,7 @@ export function RelatedActivity({
           ))}
         </ul>
       )}
+      <ConfirmDialog request={confirming} onClose={closeConfirm} busy={Boolean(busy)} />
     </>
   );
 }

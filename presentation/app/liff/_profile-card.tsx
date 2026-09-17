@@ -6,6 +6,7 @@ import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { openExternal } from "./_shared";
 import { FieldRow } from "./_field-row";
+import { ConfirmDialog, useConfirm } from "./_confirm";
 
 type Profile = {
   first_name?: string | null;
@@ -36,6 +37,7 @@ export function ProfileCard({
 }) {
   const { t, locale, setLocale } = useLanguage();
   const copy = t.dashboard.profile;
+  const { request: confirming, ask, close: closeConfirm } = useConfirm();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<Profile>({});
@@ -116,7 +118,17 @@ export function ProfileCard({
   }
 
   async function eraseData() {
-    if (!window.confirm(copy.pdpaEraseConfirm)) return;
+    // The only action in this product that erases rather than archives,
+    // and it is the person's own record across every shop. It gets the
+    // full red treatment and spells out each consequence on its own line.
+    const ok = await ask({
+      action: copy.pdpaEraseAction,
+      target: copy.pdpaEraseTarget,
+      affects: [copy.pdpaEraseAffectsShops, copy.pdpaEraseAffectsHistory, copy.pdpaEraseAffectsConsent],
+      permanent: true,
+      confirmLabel: copy.pdpaEraseAction,
+    });
+    if (!ok) return;
     setPdpaBusy("erase");
     setPdpaNote(null);
     try {
@@ -437,6 +449,7 @@ export function ProfileCard({
           </div>
         </dl>
       )}
+      <ConfirmDialog request={confirming} onClose={closeConfirm} busy={Boolean(pdpaBusy)} />
     </section>
   );
 }

@@ -11,6 +11,7 @@ import { proxyHeaders } from "../_lib";
 import { useSalesSession } from "../_session";
 import { SalesShell } from "../_shell";
 import { useSalesText } from "../_strings";
+import { ConfirmDialog, useConfirm } from "../../_confirm";
 
 type Profile = {
   legal_name: string | null;
@@ -43,6 +44,7 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
       open_hours: c.openHours,
       vat_rate: c.vat,
     })[field] ?? field;
+  const { request: confirming, ask, close: closeConfirm } = useConfirm();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
@@ -321,7 +323,14 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
   async function requestTransfer() {
     const target = members.find((m) => m.chann_uid === nominee);
     if (!target) return;
-    if (!window.confirm(s.company.confirm.replace("{name}", target.display_name))) return;
+    const ok = await ask({
+      action: s.company.transferAction,
+      target: target.display_name,
+      affects: [s.company.transferAffects],
+      reversible: s.company.transferNeedsAccept,
+      confirmLabel: s.company.transferAction,
+    });
+    if (!ok) return;
     setTransferring(true);
     try {
       const response = await fetch(`/api/phase2/licenses/${licenseId}/ownership-transfers`, {
@@ -658,6 +667,7 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
           )}
         </section>
       )}
+      <ConfirmDialog request={confirming} onClose={closeConfirm} busy={Boolean(transferring)} />
     </SalesShell>
   );
 }

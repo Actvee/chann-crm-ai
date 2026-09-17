@@ -102,16 +102,16 @@ class TestTheDeleteDialogSaysWhatAndWhether:
         return (Path(__file__).resolve().parents[2] / relative).read_text(encoding="utf-8")
 
     def test_the_dialog_is_an_alertdialog_with_its_text_wired_up(self):
-        source = self._source("presentation/app/liff/sales/_confirm.tsx")
+        source = self._source("presentation/app/liff/_confirm.tsx")
         for needed in ('role="alertdialog"', "aria-labelledby", "aria-describedby", 'aria-modal="true"'):
             assert needed in source, needed
 
     def test_focus_starts_on_the_safe_choice(self):
-        source = self._source("presentation/app/liff/sales/_confirm.tsx")
+        source = self._source("presentation/app/liff/_confirm.tsx")
         assert "cancelRef.current?.focus()" in source
 
     def test_escape_cancels_and_tab_is_trapped(self):
-        source = self._source("presentation/app/liff/sales/_confirm.tsx")
+        source = self._source("presentation/app/liff/_confirm.tsx")
         assert 'event.key === "Escape"' in source
         assert 'event.key !== "Tab"' in source
 
@@ -132,7 +132,79 @@ class TestTheDeleteDialogSaysWhatAndWhether:
         source = self._source("presentation/app/liff/sales/customers/CustomerList.tsx")
         assert "archivedNamed" in source, "a generic 'saved' tells nobody what happened"
 
-    @pytest.mark.parametrize("key", ["archivedNamed", "archiveKeeps", "confirmCancel", "confirmPermanent"])
+    @pytest.mark.parametrize("key", ["archivedNamed", "archiveKeeps", "keepIt", "cannotUndo"])
     def test_both_languages_carry_the_new_words(self, key):
         for path in ("presentation/lib/i18n/th.ts", "presentation/lib/i18n/en.ts"):
             assert f"{key}:" in self._source(path), (key, path)
+
+    #: Every destructive or consequential action the SHOP can reach. The
+    #: platform console under /admin is a separate surface and still on
+    #: window.confirm — named here so the gap is recorded, not forgotten.
+    SHOP_SCREENS = (
+        "presentation/app/liff/_profile-card.tsx",
+        "presentation/app/liff/customer/CustomerHome.tsx",
+        "presentation/app/liff/sales/SalesMenu.tsx",
+        "presentation/app/liff/sales/teams/SalesTeams.tsx",
+        "presentation/app/liff/sales/deals/[id]/DealDetail.tsx",
+        "presentation/app/liff/sales/customers/CustomerList.tsx",
+        "presentation/app/liff/sales/roles/RoleManagement.tsx",
+        "presentation/app/liff/sales/members/MemberManagement.tsx",
+        "presentation/app/liff/sales/_related.tsx",
+        "presentation/app/liff/sales/quotes/QuoteList.tsx",
+        "presentation/app/liff/sales/quotes/[id]/QuoteDetail.tsx",
+        "presentation/app/liff/sales/chats/SalesChats.tsx",
+        "presentation/app/liff/sales/company/CompanyProfile.tsx",
+        "presentation/app/liff/sales/templates/DocumentTemplates.tsx",
+    )
+
+    @pytest.mark.parametrize("screen", SHOP_SCREENS)
+    def test_no_shop_screen_still_asks_with_a_system_alert(self, screen):
+        code = "\n".join(
+            line for line in self._source(screen).split("\n")
+            if not line.strip().startswith(("//", "*", "/*"))
+        )
+        assert "window.confirm" not in code, screen
+
+    @pytest.mark.parametrize("screen", SHOP_SCREENS)
+    def test_each_one_renders_the_dialog_it_asks_with(self, screen):
+        source = self._source(screen)
+        assert "useConfirm()" in source, screen
+        assert "<ConfirmDialog" in source, screen
+
+    def test_a_permanent_action_is_marked_permanent(self):
+        """Deleting an appointment and a quotation line really cannot be
+        undone; archiving a customer can. The dialog must not cry wolf."""
+        appointments = self._source("presentation/app/liff/sales/_related.tsx")
+        assert "permanent: true" in appointments
+        lines = self._source("presentation/app/liff/sales/quotes/[id]/QuoteDetail.tsx")
+        assert "permanent: true" in lines
+        customers = self._source("presentation/app/liff/sales/customers/CustomerList.tsx")
+        assert "permanent: true" not in customers, "archiving is reversible"
+
+    def test_the_gentler_option_is_offered_before_a_permanent_delete(self):
+        source = self._source("presentation/app/liff/sales/_related.tsx")
+        assert "deleteAppointmentInstead" in source
+
+    def test_no_liff_screen_anywhere_still_uses_a_system_alert(self):
+        """The whole surface, not a list someone has to remember to extend."""
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[2] / "presentation/app/liff"
+        offenders = []
+        for path in sorted(root.rglob("*.tsx")):
+            if path.name == "_confirm.tsx":
+                continue
+            code = "\n".join(
+                line for line in path.read_text(encoding="utf-8").split("\n")
+                if not line.strip().startswith(("//", "*", "/*"))
+            )
+            if "window.confirm" in code:
+                offenders.append(str(path.relative_to(root)))
+        assert offenders == [], offenders
+
+    def test_erasing_personal_data_is_marked_permanent(self):
+        """The one action that erases rather than archives, and it is the
+        person's own record across every shop."""
+        source = self._source("presentation/app/liff/_profile-card.tsx")
+        assert "permanent: true" in source
+        assert "pdpaEraseAffectsShops" in source

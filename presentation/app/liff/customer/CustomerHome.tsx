@@ -14,6 +14,7 @@ import { ShopSwitcher } from "../_shop-switcher";
 import { ListFilters, matchesQuery, optionsFrom } from "../_filters";
 import { Ticket, TicketRow } from "../_tickets";
 import { Membership, completeLiffRedirect, initLiffSession, proxyHeaders } from "../_shared";
+import { ConfirmDialog, useConfirm } from "../_confirm";
 
 type Warranty = {
   id: string;
@@ -70,6 +71,7 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
   const statusLabel = (status: string) =>
     (t.dashboard.tickets.status as Record<string, string>)[status] ?? status;
 
+  const { request: confirming, ask, close: closeConfirm } = useConfirm();
   const [token, setToken] = useState("");
   const [licenseId, setLicenseId] = useState("");
   const [shopName, setShopName] = useState("");
@@ -221,7 +223,14 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
 
   async function endChat() {
     if (!chatSession) return;
-    if (!window.confirm(t.dashboard.customer.confirmEndChat)) return;
+    const ok = await ask({
+      action: t.dashboard.customer.endChatAction,
+      target: t.dashboard.customer.endChatTarget,
+      affects: [t.dashboard.customer.endChatAffects],
+      reversible: t.dashboard.customer.endChatKeeps,
+      confirmLabel: t.dashboard.customer.endChatAction,
+    });
+    if (!ok) return;
     setBusy(true);
     try {
       const response = await fetch(
@@ -845,6 +854,7 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
         {token && (
           <ProfileCard token={token} audience="customer" shopName={shopName} />
         )}
+      <ConfirmDialog request={confirming} onClose={closeConfirm} busy={Boolean(busy)} />
       </AppShell>
     </div>
   );

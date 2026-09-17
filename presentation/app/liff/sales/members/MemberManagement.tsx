@@ -12,6 +12,7 @@ import { proxyHeaders } from "../_lib";
 import { useSalesSession } from "../_session";
 import { SalesShell } from "../_shell";
 import { useSalesText } from "../_strings";
+import { ConfirmDialog, useConfirm } from "../../_confirm";
 
 type Channel = "sales" | "technician";
 type MemberStatus = "active" | "removed";
@@ -67,6 +68,7 @@ export default function MemberManagement({ liffId }: { liffId: string }) {
   const [roles, setRoles] = useState<Role[]>([]);
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
+  const { request: confirming, ask, close: closeConfirm } = useConfirm();
   const [busyKey, setBusyKey] = useState("");
   const [channel, setChannel] = useState<"all" | Channel>("all");
   const [showRemoved, setShowRemoved] = useState(false);
@@ -255,22 +257,32 @@ export default function MemberManagement({ liffId }: { liffId: string }) {
     );
   }
 
-  function remove(row: MemberRow) {
+  async function remove(row: MemberRow) {
     if (row.is_owner) {
       say(m.ownerCannotRemove, "error");
       return;
     }
-    const question = (row.channel === "technician" ? m.confirmRemoveTechnician : m.confirmRemoveSales)
-      .replace("{name}", row.display_name);
-    if (!window.confirm(question)) return;
+    const ok = await ask({
+      action: m.removeAction,
+      target: row.display_name,
+      code: channelLabel(row.channel),
+      affects: [m.removeAffects],
+      reversible: m.removeReversible,
+      confirmLabel: m.removeAction,
+    });
+    if (!ok) return;
     void setStatusOf(row, "removed", m.removedDone);
   }
 
-  function reactivate(row: MemberRow) {
-    const question = m.confirmReactivate
-      .replace("{name}", row.display_name)
-      .replace("{channel}", channelLabel(row.channel));
-    if (!window.confirm(question)) return;
+  async function reactivate(row: MemberRow) {
+    const ok = await ask({
+      action: m.reactivateAction,
+      target: row.display_name,
+      code: channelLabel(row.channel),
+      reversible: m.reactivateNote,
+      confirmLabel: m.reactivateAction,
+    });
+    if (!ok) return;
     void setStatusOf(row, "active", m.reactivated);
   }
 
@@ -288,11 +300,16 @@ export default function MemberManagement({ liffId }: { liffId: string }) {
     );
   }
 
-  function resetOnboarding(row: MemberRow) {
-    const question = m.confirmReset
-      .replace("{name}", row.display_name)
-      .replace("{channel}", channelLabel(row.channel));
-    if (!window.confirm(question)) return;
+  async function resetOnboarding(row: MemberRow) {
+    const ok = await ask({
+      action: m.resetAction,
+      target: row.display_name,
+      code: channelLabel(row.channel),
+      affects: [m.resetAffects],
+      reversible: m.resetKeeps,
+      confirmLabel: m.resetAction,
+    });
+    if (!ok) return;
     const uid = uidOf(row);
     void act(
       row,
@@ -478,6 +495,7 @@ export default function MemberManagement({ liffId }: { liffId: string }) {
           )}
         </>
       )}
+      <ConfirmDialog request={confirming} onClose={closeConfirm} />
     </SalesShell>
   );
 }

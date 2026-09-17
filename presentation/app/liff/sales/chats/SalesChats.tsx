@@ -7,6 +7,7 @@ import { useLanguage } from "@/lib/i18n/LanguageProvider";
 import { proxyHeaders } from "../_lib";
 import { useSalesSession } from "../_session";
 import { SalesShell } from "../_shell";
+import { ConfirmDialog, useConfirm } from "../../_confirm";
 
 type ChatSession = {
   id: string;
@@ -85,6 +86,7 @@ export default function SalesChats({ liffId }: { liffId: string }) {
   const { t, locale } = useLanguage();
   const copy = t.dashboard.chats;
 
+  const { request: confirming, ask, close: closeConfirm } = useConfirm();
   const [token, setToken] = useState("");
   const [licenseId, setLicenseId] = useState("");
   const [canReply, setCanReply] = useState(false);
@@ -258,7 +260,14 @@ export default function SalesChats({ liffId }: { liffId: string }) {
 
   async function close() {
     if (!selected) return;
-    if (!window.confirm(copy.closeConfirm)) return;
+    const ok = await ask({
+      action: copy.closeAction,
+      target: selected.customer_name || copy.chatWord,
+      affects: [copy.closeAffects],
+      reversible: copy.closeKeeps,
+      confirmLabel: copy.closeAction,
+    });
+    if (!ok) return;
     setBusy(true);
     try {
       const response = await fetch(
@@ -473,6 +482,7 @@ export default function SalesChats({ liffId }: { liffId: string }) {
         {list}
         {thread}
       </div>
+      <ConfirmDialog request={confirming} onClose={closeConfirm} busy={Boolean(busy)} />
     </SalesShell>
   );
 }

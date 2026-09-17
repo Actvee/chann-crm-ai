@@ -17,6 +17,7 @@ import { RelatedActivity } from "../../_related";
 import { useSalesSession } from "../../_session";
 import { SalesShell } from "../../_shell";
 import { useSalesText } from "../../_strings";
+import { ConfirmDialog, useConfirm } from "../../../_confirm";
 
 type Product = {
   id: string;
@@ -84,6 +85,7 @@ export default function DealDetail({
   const stageLabel = (stage: string) =>
     (t.deal.stage as Record<string, string>)[stage] ?? stage;
 
+  const { request: confirming, ask, close: closeConfirm } = useConfirm();
   const [deal, setDeal] = useState<Deal | null>(null);
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [status, setStatus] = useState(t.dashboard.opening);
@@ -297,7 +299,14 @@ export default function DealDetail({
 
   async function removeProduct(product: Product) {
     if (!deal) return;
-    if (!window.confirm(`${t.common.delete}: ${product.product_name ?? ""}?`)) return;
+    const ok = await ask({
+      action: t.common.delete,
+      target: product.product_name ?? "",
+      affects: [t.dashboard.deals.removeLineAffects],
+      permanent: true,
+      confirmLabel: t.dashboard.deals.removeLineButton,
+    });
+    if (!ok) return;
     setBusy(true);
     say(t.dashboard.working);
     try {
@@ -577,6 +586,7 @@ export default function DealDetail({
           />
         </>
       )}
+      <ConfirmDialog request={confirming} onClose={closeConfirm} busy={Boolean(busy)} />
     </SalesShell>
   );
 }

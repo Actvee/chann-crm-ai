@@ -17,6 +17,7 @@ import { useSalesSession } from "./_session";
 import { useSalesText } from "./_strings";
 import { ShopSwitcher } from "../_shop-switcher";
 import { SuspendedNotice } from "../_suspended";
+import { ConfirmDialog, useConfirm } from "../_confirm";
 
 /**
  * The Sales dashboard index.
@@ -180,6 +181,7 @@ function MenuSession({
    *  /me this component already asks for, rather than a second call. */
   onAccess: (access: { permissions: Set<string>; isOwner: boolean }) => void;
 }) {
+  const { request: confirming, ask, close: closeConfirm } = useConfirm();
   const { t } = useLanguage();
   const s = useSalesText();
   const failureText = useFailureText();
@@ -239,7 +241,14 @@ function MenuSession({
 
   async function accept() {
     if (!offer || !shop) return;
-    if (!window.confirm(s.menu.confirmAccept.replace("{shop}", shop.company_name))) return;
+    const ok = await ask({
+      action: s.menu.acceptAction,
+      target: shop.company_name,
+      affects: [s.menu.acceptAffects],
+      reversible: s.menu.acceptKeeps,
+      confirmLabel: s.menu.acceptAction,
+    });
+    if (!ok) return;
     setBusy(true);
     try {
       const response = await fetch(
@@ -296,6 +305,7 @@ function MenuSession({
       {note && (
         <p className="status" data-tone={note.tone} aria-live="polite">{note.text}</p>
       )}
+      <ConfirmDialog request={confirming} onClose={closeConfirm} busy={Boolean(busy)} />
     </>
   );
 }

@@ -11,6 +11,7 @@ import { proxyHeaders } from "../_lib";
 import { useSalesSession } from "../_session";
 import { SalesShell } from "../_shell";
 import { useSalesText } from "../_strings";
+import { ConfirmDialog, useConfirm } from "../../_confirm";
 
 type Role = {
   role_name: string;
@@ -49,6 +50,7 @@ export default function RoleManagement({ liffId }: { liffId: string }) {
   const [settingValue, setSettingValue] = useState("");
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
+  const { request: confirming, ask, close: closeConfirm } = useConfirm();
   const [busy, setBusy] = useState(false);
 
   const say = useCallback((message: string, kind?: "ok" | "error") => {
@@ -147,7 +149,14 @@ export default function RoleManagement({ liffId }: { liffId: string }) {
 
   async function deleteRole(role: Role) {
     // Destructive and one tap away: ask, and lock the buttons while it runs.
-    if (!window.confirm(t.role.confirmDelete.replace("{name}", role.role_name))) return;
+    const ok = await ask({
+      action: t.common.delete,
+      target: role.role_name,
+      affects: [t.role.deleteAffects],
+      permanent: true,
+      confirmLabel: t.role.confirmDeleteButton,
+    });
+    if (!ok) return;
     setBusy(true);
     try {
       const response = await fetch(
@@ -376,6 +385,7 @@ export default function RoleManagement({ liffId }: { liffId: string }) {
           </div>
         </form>
       )}
+      <ConfirmDialog request={confirming} onClose={closeConfirm} busy={Boolean(busy)} />
     </SalesShell>
   );
 }

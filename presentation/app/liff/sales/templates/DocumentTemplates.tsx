@@ -9,6 +9,7 @@ import { openExternal } from "../../_shared";
 import { proxyHeaders } from "../_lib";
 import { useSalesSession } from "../_session";
 import { SalesShell } from "../_shell";
+import { ConfirmDialog, useConfirm } from "../../_confirm";
 
 type TemplateVersion = {
   id: string;
@@ -119,6 +120,7 @@ function sandboxedPage(html: string): string {
  */
 export default function DocumentTemplates({ liffId }: { liffId: string }) {
   const { t } = useLanguage();
+  const { request: confirming, ask, close: closeConfirm } = useConfirm();
   const [licenseId, setLicenseId] = useState("");
   const [token, setToken] = useState("");
   const [permissions, setPermissions] = useState<Set<string>>(new Set());
@@ -323,7 +325,15 @@ export default function DocumentTemplates({ liffId }: { liffId: string }) {
   }
 
   async function publish(template: Template, version: TemplateVersion) {
-    if (!window.confirm(t.dashboard.templates.confirmPublish)) return;
+    const ok = await ask({
+      action: t.dashboard.templates.publishAction,
+      target: template.template_name,
+      code: `v${version.version}`,
+      affects: [t.dashboard.templates.publishAffects],
+      reversible: t.dashboard.templates.publishKeeps,
+      confirmLabel: t.dashboard.templates.publishAction,
+    });
+    if (!ok) return;
     setBusy(true);
     try {
       const response = await fetch(
@@ -360,16 +370,14 @@ export default function DocumentTemplates({ liffId }: { liffId: string }) {
    *  Nothing already issued changes: a generated document names the
    *  version that rendered it, which is the whole point of recording it. */
   async function chooseTemplate(template: Template, active: boolean) {
-    if (
-      !window.confirm(
-        (active
-          ? t.dashboard.templates.confirmChoose
-          : t.dashboard.templates.confirmUseBuiltin
-        ).replace("{name}", template.template_name),
-      )
-    ) {
-      return;
-    }
+    const ok = await ask({
+      action: active ? t.dashboard.templates.chooseAction : t.dashboard.templates.builtinAction,
+      target: template.template_name,
+      affects: [t.dashboard.templates.chooseAffects],
+      reversible: t.dashboard.templates.chooseKeeps,
+      confirmLabel: active ? t.dashboard.templates.chooseAction : t.dashboard.templates.builtinAction,
+    });
+    if (!ok) return;
     setBusy(true);
     try {
       const response = await fetch(
@@ -910,6 +918,7 @@ export default function DocumentTemplates({ liffId }: { liffId: string }) {
           </section>
         );
       })}
+      <ConfirmDialog request={confirming} onClose={closeConfirm} busy={Boolean(busy)} />
     </SalesShell>
   );
 }

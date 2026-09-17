@@ -6,7 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 import { BulkPaste } from "../_bulk-paste";
 import { CsvImport } from "../_csv-import";
 import { Badge, Count, Empty } from "../_components";
-import { ConfirmDialog, useConfirm } from "../_confirm";
+import { ConfirmDialog, useConfirm } from "../../_confirm";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { ListFilters, matchesQuery } from "../../_filters";
@@ -131,7 +131,6 @@ export default function CustomerList({ liffId }: { liffId: string }) {
       affects: [copy.archiveAlsoDeals, copy.archiveAlsoHistory],
       reversible: copy.archiveKeeps,
       confirmLabel: copy.archive,
-      cancelLabel: copy.confirmCancel,
     });
     if (!ok) return;
     setBusyId(customer.id);
@@ -364,16 +363,7 @@ export default function CustomerList({ liffId }: { liffId: string }) {
           ))}
         </ul>
       )}
-      <ConfirmDialog
-        request={confirming}
-        onClose={closeConfirm}
-        busy={Boolean(busyId)}
-        copy={{
-          cancel: t.dashboard.customers.confirmCancel,
-          confirm: "",
-          permanent: t.dashboard.customers.confirmPermanent,
-        }}
-      />
+      <ConfirmDialog request={confirming} onClose={closeConfirm} busy={Boolean(busyId)} />
     </SalesShell>
   );
 }
