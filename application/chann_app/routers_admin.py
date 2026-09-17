@@ -846,6 +846,24 @@ async def platform_tenant(
     row = await client.platform_tenant(license_id)
     if row is None:
         raise HTTPException(status_code=404, detail="tenant not found")
+    # The made-to-order chart allowance lives in the licence's settings, and
+    # the console edits it on this same card — so it is merged in here
+    # rather than making the page fetch a second endpoint for one number.
+    # Best effort: a settings read that fails must not hide the tenant.
+    row = dict(row)
+    row.setdefault("ai_chart_quota", None)
+    row.setdefault("ai_chart_used", 0)
+    try:
+        for setting in await client.list_license_settings(license_id) or []:
+            key = str(setting.get("setting_key") or "")
+            if key == "ai_chart_quota":
+                row["ai_chart_quota"] = setting.get("setting_value")
+            elif key == "ai_chart_usage":
+                usage = dict(setting.get("setting_value") or {})
+                row["ai_chart_used"] = usage.get("used") or 0
+                row["ai_chart_month"] = usage.get("month") or ""
+    except Exception:  # noqa: BLE001
+        log.exception("could not read the chart allowance of %s", license_id)
     return row
 
 
@@ -910,9 +928,33 @@ async def platform_tenant_update(
         else:
             changes["expires_at"] = deadline.isoformat()
     actor = str(admin.get("sub") or "")
+    # How many made-to-order charts this company may have in a month. A
+    # licence setting rather than a tenant column: it is a per-tenant
+    # allowance like every other setting, and only this route — the Chann
+    # administrator's — writes it (owner's rule, 17 ก.ย. 2569).
+    quota_written = False
+    if "ai_chart_quota" in body:
+        raw = body.get("ai_chart_quota")
+        try:
+            quota = max(0, int(str(raw).strip()))
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=422, detail={"error": "ai_chart_quota_must_be_a_number"},
+            ) from None
+        try:
+            await client.put_license_setting(license_id, "ai_chart_quota", quota, actor_id=actor)
+            quota_written = True
+        except DataTierError as exc:
+            code = exc.status_code if 400 <= exc.status_code < 500 else 502
+            raise HTTPException(
+                status_code=code,
+                detail={"error": "tenant_update_failed", "reason": exc.detail},
+            ) from exc
     try:
         if not changes:
             if not new_status:
+                if quota_written:
+                    return await client.platform_tenant(license_id)
                 raise HTTPException(status_code=422, detail={"error": "nothing_to_update"})
             return await client.set_license_status(license_id, new_status, actor_id=actor)
         if new_status:

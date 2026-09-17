@@ -23,6 +23,7 @@ function fieldsOf(tenant: TenantDetail): TenantEditFields {
     admin_notes: tenant.admin_notes ?? "",
     expires_at: bangkokDay(tenant.expires_at),
     status: tenant.status,
+    ai_chart_quota: tenant.ai_chart_quota == null ? "" : String(tenant.ai_chart_quota),
   };
 }
 
@@ -55,6 +56,12 @@ export function TenantEdit({ tenant }: { tenant: TenantDetail }) {
     const diff = changed();
     if (Object.keys(diff).length === 0) {
       setNote({ text: edit.noChanges, tone: "error" });
+      return;
+    }
+    // Blank means "leave it at the default", which is not the same as 0.
+    if (diff.ai_chart_quota !== undefined && diff.ai_chart_quota.trim()
+        && !/^\d+$/.test(diff.ai_chart_quota.trim())) {
+      setNote({ text: edit.aiChartQuotaNumber, tone: "error" });
       return;
     }
     if (diff.company_name !== undefined && !diff.company_name.trim()) {
@@ -98,6 +105,11 @@ export function TenantEdit({ tenant }: { tenant: TenantDetail }) {
           {tenant.deleted_at && <><dt>{copy.deletedAt}</dt><dd>{fmtDate(tenant.deleted_at)}</dd></>}
           <dt>{copy.created}</dt><dd>{fmtDate(tenant.created_at)}</dd>
           <dt>{copy.lastActivity}</dt><dd>{fmtDate(tenant.last_activity_at)}</dd>
+          <dt>{edit.aiChartQuota}</dt>
+          <dd>
+            {tenant.ai_chart_quota == null ? edit.aiChartDefault : String(tenant.ai_chart_quota)}
+            <span className="pa-muted"> · {edit.aiChartUsed} {tenant.ai_chart_used ?? 0}</span>
+          </dd>
           <dt>{copy.adminNotes}</dt><dd style={{ whiteSpace: "pre-wrap" }}>{tenant.admin_notes?.trim() ? tenant.admin_notes : "—"}</dd>
         </dl>
         {note && <p className={`pa-note pa-note-${note.tone}`} role="status">{note.text}</p>}
@@ -130,6 +142,18 @@ export function TenantEdit({ tenant }: { tenant: TenantDetail }) {
         <label className="pa-field">{edit.trialUntil}
           <input type="date" value={form.expires_at} onChange={(e) => set("expires_at", e.target.value)} disabled={busy} />
           <span className="pa-muted" style={{ fontSize: 12 }}>{edit.trialHint}</span>
+        </label>
+        <label className="pa-field">{edit.aiChartQuota}
+          <input
+            id="ai-chart-quota"
+            type="number"
+            min={0}
+            value={form.ai_chart_quota}
+            onChange={(e) => set("ai_chart_quota", e.target.value)}
+            disabled={busy}
+            placeholder="30"
+          />
+          <span className="pa-muted" style={{ fontSize: 12 }}>{edit.aiChartQuotaHint}</span>
         </label>
         <label className="pa-field">{edit.status}
           <select value={form.status} onChange={(e) => set("status", e.target.value)} disabled={busy || tenant.status === "suspended"}>

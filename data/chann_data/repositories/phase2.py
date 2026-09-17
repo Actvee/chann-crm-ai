@@ -274,6 +274,63 @@ class LicenseSettingRepository:
         self._s.flush()
         return row
 
+    #: What one company may spend on AI-drawn charts in a calendar month,
+    #: and what it has spent. Two settings rows rather than a table of
+    #: their own: the allowance is a per-tenant setting like every other,
+    #: and the counter is one small JSON value beside it.
+    QUOTA_KEY = "ai_chart_quota"
+    USAGE_KEY = "ai_chart_usage"
+    DEFAULT_QUOTA = 30
+
+    def ai_chart_allowance(self, scope: TenantScope) -> int:
+        row = self._s.execute(
+            select(LicenseSetting).where(
+                LicenseSetting.license_id == scope.license_id,
+                LicenseSetting.setting_key == self.QUOTA_KEY,
+            )
+        ).scalar_one_or_none()
+        try:
+            return max(0, int(str((row.setting_value if row is not None else None) or self.DEFAULT_QUOTA)))
+        except (TypeError, ValueError):
+            return self.DEFAULT_QUOTA
+
+    def consume_ai_chart(self, scope: TenantScope, *, month: str) -> tuple[bool, int, int]:
+        """Spend one chart from this month's allowance.
+
+        Returns (allowed, used_after, allowance). The row is locked for the
+        length of the transaction, so two people asking for a chart in the
+        same second cannot both read the same count and write the same
+        number back — which is exactly how a quota quietly becomes
+        unlimited.
+        """
+        allowance = self.ai_chart_allowance(scope)
+        row = self._s.execute(
+            select(LicenseSetting).where(
+                LicenseSetting.license_id == scope.license_id,
+                LicenseSetting.setting_key == self.USAGE_KEY,
+            ).with_for_update()
+        ).scalar_one_or_none()
+        value = dict((row.setting_value if row is not None else None) or {})
+        used = 0
+        try:
+            # A new month starts over; the stored month is what decides,
+            # not a clock this repository does not read.
+            used = int(value.get("used") or 0) if str(value.get("month") or "") == month else 0
+        except (TypeError, ValueError):
+            used = 0
+        if used >= allowance:
+            return False, used, allowance
+        after = {"month": month, "used": used + 1}
+        if row is None:
+            self._s.add(LicenseSetting(
+                id=uuid.uuid4(), license_id=scope.license_id,
+                setting_key=self.USAGE_KEY, setting_value=after,
+            ))
+        else:
+            row.setting_value = after
+        self._s.flush()
+        return True, used + 1, allowance
+
     def delete(self, scope: TenantScope, key: str) -> None:
         row = self._s.execute(
             select(LicenseSetting).where(

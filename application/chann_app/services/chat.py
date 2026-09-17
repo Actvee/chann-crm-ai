@@ -15439,6 +15439,8 @@ async def _handle_report_intent(
 
     if _any(_REPORT_CHART_WORDS, said) or _any(_REPORT_CHART_WORDS, (message or "").lower()):
         picture = _chart_request(message) if ctx.oa == "sales" else None
+        if picture is not None and _wants_a_made_to_order_chart(message):
+            picture = None
         if picture is not None:
             return await _handle_sales_chart(
                 client, ctx=ctx, license_id=license_id, request=picture,
@@ -15544,8 +15546,8 @@ async def _handle_sales_summary(
         quick_replies=[
             # The same numbers as a picture, one tap away (owner, 8 Sep 2026).
             (_t(CHART_AS_CHART_BUTTON, language), _t(CHART_AS_CHART_SAYS, language)),
+            (_t(CHART_AI_BUTTON, language), _t(CHART_AI_BUTTON_SAYS, language)),
             ("ดีลเดือนนี้", "ดีลเดือนนี้"),
-            ("ดีลเลยกำหนด", "ดีลเลยกำหนด"),
         ],
     )
 
@@ -23299,6 +23301,21 @@ async def _route_chat_message(
             return ChatReply(text=_t(REPLY_NOT_REGISTERED, language))
         permission_keys = list(context.get("permission_keys") or [])
 
+    # "สร้างรายงานด้วย AI: …" is the person saying which road they want, so
+    # it is honoured before any road can take the sentence for something
+    # else. It used to lose to the typed sales summary, whose test is a
+    # SUBSTRING of the whole message: "สร้างรายงานด้วย AI: ยอดดีลแยกตาม
+    # สถานะ" came back as the fixed summary and never reached the engine
+    # (found by running the tester document's own flows through the real
+    # model, 17 ก.ย. 2569).
+    if ctx.oa == "sales" and ai_report_asked_outright(message):
+        _note_road(road="ai_report")
+        return await _handle_ai_report(
+            client, ctx=ctx, license_id=license_id, message=message,
+            permission_keys=permission_keys, language=language, ai_client=ai_client,
+            with_chart=True,
+        )
+
     # The profile form this system opened, on ANY channel and before the
     # live-chat relay: the answer belongs to the question that was asked
     # (round 19h; owner, 16 ก.ย. 2569 — with a conversation open it went to
@@ -23899,6 +23916,8 @@ async def _route_chat_message(
         # the same answer; the four fixed sales pictures are deterministic,
         # so "ขอกราฟยอดขาย" never costs a model call.
         chart_request = _chart_request(message) if ctx.oa == "sales" else None
+        if chart_request is not None and _wants_a_made_to_order_chart(message):
+            chart_request = None
         if chart_request is not None and _is_ai_report_request(message):
             return await _handle_ai_report(
                 client, ctx=ctx, license_id=license_id, message=message,
@@ -23911,9 +23930,16 @@ async def _route_chat_message(
                 permission_keys=permission_keys, language=language,
             )
         if ctx.oa == "sales" and _is_ai_report_request(message):
+            # A picture asked for is a picture delivered. Round 20c sent a
+            # made-to-order request down this branch by setting
+            # chart_request to None above, and this one did not pass
+            # with_chart — so "สรุป…แยกตามผู้ดูแล เป็นกราฟ" came back as
+            # numbers with a "ดูเป็นกราฟ" button, which is what it had
+            # just asked for (caught by test_chat_charts).
             return await _handle_ai_report(
                 client, ctx=ctx, license_id=license_id, message=message,
                 permission_keys=permission_keys, language=language, ai_client=ai_client,
+                with_chart=_wants_a_picture(message),
             )
         if _matches_phrase(message, TICKET_MINE_PHRASES) or _is_bare_word(message, BARE_JOB_WORDS):
             return await _handle_ticket_list(
@@ -26639,7 +26665,15 @@ def _is_ai_report_request(message: str) -> bool:
         and not text.startswith(("รายงาน", "report"))
     ):
         return False
-    return any(text.startswith(t) for t in AI_REPORT_TRIGGERS)
+    if ai_report_asked_outright(message):
+        return True
+    if any(text.startswith(t) for t in AI_REPORT_TRIGGERS):
+        return True
+    # Asking for a picture the four fixed ones cannot draw is asking for a
+    # report whose output is a picture. Without this, "กราฟยอดขายแยกตาม
+    # พื้นที่" was not a report request at all and was answered with the
+    # pipeline chart (owner, 17 ก.ย. 2569).
+    return _wants_a_made_to_order_chart(message)
 
 
 async def _handle_ai_report(
@@ -26655,6 +26689,26 @@ async def _handle_ai_report(
         company = str((ctx.memberships[0] if ctx.memberships else {}).get("company_name") or "")
     except Exception:  # noqa: BLE001
         company = ""
+    # The picture is the metered part, and it is spent BEFORE it is drawn:
+    # a chart costs a model call and a stored file whether or not anyone
+    # looks at it. The numbers in words are never metered, so a shop that
+    # has used its month can still find out everything — it just gets the
+    # answer as text (owner's rule, 17 ก.ย. 2569).
+    # An explicit "สร้างรายงานด้วย AI: …" is stripped to what was actually
+    # asked for, and noted in the log so an AI-drawn chart can be told from
+    # a ready-made one without reading code (owner, 17 ก.ย. 2569).
+    asked_outright = ai_report_asked_outright(message)
+    if asked_outright:
+        log.info("chat.ai_report explicit=1 oa=%s chars=%d", ctx.oa, len(asked_outright))
+        message = asked_outright
+        with_chart = True
+    quota = None
+    if with_chart:
+        from . import chart_quota
+
+        quota = await chart_quota.spend_one(client, license_id=str(license_id))
+        if not quota.get("allowed"):
+            with_chart = False
     try:
         out = await reports_ai.handle_report_request(
             client, license_id=str(license_id), message=message, language=language,
@@ -26676,6 +26730,14 @@ async def _handle_ai_report(
         text = f"{text}\n\n{files_line}"
     images: list[str] = []
     buttons: list[tuple[str, str]] = []
+    if quota is not None and not quota.get("allowed"):
+        # Said plainly, with the number and the date it comes back, rather
+        # than a picture that silently never arrives.
+        text += "\n\n" + _t(CHART_QUOTA_SPENT, language).format(
+            allowance=int(quota.get("allowance") or 0),
+            when=_first_of_next_month(),
+        )
+        buttons.append(("กราฟยอดขาย", "ขอกราฟยอดขาย"))
     if with_chart:
         # The same result, in the shape they asked for. Three outcomes, and
         # each one is said: the picture; "this is one number, there is
@@ -26695,16 +26757,136 @@ async def _handle_ai_report(
     else:
         buttons.append((_t(CHART_AS_CHART_BUTTON, language), f"{message.strip()[:250]} เป็นกราฟ"
                         if language != "en" else f"{message.strip()[:250]} as a chart"))
+    if quota is not None and quota.get("allowed") and not quota.get("unknown"):
+        # It cost one of the month's charts — said whether or not the
+        # picture itself made it out, because the model call happened
+        # either way and a count that moves silently is a count nobody can
+        # check.
+        text += _t(CHART_MADE_BY_AI, language).format(
+            used=int(quota.get("used") or 0),
+            allowance=int(quota.get("allowance") or 0),
+        )
     return ChatReply(
         text=text, images=images, quick_replies=buttons,
         intent={"action": "report", "entity": out["spec"]["entity"]},
     )
 
 
+#: Said wherever a picture is being talked about, so the way to ask for a
+#: made-to-order one is learned at the moment it is wanted rather than
+#: from a manual nobody opens.
+CHART_AI_HINT = {
+    "th": "\n\nอยากได้กราฟแบบอื่น พิมพ์ \"สร้างรายงานด้วย AI: <สิ่งที่ต้องการ>\" เช่น \"สร้างรายงานด้วย AI: ยอดขายแยกตามช่าง 3 เดือน\"",
+    "en": "\n\nFor a different picture: \"AI report: <what you want>\", e.g. \"AI report: sales by technician, 3 months\".",
+}
+#: On a picture the AI drew: which one it was out of the month's allowance.
+CHART_MADE_BY_AI = {
+    "th": "\n\n(กราฟนี้สร้างด้วย AI · ใช้ไป {used}/{allowance} ครั้งของเดือนนี้ · สั่งได้ด้วย \"สร้างรายงานด้วย AI: …\")",
+    "en": "\n\n(Drawn by AI · {used}/{allowance} used this month · ask with \"AI report: …\")",
+}
+CHART_AI_BUTTON = {"th": "กราฟด้วย AI", "en": "AI chart"}
+#: A complete sentence, not the bare prefix: a button that sends
+#: "สร้างรายงานด้วย AI:" with nothing after it asks the engine to report on
+#: the instruction itself.
+CHART_AI_BUTTON_SAYS = {
+    "th": "สร้างรายงานด้วย AI: ยอดขายแยกตามช่าง 3 เดือน",
+    "en": "AI report: sales by technician, 3 months",
+}
+CHART_QUOTA_SPENT = {
+    "th": ("ใช้กราฟแบบสร้างเองครบ {allowance} ครั้งของเดือนนี้แล้ว "
+           "เริ่มนับใหม่ {when} · ตัวเลขด้านบนเป็นข้อมูลจริงล่าสุด "
+           "และกราฟสำเร็จรูป (เช่น \"ขอกราฟยอดขาย\") ยังใช้ได้ไม่จำกัด "
+           "· ต้องการเพิ่มโควตา แจ้งผู้ดูแล Chann\n"
+           "(กราฟแบบสร้างเองสั่งได้ด้วย \"สร้างรายงานด้วย AI: …\")"),
+    "en": ("This month's {allowance} made-to-order charts are used up; the count "
+           "restarts on {when}. The numbers above are current, and the ready-made "
+           "charts (\"sales chart\") stay unlimited. Ask the Chann administrator "
+           "to raise the allowance.\n(Made-to-order charts: \"AI report: …\")"),
+}
+
+
+def _first_of_next_month() -> str:
+    from datetime import date as _d
+
+    today = local_today()
+    nxt = _d(today.year + (today.month == 12), (today.month % 12) + 1, 1)
+    return _iso_to_thai_date(nxt.isoformat()) or nxt.isoformat()
+
+
 CHART_ALSO_AS_A_LINK = {
     "th": "\nถ้ารูปไม่ขึ้น เปิดได้ที่: {url}",
     "en": "\nIf the picture does not show, open it here: {url}",
 }
+
+
+#: A grouping the four ready-made pictures do not have. Asked the deployed
+#: model first (17 ก.ย. 2569) and it reads ALL of these as the same thing —
+#: `read/report {"type": "chart"}` — whether the shop wants the ready-made
+#: picture or one made to order, so the model cannot make this call and a
+#: written rule has to. Kept to what the fixed four genuinely cannot
+#: express, so everything else stays free and deterministic.
+_CHART_BEYOND_FIXED = (
+    "แยกตาม", "จำแนกตาม", "แบ่งตาม", "ตามพื้นที่", "ตามจังหวัด", "ตามภาค", "ตามเขต",
+    "ตามหมวด", "ตามประเภท", "ตามลูกค้า", "ตามช่องทาง", "ตามสถานะ", "เทียบกับ",
+    "เปรียบเทียบ", "group by", "grouped by", "compare", "versus", " vs ",
+)
+#: A period the matched picture has no option for. "N เดือน" is not here:
+#: the monthly chart takes it already.
+_CHART_PERIOD_BEYOND_FIXED = (
+    "ไตรมาส", "quarter", "ปีนี้", "ปีที่แล้ว", "ปีก่อน", "this year", "last year",
+    "สัปดาห์นี้", "สัปดาห์ที่แล้ว", "ระหว่างวันที่", "ตั้งแต่วันที่",
+)
+
+
+#: The owner's own idea, 17 ก.ย. 2569: "การใช้ AI ทำเป็นคำสั่งนำหน้าไว้ก็ได้
+#: เช่น สร้างรายงานด้วย AI : ชื่อกราฟที่ต้องการ เพื่อให้ง่ายต่อการตรวจสอบ".
+#: An explicit prefix settles what a written rule can only guess at, and it
+#: leaves a mark in the log and in the reply, so "did this cost a chart?"
+#: is answerable without reading code. The guessing rule below stays as the
+#: fallback, so a plain sentence still gets the right picture.
+AI_REPORT_PREFIXES = (
+    "สร้างรายงานด้วย ai", "สร้างรายงาน ai", "รายงานด้วย ai", "ขอรายงานด้วย ai",
+    "กราฟด้วย ai", "สร้างกราฟด้วย ai", "ขอกราฟด้วย ai", "ai report", "ai chart",
+)
+
+
+def ai_report_asked_outright(message: str) -> str:
+    """What was asked for after an explicit "…ด้วย AI:" prefix, or "".
+
+    Returns the rest of the sentence, so the engine reads the request and
+    not the instruction wrapper.
+    """
+    text = " ".join((message or "").split())
+    low = text.lower()
+    for prefix in AI_REPORT_PREFIXES:
+        if low.startswith(prefix):
+            rest = text[len(prefix):].lstrip(" :：-–—")
+            return rest or text
+    return ""
+
+
+def _wants_a_picture(message: str) -> bool:
+    """Any chart word at all — the question is only whether a picture was
+    asked for, not which road draws it."""
+    text = (message or "").strip().lower()
+    return bool(text) and any(word in text for word in CHART_WORDS)
+
+
+def _wants_a_made_to_order_chart(message: str) -> bool:
+    """A picture the four ready-made ones cannot draw."""
+    if ai_report_asked_outright(message):
+        return True
+    text = (message or "").strip().lower()
+    if not text or not any(word in text for word in CHART_WORDS):
+        return False
+    if any(word in text for word in _CHART_BEYOND_FIXED):
+        return True
+    # A period only counts when the picture it would otherwise get has no
+    # way to take one — the monthly chart does.
+    fixed = _chart_request(message)
+    if fixed is not None and str(fixed.get("kind")) == "monthly":
+        return False
+    return any(word in text for word in _CHART_PERIOD_BEYOND_FIXED)
 
 
 def _chart_request(message: str) -> dict | None:
@@ -26726,6 +26908,7 @@ def _chart_request(message: str) -> dict | None:
         return {"kind": "monthly", "options": {"months": int(months.group(1))} if months else {}}
     # "กราฟดีลแต่ละสถานะ" and a bare "ขอกราฟยอดขาย" are the same picture:
     # the pipeline, which is what "สรุปการขาย" already answers in words.
+    #
     return {"kind": "pipeline", "options": {}}
 
 
@@ -26771,10 +26954,16 @@ async def _handle_sales_chart(
         images = [url]
     else:
         text += _t(CHART_TEXT_ONLY, language)
+    # Whoever asked for a picture is the person who might want a different
+    # one, and this is the only moment they are thinking about charts at
+    # all (owner, 17 ก.ย. 2569: "อย่าลืมใส่คำแนะนำการสร้างกราฟด้วย AI ลงไป
+    # เวลามีการถามถึงกราฟด้วยนะ ผู้ใช้จะได้รู้").
+    text += _t(CHART_AI_HINT, language)
     buttons = [
         (_t(label, language), _t(says, language))
         for other, label, says in CHART_OTHER_BUTTONS if other != kind
-    ][:3]
+    ][:2]
+    buttons.append((_t(CHART_AI_BUTTON, language), _t(CHART_AI_BUTTON_SAYS, language)))
     return ChatReply(
         text=text, images=images, quick_replies=buttons,
         intent={"action": "report", "entity": "deals"},

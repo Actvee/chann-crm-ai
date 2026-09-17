@@ -235,6 +235,18 @@ class DataClient:
         )
         return self._unwrap(resp)
 
+    async def consume_ai_chart_quota(self, license_id: str, month: str) -> dict:
+        """Spend one AI-drawn chart from this month's allowance.
+
+        One call, because deciding and spending must be the same
+        transaction; the Data tier locks the counter row.
+        """
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/ai-chart-quota/consume",
+            headers=self._headers, json={"month": month},
+        )
+        return self._unwrap(resp)
+
     async def delete_license_setting(
         self, license_id: str, key: str, actor_id: str | None = None
     ) -> None:

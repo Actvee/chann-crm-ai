@@ -45,6 +45,11 @@ export type TenantDetail = TenantSummary & {
   tax_id: string | null;
   /** The operator's own notes (platform-only; never shown to the tenant). */
   admin_notes?: string | null;
+  /** Made-to-order (AI) charts this shop may have per calendar month, and
+   *  how many it has had this month. null = the system default. */
+  ai_chart_quota?: number | string | null;
+  ai_chart_used?: number | null;
+  ai_chart_month?: string | null;
   members_detail: TenantMember[];
 };
 
@@ -61,6 +66,8 @@ export type TenantEditFields = {
   /** YYYY-MM-DD in Bangkok, or "" for no deadline. */
   expires_at: string;
   status: "trial" | "active" | "suspended" | "deleted" | string;
+  /** "" means leave it at the system default. */
+  ai_chart_quota: string;
 };
 
 /** Is the subscription's end already behind us? */

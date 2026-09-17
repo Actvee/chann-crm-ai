@@ -6,6 +6,7 @@ shared internal secret.
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from datetime import date, datetime, timezone
 from decimal import Decimal
@@ -1112,6 +1113,31 @@ def put_license_setting(
         )
         session.commit()
         return LicenseSettingOut(setting_key=row.setting_key, setting_value=row.setting_value)
+    except Exception as exc:
+        session.rollback()
+        raise _phase2_http_error(exc)
+
+
+@router.post("/licenses/{license_id}/ai-chart-quota/consume")
+def consume_ai_chart_quota(
+    license_id: uuid.UUID, payload: dict, session: Session = Depends(get_session),
+):
+    """Spend one AI-drawn chart from this month's allowance.
+
+    A POST because it writes, and one call because the decision and the
+    increment have to be the same transaction — asking "how many are left"
+    and then spending one is two calls that can disagree.
+    """
+    scope = TenantScope(license_id=license_id)
+    month = str(payload.get("month") or "")[:7]
+    if not re.fullmatch(r"\d{4}-\d{2}", month):
+        raise HTTPException(status_code=422, detail="month must be YYYY-MM")
+    try:
+        allowed, used, allowance = LicenseSettingRepository(session).consume_ai_chart(
+            scope, month=month,
+        )
+        session.commit()
+        return {"allowed": allowed, "used": used, "allowance": allowance, "month": month}
     except Exception as exc:
         session.rollback()
         raise _phase2_http_error(exc)

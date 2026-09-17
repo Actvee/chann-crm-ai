@@ -637,6 +637,45 @@ class FakeDataClient:
             "open_tickets": 0, "deals": 0, "last_activity_at": None,
         }
 
+    async def run_report_query(self, license_id, spec, actor_id=None):
+        """The ad-hoc report engine's one query. The fake never had it, so
+        nothing had ever exercised the AI report road through the chat —
+        every test that reached it died on AttributeError and the road was
+        only ever proved from the router down (round 20c)."""
+        self.recorded.append(("run_report_query", license_id, dict(spec)))
+        group_by = spec.get("group_by")
+        # key AND label AND value — schemas.ReportRowOut carries all three.
+        rows = (
+            [{"key": "new", "label": "new", "value": 2},
+             {"key": "won", "label": "won", "value": 1}]
+            if group_by else [{"key": "", "label": "", "value": 3}]
+        )
+        return {
+            "entity": str(spec.get("entity") or "deals"),
+            "metric": str(spec.get("metric") or "count"),
+            "field": spec.get("field"),
+            "filter": {k: str(v) for k, v in (spec.get("filters") or {}).items()},
+            "group_by": group_by,
+            "date_range": spec.get("date_range"),
+            "date_field": str(spec.get("date_field") or "created_at"),
+            "rows": rows,
+            "total": sum(r["value"] for r in rows),
+            "generated_at": "2026-09-17T00:00:00+00:00",
+        }
+
+    async def consume_ai_chart_quota(self, license_id, month):
+        """Mirrors the Data tier: the count is per month, the allowance is
+        whatever ai_chart_quota says (default 30), and spending past it is
+        refused rather than silently allowed."""
+        self.recorded.append(("consume_ai_chart_quota", license_id, month))
+        allowance = int(getattr(self, "_ai_chart_quota", 30))
+        state = getattr(self, "_ai_chart_usage", None) or {}
+        used = int(state.get("used") or 0) if state.get("month") == month else 0
+        if used >= allowance:
+            return {"allowed": False, "used": used, "allowance": allowance, "month": month}
+        self._ai_chart_usage = {"month": month, "used": used + 1}
+        return {"allowed": True, "used": used + 1, "allowance": allowance, "month": month}
+
     async def get_active_tenant(self, chann_uid, oa):
         return getattr(self, "_active_tenant", {}).get((chann_uid, oa))
 
@@ -846,10 +885,16 @@ class FakeDataClient:
     async def claim_ticket(self, license_id, ticket_id, member_id, actor_id=None):
         self.recorded.append(("claim_ticket", license_id, ticket_id, member_id))
         # Taking a job assigns it; only check-in makes it in_progress.
+        # The real tier returns the row it just wrote. This used to return a
+        # canned one — a customer called "ก" at a fixed address on a fixed
+        # date — so a card that showed the WRONG customer or the WRONG
+        # appointment looked right in every test (found while running the
+        # tester document's flows, 17 ก.ย. 2569).
         for t in getattr(self, "_tickets", []):
             if t.get("id") == ticket_id:
                 t.update({"status": "assigned", "accept_status": "accepted",
                           "assigned_to_ref": member_id, "assigned_target_type": "technician"})
+                return dict(t)
         return {"id": ticket_id, "ticket_number": "T-2026-0001",
                 "customer_name": "ก", "service_address": "99/1",
                 "scheduled_date": "2026-09-04", "scheduled_time": "14:00:00"}

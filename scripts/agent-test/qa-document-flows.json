@@ -1,0 +1,477 @@
+[
+ {
+  "name": "guard — ช่างพิมพ์ปิดงาน แล้วกดปุ่มเมนูกลางคัน (QA: พฤติกรรมป้องกัน #1)",
+  "oa": "technician",
+  "role": "technician",
+  "seed": {
+   "tickets": [
+    {
+     "id": "t1",
+     "ticket_number": "T-2026-0001",
+     "status": "in_progress",
+     "accept_status": "accepted",
+     "assigned_to_ref": "member-1",
+     "customer_name": "สมชาย ใจดี",
+     "issue_description": "แอร์ไม่เย็น",
+     "service_address": "99/1"
+    }
+   ]
+  },
+  "turns": [
+   {
+    "say": "ปิดงาน",
+    "expect": {
+     "recorded": [
+      "set_pending_intent"
+     ]
+    }
+   },
+   {
+    "say": "วิธีใช้",
+    "expect": {
+     "not_recorded": [
+      "create_service_report",
+      "check_out_ticket"
+     ],
+     "not_contains": [
+      "บันทึกรายงาน"
+     ]
+    }
+   },
+   {
+    "say": "เช็คอิน",
+    "expect": {
+     "not_recorded": [
+      "create_service_report"
+     ]
+    }
+   },
+   {
+    "say": "พบคอมเพรสเซอร์เสีย เปลี่ยนให้แล้ว",
+    "expect": {
+     "not_contains": [
+      "วิธีใช้"
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "guard — ลูกค้าพิมพ์ยกเลิก แล้วกดปุ่มยืนยัน (QA: พฤติกรรมป้องกัน #2)",
+  "oa": "customer",
+  "role": "customer",
+  "seed": {
+   "tickets": [
+    {
+     "id": "t1",
+     "ticket_number": "T-2026-0001",
+     "status": "assigned",
+     "customer_chann_uid": "CHN-S-000001",
+     "issue_description": "แอร์ไม่เย็น",
+     "service_address": "99/1",
+     "scheduled_date": "2026-09-20"
+    }
+   ]
+  },
+  "turns": [
+   {
+    "say": "ยกเลิก",
+    "expect": {
+     "contains": [
+      "ยืนยัน"
+     ]
+    }
+   },
+   {
+    "say": "ยืนยันยกเลิกงาน T-2026-0001",
+    "expect": {
+     "not_recorded": [
+      "update_customer"
+     ],
+     "not_contains": [
+      "ที่อยู่"
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "guard — เซลส์ถามว่ามีอะไรรออนุมัติไหม ต้องไม่อนุมัติ (QA: พฤติกรรมป้องกัน #3)",
+  "oa": "sales",
+  "role": "owner",
+  "turns": [
+   {
+    "say": "มีอะไรรออนุมัติไหม",
+    "expect": {
+     "not_recorded": [
+      "act_on_approval_step"
+     ]
+    }
+   },
+   {
+    "say": "ใครรับงาน T-2026-0001",
+    "expect": {
+     "not_recorded": [
+      "claim_ticket",
+      "assign_ticket"
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "guard — เซลส์พิมพ์ เสร็จแล้ว บน Sales OA ต้องไม่เปิดรายงานปิดงาน (QA #4)",
+  "oa": "sales",
+  "role": "owner",
+  "turns": [
+   {
+    "say": "เสร็จแล้ว",
+    "expect": {
+     "not_recorded": [
+      "create_service_report",
+      "check_out_ticket"
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "guard — ลูกค้าพิมพ์ที่อยู่ลอยๆ ต้องไม่เปิดงานซ่อม (QA #6)",
+  "oa": "customer",
+  "role": "customer",
+  "turns": [
+   {
+    "say": "99/1 ถ.สุขุมวิท แขวงคลองตัน",
+    "expect": {
+     "not_recorded": [
+      "create_ticket"
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "guard — บอทขอที่อยู่ แต่ลูกค้าพิมพ์เบอร์ 10 หลัก (QA #7)",
+  "oa": "customer",
+  "role": "customer",
+  "seed": {
+   "warranties": [
+    {
+     "id": "w-1",
+     "serial_number": "SN12345678",
+     "product_name": "แอร์",
+     "status": "active",
+     "customer_chann_uid": "CHN-S-000001",
+     "warranty_end": "2027-01-01"
+    }
+   ]
+  },
+  "turns": [
+   {
+    "say": "แอร์ไม่เย็น มีน้ำหยด"
+   },
+   {
+    "say": "0812345678",
+    "expect": {
+     "not_contains": [
+      "ไม่รู้จัก"
+     ],
+     "contains": [
+      "ที่อยู่"
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "guard — กดวิธีใช้ระหว่างบอทถามที่อยู่ แล้วพิมพ์คำตอบเดิมต่อ (QA #8)",
+  "oa": "customer",
+  "role": "customer",
+  "seed": {
+   "warranties": [
+    {
+     "id": "w-1",
+     "serial_number": "SN12345678",
+     "product_name": "แอร์",
+     "status": "active",
+     "customer_chann_uid": "CHN-S-000001",
+     "warranty_end": "2027-01-01"
+    }
+   ]
+  },
+  "turns": [
+   {
+    "say": "แอร์ไม่เย็น"
+   },
+   {
+    "say": "วิธีใช้"
+   },
+   {
+    "say": "99/1 ถ.สุขุมวิท แขวงคลองตัน กรุงเทพ",
+    "expect": {
+     "not_contains": [
+      "ไม่เข้าใจ"
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "sales — ลูกค้า → ดีล → สินค้าในดีล (อีก/เป็น N/ลด) ตาม QA",
+  "oa": "sales",
+  "role": "owner",
+  "seed": {
+   "products": [
+    {
+     "id": "p1",
+     "product_id": "FAN001",
+     "product_name": "พัดลม",
+     "unit_price": "1500.00"
+    }
+   ]
+  },
+  "turns": [
+   {
+    "say": "สร้างลูกค้า สมชาย ใจดี 0812345678",
+    "expect": {
+     "recorded": [
+      "create_customer"
+     ]
+    }
+   },
+   {
+    "say": "สร้างดีลให้ สมชาย",
+    "expect": {
+     "recorded": [
+      "create_deal"
+     ]
+    }
+   },
+   {
+    "say": "เพิ่มพัดลม 2 ตัว",
+    "expect": {
+     "recorded": [
+      "add_deal_product"
+     ]
+    }
+   },
+   {
+    "say": "เพิ่มอีก 3 ตัว",
+    "expect": {
+     "regex": "5|ห้า"
+    }
+   },
+   {
+    "say": "แก้พัดลมเป็น 2 ตัว",
+    "expect": {
+     "regex": "2|สอง"
+    }
+   }
+  ]
+ },
+ {
+  "name": "sales — เปลี่ยน flow กลางคัน ต้องถามก่อน (QA: ถามก่อนเปลี่ยนคำสั่งกลาง flow)",
+  "oa": "sales",
+  "role": "owner",
+  "turns": [
+   {
+    "say": "เพิ่มลูกค้า สมหญิง",
+    "expect": {
+     "recorded": [
+      "set_pending_intent"
+     ]
+    }
+   },
+   {
+    "say": "สร้างดีลให้ สมชาย",
+    "expect": {
+     "not_recorded": [
+      "create_customer"
+     ],
+     "contains": [
+      "ยกเลิก"
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "chart — กราฟสำเร็จรูปต้องบอกวิธีสั่ง AI (รอบ 20c)",
+  "oa": "sales",
+  "role": "owner",
+  "turns": [
+   {
+    "say": "ขอกราฟยอดขาย",
+    "expect": {
+     "contains": [
+      "สร้างรายงานด้วย AI:"
+     ],
+     "not_recorded": [
+      "consume_ai_chart_quota"
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "chart — คำสั่งตรงต้องใช้ AI และหักโควตา (รอบ 20c)",
+  "oa": "sales",
+  "role": "owner",
+  "turns": [
+   {
+    "say": "สร้างรายงานด้วย AI: ยอดดีลแยกตามสถานะ",
+    "expect": {
+     "recorded": [
+      "consume_ai_chart_quota"
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "tech — มอบหมาย → รับ → เช็คอิน → รายงาน ต่อเนื่อง (QA: วงจรงานซ่อม)",
+  "oa": "technician",
+  "role": "technician",
+  "seed": {
+   "tickets": [
+    {
+     "id": "t1",
+     "ticket_number": "T-2026-0001",
+     "status": "assigned",
+     "accept_status": "pending",
+     "assigned_to_ref": "member-1",
+     "customer_name": "สมชาย ใจดี",
+     "issue_description": "แอร์ไม่เย็น",
+     "service_address": "99/1",
+     "scheduled_date": "2026-09-20"
+    }
+   ]
+  },
+  "turns": [
+   {
+    "say": "งานของฉัน",
+    "expect": {
+     "contains": [
+      "T-2026-0001"
+     ]
+    }
+   },
+   {
+    "say": "รับงาน T-2026-0001",
+    "expect": {
+     "recorded": [
+      "claim_ticket"
+     ],
+     "contains": [
+      "สมชาย"
+     ]
+    }
+   },
+   {
+    "say": "ถึงแล้ว",
+    "expect": {
+     "recorded": [
+      "check_in_ticket"
+     ]
+    }
+   },
+   {
+    "say": "ปิดงาน"
+   },
+   {
+    "say": "พบคอมเพรสเซอร์รั่ว"
+   },
+   {
+    "say": "เปลี่ยนคอมใหม่แล้ว"
+   },
+   {
+    "say": "คอมเพรสเซอร์ 1 ตัว",
+    "expect": {
+     "recorded": [
+      "check_out_ticket",
+      "open_approval_steps"
+     ],
+     "contains": [
+      "SR-"
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "tech — คำปฏิเสธต้องไม่สั่งงาน แต่คำสั่งสุภาพต้องทำงาน (QA 9 ก.ย.)",
+  "oa": "technician",
+  "role": "technician",
+  "seed": {
+   "tickets": [
+    {
+     "id": "t1",
+     "ticket_number": "T-2026-0001",
+     "status": "assigned",
+     "accept_status": "accepted",
+     "assigned_to_ref": "member-1",
+     "customer_name": "สมชาย",
+     "issue_description": "แอร์ไม่เย็น",
+     "service_address": "99/1"
+    }
+   ]
+  },
+  "turns": [
+   {
+    "say": "ยังไม่ถึงหน้างาน",
+    "expect": {
+     "not_recorded": [
+      "check_in_ticket"
+     ]
+    }
+   },
+   {
+    "say": "พรุ่งนี้ค่อยเช็คอิน",
+    "expect": {
+     "not_recorded": [
+      "check_in_ticket"
+     ]
+    }
+   },
+   {
+    "say": "ช่วยเช็คอินให้หน่อย",
+    "expect": {
+     "recorded": [
+      "check_in_ticket"
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "name": "customer — ถามราคาต้องไม่เปิดงานซ่อม (QA 9 ก.ย.)",
+  "oa": "customer",
+  "role": "customer",
+  "turns": [
+   {
+    "say": "ค่าล้างแอร์เท่าไหร่",
+    "expect": {
+     "not_recorded": [
+      "create_ticket"
+     ]
+    }
+   },
+   {
+    "say": "ไม่ต้องส่งช่างแล้วครับ",
+    "expect": {
+     "not_recorded": [
+      "create_ticket"
+     ]
+    }
+   },
+   {
+    "say": "ถ้าเสียอีกค่อยแจ้งนะครับ",
+    "expect": {
+     "not_recorded": [
+      "create_ticket"
+     ]
+    }
+   }
+  ]
+ }
+]

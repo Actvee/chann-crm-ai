@@ -187,8 +187,15 @@ class TestTheChartComesBack:
         reply = await handle_chat_message(client, message="ขอกราฟยอดขาย", ctx=_ctx(oa="sales"))
         labels = [label for label, _ in reply.quick_replies]
         assert "กราฟรายเดือน" in labels and "ดีลแต่ละสถานะ" not in labels
+        # Round 20c added a button for the made-to-order road, so "leads to
+        # a picture" now has two answers — but every button must still lead
+        # to one, and to a COMPLETE request: a button that sends the bare
+        # prefix "สร้างรายงานด้วย AI:" asks the engine to report on the
+        # instruction itself.
         for _, says in reply.quick_replies:
-            assert chat._chart_request(says) is not None
+            assert chat._chart_request(says) is not None \
+                or chat._wants_a_made_to_order_chart(says), says
+            assert chat.ai_report_asked_outright(says) != says.strip(), says
 
     async def test_a_shop_with_no_deals_is_told_so_rather_than_shown_a_lie(self, store):
         client = FakeDataClient(permission_keys=SALES_KEYS)
