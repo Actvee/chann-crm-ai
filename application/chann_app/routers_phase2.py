@@ -3251,6 +3251,20 @@ async def set_service_report_status(
     """
     _require_same_tenant(principal, license_id)
     principal.require("ticket.update")
+    # Approving from a SCREEN must be the same act as approving in chat.
+    # It was not: this wrote the report's status straight to the database
+    # and left every approval step `pending`, so the report read "อนุมัติ
+    # แล้ว" while it still sat in "รอการอนุมัติ" — and the document, the
+    # survey and the notifications that the chat road performs never
+    # happened at all (owner, 17 ก.ย. 2569, SR-2026-0003). Route the
+    # decision through the one road when the report has a step waiting.
+    if payload.status in ("approved", "rejected"):
+        acted = await approval_service.act_on_the_current_step(
+            client, license_id=license_id, report_id=report_id,
+            approve=payload.status == "approved", actor_chann_uid=principal.chann_uid,
+        )
+        if acted is not None:
+            return acted
     try:
         return await client.set_service_report_status(
             license_id, report_id, payload.status, actor_id=principal.chann_uid,

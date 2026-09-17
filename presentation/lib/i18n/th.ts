@@ -321,7 +321,7 @@ export const th = {
       register: "บันทึกเครื่อง",
       registered: "บันทึกเครื่องแล้ว ลูกค้าพิมพ์ S/N ในไลน์เพื่อผูกได้เลย",
       duplicate: "หมายเลขนี้ลงทะเบียนไว้แล้ว",
-      claimed: "ลูกค้าผูก LINE แล้ว",
+      claimed: "มีลูกค้าแล้ว",
       unclaimed: "ยังไม่มีลูกค้า",
       contact: "ลูกค้า",
       lineLinked: "ผูก LINE แล้ว",

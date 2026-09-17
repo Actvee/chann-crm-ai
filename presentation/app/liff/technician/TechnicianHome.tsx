@@ -530,8 +530,17 @@ export default function TechnicianHome({ liffId }: { liffId: string }) {
       ]),
   );
   const filtering = Boolean(query.trim() || statusFilter);
+  // Finished work is not "my jobs". Without the status test this list kept
+  // completed and cancelled tickets on the screen while chat's "งานของฉัน"
+  // — which has always excluded them — correctly answered that there were
+  // none, so the two disagreed about the same technician (owner,
+  // 17 ก.ย. 2569).
   const mine = shown.filter(
-    (x) => x.assigned_to_ref === memberId && x.accept_status === "accepted",
+    (x) =>
+      x.assigned_to_ref === memberId &&
+      x.accept_status === "accepted" &&
+      x.status !== "completed" &&
+      x.status !== "cancelled",
   );
   // Given to me by CS and not yet answered: accept (claim) or decline.
   const offered = shown.filter(

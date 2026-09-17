@@ -3127,6 +3127,17 @@ class TestALineWithAPriceAfterTheQuantity:
         assert chat._parse_line_item_command("เพิ่ม ทีวี 40 นิ้ว ราคา 4000 ไปอีก 2 รายการ")["price"] == "4000"
 
 
+def _tomorrow() -> str:
+    """Round 19z: "พรุ่งนี้" has to BE tomorrow. These two hardcoded the day
+    after the day they were written, so the suite went red at midnight and
+    a real regression would have been buried in the noise."""
+    from datetime import timedelta
+
+    from chann_app.services.thai_datetime import local_today
+
+    return (local_today() + timedelta(days=1)).isoformat()
+
+
 class TestAReminderContinuationKeepsItsRecord:
     @pytest.mark.asyncio
     async def test_a_bare_date_after_the_date_question_books_the_deal(self):
@@ -3137,7 +3148,7 @@ class TestAReminderContinuationKeepsItsRecord:
                                 deals=[{"id": "DEAL-2", "deal_id": "D-2026-0002", "stage": "new", "contact_id": "CUST-1", "notes": None, "products": []}])
         # The model's two readings, in order: the command without a date, then the answer.
         await client.set_pending_intent("CHN-S-000001", "sales", action="create", entity="followup", fields={"code": "D-2026-0002"}, missing=["due_date"])
-        ai = httpx.AsyncClient(transport=_ai(json.dumps({"action": "create", "entity": "followup", "fields": {"due_date": "2026-09-16"}, "missing": []})))
+        ai = httpx.AsyncClient(transport=_ai(json.dumps({"action": "create", "entity": "followup", "fields": {"due_date": _tomorrow()}, "missing": []})))
         reply = await handle_chat_message(client, message="พรุ่งนี้", ctx=_ctx(), ai_client=ai)
         booked = [r for r in client.recorded if r[0] == "create_follow_up"]
         assert booked and booked[-1][2].get("entity_id") == "DEAL-2", reply.text
@@ -3150,7 +3161,7 @@ class TestAReminderContinuationKeepsItsRecord:
         import httpx
         client = FakeDataClient(permission_keys=["followup.create", "customer.read"],
                                 customers=[{"id": "CUST-5", "customer_id": "C-2026-0005", "first_name": "สมปอง", "last_name": "ดี", "phone": "0855555555", "stage": "lead"}])
-        ai = httpx.AsyncClient(transport=_ai(json.dumps({"action": "create", "entity": "followup", "fields": {"code": "C-2026-0005", "due_date": "2026-09-16", "due_time": "09:00"}, "missing": []})))
+        ai = httpx.AsyncClient(transport=_ai(json.dumps({"action": "create", "entity": "followup", "fields": {"code": "C-2026-0005", "due_date": _tomorrow(), "due_time": "09:00"}, "missing": []})))
         reply = await handle_chat_message(client, message="เตือน C-2026-0005 พรุ่งนี้ บ่ายเก้า", ctx=_ctx(), ai_client=ai)
         assert not [r for r in client.recorded if r[0] == "create_follow_up"], reply.text
         assert "เวลา" in reply.text, reply.text

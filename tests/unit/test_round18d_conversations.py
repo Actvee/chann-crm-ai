@@ -18,6 +18,17 @@ from chann_app.services.chat import (
 )
 from test_phase6_chat import FakeDataClient, _ai, _ctx
 
+# Round 19z: these used to hardcode the day after the day they were
+# written, so the suite went red at midnight and stayed red. "พรุ่งนี้"
+# has to BE tomorrow, whenever the test runs.
+def _tomorrow() -> str:
+    from datetime import timedelta
+
+    from chann_app.services.thai_datetime import local_today
+
+    return (local_today() + timedelta(days=1)).isoformat()
+
+
 pytestmark = pytest.mark.asyncio
 
 TECH_KEYS = ["product.read", "service_report.create", "service_report.read", "service_report.update", "ticket.assign", "ticket.close", "ticket.create", "ticket.read", "ticket.update"]
@@ -145,7 +156,7 @@ class TestADayAloneIsStillAForm:
     async def test_a_reminder_with_a_time_and_a_subject_is_still_a_form(self):
         """"นัดพรุ่งนี้ …" read as create/followup is the form the tester saw (14 ก.ย.), not the diary."""
         client = _sales()
-        reply, _w = await _say(client, "นัดพรุ่งนี้ 10 โมง โทรตาม", {"action": "create", "entity": "followup", "fields": {"due_date": "2026-09-16", "due_time": "10:00", "notes": "โทรตาม"}, "missing": ["target_name"]})
+        reply, _w = await _say(client, "นัดพรุ่งนี้ 10 โมง โทรตาม", {"action": "create", "entity": "followup", "fields": {"due_date": _tomorrow(), "due_time": "10:00", "notes": "โทรตาม"}, "missing": ["target_name"]})
         assert "กรุณาระบุชื่อลูกค้า" in reply.text, reply.text
 
 
@@ -154,7 +165,7 @@ class TestTheSameFlowRestatedReplacesItsForm:
         """A reminder form waiting for its name, then 'นัดพรุ่งนี้ บ่าย 3 โทรตาม': it asked 'จะยกเลิกแล้วตั้งนัดแทนไหม'."""
         client = _sales()
         await client.set_pending_intent("CHN-S-000001", "sales", action="create", entity="followup", fields={"due_date": "2026-09-20"}, missing=["target_name"])
-        reply, _w = await _say(client, "นัดพรุ่งนี้ บ่าย 3 โทรตาม", {"action": "create", "entity": "followup", "fields": {"due_date": "2026-09-16", "due_time": "15:00", "notes": "โทรตาม"}, "missing": ["target_name"]})
+        reply, _w = await _say(client, "นัดพรุ่งนี้ บ่าย 3 โทรตาม", {"action": "create", "entity": "followup", "fields": {"due_date": _tomorrow(), "due_time": "15:00", "notes": "โทรตาม"}, "missing": ["target_name"]})
         assert "แทนไหม" not in reply.text, reply.text
         pending = await client.get_pending_intent("CHN-S-000001", "sales")
         assert pending and pending["entity"] == "followup" and pending["fields"].get("due_time") == "15:00", pending
@@ -165,7 +176,7 @@ class TestThisCustomerIsTheCustomerNotTheDeal:
         """R10 t4: 'นัดลูกค้าคนนี้ พรุ่งนี้ 10 โมง' with the deal in view was put on the deal."""
         client = _sales()
         await _say(client, "สร้างดีลให้ สมหญิง", {"action": "create", "entity": "deal", "fields": {"target_name": "สมหญิง"}, "missing": []})
-        reply, writes = await _say(client, "นัดลูกค้าคนนี้ พรุ่งนี้ 10 โมง", {"action": "create", "entity": "followup", "fields": {"target_name": "ลูกค้าคนนี้", "due_date": "2026-09-16", "due_time": "10:00"}, "missing": []})
+        reply, writes = await _say(client, "นัดลูกค้าคนนี้ พรุ่งนี้ 10 โมง", {"action": "create", "entity": "followup", "fields": {"target_name": "ลูกค้าคนนี้", "due_date": _tomorrow(), "due_time": "10:00"}, "missing": []})
         assert "create_follow_up" in writes, reply.text
         assert "C-2026-0003" in reply.text and "D-2026" not in reply.text, reply.text
 
@@ -201,7 +212,7 @@ class TestAFlowSwitchAnsweredWithAnotherCommand:
             fields={"original": {"action": "create", "entity": "followup", "fields": {"target_name": "สมชาย ใจดี"}, "missing": ["due_date"]},
                     "command": "สร้างดีลให้ สมหญิง"}, missing=[],
         )
-        reply, writes = await _say(client, "ตั้งนัด สมชาย ใจดี พรุ่งนี้บ่าย 3", {"action": "create", "entity": "followup", "fields": {"target_name": "สมชาย ใจดี", "due_date": "2026-09-16", "due_time": "15:00"}, "missing": []})
+        reply, writes = await _say(client, "ตั้งนัด สมชาย ใจดี พรุ่งนี้บ่าย 3", {"action": "create", "entity": "followup", "fields": {"target_name": "สมชาย ใจดี", "due_date": _tomorrow(), "due_time": "15:00"}, "missing": []})
         assert "create_follow_up" in writes and "create_deal" not in writes, (reply.text, writes)
         assert "C-2026-0001" in reply.text and "15:00" in reply.text, reply.text
 

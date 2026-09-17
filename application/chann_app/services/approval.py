@@ -288,6 +288,38 @@ async def pending_for_actor(client: DataClient, *, license_id: str, chann_uid: s
     )
 
 
+async def act_on_the_current_step(
+    client: DataClient, *, license_id: str, report_id: str, approve: bool,
+    actor_chann_uid: str, language: str = "th",
+) -> dict | None:
+    """Act on whichever step this report is waiting on, or None.
+
+    The screen used to PATCH the report's status directly, which left the
+    steps pending (so the report stayed in "รอการอนุมัติ" while reading
+    "อนุมัติแล้ว") and skipped the document, the survey and every
+    notification. A decision is a decision wherever it is made, so the
+    screen comes through here now. None means there is no step waiting —
+    the caller then writes the status as before, which is right for a
+    report filed under no approval rule at all.
+    """
+    license_id = str(license_id)
+    try:
+        steps = await client.approval_steps_for_entity(license_id, ENTITY_TYPE, str(report_id))
+    except Exception:  # noqa: BLE001 — fall back to the plain write
+        log.exception("could not read the steps of report %s", report_id)
+        return None
+    pending = sorted(
+        (s for s in steps or [] if str(s.get("status") or "") == "pending"),
+        key=lambda s: int(s.get("step_order") or 0),
+    )
+    if not pending:
+        return None
+    return await act(
+        client, license_id=license_id, step_id=str(pending[0]["id"]),
+        approve=approve, actor_chann_uid=actor_chann_uid, language=language,
+    )
+
+
 async def act(
     client: DataClient, *, license_id: str, step_id: str, approve: bool,
     actor_chann_uid: str, reason: str | None = None, language: str = "th",

@@ -319,7 +319,7 @@ export const en: Dictionary = {
       register: "Record unit",
       registered: "Unit recorded — the customer can now type the S/N in LINE to attach it",
       duplicate: "This serial is already registered",
-      claimed: "Claimed on LINE",
+      claimed: "Has a customer",
       unclaimed: "No customer yet",
       contact: "Customer",
       lineLinked: "linked on LINE",
