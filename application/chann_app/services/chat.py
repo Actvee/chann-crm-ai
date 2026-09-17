@@ -13694,9 +13694,24 @@ def _dashboard_button(section: str, language: str) -> tuple[str, str] | None:
     return (_t(OPEN_DASHBOARD, language), url) if url else None
 
 
+#: "ลูกค้าที่เป็น lead" comes back read/customer {"status": "lead"} and the
+#: list used to ignore it and show everybody (audit of all three lists,
+#: owner 17 ก.ย. 2569). Only the two stages a customer really has.
+CUSTOMER_STAGE_HEAD = {"th": "ลูกค้า: {stage}", "en": "Customers: {stage}"}
+CUSTOMER_STAGE_NONE = {
+    "th": "ยังไม่มีลูกค้าที่เป็น{stage} · พิมพ์ \"รายชื่อลูกค้า\" เพื่อดูทั้งหมด",
+    "en": "No {stage} customers yet · say \"customers\" for all of them.",
+}
+
+
+def _customer_stage_wanted(fields: dict | None) -> str:
+    said = str((fields or {}).get("stage") or (fields or {}).get("status") or "").strip().lower()
+    return said if said in CUSTOMER_STAGE_LABELS else ""
+
+
 async def _handle_customer_list(
     client: DataClient, *, license_id, permission_keys: list[str], language: str,
-    search_term: str | None = None,
+    search_term: str | None = None, stage: str = "",
 ) -> ChatReply:
     if "customer.read" not in set(permission_keys):
         return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
@@ -13705,6 +13720,17 @@ async def _handle_customer_list(
     except Exception:
         log.exception("customer list failed")
         return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    head = ""
+    if stage:
+        label = _label(CUSTOMER_STAGE_LABELS, stage, language)
+        customers = [c for c in customers if str(c.get("stage") or "").lower() == stage]
+        head = _t(CUSTOMER_STAGE_HEAD, language).format(stage=label) + "\n"
+        if not customers:
+            return ChatReply(
+                text=_t(CUSTOMER_STAGE_NONE, language).format(stage=label),
+                quick_replies=[("รายชื่อลูกค้า", "รายชื่อลูกค้า")],
+            )
 
     if search_term:
         needle = search_term.lower()
@@ -13734,7 +13760,7 @@ async def _handle_customer_list(
         + (f" · {c.get('phone')}" if c.get("phone") else "")
         for c in shown
     ]
-    text = "\n".join(lines) + _truncation_note(len(shown), len(customers), language, "customers")
+    text = head + "\n".join(lines) + _truncation_note(len(shown), len(customers), language, "customers")
     return ChatReply(
         text=text,
         # Quick replies are now only "what to say next" — navigation moved
@@ -17913,8 +17939,40 @@ async def _handle_product_list(
     )
 
 
+#: A quote that has had its answer is not "open". Terminal rather than a
+#: list of live ones, for the same reason the deal filter is: a status
+#: added later counts as open, which is the safer way to be wrong about a
+#: work queue.
+QUOTE_CLOSED_STATUSES = ("accepted", "rejected", "expired")
+#: The model says `status: "open"` / `"pending"` by itself for
+#: "ใบเสนอราคาที่เปิดอยู่" and "ที่ยังไม่ตอบรับ" (ask-model, 17 ก.ย. 2569);
+#: the list used to throw that away and show every quote, rejected ones
+#: included (owner, same day). Converted downstream, never gated in front.
+_QUOTE_OPEN_WORDS = ("open", "pending", "ยังไม่ตอบรับ", "รอตอบรับ", "เปิดอยู่", "ยังเปิด", "ค้าง")
+QUOTE_LIST_OPEN_HEAD = {
+    "th": "ใบเสนอราคาที่ยังเปิดอยู่ (ไม่รวมที่ตอบรับ/ปฏิเสธ/หมดอายุ):",
+    "en": "Open quotes (accepted, rejected and expired left out):",
+}
+QUOTE_LIST_NONE_OPEN = {
+    "th": "ไม่มีใบเสนอราคาที่ยังเปิดอยู่ · พิมพ์ \"รายการใบเสนอราคา\" เพื่อดูทั้งหมด",
+    "en": "No open quotes · say \"quotes\" to see them all.",
+}
+
+
+def _quote_status_wanted(fields: dict | None, message: str) -> str:
+    """"open" for the live ones, a status name for one kind, "" for all."""
+    said = str((fields or {}).get("status") or "").strip().lower()
+    canon = _canonical(message or "")
+    if said in QUOTE_STATUS_LABELS:
+        return said
+    if said in _QUOTE_OPEN_WORDS or any(w in canon for w in _QUOTE_OPEN_WORDS[2:]):
+        return "open"
+    return ""
+
+
 async def _handle_quote_list(
     client: DataClient, *, license_id, permission_keys: list[str], language: str,
+    wanted: str = "",
 ) -> ChatReply:
     if "quote.read" not in set(permission_keys):
         return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
@@ -17923,6 +17981,25 @@ async def _handle_quote_list(
     except Exception:
         log.exception("quote list failed")
         return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    head = ""
+    if wanted == "open":
+        quotes = [q for q in quotes
+                  if str(q.get("status") or "").lower() not in QUOTE_CLOSED_STATUSES]
+        head = _t(QUOTE_LIST_OPEN_HEAD, language) + "\n"
+        if not quotes:
+            return ChatReply(
+                text=_t(QUOTE_LIST_NONE_OPEN, language),
+                quick_replies=[("รายการใบเสนอราคา", "รายการใบเสนอราคา"), ("รายการดีล", "รายการดีล")],
+            )
+    elif wanted:
+        quotes = [q for q in quotes if str(q.get("status") or "").lower() == wanted]
+        head = f"ใบเสนอราคา: {_label(QUOTE_STATUS_LABELS, wanted, language)}\n"
+        if not quotes:
+            return ChatReply(
+                text=_t(QUOTE_LIST_NONE_OPEN, language),
+                quick_replies=[("รายการใบเสนอราคา", "รายการใบเสนอราคา")],
+            )
 
     if not quotes:
         return ChatReply(
@@ -17938,7 +18015,7 @@ async def _handle_quote_list(
         + (" · มีเอกสารแล้ว" if q.get("generated_document_id") else "")
         for q in shown
     ]
-    text = "\n".join(lines) + _truncation_note(len(shown), len(quotes), language, "quotes")
+    text = head + "\n".join(lines) + _truncation_note(len(shown), len(quotes), language, "quotes")
     return ChatReply(
         text=text,
         quick_replies=[("รายการดีล", "รายการดีล")],
@@ -17952,10 +18029,14 @@ async def _handle_quote_list(
                     "subtitle": _label(QUOTE_STATUS_LABELS, q.get("status"), language)
                     + (" · มีเอกสารแล้ว" if q.get("generated_document_id") else ""),
                     "stage": q.get("status"),
-                    # Issuing is the action a quote list exists for, and it
-                    # is per-row for the same reason viewing is.
-                    "action_label": "ออกเอกสาร",
-                    "action_text": f"ออกเอกสาร {q.get('quote_id')}",
+                    # LOOK, then decide. Issuing was the row's action, so a
+                    # list — the one place nobody has read the quote yet —
+                    # offered the one thing that produces a document for a
+                    # customer (owner, 17 ก.ย. 2569). "ออกเอกสาร" lives on
+                    # the detail card, where the lines and the discount are
+                    # on screen; it was already there.
+                    "action_label": "ดูรายละเอียด",
+                    "action_text": f"ดูใบเสนอราคา {q.get('quote_id')}",
                 }
                 for q in shown
             ],
@@ -20409,6 +20490,7 @@ async def _handle_customer_intent(
             )
         return await _handle_customer_list(
             client, license_id=license_id, permission_keys=held, language=language,
+            stage=_customer_stage_wanted(fields),
         )
 
     return _no_handler_reply(intent, language, ctx.oa)
@@ -21690,6 +21772,7 @@ async def _handle_quote_intent(
             )
         return await _handle_quote_list(
             client, license_id=license_id, permission_keys=held, language=language,
+            wanted=_quote_status_wanted(fields, message),
         )
 
     if action != "create":
@@ -24917,7 +25000,7 @@ async def _route_chat_message(
         if _matches_phrase(message, QUOTE_LIST_PHRASES):
             return await _handle_quote_list(
                 client, license_id=license_id, permission_keys=permission_keys,
-                language=language,
+                language=language, wanted=_quote_status_wanted(None, message),
             )
 
         search_term = _parse_after_trigger(message, CUSTOMER_SEARCH_TRIGGERS)
