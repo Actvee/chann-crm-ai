@@ -17579,7 +17579,39 @@ async def _handle_deal_query(
     head = f"{title} {len(rows)} ดีล"
     if total:
         head += f" รวม {total:,.0f}"
-    return ChatReply(text=head + "\n" + "\n".join(lines))
+    # The same card every other list reply sends. Nine kinds of deal
+    # question came back as bare text while "รายการดีล" got a card, so the
+    # answer looked like a different, lesser feature depending on how it
+    # was asked (owner, 17 ก.ย. 2569: "ตอบกลับมาเป็นตัวอักษร ไม่เป็น card
+    # เหมือนแบบอื่น").
+    shown = rows[:LIST_LIMIT]
+    return ChatReply(
+        text=head + "\n" + "\n".join(lines),
+        quick_replies=[("รายการดีล", "รายการดีล"), ("สรุปการขาย", "สรุปการขาย")],
+        quick_reply_url=_dashboard_button("deals", language),
+        list_card=_list_card(
+            title=title, section="deals", language=language,
+            shown=len(shown), total=len(rows),
+            rows=[
+                {
+                    "title": str(d.get("deal_id") or "-"),
+                    "subtitle": " · ".join(
+                        p for p in (
+                            str(d.get("customer_name") or ""),
+                            _label(DEAL_STAGE_LABELS, d.get("stage"), language),
+                            f"{_deal_value(d):,.0f}" if _deal_value(d) else "",
+                            _iso_to_thai_date(d.get("expected_close_date"))
+                            if d.get("expected_close_date") else "",
+                        ) if p
+                    ),
+                    "stage": d.get("stage"),
+                    "action_label": "ดู",
+                    "action_text": f"ข้อมูลดีล {d.get('deal_id')}",
+                }
+                for d in shown
+            ],
+        ),
+    )
 
 
 async def _handle_deal_list(
