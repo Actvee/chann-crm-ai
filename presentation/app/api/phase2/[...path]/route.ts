@@ -52,9 +52,13 @@ async function proxy(request: Request, context: Context) {
 
   try {
     const result = await callApplicationResponse<unknown>(apiPath, { method, headers, body });
-    return result.status === 204
-      ? new NextResponse(null, { status: result.status })
-      : NextResponse.json(result.data, { status: result.status });
+    if (result.status === 204) return new NextResponse(null, { status: result.status });
+    // Relayed, not dropped: a capped list has to be able to tell the page
+    // how many rows it did NOT send (round 20j).
+    return NextResponse.json(result.data, {
+      status: result.status,
+      headers: result.total === undefined ? undefined : { "X-Total-Count": String(result.total) },
+    });
   } catch (error) {
     if (error instanceof ApplicationError) {
       // The upstream body, as sent: pages read `detail` (a string, or an

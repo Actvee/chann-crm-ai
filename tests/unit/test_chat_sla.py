@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "application"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from chann_app.services import live_chat  # noqa: E402
+from chann_app.services import notify as _notify_mod
 from chann_app.services.chat import handle_chat_message, handle_incoming_location  # noqa: E402
 from test_live_chat import ChatFake, LICENSE_ID  # noqa: E402
 from test_phase6_chat import FakeDataClient, _ctx  # noqa: E402
@@ -60,15 +61,15 @@ def pushes(monkeypatch):
     sent: list[tuple] = []
 
     async def fake_push(oa, to, text, client=None, quick_reply=None):
-        sent.append((oa, to, text, None))
+        # The button used to arrive embedded in a message object through
+        # push_messages, so this captured a hard-coded None. Round 20j sends
+        # the reopen invitation through send_notification like everything
+        # else, and the button rides as a quick_reply — capture the real one
+        # or the assertion below is testing nothing.
+        sent.append((oa, to, text, quick_reply))
         return ["mid"]
 
-    async def fake_push_messages(oa, to, messages, client=None):
-        sent.append((oa, to, messages[0].get("text", ""), messages[0].get("quickReply")))
-        return ["mid"]
-
-    monkeypatch.setattr(live_chat, "push_text", fake_push)
-    monkeypatch.setattr(live_chat, "push_messages", fake_push_messages)
+    monkeypatch.setattr(_notify_mod, "push_text", fake_push)
     return sent
 
 
@@ -105,7 +106,9 @@ class TestTheShopAnswersLater:
         assert client._chat_sessions[0]["status"] == "unanswered"
         last = pushes[-1]
         assert "15,900" in last[2] and "เปิดแชท" in last[2]
-        assert last[3] and last[3]["items"][0]["action"]["text"] == "คุยกับร้าน"
+        # A LIST of items now, not the {"items": [...]} envelope: push_text
+        # builds the envelope itself, where push_messages took it pre-wrapped.
+        assert last[3] and last[3][0]["action"]["text"] == "คุยกับร้าน"
 
     async def test_reopening_shows_what_the_shop_said_meanwhile(self, pushes):
         client = ParkFake(role="customer", permission_keys=[])

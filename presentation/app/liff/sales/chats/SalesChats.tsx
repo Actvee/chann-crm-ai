@@ -108,6 +108,8 @@ export default function SalesChats({ liffId }: { liffId: string }) {
   const scroller = useRef<HTMLDivElement | null>(null);
   const stickToBottom = useRef(true);
   const lastMessageId = useRef<string>("");
+  //: Bumped by every list request; a reply whose number is stale is ignored.
+  const requestSeq = useRef(0);
 
   const say = useCallback((message: string, kind?: "ok" | "error") => {
     setStatus(message);
@@ -119,12 +121,26 @@ export default function SalesChats({ liffId }: { liffId: string }) {
   const loadSessions = useCallback(
     async (currentToken = token, license = licenseId, which = tab, announce = false) => {
       if (!currentToken || !license) return;
+      // Whoever asked LAST owns the answer.
+      //
+      // Round 20i gave this a loading state and the symptom came back on
+      // rapid tab switching (owner, 18 ก.ย. 2569), because two requests can
+      // be in flight at once — a switch, and the 8-second poll that started
+      // before it. Two things then went wrong: the slower reply overwrote
+      // the faster one whatever tab it was for, and the FIRST `finally` to
+      // run turned the skeleton off while the other was still coming, so an
+      // empty older answer was shown as "ยังไม่มีการสนทนา".
+      //
+      // A sequence number fixes both: a reply that is not the newest
+      // request is dropped on the floor, rows and spinner alike.
+      const seq = ++requestSeq.current;
       if (announce) setLoadingList(true);
       try {
         const response = await fetch(
           `/api/phase2/licenses/${license}/chat-sessions?status_filter=${which === "all" ? "all" : "live"}`,
           { headers: proxyHeaders(currentToken, license) },
         );
+        if (seq !== requestSeq.current) return;
         if (!response.ok) {
           throw new Error(
             response.status === 403
@@ -133,6 +149,7 @@ export default function SalesChats({ liffId }: { liffId: string }) {
           );
         }
         const rows = (await response.json()) as ChatSession[];
+        if (seq !== requestSeq.current) return;
         // Same rows, same order → keep the old array so React skips the work.
         setSessions((prev) =>
           prev.length === rows.length &&
@@ -142,7 +159,8 @@ export default function SalesChats({ liffId }: { liffId: string }) {
             : rows,
         );
       } finally {
-        if (announce) setLoadingList(false);
+        // Only the newest request may put the skeleton away.
+        if (announce && seq === requestSeq.current) setLoadingList(false);
       }
     },
     [token, licenseId, tab, t],
@@ -331,7 +349,7 @@ export default function SalesChats({ liffId }: { liffId: string }) {
           </button>
         ))}
       </div>
-      {loadingList && sessions.length === 0 ? (
+      {loadingList ? (
         // Rows, not a spinner: the list keeps its shape, so nothing jumps
         // when the real rows arrive and nobody reads the pause as "gone".
         <ul className="chat-rows" aria-busy="true" aria-label={copy.loading}>

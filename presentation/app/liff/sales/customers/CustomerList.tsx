@@ -46,6 +46,7 @@ export default function CustomerList({ liffId }: { liffId: string }) {
   const stageLabel = (stage: string) =>
     stage === "contact" ? t.customer.title : t.customer.lead;
   const [customers, setCustomers] = useState<Customer[]>([]);
+  const [totalHeld, setTotalHeld] = useState<number | null>(null);
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
   const [busy, setBusy] = useState(false);
@@ -74,6 +75,10 @@ export default function CustomerList({ liffId }: { liffId: string }) {
       );
     }
     setCustomers((await response.json()) as Customer[]);
+    // What the shop HAS, not what this page received. Without it the count
+    // below reads "500 of 500" for a shop with 3,000 (round 20j).
+    const said = response.headers.get("X-Total-Count");
+    setTotalHeld(said === null ? null : Number(said));
     say("");
   }, [licenseId, say, t, token]);
 
@@ -265,6 +270,13 @@ export default function CustomerList({ liffId }: { liffId: string }) {
       />
 
       <Count shown={visible.length} total={customers.length} />
+      {totalHeld !== null && totalHeld > customers.length && (
+        <p className="hint">
+          {t.dashboard.showingOf
+            .replace("{shown}", String(customers.length))
+            .replace("{total}", String(totalHeld))}
+        </p>
+      )}
 
       {can("customer.create") && (
         <BulkPaste token={token} licenseId={licenseId} onDone={() => void load()} />

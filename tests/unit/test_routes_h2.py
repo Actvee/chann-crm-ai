@@ -340,7 +340,7 @@ class TestNewTicketNotice:
         client._line_targets = {"CHN-TH": "U-th", "CHN-EN": "U-en"}
         pushed: list[tuple[str, str]] = []
 
-        async def fake_push(oa, to, text):
+        async def fake_push(oa, to, text, client=None, quick_reply=None):
             pushed.append((to, text))
             return ["mid"]
 

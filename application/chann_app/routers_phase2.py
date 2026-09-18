@@ -12,7 +12,7 @@ import hashlib
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .config import settings
@@ -814,6 +814,8 @@ def _company_incomplete(company: dict, exc: Exception) -> dict:
 async def list_customers(
     license_id: str,
     stage: str | None = None,
+    limit: int = 500,
+    response: Response = None,  # type: ignore[assignment]
     principal: TenantPrincipal = Depends(get_tenant_principal),
     client: DataClient = Depends(get_data_client),
 ):
@@ -827,9 +829,15 @@ async def list_customers(
     if principal.is_customer:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="staff only")
     try:
-        return await client.list_customers(license_id, stage)
+        rows, total = await client.list_customers_with_total(license_id, stage, limit=limit)
     except DataTierError as exc:
         raise _propagate(exc)
+    # The body shape is unchanged — a bare array, as every caller expects.
+    # The count rides in a header so a screen can say "200 of 3,000" instead
+    # of believing a capped page is the whole book (round 20j).
+    if response is not None:
+        response.headers["X-Total-Count"] = str(total)
+    return rows
 
 
 @router.get("/licenses/{license_id}/customers/{customer_id}")
@@ -922,15 +930,20 @@ async def my_orders(
 async def list_deals(
     license_id: str,
     stage: str | None = None,
+    limit: int = 500,
+    response: Response = None,  # type: ignore[assignment]
     principal: TenantPrincipal = Depends(get_tenant_principal),
     client: DataClient = Depends(get_data_client),
 ):
     _require_same_tenant(principal, license_id)
     principal.require("deal.read")
     try:
-        return await client.list_deals(license_id, stage)
+        rows, total = await client.list_deals_with_total(license_id, stage, limit=limit)
     except DataTierError as exc:
         raise _propagate(exc)
+    if response is not None:
+        response.headers["X-Total-Count"] = str(total)
+    return rows
 
 
 @router.get("/licenses/{license_id}/products")

@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from chann_app import routers_phase2
 from chann_app.config import settings
 from chann_app.services import live_chat
+from chann_app.services import notify as _notify_mod
 from chann_app.services.authorization import TenantPrincipal
 from chann_app.services.chat import handle_chat_message
 from test_phase6_chat import LICENSE_ID, FakeDataClient, _ctx
@@ -45,8 +46,7 @@ def pushes(monkeypatch):
     async def line_of(chann_uid):
         return f"line-{chann_uid}"
 
-    monkeypatch.setattr(live_chat, "push_text", fake_push_text)
-    monkeypatch.setattr(live_chat, "push_messages", fake_push_messages)
+    monkeypatch.setattr(_notify_mod, "push_text", fake_push_text)
     return sent, line_of
 
 

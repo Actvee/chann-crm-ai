@@ -30,6 +30,20 @@ class DataTierError(RuntimeError):
         self.structured = structured
 
 
+def _total_of(resp: httpx.Response, rows) -> int:
+    """X-Total-Count, or the page's own length when the header is absent.
+
+    Falling back to len(rows) rather than 0 is deliberate: an older Data
+    tier that does not send the header has not truncated anything either,
+    so the page IS the total.
+    """
+    raw = resp.headers.get("X-Total-Count") or resp.headers.get("x-total-count")
+    try:
+        return int(raw) if raw is not None else len(rows or [])
+    except (TypeError, ValueError):
+        return len(rows or [])
+
+
 class DataClient:
     def __init__(self, base_url: str | None = None, secret: str | None = None,
                  client: httpx.AsyncClient | None = None):
@@ -1677,6 +1691,45 @@ class DataClient:
         if resp.status_code == 404:
             return None
         return self._unwrap(resp)
+
+    async def list_customers_with_total(
+        self, license_id: str, stage: str | None = None, limit: int | None = None,
+    ) -> tuple[list[dict], int]:
+        """A page of customers, and how many there really are.
+
+        The Data tier caps this list (round 20j) and says the true count in
+        X-Total-Count. `_unwrap` returns only the body, so without this the
+        count is computed and thrown away — and a screen showing "500 of
+        500" while a shop has 3,000 is the exact bug round 20h spent its
+        time removing from the ticket lookup.
+        """
+        params: dict = {}
+        if stage:
+            params["stage"] = stage
+        if limit:
+            params["limit"] = limit
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/customers",
+            headers=self._headers, params=params or None,
+        )
+        rows = self._unwrap(resp)
+        return rows, _total_of(resp, rows)
+
+    async def list_deals_with_total(
+        self, license_id: str, stage: str | None = None, limit: int | None = None,
+    ) -> tuple[list[dict], int]:
+        """A page of deals, and how many there really are."""
+        params: dict = {}
+        if stage:
+            params["stage"] = stage
+        if limit:
+            params["limit"] = limit
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/deals",
+            headers=self._headers, params=params or None,
+        )
+        rows = self._unwrap(resp)
+        return rows, _total_of(resp, rows)
 
     async def list_customers(
         self, license_id: str, stage: str | None = None, customer_chann_uid: str | None = None,

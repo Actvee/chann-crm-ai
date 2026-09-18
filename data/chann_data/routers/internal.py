@@ -2639,16 +2639,30 @@ def get_customer(
 @router.get("/licenses/{license_id}/customers", response_model=list[CustomerOut])
 def list_customers(
     license_id: uuid.UUID, stage: str | None = None, customer_chann_uid: str | None = None,
+    limit: int = 500,
+    response: Response = None,  # type: ignore[assignment]
     session: Session = Depends(get_session),
 ):
+    """Customers, newest first.
+
+    This had NO ceiling: every row, every time. `X-Total-Count` says how
+    many there really are, so a caller can show "200 of 3,000" rather than
+    quietly believing it has them all — which is the failure the ticket
+    lookup spent round 20h fixing (18 ก.ย. 2569).
+    """
     scope = TenantScope(license_id=license_id)
     repo = CustomerRepository(session)
     if customer_chann_uid:
         # The customer's own record in this shop (B5: purchase history).
         row = repo.find_by_chann_uid(scope, customer_chann_uid)
         rows = [row] if row is not None and row.archived_at is None else []
+        total = len(rows)
     else:
-        rows = repo.list_for_license(scope, stage=stage)
+        capped = max(1, min(int(limit), 2000))
+        rows = repo.list_for_license(scope, stage=stage, limit=capped)
+        total = repo.count_for_license(scope, stage=stage)
+    if response is not None:
+        response.headers["X-Total-Count"] = str(total)
     return [CustomerOut.model_validate(r, from_attributes=True) for r in rows]
 
 
@@ -2790,14 +2804,26 @@ def get_deal(
 @router.get("/licenses/{license_id}/deals", response_model=list[DealOut])
 def list_deals(
     license_id: uuid.UUID, stage: str | None = None, contact_id: uuid.UUID | None = None,
+    limit: int = 500,
+    response: Response = None,  # type: ignore[assignment]
     session: Session = Depends(get_session),
 ):
+    """Deals, newest first, with every deal's lines in one extra query.
+
+    Same story as the customers above: no ceiling at all until now, and
+    measured at 3,000 deals this route was 480 KB over the tier boundary.
+    """
     scope = TenantScope(license_id=license_id)
     repo = DealRepository(session)
     if contact_id is not None:
         rows = repo.list_for_contact(scope, contact_id)
+        total = len(rows)
     else:
-        rows = repo.list_for_license(scope, stage=stage)
+        capped = max(1, min(int(limit), 2000))
+        rows = repo.list_for_license(scope, stage=stage, limit=capped)
+        total = repo.count_for_license(scope, stage=stage)
+    if response is not None:
+        response.headers["X-Total-Count"] = str(total)
     # One query for every deal's lines. Asking per deal made this route
     # 3,001 queries and 4.7 seconds at 3,000 deals (17 ก.ย. 2569).
     lines = repo.products_for([r.id for r in rows])

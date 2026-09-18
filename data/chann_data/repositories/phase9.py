@@ -321,13 +321,38 @@ class CustomerRepository:
         if found is None:
             raise Phase9NotFound("member not found in this tenant")
 
-    def list_for_license(self, scope: TenantScope, *, stage: str | None = None) -> list[Customer]:
+    def list_for_license(
+        self, scope: TenantScope, *, stage: str | None = None, limit: int | None = None,
+    ) -> list[Customer]:
+        """Customers, newest first.
+
+        A page, and the total it was taken from. Both routes returned EVERY
+        row with no ceiling at all: measured 17 ก.ย. 2569, the deal list was
+        480 KB and 3,001 queries at 3,000 deals, and the customer list has
+        the same shape with nothing to stop it. A silent truncation would be
+        worse than no limit — the caller has to be able to say "showing 200
+        of 3,000" — so the count comes back with the page.
+        """
         query = select(Customer).where(
             Customer.license_id == scope.license_id, Customer.archived_at.is_(None),
         )
         if stage:
             query = query.where(Customer.stage == stage)
-        return list(self._s.execute(query.order_by(Customer.created_at.desc())).scalars())
+        # id breaks the tie so a page boundary cannot show the same row
+        # twice, or skip one, when several share a created_at.
+        query = query.order_by(Customer.created_at.desc(), Customer.id.desc())
+        if limit is not None:
+            query = query.limit(max(1, int(limit)))
+        return list(self._s.execute(query).scalars())
+
+    def count_for_license(self, scope: TenantScope, *, stage: str | None = None) -> int:
+        """How many there are, so a page can say what it left out."""
+        query = select(func.count()).select_from(Customer).where(
+            Customer.license_id == scope.license_id, Customer.archived_at.is_(None),
+        )
+        if stage:
+            query = query.where(Customer.stage == stage)
+        return int(self._s.execute(query).scalar() or 0)
 
     def update(self, scope: TenantScope, customer_id: uuid.UUID, fields: dict) -> Customer:
         row = self.get(scope, customer_id)
@@ -547,13 +572,36 @@ class DealRepository:
             select(Deal).where(Deal.id == deal_id, Deal.license_id == scope.license_id)
         ).scalars().first()
 
-    def list_for_license(self, scope: TenantScope, *, stage: str | None = None) -> list[Deal]:
+    def list_for_license(
+        self, scope: TenantScope, *, stage: str | None = None, limit: int | None = None,
+    ) -> list[Deal]:
+        """Deals, newest first.
+
+        A page, and the total it was taken from. Both routes returned EVERY
+        row with no ceiling at all: measured 17 ก.ย. 2569, the deal list was
+        480 KB and 3,001 queries at 3,000 deals, and the customer list has
+        the same shape with nothing to stop it. A silent truncation would be
+        worse than no limit — the caller has to be able to say "showing 200
+        of 3,000" — so the count comes back with the page.
+        """
         query = select(Deal).where(
             Deal.license_id == scope.license_id, Deal.archived_at.is_(None),
         )
         if stage:
             query = query.where(Deal.stage == stage)
-        return list(self._s.execute(query.order_by(Deal.created_at.desc())).scalars())
+        query = query.order_by(Deal.created_at.desc(), Deal.id.desc())
+        if limit is not None:
+            query = query.limit(max(1, int(limit)))
+        return list(self._s.execute(query).scalars())
+
+    def count_for_license(self, scope: TenantScope, *, stage: str | None = None) -> int:
+        """How many there are, so a page can say what it left out."""
+        query = select(func.count()).select_from(Deal).where(
+            Deal.license_id == scope.license_id, Deal.archived_at.is_(None),
+        )
+        if stage:
+            query = query.where(Deal.stage == stage)
+        return int(self._s.execute(query).scalar() or 0)
 
     def list_for_contact(self, scope: TenantScope, contact_id: uuid.UUID) -> list[Deal]:
         """One customer's deals in this tenant — their purchase history."""

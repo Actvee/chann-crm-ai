@@ -70,7 +70,7 @@ def pushes(monkeypatch):
     """Every LINE push the code attempts, captured."""
     sent: list[tuple] = []
 
-    async def fake_push_text(oa, to, text, client=None):
+    async def fake_push_text(oa, to, text, client=None, quick_reply=None):
         sent.append(("text", oa, to, text))
         return [f"msg-{len(sent)}"]
 

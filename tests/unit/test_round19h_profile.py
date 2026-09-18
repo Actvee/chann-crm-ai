@@ -12,6 +12,7 @@ import pytest
 
 from chann_app.config import settings
 from chann_app.services import live_chat
+from chann_app.services import notify as _notify_mod
 from chann_app.services.chat import _profile_values_in, handle_chat_message
 from test_phase6_chat import FakeDataClient, _ctx
 from test_round18e_followups import _reads
@@ -43,8 +44,7 @@ def pushes(monkeypatch):
         sent.append((oa, to, messages))
         return ["mid"]
 
-    monkeypatch.setattr(live_chat, "push_text", fake_push_text)
-    monkeypatch.setattr(live_chat, "push_messages", fake_push_messages)
+    monkeypatch.setattr(_notify_mod, "push_text", fake_push_text)
     return sent
 
 

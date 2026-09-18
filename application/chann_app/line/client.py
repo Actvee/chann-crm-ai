@@ -7,6 +7,7 @@ know the wire shape, and every existing call site stays correct.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 import uuid
@@ -96,6 +97,41 @@ def quick_reply_item(label: str, text: str | None = None) -> dict:
     }
 
 
+#: 429 means "ask again in a moment", not "this cannot be sent" — and the
+#: difference was being thrown away. Every status at or above 400 raised
+#: immediately, and the callers swallow that on purpose (notify.py says
+#: "Deliberately swallowed"), which is right for a LINE outage and wrong
+#: for a rate limit: the message was simply lost, silently, with nothing
+#: but a log line. That matters now that the shops on this deployment are
+#: real (18 ก.ย. 2569).
+#:
+#: Retrying is safe because X-Line-Retry-Key is generated ONCE per _send
+#: and reused for every attempt: LINE returns the original result instead
+#: of delivering the message twice. A key generated per ATTEMPT would turn
+#: this fix into duplicate messages.
+_RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+_RETRY_ATTEMPTS = 3
+#: Waits between attempts. Kept short on purpose: a reply is answered
+#: inside a LINE webhook, and a slow answer is its own failure.
+_RETRY_BACKOFF_S = (0.5, 2.0)
+#: LINE may say when to come back. Honour it, but never wait longer than
+#: the webhook can afford.
+_RETRY_AFTER_CAP_S = 5.0
+
+
+def _retry_after_seconds(response: httpx.Response) -> float | None:
+    """What LINE asked us to wait, capped, or None if it did not say."""
+    raw = response.headers.get("Retry-After") or response.headers.get("retry-after")
+    if not raw:
+        return None
+    try:
+        return max(0.0, min(float(raw), _RETRY_AFTER_CAP_S))
+    except (TypeError, ValueError):
+        # LINE can send an HTTP-date instead of seconds; a fixed short wait
+        # beats parsing it wrong and sleeping until tomorrow.
+        return _RETRY_BACKOFF_S[0]
+
+
 async def _send(
     url: str, oa: str, payload: dict, client: httpx.AsyncClient | None, what: str,
 ) -> list[str]:
@@ -116,22 +152,37 @@ async def _send(
 
     owns_client = client is None
     client = client or httpx.AsyncClient(timeout=10.0)
+    # One key for the whole call, reused by every attempt — this is what
+    # makes a retry idempotent rather than a second message.
+    retry_key = str(uuid.uuid4())
     try:
-        response = await client.post(
-            url,
-            headers={
-                "Authorization": f"Bearer {access_token}",
-                # Required for LINE to return sentMessages. Also makes the
-                # send idempotent, which matters because a webhook that
-                # times out is retried by LINE.
-                "X-Line-Retry-Key": str(uuid.uuid4()),
-            },
-            json=payload,
-        )
-        if response.status_code >= 400:
-            raise LineReplyError(
-                f"LINE {what} failed: {response.status_code} {response.text[:200]}"
+        for attempt in range(_RETRY_ATTEMPTS):
+            response = await client.post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    # Required for LINE to return sentMessages. Also makes
+                    # the send idempotent, which matters because a webhook
+                    # that times out is retried by LINE.
+                    "X-Line-Retry-Key": retry_key,
+                },
+                json=payload,
             )
+            if response.status_code < 400:
+                break
+            last_attempt = attempt == _RETRY_ATTEMPTS - 1
+            if response.status_code not in _RETRY_STATUSES or last_attempt:
+                raise LineReplyError(
+                    f"LINE {what} failed: {response.status_code} {response.text[:200]}"
+                )
+            wait = _retry_after_seconds(response)
+            if wait is None:
+                wait = _RETRY_BACKOFF_S[min(attempt, len(_RETRY_BACKOFF_S) - 1)]
+            log.warning(
+                "LINE %s got %s — retrying in %.1fs (attempt %d of %d)",
+                what, response.status_code, wait, attempt + 2, _RETRY_ATTEMPTS,
+            )
+            await asyncio.sleep(wait)
         try:
             sent = (response.json() or {}).get("sentMessages") or []
             return [str(m.get("id")) for m in sent if m.get("id")]

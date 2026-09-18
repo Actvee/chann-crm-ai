@@ -19,6 +19,7 @@ mentioned it).
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import date, datetime, time, timedelta, timezone
 
@@ -185,6 +186,36 @@ async def _describe_entity(
     return label
 
 
+#: The 08:00 digest used to leave in one burst: every person in every shop
+#: at the same instant, through three LINE channels the whole platform
+#: shares. Owner, 18 ก.ย. 2569: "อยากให้หน่วงเวลาแต่ละร้านออกไปซักหน่อย
+#: เพื่อไม่ให้ชนกัน".
+#:
+#: Spread rather than split: the one-message-per-person rule stays exactly
+#: as it was — a person in two shops still gets ONE digest — and what
+#: changes is only the order they leave in and a small gap between them.
+#: Shops are ordered by a slot derived from the licence id, so a given shop
+#: lands in the same part of the window every morning and support can
+#: answer "your shop goes out around 08:02" rather than "sometime".
+_SEND_GAP_S = 0.25
+#: However many people there are, the run may not outlive the window it was
+#: given. At 0.25s this covers 2,400 people; beyond that the gap shrinks
+#: rather than the send being dropped.
+_SEND_WINDOW_S = 600.0
+
+
+def _shop_slot(license_id: str) -> int:
+    """A stable position in the window for one shop.
+
+    Deliberately not random and not time-based: the same shop must get the
+    same slot tomorrow, or "my reminders come at a different time every
+    day" becomes a support question nobody can answer.
+    """
+    import hashlib
+
+    return int(hashlib.sha256(str(license_id).encode("utf-8")).hexdigest()[:8], 16)
+
+
 async def sweep_due_follow_ups(client: DataClient, *, days: int = 0) -> dict:
     """Send each person ONE message listing everything they owe today.
 
@@ -310,7 +341,23 @@ async def sweep_due_follow_ups(client: DataClient, *, days: int = 0) -> dict:
                 "subject": (item.get("notes") or "").strip(),
             })
 
-    for owner, items in per_person.items():
+    # Shops interleave instead of queueing behind one another, and the gap
+    # shrinks if this shop-morning is unusually busy so the run still fits
+    # its window.
+    ordered = sorted(
+        per_person.items(),
+        key=lambda kv: (_shop_slot(kv[1][0]["license_id"]), kv[0]),
+    )
+    gap = _SEND_GAP_S
+    if ordered and gap * len(ordered) > _SEND_WINDOW_S:
+        gap = _SEND_WINDOW_S / len(ordered)
+
+    for sent_so_far, (owner, items) in enumerate(ordered):
+        # Not before the first one: an empty morning must still answer at
+        # once, and the gap belongs BETWEEN sends, not in front of them.
+        if sent_so_far:
+            await asyncio.sleep(gap)
+
         # Timed work first and in clock order, then whole-day items: someone
         # reading this at 08:00 wants to know what is coming and when.
         items.sort(key=lambda i: (i["due_time"] is None, str(i["due_time"] or "")))

@@ -111,7 +111,7 @@ def field_shop(migrated_db, monkeypatch):
 
     pushed: list[tuple] = []
 
-    async def fake_push_text(oa, to, text, client=None):
+    async def fake_push_text(oa, to, text, client=None, quick_reply=None):
         pushed.append((oa, to, text))
         return [f"msg-{len(pushed)}"]
 

@@ -1371,6 +1371,15 @@ class FakeDataClient:
             return [c for c in self._customers if c["stage"] == stage]
         return list(self._customers)
 
+    async def list_customers_with_total(self, license_id, stage=None, limit=None):
+        """Page and true total, the way the real client reads them from the
+        body and X-Total-Count. The fake caps too — one that returned
+        everything while production capped is exactly the generosity that
+        hid the ticket paging bug (round 20h)."""
+        rows = await self.list_customers(license_id, stage)
+        total = len(rows)
+        return (rows[: int(limit)] if limit else rows), total
+
     async def update_customer(self, license_id, customer_id, fields, actor_id=None):
         self.recorded.append(("update_customer", license_id, customer_id, fields, actor_id))
         if self._raises:
@@ -1436,6 +1445,11 @@ class FakeDataClient:
         if stage:
             return [d for d in self._deals if d["stage"] == stage]
         return list(self._deals)
+
+    async def list_deals_with_total(self, license_id, stage=None, limit=None):
+        rows = await self.list_deals(license_id, stage)
+        total = len(rows)
+        return (rows[: int(limit)] if limit else rows), total
 
     async def list_products(self, license_id, *args, **kwargs):
         self.recorded.append(("list_products", license_id))

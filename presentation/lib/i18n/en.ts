@@ -113,6 +113,7 @@ export const en: Dictionary = {
     },
     opening: "Opening…",
     noMatch: "No matches",
+      showingOf: "Showing {shown} of {total} — narrow it with the filters above",
     keepTyping: "Keep typing to narrow the list",
     saving: "Saving…",
     working: "Working…",

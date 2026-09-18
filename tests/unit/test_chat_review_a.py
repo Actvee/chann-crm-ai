@@ -26,6 +26,7 @@ from chann_app.config import settings  # noqa: E402
 from chann_app.data_client import DataTierError  # noqa: E402
 from chann_app.services import chat  # noqa: E402
 from chann_app.services import live_chat  # noqa: E402
+from chann_app.services import notify as _notify_mod
 from chann_app.services import registration  # noqa: E402
 from chann_app.services.chat import handle_chat_message, maybe_handle_storefront  # noqa: E402
 from chann_app.services.identity import ResolvedContext, TenantResolution  # noqa: E402
@@ -172,9 +173,9 @@ class TestA2CancelButtonBeatsTheAddressPrompt:
 
 class TestA14LiveChatDoesNotSwallowTheReportFlow:
     async def test_cancel_confirm_during_a_conversation_cancels(self, monkeypatch):
-        async def _push(oa, to, text, client=None):
+        async def _push(oa, to, text, client=None, quick_reply=None):
             return ["m"]
-        monkeypatch.setattr(live_chat, "push_text", _push)
+        monkeypatch.setattr(_notify_mod, "push_text", _push)
         client = ChatFake(role="customer", permission_keys=[])
         client._tickets = [_ticket(1, status="open")]
         await say(client, "customer", "คุยกับร้าน")
@@ -183,9 +184,9 @@ class TestA14LiveChatDoesNotSwallowTheReportFlow:
         assert not [r for r in client.recorded if r[0] == "add_chat_message" and "ยกเลิก" in str(r)]
 
     async def test_the_fault_asked_for_by_the_bot_is_filed_not_chatted(self, monkeypatch):
-        async def _push(oa, to, text, client=None):
+        async def _push(oa, to, text, client=None, quick_reply=None):
             return ["m"]
-        monkeypatch.setattr(live_chat, "push_text", _push)
+        monkeypatch.setattr(_notify_mod, "push_text", _push)
         client = ChatFake(role="customer", permission_keys=[])
         client._warranties = [{"id": "w-1", "serial_number": "SN1", "product_name": "แอร์", "status": "active", "customer_chann_uid": ME}]
         await say(client, "customer", "คุยกับร้าน")
@@ -304,9 +305,9 @@ class TestA7ContactTheShop:
         assert client._pending["entity"] == "customer_contact"
 
     async def test_the_next_line_reaches_the_shop_and_opens_no_repair(self, monkeypatch):
-        async def _push(oa, to, text, client=None):
+        async def _push(oa, to, text, client=None, quick_reply=None):
             return ["m"]
-        monkeypatch.setattr(live_chat, "push_text", _push)
+        monkeypatch.setattr(_notify_mod, "push_text", _push)
         client = self._client()
         await say(client, "customer", "ติดต่อร้าน")
         reply = await say(client, "customer", "อยากสอบถามค่าบริการล้างแอร์")
@@ -413,7 +414,7 @@ class TestA15WhoIsTold:
         ]
         client._line_targets = {"CHN-CS": "U-cs", "CHN-T": "U-tech"}
         pushed = []
-        async def _push(oa, to, text, client=None):
+        async def _push(oa, to, text, client=None, quick_reply=None):
             pushed.append((oa, to)); return ["m"]
         monkeypatch.setattr(chat._notify_mod, "push_text", _push)
         await chat._notify_ticket_change(client, LICENSE_ID, "t1", "ลูกค้ายกเลิกงาน T-2026-0001", "th")
@@ -698,7 +699,7 @@ class TestLowList:
 class TestE13DealStageNotifiesTheOwner:
     async def test_the_owner_hears_when_someone_else_moves_the_deal(self, monkeypatch):
         pushed = []
-        async def _push(oa, to, text, client=None):
+        async def _push(oa, to, text, client=None, quick_reply=None):
             pushed.append((oa, to, text)); return ["m"]
         monkeypatch.setattr(chat._notify_mod, "push_text", _push)
         client = _sales(deals=[{"id": "11111111-1111-1111-1111-111111111111", "deal_id": "D-2026-0001", "stage": "new",

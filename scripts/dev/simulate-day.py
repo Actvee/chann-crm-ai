@@ -287,7 +287,11 @@ async def approval_day():
     print("\n=== PHASE 14: check-out → approve → survey ===")
     from chann_app.services import approval as approval_service, notify as notify_module
     pushed = []
-    async def _push_text(oa, to, text, client=None):
+    # quick_reply arrived in round 20j: the customer-facing pushes carry a
+    # button now, and send_notification passes it through. A stub that does
+    # not accept it raises inside a swallowed try, so the push vanishes and
+    # only this simulator notices.
+    async def _push_text(oa, to, text, client=None, quick_reply=None):
         pushed.append((oa, to, text)); return [f"m{len(pushed)}"]
     async def _push_messages(oa, to, messages, client=None):
         pushed.append((oa, to, messages)); return [f"m{len(pushed)}"]

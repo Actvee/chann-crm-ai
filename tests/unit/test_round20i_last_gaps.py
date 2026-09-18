@@ -282,8 +282,28 @@ class TestALoadingListNeverLooksLikeAnEmptyOne:
         text = CHATS.read_text(encoding="utf-8")
         assert "chat-row-skeleton" in text
         assert 'aria-busy="true"' in text
-        # The empty state is only reachable AFTER loading is over.
-        assert "loadingList && sessions.length === 0 ?" in text
+        # The empty state is only reachable AFTER loading is over — and the
+        # skeleton covers the WHOLE wait, not just an empty list. Keeping
+        # the previous tab's rows on screen under the new tab's heading was
+        # the other half of "it came back" (owner, 18 ก.ย. 2569).
+        assert "{loadingList ? (" in text
+
+    def test_a_stale_reply_cannot_overwrite_a_newer_one(self):
+        """Two requests can be in flight at once — a tab switch and the
+        eight-second poll that started just before it. Without a sequence
+        number the slower one wins whatever tab it was for, and the first
+        `finally` puts the skeleton away while the other is still coming:
+        the empty state flashes. That is the symptom that came back."""
+        text = CHATS.read_text(encoding="utf-8")
+        assert "requestSeq" in text
+        assert "const seq = ++requestSeq.current;" in text
+        # Guarded after the fetch AND after the body is read, because both
+        # are await points.
+        assert text.count("if (seq !== requestSeq.current) return;") >= 2
+
+    def test_only_the_newest_request_may_stop_the_spinner(self):
+        text = CHATS.read_text(encoding="utf-8")
+        assert "if (announce && seq === requestSeq.current) setLoadingList(false);" in text
 
     def test_the_poll_does_not_raise_it(self):
         """A list that blinks into skeletons every eight seconds is worse

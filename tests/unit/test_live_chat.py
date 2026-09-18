@@ -126,13 +126,24 @@ def _ai(monkeypatch):
 
 @pytest.fixture
 def pushes(monkeypatch):
+    """Every LINE push this module makes, caught at the ONE place they now
+    all go through.
+
+    It used to patch live_chat.push_text, which stopped being the seam in
+    round 20j: the customer-facing pushes were rerouted through
+    send_notification so they leave a countable row (OA audit, 18 ก.ย.
+    2569). Patching the old name would have made this fixture silently
+    catch nothing.
+    """
+    from chann_app.services import notify
+
     sent: list[tuple] = []
 
     async def fake_push(oa, to, text, client=None, quick_reply=None):
         sent.append((oa, to, text))
         return ["mid"]
 
-    monkeypatch.setattr(live_chat, "push_text", fake_push)
+    monkeypatch.setattr(notify, "push_text", fake_push)
     return sent
 
 
@@ -215,8 +226,13 @@ class TestAgentReply:
             member_id="m-cs", text="สวัสดีครับ ยินดีให้บริการ",
         )
         assert ("assign_chat_session", session["id"], "m-cs") in client.recorded
-        assert pushes and pushes[0][0] == "customer" and "ร้านเย็นสบาย" in pushes[0][2]
-        assert "ยินดีให้บริการ" in pushes[0][2]
+        # Found by channel, not by position: since round 20j the fixture
+        # catches the staff notification too, because every push — the
+        # customer's included — goes through the one seam now.
+        to_customer = [p for p in pushes if p[0] == "customer"]
+        assert to_customer, pushes
+        assert "ร้านเย็นสบาย" in to_customer[0][2]
+        assert "ยินดีให้บริการ" in to_customer[0][2]
 
     async def test_a_customer_line_reaches_only_the_owner_of_the_conversation(self, pushes):
         client = ChatFake(role="customer", permission_keys=[])
@@ -243,7 +259,11 @@ class TestSweep:
         result = await live_chat.sweep(client)
         assert result == {"escalated": 1, "timed_out": 1}
         told = [r for r in client.recorded if r[0] == "create_notification"]
-        assert len(told) == 1 and "CHN-CS" in str(told[0]) and "ยังไม่ได้รับคำตอบ" in str(told[0])
+        # The escalation to the agent, plus the two customer lines that are
+        # now recorded as well (round 20j: a push nobody records cannot be
+        # counted against a shop's quota).
+        escalations = [r for r in told if "ยังไม่ได้รับคำตอบ" in str(r)]
+        assert len(escalations) == 1 and "CHN-CS" in str(escalations[0])
         # The parked conversation is pushed first, the timed-out one after.
         assert any("ปิดอัตโนมัติ" in p[2] for p in pushes)
 

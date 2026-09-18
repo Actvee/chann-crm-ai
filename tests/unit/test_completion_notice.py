@@ -81,7 +81,7 @@ def pushes(monkeypatch):
     """Every LINE push attempted, captured — nothing leaves the process."""
     sent: list[tuple] = []
 
-    async def fake_push_text(oa, to, text, client=None):
+    async def fake_push_text(oa, to, text, client=None, quick_reply=None):
         sent.append(("text", oa, to, text))
         return [f"msg-{len(sent)}"]
 
@@ -158,7 +158,7 @@ class TestChatCheckOutTellsTheCustomer:
 
         monkeypatch.setattr(c, "create_notification", watched)
 
-        async def failing_push(oa, to, text, client=None):
+        async def failing_push(oa, to, text, client=None, quick_reply=None):
             order.append("push")
             from chann_app.line.client import LineReplyError
 

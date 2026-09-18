@@ -20,6 +20,12 @@ export class ApplicationError extends Error {
 export type ApplicationResponse<T> = {
   data: T;
   status: number;
+  /** How many rows there really are, when the Application Tier says so in
+   *  X-Total-Count. A capped list that cannot report its own total is a
+   *  screen confidently showing "500 of 500" for a shop with 3,000
+   *  (round 20j) — the same shape of lie the ticket lookup carried until
+   *  round 20h. Undefined when the endpoint does not paginate. */
+  total?: number;
 };
 
 export async function callApplicationResponse<T>(
@@ -50,10 +56,16 @@ export async function callApplicationResponse<T>(
     }
     throw new ApplicationError(res.status, body);
   }
+  const rawTotal = res.headers.get("X-Total-Count");
+  const total = rawTotal === null ? undefined : Number(rawTotal);
   if (res.status === 204) {
     return { data: undefined as T, status: res.status };
   }
-  return { data: (await res.json()) as T, status: res.status };
+  return {
+    data: (await res.json()) as T,
+    status: res.status,
+    total: Number.isFinite(total) ? total : undefined,
+  };
 }
 
 /**

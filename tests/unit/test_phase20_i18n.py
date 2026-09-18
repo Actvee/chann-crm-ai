@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT / "application"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from chann_app.services import live_chat, notify, onboarding, storefront  # noqa: E402
+from chann_app.services import notify as _notify_mod
 from chann_app.services.notify import send_notification  # noqa: E402
 from test_live_chat import ChatFake  # noqa: E402
 from test_phase6_chat import FakeDataClient, LICENSE_ID  # noqa: E402
@@ -43,7 +44,7 @@ def pushed(monkeypatch):
         return ["mid"]
 
     monkeypatch.setattr(notify, "push_text", fake_push)
-    monkeypatch.setattr(live_chat, "push_text", fake_push)
+    monkeypatch.setattr(_notify_mod, "push_text", fake_push)
     return sent
 
 

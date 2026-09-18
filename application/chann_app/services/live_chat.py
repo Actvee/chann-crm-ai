@@ -16,8 +16,13 @@ import logging
 from datetime import datetime, timezone
 
 from ..data_client import DataClient, DataTierError
-from ..line.client import LineReplyError, push_messages, push_text, quick_reply_item, text_message
+from ..line.client import LineReplyError, quick_reply_item
 from .notify import send_notification
+
+#: The type the live-chat customer pushes are recorded under. A plain
+#: string column, no CHECK constraint (unlike audit_log.action), but it is
+#: named here once so the tally and the code cannot disagree about it.
+CHAT_LINE_TYPE = "chat_line"
 
 log = logging.getLogger(__name__)
 
@@ -134,18 +139,36 @@ async def _customer_language(client: DataClient, chann_uid: str) -> str:
 
 
 async def _push_customer(
-    client: DataClient, *, chann_uid: str, text: str, text_en: str | None = None,
+    client: DataClient, *, license_id: str, chann_uid: str, text: str,
+    text_en: str | None = None,
 ) -> bool:
-    """A line to the customer's LINE, in the language they read."""
+    """A line to the customer's LINE, in the language they read.
+
+    Through send_notification, not push_text: a push that leaves no
+    notification row cannot be counted, and four customer-facing pushes
+    were invisible to any per-shop tally for exactly that reason (OA audit,
+    18 ก.ย. 2569). `delivery_dashboard=False` keeps it out of the bell —
+    this is a LINE message, not a dashboard item — while still leaving the
+    row that makes it countable.
+    """
     try:
         line_uid = await client.line_target_of(chann_uid)
         if not line_uid:
             return False
-        if text_en and await _customer_language(client, chann_uid) == "en":
-            text = text_en
-        # Every line from the shop carries the way out — the tester
-        # (16 ก.ย. 2569) asked for "จบการสนทนา" to be reachable all along.
-        await push_text("customer", line_uid, text, quick_reply=[quick_reply_item("จบการสนทนา", "จบการสนทนา")])
+        await send_notification(
+            client,
+            license_id=str(license_id),
+            target_chann_uid=chann_uid,
+            target_line_user_id=line_uid,
+            type=CHAT_LINE_TYPE,
+            message=text,
+            message_en=text_en,
+            delivery_dashboard=False,
+            oa="customer",
+            # Every line from the shop carries the way out — the tester
+            # (16 ก.ย. 2569) asked for "จบการสนทนา" to be reachable all along.
+            quick_reply=[quick_reply_item("จบการสนทนา", "จบการสนทนา")],
+        )
         return True
     except (LineReplyError, Exception):  # noqa: BLE001
         log.exception("could not push a chat line to %s", chann_uid)
@@ -264,7 +287,7 @@ async def start_session_by_shop(
         )
     else:
         await _push_customer_invite(
-            client, chann_uid=customer_chann_uid,
+            client, license_id=str(license_id), chann_uid=customer_chann_uid,
             text=f"💬 {shop} อยากคุยกับคุณครับ แตะ \"คุยกับร้าน\" เพื่อเปิดแชท หรือพิมพ์ข้อความมาได้เลย",
             text_en=f"💬 {shop} would like to talk to you — tap \"talk to the shop\" or just type here.",
         )
@@ -348,7 +371,10 @@ async def agent_reply(
             f"💬 {shop} has answered:\n\"{preview}\"\n\n"
             "Reopen the chat with this shop? Tap \"talk to the shop\" (their answer is shown again)."
         )
-        await _push_customer_invite(client, chann_uid=str(session["customer_chann_uid"]), text=th, text_en=en)
+        await _push_customer_invite(
+            client, license_id=str(license_id),
+            chann_uid=str(session["customer_chann_uid"]), text=th, text_en=en,
+        )
         return message
     if member_id and str(session.get("assigned_to") or "") != str(member_id):
         try:
@@ -364,7 +390,7 @@ async def agent_reply(
     )
     shop = await company_name(client, license_id)
     await _push_customer(
-        client, chann_uid=str(session["customer_chann_uid"]),
+        client, license_id=str(license_id), chann_uid=str(session["customer_chann_uid"]),
         text=f"💬 {shop}: {text.strip()}\n(ตอบกลับได้เลยในแชทนี้ · พิมพ์ \"จบการสนทนา\" เมื่อเสร็จ)",
         text_en=f"💬 {shop}: {text.strip()}\n(reply right here · type \"end chat\" when done)",
     )
@@ -372,18 +398,25 @@ async def agent_reply(
 
 
 async def _push_customer_invite(
-    client: DataClient, *, chann_uid: str, text: str, text_en: str | None = None,
+    client: DataClient, *, license_id: str, chann_uid: str, text: str,
+    text_en: str | None = None,
 ) -> bool:
     """A push with the one button that reopens the conversation."""
     try:
         line_uid = await client.line_target_of(chann_uid)
         if not line_uid:
             return False
-        if text_en and await _customer_language(client, chann_uid) == "en":
-            text = text_en
-        await push_messages(
-            "customer", line_uid,
-            [text_message(text, quick_reply=[quick_reply_item("คุยกับร้าน", "คุยกับร้าน")])],
+        await send_notification(
+            client,
+            license_id=str(license_id),
+            target_chann_uid=chann_uid,
+            target_line_user_id=line_uid,
+            type=CHAT_LINE_TYPE,
+            message=text,
+            message_en=text_en,
+            delivery_dashboard=False,
+            oa="customer",
+            quick_reply=[quick_reply_item("คุยกับร้าน", "คุยกับร้าน")],
         )
         return True
     except (LineReplyError, Exception):  # noqa: BLE001
@@ -400,7 +433,7 @@ async def close_session(
     if by == "agent":
         shop = await company_name(client, license_id)
         await _push_customer(
-            client, chann_uid=str(session["customer_chann_uid"]),
+            client, license_id=str(license_id), chann_uid=str(session["customer_chann_uid"]),
             text=f"💬 {shop} ปิดการสนทนาแล้ว ขอบคุณครับ พิมพ์ \"คุยกับร้าน\" ได้อีกเมื่อต้องการ",
             text_en=f"💬 {shop} closed the conversation. Thank you — type \"talk to the shop\" any time.",
         )
@@ -474,7 +507,8 @@ async def sweep(client: DataClient) -> dict:
             log.warning("could not park an unanswered chat: %s", exc)
         shop = await company_name(client, license_id)
         await _push_customer(
-            client, chann_uid=str(session.get("customer_chann_uid") or ""),
+            client, license_id=str(license_id),
+            chann_uid=str(session.get("customer_chann_uid") or ""),
             text=(
                 f"💬 ขออภัยครับ เจ้าหน้าที่ของ {shop} ยังไม่ว่างตอบในตอนนี้ จะติดต่อกลับโดยเร็ว "
                 "ขอปิดการสนทนาไว้ก่อน — เมื่อร้านตอบ ระบบจะแจ้งให้เปิดแชทต่อ"
@@ -489,7 +523,8 @@ async def sweep(client: DataClient) -> dict:
         license_id = str(session.get("license_id"))
         shop = await company_name(client, license_id)
         await _push_customer(
-            client, chann_uid=str(session.get("customer_chann_uid") or ""),
+            client, license_id=str(license_id),
+            chann_uid=str(session.get("customer_chann_uid") or ""),
             text=f"💬 การสนทนากับ {shop} ปิดอัตโนมัติเพราะไม่มีข้อความสักพัก พิมพ์ \"คุยกับร้าน\" ได้อีกเมื่อต้องการ",
             text_en=f"💬 Your conversation with {shop} closed after a quiet while. Type \"talk to the shop\" any time.",
         )

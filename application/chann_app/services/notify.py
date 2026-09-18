@@ -81,8 +81,19 @@ async def send_notification(
     delivery_dashboard: bool = True,
     language: str = "th",
     oa: str | None = None,
+    quick_reply: list | None = None,
 ) -> dict:
-    """Record, then push. Returns the stored notification either way."""
+    """Record, then push. Returns the stored notification either way.
+
+    `quick_reply` exists so that the pushes which carry a button — the
+    live-chat lines that offer "จบการสนทนา" and "คุยกับร้าน" — can come
+    through HERE rather than calling push_text directly. Four of them did,
+    which meant four customer-facing pushes left no notification row: they
+    could not be counted, so a per-shop push quota would have read low
+    (OA audit, 18 ก.ย. 2569). Routing them through this function without
+    carrying the button would have been a worse trade — a customer told
+    the conversation ended, with no way to reopen it.
+    """
     # Phase 20 i18n: the READER's language, not the sender's. A caller that
     # supplies message_en is asking for the recipient's preference to
     # decide; one that has only one text gets no lookup, nothing to gain.
@@ -118,7 +129,10 @@ async def send_notification(
 
     text = message_en if (language == "en" and message_en) else message
     try:
-        sent_ids = await push_text(oa or TYPE_TO_OA.get(type, DEFAULT_OA), target_line_user_id, text)
+        sent_ids = await push_text(
+            oa or TYPE_TO_OA.get(type, DEFAULT_OA), target_line_user_id, text,
+            quick_reply=quick_reply,
+        )
     except LineReplyError as exc:
         # Deliberately swallowed: the notification is already durable, and
         # raising here would fail whatever business action triggered it —

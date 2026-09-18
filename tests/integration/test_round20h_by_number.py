@@ -217,3 +217,95 @@ class TestDealLinesComeBackInOneQuery:
 
         with Session(migrated_db) as session:
             assert DealRepository(session).products_for([]) == {}
+
+
+@pytest.mark.usefixtures("migrated_db")
+class TestTheListsHaveACeilingAndSayWhatTheyLeftOut:
+    """Round 20j — `list_customers` and `list_deals` returned EVERY row with
+    no ceiling at all, and the deal one was 480 KB across the tier boundary
+    at 3,000 deals (measured 17 ก.ย. 2569).
+
+    A limit on its own would have been the ticket bug again: a page that
+    looks like the whole list is how a shop past a hundred jobs was told
+    its job did not exist. So the count travels with the page.
+    """
+
+    @pytest.fixture(scope="class")
+    def crowded(self, migrated_db):
+        from chann_data.models import ChannIdentity
+        from chann_data.repositories.phase65 import RegistrationRepository
+        from chann_data.repositories.phase9 import CustomerRepository
+        from chann_data.repositories.tenant_scope import TenantScope
+
+        with Session(migrated_db) as session:
+            if session.get(ChannIdentity, "CHN-20J-OWNER") is None:
+                session.add(ChannIdentity(
+                    chann_uid="CHN-20J-OWNER", line_user_id="line-20j-owner",
+                    primary_role="sales",
+                ))
+                session.commit()
+        with Session(migrated_db) as session:
+            lic = RegistrationRepository(session).create_license(
+                company_name="ร้านลูกค้าเยอะ", created_by_chann_uid="CHN-20J-OWNER",
+            )
+            session.commit()
+            license_id = lic.id
+        scope = TenantScope(license_id=license_id)
+        with Session(migrated_db) as session:
+            repo = CustomerRepository(session)
+            for n in range(25):
+                repo.create(scope, first_name="ก", last_name=f"ข{n}", phone=f"0810000{n:03d}")
+            session.commit()
+        return str(license_id)
+
+    def test_the_page_is_capped(self, api, crowded):
+        client, headers = api
+        r = client.get(
+            f"/internal/v1/licenses/{crowded}/customers", headers=headers, params={"limit": 10},
+        )
+        assert r.status_code == 200, r.text
+        assert len(r.json()) == 10
+
+    def test_the_total_comes_with_it(self, api, crowded):
+        """Without this the caller cannot tell a short list from a whole one."""
+        client, headers = api
+        r = client.get(
+            f"/internal/v1/licenses/{crowded}/customers", headers=headers, params={"limit": 10},
+        )
+        assert r.headers["X-Total-Count"] == "25"
+
+    def test_an_absurd_limit_is_capped_not_obeyed(self, api, crowded):
+        client, headers = api
+        r = client.get(
+            f"/internal/v1/licenses/{crowded}/customers", headers=headers,
+            params={"limit": 999999},
+        )
+        assert r.status_code == 200 and len(r.json()) == 25
+
+    def test_the_default_still_returns_a_small_shop_whole(self, api, crowded):
+        """25 customers is every shop we have. Nothing may change for them."""
+        client, headers = api
+        r = client.get(f"/internal/v1/licenses/{crowded}/customers", headers=headers)
+        assert len(r.json()) == 25
+        assert r.headers["X-Total-Count"] == "25"
+
+    def test_the_page_boundary_does_not_repeat_or_skip_a_row(self, migrated_db, crowded):
+        """Rows created in one transaction share created_at, so ordering on
+        it alone makes the boundary arbitrary — id breaks the tie."""
+        from chann_data.repositories.phase9 import CustomerRepository
+        from chann_data.repositories.tenant_scope import TenantScope
+        import uuid as _uuid
+
+        scope = TenantScope(license_id=_uuid.UUID(crowded))
+        with Session(migrated_db) as session:
+            repo = CustomerRepository(session)
+            first = [c.id for c in repo.list_for_license(scope, limit=10)]
+            again = [c.id for c in repo.list_for_license(scope, limit=10)]
+        assert first == again, "the same page came back in a different order"
+        assert len(set(first)) == 10
+
+    def test_deals_are_capped_and_counted_too(self, api, crowded):
+        client, headers = api
+        r = client.get(f"/internal/v1/licenses/{crowded}/deals", headers=headers, params={"limit": 5})
+        assert r.status_code == 200, r.text
+        assert "X-Total-Count" in r.headers

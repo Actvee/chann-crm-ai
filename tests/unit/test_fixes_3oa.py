@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "application"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from chann_app.services import live_chat  # noqa: E402
+from chann_app.services import notify as _notify_mod
 from chann_app.services.chat import handle_chat_message  # noqa: E402
 from chann_app.services.thai_datetime import local_today  # noqa: E402
 from test_live_chat import ChatFake  # noqa: E402
@@ -43,7 +44,7 @@ class TestLiveChatQuiet:
         async def fake_push(oa, to, text, client=None, quick_reply=None):
             return ["mid"]
 
-        monkeypatch.setattr(live_chat, "push_text", fake_push)
+        monkeypatch.setattr(_notify_mod, "push_text", fake_push)
         client = ChatFake(role="customer", permission_keys=[])
         await handle_chat_message(client, message="คุยกับร้าน", ctx=_ctx(primary_role="customer", oa="customer"))
         reply = await handle_chat_message(client, message="ราคาเท่าไหร่", ctx=_ctx(primary_role="customer", oa="customer"))

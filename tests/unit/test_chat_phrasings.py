@@ -372,7 +372,7 @@ class TestCustomerCatchAll:
         client._permission_keys = ["ticket.assign", "ticket.read"]
         client._line_targets = {"CHN-S-000009": "U-cs"}
         pushed = []
-        async def _push(oa, to, text, client=None):
+        async def _push(oa, to, text, client=None, quick_reply=None):
             pushed.append((oa, to, text)); return ["m1"]
         monkeypatch.setattr(chat._notify_mod, "push_text", _push)
         await say(client, "customer", "แอร์ไม่เย็น")
@@ -387,7 +387,7 @@ class TestWhoHears:
         client._tickets[0].update({"accept_status": "pending", "customer_chann_uid": "CHN-C-1"})
         client._line_targets = {"CHN-C-1": "U-cust"}
         pushed = []
-        async def _push(oa, to, text, client=None):
+        async def _push(oa, to, text, client=None, quick_reply=None):
             pushed.append((oa, to, text)); return ["m1"]
         monkeypatch.setattr(chat._notify_mod, "push_text", _push)
         await say(client, "technician", "รับงาน T-2026-0001")
@@ -400,7 +400,7 @@ class TestWhoHears:
         client._line_targets = {"CHN-T-1": "U-tech", "CHN-O-1": "U-owner", "CHN-C-1": "U-cust"}
         client._tickets[0]["customer_chann_uid"] = "CHN-C-1"
         pushed = []
-        async def _push(oa, to, text, client=None):
+        async def _push(oa, to, text, client=None, quick_reply=None):
             pushed.append((oa, to, text)); return ["m1"]
         monkeypatch.setattr(chat._notify_mod, "push_text", _push)
         await chat._notify_ticket_change(client, "L1", "t1", "งาน T-2026-0001 ถูกยกเลิกโดยร้าน", "th",
@@ -415,7 +415,7 @@ class TestWhoHears:
                            {"id": "o-1", "chann_uid": "CHN-O", "role": "owner", "status": "active"}]
         client._line_targets = {"CHN-CS": "U-cs", "CHN-O": "U-owner"}
         pushed = []
-        async def _push(oa, to, text, client=None):
+        async def _push(oa, to, text, client=None, quick_reply=None):
             pushed.append((oa, to, text)); return ["m1"]
         monkeypatch.setattr(chat._notify_mod, "push_text", _push)
         await chat._notify_new_ticket(client, "L1", "t1", "th")
