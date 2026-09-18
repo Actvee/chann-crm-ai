@@ -82,11 +82,19 @@
 /tmp/dv/bin/python -m pytest tests/unit tests/boundary -q     # ~650
 TEST_DATABASE_URL=... pytest tests/integration -q             # ~266 ต้องมี Postgres
 python scripts/dev/simulate-day.py ; simulate-edge-cases.py   # ต้อง "0 FINDINGS"
+OR_KEY=$(cat ~/.or_key) python scripts/dev/simulate-phrasings.py --real   # ถ้าแตะ chat — บังคับ
 python scripts/dev/check-parity.py                            # ต้องสะอาด
 python scripts/dev/check-{routes,client,perms,triggers,i18n-usage,chat-format,auth,placeholders,fields,methods}.py
 cd presentation && npm run typecheck && npm run build         # ถ้าแตะ UI
 ```
 เทียบผล check-* กับรอบก่อน: ควรต่างแค่ตัวเลข ถ้ามีบรรทัดใหม่ต้องอธิบายได้
+
+**`--real` ไม่ใช่ของเสริม** (18 ก.ย. 2569): `simulate-phrasings` ตอบ model call
+ด้วย mock เสมอ จึงรายงาน `0 long replies` มาทุกรอบทั้งที่ไม่เคยถามโมเดลเลย —
+พอยิงจริงครั้งแรกเจอทันทีว่าการ์ดลูกค้าตอบ 18 บรรทัด (เพดาน 15) และตัวเลข
+"ไม่ตรงคาด" คือ 12 ไม่ใช่ 6 · รันโหมดปกติในทุก gate (เร็ว คงที่) แต่**ก่อน deploy
+ทุกครั้งที่แตะ chat ต้องรัน `--real` และอ่านผลจริง** ไม่มี key แล้วสั่ง `--real`
+มันจะเตือนแล้วถอยไป offline ไม่เงียบ
 
 ### บทเรียนที่จ่ายแพงแล้ว (อย่าจ่ายซ้ำ)
 - **tier-seam bug มองไม่เห็นจาก log ของ tier ที่กำลังดู** — MemberOut ไม่ส่ง `id`,

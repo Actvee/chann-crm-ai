@@ -3510,18 +3510,57 @@ class TestACustomersCancelWaitsThroughAQuestion:
 
 
 class TestASearchWhileAProductListIsOpen:
+    """The numbers a customer types must belong to the list in front of them.
+
+    This test used to assert the opposite of its own name: after searching
+    for "พัดลม" it picked number 2 and expected the AIR CONDITIONER — the
+    second row of the PREVIOUS list. It passed because the fake's
+    `storefront_search` ignored the query and handed back the whole shelf
+    every time, so the list never actually changed and nothing here was
+    measuring replacement (18 ก.ย. 2569). With the fake filtering the way
+    the Data tier does, the search leaves one row, and "2" is out of range
+    — which is the proof the list was replaced.
+    """
+
+    @staticmethod
+    def _client():
+        from test_phase6_chat import FakeDataClient
+
+        return FakeDataClient(
+            role="customer", permission_keys=[],
+            storefront_results=[
+                {"product_name": "พัดลม 18 นิ้ว", "company_name": "บริษัททดสอบ", "license_id": "L1", "unit_price": "1200"},
+                {"product_name": "แอร์ 12000 BTU", "company_name": "บริษัททดสอบ", "license_id": "L1", "unit_price": "15900"},
+            ],
+        )
+
     @pytest.mark.asyncio
     async def test_a_new_search_replaces_the_list(self):
-        from test_phase6_chat import FakeDataClient, _ctx
+        from test_phase6_chat import _ctx
         from chann_app.services.chat import handle_chat_message
-        client = FakeDataClient(role="customer", permission_keys=[],
-                                storefront_results=[{"product_name": "พัดลม 18 นิ้ว", "company_name": "บริษัททดสอบ", "license_id": "L1", "unit_price": "1200"},
-                                                    {"product_name": "แอร์ 12000 BTU", "company_name": "บริษัททดสอบ", "license_id": "L1", "unit_price": "15900"}])
+        client = self._client()
         ctx = _ctx(oa="customer", primary_role="customer")
         first = await handle_chat_message(client, message="สินค้าทั้งหมด", ctx=ctx)
         assert "พิมพ์หมายเลข" in first.text, first.text
+        assert "แอร์ 12000 BTU" in first.text, first.text
         again = await handle_chat_message(client, message="ค้นหา พัดลม", ctx=ctx)
         assert "พัดลม" in again.text and "ยังไม่แน่ใจ" not in again.text, again.text
-        picked = await handle_chat_message(client, message="2", ctx=ctx)
-        assert "บันทึกความสนใจ" in picked.text and "แอร์ 12000 BTU" in picked.text, picked.text
+        # The search replaced the list: the air conditioner is gone from it.
+        assert "แอร์ 12000 BTU" not in again.text, again.text
+        picked = await handle_chat_message(client, message="1", ctx=ctx)
+        assert "บันทึกความสนใจ" in picked.text and "พัดลม 18 นิ้ว" in picked.text, picked.text
         assert [r for r in client.recorded if r[0] == "storefront_record_interest"], picked.text
+
+    @pytest.mark.asyncio
+    async def test_a_number_from_the_old_list_is_refused_not_guessed(self):
+        # The one that matters: a customer who was mid-scroll must not have
+        # their "2" silently spent on a product the new list never showed.
+        from test_phase6_chat import _ctx
+        from chann_app.services.chat import handle_chat_message
+        client = self._client()
+        ctx = _ctx(oa="customer", primary_role="customer")
+        await handle_chat_message(client, message="สินค้าทั้งหมด", ctx=ctx)
+        await handle_chat_message(client, message="ค้นหา พัดลม", ctx=ctx)
+        picked = await handle_chat_message(client, message="2", ctx=ctx)
+        assert "1-1" in picked.text, picked.text
+        assert not [r for r in client.recorded if r[0] == "storefront_record_interest"], picked.text

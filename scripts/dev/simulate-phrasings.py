@@ -19,7 +19,25 @@ sys.path.insert(0, os.path.join(ROOT, "application")); sys.path.insert(0, os.pat
 import httpx
 import test_phase6_chat as T
 from chann_app.config import settings
-settings.openrouter_api_key = "k"; settings.openrouter_model = "m"
+
+#: Plain: the model road is answered locally, so the run is fast and the
+#: same every time — which is what the gate wants. `--real`, with OR_KEY
+#: (or OPENROUTER_API_KEY) set, sends the same phrasings to the deployed
+#: model instead, which is the ONLY way the "ai" expectations below are
+#: actually measured rather than assumed (18 ก.ย. 2569). Until this
+#: existed, every `expected ai, got rule` line was read as a fact about
+#: the model that no model had been asked about.
+REAL = "--real" in sys.argv
+_KEY = os.environ.get("OR_KEY") or os.environ.get("OPENROUTER_API_KEY") or ""
+if REAL and _KEY:
+    settings.openrouter_api_key = _KEY
+    settings.openrouter_model = os.environ.get("OR_MODEL", "qwen/qwen3.6-35b-a3b")
+    print("=== asking the deployed model for real ===")
+else:
+    if REAL:
+        print("!! --real needs OR_KEY (or OPENROUTER_API_KEY) — falling back to offline")
+        REAL = False
+    settings.openrouter_api_key = "k"; settings.openrouter_model = "m"
 
 LONG_LINES, LONG_CHARS = 15, 700
 
@@ -41,10 +59,22 @@ def classify(text):
 
 
 class AiProbe:
-    """Answers every model call with "suggest" and remembers it was asked."""
+    """Remembers whether the model was asked — and, offline, answers for it.
+
+    The `calls` counter is what tells a rule answer from a model answer in
+    the table below, so it has to keep working in both modes. Offline it
+    is bumped by the mock; against the real model an event hook counts the
+    request on its way out.
+    """
     def __init__(self):
         self.calls = 0
-        self.client = httpx.AsyncClient(transport=httpx.MockTransport(self._handle))
+        if REAL:
+            self.client = httpx.AsyncClient(event_hooks={"request": [self._count]})
+        else:
+            self.client = httpx.AsyncClient(transport=httpx.MockTransport(self._handle))
+
+    async def _count(self, request):
+        self.calls += 1
 
     def _handle(self, request):
         self.calls += 1
@@ -244,6 +274,17 @@ async def customer():
     c = T.FakeDataClient(permission_keys=CUST_KEYS)
     c._warranties = [{"id": "w-1", "serial_number": "SN12345678", "product_name": "แอร์", "status": "active",
                       "customer_chann_uid": "CHN-S-000001", "warranty_end": "2027-01-01"}]
+    # The storefront the customer OA actually searches — `_products` is
+    # the shop's own catalogue and a customer never sees it. Without these
+    # rows "อยากซื้อแอร์" and "ค้นหา พัดลม" could only ever answer
+    # "ไม่พบสินค้า": a correct reply to an empty shelf, and a case that
+    # tested nothing (18 ก.ย. 2569).
+    c._storefront_results = [
+        {"id": "p1", "product_id": "AC12", "product_name": "แอร์ 12000 BTU",
+         "unit_price": "15900.00", "license_id": "L1", "company_name": "ร้านชาญแอร์"},
+        {"id": "p2", "product_id": "FAN01", "product_name": "พัดลมตั้งพื้น 16 นิ้ว",
+         "unit_price": "890.00", "license_id": "L1", "company_name": "ร้านชาญแอร์"},
+    ]
     cases = [(m, "help") for m in HELP_VARIANTS] + [(m, "greet") for m in GREETINGS] + SMALL_TALK
     faults = [
         "แอร์ไม่เย็น", "แอร์ไม่เย็นเลยค่ะ", "แอร์เสีย", "เครื่องซักผ้าไม่หมุน", "ตู้เย็นไม่เย็น", "ทีวีเปิดไม่ติด",
@@ -287,13 +328,18 @@ async def main():
     for (oa, expect, layer, kind), msgs in sorted(by.items()):
         print(f"  [{oa}] expected {expect}, got {layer}/{kind} ({len(msgs)}): " + " | ".join(m.replace(chr(10), ' ')[:24] for m in msgs[:12]))
     print("\nLONG replies (lines/chars):")
-    seen = set()
+    # Grouped by the reply, not deduped into silence: the header counted
+    # every long case while this list dropped the ones whose reply shared
+    # a first line, so "2 long replies" printed one row and the second
+    # phrasing was invisible (18 ก.ย. 2569).
+    groups: dict[tuple, list] = {}
     for oa, msg, expect, layer, kind, ok, long, lines, chars, qr, text in longs:
-        head = text.splitlines()[0][:40]
-        if (oa, head) in seen:
-            continue
-        seen.add((oa, head))
-        print(f"  [{oa}] {msg[:24]:26} {lines}L/{chars}c  {head}")
+        groups.setdefault((oa, text.splitlines()[0][:40], lines, chars), []).append(msg)
+    for (oa, head, lines, chars), msgs in groups.items():
+        tail = f" (+{len(msgs) - 1} more)" if len(msgs) > 1 else ""
+        print(f"  [{oa}] {msgs[0][:24]:26} {lines}L/{chars}c  {head}{tail}")
+        for extra in msgs[1:]:
+            print(f"  [{oa}] {extra[:24]:26} ↑ same reply")
     if "--dump" in sys.argv:
         with open(sys.argv[sys.argv.index("--dump") + 1], "w", encoding="utf-8") as f:
             for r in results:

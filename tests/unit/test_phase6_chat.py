@@ -1610,12 +1610,26 @@ class FakeDataClient:
         return row
 
     async def storefront_search(self, q, limit=10):
+        """Filtered the way the Data tier filters — `product_name ILIKE %q%`.
+
+        This used to ignore `q` and hand back every seeded row, so a test
+        could not tell "found the right product" from "returned the whole
+        shelf", and a search that matched nothing looked identical to one
+        that matched everything. A fake more generous than production is
+        how the customer OA's product search went unexercised for a whole
+        corpus run (18 ก.ย. 2569).
+        """
         self.recorded.append(("storefront_search", q, limit))
-        return list(self._storefront_results)
+        needle = str(q or "").strip().lower()
+        rows = [
+            r for r in self._storefront_results
+            if not needle or needle in str(r.get("product_name") or "").lower()
+        ]
+        return rows[:limit]
 
     async def storefront_browse(self, limit=20):
         self.recorded.append(("storefront_browse", limit))
-        return list(self._storefront_results)
+        return list(self._storefront_results)[:limit]
 
     # ------------------------------------------------------------ Phase 15
     # The live conversation between a customer and the shop. Until now the

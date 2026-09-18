@@ -1,9 +1,49 @@
-import asyncio, json, sys
+"""Edge cases played through the real chat handler on all three OAs.
+
+Run it plain and the model road is answered locally, so the run is fast,
+deterministic and offline. Run it `--real` with OR_KEY (or
+OPENROUTER_API_KEY) in the environment and the same cases go to the
+deployed model, which is the only way to see what it actually replies.
+
+**Why the default had to be built rather than assumed** (18 ก.ย. 2569):
+thirty of these cases called `say()` without an `ai_client`, so the chat
+handler built its own httpx client and went to OpenRouter FOR REAL with
+the placeholder key "k" above. Seventy-two 401s per run, every model-road
+case answered "ระบบไม่พร้อมใช้งาน" — and the run still printed
+"0 FINDINGS", because an AI-down reply is a graceful one. A simulator
+that silently loses the model and still reports clean is the same class
+of fault as a checker that passes on its own worked example.
+"""
+import asyncio, json, os, sys
 sys.path.insert(0, "application"); sys.path.insert(0, "tests/unit")
 import httpx
 import test_phase6_chat as T
 from chann_app.config import settings
-settings.openrouter_api_key = "k"; settings.openrouter_model = "m"
+
+REAL = "--real" in sys.argv
+_KEY = os.environ.get("OR_KEY") or os.environ.get("OPENROUTER_API_KEY") or ""
+if REAL and _KEY:
+    settings.openrouter_api_key = _KEY
+    settings.openrouter_model = os.environ.get("OR_MODEL", "qwen/qwen3.6-35b-a3b")
+    print("=== asking the deployed model for real ===")
+else:
+    if REAL:
+        print("!! --real needs OR_KEY (or OPENROUTER_API_KEY) — falling back to offline")
+        REAL = False
+    settings.openrouter_api_key = "k"; settings.openrouter_model = "m"
+
+
+def _no_model(request):
+    """What a case with no ai_client gets: the model, unavailable.
+
+    Exactly the reply those thirty cases were already getting from the
+    real 401 — the same behaviour, without leaving the machine.
+    """
+    return httpx.Response(503, json={"error": {"message": "offline simulator"}})
+
+
+def _offline():
+    return httpx.AsyncClient(transport=httpx.MockTransport(_no_model))
 BAD = {"GENERIC_ERROR": ("ขออภัย",), "PERMISSION_LIST": ("คุณสามารถทำสิ่งเหล่านี้ได้","คุณยังไม่มีสิทธิ์"),
        "NOT_A_FEATURE": ("ระบบยังไม่มีฟังก์ชันนี้",), "AI_DOWN": ("ระบบไม่พร้อมใช้งาน",), "NOT_FOUND": ("ไม่พบ",)}
 def classify(t):
@@ -14,6 +54,10 @@ def ai(p): return httpx.AsyncClient(transport=T._ai(json.dumps(p, ensure_ascii=F
 findings = []
 async def say(c, oa, msg, expect_ok=True, ai_client=None):
     ctx = T._ctx(oa=oa, primary_role="technician" if oa=="technician" else "sales")
+    # A case that names no client gets the offline stand-in, never the
+    # network — unless the run asked for the real model.
+    if ai_client is None and not REAL:
+        ai_client = _offline()
     r = await T.handle_chat_message(c, message=msg, ctx=ctx, ai_client=ai_client)
     kind = classify(r.text); ok = (kind=="ok")==expect_ok
     print(f"{'  ' if ok else '!!'} [{oa:10}] {msg[:40]:42} -> {kind:15} {r.text.splitlines()[0][:66]}")

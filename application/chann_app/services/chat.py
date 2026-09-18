@@ -13935,7 +13935,22 @@ async def _handle_customer_list(
 #: Each section is capped, because a LINE bubble past 15 lines is not read
 #: (simulate-phrasings). The count is always the true one, so a cap never
 #: reads as "that is all there is".
+#:
+#: A PER-SECTION cap is not a budget, though. Four sections at two items
+#: each, every one of them carrying a title and a "…อีก N" line, is 16
+#: lines before the header's six — and the card came back at 18 (owner's
+#: run through the real model, 18 ก.ย. 2569). The comment above claimed
+#: simulate-phrasings as its evidence while that simulator never once
+#: reached this card with a model attached, so the cap was measured
+#: against a road nothing drove down. The whole card is budgeted now.
 CUSTOMER_CARD_SECTION_LIMIT = 2
+#: What a LINE bubble may be. The card is trimmed to fit it, from the
+#: bottom, and says out loud what it folded away.
+CARD_MAX_LINES = 15
+CUSTOMER_CARD_REST = {
+    "th": "อื่น ๆ: {parts}",
+    "en": "Also: {parts}",
+}
 CUSTOMER_CARD_NOTES = {"th": "บันทึก ({n}):", "en": "Notes ({n}):"}
 CUSTOMER_CARD_APPOINTMENTS = {"th": "นัดหมายที่จะถึง ({n}):", "en": "Upcoming ({n}):"}
 CUSTOMER_CARD_DEALS = {"th": "ดีลที่เปิดอยู่ ({n}):", "en": "Open deals ({n}):"}
@@ -13953,16 +13968,50 @@ def _capped(lines: list[str], total: int, language: str) -> list[str]:
     return lines + ([_t(CUSTOMER_CARD_MORE, language).format(n=left)] if left > 0 else [])
 
 
+def _fit_card(header: list[str], sections: list[tuple[str, list[str], int, str]],
+              language: str) -> list[str]:
+    """Header, then as much activity as a LINE bubble will actually hold.
+
+    The header is identity and is never trimmed. Sections are spent in
+    order, each needing at least its title; whatever will not fit is
+    folded into one last line that names each dropped section and its real
+    count, so the card never implies there is nothing there.
+    """
+    rows = list(header)
+    dropped: list[str] = []
+    for title, items, total, short in sections:
+        if dropped:
+            dropped.append(f"{short} {total}")
+            continue
+        room = CARD_MAX_LINES - len(rows)
+        # A title with no room for a single item, or no room to say what
+        # was folded away, is where this section and the rest give up.
+        if room < 3:
+            dropped.append(f"{short} {total}")
+            continue
+        rows.append(title)
+        keep = items[: max(1, room - 2)]
+        rows += _capped(keep, total, language) if len(keep) < total else keep
+    if dropped:
+        rows.append(_t(CUSTOMER_CARD_REST, language).format(parts=" · ".join(dropped)))
+    return rows
+
+
 async def _customer_activity(
     client: DataClient, *, license_id: str, customer: dict, language: str,
-) -> list[str]:
+) -> list[tuple[str, list[str], int, str]]:
     """The four things a person asking about a customer wants to know.
+
+    Returned as (title, items, true total, short name) rather than as flat
+    lines, so `_fit_card` can decide what survives a LINE bubble — a flat
+    list can only be cut, and a cut in the middle of a section loses the
+    fact that the section existed at all.
 
     Every read is best effort and independent: a customer card that fails
     because the quotes endpoint hiccuped would be worse than one missing
     its quotes line.
     """
-    rows: list[str] = []
+    sections: list[tuple[str, list[str], int, str]] = []
     customer_row_id = str(customer.get("id") or "")
     limit = CUSTOMER_CARD_SECTION_LIMIT
 
@@ -13973,12 +14022,12 @@ async def _customer_activity(
         notes = []
     if notes:
         newest = sorted(notes, key=lambda n: str(n.get("created_at") or ""), reverse=True)
-        rows.append(_t(CUSTOMER_CARD_NOTES, language).format(n=len(notes)))
-        rows += _capped(
+        sections.append((
+            _t(CUSTOMER_CARD_NOTES, language).format(n=len(notes)),
             [f"  • {_short_date(n.get('created_at'))}{str(n.get('body') or '').strip()[:60]}"
              for n in newest[:limit]],
-            len(notes), language,
-        )
+            len(notes), "บันทึก" if language != "en" else "notes",
+        ))
 
     try:
         follow_ups = await client.list_follow_ups(license_id, status="pending")
@@ -13992,8 +14041,11 @@ async def _customer_activity(
     ]
     if mine:
         mine.sort(key=lambda f: (str(f.get("due_date") or ""), str(f.get("due_time") or "")))
-        rows.append(_t(CUSTOMER_CARD_APPOINTMENTS, language).format(n=len(mine)))
-        rows += _capped([f"  • {_appointment_line(f)}" for f in mine[:limit]], len(mine), language)
+        sections.append((
+            _t(CUSTOMER_CARD_APPOINTMENTS, language).format(n=len(mine)),
+            [f"  • {_appointment_line(f)}" for f in mine[:limit]],
+            len(mine), "นัดหมาย" if language != "en" else "upcoming",
+        ))
 
     try:
         deals = await client.list_deals(license_id, contact_id=customer_row_id)
@@ -14005,13 +14057,13 @@ async def _customer_activity(
         if str(d.get("stage") or "").lower() not in ("won", "lost") and not d.get("archived_at")
     ]
     if open_deals:
-        rows.append(_t(CUSTOMER_CARD_DEALS, language).format(n=len(open_deals)))
-        rows += _capped(
+        sections.append((
+            _t(CUSTOMER_CARD_DEALS, language).format(n=len(open_deals)),
             [f"  • {d.get('deal_id') or '-'} · "
              f"{_label(DEAL_STAGE_LABELS, d.get('stage'), language)}{_amount_tail(d.get('amount'))}"
              for d in open_deals[:limit]],
-            len(open_deals), language,
-        )
+            len(open_deals), "ดีล" if language != "en" else "deals",
+        ))
 
     deal_ids = {str(d.get("id")) for d in deals}
     if deal_ids:
@@ -14023,14 +14075,14 @@ async def _customer_activity(
             quotes = []
         if quotes:
             quotes.sort(key=lambda q: str(q.get("created_at") or ""), reverse=True)
-            rows.append(_t(CUSTOMER_CARD_QUOTES, language).format(n=len(quotes)))
-            rows += _capped(
+            sections.append((
+                _t(CUSTOMER_CARD_QUOTES, language).format(n=len(quotes)),
                 [f"  • {q.get('quote_id') or '-'} · "
                  f"{_label(QUOTE_STATUS_LABELS, q.get('status'), language)}"
                  for q in quotes[:limit]],
-                len(quotes), language,
-            )
-    return rows
+                len(quotes), "ใบเสนอราคา" if language != "en" else "quotes",
+            ))
+    return sections
 
 
 def _short_date(value) -> str:
@@ -14131,10 +14183,11 @@ async def _handle_customer_detail(
         if customer.get(field_name):
             rows.append(f"{label}: {customer[field_name]}")
 
-    activity = await _customer_activity(
+    sections = await _customer_activity(
         client, license_id=str(license_id), customer=customer, language=language,
     )
-    rows += activity or [_t(CUSTOMER_CARD_NOTHING_YET, language)]
+    rows = (_fit_card(rows, sections, language) if sections
+            else rows + [_t(CUSTOMER_CARD_NOTHING_YET, language)])
 
     return ChatReply(
         text="\n".join(rows),
