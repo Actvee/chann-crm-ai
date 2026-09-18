@@ -756,6 +756,31 @@ class DealRepository:
             "undated_open_count": undated_open,
         }
 
+    def products_for(self, deal_ids: list[uuid.UUID]) -> dict[uuid.UUID, list[DealProduct]]:
+        """Every listed deal's lines, in ONE query, grouped by deal.
+
+        `products_of` per deal made the deal list 3,001 queries and 4.7
+        seconds for 3,000 deals (measured 17 ก.ย. 2569). Same ordering as
+        products_of — position, then created_at, then id — so a deal reads
+        the same whichever of the two loaded it.
+        """
+        if not deal_ids:
+            return {}
+        rows = self._s.execute(
+            select(DealProduct)
+            .where(DealProduct.deal_id.in_(list(deal_ids)))
+            .order_by(
+                DealProduct.deal_id.asc(),
+                DealProduct.position.asc(),
+                DealProduct.created_at.asc(),
+                DealProduct.id.asc(),
+            )
+        ).scalars()
+        grouped: dict[uuid.UUID, list[DealProduct]] = {deal_id: [] for deal_id in deal_ids}
+        for row in rows:
+            grouped.setdefault(row.deal_id, []).append(row)
+        return grouped
+
     def products_of(self, deal_id: uuid.UUID) -> list[DealProduct]:
         return list(
             self._s.execute(

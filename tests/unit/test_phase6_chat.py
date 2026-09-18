@@ -794,6 +794,22 @@ class FakeDataClient:
             (t for t in getattr(self, "_tickets", []) if t["id"] == ticket_id), None,
         )
 
+    async def get_ticket_by_number(self, license_id, number, *, visible_to=None):
+        self.recorded.append(("get_ticket_by_number", license_id, number, visible_to))
+        row = next(
+            (t for t in getattr(self, "_tickets", [])
+             if str(t.get("ticket_number") or "").upper() == str(number).upper()),
+            None,
+        )
+        # Mirrors the route: the same 12.1 rule the list applies, so a fake
+        # that answered where production refuses could not hide a leak.
+        if row is not None and visible_to:
+            public = str(row.get("visibility") or "public") == "public"
+            mine = str(row.get("assigned_to_ref") or "") == str(visible_to)
+            if not (public or mine):
+                return None
+        return row
+
     async def get_profile(self, chann_uid):
         return getattr(self, "_profiles", {}).get(chann_uid)
 
@@ -825,6 +841,14 @@ class FakeDataClient:
             ]
         if status:
             rows = [r for r in rows if str(r.get("status") or "") == status]
+        # Production PAGES this list — newest first, a hundred by default and
+        # 500 at the hard cap — and a fake that returned everything hid the
+        # fact that a shop past a hundred jobs could not reach an older one
+        # by typing its number (measured 17 ก.ย. 2569). `page_limit` lets a
+        # test put the tier's own ceiling back.
+        page = getattr(self, "page_limit", None) or limit
+        if page:
+            rows = rows[: int(page)]
         return rows
 
     async def assign_ticket(self, license_id, ticket_id, *, target_type, target_ref, actor_id=None,

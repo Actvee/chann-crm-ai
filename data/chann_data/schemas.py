@@ -67,6 +67,14 @@ class MemberOut(BaseModel):
     # The license owner's row — the one that can never be removed.
     is_owner: bool = False
     display_name: str | None = None
+    # The person's own name and number, from the identity row _member_out
+    # already loads to fill display_name. The Application tier wanted these
+    # on every members list and had to ask for each one separately — one
+    # HTTP round trip per member, on eleven different screens and replies
+    # (17 ก.ย. 2569). Nothing new is read to send them.
+    first_name: str | None = None
+    last_name: str | None = None
+    phone: str | None = None
     # Only on the invite-redeem reply, which is the one place a caller
     # holds a member before knowing the tenant.
     company_name: str | None = None

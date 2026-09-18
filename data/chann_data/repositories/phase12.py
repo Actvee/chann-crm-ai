@@ -172,13 +172,48 @@ class ServiceTicketRepository:
             ).with_for_update()
         ).scalars().first()
 
-    def get_by_number(self, scope: TenantScope, number: str) -> ServiceTicket | None:
-        return self._s.execute(
-            select(ServiceTicket).where(
-                ServiceTicket.license_id == scope.license_id,
-                ServiceTicket.ticket_number == number,
-            )
-        ).scalars().first()
+    def _visible_to_member(self, scope: TenantScope, member_id: uuid.UUID):
+        """The 12.1 predicate: public to everyone, private only to the
+        member or one of their teams.
+
+        Shared by the list and the by-number lookup so the two cannot
+        drift — a lookup that saw more than the list would hand a
+        technician a colleague's address for the price of guessing a
+        number.
+        """
+        team_ids = [
+            row for row in self._s.execute(
+                select(TechnicianTeamMember.team_id).where(
+                    TechnicianTeamMember.license_id == scope.license_id,
+                    TechnicianTeamMember.member_id == member_id,
+                )
+            ).scalars()
+        ]
+        private = ServiceTicket.assigned_to_ref == member_id
+        if team_ids:
+            private = private | ServiceTicket.assigned_to_ref.in_(team_ids)
+        return (ServiceTicket.visibility == "public") | private
+
+    def get_by_number(
+        self, scope: TenantScope, number: str, *, visible_to: uuid.UUID | None = None,
+    ) -> ServiceTicket | None:
+        """One ticket by the number a person types.
+
+        This existed from Phase 12 with no route above it, so every lookup
+        by code fetched a page of tickets and scanned it in Python — and
+        that page is the newest hundred, so it quietly stopped finding
+        anything older once a shop had done a hundred jobs. Measured on
+        3,000 tickets (17 ก.ย. 2569): the oldest was NOT FOUND both at the
+        default hundred and at the 500 hard cap, and is found here in one
+        query in 2.3 ms.
+        """
+        query = select(ServiceTicket).where(
+            ServiceTicket.license_id == scope.license_id,
+            ServiceTicket.ticket_number == number,
+        )
+        if visible_to is not None:
+            query = query.where(self._visible_to_member(scope, visible_to))
+        return self._s.execute(query).scalars().first()
 
     def list_for_license(
         self, scope: TenantScope, *, status: str | None = None, limit: int = 100,
@@ -203,22 +238,9 @@ class ServiceTicketRepository:
         another customer's address because a colleague happens to own that
         job.
         """
-        team_ids = [
-            row for row in self._s.execute(
-                select(TechnicianTeamMember.team_id).where(
-                    TechnicianTeamMember.license_id == scope.license_id,
-                    TechnicianTeamMember.member_id == member_id,
-                )
-            ).scalars()
-        ]
-
-        visible_private = ServiceTicket.assigned_to_ref == member_id
-        if team_ids:
-            visible_private = visible_private | ServiceTicket.assigned_to_ref.in_(team_ids)
-
         query = select(ServiceTicket).where(
             ServiceTicket.license_id == scope.license_id,
-            (ServiceTicket.visibility == "public") | visible_private,
+            self._visible_to_member(scope, member_id),
         )
         return list(
             self._s.execute(

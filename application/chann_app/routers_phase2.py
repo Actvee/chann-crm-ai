@@ -3009,13 +3009,33 @@ async def remove_sales_group_member(
 
 
 async def _with_names(client: DataClient, members: list[dict]) -> list[dict]:
+    """The members list a screen reads, with each person's own name.
+
+    The names now arrive ON the member rows: the Data tier loads the
+    identity anyway to fill display_name, so first_name/last_name/phone
+    cost it nothing to send (round 20h). Before that this asked the Data
+    tier for every member's profile in turn — one HTTP round trip per
+    member, on every screen and reply that lists people.
+
+    The per-member read is kept as a fallback for a row that predates the
+    wider schema, so a stale Data tier degrades to the old behaviour
+    instead of showing a list of chann_uids.
+    """
     out = []
     for m in members:
         chann_uid = str(m.get("chann_uid") or "")
-        try:
-            profile = await client.get_profile(chann_uid) or {}
-        except Exception:  # noqa: BLE001 — a missing profile is a nameless row, not a failure
-            profile = {}
+        profile: dict = {}
+        if m.get("first_name") or m.get("last_name") or m.get("phone"):
+            profile = {
+                "first_name": m.get("first_name"),
+                "last_name": m.get("last_name"),
+                "phone": m.get("phone"),
+            }
+        else:
+            try:
+                profile = await client.get_profile(chann_uid) or {}
+            except Exception:  # noqa: BLE001 — a missing profile is a nameless row, not a failure
+                profile = {}
         name = " ".join(
             p for p in (profile.get("first_name"), profile.get("last_name")) if p
         )

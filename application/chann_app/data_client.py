@@ -627,6 +627,28 @@ class DataClient:
         )
         return self._unwrap(resp)
 
+    async def get_ticket_by_number(
+        self, license_id: str, number: str, *, visible_to: str | None = None,
+    ) -> dict | None:
+        """One ticket by the code a person typed, or None.
+
+        The alternative — and what every caller did until 20h — is to
+        fetch a page of tickets and scan it. That page is the newest
+        hundred, so the scan silently stopped finding anything older once
+        a shop had done a hundred jobs.
+
+        `visible_to` is a technician's member id and carries the same
+        visibility rule the list carries; the shop's own OAs pass nothing.
+        """
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/tickets/by-number/{number}",
+            headers=self._headers,
+            params={"visible_to": visible_to} if visible_to else None,
+        )
+        if resp.status_code == 404:
+            return None
+        return self._unwrap(resp)
+
     async def list_tickets(
         self, license_id: str, status: str | None = None,
         visible_to: str | None = None, limit: int | None = None,

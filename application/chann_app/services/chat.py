@@ -833,6 +833,31 @@ async def _team_named(client: DataClient, license_id: str, fragment: str) -> dic
     return loose[0] if len(loose) == 1 else None
 
 
+async def _profile_of(client: DataClient, member: dict) -> dict:
+    """This member's own name and number.
+
+    The members list now carries them (round 20h): the Data tier loads the
+    identity row anyway to fill display_name, so sending first_name,
+    last_name and phone costs it nothing — and saves this tier an HTTP
+    round trip PER MEMBER, which is what every roster, team list and card
+    was doing.
+
+    The per-member read stays as the fallback, so one row that predates the
+    wider schema degrades to the old behaviour rather than showing a raw
+    CHN- id.
+    """
+    if member.get("first_name") or member.get("last_name") or member.get("phone"):
+        return {
+            "first_name": member.get("first_name"),
+            "last_name": member.get("last_name"),
+            "phone": member.get("phone"),
+        }
+    try:
+        return await client.get_profile(str(member.get("chann_uid") or "")) or {}
+    except Exception:  # noqa: BLE001 — a nameless row, not a failure
+        return {}
+
+
 def _member_name(member: dict, profile: dict | None) -> str:
     """What to call this person: the name they gave the shop, else the name
     LINE knows them by, else nothing.
@@ -863,7 +888,7 @@ async def _technician_named(
         if str(m.get("status") or "active") != "active":
             continue
         try:
-            profile = await client.get_profile(str(m.get("chann_uid") or "")) or {}
+            profile = await _profile_of(client, m)
         except Exception:
             profile = {}
         name = _member_name(m, profile)
@@ -907,7 +932,7 @@ async def _maybe_handle_teams(
             names = []
             for m in members:
                 try:
-                    profile = await client.get_profile(str(m.get("chann_uid") or "")) or {}
+                    profile = await _profile_of(client, m)
                 except Exception:
                     profile = {}
                 name = " ".join(p for p in (profile.get("first_name"), profile.get("last_name")) if p) \
@@ -1241,10 +1266,7 @@ async def _handle_technician_list(
     lines = []
     for m in technicians[:20]:
         chann_uid = str(m.get("chann_uid") or "")
-        try:
-            profile = await client.get_profile(chann_uid) or {}
-        except Exception:
-            profile = {}
+        profile = await _profile_of(client, m)
         name = _member_name(m, profile) or chann_uid
         phone = f" · {profile['phone']}" if profile.get("phone") else ""
         lines.append(f"· {name}{phone}")
@@ -4033,7 +4055,7 @@ async def _handle_shop_chat_start(
             tickets = await client.list_tickets(license_id)
         except Exception:
             tickets = []
-        ticket = next((t for t in tickets if str(t.get("ticket_number") or "").upper() == code), None)
+        ticket = await _ticket_named(client, license_id, code=code, among=tickets)
         if ticket is None:
             return ChatReply(text=_t(NOT_FOUND_BY_CODE, language).format(what="งาน", code=code))
         chann_uid = str(ticket.get("customer_chann_uid") or "")
@@ -6513,7 +6535,10 @@ async def _handle_customer_status(
     status_code = TICKET_CODE_RE.search(message or "")
     if status_code:
         wanted = status_code.group(1).upper()
-        t = next((x for x in mine if str(x.get("ticket_number") or "").upper() == wanted), None)
+        t = await _ticket_named(
+            client, license_id, code=wanted, among=mine,
+            keep=lambda row: row.get("customer_chann_uid") == ctx.chann_uid,
+        )
         if t is None:
             return ChatReply(text=_t(NOT_FOUND_BY_CODE, language).format(what="งาน", code=wanted))
         return ChatReply(
@@ -7705,16 +7730,19 @@ async def _handle_customer_amend(
     match = TICKET_CODE_RE.search(message or "")
     if match:
         code = match.group(1).upper()
-        ticket = next(
-            (t for t in mine if str(t.get("ticket_number", "")).upper() == code), None,
+        ticket = await _ticket_named(
+            client, license_id, code=code, among=mine,
+            keep=lambda row: (
+                row.get("customer_chann_uid") == ctx.chann_uid
+                and str(row.get("status")) not in ("completed", "cancelled")
+            ),
         )
         if ticket is None:
             # Might exist but be finished — worth saying, since "not found"
             # for a job they remember reporting is confusing.
-            closed = next(
-                (t for t in tickets
-                 if str(t.get("ticket_number", "")).upper() == code
-                 and t.get("customer_chann_uid") == ctx.chann_uid), None,
+            closed = await _ticket_named(
+                client, license_id, code=code, among=tickets,
+                keep=lambda row: row.get("customer_chann_uid") == ctx.chann_uid,
             )
             if closed:
                 return ChatReply(text=_t(AMEND_ALREADY_DONE, language).format(code=code))
@@ -8413,6 +8441,58 @@ def parse_service_report(message: str) -> dict:
     return report
 
 
+def _visible_to_arg(ctx: ResolvedContext, member: dict | None) -> str | None:
+    """The member id a ticket read must be narrowed by, or None.
+
+    Mirrors _tickets_this_person_may_see exactly: the technician channel
+    is narrowed, the shop's own channels are not. Kept beside it so the
+    list and the by-number lookup cannot drift apart.
+    """
+    if ctx.oa == "technician" and member and member.get("id"):
+        return str(member["id"])
+    return None
+
+
+async def _ticket_named(
+    client: DataClient, license_id, *, code: str, among: list[dict],
+    visible_to: str | None = None, keep=None,
+) -> dict | None:
+    """The job this code names — from the list in hand, or fetched by number.
+
+    `among` is scanned first, which costs nothing when the job is recent.
+    When the code is not in it the job is fetched BY NUMBER, because
+    `among` is at most the newest hundred rows: measured on 3,000 tickets
+    (17 ก.ย. 2569) the OLDEST was not found at the default hundred and not
+    found at the 500 hard cap either, so a shop past a hundred jobs was
+    told "ไม่พบใบงาน" about a job that was still open. The fetch is one
+    indexed query, 2.3 ms.
+
+    `visible_to` carries the technician's 12.1 narrowing into the fetch,
+    so it sees exactly what the list saw. `keep` is the caller's own
+    narrowing — their own jobs, the unfinished ones — applied again to the
+    fetched row: a fallback that widened what a person may act on would be
+    a worse bug than the one it fixes.
+    """
+    wanted = str(code or "").upper()
+    if not wanted:
+        return None
+    found = next(
+        (t for t in among if str(t.get("ticket_number") or "").upper() == wanted), None,
+    )
+    if found is not None:
+        return found
+    try:
+        fetched = await client.get_ticket_by_number(
+            str(license_id), wanted, visible_to=visible_to,
+        )
+    except Exception:  # noqa: BLE001 — an older job we cannot reach is "not found"
+        log.exception("ticket lookup by number")
+        return None
+    if fetched is None:
+        return None
+    return fetched if (keep is None or keep(fetched)) else None
+
+
 async def _resolve_ticket_for_member(
     client: DataClient, license_id: str, ctx: ResolvedContext, code: str,
 ) -> tuple[dict | None, dict | None]:
@@ -8421,8 +8501,9 @@ async def _resolve_ticket_for_member(
     if member is None:
         return None, None
     tickets = await _tickets_this_person_may_see(client, license_id, ctx, member)
-    ticket = next(
-        (t for t in tickets if str(t.get("ticket_number", "")).upper() == code), None,
+    ticket = await _ticket_named(
+        client, license_id, code=code, among=tickets,
+        visible_to=_visible_to_arg(ctx, member),
     )
     return member, ticket
 
@@ -8473,9 +8554,9 @@ async def _ticket_for_action(
         code = match.group(1).upper()
         return (
             member,
-            next(
-                (t for t in tickets if str(t.get("ticket_number", "")).upper() == code),
-                None,
+            await _ticket_named(
+                client, license_id, code=code, among=tickets,
+                visible_to=_visible_to_arg(ctx, member),
             ),
             False,
         )
@@ -8769,7 +8850,10 @@ async def _handle_check_out(
                     tickets = await _tickets_this_person_may_see(client, license_id, ctx, member)
                 except Exception:
                     tickets = []
-                target = next((t for t in tickets if str(t.get("ticket_number") or "").upper() == wanted), None)
+                target = await _ticket_named(
+                    client, license_id, code=wanted, among=tickets,
+                    visible_to=_visible_to_arg(ctx, member),
+                )
                 if target is None:
                     return ChatReply(text=_t(NOT_FOUND_BY_CODE, language).format(what="งาน", code=wanted))
                 if str(target.get("status") or "") != "in_progress":
@@ -9477,8 +9561,9 @@ async def _handle_ticket_detail(
         except Exception:
             log.exception("ticket detail failed")
             return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
-        ticket = next(
-            (t for t in tickets if str(t.get("ticket_number", "")).upper() == code), None,
+        ticket = await _ticket_named(
+            client, license_id, code=code, among=tickets,
+            visible_to=_visible_to_arg(ctx, member),
         )
         if ticket is None:
             return ChatReply(
@@ -9766,8 +9851,11 @@ async def _ticket_for_assignment(
     match = TICKET_CODE_RE.search(message or "")
     if match:
         code = match.group(1).upper()
-        return next(
-            (t for t in tickets if str(t.get("ticket_number", "")).upper() == code), None,
+        # Dispatch is the shop's own job, reached from the sales channel,
+        # so the queue is not narrowed — but it IS paged, and an older job
+        # fell off the end of it.
+        return await _ticket_named(
+            client, license_id, code=code, among=tickets,
         ), code, ""
 
     for run, said in _ticket_run_numbers(message, trigger):
@@ -9831,7 +9919,7 @@ async def _technicians_of(client: DataClient, license_id: str) -> list[dict]:
         if "technician" not in role and "ช่าง" not in str(m.get("role") or ""):
             continue
         try:
-            profile = await client.get_profile(str(m.get("chann_uid") or "")) or {}
+            profile = await _profile_of(client, m)
         except Exception:
             profile = {}
         name = " ".join(
@@ -10039,7 +10127,7 @@ async def _handle_ticket_release(
     except Exception:
         log.exception("could not list tickets to release one")
         return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
-    ticket = next((t for t in tickets if str(t.get("ticket_number") or "").upper() == code), None)
+    ticket = await _ticket_named(client, license_id, code=code, among=tickets)
     if ticket is None:
         return ChatReply(text=_t(NOT_FOUND_BY_CODE, language).format(what="งาน", code=code))
     if str(ticket.get("status") or "") in ("completed", "cancelled"):
@@ -10300,7 +10388,7 @@ async def _find_member_by_name(client: DataClient, license_id: str, name: str):
         if str(member.get("status") or "active") != "active":
             continue
         try:
-            profile = await client.get_profile(str(member.get("chann_uid") or ""))
+            profile = await _profile_of(client, member)
         except Exception:
             profile = None
         display = " ".join(
@@ -10606,8 +10694,9 @@ async def _handle_ticket_claim(
                 )
             code = str(claimable[0].get("ticket_number", "")).upper()
 
-        ticket = next(
-            (t for t in tickets if str(t.get("ticket_number", "")).upper() == code), None,
+        ticket = await _ticket_named(
+            client, license_id, code=code, among=tickets,
+            visible_to=_visible_to_arg(ctx, member),
         )
         if ticket is None:
             # Not found OR not visible — deliberately the same message. A
@@ -10829,8 +10918,9 @@ async def _handle_ticket_reject(
                 )
             else:
                 return ChatReply(text=_t(TICKET_REJECT_NEEDS_CODE, language))
-        ticket = next(
-            (t for t in tickets if str(t.get("ticket_number", "")).upper() == code), None,
+        ticket = await _ticket_named(
+            client, license_id, code=code, among=tickets,
+            visible_to=_visible_to_arg(ctx, member),
         )
         if ticket is None:
             return ChatReply(text=_t(NOT_FOUND_BY_CODE, language).format(what="งาน", code=code))
@@ -15678,10 +15768,7 @@ async def _audit_actor_names(client: DataClient, license_id) -> dict[str, str]:
         chann_uid = str(m.get("chann_uid") or "")
         if not chann_uid or chann_uid in names:
             continue
-        try:
-            profile = await client.get_profile(chann_uid) or {}
-        except Exception:  # noqa: BLE001
-            profile = {}
+        profile = await _profile_of(client, m)
         names[chann_uid] = _member_name(m, profile) or chann_uid[:8]
     return names
 
@@ -18651,8 +18738,10 @@ async def _shop_holding(client: DataClient, license_id: str, kind: str, code: st
     """Does this shop hold the record the sentence named?"""
     try:
         if kind == "ticket":
-            rows = await client.list_tickets(license_id)
-            return any(str(r.get("ticket_number") or "").upper() == code for r in rows)
+            # One indexed read. Scanning a page of the queue answered "no"
+            # for any job past the newest hundred, so a shop pointing at an
+            # older job was told it was not theirs (17 ก.ย. 2569).
+            return await client.get_ticket_by_number(str(license_id), code) is not None
         if kind == "report":
             rows = await client.list_service_reports(license_id)
             return any(str(r.get("report_id") or "").upper() == code for r in rows)
@@ -22689,7 +22778,11 @@ async def _handle_customer_reschedule_approval(
         log.exception("could not read the queue to confirm a reschedule")
         return None
     if code:
-        wanted = [t for t in tickets if str(t.get("ticket_number") or "").upper() == code]
+        named = await _ticket_named(
+            client, license_id, code=code, among=tickets,
+            keep=lambda row: str(row.get("status") or "") not in ("completed", "cancelled"),
+        )
+        wanted = [named] if named else []
     else:
         ref = await _last_entity_ref(client, ctx)
         ref_id = str((ref or {}).get("entity_id") or "") if ref and str(ref.get("entity_type") or "") in ("ticket", "service_ticket") else ""
@@ -26609,7 +26702,7 @@ async def _handle_sales_group_intent(
                 for member in people:
                     profile = {}
                     try:
-                        profile = await client.get_profile(str(member.get("chann_uid") or "")) or {}
+                        profile = await _profile_of(client, member)
                     except Exception:  # noqa: BLE001 — a missing profile is not a failed list
                         profile = {}
                     names.append(" ".join(
