@@ -1,0 +1,56 @@
+# "ใครลบลูกค้ารายนี้" — a question a shop with staff has to be able to ask.
+#
+# audit_log.view has been a permission an owner holds since Phase 2,
+# labelled "ดูประวัติการใช้งาน", and it unlocked nothing anywhere: the Data
+# route had no caller, the Application route was added on 6 ก.ย. 2569
+# *because* of that and then had no caller either. The gap moved up a tier
+# instead of closing (audit, 17 ก.ย. 2569).
+#
+# What this pins is the half that makes the answer worth reading: the rows
+# name PEOPLE. A page of chann_uids answers nobody's question.
+name: the-shop-reads-its-own-history
+description: the shop's own audit trail, answered in chat with names not ids
+backend: fake
+actor:
+  oa: sales
+  role: owner
+  language: th
+  # The shop's own history is an owner/admin capability, so the actor
+  # here holds every key rather than the sales default.
+  permissions: all
+
+steps:
+  - seed:
+      customers:
+        - ref: somchai
+          first_name: "สมชาย"
+          last_name: "ใจดี"
+          phone: "0812345678"
+
+  - send:
+      message: "ประวัติการใช้งาน"
+      ai:
+        action: read
+        entity: audit_log
+        fields: {}
+        missing: []
+    expect:
+      is_not: [not_sure, generic_error, permission, not_a_feature]
+      # Empty is a legitimate answer here; what must never come back is
+      # "ยังทำรายการนี้ไม่ได้", which is what it said for a year.
+      not_contains: ["ยังทำรายการนี้ไม่ได้", "actor_id", "entity_id"]
+      max_chars: 700
+
+  # Reading the shop's history takes ดูประวัติการใช้งาน. Without it the
+  # answer must be a refusal that names the permission.
+  - send:
+      message: "ประวัติการใช้งาน"
+      permissions: [customer.read]
+      ai:
+        action: read
+        entity: audit_log
+        fields: {}
+        missing: []
+    expect:
+      is_not: [generic_error, not_a_feature]
+      max_chars: 900

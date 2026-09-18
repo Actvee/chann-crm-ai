@@ -1512,7 +1512,10 @@ class TestTheExpectedCloseDate:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("message,expected", [
-        ("ดีล D-2026-0001 คาดว่าจะปิดวันศุกร์", "2026-09-18"),
+        # NEXT_FRIDAY, not a date: see _next_weekday above — "วันศุกร์" is
+        # the next one strictly ahead of today, so a literal here is red on
+        # every Friday.
+        ("ดีล D-2026-0001 คาดว่าจะปิดวันศุกร์", "NEXT_FRIDAY"),
         # The agent corpus's own control case, which wrote nothing before.
         ("ดีล D-2026-0001 คาดว่าจะปิดวันที่ 30 กันยายน", "2026-09-30"),
         ("D-2026-0001 คาดว่าจะปิดวันที่ 30 กันยายน", "2026-09-30"),
@@ -1525,6 +1528,13 @@ class TestTheExpectedCloseDate:
     async def test_the_command_writes_the_date_it_was_given(self, message, expected):
         text, updates = await self._say(message)
         assert updates, f"{message!r} was refused or unread: {text[:80]}"
+        from datetime import timedelta
+
+        from chann_app.services.thai_datetime import local_today
+
+        if expected == "NEXT_FRIDAY":
+            today = local_today()
+            expected = (today + timedelta(days=((4 - today.weekday()) % 7) or 7)).isoformat()
         assert updates[0][3]["expected_close_date"] == expected
 
     @pytest.mark.asyncio
@@ -1687,7 +1697,7 @@ class TestTheGuardDeclinesWithoutAskingASecondQuestion:
         assert "create_note" in writes, text[:80]
         assert "update_ticket" not in writes, writes
         note = next(c for c in client.recorded if c[0] == "create_note")
-        assert "18 ก.ย. 2569" in next(p for p in note if isinstance(p, dict)).get("body", "")
+        assert _next_weekday(4) in next(p for p in note if isinstance(p, dict)).get("body", "")
 
     @pytest.mark.asyncio
     async def test_the_same_shape_still_reaches_the_handler_when_the_time_is_unreadable(self):

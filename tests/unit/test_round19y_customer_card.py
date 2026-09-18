@@ -21,7 +21,10 @@ import json
 import httpx
 import pytest
 
+from datetime import timedelta
+
 from chann_app.config import settings
+from chann_app.services.thai_datetime import local_today
 from chann_app.services.chat import handle_chat_message
 from test_phase6_chat import FakeDataClient, _ai, _ctx
 
@@ -82,7 +85,11 @@ class TestSavingSaysWhatItSaved:
         reply = await _say(
             client, "เตือน C-2026-0001 พรุ่งนี้ ตามเรื่องใบเสนอราคา",
             {"action": "create", "entity": "followup",
-             "fields": {"entity_code": "C-2026-0001", "due_date": "2026-09-17",
+             # "พรุ่งนี้" is tomorrow, so the stub has to say tomorrow: pinned
+             # to 2026-09-17, this became a date in the past and the handler
+             # correctly refused it (18 ก.ย. 2569).
+             "fields": {"entity_code": "C-2026-0001",
+                        "due_date": (local_today() + timedelta(days=1)).isoformat(),
                         "notes": "ตามเรื่องใบเสนอราคา"}, "missing": []},
         )
         saved = [w for w in client.recorded if w[0] == "create_follow_up"]
@@ -103,7 +110,10 @@ class TestTheCustomerCardShowsTheirActivity:
         ]
         client._follow_ups = [
             {"id": "f-1", "entity_type": "customer", "entity_id": "c-1",
-             "due_date": "2026-09-18", "due_time": "14:00", "status": "pending",
+             # Ahead of today by construction: pinned to 2026-09-18, this
+             # stopped being "นัดหมายที่จะถึง" the morning that date arrived.
+             "due_date": (local_today() + timedelta(days=2)).isoformat(),
+             "due_time": "14:00", "status": "pending",
              "notes": "ตามเรื่องใบเสนอราคา"},
         ]
         client._deals = [

@@ -156,6 +156,13 @@ export const ICONS = {
       <path d="M10.2 12.8 20 3M17.2 5.8l2 2M14.6 8.4l2 2" />
     </>,
   ),
+  history: glyph(
+    <>
+      <path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1" />
+      <path d="M3.5 4.5V9H8" />
+      <path d="M12 7.8V12l3 1.8" />
+    </>,
+  ),
   guide: glyph(
     <>
       <circle cx="12" cy="12" r="8.6" />
@@ -255,6 +262,13 @@ export function navGroups(t: Dictionary, audience: Audience): NavGroup[] {
         { key: "aiReports", href: "/liff/sales/reports/ai", label: t.dashboard.aiReports.title, icon: ICONS.aiReports, needs: ["view_reports"] },
         { key: "approvals", href: "/liff/sales/approvals", label: t.dashboard.approvals.title, icon: ICONS.approvals, needs: ["approval.view"] },
         { key: "templates", href: "/liff/sales/templates", label: t.dashboard.templates.title, icon: ICONS.templates, needs: ["setting.manage"] },
+        // The page has existed and been deployed all along with no way in:
+        // the technician and customer rails carry it, the sales one never
+        // did, so a CS who approves a service report signs it with a blank
+        // line (owner, 17 ก.ย. 2569). Filed under paperwork because that is
+        // where a signature ends up — no permission key: signing is
+        // personal, and everyone who can approve anything needs it.
+        { key: "signature", href: "/liff/sales/signature", label: t.dashboard.signature.title, icon: ICONS.signature },
       ],
     },
     {
@@ -264,6 +278,9 @@ export function navGroups(t: Dictionary, audience: Audience): NavGroup[] {
         { key: "company", href: "/liff/sales/company", label: t.dashboard.companyTitle, icon: ICONS.company, needs: ["setting.manage"] },
         { key: "members", href: "/liff/sales/members", label: t.dashboard.members.title, icon: ICONS.members, needs: ["member.manage", "team.manage", "role.manage"] },
         { key: "roles", href: "/liff/sales/roles", label: t.role.title, icon: ICONS.roles, needs: ["role.manage"] },
+        // "ดูประวัติการใช้งาน" has been a permission since Phase 2 with no
+        // page behind it (audit, 17 ก.ย. 2569).
+        { key: "history", href: "/liff/sales/history", label: t.dashboard.history.title, icon: ICONS.history, needs: ["audit_log.view"] },
       ],
     },
   ];

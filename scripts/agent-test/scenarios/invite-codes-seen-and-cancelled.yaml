@@ -1,0 +1,74 @@
+# A key to the shop you can take back.
+#
+# The Data tier has listed and revoked invite codes since Phase 6.5 and
+# nothing above it ever called either, so a shop could issue a code and
+# then neither see which codes were still out nor cancel one that leaked
+# (audit, 17 ก.ย. 2569 — "ไล่ตรวจทั้งระบบเลยว่ามีอะไรทำได้แต่ไปไม่ถึงอีก").
+#
+# The trap this scenario exists to catch: the word "รหัสเชิญ" bypassed the
+# model road and ISSUED a code, so "ยกเลิกรหัสเชิญ …" would have minted a
+# new one. Issuing and cancelling must stay two different things.
+name: invite-codes-seen-and-cancelled
+description: a shop issues an invite code, sees it in the list, and cancels it
+backend: fake
+actor:
+  oa: sales
+  role: owner
+  language: th
+  permissions: sales
+
+steps:
+  - send: "ขอรหัสเชิญช่าง"
+    expect:
+      contains: "รหัสเชิญ"
+      is_not: [not_sure, generic_error, permission, not_a_feature]
+
+  # The list, not another code. A second "รหัสเชิญช่าง: …" here is the bug.
+  - send:
+      message: "ดูรหัสเชิญ"
+      ai:
+        action: read
+        entity: invite
+        fields: {}
+        missing: []
+    expect:
+      contains: "รหัสเชิญที่ยังใช้ได้"
+      is_not: [not_sure, generic_error, permission, not_a_feature]
+
+  - send:
+      message: "ยกเลิกรหัสเชิญ ABC234XY01"
+      ai:
+        action: delete
+        entity: invite
+        fields:
+          invite_code: "ABC234XY01"
+        missing: []
+    expect:
+      contains: ["ABC234XY01", "ยกเลิก"]
+      is_not: [not_sure, generic_error, permission, not_a_feature, not_found]
+
+  # Cancelled means gone from the list, not merely acknowledged.
+  - send:
+      message: "ดูรหัสเชิญ"
+      ai:
+        action: read
+        entity: invite
+        fields: {}
+        missing: []
+    expect:
+      not_contains: "ABC234XY01"
+      is_not: [generic_error, permission]
+
+  # Listing keys to the shop takes จัดการสมาชิก. Losing it must read as a
+  # refusal that names the permission, never as "there are none".
+  - send:
+      message: "ดูรหัสเชิญ"
+      permissions: [customer.read]
+      ai:
+        action: read
+        entity: invite
+        fields: {}
+        missing: []
+    expect:
+      is_not: [generic_error, not_a_feature]
+      max_chars: 900

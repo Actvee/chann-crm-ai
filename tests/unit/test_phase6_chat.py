@@ -1230,8 +1230,52 @@ class FakeDataClient:
 
     async def create_invite(self, license_id, payload, actor_id=None):
         self.recorded.append(("create_invite", license_id, payload, actor_id))
-        return {"invite_code": "ABC234XY7Z", "role": payload["role"],
-                "license_id": license_id}
+        # Kept, not just answered. A fake that forgets the code it issued
+        # cannot show "the codes still out", which is the whole of the
+        # list the shop asks for (round 20g).
+        rows = getattr(self, "_invites", [])
+        row = {
+            "id": f"INV-{len(rows) + 1}",
+            "license_id": license_id,
+            "invite_code": f"ABC234XY{len(rows) + 1:02d}",
+            "role": payload["role"],
+            "channel": "technician" if payload["role"] == "technician" else "sales",
+            "max_uses": 1,
+            "used_count": 0,
+            "expires_at": f"{local_today() + _dt.timedelta(days=7)}T00:00:00+00:00",
+            "revoked_at": None,
+            "created_at": f"{local_today()}T09:00:00+00:00",
+        }
+        self._invites = [row] + rows
+        return row
+
+    async def list_invites(self, license_id):
+        self.recorded.append(("list_invites", license_id))
+        return list(getattr(self, "_invites", []))
+
+    async def revoke_invite(self, license_id, invite_id, actor_id=None):
+        self.recorded.append(("revoke_invite", license_id, invite_id, actor_id))
+        row = next(
+            (r for r in getattr(self, "_invites", []) if str(r.get("id")) == str(invite_id)),
+            None,
+        )
+        if row is None:
+            # The real tier 404s on an id that is not this shop's.
+            from chann_app.data_client import DataTierError
+
+            raise DataTierError(404, "invite not found")
+        row["revoked_at"] = f"{local_today()}T10:00:00+00:00"
+        return dict(row)
+
+    async def list_audit_log(self, license_id, entity_type=None, actor_type=None, limit=100):
+        self.recorded.append(("list_audit_log", license_id, entity_type, actor_type))
+        rows = list(getattr(self, "_audit", []))
+        if entity_type:
+            rows = [r for r in rows if r.get("entity_type") == entity_type]
+        if actor_type:
+            rows = [r for r in rows if r.get("actor_type") == actor_type]
+        rows.sort(key=lambda r: str(r.get("created_at") or ""), reverse=True)
+        return rows[:limit]
 
     # ------------------------------------------------------------ Phase 9 CRM
 
@@ -2381,7 +2425,9 @@ class TestTechnicianInviteRequest:
             client, message="ขอรหัสเชิญช่าง",
             ctx=_ctx(primary_role="sales"), ai_client=None,
         )
-        assert "ABC234XY7Z" in reply.text
+        # The fake numbers the codes it issues so a scenario can list and
+        # cancel them (round 20g); the prefix is what this test is about.
+        assert "ABC234XY" in reply.text
         call = next(r for r in client.recorded if r[0] == "create_invite")
         _, license_id, payload, actor_id = call
         assert payload["role"] == "technician"
@@ -2409,7 +2455,7 @@ class TestTechnicianInviteRequest:
             ctx=_ctx(primary_role="technician"), ai_client=ai,
         )
         assert not any(r[0] == "create_invite" for r in client.recorded)
-        assert "ABC234XY7Z" not in reply.text
+        assert "ABC234XY" not in reply.text
 
 
 class TestPhase9CustomerChat:

@@ -7,7 +7,7 @@ import re
 import uuid
 
 import hashlib
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -4350,9 +4350,98 @@ async def tenant_audit_log(
     _require_same_tenant(principal, license_id)
     principal.require("audit_log.view")
     try:
-        return await client.list_audit_log(
+        rows = await client.list_audit_log(
             license_id, entity_type=entity_type, actor_type=actor_type,
             limit=max(1, min(int(limit), 500)),
         )
     except DataTierError as exc:
         raise _propagate(exc)
+    names = await _actor_names(client, license_id)
+    return [
+        {**row, "actor_name": names.get(str(row.get("actor_id") or ""), "")}
+        for row in rows
+    ]
+
+
+async def _actor_names(client: DataClient, license_id: str) -> dict[str, str]:
+    """chann_uid -> the name a person recognises.
+
+    An audit row stores the actor's chann_uid, because that is what the
+    Data tier holds. A page of "U1a2b3c\u2026 แก้ไขลูกค้า" tells a shop
+    owner nothing, so the names are resolved here \u2014 once per request,
+    not once per row.
+    """
+    try:
+        members = await client.list_members(license_id)
+    except DataTierError:
+        return {}
+    named = await _with_names(client, members)
+    return {
+        str(m.get("chann_uid") or ""): str(m.get("display_name") or "")
+        for m in named
+        if m.get("chann_uid")
+    }
+
+
+# --------------------------------------------------------------- invites
+#
+# A shop could issue a technician invite from chat since Phase 6.5 and then
+# had no way to see which codes were still out, or to cancel one that had
+# leaked \u2014 list_invites and revoke_invite existed in the Data tier and
+# in DataClient with no caller above them (audit, 17 ก.ย. 2569). A code is
+# a key to the shop; a key you cannot take back is the gap.
+
+
+def _invite_status(row: dict, *, now: datetime) -> str:
+    """open | used | revoked | expired \u2014 what a person needs to know."""
+    if row.get("revoked_at"):
+        return "revoked"
+    if int(row.get("used_count") or 0) >= int(row.get("max_uses") or 1):
+        return "used"
+    expires = row.get("expires_at")
+    if expires:
+        when = expires if isinstance(expires, datetime) else datetime.fromisoformat(str(expires))
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        if when <= now:
+            return "expired"
+    return "open"
+
+
+@router.get("/licenses/{license_id}/invites")
+async def tenant_invites(
+    license_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Every invite code this shop has issued, newest first, each carrying
+    the one thing the list is read for: whether it still works."""
+    _require_same_tenant(principal, license_id)
+    _staff_only(principal)
+    principal.require("member.manage")
+    try:
+        rows = await client.list_invites(license_id)
+    except DataTierError as exc:
+        raise _propagate(exc)
+    now = datetime.now(timezone.utc)
+    return [{**row, "status": _invite_status(row, now=now)} for row in rows]
+
+
+@router.post("/licenses/{license_id}/invites/{invite_id}/revoke")
+async def tenant_revoke_invite(
+    license_id: str,
+    invite_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Cancel a code. Idempotent in the Data tier, so cancelling twice is
+    not an error \u2014 the person pressing the button wants the code dead,
+    and it is."""
+    _require_same_tenant(principal, license_id)
+    _staff_only(principal)
+    principal.require("member.manage")
+    try:
+        row = await client.revoke_invite(license_id, invite_id, actor_id=principal.chann_uid)
+    except DataTierError as exc:
+        raise _propagate(exc)
+    return {**row, "status": _invite_status(row, now=datetime.now(timezone.utc))}

@@ -58,6 +58,15 @@ const CHANNELS: Channel[] = ["sales", "technician"];
  * everyone else a plain "no permission" rather than a list of buttons
  * that would 403.
  */
+type Invite = {
+  id: string;
+  invite_code: string;
+  role: string;
+  channel?: string;
+  expires_at?: string | null;
+  status?: string;
+};
+
 export default function MemberManagement({ liffId }: { liffId: string }) {
   const { t } = useLanguage();
   const s = useSalesText();
@@ -73,6 +82,7 @@ export default function MemberManagement({ liffId }: { liffId: string }) {
   const [channel, setChannel] = useState<"all" | Channel>("all");
   const [showRemoved, setShowRemoved] = useState(false);
   const [query, setQuery] = useState("");
+  const [invites, setInvites] = useState<Invite[]>([]);
 
   const say = useCallback((message: string, kind?: "ok" | "error") => {
     setStatus(message);
@@ -113,6 +123,22 @@ export default function MemberManagement({ liffId }: { liffId: string }) {
       );
     }
     setMembers(normalise(await response.json()));
+
+    // The codes already issued. A shop could hand out an invite and then
+    // had no way to see which ones were still out, or to cancel one that
+    // leaked — the Data tier has listed and revoked them since Phase 6.5
+    // with nothing above calling either (audit, 17 ก.ย. 2569).
+    try {
+      const inviteResponse = await fetch(`/api/phase2/licenses/${licenseId}/invites`, {
+        headers: headers(),
+      });
+      if (inviteResponse.ok) {
+        const rows = (await inviteResponse.json()) as unknown;
+        setInvites(Array.isArray(rows) ? (rows as Invite[]) : []);
+      }
+    } catch {
+      // A missing list hides the section; it never blocks the page.
+    }
 
     // The role names for the dropdown. A missing list leaves the select
     // with only the roles already in use, which is visible, not wrong.
@@ -323,6 +349,41 @@ export default function MemberManagement({ liffId }: { liffId: string }) {
     );
   }
 
+  const openInvites = useMemo(
+    () => invites.filter((row) => (row.status ?? "open") === "open"),
+    [invites],
+  );
+
+  async function revokeInvite(row: Invite) {
+    const ok = await ask({
+      action: m.revokeAction,
+      target: m.inviteFor.replace("{role}", row.role),
+      code: row.invite_code,
+      affects: [m.revokeAffects, m.revokePermanent],
+      permanent: true,
+      confirmLabel: m.revokeAction,
+    });
+    if (!ok) return;
+    setBusyKey(row.id);
+    say(t.dashboard.working);
+    try {
+      const response = await fetch(
+        `/api/phase2/licenses/${licenseId}/invites/${row.id}/revoke`,
+        { method: "POST", headers: headers() },
+      );
+      if (!response.ok) {
+        say(await failureText(response), "error");
+        return;
+      }
+      await load();
+      say(m.revokeDone.replace("{code}", row.invite_code), "ok");
+    } catch {
+      say(t.common.error, "error");
+    } finally {
+      setBusyKey("");
+    }
+  }
+
   const shownCount = visible.length;
   const inviteHint = m.howToAdd.replace("{command}", m.inviteCommand);
 
@@ -492,6 +553,39 @@ export default function MemberManagement({ liffId }: { liffId: string }) {
               </div>
               <p className="card-meta" style={{ marginTop: 16 }}>{inviteHint}</p>
             </>
+          )}
+
+          {canManage && openInvites.length > 0 && (
+            <section style={{ marginTop: 24 }}>
+              <h2 className="section-head">{m.invitesTitle}</h2>
+              <p className="card-meta">{m.invitesIntro}</p>
+              <div className="list">
+                {openInvites.map((row) => (
+                  <article key={row.id} className="card">
+                    <div className="card-title" style={{ letterSpacing: "0.08em" }}>
+                      {row.invite_code}
+                    </div>
+                    <p className="card-meta">
+                      {m.inviteFor.replace("{role}", row.role)}
+                      {row.expires_at && shortDate(row.expires_at)
+                        ? ` · ${m.inviteExpires.replace("{date}", shortDate(row.expires_at))}`
+                        : ""}
+                    </p>
+                    <div className="card-actions">
+                      <button
+                        type="button"
+                        className="btn"
+                        data-variant="quiet"
+                        disabled={busyKey === row.id}
+                        onClick={() => void revokeInvite(row)}
+                      >
+                        {m.revokeAction}
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </section>
           )}
         </>
       )}

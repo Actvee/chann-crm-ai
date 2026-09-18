@@ -203,6 +203,11 @@ ACTION_PERMISSIONS: dict[tuple[str, str], str] = {
     ("create", "role"): "role.manage",
     ("read", "member"): "member.manage",
     ("update", "member"): "member.manage",
+    # An invite code is a key to the shop. Reading the keys out and taking
+    # one back are both "จัดการสมาชิก" — the same permission that issues
+    # one (audit, 17 ก.ย. 2569: a leaked code could not be cancelled).
+    ("read", "invite"): "member.manage",
+    ("delete", "invite"): "member.manage",
     ("read", "setting"): "setting.manage",
     ("update", "setting"): "setting.manage",
 }
@@ -348,13 +353,41 @@ INVITE_AMBIGUOUS_TRIGGERS = (
 )
 
 
+# Words that turn "รหัสเชิญ" from a request for a NEW code into a question
+# about the codes already issued. The trigger tables above bypass the model
+# road entirely (see _is_a_typed_command), so without this "ดูรหัสเชิญ" and
+# "ยกเลิกรหัสเชิญ QK4P2RSTUV" were both answered by ISSUING another code —
+# a sentence asking to cancel a leaked key would have minted a new one
+# (round 20g, caught by asking the model before shipping).
+#
+# The tables keep every word they had. They simply stop ACTING on a
+# sentence that is not asking them to act, and it falls through to the
+# model road, which reads both as entity="invite" and has a handler for
+# each — with the same member.manage gate in front of it.
+INVITE_ABOUT_EXISTING_WORDS = (
+    "ดู", "รายการ", "มีอะไร", "มีรหัส", "ค้างอยู่", "ที่ใช้ได้", "ที่ออกไป",
+    "ยกเลิก", "เพิกถอน", "ปิดรหัส", "ลบรหัส",
+    "list", "show", "revoke", "cancel", "disable",
+)
+
+
+def _asks_about_invites_already_issued(message: str) -> bool:
+    """Is this about the codes that exist, rather than a new one?"""
+    text = (message or "").strip().lower()
+    return any(word in text for word in INVITE_ABOUT_EXISTING_WORDS)
+
+
 def _is_technician_invite_request(message: str) -> bool:
     text = (message or "").strip().lower()
+    if _asks_about_invites_already_issued(text):
+        return False
     return any(trigger.lower() in text for trigger in TECHNICIAN_INVITE_TRIGGERS)
 
 
 def _is_sales_invite_request(message: str) -> bool:
     text = (message or "").strip().lower()
+    if _asks_about_invites_already_issued(text):
+        return False
     return any(trigger.lower() in text for trigger in SALES_INVITE_TRIGGERS)
 
 
@@ -377,6 +410,8 @@ def _is_ambiguous_invite_request(message: str) -> bool:
     AFTER the two specific tables — "ขอรหัสเชิญช่าง" contains "ขอรหัสเชิญ",
     so the order is the whole correctness argument here."""
     text = (message or "").strip().lower()
+    if _asks_about_invites_already_issued(text):
+        return False
     if _is_technician_invite_request(text) or _is_sales_invite_request(text) or _is_customer_invite_request(text):
         return False
     return any(trigger.lower() in text for trigger in INVITE_AMBIGUOUS_TRIGGERS)
@@ -11846,6 +11881,12 @@ DASHBOARD_PATHS = {
     "approvals": "approvals",
     "roles": "roles",
     "members": "members",
+    # Added with the pages themselves: "history" is the audit trail (round
+    # 20g) and "appointments" the diary (round 20f), and a deep link to a
+    # page with no path here comes back None — the reply then says "try the
+    # dashboard" with nothing to tap.
+    "history": "history",
+    "appointments": "appointments",
     "guide": "guide",
     "chats": "chats",
     "chats": "chats",
@@ -15552,6 +15593,258 @@ async def _handle_sales_summary(
     )
 
 
+# ------------------------------------------------- the shop's own history
+#
+# audit_log.view has been a permission an owner and an admin hold since
+# Phase 2, and it unlocked nothing anywhere. The Data tier had the route;
+# the Application tier added one on 6 ก.ย. 2569 *because* that route had no
+# caller — and still no screen asked for it and no sentence reached it, so
+# the fix moved the gap up one tier instead of closing it (audit,
+# 17 ก.ย. 2569). A shop with more than one member cannot otherwise answer
+# "ใครลบลูกค้ารายนี้".
+
+AUDIT_LOG_HEAD = {"th": "ประวัติการใช้งานล่าสุด", "en": "Recent activity"}
+AUDIT_LOG_NONE = {
+    "th": "ยังไม่มีประวัติการใช้งานที่บันทึกไว้ครับ",
+    "en": "Nothing has been recorded yet.",
+}
+AUDIT_LOG_FOOT = {
+    "th": "ดูทั้งหมด กรองตามคนหรือประเภทได้ที่แดชบอร์ด",
+    "en": "The dashboard has the rest, filtered by person or kind.",
+}
+AUDIT_LOG_SOMEONE = {"th": "ระบบ", "en": "the system"}
+#: How many rows fit a LINE bubble alongside a head, a foot and a cap line.
+AUDIT_LOG_LINES = 8
+AUDIT_LOG_READ = 60
+
+AUDIT_ACTION_WORDS = {
+    "create": {"th": "เพิ่ม", "en": "added"},
+    "update": {"th": "แก้ไข", "en": "changed"},
+    "delete": {"th": "ลบ", "en": "deleted"},
+    "read": {"th": "เปิดดู", "en": "opened"},
+    "export": {"th": "ส่งออก", "en": "exported"},
+    "erase": {"th": "ลบถาวร", "en": "erased"},
+}
+#: The audit table's own entity_type vocabulary, which is the DATABASE's
+#: names, not the model's — "license_invite", not "invite".
+AUDIT_ENTITY_WORDS = {
+    "customer": {"th": "ลูกค้า", "en": "a customer"},
+    "deal": {"th": "ดีล", "en": "a deal"},
+    "quote": {"th": "ใบเสนอราคา", "en": "a quote"},
+    "quote_line_item": {"th": "รายการในใบเสนอราคา", "en": "a quote line"},
+    "ticket": {"th": "ใบงาน", "en": "a job"},
+    "service_report": {"th": "รายงานบริการ", "en": "a service report"},
+    "product": {"th": "สินค้า", "en": "a product"},
+    "warranty": {"th": "การรับประกัน", "en": "a warranty"},
+    "note": {"th": "บันทึก", "en": "a note"},
+    "follow_up": {"th": "นัดหมาย", "en": "an appointment"},
+    "license_member": {"th": "สมาชิก", "en": "a member"},
+    "license_invite": {"th": "รหัสเชิญ", "en": "an invite code"},
+    "license_role": {"th": "บทบาท", "en": "a role"},
+    "license_setting": {"th": "การตั้งค่า", "en": "a setting"},
+    "technician_team": {"th": "ทีมช่าง", "en": "a technician team"},
+    "sales_group": {"th": "กลุ่มขาย", "en": "a sales group"},
+    "chat_session": {"th": "ห้องแชท", "en": "a chat session"},
+}
+
+
+def _audit_word(table: dict, key: str, language: str) -> str:
+    entry = table.get(str(key or "").strip().lower())
+    return _t(entry, language) if entry else str(key or "")
+
+
+def _audit_when(value) -> str:
+    """"17 ก.ย. 14:30" — the date a Thai shop reads, plus the clock, which
+    is the half that settles "ใครแก้ก่อน"."""
+    text = str(value or "")
+    day = _short_date(text).strip()
+    clock = text[11:16] if len(text) >= 16 and text[10] in ("T", " ") else ""
+    return " ".join(p for p in (day, clock) if p) or "-"
+
+
+async def _audit_actor_names(client: DataClient, license_id) -> dict[str, str]:
+    """chann_uid -> the name a shop recognises, resolved once per reply.
+
+    A row stores the actor's chann_uid because that is what the Data tier
+    holds. "U1a2b3c… ลบลูกค้า" answers nobody's question.
+    """
+    try:
+        members = await client.list_members(license_id)
+    except Exception:  # noqa: BLE001
+        log.exception("audit log: members")
+        return {}
+    names: dict[str, str] = {}
+    for m in members:
+        chann_uid = str(m.get("chann_uid") or "")
+        if not chann_uid or chann_uid in names:
+            continue
+        try:
+            profile = await client.get_profile(chann_uid) or {}
+        except Exception:  # noqa: BLE001
+            profile = {}
+        names[chann_uid] = _member_name(m, profile) or chann_uid[:8]
+    return names
+
+
+async def _handle_audit_log_query(
+    client: DataClient, *, ctx: ResolvedContext, license_id, intent: dict, language: str,
+) -> ChatReply:
+    """Who changed what, most recent first."""
+    fields = intent.get("fields") or {}
+    wanted = str(fields.get("entity_type") or fields.get("type") or "").strip().lower()
+    entity_type = wanted if wanted in AUDIT_ENTITY_WORDS else None
+    try:
+        rows = await client.list_audit_log(license_id, entity_type=entity_type, limit=AUDIT_LOG_READ)
+    except Exception:  # noqa: BLE001
+        log.exception("audit log read")
+        return ChatReply(text=unavailable_reply(language))
+    if not rows:
+        return ChatReply(
+            text=_t(AUDIT_LOG_NONE, language),
+            quick_reply_url=_dashboard_button("history", language),
+        )
+    names = await _audit_actor_names(client, license_id)
+    lines = []
+    for row in rows[:AUDIT_LOG_LINES]:
+        who = names.get(str(row.get("actor_id") or "")) or (
+            _t(AUDIT_LOG_SOMEONE, language)
+            if str(row.get("actor_type") or "") != "user"
+            else str(row.get("actor_id") or "")[:8] or _t(AUDIT_LOG_SOMEONE, language)
+        )
+        did = _audit_word(AUDIT_ACTION_WORDS, str(row.get("action") or ""), language)
+        what = _audit_word(AUDIT_ENTITY_WORDS, str(row.get("entity_type") or ""), language)
+        lines.append(f"• {_audit_when(row.get('created_at'))} · {who} {did}{what}")
+    body = "\n".join(_capped(lines, len(rows), language))
+    return ChatReply(
+        text=f"{_t(AUDIT_LOG_HEAD, language)}\n{body}\n{_t(AUDIT_LOG_FOOT, language)}",
+        quick_reply_url=_dashboard_button("history", language),
+    )
+
+
+# ---------------------------------------------------------- invite codes
+#
+# The shop could issue a code and never see the codes it had issued, so a
+# code that leaked stayed valid for its seven days with nobody able to
+# stop it. list_invites and revoke_invite have existed in the Data tier and
+# in DataClient, with no caller above them, since Phase 6.5.
+
+INVITE_LIST_HEAD = {"th": "รหัสเชิญที่ยังใช้ได้", "en": "Invite codes still valid"}
+INVITE_LIST_NONE = {
+    "th": "ตอนนี้ไม่มีรหัสเชิญที่ยังใช้ได้ครับ\nออกใหม่ได้โดยพิมพ์ \"ขอรหัสเชิญช่าง\" หรือ \"ขอรหัสเชิญพนักงานขาย\"",
+    "en": "No invite code is outstanding right now.\nType \"technician invite\" or \"sales invite\" to issue one.",
+}
+INVITE_LIST_FOOT = {
+    "th": "ยกเลิกได้โดยพิมพ์ \"ยกเลิกรหัสเชิญ <รหัส>\"",
+    "en": "Type \"revoke invite <code>\" to cancel one.",
+}
+INVITE_ROLE_WORDS = {
+    "technician": {"th": "ช่าง", "en": "technician"},
+    "sales": {"th": "ฝ่ายขาย", "en": "sales"},
+    "admin": {"th": "แอดมิน", "en": "admin"},
+    "owner": {"th": "เจ้าของร้าน", "en": "owner"},
+}
+INVITE_EXPIRES = {"th": "หมดอายุ {when}", "en": "expires {when}"}
+INVITE_NO_EXPIRY = {"th": "ไม่มีวันหมดอายุ", "en": "no expiry"}
+INVITE_REVOKED = {
+    "th": "ยกเลิกรหัสเชิญ {code} แล้วครับ — ใครถือรหัสนี้อยู่จะใช้เข้าร้านไม่ได้อีก",
+    "en": "Invite code {code} is cancelled — whoever holds it can no longer join.",
+}
+INVITE_NOT_FOUND = {
+    "th": "ไม่พบรหัสเชิญ {code} ในร้านนี้ครับ พิมพ์ \"ดูรหัสเชิญ\" เพื่อดูรายการ",
+    "en": "No invite code {code} in this shop. Type \"invite codes\" to see the list.",
+}
+INVITE_WHICH = {
+    "th": "จะยกเลิกรหัสเชิญไหนครับ พิมพ์ \"ยกเลิกรหัสเชิญ <รหัส>\"\nดูรายการได้โดยพิมพ์ \"ดูรหัสเชิญ\"",
+    "en": "Which invite code? Type \"revoke invite <code>\".\nType \"invite codes\" for the list.",
+}
+INVITE_LIST_LINES = 8
+
+
+def _invite_code_in(text: str) -> str:
+    """The code out of "ยกเลิกรหัสเชิญ QK4P2RSTUV".
+
+    Exactly ten characters of the generator's own alphabet, which has no
+    I, L, O, 0 or 1 in it (phase65.CODE_ALPHABET) — narrow enough that an
+    ordinary English word in the sentence is not mistaken for a code.
+    """
+    match = re.search(r"\b[A-HJ-KM-NP-Za-hj-km-np-z2-9]{10}\b", str(text or ""))
+    return match.group(0).upper() if match else ""
+
+
+def _invite_line(row: dict, language: str) -> str:
+    role = _audit_word(INVITE_ROLE_WORDS, str(row.get("role") or ""), language)
+    when = _short_date(row.get("expires_at")).strip()
+    tail = _t(INVITE_EXPIRES, language).format(when=when) if when else _t(INVITE_NO_EXPIRY, language)
+    return f"• {row.get('invite_code')} · {role} · {tail}"
+
+
+def _invite_is_open(row: dict) -> bool:
+    """Still a key to the shop: not cancelled, not used up, not expired.
+
+    `status` is what the Application tier computes; a row read straight
+    from the Data tier has none, so the fields decide.
+    """
+    status = str(row.get("status") or "")
+    if status:
+        return status == "open"
+    if row.get("revoked_at"):
+        return False
+    if int(row.get("used_count") or 0) >= int(row.get("max_uses") or 1):
+        return False
+    expires = str(row.get("expires_at") or "")[:10]
+    return not expires or expires >= local_today().isoformat()
+
+
+async def _handle_invite_list(
+    client: DataClient, *, ctx: ResolvedContext, license_id, language: str,
+) -> ChatReply:
+    try:
+        rows = await client.list_invites(license_id)
+    except Exception:  # noqa: BLE001
+        log.exception("invite list")
+        return ChatReply(text=unavailable_reply(language))
+    live = [r for r in rows if _invite_is_open(r)]
+    if not live:
+        return ChatReply(
+            text=_t(INVITE_LIST_NONE, language),
+            quick_reply_url=_dashboard_button("members", language),
+        )
+    lines = _capped([_invite_line(r, language) for r in live[:INVITE_LIST_LINES]], len(live), language)
+    return ChatReply(
+        text=f"{_t(INVITE_LIST_HEAD, language)}\n" + "\n".join(lines) + f"\n{_t(INVITE_LIST_FOOT, language)}",
+        quick_reply_url=_dashboard_button("members", language),
+    )
+
+
+async def _handle_invite_revoke(
+    client: DataClient, *, ctx: ResolvedContext, license_id, intent: dict,
+    message: str, language: str,
+) -> ChatReply:
+    fields = intent.get("fields") or {}
+    code = str(fields.get("invite_code") or fields.get("code") or "").strip().upper()
+    if not code:
+        code = _invite_code_in(message)
+    if not code:
+        return ChatReply(text=_t(INVITE_WHICH, language))
+    try:
+        rows = await client.list_invites(license_id)
+    except Exception:  # noqa: BLE001
+        log.exception("invite list before revoke")
+        return ChatReply(text=unavailable_reply(language))
+    match = next((r for r in rows if str(r.get("invite_code") or "").upper() == code), None)
+    if match is None:
+        return ChatReply(text=_t(INVITE_NOT_FOUND, language).format(code=code))
+    try:
+        await client.revoke_invite(license_id, str(match.get("id") or ""), actor_id=ctx.chann_uid)
+    except Exception:  # noqa: BLE001
+        log.exception("invite revoke")
+        return ChatReply(text=unavailable_reply(language))
+    return ChatReply(
+        text=_t(INVITE_REVOKED, language).format(code=code),
+        quick_reply_url=_dashboard_button("members", language),
+    )
+
+
 async def _handle_ai_understood_intent(
     client: DataClient, *, intent: dict, ctx: ResolvedContext, license_id,
     permission_keys: list[str], language: str, message: str = "",
@@ -15968,6 +16261,22 @@ async def _handle_ai_understood_intent(
             message=_joined(fields.get("serial_number"), fields.get("product_name"), target, message),
             language=language, permission_keys=permission_keys, target_name=target,
         )
+
+    if entity == "audit_log" and action in READ_ACTIONS:
+        return await _handle_audit_log_query(
+            client, ctx=ctx, license_id=license_id, intent=intent, language=language,
+        )
+
+    if entity == "invite":
+        if action in READ_ACTIONS:
+            return await _handle_invite_list(
+                client, ctx=ctx, license_id=license_id, language=language,
+            )
+        if action in ("delete", "cancel", "revoke", "reject"):
+            return await _handle_invite_revoke(
+                client, ctx=ctx, license_id=license_id, intent=intent,
+                message=message, language=language,
+            )
 
     # Understood as a category but not as something with a handler behind
     # it. Saying what IS possible beats "not a feature", which is wrong —
@@ -26088,7 +26397,13 @@ async def _execute_intent(
     if mismatch is not None:
         return mismatch
     _drop_invented_values(intent)
-    if intent.get("entity") in ("ticket", "service_report", "followup", "warranty", "approval", "photo"):
+    if intent.get("entity") in (
+        "ticket", "service_report", "followup", "warranty", "approval", "photo",
+        # The same lesson, twice more (round 20g): a handler written inside
+        # _handle_ai_understood_intent does nothing at all until its entity
+        # is on THIS list. It is the list that decides what is reachable.
+        "audit_log", "invite",
+    ):
         # "approval" was handled inside _handle_ai_understood_intent and
         # never dispatched TO it: "มีอะไรรอผมตรวจบ้าง" and "อนุมัติ
         # SR-2026-0001" passed the gate and fell to the stub below, with
@@ -26514,7 +26829,8 @@ ENTITY_DASHBOARD_PAGE: dict[str, tuple[str, dict[str, str]]] = {
     "member": ("members", {"th": "สมาชิกและสิทธิ์", "en": "Members and permissions"}),
     "role": ("roles", {"th": "บทบาทและสิทธิ์", "en": "Roles and permissions"}),
     "setting": ("company", {"th": "ข้อมูลบริษัท", "en": "Company details"}),
-    "audit_log": ("company", {"th": "ข้อมูลบริษัท", "en": "Company details"}),
+    "audit_log": ("history", {"th": "ประวัติการใช้งาน", "en": "Activity"}),
+    "invite": ("members", {"th": "สมาชิกและสิทธิ์", "en": "Members and permissions"}),
     "report": ("index", {"th": "แดชบอร์ด", "en": "Dashboard"}),
 }
 NO_HANDLER_ON_PAGE = {

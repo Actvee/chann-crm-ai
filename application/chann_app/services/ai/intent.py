@@ -336,6 +336,23 @@ does not exist anywhere else the model can check against):
     "ขอรหัสร้านให้ลูกค้าหน่อย", "ข้อมูลบริษัท". Asking for the shop's code
     is never a customer lookup.
 
+- entity="audit_log" — who changed what in this shop, and when. A
+  question about PEOPLE'S ACTIONS on the shop's records, never about the
+  records themselves.
+  action="read": fields may include entity_type, one of the record kinds
+    ("customer", "deal", "quote", "ticket", "product", "license_member")
+    when the question narrows to one. Examples: "ใครลบลูกค้ารายนี้",
+    "ประวัติการใช้งาน", "ใครแก้ราคาไป", "who changed this", "ดูว่าพนักงาน
+    ทำอะไรไปบ้าง". "ประวัติลูกค้า" is the CUSTOMER's card, not this.
+
+- entity="invite" — a code a new member types to join this shop. Issuing
+  one is answered elsewhere; this is the codes already issued.
+  action="read": the codes still valid. Examples: "ดูรหัสเชิญ",
+    "มีรหัสเชิญอะไรค้างอยู่บ้าง", "invite codes".
+  action="delete": cancelling one, because it leaked or is no longer
+    wanted. fields may include invite_code. Examples: "ยกเลิกรหัสเชิญ
+    QK4P2RSTUV", "รหัสเชิญหลุด ยกเลิกให้หน่อย", "revoke invite QK4P2RSTUV".
+
 - entity="report" — asking for an overview rather than changing anything.
   action="read": fields may include type and period ("today", "week", "month").
     type is one of:

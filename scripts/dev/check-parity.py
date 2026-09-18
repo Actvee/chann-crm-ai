@@ -107,7 +107,10 @@ KNOWN_GAPS: dict[tuple[str, str], str] = {}
 # fields happily — a parity break the parity checker could not see
 # (11 ก.ย. 2569).
 NO_HANDLER_YET = {
-    ("audit_log", "read"): "the compliance trail is a dashboard screen; chat has no reader",
+    # ("audit_log", "read") was here until round 20g. The reason given was
+    # "the compliance trail is a dashboard screen" — and there was no such
+    # screen either, so the entry documented a gap on both sides as if it
+    # were a decision (audit, 17 ก.ย. 2569). Now both exist.
     ("member", "update"): "changing someone's role is the roles screen's job, with the members list in view",
     ("role", "create"): "permission editing is the roles screen, deliberately",
     ("role", "read"): "same screen",
@@ -122,7 +125,9 @@ URL_ENTITIES = [
     ("approvals", "approval"),
     ("surveys", "survey"),
     ("follow-ups", "followup"),
+    ("audit-log", "audit_log"),
     ("audit", "audit_log"),
+    ("invites", "invite"),
     ("sales-groups", "sales_group"),
     ("warranties", "warranty"),
     ("products", "product"),
@@ -149,7 +154,7 @@ VERB_SEGMENTS = {
     "promote": "promote", "archive": "archive", "void": "update",
     "issue": "update", "status": "update", "check-in": "check_in",
     "check-out": "check_out", "link": "read", "preview": "read",
-    "publish": "update", "reopen": "update",
+    "publish": "update", "reopen": "update", "revoke": "delete",
     # Phase 14: acting on an approval step; answering a survey is the
     # customer updating their own row.
     "approve": "approve", "reject": "reject", "answer": "update",

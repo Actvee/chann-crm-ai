@@ -114,6 +114,21 @@ async def _say(client, message, *, intent=None, oa="sales", role="sales"):
     return (reply.text or ""), written
 
 
+def _the_next_friday() -> str:
+    """The day "วันศุกร์" names, as the parser reads it: the next Friday
+    STRICTLY ahead of today. Pinned to 2026-09-18 until that date arrived
+    and was a Friday, at which point "วันศุกร์" meant the 25th and five
+    tests went red at midnight for the second time (18 ก.ย. 2569). The rule
+    is the assertion; a date never is.
+    """
+    from datetime import timedelta
+
+    from chann_app.services.thai_datetime import local_today
+
+    today = local_today()
+    return (today + timedelta(days=((4 - today.weekday()) % 7) or 7)).isoformat()
+
+
 class TestCase1DoNotCancel:
     """"ไม่ต้องยกเลิกนัด" ต้องไม่ยกเลิก."""
 
@@ -1888,7 +1903,7 @@ class TestTheShopCanMoveAVisitFromChat:
         text, written = await self._say_on(client, message, "sales", "admin")
         assert "update_ticket" in written, f"{text} / {written}"
         sent = _payload(client, "update_ticket")
-        assert sent["scheduled_date"] == "2026-09-18", sent
+        assert sent["scheduled_date"] == _the_next_friday(), sent
         assert sent["scheduled_time"].startswith("14:00"), sent
 
     @pytest.mark.asyncio
