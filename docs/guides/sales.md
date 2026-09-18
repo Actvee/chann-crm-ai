@@ -76,20 +76,20 @@ _EN: Ask for a report — Type what you want to know in the chat — "won deals 
 
 ## 8. ติดขัด
 
-"วิธีใช้" ดูตัวอย่างที่คุณมีสิทธิ์ · "ทำอะไรได้บ้าง" ดูสิทธิ์ทั้งหมด · สิทธิ์ขอได้จากเจ้าของร้าน (แดชบอร์ด > บทบาทและทีม) · "เปลี่ยนภาษาเป็นอังกฤษ"
+"วิธีใช้" ดูตัวอย่างที่คุณมีสิทธิ์ · "ทำอะไรได้บ้าง" ดูสิทธิ์ทั้งหมด · คุยกันจนงงหรือกรอกค้างอยู่ พิมพ์ "เริ่มใหม่" ล้างเฉพาะบทสนทนา ข้อมูลไม่หาย · สิทธิ์ขอได้จากเจ้าของร้าน (แดชบอร์ด > บทบาทและทีม) · "เปลี่ยนภาษาเป็นอังกฤษ"
 
 พิมพ์: `วิธีใช้`
 
 [IMAGE: sales-help — หน้าจอ 'บทบาทและทีม' แสดงรายชื่อสมาชิกและสิทธิ์เป็น toggle ธีมเขียว]
 
-_EN: Stuck — "help" · "what can I do" · ask the owner for permissions (dashboard > roles) · "switch to English"_
+_EN: Stuck — "help" · "what can I do" · stuck mid-form or talking in circles? "start over" clears the conversation only, never your data · ask the owner for permissions (dashboard > roles) · "switch to English"_
 
 ## 9. สมาชิกในร้าน
 
-หน้าจอ > สมาชิกในร้าน (ข้างบทบาท) ดูว่าใครผูกกับบริษัทใน LINE ไหน — LINE ทีมขาย/CS หรือ LINE ช่าง คนเดียวกันอาจอยู่ทั้งสองฝั่งคนละบทบาท · เปลี่ยนบทบาท · นำออก / กลับมาใช้งาน (นำช่างออก = ถอดจากทีมและคืนงานที่ค้างเข้าคิว) · รีเซ็ตการลงทะเบียน เมื่อแชทของคนนั้นค้าง · เจ้าของร้านนำออกไม่ได้ ต้องโอนความเป็นเจ้าของก่อน · เพิ่มคน: พิมพ์ "ขอรหัสเชิญ" แล้วเลือกว่าช่างหรือทีมขาย — รหัสช่างไปพิมพ์ใน LINE ช่าง รหัสทีมขาย/CS ไปพิมพ์ใน LINE ฝ่ายขาย · ดูรหัสที่ออกไปแล้ว: "ดูรหัสเชิญ" · รหัสหลุด ยกเลิกได้ที่ "ยกเลิกรหัสเชิญ <รหัส>" หรือปุ่มบนหน้าสมาชิก · แต่ละ LINE ลงทะเบียนแยกกัน ใช้ร่วมกันเฉพาะข้อมูลส่วนตัว · **ใครทำอะไรไปบ้าง**: พิมพ์ "ประวัติการใช้งาน" หรือถามตรง ๆ เช่น "ใครลบลูกค้ารายนี้" · ดูทั้งหมดที่ หน้าจอ > ประวัติการใช้งาน (ต้องมีสิทธิ์ "ดูประวัติการใช้งาน")
+หน้าจอ > สมาชิกในร้าน (ข้างบทบาท) ดูว่าใครผูกกับบริษัทใน LINE ไหน — LINE ทีมขาย/CS หรือ LINE ช่าง คนเดียวกันอาจอยู่ทั้งสองฝั่งคนละบทบาท · เปลี่ยนบทบาท · นำออก / กลับมาใช้งาน (นำช่างออก = ถอดจากทีมและคืนงานที่ค้างเข้าคิว) · รีเซ็ตการลงทะเบียน เมื่อแชทของคนนั้นค้าง · เจ้าของร้านนำออกไม่ได้ ต้องโอนความเป็นเจ้าของก่อน · เพิ่มคน: พิมพ์ "ขอรหัสเชิญ" แล้วเลือกว่าช่างหรือทีมขาย — รหัสช่างไปพิมพ์ใน LINE ช่าง รหัสทีมขาย/CS ไปพิมพ์ใน LINE ฝ่ายขาย · เปลี่ยนบทบาทจากแชทได้: "เปลี่ยนบทบาทสมชายเป็นแอดมิน" · เอาคนออก: "เอาสมศักดิ์ออกจากร้าน" · รับกลับ: "ให้สมศักดิ์กลับมาใช้งานได้" · ดูบทบาททั้งหมด: "มีบทบาทอะไรบ้าง" · เพิ่มสิทธิ์ให้บทบาท: "ให้บทบาท cs ดูใบเสนอราคาได้ด้วย" (เพิ่ม ไม่ทับของเดิม) · ดูรหัสที่ออกไปแล้ว: "ดูรหัสเชิญ" · รหัสหลุด ยกเลิกได้ที่ "ยกเลิกรหัสเชิญ <รหัส>" หรือปุ่มบนหน้าสมาชิก · แต่ละ LINE ลงทะเบียนแยกกัน ใช้ร่วมกันเฉพาะข้อมูลส่วนตัว · **ใครทำอะไรไปบ้าง**: พิมพ์ "ประวัติการใช้งาน" หรือถามตรง ๆ เช่น "ใครลบลูกค้ารายนี้" · ดูทั้งหมดที่ หน้าจอ > ประวัติการใช้งาน (ต้องมีสิทธิ์ "ดูประวัติการใช้งาน")
 
 พิมพ์: `หน้าจอ > สมาชิกในร้าน`
 
 [IMAGE: sales-members — หน้าจอแดชบอร์ดสีเขียว 'สมาชิกในร้าน' ตารางชื่อ / LINE (ทีมขาย·ช่าง) / บทบาท / สถานะ ปุ่ม เปลี่ยนบทบาท นำออก รีเซ็ต แถวเจ้าของมีป้าย 'เจ้าของ']
 
-_EN: Members — Home > Members (next to roles): who is linked to the company on which LINE — the sales/CS LINE or the technician LINE; one person can be on both with different roles · change a role · remove / reactivate (removing a technician also takes them off teams and returns their open jobs to the queue) · reset onboarding when someone's chat is stuck · the owner cannot be removed; transfer ownership first · to add people: "invite technician" gives a code they type in the technician LINE; sales/CS staff use a sales-LINE invite code · "invite codes" lists the ones still valid and "revoke invite <code>" cancels one that leaked · each LINE is a separate registration; only personal details are shared · **who did what**: type "activity", or ask directly ("who deleted this customer"); Home > Activity has all of it, behind the "view audit log" permission._
+_EN: Members — Home > Members (next to roles): who is linked to the company on which LINE — the sales/CS LINE or the technician LINE; one person can be on both with different roles · change a role · remove / reactivate (removing a technician also takes them off teams and returns their open jobs to the queue) · reset onboarding when someone's chat is stuck · the owner cannot be removed; transfer ownership first · to add people: "invite technician" gives a code they type in the technician LINE; sales/CS staff use a sales-LINE invite code · roles and people can be changed from chat too: "make Somchai an admin", "take Somsak off the shop", "bring Somsak back", "what roles are there", "give role cs quote.read" (added, never substituted) · "invite codes" lists the ones still valid and "revoke invite <code>" cancels one that leaked · each LINE is a separate registration; only personal details are shared · **who did what**: type "activity", or ask directly ("who deleted this customer"); Home > Activity has all of it, behind the "view audit log" permission._

@@ -1,0 +1,35 @@
+[
+  {
+    "name": "บทบาทและสมาชิก — ดู สร้าง ให้สิทธิ์ แล้วเปลี่ยนบทบาทคน (round 20i)",
+    "oa": "sales",
+    "role": "owner",
+    "seed": {
+      "members": [
+        {"id": "m1", "chann_uid": "CHN-S-000001", "role": "owner", "channel": "sales", "status": "active", "is_owner": true, "first_name": "สมชาย", "last_name": "ใจดี"},
+        {"id": "m2", "chann_uid": "U-cs", "role": "cs", "channel": "sales", "status": "active", "is_owner": false, "first_name": "สมหญิง", "last_name": "ขยัน"}
+      ],
+      "roles": [
+        {"role_name": "owner", "is_owner": true, "permission_keys": []},
+        {"role_name": "cs", "is_owner": false, "permission_keys": ["customer.read"]},
+        {"role_name": "admin", "is_owner": false, "permission_keys": ["customer.read", "deal.read"]}
+      ]
+    },
+    "turns": [
+      {"say": "มีบทบาทอะไรบ้าง", "expect": {"contains": ["cs", "admin"], "not_contains": ["ยังทำรายการนี้ไม่ได้"]}},
+      {"say": "ให้บทบาท cs ดูใบเสนอราคาได้ด้วย", "expect": {"recorded": ["update_role"]}},
+      {"say": "เปลี่ยนบทบาทสมหญิงเป็น admin", "expect": {"recorded": ["set_member_role"], "contains": ["สมหญิง"]}},
+      {"say": "เปลี่ยนบทบาทสมชายเป็น cs", "expect": {"not_recorded": ["set_member_role"], "contains": ["เจ้าของ"]}}
+    ]
+  },
+  {
+    "name": "เริ่มใหม่ — ระหว่างฟอร์มค้างอยู่ (round 20i)",
+    "oa": "sales",
+    "role": "owner",
+    "seed": {},
+    "turns": [
+      {"say": "เพิ่มลูกค้าใหม่", "expect": {"recorded": ["set_pending_intent"]}},
+      {"say": "เริ่มใหม่", "expect": {"recorded": ["clear_recent_turns"], "contains": ["ยังอยู่ครบ"]}},
+      {"say": "รายชื่อลูกค้า", "expect": {"not_contains": ["กรุณาระบุ"]}}
+    ]
+  }
+]

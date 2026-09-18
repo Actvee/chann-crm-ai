@@ -5403,14 +5403,24 @@ def sweep_chat_sessions(session: Session = Depends(get_session)):
             repo.mark_escalated(row)
         timed_out = repo.time_out()
         session.commit()
-        escalated_out = []
-        for row in overdue:
-            session.refresh(row)
-            escalated_out.extend(_chat_sessions_out(session, TenantScope(license_id=row.license_id), [row]))
-        timed_out_out = []
-        for row in timed_out:
-            session.refresh(row)
-            timed_out_out.extend(_chat_sessions_out(session, TenantScope(license_id=row.license_id), [row]))
+        # Grouped by licence rather than one call per row: _chat_sessions_out
+        # runs a summaries query and an identity query each time, and the
+        # dashboard used to drive this sweep on every poll (18 ก.ย. 2569).
+        # The scope only ever narrows the summaries lookup to one tenant, so
+        # rows of the same licence answer together.
+        def _grouped(rows: list) -> list:
+            for row in rows:
+                session.refresh(row)
+            by_license: dict = {}
+            for row in rows:
+                by_license.setdefault(row.license_id, []).append(row)
+            out: list = []
+            for license_id, group in by_license.items():
+                out.extend(_chat_sessions_out(session, TenantScope(license_id=license_id), group))
+            return out
+
+        escalated_out = _grouped(overdue)
+        timed_out_out = _grouped(timed_out)
         return ChatSweepOut(escalated=escalated_out, timed_out=timed_out_out)
     except Exception as exc:
         session.rollback()

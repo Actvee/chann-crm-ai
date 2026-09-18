@@ -87,9 +87,15 @@ class TestTheClosedChatTabDoesNotWaitForTheSweep:
         source = (Path(__file__).resolve().parents[2]
                   / "application/chann_app/routers_phase2.py").read_text(encoding="utf-8")
         start = source.index("async def list_chat_sessions")
-        body = source[start:start + 2400]
+        body = source[start: source.index("@router.post", start)]
         assert 'if wanted == "live":' in body, body[:600]
-        assert body.index('if wanted == "live":') < body.index("live_chat.sweep")
+        # Round 20i moved the call itself into _sweep_soon, which throttles
+        # it and does NOT await it — the dashboard polls the live tab every
+        # eight seconds and the sweep is a cross-tenant write pass. The
+        # guarantee this test exists for is unchanged: only the live view
+        # starts one, and the closed tabs never do.
+        assert body.index('if wanted == "live":') < body.index("_sweep_soon(client)")
+        assert "await live_chat.sweep(" not in body, "the list waits for the sweep again"
 
 
 class TestTheDeleteDialogSaysWhatAndWhether:

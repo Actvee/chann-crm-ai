@@ -1,9 +1,11 @@
 """Phase 2 business API: roles, permissions, settings and owner transfer."""
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 import re
+import time
 import uuid
 
 import hashlib
@@ -589,7 +591,17 @@ async def patch_company_profile(
     body = payload.model_dump(mode="json", exclude_unset=True)
     if "vat_rate_percent" in body:
         percent = body.pop("vat_rate_percent")
-        body["vat_rate"] = None if percent is None else percent / Decimal(100)
+        # `mode="json"` hands a Decimal back as a STRING. Round 20d added
+        # that to all fifteen dumps to stop Decimals reaching the JSON
+        # encoder, and this is the one site that then did ARITHMETIC on the
+        # result — so saving VAT has answered 500 ever since with
+        # "unsupported operand type(s) for /: 'str' and 'decimal.Decimal'"
+        # (owner, 18 ก.ย. 2569). Decimal(str(...)) parses it without going
+        # near a float, and the quotient leaves as a string because the very
+        # next thing it meets is the JSON encoder that started all this.
+        body["vat_rate"] = (
+            None if percent is None else str(Decimal(str(percent)) / Decimal(100))
+        )
 
     try:
         return await client.update_company_profile(
@@ -4099,6 +4111,39 @@ async def _chat_session_for(
     return session
 
 
+#: The dashboard polls the live tab every 8 seconds, and the sweep is a
+#: CROSS-TENANT write pass — overdue answers escalated, dead conversations
+#: closed, LINE pushes sent — so awaiting it made every poll wait for work
+#: that has nothing to do with drawing a list, and every open dashboard in
+#: the platform started one (owner, 18 ก.ย. 2569: "กดดูระหว่าง เปิดอยู่ กับ
+#: ทั้งหมด ยังโหลดช้าอยู่"). Cloud Scheduler runs the same sweep every five
+#: minutes; this is only the safety net for a deployment without one, so
+#: once a minute is plenty and the list must never wait for it.
+_SWEEP_EVERY_S = 60.0
+_last_sweep_at = 0.0
+
+
+def _sweep_soon(client: DataClient) -> None:
+    """Start the clock tick if it is due, and return immediately."""
+    global _last_sweep_at
+
+    now = time.monotonic()
+    if now - _last_sweep_at < _SWEEP_EVERY_S:
+        return
+    _last_sweep_at = now
+
+    async def _run() -> None:
+        try:
+            await live_chat.sweep(client)
+        except Exception:  # noqa: BLE001 — the scheduler runs it again in five minutes
+            logging.getLogger(__name__).exception("chat sweep from the dashboard failed")
+
+    try:
+        asyncio.get_running_loop().create_task(_run())
+    except RuntimeError:  # pragma: no cover — no loop means no request either
+        logging.getLogger(__name__).debug("no running loop for the chat sweep")
+
+
 @router.get("/licenses/{license_id}/chat-sessions")
 async def list_chat_sessions(
     license_id: str,
@@ -4132,10 +4177,7 @@ async def list_chat_sessions(
     # Cloud Scheduler calls /platform/chat/sweep every five minutes as
     # well, so nothing is lost by skipping it on the closed tabs.
     if wanted == "live":
-        try:
-            await live_chat.sweep(client)
-        except Exception:
-            logging.getLogger(__name__).exception("chat sweep from the dashboard failed")
+        _sweep_soon(client)
     try:
         return await client.list_chat_sessions(
             license_id, status=None if wanted == "all" else wanted, limit=200,

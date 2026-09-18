@@ -330,30 +330,50 @@ class TestTheOtherRegisteredReads:
 # ------------------------------------------ 5. what genuinely has no handler
 
 class TestTheHonestReplyIsStillHonest:
-    async def test_it_says_no_and_names_the_page_that_does_it(self):
-        client = await _sales()
-        reply = await say(client, "อยากเปลี่ยนบทบาทของสมาชิกคนนี้", ai=_crafted(
-            {"action": "update", "entity": "member", "fields": {}, "missing": []}))
+    """The reply for something chat genuinely cannot do: say so, name the
+    screen that can, and carry a button to it.
+
+    This used to be demonstrated with ("update", "member") — until round
+    20i gave that a handler, along with the last three others, so
+    measure-capabilities now reads "0 with no handler". There is no
+    registered pair left to demonstrate it WITH, which is the point; so
+    the reply itself is exercised directly, and the invariant that every
+    entity has a page to point at is pinned by the test below.
+    """
+
+    def test_it_says_no_and_names_the_page_that_does_it(self):
+        reply = chat._no_handler_reply(
+            {"action": "update", "entity": "member", "fields": {}, "missing": []}, "th",
+        )
         assert NOT_IN_CHAT_TH in reply.text
         assert "หน้า \"สมาชิกและสิทธิ์\" ในแดชบอร์ด" in reply.text
         # No work claimed and no dead end.
         assert "เรียบร้อยแล้ว" not in reply.text
 
-    async def test_in_english_too(self):
-        client = await _sales()
-        reply = await say(client, "change this member's role", language="en", ai=_crafted(
-            {"action": "update", "entity": "member", "fields": {}, "missing": []}))
+    def test_in_english_too(self):
+        reply = chat._no_handler_reply(
+            {"action": "update", "entity": "member", "fields": {}, "missing": []}, "en",
+        )
         assert "not available in chat yet" in reply.text
         assert '"Members and permissions" page in the dashboard' in reply.text
 
-    async def test_the_button_opens_that_page_when_the_shop_has_a_liff_id(self, monkeypatch):
+    def test_the_button_opens_that_page_when_the_shop_has_a_liff_id(self, monkeypatch):
         monkeypatch.setattr(settings, "liff_sales_id", "1234-abcd")
-        client = await _sales()
-        reply = await say(client, "อยากเปลี่ยนบทบาทของสมาชิกคนนี้", ai=_crafted(
-            {"action": "update", "entity": "member", "fields": {}, "missing": []}))
+        reply = chat._no_handler_reply(
+            {"action": "update", "entity": "member", "fields": {}, "missing": []}, "th",
+        )
         label, url = reply.quick_reply_url
         assert label == "เปิดหน้าสมาชิกและสิทธิ์"
         assert url == "https://liff.line.me/1234-abcd/members"
+
+    def test_the_fallback_is_still_wired_into_the_dispatcher(self):
+        """Exercising the function directly proves the wording, not the
+        reach — so this proves the reach."""
+        from pathlib import Path
+
+        src = (Path(chat.__file__).read_text(encoding="utf-8"))
+        body = src[src.index("async def _execute_intent("):]
+        assert "_no_handler_reply(intent, language, ctx.oa)" in body
 
     def test_every_entity_the_model_can_emit_has_a_page_to_point_at(self):
         """A pair with no handler and no page is the dead end this fixed."""

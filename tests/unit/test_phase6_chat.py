@@ -1110,6 +1110,48 @@ class FakeDataClient:
             {"role_name": "technician", "is_owner": False, "permission_keys": []},
         ]))
 
+    async def create_role(self, license_id, payload, actor_id=None):
+        self.recorded.append(("create_role", license_id, payload, actor_id))
+        row = {
+            "role_name": payload["role_name"], "is_owner": False,
+            "permission_keys": list(payload.get("permission_keys") or []),
+        }
+        self._roles = await self.list_roles(license_id) + [row]
+        return row
+
+    async def update_role(self, license_id, role_name, payload, actor_id=None):
+        self.recorded.append(("update_role", license_id, role_name, payload, actor_id))
+        rows = await self.list_roles(license_id)
+        row = next((r for r in rows if r["role_name"] == role_name), None)
+        if row is None:
+            from chann_app.data_client import DataTierError
+
+            raise DataTierError(404, "role not found")
+        if "permission_keys" in payload:
+            row["permission_keys"] = list(payload["permission_keys"])
+        self._roles = rows
+        return row
+
+    async def set_member_role(self, license_id, chann_uid, role_name, actor_id=None, channel="sales"):
+        self.recorded.append(("set_member_role", license_id, chann_uid, role_name, channel))
+        for m in getattr(self, "_members", []):
+            if m.get("chann_uid") == chann_uid and str(m.get("channel") or "sales") == channel:
+                m["role"] = role_name
+                return dict(m)
+        from chann_app.data_client import DataTierError
+
+        raise DataTierError(404, "member not found")
+
+    async def set_member_status(self, license_id, chann_uid, *, status, channel="sales", actor_id=None):
+        self.recorded.append(("set_member_status", license_id, chann_uid, status, channel))
+        for m in getattr(self, "_members", []):
+            if m.get("chann_uid") == chann_uid and str(m.get("channel") or "sales") == channel:
+                m["status"] = status
+                return dict(m)
+        from chann_app.data_client import DataTierError
+
+        raise DataTierError(404, "member not found")
+
     # Notification pipeline (Phase 6), as the approval executor drives it.
     async def line_target_of(self, chann_uid):
         return getattr(self, "_line_targets", {}).get(chann_uid)
@@ -6850,6 +6892,9 @@ class TestButtonsTheSystemWritesDoNotNeedTheAI:
             # round 19p: read by _asks_to_join_another_shop, in the
             # dispatcher and in the customer road
             "ผูกอีกร้าน",
+            # round 20i: the roster, read by the model as ("read","member")
+            # — same as the profile edit above, no trigger tuple of its own
+            "รายชื่อสมาชิก",
         }
         remaining = [t for t in dead if t not in handled_by_literal]
         assert not remaining, f"buttons that lead nowhere: {remaining}"

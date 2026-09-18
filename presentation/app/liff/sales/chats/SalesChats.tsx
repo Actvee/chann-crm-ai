@@ -92,6 +92,13 @@ export default function SalesChats({ liffId }: { liffId: string }) {
   const [canReply, setCanReply] = useState(false);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [tab, setTab] = useState<"live" | "all">("live");
+  // Loading and empty are two different things and looked identical: a tab
+  // switch kept showing the previous tab's "ยังไม่มีแชท" until the new rows
+  // landed, so a shop with no live conversations pressed "ทั้งหมด" and read
+  // it as their chats having vanished (owner, 18 ก.ย. 2569). The eight-second
+  // poll must NOT raise this — a list that blinks into skeletons every eight
+  // seconds is worse than one that never says anything.
+  const [loadingList, setLoadingList] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
@@ -110,28 +117,33 @@ export default function SalesChats({ liffId }: { liffId: string }) {
   const selected = sessions.find((s) => s.id === selectedId) ?? null;
 
   const loadSessions = useCallback(
-    async (currentToken = token, license = licenseId, which = tab) => {
+    async (currentToken = token, license = licenseId, which = tab, announce = false) => {
       if (!currentToken || !license) return;
-      const response = await fetch(
-        `/api/phase2/licenses/${license}/chat-sessions?status_filter=${which === "all" ? "all" : "live"}`,
-        { headers: proxyHeaders(currentToken, license) },
-      );
-      if (!response.ok) {
-        throw new Error(
-          response.status === 403
-            ? t.dashboard.noPermission
-            : `${t.dashboard.loadFailed} (${response.status})`,
+      if (announce) setLoadingList(true);
+      try {
+        const response = await fetch(
+          `/api/phase2/licenses/${license}/chat-sessions?status_filter=${which === "all" ? "all" : "live"}`,
+          { headers: proxyHeaders(currentToken, license) },
         );
+        if (!response.ok) {
+          throw new Error(
+            response.status === 403
+              ? t.dashboard.noPermission
+              : `${t.dashboard.loadFailed} (${response.status})`,
+          );
+        }
+        const rows = (await response.json()) as ChatSession[];
+        // Same rows, same order → keep the old array so React skips the work.
+        setSessions((prev) =>
+          prev.length === rows.length &&
+          prev.every((p, i) => p.id === rows[i].id && p.updated_at === rows[i].updated_at &&
+            p.unread_from_customer === rows[i].unread_from_customer && p.status === rows[i].status)
+            ? prev
+            : rows,
+        );
+      } finally {
+        if (announce) setLoadingList(false);
       }
-      const rows = (await response.json()) as ChatSession[];
-      // Same rows, same order → keep the old array so React skips the work.
-      setSessions((prev) =>
-        prev.length === rows.length &&
-        prev.every((p, i) => p.id === rows[i].id && p.updated_at === rows[i].updated_at &&
-          p.unread_from_customer === rows[i].unread_from_customer && p.status === rows[i].status)
-          ? prev
-          : rows,
-      );
     },
     [token, licenseId, tab, t],
   );
@@ -171,7 +183,7 @@ export default function SalesChats({ liffId }: { liffId: string }) {
     setToken(session.token);
     setLicenseId(session.licenseId);
     setCanReply(!session.suspended && session.permissions.has("chat_session.reply"));
-    loadSessions(session.token, session.licenseId, "live")
+    loadSessions(session.token, session.licenseId, "live", true)
       .then(() => say(""))
       .catch((error: unknown) =>
         say(error instanceof Error ? error.message : t.dashboard.openFailed, "error"),
@@ -205,7 +217,11 @@ export default function SalesChats({ liffId }: { liffId: string }) {
   }, [token, licenseId, selectedId, loadSessions, loadThread]);
 
   useEffect(() => {
-    void loadSessions().catch(() => undefined);
+    // A tab switch is a new question, so it gets a visible answer; the poll
+    // above refreshes the same question quietly.
+    void loadSessions(undefined, undefined, undefined, true).catch(() => {
+      setLoadingList(false);
+    });
   }, [tab, loadSessions]);
 
   // Scroll to the newest line only when the reader was already there.
@@ -315,10 +331,27 @@ export default function SalesChats({ liffId }: { liffId: string }) {
           </button>
         ))}
       </div>
-      {sessions.length === 0 ? (
+      {loadingList && sessions.length === 0 ? (
+        // Rows, not a spinner: the list keeps its shape, so nothing jumps
+        // when the real rows arrive and nobody reads the pause as "gone".
+        <ul className="chat-rows" aria-busy="true" aria-label={copy.loading}>
+          {[0, 1, 2, 3].map((n) => (
+            <li key={n} aria-hidden="true">
+              <div className="chat-row chat-row-skeleton">
+                <span className="avatar skeleton-block" />
+                <span className="chat-row-main">
+                  <span className="skeleton-line" style={{ width: "42%" }} />
+                  <span className="skeleton-line" style={{ width: "78%" }} />
+                </span>
+              </div>
+            </li>
+          ))}
+          <li className="chat-loading-note">{copy.loading}</li>
+        </ul>
+      ) : sessions.length === 0 ? (
         <div className="empty chat-empty">
-          <p>{copy.empty}</p>
-          <p className="card-meta">{copy.intro}</p>
+          <p>{tab === "live" ? copy.emptyLive : copy.emptyAll}</p>
+          <p className="card-meta">{tab === "live" ? copy.emptyLiveHint : copy.intro}</p>
         </div>
       ) : (
         <ul className="chat-rows">

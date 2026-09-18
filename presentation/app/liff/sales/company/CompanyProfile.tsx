@@ -502,17 +502,32 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
 
       {autoAccept !== null && canEdit && (
         <section className="section" style={{ marginTop: 16 }}>
-          <label className="field">
-            <span>
-              <input
-                type="checkbox"
-                checked={autoAccept}
-                onChange={(e) => void saveAutoAccept(e.target.checked)}
-                style={{ marginRight: 8 }}
-              />
-              {c.autoAccept}
+          <div className="section-head">
+            <h2>{c.newCustomers}</h2>
+          </div>
+          {/* Its own class, not `.field`: `.field > span` is the caption
+              style — 13.5px, weight 500, muted — so a setting's own name
+              read like a disabled hint, and the default checkbox next to
+              it was 13px against the 44px touch target used everywhere
+              else (owner, 18 ก.ย. 2569: "UI ยังแปลกๆ"). */}
+          <label className="setting-row">
+            <input
+              type="checkbox"
+              checked={autoAccept}
+              onChange={(e) => void saveAutoAccept(e.target.checked)}
+              aria-describedby="auto-accept-hint"
+            />
+            <span className="setting-text">
+              <span className="setting-name">
+                {c.autoAccept}
+                {/* The state in words as well as in the tick: a checkbox
+                    alone is the one signal, and it is a small one. */}
+                <span className="chip" data-tone={autoAccept ? "live" : "muted"}>
+                  {autoAccept ? c.autoAcceptOn : c.autoAcceptOff}
+                </span>
+              </span>
+              <span id="auto-accept-hint" className="hint">{c.autoAcceptHint}</span>
             </span>
-            <span className="hint">{c.autoAcceptHint}</span>
           </label>
         </section>
       )}

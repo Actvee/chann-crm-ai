@@ -1206,6 +1206,91 @@ fieldset.group legend {
   overflow-y: auto;
 }
 
+/* A list that is loading must not look like a list that is empty — the
+   rows keep their shape and their height, so nothing jumps when the real
+   ones arrive and nobody reads the pause as "my chats are gone"
+   (owner, 18 ก.ย. 2569). Only the first load and a tab switch show these;
+   the 8-second poll refreshes in silence. */
+/* One setting on a row: the control, its name, its consequence. Deliberately
+   NOT `.field` — that is the caption style for a form label, and wearing it
+   made a live setting look like a disabled hint with a 13px tickbox
+   (owner, 18 ก.ย. 2569). 44px is the touch target the rest of the app uses. */
+.setting-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-height: 44px;
+  padding: 10px 0;
+  cursor: pointer;
+}
+.setting-row > input[type="checkbox"] {
+  width: 22px;
+  height: 22px;
+  margin: 2px 0 0;
+  flex: none;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.setting-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.setting-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.setting-row .hint {
+  margin: 0;
+}
+
+.chat-row-skeleton {
+  pointer-events: none;
+  cursor: default;
+}
+.skeleton-block,
+.skeleton-line {
+  display: block;
+  border-radius: 6px;
+  background: linear-gradient(
+    90deg,
+    var(--line) 0%,
+    var(--surface-2, var(--line)) 50%,
+    var(--line) 100%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-sweep 1.2s ease-in-out infinite;
+}
+.skeleton-block {
+  border-radius: 50%;
+}
+.skeleton-line {
+  height: 11px;
+  margin: 6px 0;
+}
+.chat-loading-note {
+  padding: 4px 14px 14px;
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+@keyframes skeleton-sweep {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-block,
+  .skeleton-line {
+    animation: none;
+    background: var(--line);
+  }
+}
+
 .chat-row {
   font: inherit;
   text-align: left;

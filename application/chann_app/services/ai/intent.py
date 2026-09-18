@@ -326,6 +326,38 @@ does not exist anywhere else the model can check against):
     {{"scope": "technician"}}. Examples: "ช่างมีใครบ้าง", "ใครว่างบ้างวันนี้",
     "ช่างว่างไหม" — a question about PEOPLE is this, never entity="report".
 
+- entity="member" — a person who works at this shop, on one of its LINEs.
+  Never a customer, and never a team: a team is a GROUP of members.
+  action="read": who is on staff. Examples: "มีใครอยู่ในร้านบ้าง",
+    "พนักงานมีกี่คน".
+  action="update": changing what one person may do, or taking them off the
+    shop / putting them back. fields may include target_name, role,
+    status ("active" to restore, "removed" to take off), channel
+    ("sales" or "technician" — which LINE the change is about).
+    Examples: "เปลี่ยนบทบาทสมชายเป็นแอดมิน" (target_name "สมชาย",
+    role "แอดมิน"), "สมหญิงเป็น cs แทน" (role "cs"), "เอาสมศักดิ์ออกจาก
+    ร้าน" (status "removed"), "ให้สมศักดิ์กลับมาใช้งานได้" (status
+    "active").
+
+- entity="role" — a named set of permissions the shop defines, which
+  members are then given. Changing the ROLE changes it for everyone who
+  holds it; changing one person is entity="member".
+  action="read": which roles exist and what each may do. Examples:
+    "มีบทบาทอะไรบ้าง", "บทบาท cs ทำอะไรได้".
+  action="create": fields may include role_name and permissions.
+    Examples: "สร้างบทบาทใหม่ชื่อ หัวหน้าช่าง".
+  action="update": fields may include role_name and permissions — the
+    permissions to ADD, named either as keys ("quote.read") or in the
+    shop's own words ("ดูใบเสนอราคา"). Examples: "ให้บทบาท cs ดูใบเสนอ
+    ราคาได้ด้วย" (role_name "cs", permissions ["quote.read"]).
+
+- entity="conversation" — this chat thread itself, not any record in it.
+  action="delete": the person wants the assistant to forget what was said
+    and start clean, usually because it has misunderstood something and
+    keeps building on it. Nothing of the shop's data is touched.
+    Examples: "ลืมที่คุยไปก่อนหน้านี้", "เริ่มบทสนทนาใหม่", "ล้างที่คุยกัน
+    ไว้", "start over", "forget what I said".
+
 - entity="setting" — the shop's own details that appear on documents.
   action="update": fields may include legal_name, company_address,
     tax_id, phone, vat_rate.

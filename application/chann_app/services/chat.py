@@ -203,6 +203,9 @@ ACTION_PERMISSIONS: dict[tuple[str, str], str] = {
     ("create", "role"): "role.manage",
     ("read", "member"): "member.manage",
     ("update", "member"): "member.manage",
+    # Forgetting this thread is not a shop capability: it clears the
+    # assistant's own scratchpad for the person typing, so it is gated by
+    # nothing — the same way editing your own profile is.
     # An invite code is a key to the shop. Reading the keys out and taking
     # one back are both "จัดการสมาชิก" — the same permission that issues
     # one (audit, 17 ก.ย. 2569: a leaked code could not be cancelled).
@@ -15932,6 +15935,498 @@ async def _handle_invite_revoke(
     )
 
 
+# ------------------------------------------------ people, roles, and this thread
+#
+# Three capabilities the dashboard has had for months and chat answered
+# "ยังทำรายการนี้ไม่ได้" to, plus one that nothing anywhere could reach.
+# measure-capabilities named them: sales member.update, sales role.create /
+# .read / .update (audit, 17 ก.ย. 2569). `clear_recent_turns` had no caller
+# at all — there was no way to tell the assistant to forget a thread it had
+# misread, which is the moment a person most wants one.
+
+CONVERSATION_CLEARED = {
+    "th": "ล้างบทสนทนาแล้วครับ เริ่มใหม่ได้เลย\nข้อมูลลูกค้า ดีล ใบเสนอราคา และงานซ่อม ยังอยู่ครบ ไม่ได้ลบอะไรทั้งนั้น",
+    "en": "Cleared — we can start fresh.\nNothing of yours was deleted: customers, deals, quotes and jobs are all still there.",
+}
+
+#: Saying "start over" has to work when everything else is confused, which
+#: is exactly when someone types it — including when a half-filled form is
+#: holding the conversation and the model never sees the sentence at all.
+#: So this one road is deterministic, and it is allowed to be: what it
+#: clears is the assistant's own scratchpad, never a record. The standing
+#: rule still holds — these words may forget, and may do nothing else.
+#:
+#: Matched on the WHOLE message, not as a substring: "เริ่มใหม่" inside
+#: "เปิดงานใหม่" must not wipe the thread.
+START_OVER_PHRASES = frozenset(_normalise(w) for w in (
+    "เริ่มใหม่", "เริ่มต้นใหม่", "เริ่มบทสนทนาใหม่", "คุยใหม่", "เริ่มคุยใหม่",
+    "ล้างบทสนทนา", "ล้างการสนทนา", "ล้างแชท", "ลืมที่คุยไป", "ลืมที่คุยมา",
+    "ลืมที่คุยไปก่อนหน้านี้", "ลืมบทสนทนา", "รีเซ็ตการคุย", "ไม่ต้องจำที่คุยไป",
+    "start over", "start again", "clear the chat", "clear chat",
+    "reset the conversation", "new conversation", "forget what i said",
+))
+
+
+def _asks_to_start_over(message: str) -> bool:
+    return _normalise(message or "") in START_OVER_PHRASES
+
+
+async def _handle_conversation_clear(
+    client: DataClient, *, ctx: ResolvedContext, language: str,
+) -> ChatReply:
+    """Forget the thread. Never a record."""
+    lic = str(getattr(ctx, "license_id", "") or "")
+    for forget in (
+        lambda: client.clear_recent_turns(ctx.chann_uid, ctx.oa, license_id=lic),
+        lambda: client.clear_pending_intent(ctx.chann_uid, ctx.oa),
+    ):
+        try:
+            await forget()
+        except Exception:  # noqa: BLE001 — a thread that was already empty is cleared
+            log.debug("could not clear part of the thread", exc_info=True)
+    return ChatReply(text=_t(CONVERSATION_CLEARED, language))
+
+
+# ------------------------------------------------------------------ members
+
+MEMBER_WHICH_PERSON = {
+    "th": "จะเปลี่ยนของใครครับ พิมพ์ชื่อมาได้เลย เช่น \"เปลี่ยนบทบาทสมชายเป็นแอดมิน\"",
+    "en": "Whose? Name them — e.g. \"make Somchai an admin\".",
+}
+MEMBER_NOT_FOUND = {
+    "th": "ไม่พบ \"{name}\" ในรายชื่อสมาชิกของร้านครับ\nพิมพ์ \"รายชื่อสมาชิก\" เพื่อดูว่ามีใครบ้าง",
+    "en": "No \"{name}\" among this shop's members.\nType \"members\" to see who there is.",
+}
+MEMBER_ROLE_UNKNOWN = {
+    "th": "ร้านนี้ยังไม่มีบทบาทชื่อ \"{role}\" ครับ\nบทบาทที่มี: {have}",
+    "en": "This shop has no role called \"{role}\".\nIt has: {have}",
+}
+MEMBER_ROLE_CHANGED = {
+    "th": "เปลี่ยนบทบาทของ {name} เป็น \"{role}\" แล้วครับ ({channel})",
+    "en": "{name} is now \"{role}\" ({channel}).",
+}
+MEMBER_REMOVED = {
+    "th": "เอา {name} ออกจาก{channel}แล้วครับ\nงานและประวัติที่เคยทำยังอยู่ · เชิญกลับเข้าทีมได้ภายหลัง",
+    "en": "{name} is off {channel}.\nTheir work and history stay; they can be invited back.",
+}
+MEMBER_RESTORED = {
+    "th": "เปิดใช้งาน {name} ใน{channel}อีกครั้งแล้วครับ ด้วยสิทธิ์เดิม",
+    "en": "{name} is active again on {channel}, with the same permissions.",
+}
+MEMBER_OWNER_LOCKED = {
+    "th": "บทบาทของเจ้าของร้านเปลี่ยนไม่ได้ครับ ต้องโอนความเป็นเจ้าของก่อน (แดชบอร์ด > ข้อมูลบริษัท)",
+    "en": "The owner's own role cannot be changed — transfer ownership first (dashboard > company details).",
+}
+MEMBER_NOTHING_ASKED = {
+    "th": "จะเปลี่ยนอะไรของ {name} ครับ — บทบาท หรือเอาออก/เปิดใช้งาน",
+    "en": "What about {name} — their role, or taking them off / putting them back?",
+}
+CHANNEL_WORDS = {
+    "sales": {"th": "LINE ร้าน", "en": "the sales LINE"},
+    "technician": {"th": "LINE ช่าง", "en": "the technician LINE"},
+}
+
+
+def _member_channel_asked(fields: dict, message: str) -> str | None:
+    """Which LINE the change is about, when the sentence says."""
+    said = str(fields.get("channel") or "").strip().lower()
+    if said in ("sales", "technician"):
+        return said
+    text = (message or "").lower()
+    if any(w in text for w in ("ช่าง", "technician")):
+        return "technician"
+    if any(w in text for w in ("ทีมขาย", "ฝ่ายขาย", "เซลส์", "sales", "cs", "แอดมิน")):
+        return "sales"
+    return None
+
+
+#: "removed" and "active" are not in _CLOSED_VALUES["status"] — that table
+#: is entity-blind and holds the ticket/deal/quote vocabularies — so the
+#: invented-value guard correctly drops them, and the sentence is where the
+#: answer has to come from instead. Widening the shared table would have
+#: taught every other entity two statuses it does not have.
+_MEMBER_OFF_WORDS = ("ออกจากร้าน", "ออกจากทีม", "ออกจากระบบ", "เอาออก", "ปลดออก",
+                     "ไล่ออก", "ลาออก", "remove", "take off", "deactivate")
+_MEMBER_BACK_WORDS = ("กลับมา", "เปิดใช้งาน", "คืนสิทธิ์", "รับกลับ",
+                      "reactivate", "restore", "put back", "bring back")
+
+
+def _member_status_meant(fields: dict, message: str) -> str:
+    """"" | "removed" | "active" — the field when it survived, else the
+    sentence."""
+    said = str(fields.get("status") or "").strip().lower()
+    if said in ("removed", "remove", "inactive"):
+        return "removed"
+    if said in ("active", "restore", "reactivate"):
+        return "active"
+    text = (message or "").lower()
+    if any(w in text for w in _MEMBER_BACK_WORDS):
+        return "active"
+    if any(w in text for w in _MEMBER_OFF_WORDS):
+        return "removed"
+    return ""
+
+
+def _member_rows_named(members: list[dict], name: str) -> list[dict]:
+    """Every member row whose person matches the name as typed.
+
+    One person can hold two rows — sales and technician — and they are two
+    separate memberships, so this returns both and the caller decides.
+    """
+    wanted = _normalise(name)
+    if not wanted:
+        return []
+    hits = [
+        m for m in members
+        if wanted in _normalise(_member_name(m, None) or "")
+        or wanted in _normalise(str(m.get("first_name") or ""))
+        or wanted in _normalise(
+            " ".join(str(m.get(k) or "") for k in ("first_name", "last_name"))
+        )
+    ]
+    return hits
+
+
+async def _handle_member_update(
+    client: DataClient, *, ctx: ResolvedContext, license_id, intent: dict,
+    message: str, language: str,
+) -> ChatReply:
+    """Change one person's role, or take them off / put them back."""
+    fields = intent.get("fields") or {}
+    name = str(fields.get("target_name") or fields.get("name") or "").strip()
+    if not name:
+        return ChatReply(text=_t(MEMBER_WHICH_PERSON, language))
+    try:
+        members = await client.list_members(str(license_id))
+    except Exception:  # noqa: BLE001
+        log.exception("member update: roster")
+        return ChatReply(text=unavailable_reply(language))
+
+    hits = _member_rows_named(members, name)
+    if not hits:
+        return ChatReply(
+            text=_t(MEMBER_NOT_FOUND, language).format(name=name),
+            quick_replies=[("รายชื่อสมาชิก", "รายชื่อสมาชิก")],
+        )
+    channel = _member_channel_asked(fields, message)
+    if channel:
+        on_channel = [m for m in hits if str(m.get("channel") or "sales") == channel]
+        hits = on_channel or hits
+    # Two rows for the same person and nothing in the sentence saying which
+    # LINE: ask, rather than guess which half of their working life to
+    # change (the members screen makes the same distinction visible).
+    people = {str(m.get("chann_uid") or "") for m in hits}
+    if len(people) > 1:
+        return ChatReply(
+            text=_t(MEMBER_NOT_FOUND, language).format(name=name),
+            quick_replies=[("รายชื่อสมาชิก", "รายชื่อสมาชิก")],
+        )
+    if len(hits) > 1 and not channel:
+        return ChatReply(text=_t(MEMBER_WHICH_LINE, language).format(
+            name=_member_name(hits[0], None) or name,
+        ))
+    row = hits[0]
+    chann_uid = str(row.get("chann_uid") or "")
+    on = str(row.get("channel") or "sales")
+    shown = _member_name(row, None) or name
+    channel_word = _t(CHANNEL_WORDS.get(on, CHANNEL_WORDS["sales"]), language)
+
+    status = _member_status_meant(fields, message)
+    if status == "removed":
+        try:
+            await client.set_member_status(
+                str(license_id), chann_uid, status="removed", channel=on,
+                actor_id=ctx.chann_uid,
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("member update: remove")
+            return ChatReply(text=unavailable_reply(language))
+        return ChatReply(
+            text=_t(MEMBER_REMOVED, language).format(name=shown, channel=channel_word),
+            quick_reply_url=_dashboard_button("members", language),
+        )
+    if status == "active":
+        try:
+            await client.set_member_status(
+                str(license_id), chann_uid, status="active", channel=on,
+                actor_id=ctx.chann_uid,
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("member update: restore")
+            return ChatReply(text=unavailable_reply(language))
+        return ChatReply(
+            text=_t(MEMBER_RESTORED, language).format(name=shown, channel=channel_word),
+            quick_reply_url=_dashboard_button("members", language),
+        )
+
+    role = str(fields.get("role") or fields.get("role_name") or "").strip()
+    if not role:
+        return ChatReply(text=_t(MEMBER_NOTHING_ASKED, language).format(name=shown))
+    if row.get("is_owner"):
+        return ChatReply(text=_t(MEMBER_OWNER_LOCKED, language))
+    try:
+        roles = await client.list_roles(str(license_id))
+    except Exception:  # noqa: BLE001
+        log.exception("member update: roles")
+        return ChatReply(text=unavailable_reply(language))
+    named = _role_named(roles, role)
+    if named is None:
+        return ChatReply(text=_t(MEMBER_ROLE_UNKNOWN, language).format(
+            role=role,
+            have=", ".join(str(r.get("role_name") or "") for r in roles if not r.get("is_owner")) or "-",
+        ))
+    try:
+        await client.set_member_role(
+            str(license_id), chann_uid, str(named.get("role_name") or role),
+            actor_id=ctx.chann_uid, channel=on,
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("member update: role")
+        return ChatReply(text=unavailable_reply(language))
+    return ChatReply(
+        text=_t(MEMBER_ROLE_CHANGED, language).format(
+            name=shown, role=named.get("role_name"), channel=channel_word,
+        ),
+        quick_reply_url=_dashboard_button("members", language),
+    )
+
+
+MEMBER_WHICH_LINE = {
+    "th": "{name} อยู่ทั้ง LINE ร้าน และ LINE ช่าง — จะเปลี่ยนฝั่งไหนครับ",
+    "en": "{name} is on both the sales LINE and the technician LINE — which one?",
+}
+
+
+# -------------------------------------------------------------------- roles
+
+ROLE_LIST_HEAD = {"th": "บทบาทในร้าน", "en": "Roles in this shop"}
+ROLE_LIST_NONE = {
+    "th": "ร้านนี้ยังไม่มีบทบาทที่ตั้งเองครับ สร้างได้โดยพิมพ์ \"สร้างบทบาท <ชื่อ>\"",
+    "en": "No roles defined yet. Type \"create role <name>\" to add one.",
+}
+ROLE_LIST_FOOT = {
+    "th": "แก้สิทธิ์ทีละข้อได้ที่แดชบอร์ด > บทบาทและสิทธิ์",
+    "en": "The dashboard > Roles page edits permissions one by one.",
+}
+ROLE_OWNER_LINE = {"th": "  • เจ้าของร้าน — ทุกสิทธิ์", "en": "  • Owner — everything"}
+ROLE_WHICH_NAME = {
+    "th": "จะสร้างบทบาทชื่ออะไรครับ เช่น \"สร้างบทบาท หัวหน้าช่าง\"",
+    "en": "What should the role be called? e.g. \"create role Lead technician\".",
+}
+ROLE_CREATED = {
+    "th": "สร้างบทบาท \"{role}\" แล้วครับ{granted}\nเพิ่มสิทธิ์ได้อีกโดยพิมพ์ \"ให้บทบาท {role} <สิทธิ์>\"",
+    "en": "Role \"{role}\" created{granted}.\nAdd more with \"give role {role} <permission>\".",
+}
+ROLE_GRANTED_TAIL = {"th": " พร้อมสิทธิ์ {n} ข้อ", "en": " with {n} permission(s)"}
+ROLE_NOT_FOUND = {
+    "th": "ร้านนี้ไม่มีบทบาทชื่อ \"{role}\" ครับ\nบทบาทที่มี: {have}",
+    "en": "No role called \"{role}\".\nThis shop has: {have}",
+}
+ROLE_OWNER_UNTOUCHABLE = {
+    "th": "บทบาทเจ้าของร้านแก้ไม่ได้ครับ — มันถือทุกสิทธิ์อยู่แล้วโดยนิยาม",
+    "en": "The owner role cannot be edited — it holds everything by definition.",
+}
+ROLE_NO_PERMISSION_NAMED = {
+    "th": "จะให้บทบาท \"{role}\" ทำอะไรได้เพิ่มครับ เช่น \"ให้บทบาท {role} ดูใบเสนอราคา\"",
+    "en": "What should \"{role}\" also be able to do? e.g. \"give {role} quote.read\".",
+}
+ROLE_UPDATED = {
+    "th": "บทบาท \"{role}\" ได้สิทธิ์เพิ่มแล้วครับ: {added}\nตอนนี้มีทั้งหมด {n} ข้อ",
+    "en": "\"{role}\" gained: {added}\nIt now holds {n} permission(s).",
+}
+ROLE_NOTHING_MATCHED = {
+    "th": "ไม่รู้จักสิทธิ์ \"{said}\" ครับ\nดูรายการสิทธิ์ทั้งหมดได้ที่แดชบอร์ด > บทบาทและสิทธิ์",
+    "en": "\"{said}\" is not a permission I know.\nThe dashboard > Roles page lists them all.",
+}
+ROLE_ALREADY_HAS = {
+    "th": "บทบาท \"{role}\" มีสิทธิ์นั้นอยู่แล้วครับ",
+    "en": "\"{role}\" already has that.",
+}
+ROLE_LIST_LINES = 8
+
+
+def _role_named(roles: list[dict], name: str) -> dict | None:
+    wanted = _normalise(name)
+    if not wanted:
+        return None
+    for row in roles:
+        if _normalise(str(row.get("role_name") or "")) == wanted:
+            return row
+    for row in roles:
+        if wanted in _normalise(str(row.get("role_name") or "")):
+            return row
+    return None
+
+
+def _permission_keys_meant(said, catalog: list[dict], language: str) -> tuple[list[str], list[str]]:
+    """(keys, words that matched nothing).
+
+    A person says "ดูใบเสนอราคา"; the model usually returns "quote.read"
+    but not always. Both are accepted, and anything that matches neither
+    comes back as its own list — silently dropping half of what was asked
+    for is how a permission edit does less than it said it did.
+    """
+    if isinstance(said, str):
+        said = [said]
+    keys_by_key = {str(c.get("key") or ""): str(c.get("key") or "") for c in catalog}
+    by_label: dict[str, str] = {}
+    for c in catalog:
+        label = c.get("label") or {}
+        for value in (label.get("th"), label.get("en")):
+            if value:
+                by_label[_normalise(str(value))] = str(c.get("key") or "")
+    keys: list[str] = []
+    missed: list[str] = []
+    for item in (said or []):
+        text = str(item or "").strip()
+        if not text:
+            continue
+        if text in keys_by_key:
+            keys.append(text)
+            continue
+        norm = _normalise(text)
+        if norm in by_label:
+            keys.append(by_label[norm])
+            continue
+        hit = next((k for label, k in by_label.items() if norm and norm in label), None)
+        if hit:
+            keys.append(hit)
+        else:
+            missed.append(text)
+    return list(dict.fromkeys(keys)), missed
+
+
+async def _handle_role_intent(
+    client: DataClient, *, ctx: ResolvedContext, license_id, intent: dict,
+    message: str, language: str,
+) -> ChatReply:
+    """Which roles exist, a new one, or more permissions on one."""
+    action = str(intent.get("action") or "")
+    fields = intent.get("fields") or {}
+    name = str(fields.get("role_name") or fields.get("name") or fields.get("target_name") or "").strip()
+    try:
+        roles = await client.list_roles(str(license_id))
+    except Exception:  # noqa: BLE001
+        log.exception("role intent: list")
+        return ChatReply(text=unavailable_reply(language))
+
+    if action in READ_ACTIONS:
+        named = _role_named(roles, name) if name else None
+        if named is not None:
+            try:
+                catalog = await client.permission_catalog()
+            except Exception:  # noqa: BLE001
+                catalog = []
+            labels = {str(c.get("key")): (c.get("label") or {}) for c in catalog}
+            held = list(named.get("permission_keys") or [])
+            shown = [
+                _t(labels.get(k) or {"th": k, "en": k}, language) or k
+                for k in held[:ROLE_LIST_LINES]
+            ]
+            body = "\n".join(_capped([f"  • {s}" for s in shown], len(held), language))
+            return ChatReply(
+                text=f"{named.get('role_name')} ({len(held)})\n{body}\n{_t(ROLE_LIST_FOOT, language)}",
+                quick_reply_url=_dashboard_button("roles", language),
+            )
+        if not roles:
+            return ChatReply(
+                text=_t(ROLE_LIST_NONE, language),
+                quick_reply_url=_dashboard_button("roles", language),
+            )
+        lines = []
+        for row in roles[:ROLE_LIST_LINES]:
+            if row.get("is_owner"):
+                lines.append(_t(ROLE_OWNER_LINE, language))
+                continue
+            lines.append(f"  • {row.get('role_name')} — {len(row.get('permission_keys') or [])} สิทธิ์"
+                         if language != "en"
+                         else f"  • {row.get('role_name')} — {len(row.get('permission_keys') or [])} permission(s)")
+        body = "\n".join(_capped(lines, len(roles), language))
+        return ChatReply(
+            text=f"{_t(ROLE_LIST_HEAD, language)}\n{body}\n{_t(ROLE_LIST_FOOT, language)}",
+            quick_reply_url=_dashboard_button("roles", language),
+        )
+
+    if action == "create":
+        if not name:
+            return ChatReply(text=_t(ROLE_WHICH_NAME, language))
+        try:
+            catalog = await client.permission_catalog()
+        except Exception:  # noqa: BLE001
+            catalog = []
+        keys, _missed = _permission_keys_meant(
+            fields.get("permissions") or fields.get("permission_keys") or [], catalog, language,
+        )
+        try:
+            await client.create_role(
+                str(license_id), {"role_name": name, "permission_keys": keys},
+                actor_id=ctx.chann_uid,
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("role intent: create")
+            return ChatReply(text=unavailable_reply(language))
+        return ChatReply(
+            text=_t(ROLE_CREATED, language).format(
+                role=name,
+                granted=_t(ROLE_GRANTED_TAIL, language).format(n=len(keys)) if keys else "",
+            ),
+            quick_reply_url=_dashboard_button("roles", language),
+        )
+
+    if action == "update":
+        named = _role_named(roles, name) if name else None
+        if named is None:
+            return ChatReply(text=_t(ROLE_NOT_FOUND, language).format(
+                role=name or "-",
+                have=", ".join(str(r.get("role_name") or "") for r in roles) or "-",
+            ))
+        if named.get("is_owner"):
+            return ChatReply(text=_t(ROLE_OWNER_UNTOUCHABLE, language))
+        asked = fields.get("permissions") or fields.get("permission_keys") or []
+        if not asked:
+            return ChatReply(text=_t(ROLE_NO_PERMISSION_NAMED, language).format(
+                role=named.get("role_name"),
+            ))
+        try:
+            catalog = await client.permission_catalog()
+        except Exception:  # noqa: BLE001
+            catalog = []
+        keys, missed = _permission_keys_meant(asked, catalog, language)
+        if not keys:
+            return ChatReply(text=_t(ROLE_NOTHING_MATCHED, language).format(
+                said=", ".join(missed) or "-",
+            ))
+        held = list(named.get("permission_keys") or [])
+        fresh = [k for k in keys if k not in held]
+        if not fresh:
+            return ChatReply(text=_t(ROLE_ALREADY_HAS, language).format(
+                role=named.get("role_name"),
+            ))
+        # Added, never replaced: the model returns the permissions the
+        # SENTENCE named, and sending those as the whole set would silently
+        # strip every other permission the role already had.
+        merged = held + fresh
+        try:
+            await client.update_role(
+                str(license_id), str(named.get("role_name") or name),
+                {"permission_keys": merged}, actor_id=ctx.chann_uid,
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("role intent: update")
+            return ChatReply(text=unavailable_reply(language))
+        labels = {str(c.get("key")): (c.get("label") or {}) for c in catalog}
+        added = ", ".join(_t(labels.get(k) or {"th": k, "en": k}, language) or k for k in fresh)
+        tail = _t(ROLE_NOTHING_MATCHED, language).format(said=", ".join(missed)) if missed else ""
+        return ChatReply(
+            text=_t(ROLE_UPDATED, language).format(
+                role=named.get("role_name"), added=added, n=len(merged),
+            ) + (f"\n{tail}" if tail else ""),
+            quick_reply_url=_dashboard_button("roles", language),
+        )
+
+    return _no_handler_reply(intent, language, ctx.oa)
+
+
 async def _handle_ai_understood_intent(
     client: DataClient, *, intent: dict, ctx: ResolvedContext, license_id,
     permission_keys: list[str], language: str, message: str = "",
@@ -23628,6 +24123,16 @@ async def _route_chat_message(
             return ChatReply(text=_t(pdpa_service.FAILED, language))
         return ChatReply(text=out["text"])
 
+    # "เริ่มใหม่" — placed with the PDPA rights above and for the same
+    # reason: it must work when nothing else does. A half-filled form owns
+    # the next message and the model never sees it, so a person stuck
+    # inside a misread flow could not ask to get out of it (audit,
+    # 17 ก.ย. 2569 — clear_recent_turns had no caller anywhere). Matched on
+    # the whole message only, and it clears nothing but this thread.
+    if _asks_to_start_over(message):
+        _note_road(road="start_over")
+        return await _handle_conversation_clear(client, ctx=ctx, language=language)
+
     # Phase 18 — a suspended tenant is read-only: nothing new through chat.
     # A person's own PDPA rights (above) still work; those are against the
     # platform, not the shop. Round 18: a soft-deleted company is gated
@@ -26560,6 +27065,18 @@ async def _execute_intent(
         return await _handle_team_intent(
             client, intent=intent, ctx=ctx, license_id=license_id,
             permission_keys=permission_keys, language=language, message=message,
+        )
+    if intent.get("entity") == "conversation":
+        return await _handle_conversation_clear(client, ctx=ctx, language=language)
+    if intent.get("entity") == "role":
+        return await _handle_role_intent(
+            client, ctx=ctx, license_id=license_id, intent=intent,
+            message=message, language=language,
+        )
+    if intent.get("entity") == "member" and intent.get("action") == "update":
+        return await _handle_member_update(
+            client, ctx=ctx, license_id=license_id, intent=intent,
+            message=message, language=language,
         )
     if intent.get("entity") == "member" and intent.get("action") in READ_ACTIONS:
         # "มีช่างคนไหนบ้าง" — the roster the typed "รายชื่อช่าง" shows.
