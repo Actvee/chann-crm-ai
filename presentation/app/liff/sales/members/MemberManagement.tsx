@@ -4,7 +4,6 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
-import { NotificationBell } from "@/lib/NotificationBell";
 
 import { Badge, Empty } from "../_components";
 import { describeFailure, readFailure, useFormatters } from "../_format";
@@ -396,10 +395,6 @@ export default function MemberManagement({ liffId }: { liffId: string }) {
       status={status}
       statusTone={tone}
     >
-      {token && licenseId && (
-        <NotificationBell idToken={token} licenseId={licenseId} />
-      )}
-
       <p className="card-meta" style={{ margin: "0 0 12px" }}>
         {m.intro}{" "}
         <Link href="/liff/sales/roles">{m.rolesLink}</Link>

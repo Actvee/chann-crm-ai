@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
-import { NotificationBell } from "@/lib/NotificationBell";
 
 import { Count, Empty } from "../_components";
 import { useFailureText } from "../_format";
@@ -138,7 +137,6 @@ export default function AuditTrail({ liffId }: { liffId: string }) {
           statusLabel={copy.kind}
           allLabel={copy.allKinds}
         />
-        <NotificationBell idToken={token} licenseId={licenseId} />
       </div>
 
       {days.length === 0 ? (

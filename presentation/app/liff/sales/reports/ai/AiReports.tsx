@@ -46,6 +46,15 @@ type Answer = {
    *  this report a person can forward into a chat. Null when the document
    *  store is not configured or the result is a single number. */
   chart?: string | null;
+  /** False when the result is ONE number, which has nothing to plot — a
+   *  different fact from "the picture failed". The API has always sent it
+   *  and the page threw it away, so a report with no chart looked broken
+   *  rather than explained (owner, 18 ก.ย. 2569). */
+  plottable?: boolean;
+  /** Present when a picture was drawn: how many of the month's AI charts
+   *  this shop has used. `allowed: false` means the month is spent and the
+   *  image was withheld — the numbers and the files are unaffected. */
+  quota?: { allowed: boolean; used: number; allowance: number; unknown: boolean };
 };
 
 /** Phase 17 — the report viewer. One question box, the model turns it
@@ -314,6 +323,32 @@ export default function AiReports({ liffId }: { liffId: string }) {
                 </button>
               )}
             </div>
+          )}
+          {answer.quota && !answer.quota.allowed && (
+            <p className="footnote">
+              {copy.quotaSpent.replace("{allowance}", String(answer.quota.allowance))}
+            </p>
+          )}
+          {answer.quota?.allowed && !answer.quota.unknown && (
+            <p className="footnote">
+              {copy.quotaUsed
+                .replace("{used}", String(answer.quota.used))
+                .replace("{allowance}", String(answer.quota.allowance))}
+            </p>
+          )}
+          {answer.plottable === false && (
+            <p className="footnote report-no-chart">
+              {copy.noChart}{" "}
+              {draft && options && (
+                <button
+                  type="button"
+                  className="linklike"
+                  onClick={() => setTuning(true)}
+                >
+                  {copy.noChartAction}
+                </button>
+              )}
+            </p>
           )}
           {draft && options && (
             <div className="spec-editor">

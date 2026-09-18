@@ -27644,12 +27644,6 @@ async def _handle_ai_report(
         message = asked_outright
         with_chart = True
     quota = None
-    if with_chart:
-        from . import chart_quota
-
-        quota = await chart_quota.spend_one(client, license_id=str(license_id))
-        if not quota.get("allowed"):
-            with_chart = False
     try:
         out = await reports_ai.handle_report_request(
             client, license_id=str(license_id), message=message, language=language,
@@ -27665,6 +27659,20 @@ async def _handle_ai_report(
         return ChatReply(text=_t(AI_REPORT_UNAVAILABLE, language))
     if out.get("clarify"):
         return ChatReply(text=out["clarify"])
+    # The picture is the metered part (owner's rule, 17 ก.ย. 2569), so the
+    # count moves when a picture exists — not before one is attempted.
+    # Spending up front charged a shop for reports that came back as a
+    # single number and drew nothing, and for a spec the model refused;
+    # the allowance was named for charts and was being spent on text
+    # (owner, 18 ก.ย. 2569). Nothing is lost by moving it: an over-quota
+    # shop already reached the model under the old order too, because the
+    # report itself was still produced — the cap was always on the image.
+    if with_chart and out.get("chart"):
+        from . import chart_quota
+
+        quota = await chart_quota.spend_one(client, license_id=str(license_id))
+        if not quota.get("allowed"):
+            out["chart"] = None
     text = out["text"]
     files_line = reports_ai.files_line(out.get("files") or {}, language)
     if files_line:
@@ -27691,6 +27699,8 @@ async def _handle_ai_report(
             # that was never made (owner's tester, 16 ก.ย. 2569:
             # "ขอกราฟได้แต่ภาพไม่ขึ้น"). The link is the way through.
             text += _t(CHART_ALSO_AS_A_LINK, language).format(url=out["chart"])
+        elif quota is not None and not quota.get("allowed"):
+            pass  # the allowance sentence below says it, with the number
         elif not out.get("plottable"):
             text += _t(reports_ai.CHART_NEEDS_GROUPS, language)
         else:

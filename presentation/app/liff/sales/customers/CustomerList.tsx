@@ -318,20 +318,23 @@ export default function CustomerList({ liffId }: { liffId: string }) {
           {visible.map((customer) => (
             <li key={customer.id} className="card" data-stage={customer.stage}>
               {/* The whole row opens the detail view — a list you cannot
-                  drill into is a report, not a tool. */}
-              <Link
-                href={`/liff/sales/customers/${customer.id}`}
-                style={{ textDecoration: "none", color: "inherit" }}
-              >
-              <div className="card-title">
-                {fullName(customer)}
-                <Badge stage={customer.stage} label={stageLabel(customer.stage)} />
-              </div>
-              <div className="card-meta">
-                <span className="code">{customer.customer_id}</span>
-                {customer.phone ? ` · ${customer.phone}` : ""}
-                {customer.email ? ` · ${customer.email}` : ""}
-              </div>
+                  drill into is a report, not a tool. `.row-link` rather
+                  than a hand-written `textDecoration: none`: three lists
+                  had three copies of the same two inline properties and
+                  none of them drew the chevron that tells a person the
+                  row is a door (owner, 18 ก.ย. 2569). */}
+              <Link className="row-link" href={`/liff/sales/customers/${customer.id}`}>
+                <span className="row-body">
+                  <span className="card-title">
+                    {fullName(customer)}
+                    <Badge stage={customer.stage} label={stageLabel(customer.stage)} />
+                  </span>
+                  <span className="card-meta">
+                    <span className="code">{customer.customer_id}</span>
+                    {customer.phone ? ` · ${customer.phone}` : ""}
+                    {customer.email ? ` · ${customer.email}` : ""}
+                  </span>
+                </span>
               </Link>
               {customer.customer_chann_uid && can("chat_session.reply") && (
                 <div className="card-actions">

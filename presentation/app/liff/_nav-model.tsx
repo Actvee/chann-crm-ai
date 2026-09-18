@@ -69,6 +69,12 @@ export const ICONS = {
       <path d="m9 14.5 2 2 4-4" />
     </>,
   ),
+  bell: glyph(
+    <>
+      <path d="M18 8.8a6 6 0 1 0-12 0c0 5-2 6.2-2 6.2h16s-2-1.2-2-6.2" />
+      <path d="M13.7 19a2 2 0 0 1-3.4 0" />
+    </>,
+  ),
   chats: glyph(<path d="M20 14.5a2.5 2.5 0 0 1-2.5 2.5H8.5L4 20.5V6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5z" />),
   customers: glyph(
     <>

@@ -367,10 +367,10 @@ export default function DealList({ liffId }: { liffId: string }) {
         <ul className="list">
           {visible.map((deal) => (
             <li key={deal.id} className="card" data-stage={deal.stage}>
-              <Link
-                href={`/liff/sales/deals/${deal.id}`}
-                style={{ textDecoration: "none", color: "inherit" }}
-              >
+              {/* `.row-link`, like every other list — it also draws the
+                  chevron that says the row opens something. */}
+              <Link className="row-link" href={`/liff/sales/deals/${deal.id}`}>
+              <span className="row-body">
               <div className="card-title">
                 <span className="code">{deal.deal_id}</span>
                 <Badge stage={deal.stage} label={stageLabel(deal.stage)} />
@@ -395,6 +395,7 @@ export default function DealList({ liffId }: { liffId: string }) {
               <div className="card-meta" style={{ fontSize: 12, color: "var(--ink-faint)" }}>
                 {shortDate(deal.created_at, locale)}
               </div>
+              </span>
               </Link>
               {moves(deal).length ? (
                 <div className="card-actions">

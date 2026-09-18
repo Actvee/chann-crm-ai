@@ -4,7 +4,6 @@ import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
-import { NotificationBell } from "@/lib/NotificationBell";
 
 import { useFailureText } from "../_format";
 import { proxyHeaders } from "../_lib";
@@ -212,10 +211,6 @@ export default function RoleManagement({ liffId }: { liffId: string }) {
       status={status}
       statusTone={tone}
     >
-      {token && licenseId && (
-        <NotificationBell idToken={token} licenseId={licenseId} />
-      )}
-
       {/* Roles say what a person may do; the members page says who holds
           one. Linked both ways so neither is a page you have to know about. */}
       <p className="card-meta" style={{ margin: "0 0 12px" }}>

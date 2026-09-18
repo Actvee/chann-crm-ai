@@ -36,6 +36,30 @@ def _model_configured(monkeypatch):
     monkeypatch.setattr(settings, "openrouter_model", "qwen/qwen3.6-35b-a3b")
 
 
+@pytest.fixture(autouse=True)
+def _a_shop_that_can_receive_pictures(monkeypatch):
+    """A document store, because the allowance now follows the picture.
+
+    Round 20c spent the quota BEFORE drawing, so these scenarios ran fine
+    with no store at all: nothing was ever delivered and the counter moved
+    anyway. That is the bug the owner reported on 18 ก.ย. 2569 — "สร้าง
+    รายงานด้วย AI" took one of the month's charts and answered with a page
+    of text. The count now moves only when a picture reaches the person,
+    so a shop that cannot be sent one is never charged, and these tests
+    have to describe a shop that can.
+    """
+    from chann_app.services import reports_ai
+    from chann_app.services.storage.base import StoredDocument, sha256_hex
+
+    class _Store:
+        async def put(self, *, key, content, content_type):
+            return StoredDocument(path=f"gs://b/{key}", sha256=sha256_hex(content), size=len(content))
+
+    monkeypatch.setattr(settings, "jwt_secret", "test-jwt-secret")
+    monkeypatch.setattr(settings, "public_base_url", "https://app.example")
+    monkeypatch.setattr(reports_ai, "get_document_store", lambda *a, **k: _Store())
+
+
 class TestWhichRoadAPictureTakes:
     """The four ready-made charts must stay free and deterministic; anything
     beyond them has to reach the engine that can draw it."""
@@ -266,7 +290,13 @@ class TestTheExplicitCommand:
         await handle_chat_message(
             client, message="สร้างรายงานด้วย AI: ยอดดีลแยกตามสถานะ",
             ctx=_ctx(primary_role="sales", oa="sales"),
-            ai_client=httpx.AsyncClient(transport=_ai_router_then_spec(SPEC)),
+            # An explicit command skips the router, so the FIRST model call
+            # is the spec call — the same transport its sibling test uses.
+            # With the router transport the spec call read the router's
+            # answer, no report came out, and this test still passed:
+            # proof of the bug it now guards against, since the old code
+            # spent the allowance before knowing there was a picture.
+            ai_client=httpx.AsyncClient(transport=_ai(json.dumps(SPEC))),
         )
         assert [w for w in client.recorded if w[0] == "consume_ai_chart_quota"], client.recorded
 

@@ -303,6 +303,10 @@ body {
 }
 
 .card-meta {
+  /* Explicit, because the row bodies inside `.row-link` are spans now: an
+     inline box drops the margin-top and the meta line rides up into the
+     title. */
+  display: block;
   margin-top: 4px;
   font-size: 14px;
   color: var(--ink-soft);
@@ -2183,3 +2187,256 @@ html {
 .spec-fields { margin-top: 12px; gap: 12px; }
 .spec-fields select { min-height: 44px; }
 .spec-filters { display: flex; flex-direction: column; gap: 6px; }
+
+/* ------------------------------------------------- notifications (20l)
+
+   The bell and its popover. Before this the component was the one piece of
+   the dashboard written entirely in inline styles: a plain text button and
+   a list that expanded IN THE PAGE FLOW, shoving the page's content down,
+   on four pages out of nineteen (owner, 18 ก.ย. 2569). It now sits in the
+   top bar on every Sales page and opens over the page, not through it. */
+.notif {
+  position: relative;
+  display: inline-flex;
+}
+
+.notif-trigger {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: inherit;
+  cursor: pointer;
+}
+
+.notif-trigger svg {
+  width: 20px;
+  height: 20px;
+}
+
+.notif-trigger:focus-visible,
+.notif-panel :focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* The count is decoration for the eye; the button's aria-label carries the
+   sentence, so this is aria-hidden and may be as terse as it likes. */
+.notif-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 9px;
+  background: var(--danger);
+  color: #fff;
+  font-family: var(--font-data);
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.notif-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 40;
+  width: min(360px, calc(100vw - 32px));
+  max-height: min(70vh, 480px);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+  overflow: hidden;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .notif-panel {
+    animation: notif-in 120ms ease-out;
+  }
+}
+
+@keyframes notif-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}
+
+.notif-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 8px 10px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.notif-head h2 {
+  flex: 1;
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.notif-readall,
+.notif-retry {
+  border: 0;
+  background: none;
+  padding: 0 6px;
+  min-height: 44px;
+  color: var(--accent-deep);
+  font-size: 13px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.notif-close {
+  flex: none;
+  min-width: 44px;
+  min-height: 44px;
+  border: 0;
+  background: none;
+  color: var(--ink-faint);
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.notif-body {
+  overflow-y: auto;
+  padding: 4px 0 8px;
+}
+
+.notif-section {
+  margin: 10px 14px 4px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.notif-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.notif-item {
+  border-bottom: 1px solid var(--line);
+}
+
+/* The whole row is the control — a link when the notification has a record
+   to open, a button when it only has itself to dismiss. Both are laid out
+   the same so the list does not jump between the two shapes. Padding lives
+   here rather than on the item so the tap area IS the row (owner,
+   18 ก.ย. 2569: กดที่ตัว record เลย ไม่ต้องใช้ปุ่ม). */
+.notif-open {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 14px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  text-decoration: none;
+}
+
+button.notif-open {
+  cursor: pointer;
+}
+
+.notif-open .row-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.notif-text,
+.notif-when {
+  display: block;
+}
+
+.notif-item:last-child {
+  border-bottom: 0;
+}
+
+/* Weight and a rail, not colour alone — "unread" has to survive a
+   monochrome screen and a person who cannot tell the two greens apart. */
+.notif-item[data-unread="true"] {
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+}
+
+.notif-item[data-unread="true"] .notif-open {
+  padding-left: 11px;
+}
+
+.notif-text {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.notif-item[data-unread="true"] .notif-text {
+  font-weight: 600;
+}
+
+.notif-when {
+  margin: 4px 0 0;
+  font-family: var(--font-data);
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+
+.notif-note {
+  margin: 12px 14px;
+  font-size: 13.5px;
+  color: var(--ink-faint);
+}
+
+.notif-empty {
+  padding: 16px 14px 8px;
+}
+
+.notif-empty-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.notif-empty .notif-note {
+  margin: 4px 0 0;
+}
+
+/* Round 20L — the sentence that explains a missing chart, and the control
+   that fixes it. A single-number report has nothing to plot; saying so is
+   the difference between "explained" and "broken". */
+.report-no-chart {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.linklike {
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-ink, var(--accent));
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}

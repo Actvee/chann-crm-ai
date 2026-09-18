@@ -3,6 +3,7 @@
 import { ReactNode } from "react";
 
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
+import { NotificationBell } from "@/lib/NotificationBell";
 
 import { ShopSwitcher } from "../_shop-switcher";
 import { SuspendedNotice } from "../_suspended";
@@ -54,6 +55,15 @@ export function SalesShell({
       permissions={session.permissions}
       isOwner={session.isOwner}
       notice={<SuspendedNotice memberships={session.memberships} />}
+      // One bell, in the bar, on every Sales page. Before this it was placed
+      // by hand on four pages and absent from the other fifteen, so whether
+      // a person saw their notifications depended on the screen they were
+      // standing on (owner, 18 ก.ย. 2569).
+      tools={
+        session.token && session.licenseId ? (
+          <NotificationBell idToken={session.token} licenseId={session.licenseId} />
+        ) : undefined
+      }
     >
       {session.memberships.length > 1 && (
         <ShopSwitcher

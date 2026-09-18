@@ -33,6 +33,12 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 W, H = 1040, 780
+#: One figure needs a shorter card than a plot does.
+VALUE_H = 520
+#: Bars are thin marks. Capped, so a wide slot becomes air, not colour.
+BAR_MAX_W = 56.0
+#: A column band wider than this is paper, not information.
+MAX_SLOT_W = 176.0
 
 # The guide pictures' palette, unchanged (render-guide-images.py).
 INK, SOFT, FAINT, LINE, PAPER, WHITE = "#1a2030", "#5a6478", "#8b93a3", "#e5e0d8", "#faf7f2", "#ffffff"
@@ -67,7 +73,7 @@ class Chart:
     points: list[tuple[str, float]] = field(default_factory=list)
     subtitle: str = ""
     footer: str = ""
-    kind: str = "bar"  # "bar" | "hbar" | "line"
+    kind: str = "bar"  # "bar" | "hbar" | "line" | "value"
     oa: str = "sales"
     language: str = "th"
     money: bool = False
@@ -122,6 +128,26 @@ def _short(value: float, money: bool = False, language: str = "th") -> str:
     return _fmt(number, money)
 
 
+def _axis_ticks(top_value: float, count: int, money: bool, language: str) -> list[str]:
+    """Every tick on one axis in ONE unit.
+
+    `_short` decided per value, so an axis topping out at 2.4 million read
+    "2.4 ล้าน · 1.8 ล้าน · 1.2 ล้าน · 600,000 · 0" — two units on one
+    scale, which makes the reader do arithmetic to compare two ticks
+    (18 ก.ย. 2569). The unit is chosen once, from the top of the axis.
+    """
+    millions = abs(top_value) >= 1_000_000
+    out = []
+    for i in range(count):
+        value = top_value * i / (count - 1)
+        if not millions:
+            out.append(_fmt(value, money))
+            continue
+        head = f"{value / 1_000_000:,.2f}".rstrip("0").rstrip(".")
+        out.append(head + ("M" if language == "en" else " ล้าน") if value else "0")
+    return out
+
+
 def _ellipsis(draw, text: str, fnt, max_w: float) -> str:
     """A label cut to fit, with a real ellipsis. Thai has no spaces, so the
     cut is by character; the head is kept because that is where the name
@@ -151,7 +177,13 @@ def _wrap_two(draw, text: str, fnt, max_w: float) -> list[str]:
     cut = len(text)
     while cut > 1 and draw.textlength(text[:cut], font=fnt) > max_w:
         cut -= 1
-    return [text[:cut], _ellipsis(draw, text[cut:], fnt, max_w)]
+    tail = text[cut:]
+    # A second line holding one or two characters is an orphan — it reads
+    # as a mistake ("เสนอราคาแล้" / "ว") rather than as a wrapped label.
+    # One line with an ellipsis is the tidier truth (18 ก.ย. 2569).
+    if len(tail) <= 2:
+        return [_ellipsis(draw, text, fnt, max_w)]
+    return [text[:cut], _ellipsis(draw, tail, fnt, max_w)]
 
 
 def _fit(draw, text: str, max_w: float, font, sizes, bold: bool = False):
@@ -211,19 +243,36 @@ def _integral(points: list[tuple[str, float]]) -> bool:
 # ------------------------------------------------------------------ the frame
 
 class _Canvas:
-    def __init__(self, chart: Chart):
+    def __init__(self, chart: Chart, height: int = H):
         from PIL import Image, ImageDraw
 
         self.chart = chart
+        # A value card holds one figure and needs none of a bar chart's
+        # plotting room; at the full 780 it is mostly empty paper, which
+        # reads as a mistake rather than as restraint.
+        self.h = height
         self.font = _fonts()
         self.accent = ACCENT.get(chart.oa, ACCENT["sales"])
         self.accent_soft = ACCENT_SOFT.get(chart.oa, ACCENT_SOFT["sales"])
-        self.im = Image.new("RGB", (W, H), PAPER)
+        self.im = Image.new("RGB", (W, self.h), PAPER)
+        self.d = ImageDraw.Draw(self.im)
+
+    def resize(self, height: int) -> None:
+        """Start again on a card of the right height.
+
+        The row count is only known after the points are condensed, and a
+        chart's height should follow its content — so the canvas is made
+        once the caller knows how much it has to draw.
+        """
+        from PIL import Image, ImageDraw
+
+        self.h = height
+        self.im = Image.new("RGB", (W, self.h), PAPER)
         self.d = ImageDraw.Draw(self.im)
 
     def frame(self) -> None:
         d, f = self.d, self.font
-        d.rounded_rectangle((24, 24, W - 24, H - 24), radius=26, fill=WHITE, outline=LINE, width=2)
+        d.rounded_rectangle((24, 24, W - 24, self.h - 24), radius=26, fill=WHITE, outline=LINE, width=2)
         # The accent header, drawn the way the guide's dashboard mock-up is:
         # a rounded rectangle with its lower corners squared off.
         d.rounded_rectangle((24, 24, W - 24, 118), radius=26, fill=self.accent)
@@ -236,7 +285,7 @@ class _Canvas:
 
     def footer(self) -> None:
         if self.chart.footer:
-            self.d.text((56, H - 52), _ellipsis(self.d, self.chart.footer, self.font(22), W - 112),
+            self.d.text((56, self.h - 52), _ellipsis(self.d, self.chart.footer, self.font(22), W - 112),
                         fill=SOFT, font=self.font(22), anchor="lm")
 
     def empty(self) -> None:
@@ -265,28 +314,45 @@ def _bar(chart: Chart) -> bytes:
         c.footer()
         return c.png()
 
-    left, right, top, base = 150, W - 60, 176, 608
+    left, right, top, base = 150, W - 60, 168, 620
     top_value = _axis_top(max(v for _, v in points), _integral(points))
+    # Hairline, solid, one step off the surface — the grid is chrome, and
+    # chrome that competes with the bars is ink that is not data.
+    # Four categories spread over 890px put 200px of paper between each
+    # pair of bars, which reads as a chart with most of its columns
+    # missing. The plot takes the width it needs and sits in the middle of
+    # the card instead (18 ก.ย. 2569).
+    slot = min((right - left) / len(points), MAX_SLOT_W)
+    plot_w = slot * len(points)
+    left += ((right - left) - plot_w) / 2
+    # Capped, never filling the slot: a bar that fills its band reads as a
+    # block of colour rather than a measurement, and the leftover IS the
+    # design (dataviz: bars are thin marks, the band's remainder is air).
+    width = min(BAR_MAX_W, slot * 0.46)
+    ticks = _axis_ticks(top_value, 5, chart.money, chart.language)
     for i in range(5):
         y = base - (base - top) * i / 4
-        d.line((left, y, right, y), fill=GRID if i else LINE, width=2 if i == 0 else 1)
-        d.text((left - 16, y), _short(top_value * i / 4, chart.money, chart.language), fill=FAINT, font=f(20), anchor="rm")
-
-    slot = (right - left) / len(points)
-    width = min(96.0, slot * 0.6)
+        d.line((left, y, right, y), fill=LINE if i == 0 else GRID, width=1)
+        d.text((left - 16, y), ticks[i], fill=FAINT, font=f(20), anchor="rm")
+    # One direct label, on the tallest — a number on every bar is chaos
+    # and goes unread; the axis carries the rest, and the reply above the
+    # picture lists every value in words anyway.
+    tallest = max(range(len(points)), key=lambda i: points[i][1])
     for i, (label, value) in enumerate(points):
         centre = left + slot * (i + 0.5)
         height = (base - top) * (max(value, 0) / top_value) if top_value else 0
         x0, x1 = centre - width / 2, centre + width / 2
         if height >= 8:
-            d.rounded_rectangle((x0, base - height, x1, base), radius=8, fill=c.accent)
-            d.rectangle((x0, base - 8, x1, base), fill=c.accent)
+            # Rounded at the data end, square on the baseline.
+            d.rounded_rectangle((x0, base - height, x1, base), radius=6, fill=c.accent)
+            d.rectangle((x0, base - 6, x1, base), fill=c.accent)
         else:
             # A tiny (or zero) value still gets a mark: an empty column
             # reads as "no answer", and the number beside it says otherwise.
             d.rectangle((x0, base - 3, x1, base), fill=c.accent if value else LINE)
-        vf = _fit(d, _fmt(value, chart.money), slot - 8, f, (24, 21, 18, 16), bold=True)
-        d.text((centre, base - height - 20), _fmt(value, chart.money), fill=INK, font=vf, anchor="mm")
+        if i == tallest:
+            d.text((centre, base - height - 22), _fmt(value, chart.money),
+                   fill=INK, font=f(24, True), anchor="mm")
         lf = f(21)
         for n, line in enumerate(_wrap_two(d, label, lf, slot - 10)):
             d.text((centre, base + 26 + n * 27), line, fill=SOFT, font=lf, anchor="mm")
@@ -297,33 +363,51 @@ def _bar(chart: Chart) -> bytes:
 def _hbar(chart: Chart) -> bytes:
     c = _Canvas(chart)
     d, f = c.d, c.font
-    c.frame()
     points = _condense(chart.points, MAX_HBARS, chart.language)
     if not points:
+        c.frame()
         c.empty()
         c.footer()
         return c.png()
 
-    label_w, top, bottom = 300, 168, 612
+    label_w = 300
     x0, x1 = 56 + label_w + 20, W - 150
     top_value = _axis_top(max(v for _, v in points), _integral(points))
-    # Few rows are centred rather than stretched: five bars spread over the
-    # full height read as a chart with half its rows missing.
-    slot = min((bottom - top) / len(points), 76.0)
-    top += ((bottom - top) - slot * len(points)) / 2
-    height = min(46.0, slot * 0.62)
+    # The card is as tall as the rows need. Centring five rows inside a
+    # 780px card left a third of it empty above and below them, which
+    # reads as a chart that failed to load rather than as breathing room.
+    top, foot = 168.0, 110.0
+    slot = 76.0
+    needed = top + slot * len(points) + foot
+    if needed > H:
+        # Eight rows at the comfortable pitch do not fit: tighten the pitch
+        # rather than let the last rows run off the card and land on the
+        # footer, which is what happened the first time this card learned
+        # to resize (18 ก.ย. 2569).
+        slot = (H - foot - top) / len(points)
+        needed = H
+    c.resize(int(max(400, needed)))
+    d = c.d
+    c.frame()
+    height = min(BAR_MAX_W, slot * 0.42)
     lf = f(23)
     for i, (label, value) in enumerate(points):
         centre = top + slot * (i + 0.5)
         length = (x1 - x0) * (max(value, 0) / top_value) if top_value else 0
-        d.text((56 + label_w, centre), _ellipsis(d, label, lf, label_w), fill=INK, font=lf, anchor="rm")
-        d.rounded_rectangle((x0, centre - height / 2, x1, centre + height / 2), radius=8, fill=c.accent_soft)
+        d.text((56 + label_w, centre), _ellipsis(d, label, lf, label_w), fill=SOFT, font=lf, anchor="rm")
+        # No track behind the bar: a full-width block of tinted paper is
+        # ink that carries no data, and it made every row read as full.
         if length >= 10:
-            d.rounded_rectangle((x0, centre - height / 2, x0 + length, centre + height / 2), radius=8, fill=c.accent)
+            d.rounded_rectangle((x0, centre - height / 2, x0 + length, centre + height / 2),
+                                radius=6, fill=c.accent)
+            d.rectangle((x0, centre - height / 2, x0 + 6, centre + height / 2), fill=c.accent)
         elif value:
             d.rectangle((x0, centre - height / 2, x0 + 4, centre + height / 2), fill=c.accent)
-        vf = _fit(d, _fmt(value, chart.money), W - 66 - (x0 + length), f, (24, 21, 18), bold=True)
-        d.text((x0 + length + 14, centre), _fmt(value, chart.money), fill=INK, font=vf, anchor="lm")
+        else:
+            d.rectangle((x0, centre - 1.5, x0 + 4, centre + 1.5), fill=LINE)
+        # The value at the tip: with no axis on this form, the tip labels
+        # ARE the scale, so every row keeps one.
+        d.text((x0 + length + 14, centre), _fmt(value, chart.money), fill=INK, font=f(23), anchor="lm")
     c.footer()
     return c.png()
 
@@ -338,12 +422,13 @@ def _line(chart: Chart) -> bytes:
         c.footer()
         return c.png()
 
-    left, right, top, base = 150, W - 60, 176, 608
+    left, right, top, base = 150, W - 90, 176, 608
     top_value = _axis_top(max(v for _, v in points), _integral(points))
+    ticks = _axis_ticks(top_value, 5, chart.money, chart.language)
     for i in range(5):
         y = base - (base - top) * i / 4
-        d.line((left, y, right, y), fill=GRID if i else LINE, width=2 if i == 0 else 1)
-        d.text((left - 16, y), _short(top_value * i / 4, chart.money, chart.language), fill=FAINT, font=f(20), anchor="rm")
+        d.line((left, y, right, y), fill=LINE if i == 0 else GRID, width=1)
+        d.text((left - 16, y), ticks[i], fill=FAINT, font=f(20), anchor="rm")
 
     step = (right - left) / max(len(points) - 1, 1)
     xs = [left + step * i for i in range(len(points))] if len(points) > 1 else [(left + right) / 2]
@@ -354,24 +439,73 @@ def _line(chart: Chart) -> bytes:
         d.polygon([(xs[0], base)] + list(zip(xs, ys)) + [(xs[-1], base)], fill=c.accent_soft)
         d.line(list(zip(xs, ys)), fill=c.accent, width=5, joint="curve")
     lf = f(21)
+    # One direct label, at the end of the line — a number on every point is
+    # the anti-pattern the whole form is built to avoid, and on this chart
+    # the last one ran off the right edge of the card entirely
+    # (18 ก.ย. 2569). The axis carries the rest.
+    last = len(points) - 1
     for i, (label, value) in enumerate(points):
         x, y = xs[i], ys[i]
         d.ellipse((x - 9, y - 9, x + 9, y + 9), fill=WHITE, outline=c.accent, width=5)
-        text = _fmt(value, chart.money)
-        vf = _fit(d, text, step - 6 if len(points) > 1 else 200, f, (23, 20, 17), bold=True)
-        # The label sits on a white pill: on a falling line the next
-        # segment runs straight through the number otherwise, and a
-        # struck-through figure is the one thing a chart must not show.
-        half = d.textlength(text, font=vf) / 2 + 8
-        d.rounded_rectangle((x - half, y - 42, x + half, y - 12), radius=8, fill=WHITE)
-        d.text((x, y - 27), text, fill=INK, font=vf, anchor="mm")
+        if i == last:
+            text = _fmt(value, chart.money)
+            vf = f(24, True)
+            half = d.textlength(text, font=vf) / 2 + 8
+            # Kept inside the card: a label pushed past the edge is worse
+            # than no label, and the value is in the reply text as well.
+            cx = min(max(x, 56 + half), W - 56 - half)
+            # The label sits on a white pill: on a falling line the next
+            # segment runs straight through the number otherwise, and a
+            # struck-through figure is the one thing a chart must not show.
+            d.rounded_rectangle((cx - half, y - 44, cx + half, y - 12), radius=8, fill=WHITE)
+            d.text((cx, y - 28), text, fill=INK, font=vf, anchor="mm")
         for n, line in enumerate(_wrap_two(d, label, lf, step - 8 if len(points) > 1 else 200)):
             d.text((x, base + 26 + n * 27), line, fill=SOFT, font=lf, anchor="mm")
     c.footer()
     return c.png()
 
 
-_KINDS = {"bar": _bar, "hbar": _hbar, "line": _line}
+def _value(chart: Chart) -> bytes:
+    """One number, drawn as a picture.
+
+    Owner, 18 ก.ย. 2569: "ปัจจุบันถูกสร้างออกมาเป็นหน้าเว็บ ไม่ได้เป็นรูป
+    และมีแต่ตัวอักษร ไม่ได้เป็นกราฟหรือรูปที่สร้างจาก AI เลย".
+
+    A report that comes back as a single figure had no picture at all —
+    `chart_for` returned None and the person was handed the HTML page,
+    which for an ungrouped report is a line of text. They asked for an
+    image and got a document.
+
+    The rule that produced that is still right for its own case: a chart
+    of ONE BAR says less than the sentence does. A number set large on the
+    same card is a different thing — it is the tile every dashboard opens
+    with, it reads at a glance on a phone, and it forwards into a chat as
+    an image. So: bars when there is something to compare, a value card
+    when there is one number, and never a page pretending to be a picture.
+    """
+    c = _Canvas(chart, height=VALUE_H)
+    d, f = c.d, c.font
+    c.frame()
+    value = float(chart.points[0][1]) if chart.points else 0.0
+    caption = chart.points[0][0] if chart.points else ""
+    text = _fmt(value, chart.money)
+    # Label above, figure below: the reading order of every KPI tile, and
+    # it puts the large mass in the optical centre rather than the exact
+    # one, where a single number always looks like it has slipped.
+    top, bottom = 118, c.h - 24
+    if caption:
+        d.text((W / 2, top + (bottom - top) * 0.34), _ellipsis(d, caption, f(28), W - 200),
+               fill=SOFT, font=f(28), anchor="mm")
+    # The figure takes the room it needs: 140 for "7", smaller for
+    # "1,250,000", so a seven-digit number never runs off the card.
+    fnt = _fit(d, text, W - 200, f, (140, 120, 100, 84, 68, 54), bold=True)
+    d.text((W / 2, top + (bottom - top) * (0.60 if caption else 0.5)), text,
+           fill=c.accent, font=fnt, anchor="mm")
+    c.footer()
+    return c.png()
+
+
+_KINDS = {"bar": _bar, "hbar": _hbar, "line": _line, "value": _value}
 
 
 def render(chart: Chart) -> bytes:

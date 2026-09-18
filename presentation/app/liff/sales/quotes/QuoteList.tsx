@@ -303,19 +303,22 @@ export default function QuoteList({ liffId }: { liffId: string }) {
         <ul className="list">
           {visibleQuotes.map((quote) => (
             <li key={quote.id} className="card" data-stage={quote.status}>
-              <Link
-                className="row-link"
-                href={`/liff/sales/quotes/${quote.id}`}
-              >
-              <div className="card-title">
-                <span className="code">{quote.quote_id}</span>
-                <Badge stage={quote.status} label={statusLabel(quote.status)} />
-              </div>
-              <div className="card-meta">
-                {quote.generated_document_id
-                  ? t.dashboard.quotes.issued
-                  : t.dashboard.quotes.notIssued}
-              </div>
+              {/* `.row-body` was missing here: `.row-link` is a flex row,
+                  so the code+badge line and the "issued" line were laid out
+                  SIDE BY SIDE rather than stacked (owner, 18 ก.ย. 2569 —
+                  the same pass that made every list open the same way). */}
+              <Link className="row-link" href={`/liff/sales/quotes/${quote.id}`}>
+                <span className="row-body">
+                  <span className="card-title">
+                    <span className="code">{quote.quote_id}</span>
+                    <Badge stage={quote.status} label={statusLabel(quote.status)} />
+                  </span>
+                  <span className="card-meta">
+                    {quote.generated_document_id
+                      ? t.dashboard.quotes.issued
+                      : t.dashboard.quotes.notIssued}
+                  </span>
+                </span>
               </Link>
               <div className="card-actions">
                 {quote.generated_document_id && (

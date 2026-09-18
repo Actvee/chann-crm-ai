@@ -33,6 +33,7 @@ export function AppShell({
   permissions,
   isOwner = false,
   guideHref,
+  tools,
   wide = false,
   children,
 }: {
@@ -41,6 +42,11 @@ export function AppShell({
   /** Where "วิธีใช้" goes. Derived from the path when not given, so every
    *  page of every OA carries it in the same spot (owner, 4 Sep). */
   guideHref?: string | null;
+  /** Extra controls for the top bar, left of the language switcher — the
+   *  notification bell, which SalesShell passes for every Sales page. It
+   *  used to be dropped into four pages by hand and missing from the rest
+   *  (owner, 18 ก.ย. 2569). */
+  tools?: ReactNode;
   /** Two-pane pages (the chat inbox) get the wider shell. */
   wide?: boolean;
   /** The left navigation. On by default and correct for whichever OA the
@@ -145,6 +151,7 @@ export function AppShell({
                   {t.dashboard.guide.title}
                 </a>
               )}
+              {tools}
               <LanguageSwitcher />
             </div>
           </header>

@@ -34,11 +34,17 @@ class TestBytes:
     @pytest.mark.parametrize("kind,points", [
         ("bar", BY_STAGE), ("hbar", BY_STAGE), ("line", BY_MONTH),
     ])
-    def test_every_kind_is_a_png_of_the_declared_size(self, kind, points):
+    def test_every_kind_is_a_png_of_the_declared_width(self, kind, points):
         png = charts.render(charts.Chart(
             title="ยอดขาย", subtitle="เดือนนี้", points=points, kind=kind, footer="รวม 23"))
         assert png[:8] == b"\x89PNG\r\n\x1a\n"
-        assert _image(png).size == (charts.W, charts.H)
+        width, height = _image(png).size
+        # The width is fixed — LINE shows an image at the bubble's width.
+        # The HEIGHT follows the content since 18 ก.ย. 2569: five rows
+        # centred inside a 780 px card left a third of it blank above and
+        # below them, which reads as a chart that failed to load.
+        assert width == charts.W
+        assert charts.VALUE_H // 2 <= height <= charts.H
 
     def test_a_chart_stays_small_enough_to_send_over_line(self):
         png = charts.render(charts.Chart(title="ยอดขายรายเดือน", points=BY_MONTH, kind="line", money=True))
@@ -79,7 +85,7 @@ class TestLabels:
         paper = im.getpixel((4, 400))
         # The 24 px margin outside the card is untouched paper on every
         # side: ink there means a label ran off the picture.
-        for y in range(40, charts.H - 40, 7):
+        for y in range(40, _image(png).size[1] - 40, 7):
             assert im.getpixel((6, y)) == paper
             assert im.getpixel((charts.W - 7, y)) == paper
 

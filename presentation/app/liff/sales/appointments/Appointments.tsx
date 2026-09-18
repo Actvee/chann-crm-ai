@@ -4,7 +4,6 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
-import { NotificationBell } from "@/lib/NotificationBell";
 
 import { Count, Empty } from "../_components";
 import { useFailureText } from "../_format";
@@ -46,7 +45,10 @@ export default function Appointments({ liffId }: { liffId: string }) {
   const [rows, setRows] = useState<FollowUp[]>([]);
   const [names, setNames] = useState<Record<string, Named>>({});
   const [query, setQuery] = useState("");
-  const [showDone, setShowDone] = useState(false);
+  // A real status, not a checkbox beside a select that did nothing. It
+  // starts at "pending" so the default view is unchanged: what is still
+  // waiting on you, with what is finished a choice away.
+  const [statusFilter, setStatusFilter] = useState("pending");
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
   const { request: confirming, ask, close: closeConfirm } = useConfirm();
@@ -166,7 +168,7 @@ export default function Appointments({ liffId }: { liffId: string }) {
   const today = new Date().toISOString().slice(0, 10);
   const visible = rows.filter(
     (row) =>
-      (showDone || row.status === "pending") &&
+      (statusFilter === "" || row.status === statusFilter) &&
       matchesQuery(query, [whoFor(row), row.notes, row.due_date]),
   );
   const groups: { key: string; title: string; rows: FollowUp[] }[] = [
@@ -203,23 +205,23 @@ export default function Appointments({ liffId }: { liffId: string }) {
       onSdkError={() => say(t.liff.sdkLoadFailed, "error")}
     >
       <div className="page-head">
+        {/* `statuses={[]}` is what was here, and an empty array is truthy:
+            the select rendered with "ทั้งหมด" as its only option and an
+            onStatus that did nothing, beside a checkbox that did the
+            filtering — two status controls, one of them dead (owner,
+            18 ก.ย. 2569). One control now, the same as every other list. */}
         <ListFilters
           query={query}
           onQuery={setQuery}
           placeholder={copy.searchHint}
-          statuses={[]}
-          status=""
-          onStatus={() => {}}
+          statuses={[
+            { value: "pending", label: copy.statusPending },
+            { value: "completed", label: copy.statusCompleted },
+            { value: "cancelled", label: copy.statusCancelled },
+          ]}
+          status={statusFilter}
+          onStatus={setStatusFilter}
         />
-        <label className="btn" data-variant="quiet">
-          <input
-            type="checkbox"
-            checked={showDone}
-            onChange={(e) => setShowDone(e.target.checked)}
-          />{" "}
-          {copy.showSettled}
-        </label>
-        <NotificationBell idToken={token} licenseId={licenseId} />
       </div>
 
       {groups.length === 0 ? (
@@ -235,38 +237,54 @@ export default function Appointments({ liffId }: { liffId: string }) {
                 const href = hrefFor(row);
                 return (
                   <li key={row.id} className="card" data-stage={row.status}>
-                    <div className="card-title">
-                      {whenOf(row)} · {whoFor(row)}
-                    </div>
-                    {row.notes && <div className="card-meta">{row.notes}</div>}
-                    <div className="card-actions">
-                      {row.status === "pending" && (
-                        <>
-                          <button
-                            type="button"
-                            className="btn"
-                            data-variant="primary"
-                            disabled={busy !== ""}
-                            onClick={() => void setStatusOf(row, "completed")}
-                          >
-                            {copy.markDone}
-                          </button>
-                          <button
-                            type="button"
-                            className="btn"
-                            disabled={busy !== ""}
-                            onClick={() => void setStatusOf(row, "cancelled")}
-                          >
-                            {copy.markCancelled}
-                          </button>
-                        </>
-                      )}
-                      {href && (
-                        <Link className="btn" data-variant="quiet" href={href}>
-                          {copy.openRecord}
-                        </Link>
-                      )}
-                    </div>
+                    {/* The whole row opens the record, with the chevron the
+                        other lists use — every other page in the dashboard
+                        is tapped on the row itself, and this one alone had
+                        a button labelled "เปิดระเบียน", which is the
+                        database's word for it, not a person's (owner,
+                        18 ก.ย. 2569). The action buttons stay OUTSIDE the
+                        link: a button inside a link is reached twice by a
+                        keyboard and reads as one control to a screen
+                        reader. */}
+                    {href ? (
+                      <Link className="row-link" href={href}>
+                        <div className="row-body">
+                          <div className="card-title">
+                            {whenOf(row)} · {whoFor(row)}
+                          </div>
+                          {row.notes && <div className="card-meta">{row.notes}</div>}
+                        </div>
+                      </Link>
+                    ) : (
+                      <div className="row-body">
+                        <div className="card-title">
+                          {whenOf(row)} · {whoFor(row)}
+                        </div>
+                        {row.notes && <div className="card-meta">{row.notes}</div>}
+                        <div className="card-meta">{copy.recordGone}</div>
+                      </div>
+                    )}
+                    {row.status === "pending" && (
+                      <div className="card-actions">
+                        <button
+                          type="button"
+                          className="btn"
+                          data-variant="primary"
+                          disabled={busy !== ""}
+                          onClick={() => void setStatusOf(row, "completed")}
+                        >
+                          {copy.markDone}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn"
+                          disabled={busy !== ""}
+                          onClick={() => void setStatusOf(row, "cancelled")}
+                        >
+                          {copy.markCancelled}
+                        </button>
+                      </div>
+                    )}
                   </li>
                 );
               })}

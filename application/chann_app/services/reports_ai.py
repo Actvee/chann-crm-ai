@@ -85,6 +85,42 @@ METRIC_LABEL = {
     "count": {"th": "จำนวน", "en": "count"}, "sum": {"th": "ผลรวม", "en": "total"}, "avg": {"th": "ค่าเฉลี่ย", "en": "average"},
     "min": {"th": "ต่ำสุด", "en": "minimum"}, "max": {"th": "สูงสุด", "en": "maximum"},
 }
+#: The values the whitelist allows, in words. `describe()` used to print
+#: the raw pair — "stage=won" — into the report title, the chart title and
+#: the CSV, which is exactly the raw key rule 4 forbids in front of a
+#: person (18 ก.ย. 2569). Bounded on purpose: these are the only enums
+#: ALLOWED_ENTITIES admits, so the table cannot drift out of date silently.
+VALUE_LABEL = {
+    "stage": {
+        "new": {"th": "ใหม่", "en": "New"},
+        "proposed": {"th": "เสนอราคาแล้ว", "en": "Proposed"},
+        "won": {"th": "ปิดสำเร็จ", "en": "Won"},
+        "lost": {"th": "ไม่สำเร็จ", "en": "Lost"},
+    },
+    "status": {
+        "open": {"th": "เปิดอยู่", "en": "Open"},
+        "assigned": {"th": "มอบหมายแล้ว", "en": "Assigned"},
+        "in_progress": {"th": "กำลังทำ", "en": "In progress"},
+        "completed": {"th": "เสร็จแล้ว", "en": "Completed"},
+        "cancelled": {"th": "ยกเลิก", "en": "Cancelled"},
+        "draft": {"th": "ร่าง", "en": "Draft"},
+        "sent": {"th": "ส่งแล้ว", "en": "Sent"},
+        "accepted": {"th": "ตอบรับแล้ว", "en": "Accepted"},
+        "rejected": {"th": "ปฏิเสธ", "en": "Rejected"},
+        "expired": {"th": "หมดอายุ", "en": "Expired"},
+        "active": {"th": "ยังคุ้มครอง", "en": "Active"},
+        "void": {"th": "เป็นโมฆะ", "en": "Void"},
+    },
+}
+
+
+def _filter_words(key: str, value: str, language: str) -> str:
+    """"สถานะ ปิดสำเร็จ", never "stage=won"."""
+    name = _t(GROUP_LABEL.get(key) or FIELD_LABEL.get(key) or {"th": key}, language)
+    words = VALUE_LABEL.get(key, {}).get(value)
+    return f"{name} {_t(words, language) if words else value}"
+
+
 NO_DATA = {"th": "ไม่มีข้อมูลในช่วงที่ขอ", "en": "No data in that range"}
 INVALID = {
     "th": "สร้างรายงานนี้ไม่ได้ครับ ({reason}) ลองถามแบบนี้: \"ดูยอดดีลปิดสำเร็จ 3 เดือนล่าสุด\" หรือ \"สรุปงานค้างแยกตามช่าง\"",
@@ -99,6 +135,11 @@ CHART_KIND = {"owner_member_id": "hbar", "assigned_to": "hbar", "product_id": "h
 CHART_UNAVAILABLE = {
     "th": "\n(ยังส่งรูปกราฟไม่ได้ตอนนี้ — ตัวเลขด้านบนถูกต้องครับ)",
     "en": "\n(The chart picture could not be sent right now — the numbers above are correct.)",
+}
+#: On the value card, where there is no axis to explain the numbers.
+CHART_FOOTNOTE = {
+    "th": "นับจากข้อมูลของร้านคุณเท่านั้น",
+    "en": "Counted from your shop's data only",
 }
 CHART_NEEDS_GROUPS = {
     "th": "\n(รายงานนี้เป็นตัวเลขเดียว ยังไม่มีกราฟให้ดู ลองเพิ่ม \"แยกตาม...\" เช่น \"แยกตามผู้ดูแล\")",
@@ -273,7 +314,7 @@ def describe(spec: dict, language: str) -> str:
     metric = _t(METRIC_LABEL[spec["metric"]], language)
     parts = [f"{metric}{entity}" if language != "en" else f"{metric} of {entity}"]
     for key, value in (spec.get("filter") or {}).items():
-        parts.append(f"{key}={value}")
+        parts.append(_filter_words(key, str(value), language))
     if spec.get("date_range"):
         parts.append(_t(RANGE_LABEL[spec["date_range"]], language))
     if spec.get("group_by"):
@@ -299,9 +340,64 @@ def report_text(spec: dict, result: dict, language: str) -> str:
     return f"{head}\n{('รวม ' if language != 'en' else 'Total ')}{_fmt(total if total is not None else 0)}"
 
 
-def report_csv(spec: dict, result: dict, language: str) -> bytes:
+CSV_HEAD = {
+    "shop": {"th": "ร้าน", "en": "Shop"},
+    "report": {"th": "รายงาน", "en": "Report"},
+    "entity": {"th": "ดูข้อมูล", "en": "Data"},
+    "metric": {"th": "ตัวเลข", "en": "Measure"},
+    "field": {"th": "คิดจากช่อง", "en": "Based on"},
+    "range": {"th": "ช่วงเวลา", "en": "Period"},
+    "all_time": {"th": "ทุกช่วงเวลา", "en": "All time"},
+    "date_field": {"th": "นับจากวันที่", "en": "Counted by"},
+    "filters": {"th": "เงื่อนไข", "en": "Filters"},
+    "none": {"th": "ไม่มี", "en": "None"},
+    "at": {"th": "ออกรายงานเมื่อ", "en": "Generated"},
+}
+
+
+def report_csv(
+    spec: dict, result: dict, language: str, *,
+    company_name: str = "", generated_at: datetime | None = None,
+) -> bytes:
+    """The numbers, with enough above them to know what they are.
+
+    Owner, 18 ก.ย. 2569: "โหลดมาแล้วดูไม่รู้เรื่องเลย มีแต่ column ผลรวม".
+    A report with no grouping used to produce a file of exactly two lines —
+    the word "จำนวน" and a number — with nothing saying what was counted,
+    over what period, or under which filters. Opened a week later it was
+    unreadable, and there was no way to tell two such files apart.
+
+    The header block answers that before the data starts. Excel reads the
+    blank line as the end of it and the table below as the table.
+    """
     buf = io.StringIO()
     writer = csv.writer(buf)
+    head = lambda key: _t(CSV_HEAD[key], language)  # noqa: E731
+    if company_name:
+        writer.writerow([head("shop"), company_name])
+    writer.writerow([head("report"), describe(spec, language)])
+    writer.writerow([head("entity"), _t(ENTITY_LABEL[spec["entity"]], language)])
+    writer.writerow([head("metric"), _t(METRIC_LABEL[spec["metric"]], language)])
+    if spec.get("field"):
+        writer.writerow([head("field"), _t(FIELD_LABEL.get(spec["field"], {"th": spec["field"]}), language)])
+    writer.writerow([
+        head("range"),
+        _t(RANGE_LABEL[spec["date_range"]], language) if spec.get("date_range") else head("all_time"),
+    ])
+    writer.writerow([
+        head("date_field"),
+        _t(FIELD_LABEL.get(spec.get("date_field") or "", {"th": str(spec.get("date_field") or "")}), language),
+    ])
+    filters = spec.get("filter") or {}
+    writer.writerow([
+        head("filters"),
+        " · ".join(_filter_words(k, str(v), language) for k, v in filters.items()) if filters else head("none"),
+    ])
+    writer.writerow([
+        head("at"),
+        (generated_at or datetime.now(timezone.utc)).astimezone().strftime("%Y-%m-%d %H:%M"),
+    ])
+    writer.writerow([])
     if spec.get("group_by"):
         writer.writerow([_t(GROUP_LABEL[spec["group_by"]], language), _t(METRIC_LABEL[spec["metric"]], language)])
         for row in result.get("rows") or []:
@@ -355,7 +451,20 @@ def chart_for(spec: dict, result: dict, language: str) -> charts.Chart | None:
     tells the reader strictly less than the sentence does, so it is not
     drawn and the caller says why."""
     if not spec.get("group_by"):
-        return None
+        # One number IS drawable — as a value card, not as a bar chart.
+        # Until 18 ก.ย. 2569 this returned None and the person who had
+        # just typed "สร้างรายงานด้วย AI: …" was handed the HTML page
+        # instead: a document, where they had asked for a picture.
+        total = result.get("total")
+        return charts.Chart(
+            title=describe(spec, language),
+            points=[(_t(METRIC_LABEL[spec["metric"]], language)
+                     + _t(ENTITY_LABEL[spec["entity"]], language), float(total or 0))],
+            kind="value",
+            money=spec.get("metric") != "count",
+            language=language,
+            footer=_t(CHART_FOOTNOTE, language),
+        )
     rows = result.get("rows") or []
     money = spec.get("metric") != "count"
     total = result.get("total")
@@ -427,7 +536,7 @@ async def publish_files(spec: dict, result: dict, language: str, *, license_id: 
     stamp = uuid.uuid4().hex
     page = report_html(spec, result, language, company_name=company_name)
     try:
-        stored = await store.put(key=f"reports/{license_id}/{stamp}.csv", content=report_csv(spec, result, language), content_type="text/csv; charset=utf-8")
+        stored = await store.put(key=f"reports/{license_id}/{stamp}.csv", content=report_csv(spec, result, language, company_name=company_name), content_type="text/csv; charset=utf-8")
         files["csv"] = asset_link(stored.path, content_type="text/csv; charset=utf-8", ttl_seconds=FILE_LINK_SECONDS, filename="report.csv")
         stored = await store.put(key=f"reports/{license_id}/{stamp}.html", content=page.encode("utf-8"), content_type="text/html; charset=utf-8")
         files["html"] = asset_link(stored.path, content_type="text/html; charset=utf-8", ttl_seconds=FILE_LINK_SECONDS, filename="report.html")

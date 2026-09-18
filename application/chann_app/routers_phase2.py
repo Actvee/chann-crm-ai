@@ -4418,6 +4418,37 @@ async def ai_report_ask(
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="AI is not available right now")
     except DataTierError as exc:
         raise _propagate(exc)
+    return await _charge_for_the_picture(client, license_id, out)
+
+
+async def _charge_for_the_picture(client, license_id: str, out: dict) -> dict:
+    """Spend one of the month's AI charts, but only if there IS a picture.
+
+    `chart_quota.spend_one` was called from exactly one place in the whole
+    system - the chat road - so the dashboard drew AI charts for free and
+    a shop that had used its month simply opened the dashboard and carried
+    on. The allowance in the Chann admin screen counted the chat only, and
+    the "used X/30" it showed was not the truth (whole-system reach audit,
+    18 September 2026).
+
+    Over the allowance the numbers, the table and the files all still come
+    back - only the image is withheld, which is the owner's standing rule:
+    running out of chart quota must never stop a shop finding out its own
+    numbers.
+    """
+    from .services import chart_quota
+
+    if not out.get("chart"):
+        return out
+    quota = await chart_quota.spend_one(client, license_id=license_id)
+    out["quota"] = {
+        "allowed": bool(quota.get("allowed")),
+        "used": int(quota.get("used") or 0),
+        "allowance": int(quota.get("allowance") or 0),
+        "unknown": bool(quota.get("unknown")),
+    }
+    if not quota.get("allowed"):
+        out["chart"] = None
     return out
 
 
@@ -4459,8 +4490,11 @@ async def ai_report_run(
     text = reports_ai.report_text(spec, result, language)
     files = await reports_ai.publish_files(spec, result, language, license_id=license_id, company_name=_company_name_of(principal))
     chart, plottable = await reports_ai.publish_chart_for(spec, result, language, license_id=license_id)
-    return {"spec": spec, "result": result, "text": text, "files": files,
-            "chart": chart, "plottable": plottable}
+    return await _charge_for_the_picture(
+        client, license_id,
+        {"spec": spec, "result": result, "text": text, "files": files,
+         "chart": chart, "plottable": plottable},
+    )
 
 
 def _company_name_of(principal: TenantPrincipal) -> str:

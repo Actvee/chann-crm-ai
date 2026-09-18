@@ -274,15 +274,26 @@ class TestTheAiReportEngineGainsAChart:
         path, content_type, _ = decode_asset_token(reply.images[0].rsplit("/", 1)[-1])
         assert content_type == "image/png" and store.objects[path][:8] == b"\x89PNG\r\n\x1a\n"
 
-    async def test_a_single_number_says_there_is_nothing_to_plot(self, store):
+    async def test_a_single_number_is_drawn_as_a_value_card(self, store):
+        """It used to answer "there is nothing to plot" and send no picture.
+
+        Owner, 18 ก.ย. 2569: asking for a chart and being handed a page of
+        text "ไม่ถูกต้องตามหลักเลย". One number has nothing to COMPARE,
+        which is why it is not a bar chart — but it is still drawable, and
+        a stat tile is what every dashboard draws for it.
+        """
         client = await sales_client()
         client.run_report_query = _report_query(client, {"rows": [], "total": 3})
         ai = httpx.AsyncClient(transport=_ai(json.dumps(
             {"entity": "deals", "metric": "count", "filter": {"stage": "won"}, "group_by": None})))
         reply = await handle_chat_message(
             client, message="สรุปดีลปิดสำเร็จ เป็นกราฟ", ctx=_ctx(oa="sales"), ai_client=ai)
-        assert not reply.images
-        assert "รายงานนี้เป็นตัวเลขเดียว" in reply.text and "รวม 3" in reply.text
+        assert reply.images, reply.text
+        path, content_type, _ = decode_asset_token(reply.images[0].rsplit("/", 1)[-1])
+        assert content_type == "image/png" and store.objects[path][:8] == b"\x89PNG\r\n\x1a\n"
+        # The numbers still come in words as well — the picture is extra.
+        assert "รวม 3" in reply.text
+        assert "รายงานนี้เป็นตัวเลขเดียว" not in reply.text
 
     async def test_a_plain_report_still_answers_in_text_and_offers_the_chart(self, store):
         client = await sales_client()
@@ -342,10 +353,16 @@ class TestTheDashboardContract:
         path, content_type, _ = decode_asset_token(url.rsplit("/", 1)[-1])
         assert content_type == "image/png" and path.startswith("gs://bucket/reports/L1/charts/")
 
-    async def test_a_single_number_publishes_nothing_and_says_it_is_not_plottable(self, store):
+    async def test_a_single_number_publishes_a_value_card(self, store):
+        # `plottable` now means "there was something to draw", and one
+        # number is something: the card carries it (18 ก.ย. 2569).
         spec = reports_ai.validate_query_spec({"entity": "deals"})
         url, plottable = await reports_ai.publish_chart_for(spec, {**spec, "rows": [], "total": 3}, "th", license_id="L1")
-        assert url is None and plottable is False and not store.objects
+        assert plottable is True
+        assert url and store.objects
+        path = next(iter(store.objects))
+        assert path.startswith("gs://bucket/reports/L1/charts/")
+        assert store.objects[path][:8] == b"\x89PNG\r\n\x1a\n"
 
     async def test_without_a_store_the_page_simply_gets_no_chart(self, no_store):
         spec = reports_ai.validate_query_spec({"entity": "deals", "group_by": "stage"})
