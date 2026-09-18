@@ -3007,10 +3007,22 @@ def get_quote(
 
 @router.get("/licenses/{license_id}/quotes", response_model=list[QuoteOut])
 def list_quotes(
-    license_id: uuid.UUID, status_: str | None = None, session: Session = Depends(get_session),
+    license_id: uuid.UUID, status_: str | None = None, limit: int = 500,
+    response: Response = None,  # type: ignore[assignment]
+    session: Session = Depends(get_session),
 ):
+    """Quotes, newest first, capped and counted.
+
+    X-Total-Count travels with the page for the same reason it does on the
+    customer and deal lists (round 20j): a cap with no count is a screen
+    confidently showing "500 of 500" for a shop that has 3,000.
+    """
     scope = TenantScope(license_id=license_id)
-    rows = QuoteRepository(session).list_for_license(scope, status=status_)
+    repo = QuoteRepository(session)
+    capped = max(1, min(int(limit), 2000))
+    rows = repo.list_for_license(scope, status=status_, limit=capped)
+    if response is not None:
+        response.headers["X-Total-Count"] = str(repo.count_for_license(scope, status=status_))
     return [QuoteOut.model_validate(r, from_attributes=True) for r in rows]
 
 

@@ -87,6 +87,31 @@ ACCEPTED = {
     # the old row); there is no separate create, and chat's ตั้งการอนุมัติ
     # is the same replace — registered as ("update", "approval").
     ("approval", "create"): "PUT replaces the flow; both surfaces do that as 'update'",
+    # A photo arrives as an image message, not as a sentence — there is no
+    # wording that could attach one, which is why ACTION_PERMISSIONS has
+    # read/update/delete for photo and no create.
+    # Both of these are one operation wearing two verb names, and the
+    # checker reads the URL, which cannot see either. Round 20k, after the
+    # photos fix above left them as the last two lines: each was verified
+    # by finding the dashboard code that performs it, not by reasoning
+    # that it probably exists somewhere.
+    ("deal", "reopen"): (
+        "both — the dashboard reopens by PATCHing stage back to new with "
+        "allow_reopen (DealDetail.tsx and DealList.tsx both send it when the "
+        "person holds deal.reopen); the URL is the same PATCH as any edit, so "
+        "the scan can only see it as deal.update"
+    ),
+    ("team", "archive"): (
+        "both — one operation: SalesTeams.tsx sends DELETE technician-teams/{id}, "
+        "which the Data tier performs as an archive (7.5: delete is never a hard "
+        "delete), and chat's \"ลบทีม <ทีม>\" is registered under the archive verb "
+        "for the same call — see the (team, delete) entry above, which is its "
+        "other half"
+    ),
+    ("photo", "create"): (
+        "dashboard uploads the file; in chat the technician sends the image itself, "
+        "which store_ticket_photo attaches to the job in view"
+    ),
 }
 
 # Real gaps, planned rather than accepted. Listed separately so the
@@ -125,6 +150,13 @@ URL_ENTITIES = [
     ("approvals", "approval"),
     ("surveys", "survey"),
     ("follow-ups", "followup"),
+    # Deleting a photo is `photo.delete`, not `ticket.delete`. Without this
+    # line the entity scan walked back past `photos` to `tickets` and
+    # reported a ticket-deletion gap that neither surface has: nothing
+    # deletes a TICKET anywhere, and both surfaces delete a photo
+    # (chat: "ลบรูปที่ 2", registered as ("delete", "photo")). The gap was
+    # in the reading of the URL (round 20k).
+    ("photos", "photo"),
     ("audit-log", "audit_log"),
     ("audit", "audit_log"),
     ("invites", "invite"),

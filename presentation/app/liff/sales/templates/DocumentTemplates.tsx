@@ -364,6 +364,67 @@ export default function DocumentTemplates({ liffId }: { liffId: string }) {
     }
   }
 
+  /** Retire a version. The other half of publish — until round 20k a
+   *  published layout could never be taken back out of use.
+   *
+   *  The confirmation names what the NEXT document will render from,
+   *  because that is the part a person cannot see: the renderer takes the
+   *  highest published version, so archiving it either hands over to the
+   *  next published one or falls back to the built-in layout. */
+  async function archive(template: Template, version: TemplateVersion) {
+    const published = (versions[template.id] ?? []).filter(
+      (v) => v.status === "published" && v.id !== version.id,
+    );
+    const successor = published.length
+      ? published.reduce((best, v) => (v.version > best.version ? v : best))
+      : null;
+    const wasRendering =
+      version.status === "published" &&
+      !published.some((v) => v.version > version.version);
+    const copy = t.dashboard.templates;
+    const ok = await ask({
+      action: copy.archiveAction,
+      target: template.template_name,
+      code: `v${version.version}`,
+      affects: wasRendering
+        ? [
+            successor
+              ? copy.archiveThenVersion.replace("{version}", String(successor.version))
+              : copy.archiveThenBuiltin,
+          ]
+        : [copy.archiveNotInUse],
+      reversible: copy.archiveKeeps,
+      confirmLabel: copy.archiveAction,
+    });
+    if (!ok) return;
+    setBusy(true);
+    try {
+      const response = await fetch(
+        `/api/phase2/licenses/${licenseId}/document-templates/${template.id}/versions/${version.id}/archive`,
+        { method: "POST", headers: proxyHeaders(token, licenseId) },
+      );
+      if (!response.ok) {
+        const detail = await response.json().catch(() => ({}));
+        say(
+          typeof detail.detail === "string"
+            ? detail.detail
+            : `${t.common.error} (${response.status})`,
+          "error",
+        );
+        return;
+      }
+      await loadVersions(template);
+      // Archiving can change which layout is in use, exactly as publishing
+      // can — the page must not go on asserting the old answer.
+      await load();
+      say(copy.archived, "ok");
+    } catch (error) {
+      fail(error);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   /** Choose the layout a kind of document is rendered from, or hand the
    *  type back to the system's standard one.
    *
@@ -835,6 +896,20 @@ export default function DocumentTemplates({ liffId }: { liffId: string }) {
                             disabled={busy}
                           >
                             {t.dashboard.templates.publish}
+                          </button>
+                        )}
+                        {/* Round 20k: publish had no opposite, so a layout
+                            could go into use and never come out. */}
+                        {canManage && version.status !== "archived" && (
+                          <button
+                            type="button"
+                            className="btn"
+                            data-variant="quiet"
+                            style={{ marginLeft: 8 }}
+                            onClick={() => void archive(template, version)}
+                            disabled={busy}
+                          >
+                            {t.dashboard.templates.archive}
                           </button>
                         )}
                         {preview?.versionId === version.id && (

@@ -2174,3 +2174,12 @@ html {
 }
 
 .btn[data-variant="danger"][aria-busy="true"] { opacity: 0.7; }
+
+/* Round 20k — the AI report spec editor. The model's spec is a starting
+   point: `/reports/ai/run` accepts an edited one, so the same report can be
+   moved to another period or grouping without re-typing the question. */
+.spec-editor { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 12px; }
+.spec-toggle { min-height: 44px; }
+.spec-fields { margin-top: 12px; gap: 12px; }
+.spec-fields select { min-height: 44px; }
+.spec-filters { display: flex; flex-direction: column; gap: 6px; }

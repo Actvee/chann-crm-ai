@@ -2023,6 +2023,22 @@ class DataClient:
             return None
         return self._unwrap(resp)
 
+    async def list_quotes_with_total(
+        self, license_id: str, status: str | None = None, limit: int | None = None,
+    ) -> tuple[list[dict], int]:
+        """A page of quotes, and how many there really are."""
+        params: dict = {}
+        if status:
+            params["status_"] = status
+        if limit:
+            params["limit"] = limit
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/quotes",
+            headers=self._headers, params=params or None,
+        )
+        rows = self._unwrap(resp)
+        return rows, _total_of(resp, rows)
+
     async def list_quotes(self, license_id: str, status: str | None = None) -> list[dict]:
         params = {"status_": status} if status else None
         resp = await self._client.get(

@@ -72,6 +72,15 @@ GROUP_LABEL = {
     "stage": {"th": "สถานะ", "en": "stage"}, "status": {"th": "สถานะ", "en": "status"},
     "product_id": {"th": "สินค้า", "en": "product"},
 }
+FIELD_LABEL = {
+    "created_at": {"th": "วันที่สร้าง", "en": "created"},
+    "expected_close_date": {"th": "วันที่คาดว่าจะปิด", "en": "expected close"},
+    "scheduled_date": {"th": "วันนัดหมาย", "en": "scheduled"},
+    "valid_until": {"th": "วันหมดอายุ", "en": "valid until"},
+    "warranty_end": {"th": "วันสิ้นสุดประกัน", "en": "warranty end"},
+    "amount": {"th": "มูลค่า", "en": "amount"},
+    "discount_amount": {"th": "ส่วนลด", "en": "discount"},
+}
 METRIC_LABEL = {
     "count": {"th": "จำนวน", "en": "count"}, "sum": {"th": "ผลรวม", "en": "total"}, "avg": {"th": "ค่าเฉลี่ย", "en": "average"},
     "min": {"th": "ต่ำสุด", "en": "minimum"}, "max": {"th": "สูงสุด", "en": "maximum"},
@@ -153,6 +162,38 @@ def validate_query_spec(spec: dict) -> dict:
         raise ReportSpecInvalid(f"'{date_field}' is not a date field of {entity}")
     return {"entity": entity, "metric": metric, "field": field, "filter": filters,
             "group_by": group_by, "date_range": date_range, "date_field": date_field}
+
+
+def spec_options(language: str = "th") -> dict:
+    """The whitelist, labelled, for the dashboard's spec editor.
+
+    The editor must offer exactly what `validate_query_spec` accepts. Writing
+    the same table again in TypeScript is how `Warranty.purchase_date` and
+    the missing `MemberOut.id` happened, so the page asks for it instead.
+    """
+    entities = []
+    for entity, table in ALLOWED_ENTITIES.items():
+        entities.append({
+            "value": entity,
+            "label": _t(ENTITY_LABEL[entity], language),
+            "date_fields": [
+                {"value": f, "label": _t(FIELD_LABEL.get(f, {"th": f}), language)}
+                for f in table["date_fields"]
+            ],
+            "group_by": [
+                {"value": f, "label": _t(GROUP_LABEL[f], language)}
+                for f in table["fields"] if f in ALLOWED_GROUP_BY
+            ],
+            "numeric_fields": [
+                {"value": f, "label": _t(FIELD_LABEL.get(f, {"th": f}), language)}
+                for f in NUMERIC_FIELDS.get(entity, ())
+            ],
+        })
+    return {
+        "entities": entities,
+        "metrics": [{"value": m, "label": _t(METRIC_LABEL[m], language)} for m in ALLOWED_METRICS],
+        "date_ranges": [{"value": r, "label": _t(RANGE_LABEL[r], language)} for r in ALLOWED_DATE_RANGES],
+    }
 
 
 # ----------------------------------------------------------------- the model

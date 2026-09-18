@@ -618,13 +618,18 @@ async def patch_company_profile(
 async def list_quotes(
     license_id: str,
     status_filter: str | None = None,
+    limit: int = 500,
+    response: Response = None,  # type: ignore[assignment]
     principal: TenantPrincipal = Depends(get_tenant_principal),
     client: DataClient = Depends(get_data_client),
 ):
     _require_same_tenant(principal, license_id)
     principal.require("quote.read")
     try:
-        return await client.list_quotes(license_id, status_filter)
+        rows, total = await client.list_quotes_with_total(license_id, status_filter, limit=limit)
+        if response is not None:
+            response.headers["X-Total-Count"] = str(total)
+        return rows
     except DataTierError as exc:
         raise _propagate(exc)
 
@@ -3630,6 +3635,46 @@ async def publish_document_template(
         raise _propagate(exc)
 
 
+@router.post(
+    "/licenses/{license_id}/document-templates/{template_id}/versions/{version_id}/archive"
+)
+async def archive_document_template(
+    license_id: str,
+    template_id: str,
+    version_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Retire a layout the shop no longer wants used.
+
+    The other half of publish, and the only way out of a published
+    version: the Data tier route and the client method both existed with
+    no caller, so a shop could put a layout into use and never take it
+    back out (whole-system reach audit, round 20k).
+
+    Nothing already issued changes — a generated document names the
+    version it was rendered from. What changes is the NEXT document:
+    `documents/selection.usable_version` takes the highest published
+    version, so archiving that one hands rendering to the next published
+    version, or to the built-in layout when there is none. It never
+    fails an issue, which is the standing rule for templates.
+    """
+    _require_same_tenant(principal, license_id)
+    principal.require("setting.manage")
+    try:
+        # Same guard as publish: the Data tier addresses a version by its
+        # own id, so the template in the path proves nothing until it is
+        # checked against the template's own list.
+        versions = await client.list_document_template_versions(license_id, template_id)
+        if not any(str(v.get("id")) == str(version_id) for v in versions):
+            raise HTTPException(status_code=404, detail="template version not found")
+        return await client.archive_document_template_version(
+            license_id, version_id, actor_id=principal.chann_uid,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
 @router.get("/licenses/{license_id}/document-templates")
 async def list_document_templates(
     license_id: str,
@@ -4374,6 +4419,21 @@ async def ai_report_ask(
     except DataTierError as exc:
         raise _propagate(exc)
     return out
+
+
+@router.get("/licenses/{license_id}/reports/ai/options")
+async def ai_report_options(
+    license_id: str,
+    language: str = "th",
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+):
+    """What the spec editor is allowed to offer — straight from the whitelist
+    the validator uses, so the two can never drift apart."""
+    from .services import reports_ai
+
+    _require_same_tenant(principal, license_id)
+    principal.require("view_reports")
+    return reports_ai.spec_options(language if language in ("th", "en") else "th")
 
 
 @router.post("/licenses/{license_id}/reports/ai/run")

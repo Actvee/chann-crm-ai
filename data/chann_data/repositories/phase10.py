@@ -402,11 +402,33 @@ class QuoteRepository:
         self._s.flush()
         return row
 
-    def list_for_license(self, scope: TenantScope, *, status: str | None = None) -> list[Quote]:
+    def list_for_license(
+        self, scope: TenantScope, *, status: str | None = None, limit: int | None = None,
+    ) -> list[Quote]:
+        """Quotes, newest first.
+
+        The last list in the Data tier with no ceiling at all (survey,
+        18 ก.ย. 2569): customers, deals, tickets, reports, follow-ups and
+        the rest were already capped, and quotes grow with every quotation
+        a shop writes. `id` breaks the created_at tie so a page boundary
+        cannot repeat or skip a row.
+        """
         query = select(Quote).where(Quote.license_id == scope.license_id)
         if status:
             query = query.where(Quote.status == status)
-        return list(self._s.execute(query.order_by(Quote.created_at.desc())).scalars())
+        query = query.order_by(Quote.created_at.desc(), Quote.id.desc())
+        if limit is not None:
+            query = query.limit(max(1, int(limit)))
+        return list(self._s.execute(query).scalars())
+
+    def count_for_license(self, scope: TenantScope, *, status: str | None = None) -> int:
+        """How many there are, so a capped page can say what it left out."""
+        query = select(func.count()).select_from(Quote).where(
+            Quote.license_id == scope.license_id,
+        )
+        if status:
+            query = query.where(Quote.status == status)
+        return int(self._s.execute(query).scalar() or 0)
 
     def transition_status(
         self, scope: TenantScope, quote_id: uuid.UUID, *, to_status: str,
