@@ -14016,17 +14016,22 @@ async def _customer_activity(
     limit = CUSTOMER_CARD_SECTION_LIMIT
 
     try:
-        notes = await client.list_notes(license_id, "customer", customer_row_id, limit=20)
+        # The TRUE count, not the length of the capped page: a customer
+        # with thirty notes was told they had twenty, because the card
+        # counted the rows it got back (round 20O).
+        notes, note_total = await client.list_notes_with_total(
+            license_id, "customer", customer_row_id, limit=20,
+        )
     except Exception:  # noqa: BLE001
         log.exception("customer card: notes")
-        notes = []
+        notes, note_total = [], 0
     if notes:
         newest = sorted(notes, key=lambda n: str(n.get("created_at") or ""), reverse=True)
         sections.append((
-            _t(CUSTOMER_CARD_NOTES, language).format(n=len(notes)),
+            _t(CUSTOMER_CARD_NOTES, language).format(n=note_total),
             [f"  • {_short_date(n.get('created_at'))}{str(n.get('body') or '').strip()[:60]}"
              for n in newest[:limit]],
-            len(notes), "บันทึก" if language != "en" else "notes",
+            note_total, "บันทึก" if language != "en" else "notes",
         ))
 
     try:

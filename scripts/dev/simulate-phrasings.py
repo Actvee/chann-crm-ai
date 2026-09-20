@@ -8,6 +8,7 @@ Every case carries an expectation:
   rule   handled before the model, with a non-failing reply
   fault  (customer OA) opens or continues a fault report
   ai     free text the model is meant to parse — going to the AI is fine
+  unsure gibberish; saying "ยังไม่แน่ใจ" IS the right answer, not a defect
   any    just show what happens
 
 Replies longer than LONG_LINES lines or LONG_CHARS characters are listed
@@ -125,6 +126,13 @@ async def run(oa, client, cases, role=None):
             # what is assertable, and what the conversion is about, is that
             # a keyword did not decide it (11 ก.ย. 2569).
             ok = layer == "AI"
+        elif expect == "unsure":
+            # Gibberish. "ยังไม่แน่ใจว่าต้องการอะไร" is the RIGHT answer to
+            # it, and labelling these "any" made them count as answered
+            # badly — three of them, every run, in the number I read out
+            # to the owner as if it were a list of defects (20 ก.ย. 2569).
+            # What matters is that the system says so rather than guessing.
+            ok = kind in ("NOT_SURE", "ok")
         else:
             ok = kind == "ok"
         results.append((oa, message, expect, layer, kind, ok, long, lines, len(text), qr, text))
@@ -145,7 +153,7 @@ HELP_VARIANTS = [
 GREETINGS = [
     "สวัสดีครับ", "สวัสดีค่ะ", "หวัดดี", "ดีครับ", "hello", "hi", "สวัสดีครับ ขอสอบถามหน่อย",
 ]
-SMALL_TALK = [("ขอบคุณครับ", "any"), ("โอเค", "any"), ("ครับ", "any"), ("ค่ะ", "any"), ("ok", "any"), ("👍", "any"), ("555", "any"), ("asdfgh", "any")]
+SMALL_TALK = [("ขอบคุณครับ", "any"), ("โอเค", "any"), ("ครับ", "any"), ("ค่ะ", "any"), ("ok", "any"), ("👍", "any"), ("555", "any"), ("asdfgh", "unsure")]
 
 
 async def sales():
@@ -321,12 +329,31 @@ async def main():
     await sales(); await technician(); await customer()
     fails = [r for r in results if not r[5]]
     longs = [r for r in results if r[6]]
+    # Two different things were being added together, and the sum was read
+    # out loud as if it were one (18–20 ก.ย. 2569):
+    #
+    #   BAD ANSWER   the reply itself is a failure — "ยังไม่แน่ใจ", a
+    #                permission list, "ไม่พบ", an apology. Something to fix.
+    #   OTHER ROAD   the reply is fine (`ok`), it just came from the rule
+    #                layer where the case is labelled `ai`, or the other
+    #                way round. A label about intent, not a defect.
+    #
+    # Six cases of the second kind and three of the first read as "9 not
+    # as expected", and I reported that number to the owner twice as if
+    # every one of them were a problem. The headline line keeps its old
+    # shape so the deploy gate's grep still matches; the number that
+    # actually needs watching is on the line under it.
+    bad = [r for r in fails if r[4] != "ok"]
+    other_road = [r for r in fails if r[4] == "ok"]
     print(f"\n=== {len(results)} cases · {len(fails)} not as expected · {len(longs)} long replies ===")
+    print(f"    of those: {len(bad)} answered badly · {len(other_road)} answered fine on the other road")
     by = {}
     for oa, msg, expect, layer, kind, ok, long, lines, chars, qr, text in fails:
-        by.setdefault((oa, expect, layer, kind), []).append(msg)
-    for (oa, expect, layer, kind), msgs in sorted(by.items()):
-        print(f"  [{oa}] expected {expect}, got {layer}/{kind} ({len(msgs)}): " + " | ".join(m.replace(chr(10), ' ')[:24] for m in msgs[:12]))
+        by.setdefault((kind != "ok", oa, expect, layer, kind), []).append(msg)
+    for (is_bad, oa, expect, layer, kind), msgs in sorted(by.items(), reverse=True):
+        mark = "!!" if is_bad else "  "
+        print(f"  {mark} [{oa}] expected {expect}, got {layer}/{kind} ({len(msgs)}): "
+              + " | ".join(m.replace(chr(10), ' ')[:24] for m in msgs[:12]))
     print("\nLONG replies (lines/chars):")
     # Grouped by the reply, not deduped into silence: the header counted
     # every long case while this list dropped the ones whose reply shared

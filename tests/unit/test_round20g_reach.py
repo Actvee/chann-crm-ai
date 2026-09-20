@@ -324,6 +324,12 @@ class _Routes:
     async def aclose(self):
         pass
 
+    async def list_audit_log_with_total(self, license_id, **kwargs):
+        """Page and true total, delegating so `recorded` keeps its shape."""
+        kwargs.pop("offset", None)
+        rows = await self.list_audit_log(license_id, **kwargs)
+        return rows, len(rows)
+
     async def list_audit_log(self, license_id, *, entity_type=None, actor_type=None, limit=100):
         self.recorded.append(("list_audit_log", license_id, entity_type, actor_type, limit))
         return list(self._audit)

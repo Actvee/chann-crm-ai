@@ -470,23 +470,44 @@ class NoteRepository:
         self._s.flush()
         return row
 
+    def _narrow(self, stmt, scope: TenantScope, entity_type: str, entity_id):
+        """The one place a note list is narrowed — page and count alike."""
+        return stmt.where(
+            Note.license_id == scope.license_id,
+            Note.entity_type == entity_type,
+            Note.entity_id == entity_id,
+        )
+
+    def count_for_entity(
+        self, scope: TenantScope, *, entity_type: str, entity_id: uuid.UUID,
+    ) -> int:
+        """How many notes this record has, so a page can say what it left
+        out — "บันทึก (7)" on the customer card has to be the true seven
+        even when only two are shown (round 20O)."""
+        from sqlalchemy import func
+
+        return int(self._s.execute(
+            self._narrow(select(func.count()).select_from(Note), scope, entity_type, entity_id)
+        ).scalar() or 0)
+
     def list_for_entity(
         self, scope: TenantScope, *, entity_type: str, entity_id: uuid.UUID,
-        limit: int = 50,
+        limit: int = 50, offset: int | None = None,
     ) -> list[Note]:
         limit = max(1, min(limit, 200))
+        from .search import page as _page
+
         return list(
             self._s.execute(
-                select(Note)
-                .where(
-                    Note.license_id == scope.license_id,
-                    Note.entity_type == entity_type,
-                    Note.entity_id == entity_id,
+                _page(
+                    self._narrow(select(Note), scope, entity_type, entity_id)
+                    # Newest first: the last thing said is the thing being
+                    # looked for far more often than the first. `id` breaks
+                    # the created_at tie so a page boundary cannot repeat a
+                    # note or drop one.
+                    .order_by(Note.created_at.desc(), Note.id.desc()),
+                    limit=limit, offset=offset,
                 )
-                # Newest first: the last thing said is the thing being looked
-                # for far more often than the first.
-                .order_by(Note.created_at.desc())
-                .limit(limit)
             ).scalars()
         )
 

@@ -89,26 +89,31 @@ export default function ProductList({ liffId }: { liffId: string }) {
 
   // The categories the catalogue actually uses, so the select never
   // offers one with nothing in it; no categories, no select.
-  //
-  // KNOWN LIMIT (round 20N): the options come from the rows loaded so
-  // far. Before this they came from one fetch of up to a thousand rows,
-  // so the select has not lost anything — but a catalogue past that, with
-  // a category used only by a late row, will not offer it until the page
-  // holding it has been loaded. A `distinct category` endpoint is the
-  // proper fix and is its own small round; keeping the options SEEN so
-  // far means the select only ever grows, never drops one mid-browse.
-  const [seenCategories, setSeenCategories] = useState<string[]>([]);
+  // The filter's options come from the DATABASE, not from the rows this
+  // page happens to hold. Round 20N built them from the loaded rows and
+  // wrote the limitation down: a category used only by a product on page
+  // three was missing from the filter that would have found it.
+  const [categories, setCategories] = useState<string[]>([]);
   useEffect(() => {
-    setSeenCategories((known) => {
-      const next = new Set(known);
-      for (const product of products) {
-        const name = (product.category ?? "").trim();
-        if (name) next.add(name);
+    if (!session.ready || !token || !licenseId) return;
+    let live = true;
+    void (async () => {
+      try {
+        const response = await fetch(
+          `/api/phase2/licenses/${licenseId}/product-categories`,
+          { headers: proxyHeaders(token, licenseId) },
+        );
+        if (!response.ok) return;
+        const body = (await response.json()) as string[];
+        if (live) setCategories(body);
+      } catch {
+        // The select simply stays empty; the list and the search work.
       }
-      return next.size === known.length ? known : Array.from(next);
-    });
-  }, [products]);
-  const categories = [...seenCategories].sort((a, b) => a.localeCompare(b, "th"));
+    })();
+    return () => {
+      live = false;
+    };
+  }, [session.ready, token, licenseId]);
   // Category and search were applied by the database.
   const visible = products;
 

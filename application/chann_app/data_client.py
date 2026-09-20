@@ -999,6 +999,21 @@ class DataClient:
         )
         return self._unwrap(resp)
 
+    async def list_notes_with_total(
+        self, license_id: str, entity_type: str, entity_id: str,
+        limit: int = 50, offset: int | None = None,
+    ) -> tuple[list[dict], int]:
+        """A page of one record's notes, and how many it really has."""
+        params: dict = {"entity_type": entity_type, "entity_id": entity_id, "limit": limit}
+        if offset:
+            params["offset"] = offset
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/notes",
+            headers=self._headers, params=params,
+        )
+        rows = self._unwrap(resp)
+        return rows, _total_of(resp, rows)
+
     async def list_notes(
         self, license_id: str, entity_type: str, entity_id: str, limit: int = 50,
     ) -> list[dict]:
@@ -1191,6 +1206,14 @@ class DataClient:
             f"/products/{quote(product_id, safe='')}",
             headers=self._headers_for(actor_id),
             json=payload,
+        )
+        return self._unwrap(resp)
+
+    async def list_product_categories(self, license_id: str) -> list[str]:
+        """Every category the catalogue uses, for the filter select."""
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/product-categories",
+            headers=self._headers,
         )
         return self._unwrap(resp)
 
@@ -1710,6 +1733,29 @@ class DataClient:
         if resp.status_code == 404:
             return None
         return self._unwrap(resp)
+
+    async def list_audit_log_with_total(
+        self, license_id: str, *, entity_type: str | None = None,
+        actor_type: str | None = None, limit: int = 100, offset: int | None = None,
+    ) -> tuple[list[dict], int]:
+        """A page of the trail, and how many entries match.
+
+        A compliance screen that says "showing 100" without saying of how
+        many is the round-20h bug wearing a different hat (round 20O).
+        """
+        params: dict = {"limit": int(limit)}
+        if entity_type:
+            params["entity_type"] = entity_type
+        if actor_type:
+            params["actor_type"] = actor_type
+        if offset:
+            params["offset"] = offset
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/audit-log",
+            headers=self._headers, params=params,
+        )
+        rows = self._unwrap(resp)
+        return rows, _total_of(resp, rows)
 
     async def list_audit_log(
         self, license_id: str, *, entity_type: str | None = None,

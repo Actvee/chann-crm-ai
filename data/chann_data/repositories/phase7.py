@@ -175,6 +175,33 @@ class ProductRepository:
             page(stmt.order_by(Product.product_name.asc()), limit=limit, offset=offset)
         ).scalars())
 
+    def categories(self, scope: TenantScope, *, include_archived: bool = False) -> list[str]:
+        """Every category this shop actually uses, in one query.
+
+        The catalogue screen built its filter options from the rows it had
+        loaded. That was the whole catalogue while one fetch held it, and
+        stopped being true the moment the list was paged (round 20N, which
+        wrote the limitation down rather than leaving it to be discovered):
+        a category used only by a product on page three was missing from
+        the filter that would have found it.
+
+        DISTINCT over a column the tenant index already covers, so it is
+        one cheap query rather than a scan of the page.
+        """
+        stmt = (
+            select(Product.category)
+            .where(
+                Product.license_id == scope.license_id,
+                Product.category.is_not(None),
+                Product.category != "",
+            )
+            .distinct()
+            .order_by(Product.category.asc())
+        )
+        if not include_archived:
+            stmt = stmt.where(Product.archived_at.is_(None))
+        return [row.strip() for row in self._s.execute(stmt).scalars() if row and row.strip()]
+
     def count(
         self,
         scope: TenantScope,

@@ -963,6 +963,25 @@ async def list_deals(
     return rows
 
 
+@router.get("/licenses/{license_id}/product-categories")
+async def list_product_categories(
+    license_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """The filter's options, from the database rather than from the page.
+
+    Same permission as the catalogue itself: a category name is a fact
+    about the catalogue, and anyone who may read one may read the other.
+    """
+    _require_same_tenant(principal, license_id)
+    principal.require_any("product.read", "product.manage")
+    try:
+        return await client.list_product_categories(license_id)
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
 @router.get("/licenses/{license_id}/products")
 async def list_products(
     license_id: str,
@@ -4557,6 +4576,8 @@ async def tenant_audit_log(
     entity_type: str | None = None,
     actor_type: str | None = None,
     limit: int = 100,
+    offset: int = 0,
+    response: Response = None,  # type: ignore[assignment]
     principal: TenantPrincipal = Depends(get_tenant_principal),
     client: DataClient = Depends(get_data_client),
 ):
@@ -4566,12 +4587,14 @@ async def tenant_audit_log(
     _require_same_tenant(principal, license_id)
     principal.require("audit_log.view")
     try:
-        rows = await client.list_audit_log(
+        rows, total = await client.list_audit_log_with_total(
             license_id, entity_type=entity_type, actor_type=actor_type,
-            limit=max(1, min(int(limit), 500)),
+            limit=max(1, min(int(limit), 500)), offset=max(0, int(offset)),
         )
     except DataTierError as exc:
         raise _propagate(exc)
+    if response is not None:
+        response.headers["X-Total-Count"] = str(total)
     names = await _actor_names(client, license_id)
     return [
         {**row, "actor_name": names.get(str(row.get("actor_id") or ""), "")}

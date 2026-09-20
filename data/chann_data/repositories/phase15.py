@@ -115,19 +115,47 @@ class ChatSessionRepository:
             raise ChatSessionNotFound("chat session not found in this tenant")
         return row
 
-    def list_for_license(
-        self, scope: TenantScope, *, status: str | None = None,
-        customer_chann_uid: str | None = None, limit: int = 100,
-    ) -> list[ChatSession]:
-        query = select(ChatSession).where(ChatSession.license_id == scope.license_id)
+    def _narrow(self, query, scope: TenantScope, status: str | None,
+                customer_chann_uid: str | None):
+        """The one place a conversation list is narrowed — page and count
+        alike, so "แสดง 50 จาก 300" describes the tab in front of the
+        person rather than every conversation the shop has ever had
+        (round 20O)."""
+        query = query.where(ChatSession.license_id == scope.license_id)
         if status == "live":
             query = query.where(ChatSession.status.in_(LIVE_STATUSES))
         elif status:
             query = query.where(ChatSession.status == status)
         if customer_chann_uid:
             query = query.where(ChatSession.customer_chann_uid == customer_chann_uid)
-        query = query.order_by(ChatSession.updated_at.desc()).limit(max(1, min(limit, 500)))
-        return list(self._s.execute(query).scalars())
+        return query
+
+    def list_for_license(
+        self, scope: TenantScope, *, status: str | None = None,
+        customer_chann_uid: str | None = None, limit: int = 100,
+        offset: int | None = None,
+    ) -> list[ChatSession]:
+        from .search import page as _page
+
+        query = self._narrow(select(ChatSession), scope, status, customer_chann_uid)
+        # id breaks the updated_at tie so a page boundary cannot repeat a
+        # conversation or drop one.
+        query = query.order_by(ChatSession.updated_at.desc(), ChatSession.id.desc())
+        return list(self._s.execute(
+            _page(query, limit=max(1, min(limit, 500)), offset=offset)
+        ).scalars())
+
+    def count_for_license(
+        self, scope: TenantScope, *, status: str | None = None,
+        customer_chann_uid: str | None = None,
+    ) -> int:
+        """How many conversations match this tab."""
+        from sqlalchemy import func
+
+        query = self._narrow(
+            select(func.count()).select_from(ChatSession), scope, status, customer_chann_uid,
+        )
+        return int(self._s.execute(query).scalar() or 0)
 
     def assign(self, scope: TenantScope, session_id: uuid.UUID, member_id: uuid.UUID) -> ChatSession:
         row = self.require(scope, session_id)

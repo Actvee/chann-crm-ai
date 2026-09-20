@@ -859,11 +859,20 @@ def list_audit_log(
     entity_type: str | None = None,
     actor_type: str | None = None,
     limit: int = 100,
+    offset: int = 0,
+    response: Response = None,  # type: ignore[assignment]
     session: Session = Depends(get_session),
 ):
-    rows = AuditRepository(session).list_for_license(
-        license_id, entity_type=entity_type, actor_type=actor_type, limit=limit
+    """A page of the shop's trail, and how many entries there really are."""
+    repo = AuditRepository(session)
+    rows = repo.list_for_license(
+        license_id, entity_type=entity_type, actor_type=actor_type,
+        limit=limit, offset=max(0, int(offset)),
     )
+    if response is not None:
+        response.headers["X-Total-Count"] = str(repo.count_for_license(
+            license_id, entity_type=entity_type, actor_type=actor_type,
+        ))
     return [AuditLogOut.model_validate(r, from_attributes=True) for r in rows]
 
 
@@ -2037,6 +2046,19 @@ def upsert_product(
     except Exception as exc:
         session.rollback()
         raise _phase7_http_error(exc)
+
+
+@router.get("/licenses/{license_id}/product-categories", response_model=list[str])
+def list_product_categories(
+    license_id: uuid.UUID,
+    include_archived: bool = False,
+    session: Session = Depends(get_session),
+):
+    """The categories the catalogue uses — all of them, not just the ones
+    on the page the screen happens to hold (round 20O)."""
+    return ProductRepository(session).categories(
+        TenantScope(license_id=license_id), include_archived=include_archived,
+    )
 
 
 @router.get("/licenses/{license_id}/products", response_model=list[ProductOut])
@@ -3649,12 +3671,27 @@ def list_notes(
     entity_type: str,
     entity_id: uuid.UUID,
     limit: int = 50,
+    offset: int = 0,
+    response: Response = None,  # type: ignore[assignment]
     session: Session = Depends(get_session),
 ):
-    return NoteRepository(session).list_for_entity(
-        TenantScope(license_id=license_id),
-        entity_type=entity_type, entity_id=entity_id, limit=limit,
+    """A page of one record's notes, and how many it really has.
+
+    The customer card counted the rows it got back, so a customer with
+    thirty notes was told they had twenty — the cap's number, printed as
+    the record's (round 20O).
+    """
+    scope = TenantScope(license_id=license_id)
+    repo = NoteRepository(session)
+    rows = repo.list_for_entity(
+        scope, entity_type=entity_type, entity_id=entity_id,
+        limit=limit, offset=max(0, int(offset)),
     )
+    if response is not None:
+        response.headers["X-Total-Count"] = str(repo.count_for_entity(
+            scope, entity_type=entity_type, entity_id=entity_id,
+        ))
+    return rows
 
 
 @router.patch("/licenses/{license_id}/notes/{note_id}", response_model=NoteOut)
@@ -5369,12 +5406,20 @@ def open_chat_session(
 @router.get("/licenses/{license_id}/chat-sessions", response_model=list[ChatSessionOut])
 def list_chat_sessions(
     license_id: uuid.UUID, status: str | None = None, customer_chann_uid: str | None = None,
-    limit: int = 100, session: Session = Depends(get_session),
+    limit: int = 100, offset: int = 0,
+    response: Response = None,  # type: ignore[assignment]
+    session: Session = Depends(get_session),
 ):
     scope = TenantScope(license_id=license_id)
-    rows = ChatSessionRepository(session).list_for_license(
-        scope, status=status, customer_chann_uid=customer_chann_uid, limit=limit,
+    repo = ChatSessionRepository(session)
+    rows = repo.list_for_license(
+        scope, status=status, customer_chann_uid=customer_chann_uid,
+        limit=limit, offset=max(0, int(offset)),
     )
+    if response is not None:
+        response.headers["X-Total-Count"] = str(repo.count_for_license(
+            scope, status=status, customer_chann_uid=customer_chann_uid,
+        ))
     return _chat_sessions_out(session, scope, rows)
 
 

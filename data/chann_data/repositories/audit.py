@@ -5,8 +5,10 @@ import uuid
 from datetime import date, datetime, time
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
+
+from .search import page
 
 from ..audit_actions import AUDIT_ACTIONS
 from ..models import AuditLog
@@ -77,6 +79,29 @@ class AuditRepository:
         self._s.flush()
         return row
 
+    def _narrow(
+        self,
+        stmt,
+        license_id: uuid.UUID,
+        entity_type: str | None,
+        actor_type: str | None,
+        since: datetime | None,
+    ):
+        """The one place the trail is narrowed — page and count alike.
+
+        A compliance trail that says "showing 100 of 4,000" has to mean it;
+        a count taken over a wider set than the page describes is the sort
+        of number an auditor would rely on (round 20O).
+        """
+        stmt = stmt.where(AuditLog.license_id == license_id)
+        if entity_type is not None:
+            stmt = stmt.where(AuditLog.entity_type == entity_type)
+        if actor_type is not None:
+            stmt = stmt.where(AuditLog.actor_type == actor_type)
+        if since is not None:
+            stmt = stmt.where(AuditLog.created_at >= since)
+        return stmt
+
     def list_for_license(
         self,
         license_id: uuid.UUID,
@@ -85,17 +110,30 @@ class AuditRepository:
         actor_type: str | None = None,
         since: datetime | None = None,
         limit: int = 100,
+        offset: int | None = None,
     ) -> list[AuditLog]:
         limit = max(1, min(limit, 500))
-        stmt = select(AuditLog).where(AuditLog.license_id == license_id)
-        if entity_type is not None:
-            stmt = stmt.where(AuditLog.entity_type == entity_type)
-        if actor_type is not None:
-            stmt = stmt.where(AuditLog.actor_type == actor_type)
-        if since is not None:
-            stmt = stmt.where(AuditLog.created_at >= since)
-        stmt = stmt.order_by(AuditLog.created_at.desc()).limit(limit)
-        return list(self._s.execute(stmt).scalars())
+        stmt = self._narrow(select(AuditLog), license_id, entity_type, actor_type, since)
+        # id breaks the created_at tie: entries written inside one request
+        # share a timestamp, and without it a page boundary repeats a row
+        # or drops one.
+        stmt = stmt.order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
+        return list(self._s.execute(page(stmt, limit=limit, offset=offset)).scalars())
+
+    def count_for_license(
+        self,
+        license_id: uuid.UUID,
+        *,
+        entity_type: str | None = None,
+        actor_type: str | None = None,
+        since: datetime | None = None,
+    ) -> int:
+        """How many entries match, so a page can say what it left out."""
+        stmt = self._narrow(
+            select(func.count()).select_from(AuditLog),
+            license_id, entity_type, actor_type, since,
+        )
+        return int(self._s.execute(stmt).scalar() or 0)
 
     def list_platform(
         self,

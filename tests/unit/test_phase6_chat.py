@@ -1203,6 +1203,18 @@ class FakeDataClient:
         self.recorded.append(("delete_note", license_id, note_id, actor_id))
         self._notes = [r for r in getattr(self, "_notes", []) if str(r.get("id")) != str(note_id)]
 
+    async def list_notes_with_total(self, license_id, entity_type, entity_id,
+                                    limit=50, offset=None):
+        """Page and true total — the fake counts what it holds, which for a
+        fake IS the truth."""
+        rows = await self.list_notes(license_id, entity_type, entity_id, limit=limit)
+        everything = [
+            n for n in getattr(self, "_notes", [])
+            if str(n.get("entity_type")) == str(entity_type)
+            and str(n.get("entity_id")) == str(entity_id)
+        ]
+        return rows, len(everything) or len(rows)
+
     async def list_notes(self, license_id, entity_type, entity_id, limit=50):
         self.recorded.append(("list_notes", license_id, entity_type, entity_id))
         return [
@@ -1332,6 +1344,12 @@ class FakeDataClient:
             raise DataTierError(404, "invite not found")
         row["revoked_at"] = f"{local_today()}T10:00:00+00:00"
         return dict(row)
+
+    async def list_audit_log_with_total(self, license_id, **kwargs):
+        """Page and true total, delegating so `recorded` keeps its shape."""
+        kwargs.pop("offset", None)
+        rows = await self.list_audit_log(license_id, **kwargs)
+        return rows, len(rows)
 
     async def list_audit_log(self, license_id, entity_type=None, actor_type=None, limit=100):
         self.recorded.append(("list_audit_log", license_id, entity_type, actor_type))
