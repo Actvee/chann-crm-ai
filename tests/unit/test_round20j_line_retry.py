@@ -299,11 +299,20 @@ class TestACappedListSaysSo:
         route = ROOT / "presentation/app/api/phase2/[...path]/route.ts"
         assert '"X-Total-Count": String(result.total)' in route.read_text(encoding="utf-8")
 
-    def test_the_customer_screen_shows_the_real_total(self):
-        from pathlib import Path
+    def test_the_screen_shows_the_real_total(self):
+        """The reading moved, the guarantee did not.
 
+        Round 20j had CustomerList.tsx read the header itself; round 20N
+        gave all six list screens one hook, so the header is read there
+        and the pages consume it. Pinning the FILE would have made this
+        test fail for a refactor that kept every promise — what matters is
+        that something between the response and the screen still reads it
+        (20 ก.ย. 2569).
+        """
+        hook = (ROOT / "presentation/app/liff/_paged-list.ts").read_text(encoding="utf-8")
+        assert 'response.headers.get("X-Total-Count")' in hook
         page = (ROOT / "presentation/app/liff/sales/customers/CustomerList.tsx").read_text(
             encoding="utf-8",
         )
-        assert 'response.headers.get("X-Total-Count")' in page
+        assert "usePagedList" in page
         assert "showingOf" in page

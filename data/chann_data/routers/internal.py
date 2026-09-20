@@ -2044,13 +2044,28 @@ def list_products(
     license_id: uuid.UUID,
     category: str | None = None,
     include_archived: bool = False,
+    q: str | None = None,
     limit: int = 200,
+    offset: int = 0,
+    response: Response = None,  # type: ignore[assignment]
     session: Session = Depends(get_session),
 ):
+    """A page of the catalogue, searched in the database.
+
+    The products screen fetched up to 1,000 rows and filtered them in
+    JavaScript, so a catalogue past the ceiling hid products from search
+    while telling the person they do not exist (20 ก.ย. 2569).
+    """
     scope = TenantScope(license_id=license_id)
-    rows = ProductRepository(session).list(
-        scope, category=category, include_archived=include_archived, limit=limit
+    repo = ProductRepository(session)
+    rows = repo.list(
+        scope, category=category, include_archived=include_archived, q=q,
+        limit=limit, offset=max(0, int(offset)),
     )
+    if response is not None:
+        response.headers["X-Total-Count"] = str(repo.count(
+            scope, category=category, include_archived=include_archived, q=q,
+        ))
     return [ProductOut.model_validate(r, from_attributes=True) for r in rows]
 
 
@@ -2639,16 +2654,23 @@ def get_customer(
 @router.get("/licenses/{license_id}/customers", response_model=list[CustomerOut])
 def list_customers(
     license_id: uuid.UUID, stage: str | None = None, customer_chann_uid: str | None = None,
-    limit: int = 500,
+    q: str | None = None, limit: int = 500, offset: int = 0,
     response: Response = None,  # type: ignore[assignment]
     session: Session = Depends(get_session),
 ):
-    """Customers, newest first.
+    """Customers, newest first — a page of the ones matching `q`.
 
     This had NO ceiling: every row, every time. `X-Total-Count` says how
     many there really are, so a caller can show "200 of 3,000" rather than
     quietly believing it has them all — which is the failure the ticket
     lookup spent round 20h fixing (18 ก.ย. 2569).
+
+    `q` is answered HERE, not on the screen. Every list page searched the
+    rows it had already fetched, so a shop with 800 customers could type
+    the 600th name, be told there is no such customer, and believe it —
+    the ceiling added in 20j turned a slow page into a hidden record
+    (20 ก.ย. 2569). The total is counted through the same filter, so
+    "showing 50 of 1,240" describes the search, not the shop.
     """
     scope = TenantScope(license_id=license_id)
     repo = CustomerRepository(session)
@@ -2659,8 +2681,10 @@ def list_customers(
         total = len(rows)
     else:
         capped = max(1, min(int(limit), 2000))
-        rows = repo.list_for_license(scope, stage=stage, limit=capped)
-        total = repo.count_for_license(scope, stage=stage)
+        rows = repo.list_for_license(
+            scope, stage=stage, q=q, limit=capped, offset=max(0, int(offset)),
+        )
+        total = repo.count_for_license(scope, stage=stage, q=q)
     if response is not None:
         response.headers["X-Total-Count"] = str(total)
     return [CustomerOut.model_validate(r, from_attributes=True) for r in rows]
@@ -2804,7 +2828,7 @@ def get_deal(
 @router.get("/licenses/{license_id}/deals", response_model=list[DealOut])
 def list_deals(
     license_id: uuid.UUID, stage: str | None = None, contact_id: uuid.UUID | None = None,
-    limit: int = 500,
+    q: str | None = None, limit: int = 500, offset: int = 0,
     response: Response = None,  # type: ignore[assignment]
     session: Session = Depends(get_session),
 ):
@@ -2812,6 +2836,7 @@ def list_deals(
 
     Same story as the customers above: no ceiling at all until now, and
     measured at 3,000 deals this route was 480 KB over the tier boundary.
+    `q` searches the database rather than the page (see list_customers).
     """
     scope = TenantScope(license_id=license_id)
     repo = DealRepository(session)
@@ -2820,8 +2845,10 @@ def list_deals(
         total = len(rows)
     else:
         capped = max(1, min(int(limit), 2000))
-        rows = repo.list_for_license(scope, stage=stage, limit=capped)
-        total = repo.count_for_license(scope, stage=stage)
+        rows = repo.list_for_license(
+            scope, stage=stage, q=q, limit=capped, offset=max(0, int(offset)),
+        )
+        total = repo.count_for_license(scope, stage=stage, q=q)
     if response is not None:
         response.headers["X-Total-Count"] = str(total)
     # One query for every deal's lines. Asking per deal made this route
@@ -3007,22 +3034,28 @@ def get_quote(
 
 @router.get("/licenses/{license_id}/quotes", response_model=list[QuoteOut])
 def list_quotes(
-    license_id: uuid.UUID, status_: str | None = None, limit: int = 500,
+    license_id: uuid.UUID, status_: str | None = None, q: str | None = None,
+    limit: int = 500, offset: int = 0,
     response: Response = None,  # type: ignore[assignment]
     session: Session = Depends(get_session),
 ):
-    """Quotes, newest first, capped and counted.
+    """Quotes, newest first, capped, searched and counted.
 
     X-Total-Count travels with the page for the same reason it does on the
     customer and deal lists (round 20j): a cap with no count is a screen
-    confidently showing "500 of 500" for a shop that has 3,000.
+    confidently showing "500 of 500" for a shop that has 3,000. `q` is
+    answered here rather than on the screen (see list_customers).
     """
     scope = TenantScope(license_id=license_id)
     repo = QuoteRepository(session)
     capped = max(1, min(int(limit), 2000))
-    rows = repo.list_for_license(scope, status=status_, limit=capped)
+    rows = repo.list_for_license(
+        scope, status=status_, q=q, limit=capped, offset=max(0, int(offset)),
+    )
     if response is not None:
-        response.headers["X-Total-Count"] = str(repo.count_for_license(scope, status=status_))
+        response.headers["X-Total-Count"] = str(
+            repo.count_for_license(scope, status=status_, q=q)
+        )
     return [QuoteOut.model_validate(r, from_attributes=True) for r in rows]
 
 
@@ -3940,7 +3973,10 @@ def list_tickets(
     license_id: uuid.UUID,
     status: str | None = None,
     visible_to: uuid.UUID | None = None,
+    q: str | None = None,
     limit: int = 100,
+    offset: int = 0,
+    response: Response = None,  # type: ignore[assignment]
     session: Session = Depends(get_session),
 ):
     """Tickets, optionally filtered to what one technician may see.
@@ -3958,8 +3994,23 @@ def list_tickets(
         # `limit` was accepted and then dropped on this branch, so a
         # technician's list was pinned to the repository default whatever
         # the caller asked for (17 ก.ย. 2569).
-        return repo.list_visible_to(scope, member_id=visible_to, limit=limit)
-    return repo.list_for_license(scope, status=status, limit=limit)
+        rows = repo.list_visible_to(
+            scope, member_id=visible_to, status=status, q=q,
+            limit=limit, offset=max(0, int(offset)),
+        )
+        # Counted through the SAME visibility predicate. A total taken
+        # without it would tell a technician "20 of 50" and so tell them
+        # thirty jobs exist that they may not see — the number is the leak
+        # (20 ก.ย. 2569).
+        total = repo.count_for_license(scope, status=status, q=q, member_id=visible_to)
+    else:
+        rows = repo.list_for_license(
+            scope, status=status, q=q, limit=limit, offset=max(0, int(offset)),
+        )
+        total = repo.count_for_license(scope, status=status, q=q)
+    if response is not None:
+        response.headers["X-Total-Count"] = str(total)
+    return rows
 
 
 @router.get("/licenses/{license_id}/tickets/by-number/{number}", response_model=TicketOut)
@@ -4809,18 +4860,35 @@ def list_warranties(
     license_id: uuid.UUID,
     serial_number: str | None = None,
     customer_chann_uid: str | None = None,
+    status: str | None = None,
+    q: str | None = None,
     limit: int = 100,
+    offset: int = 0,
+    response: Response = None,  # type: ignore[assignment]
     session: Session = Depends(get_session),
 ):
+    """Registrations for this shop — a page of them, matching `q`.
+
+    `serial_number` stays an EXACT lookup: it answers "this unit", and the
+    cross-tenant version of that question is deliberately exact for a
+    reason written out in the repository. `q` is the shop searching its
+    own shelf, which is a different question (20 ก.ย. 2569).
+    """
     scope = TenantScope(license_id=license_id)
     repo = WarrantyRepository(session)
+    total = None
     if serial_number:
         row = repo.by_serial(scope, serial_number)
         rows = [row] if row else []
     elif customer_chann_uid:
         rows = repo.for_customer(scope, customer_chann_uid)
     else:
-        rows = repo.list_for_license(scope, limit=limit)
+        rows = repo.list_for_license(
+            scope, limit=limit, status=status, q=q, offset=max(0, int(offset)),
+        )
+        total = repo.count_for_license(scope, status=status, q=q)
+    if response is not None:
+        response.headers["X-Total-Count"] = str(len(rows) if total is None else total)
     contacts = _warranty_contacts(session, scope, rows)
     return [_warranty_out(r, contacts.get(r.contact_id)) for r in rows]
 

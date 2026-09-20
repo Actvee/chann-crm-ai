@@ -11,7 +11,17 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..models import Customer, Deal, DealProduct, License, LicenseMember, Product
+
+#: What a person types when they are looking for a customer or a deal.
+#: The LIST and the COUNT are built from this same tuple, so a total can
+#: never be counted over a wider set than the page it describes.
+CUSTOMER_SEARCH = (
+    Customer.customer_id, Customer.first_name, Customer.last_name,
+    Customer.phone, Customer.email,
+)
+DEAL_SEARCH = (Deal.deal_id, Deal.notes)
 from .locks import serialise
+from .search import like_any, page
 from .tenant_scope import TenantScope
 
 # 9.6's transition table. A value of None as the destination set means "no
@@ -321,10 +331,28 @@ class CustomerRepository:
         if found is None:
             raise Phase9NotFound("member not found in this tenant")
 
+    def _narrow(self, query, scope: TenantScope, stage: str | None, q: str | None):
+        """The one place a customer list is narrowed.
+
+        Both the page and its count go through here, so they can never
+        disagree — a total counted without the search term is a number the
+        screen prints as the truth (18 ก.ย. 2569).
+        """
+        query = query.where(
+            Customer.license_id == scope.license_id, Customer.archived_at.is_(None),
+        )
+        if stage:
+            query = query.where(Customer.stage == stage)
+        clause = like_any(q, *CUSTOMER_SEARCH)
+        if clause is not None:
+            query = query.where(clause)
+        return query
+
     def list_for_license(
-        self, scope: TenantScope, *, stage: str | None = None, limit: int | None = None,
+        self, scope: TenantScope, *, stage: str | None = None, q: str | None = None,
+        limit: int | None = None, offset: int | None = None,
     ) -> list[Customer]:
-        """Customers, newest first.
+        """Customers, newest first — a page of them, matching `q`.
 
         A page, and the total it was taken from. Both routes returned EVERY
         row with no ceiling at all: measured 17 ก.ย. 2569, the deal list was
@@ -332,26 +360,22 @@ class CustomerRepository:
         the same shape with nothing to stop it. A silent truncation would be
         worse than no limit — the caller has to be able to say "showing 200
         of 3,000" — so the count comes back with the page.
+
+        `q` searches in the DATABASE. Searching the page after it arrives
+        is what the dashboard did, and it cannot find row 600 of 800 when
+        the page stops at 500.
         """
-        query = select(Customer).where(
-            Customer.license_id == scope.license_id, Customer.archived_at.is_(None),
-        )
-        if stage:
-            query = query.where(Customer.stage == stage)
+        query = self._narrow(select(Customer), scope, stage, q)
         # id breaks the tie so a page boundary cannot show the same row
         # twice, or skip one, when several share a created_at.
         query = query.order_by(Customer.created_at.desc(), Customer.id.desc())
-        if limit is not None:
-            query = query.limit(max(1, int(limit)))
-        return list(self._s.execute(query).scalars())
+        return list(self._s.execute(page(query, limit=limit, offset=offset)).scalars())
 
-    def count_for_license(self, scope: TenantScope, *, stage: str | None = None) -> int:
-        """How many there are, so a page can say what it left out."""
-        query = select(func.count()).select_from(Customer).where(
-            Customer.license_id == scope.license_id, Customer.archived_at.is_(None),
-        )
-        if stage:
-            query = query.where(Customer.stage == stage)
+    def count_for_license(
+        self, scope: TenantScope, *, stage: str | None = None, q: str | None = None,
+    ) -> int:
+        """How many match, so a page can say what it left out."""
+        query = self._narrow(select(func.count()).select_from(Customer), scope, stage, q)
         return int(self._s.execute(query).scalar() or 0)
 
     def update(self, scope: TenantScope, customer_id: uuid.UUID, fields: dict) -> Customer:
@@ -572,35 +596,48 @@ class DealRepository:
             select(Deal).where(Deal.id == deal_id, Deal.license_id == scope.license_id)
         ).scalars().first()
 
+    #: The two stages that end a deal. "open" means neither of them.
+    CLOSED_STAGES = ("won", "lost")
+
+    def _narrow(self, query, scope: TenantScope, stage: str | None, q: str | None):
+        """The one place a deal list is narrowed — page and count alike."""
+        query = query.where(
+            Deal.license_id == scope.license_id, Deal.archived_at.is_(None),
+        )
+        if stage == "open":
+            # The work queue. The dashboard computed this in JavaScript over
+            # the rows it had, which stops being true the moment the list is
+            # paged — and it is written as "not the terminal ones" rather
+            # than as a list of open stages so a stage added later counts as
+            # open by default, the safer direction to be wrong in for a
+            # queue (20 ก.ย. 2569).
+            query = query.where(Deal.stage.notin_(self.CLOSED_STAGES))
+        elif stage:
+            query = query.where(Deal.stage == stage)
+        clause = like_any(q, *DEAL_SEARCH)
+        if clause is not None:
+            query = query.where(clause)
+        return query
+
     def list_for_license(
-        self, scope: TenantScope, *, stage: str | None = None, limit: int | None = None,
+        self, scope: TenantScope, *, stage: str | None = None, q: str | None = None,
+        limit: int | None = None, offset: int | None = None,
     ) -> list[Deal]:
-        """Deals, newest first.
+        """Deals, newest first — a page of them, matching `q`.
 
-        A page, and the total it was taken from. Both routes returned EVERY
-        row with no ceiling at all: measured 17 ก.ย. 2569, the deal list was
-        480 KB and 3,001 queries at 3,000 deals, and the customer list has
-        the same shape with nothing to stop it. A silent truncation would be
-        worse than no limit — the caller has to be able to say "showing 200
-        of 3,000" — so the count comes back with the page.
+        See CustomerRepository.list_for_license: same ceiling, same reason,
+        and the same rule that `q` is answered by the database rather than
+        by whatever happened to be fetched.
         """
-        query = select(Deal).where(
-            Deal.license_id == scope.license_id, Deal.archived_at.is_(None),
-        )
-        if stage:
-            query = query.where(Deal.stage == stage)
+        query = self._narrow(select(Deal), scope, stage, q)
         query = query.order_by(Deal.created_at.desc(), Deal.id.desc())
-        if limit is not None:
-            query = query.limit(max(1, int(limit)))
-        return list(self._s.execute(query).scalars())
+        return list(self._s.execute(page(query, limit=limit, offset=offset)).scalars())
 
-    def count_for_license(self, scope: TenantScope, *, stage: str | None = None) -> int:
-        """How many there are, so a page can say what it left out."""
-        query = select(func.count()).select_from(Deal).where(
-            Deal.license_id == scope.license_id, Deal.archived_at.is_(None),
-        )
-        if stage:
-            query = query.where(Deal.stage == stage)
+    def count_for_license(
+        self, scope: TenantScope, *, stage: str | None = None, q: str | None = None,
+    ) -> int:
+        """How many match, so a page can say what it left out."""
+        query = self._narrow(select(func.count()).select_from(Deal), scope, stage, q)
         return int(self._s.execute(query).scalar() or 0)
 
     def list_for_contact(self, scope: TenantScope, contact_id: uuid.UUID) -> list[Deal]:

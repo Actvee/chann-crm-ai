@@ -1194,6 +1194,81 @@ class DataClient:
         )
         return self._unwrap(resp)
 
+    async def list_products_with_total(
+        self, license_id: str, *, category: str | None = None, q: str | None = None,
+        include_archived: bool = False, limit: int | None = None, offset: int | None = None,
+    ) -> tuple[list[dict], int]:
+        """A page of the catalogue, and how many match.
+
+        The products screen fetched up to a thousand rows and searched them
+        in JavaScript; past that ceiling a product simply could not be
+        found (20 ก.ย. 2569).
+        """
+        params: dict = {"include_archived": str(include_archived).lower()}
+        if category:
+            params["category"] = category
+        if q:
+            params["q"] = q
+        if limit:
+            params["limit"] = limit
+        if offset:
+            params["offset"] = offset
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/products",
+            headers=self._headers, params=params,
+        )
+        rows = self._unwrap(resp)
+        return rows, _total_of(resp, rows)
+
+    async def list_tickets_with_total(
+        self, license_id: str, *, status: str | None = None, visible_to: str | None = None,
+        q: str | None = None, limit: int | None = None, offset: int | None = None,
+    ) -> tuple[list[dict], int]:
+        """A page of jobs, and how many match.
+
+        `visible_to` reaches the COUNT as well as the page: a total taken
+        without it tells a technician how many jobs exist that they are not
+        allowed to see (20 ก.ย. 2569).
+        """
+        params: dict = {}
+        if status:
+            params["status"] = status
+        if visible_to:
+            params["visible_to"] = visible_to
+        if q:
+            params["q"] = q
+        if limit:
+            params["limit"] = limit
+        if offset:
+            params["offset"] = offset
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/tickets",
+            headers=self._headers, params=params or None,
+        )
+        rows = self._unwrap(resp)
+        return rows, _total_of(resp, rows)
+
+    async def list_warranties_with_total(
+        self, license_id: str, *, status: str | None = None, q: str | None = None,
+        limit: int | None = None, offset: int | None = None,
+    ) -> tuple[list[dict], int]:
+        """A page of this shop's registrations, and how many match."""
+        params: dict = {}
+        if status:
+            params["status"] = status
+        if q:
+            params["q"] = q
+        if limit:
+            params["limit"] = limit
+        if offset:
+            params["offset"] = offset
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/warranties",
+            headers=self._headers, params=params or None,
+        )
+        rows = self._unwrap(resp)
+        return rows, _total_of(resp, rows)
+
     async def list_products(
         self, license_id: str, *, category: str | None = None,
         include_archived: bool = False, limit: int = 200,
@@ -1694,6 +1769,7 @@ class DataClient:
 
     async def list_customers_with_total(
         self, license_id: str, stage: str | None = None, limit: int | None = None,
+        *, q: str | None = None, offset: int | None = None,
     ) -> tuple[list[dict], int]:
         """A page of customers, and how many there really are.
 
@@ -1708,6 +1784,13 @@ class DataClient:
             params["stage"] = stage
         if limit:
             params["limit"] = limit
+        # `q` goes to the database. The screen used to filter the page it
+        # already had, which cannot find row 600 of 800 behind a cap of
+        # 500 (20 ก.ย. 2569).
+        if q:
+            params["q"] = q
+        if offset:
+            params["offset"] = offset
         resp = await self._client.get(
             f"{self._base}/internal/v1/licenses/{license_id}/customers",
             headers=self._headers, params=params or None,
@@ -1717,6 +1800,7 @@ class DataClient:
 
     async def list_deals_with_total(
         self, license_id: str, stage: str | None = None, limit: int | None = None,
+        *, q: str | None = None, offset: int | None = None,
     ) -> tuple[list[dict], int]:
         """A page of deals, and how many there really are."""
         params: dict = {}
@@ -1724,6 +1808,10 @@ class DataClient:
             params["stage"] = stage
         if limit:
             params["limit"] = limit
+        if q:
+            params["q"] = q
+        if offset:
+            params["offset"] = offset
         resp = await self._client.get(
             f"{self._base}/internal/v1/licenses/{license_id}/deals",
             headers=self._headers, params=params or None,

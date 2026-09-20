@@ -29,6 +29,42 @@ def _tomorrow() -> str:
     return (local_today() + timedelta(days=1)).isoformat()
 
 
+def _the_next(weekday: int):
+    """(iso, "D ม.ค.") for the next named weekday strictly ahead of today.
+
+    Monday is 0, so Tuesday is 1 and Friday is 4 — the same arithmetic the
+    parser does when it reads "วันอังคาร" or "วันศุกร์".
+    """
+    from datetime import timedelta
+
+    from chann_app.services.thai_datetime import local_today
+    from chann_app.services.chat import _iso_to_thai_date
+
+    today = local_today()
+    day = today + timedelta(days=((weekday - today.weekday()) % 7) or 7)
+    return day.isoformat(), _iso_to_thai_date(day.isoformat())
+
+
+def _the_next_friday() -> str:
+    """The day "วันศุกร์" names: the next Friday STRICTLY ahead of today.
+
+    THIRD time this class has been paid for. A date literal standing in
+    for a weekday is true for one week: "2026-09-18" was written as "วัน
+    ศุกร์" and was one, until the 20th arrived and the sentence meant the
+    25th — the appointment then moved to a date in the past, the second
+    turn had nothing in context to change, and the test failed on `main`
+    with nobody having touched it (20 ก.ย. 2569). Same helper, same
+    reasoning, as test_assistant_behaviour._the_next_friday. The rule is
+    the assertion; a date never is.
+    """
+    from datetime import timedelta
+
+    from chann_app.services.thai_datetime import local_today
+
+    today = local_today()
+    return (today + timedelta(days=((4 - today.weekday()) % 7) or 7)).isoformat()
+
+
 pytestmark = pytest.mark.asyncio
 
 TECH_KEYS = ["product.read", "service_report.create", "service_report.read", "service_report.update", "ticket.assign", "ticket.close", "ticket.create", "ticket.read", "ticket.update"]
@@ -186,7 +222,7 @@ class TestChangingTheTimeAfterMovingAnAppointment:
         """diary-05 t3: 'เปลี่ยนเวลาเป็น 13.00' after 'เลื่อนนัดเป็นวันศุกร์' went looking for a job."""
         client = _sales()
         client._follow_ups = [{"id": "f1", "contact_id": "c3", "entity_type": "customer", "entity_id": "c3", "due_at": "2026-09-17T10:00:00", "status": "pending", "note": "โทรตาม"}]
-        await _say(client, "เลื่อนนัด สมหญิง เป็นวันศุกร์", {"action": "update", "entity": "followup", "fields": {"target_name": "สมหญิง", "due_date": "2026-09-18"}, "missing": []})
+        await _say(client, "เลื่อนนัด สมหญิง เป็นวันศุกร์", {"action": "update", "entity": "followup", "fields": {"target_name": "สมหญิง", "due_date": _the_next_friday()}, "missing": []})
         reply, writes = await _say(client, "เปลี่ยนเวลาเป็น 13.00", {"action": "update", "entity": "ticket", "fields": {"scheduled_time": "13:00"}, "missing": []})
         assert "update_follow_up" in writes, reply.text
         assert "13:00" in reply.text and "C-2026-0003" in reply.text, reply.text
@@ -198,9 +234,12 @@ class TestMovingTheDealsAppointmentIsNotItsCloseDate:
         client = _sales(deals=[{"id": "d1", "deal_id": "D-2026-0001", "contact_id": "c3", "stage": "new", "amount": 1000}])
         client._follow_ups = [{"id": "f1", "entity_type": "deal", "entity_id": "d1", "due_at": "2026-09-21T11:00:00", "status": "pending", "note": ""}]
         await _say(client, "D-2026-0001", {"action": "read", "entity": "deal", "fields": {"deal_code": "D-2026-0001"}, "missing": []})
-        reply, writes = await _say(client, "เลื่อนนัดดีลนี้เป็นวันอังคาร", {"action": "update", "entity": "deal", "fields": {"expected_close_date": "2026-09-22"}, "missing": []})
+        # Same lesson as _the_next_friday above: "2026-09-22" was a Tuesday
+        # when this was written and stops being one next week.
+        tuesday, tuesday_thai = _the_next(1)
+        reply, writes = await _say(client, "เลื่อนนัดดีลนี้เป็นวันอังคาร", {"action": "update", "entity": "deal", "fields": {"expected_close_date": tuesday}, "missing": []})
         assert "update_follow_up" in writes and "update_deal" not in writes, (reply.text, writes)
-        assert "D-2026-0001" in reply.text and "22 ก.ย." in reply.text, reply.text
+        assert "D-2026-0001" in reply.text and tuesday_thai in reply.text, reply.text
 
 
 class TestAFlowSwitchAnsweredWithAnotherCommand:

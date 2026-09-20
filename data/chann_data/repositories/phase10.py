@@ -30,6 +30,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .locks import serialise
+from .search import like_any, page
 
 from ..models import (
     Deal,
@@ -403,7 +404,8 @@ class QuoteRepository:
         return row
 
     def list_for_license(
-        self, scope: TenantScope, *, status: str | None = None, limit: int | None = None,
+        self, scope: TenantScope, *, status: str | None = None, q: str | None = None,
+        limit: int | None = None, offset: int | None = None,
     ) -> list[Quote]:
         """Quotes, newest first.
 
@@ -413,22 +415,27 @@ class QuoteRepository:
         a shop writes. `id` breaks the created_at tie so a page boundary
         cannot repeat or skip a row.
         """
-        query = select(Quote).where(Quote.license_id == scope.license_id)
-        if status:
-            query = query.where(Quote.status == status)
+        query = self._narrow(select(Quote), scope, status, q)
         query = query.order_by(Quote.created_at.desc(), Quote.id.desc())
-        if limit is not None:
-            query = query.limit(max(1, int(limit)))
-        return list(self._s.execute(query).scalars())
+        return list(self._s.execute(page(query, limit=limit, offset=offset)).scalars())
 
-    def count_for_license(self, scope: TenantScope, *, status: str | None = None) -> int:
-        """How many there are, so a capped page can say what it left out."""
-        query = select(func.count()).select_from(Quote).where(
-            Quote.license_id == scope.license_id,
-        )
+    def _narrow(self, query, scope: TenantScope, status: str | None, q: str | None):
+        """The one place a quote list is narrowed — page and count alike."""
+        query = query.where(Quote.license_id == scope.license_id)
         if status:
             query = query.where(Quote.status == status)
-        return int(self._s.execute(query).scalar() or 0)
+        clause = like_any(q, Quote.quote_id)
+        if clause is not None:
+            query = query.where(clause)
+        return query
+
+    def count_for_license(
+        self, scope: TenantScope, *, status: str | None = None, q: str | None = None,
+    ) -> int:
+        """How many match, so a capped page can say what it left out."""
+        return int(self._s.execute(
+            self._narrow(select(func.count()).select_from(Quote), scope, status, q)
+        ).scalar() or 0)
 
     def transition_status(
         self, scope: TenantScope, quote_id: uuid.UUID, *, to_status: str,

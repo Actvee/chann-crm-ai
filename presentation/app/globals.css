@@ -2245,10 +2245,22 @@ html {
   font-variant-numeric: tabular-nums;
 }
 
+/* Fixed to the VIEWPORT, not to the bell.
+ *
+ * It was `position: absolute; right: 0` on `.notif`, so the panel hung
+ * leftwards from the bell — and the bell is not at the right edge of the
+ * screen, it has the guide link and the language switch beside it. On a
+ * phone a 360px panel starting there ran off the left of the screen and
+ * the notifications could not be read at all (owner, 20 ก.ย. 2569).
+ *
+ * `right` against the viewport keeps it on screen at every width. `top`
+ * cannot be a constant, because the top bar wraps to two rows on a narrow
+ * phone, so the component measures the bell and sets it — the one thing
+ * CSS alone cannot do here. */
 .notif-panel {
-  position: absolute;
-  top: calc(100% + 8px);
-  right: 0;
+  position: fixed;
+  right: max(16px, env(safe-area-inset-right, 0px));
+  left: auto;
   z-index: 40;
   width: min(360px, calc(100vw - 32px));
   max-height: min(70vh, 480px);

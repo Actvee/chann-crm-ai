@@ -14,7 +14,7 @@ import uuid
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..models import (
@@ -25,6 +25,7 @@ from ..models import (
     TechnicianTeam,
     TechnicianTeamMember,
 )
+from .search import like_any, page
 from .tenant_scope import TenantScope
 
 CSV_COLUMNS = ("product_id", "product_name", "sku", "category", "unit_price", "description")
@@ -132,23 +133,61 @@ class ProductRepository:
             )
         ).scalars().first()
 
+    #: What a person types when they are hunting for a product.
+    SEARCH = (Product.product_name, Product.product_id, Product.sku, Product.category)
+
+    def _narrow(self, stmt, scope: TenantScope, category: str | None,
+                include_archived: bool, q: str | None):
+        """The one place a product list is narrowed — page and count alike.
+
+        A count taken over a wider set than the page it describes is a
+        number the screen prints as the truth (18 ก.ย. 2569).
+        """
+        stmt = stmt.where(Product.license_id == scope.license_id)
+        if not include_archived:
+            stmt = stmt.where(Product.archived_at.is_(None))
+        if category is not None:
+            stmt = stmt.where(Product.category == category)
+        clause = like_any(q, *self.SEARCH)
+        if clause is not None:
+            stmt = stmt.where(clause)
+        return stmt
+
     def list(
         self,
         scope: TenantScope,
         *,
         category: str | None = None,
         include_archived: bool = False,
+        q: str | None = None,
         limit: int = 200,
+        offset: int | None = None,
     ) -> list[Product]:
+        """A page of the catalogue, matching `q`, by name.
+
+        The dashboard used to fetch up to 1,000 rows and filter them in
+        JavaScript, so a catalogue past the ceiling hid products from
+        search while insisting they did not exist.
+        """
         limit = max(1, min(limit, 1000))
-        stmt = select(Product).where(Product.license_id == scope.license_id)
-        if not include_archived:
-            stmt = stmt.where(Product.archived_at.is_(None))
-        if category is not None:
-            stmt = stmt.where(Product.category == category)
-        return list(
-            self._s.execute(stmt.order_by(Product.product_name.asc()).limit(limit)).scalars()
+        stmt = self._narrow(select(Product), scope, category, include_archived, q)
+        return list(self._s.execute(
+            page(stmt.order_by(Product.product_name.asc()), limit=limit, offset=offset)
+        ).scalars())
+
+    def count(
+        self,
+        scope: TenantScope,
+        *,
+        category: str | None = None,
+        include_archived: bool = False,
+        q: str | None = None,
+    ) -> int:
+        """How many match, so a capped page can say what it left out."""
+        stmt = self._narrow(
+            select(func.count()).select_from(Product), scope, category, include_archived, q,
         )
+        return int(self._s.execute(stmt).scalar() or 0)
 
     def archive(self, scope: TenantScope, product_id: str) -> Product:
         """7.5: delete must archive, never hard-delete.

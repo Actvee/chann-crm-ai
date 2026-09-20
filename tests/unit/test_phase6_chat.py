@@ -1371,13 +1371,36 @@ class FakeDataClient:
             return [c for c in self._customers if c["stage"] == stage]
         return list(self._customers)
 
-    async def list_customers_with_total(self, license_id, stage=None, limit=None):
+    @staticmethod
+    def _search(rows, q, fields):
+        """The `q` the Data tier answers, mirrored (round 20N).
+
+        A fake that ignored the search term would let a route forget to
+        pass it and still pass its tests — and `q` is the whole point of
+        the round: the SCREEN used to filter the page it already had, and
+        could not find row 600 of 800 behind a cap of 500.
+        """
+        needle = str(q or "").strip().lower()
+        if not needle:
+            return rows
+        return [
+            r for r in rows
+            if any(needle in str(r.get(f) or "").lower() for f in fields)
+        ]
+
+    async def list_customers_with_total(self, license_id, stage=None, limit=None,
+                                        *, q=None, offset=None):
         """Page and true total, the way the real client reads them from the
         body and X-Total-Count. The fake caps too — one that returned
         everything while production capped is exactly the generosity that
         hid the ticket paging bug (round 20h)."""
-        rows = await self.list_customers(license_id, stage)
+        rows = self._search(
+            await self.list_customers(license_id, stage), q,
+            ("customer_id", "first_name", "last_name", "phone", "email"),
+        )
         total = len(rows)
+        if offset:
+            rows = rows[int(offset):]
         return (rows[: int(limit)] if limit else rows), total
 
     async def update_customer(self, license_id, customer_id, fields, actor_id=None):
@@ -1446,14 +1469,66 @@ class FakeDataClient:
             return [d for d in self._deals if d["stage"] == stage]
         return list(self._deals)
 
-    async def list_deals_with_total(self, license_id, stage=None, limit=None):
-        rows = await self.list_deals(license_id, stage)
+    async def list_deals_with_total(self, license_id, stage=None, limit=None,
+                                    *, q=None, offset=None):
+        rows = self._search(
+            await self.list_deals(license_id, stage), q, ("deal_id", "notes"),
+        )
         total = len(rows)
+        if offset:
+            rows = rows[int(offset):]
         return (rows[: int(limit)] if limit else rows), total
 
     async def list_products(self, license_id, *args, **kwargs):
         self.recorded.append(("list_products", license_id))
-        return list(getattr(self, "_products", []))
+        rows = list(getattr(self, "_products", []))
+        q = str(kwargs.get("q") or "").strip().lower()
+        if q:
+            # `q` reaches the DATABASE in production (round 20N). A fake
+            # that ignored it would let a caller forget to pass it and
+            # still pass its tests.
+            rows = [
+                r for r in rows
+                if any(q in str(r.get(f) or "").lower()
+                       for f in ("product_name", "product_id", "sku", "category"))
+            ]
+        return rows
+
+    # ---------------------------------------- page + true total (round 20N)
+    #
+    # Delegating rather than re-implementing: the `recorded` entries every
+    # other test asserts on stay exactly as they were, and the total can
+    # never drift from the rows, because it IS the rows.
+
+    async def list_products_with_total(self, license_id, **kwargs):
+        rows = await self.list_products(license_id, **kwargs)
+        return rows, len(rows)
+
+    async def list_tickets_with_total(self, license_id, **kwargs):
+        rows = await self.list_tickets(
+            license_id, status=kwargs.get("status"), visible_to=kwargs.get("visible_to"),
+            limit=kwargs.get("limit"),
+        )
+        q = str(kwargs.get("q") or "").strip().lower()
+        if q:
+            rows = [
+                r for r in rows
+                if any(q in str(r.get(f) or "").lower()
+                       for f in ("ticket_number", "customer_name", "customer_phone",
+                                 "serial_number", "issue_description"))
+            ]
+        return rows, len(rows)
+
+    async def list_warranties_with_total(self, license_id, **kwargs):
+        rows = await self.list_warranties(license_id, limit=kwargs.get("limit"))
+        q = str(kwargs.get("q") or "").strip().lower()
+        if q:
+            rows = [
+                r for r in rows
+                if any(q in str(r.get(f) or "").lower()
+                       for f in ("warranty_number", "serial_number", "product_name"))
+            ]
+        return rows, len(rows)
 
     # ------------------------------------------- document templates (10.4)
     #

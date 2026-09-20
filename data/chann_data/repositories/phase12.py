@@ -15,11 +15,12 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..models import LicenseMember, ServiceTicket, TechnicianTeam, TechnicianTeamMember
 from .locks import serialise
+from .search import like_any, page
 from .tenant_scope import TenantScope
 
 TICKET_STATUSES = frozenset(
@@ -215,20 +216,66 @@ class ServiceTicketRepository:
             query = query.where(self._visible_to_member(scope, visible_to))
         return self._s.execute(query).scalars().first()
 
-    def list_for_license(
-        self, scope: TenantScope, *, status: str | None = None, limit: int = 100,
-    ) -> list[ServiceTicket]:
-        query = select(ServiceTicket).where(ServiceTicket.license_id == scope.license_id)
+    #: What a person types when they are looking for a job.
+    SEARCH = (
+        ServiceTicket.ticket_number, ServiceTicket.customer_name,
+        ServiceTicket.customer_phone, ServiceTicket.serial_number,
+        ServiceTicket.issue_description,
+    )
+
+    def _narrow(self, query, scope: TenantScope, *, status: str | None, q: str | None,
+                member_id: uuid.UUID | None):
+        """The one place a ticket list is narrowed — page and count alike.
+
+        `member_id` carries the 12.1 visibility predicate. It has to be in
+        here rather than at the call sites, because a COUNT taken without
+        it would tell a technician "showing 20 of 50" and so tell them that
+        thirty jobs exist which they may not see — the number itself is the
+        leak (18 ก.ย. 2569).
+        """
+        query = query.where(ServiceTicket.license_id == scope.license_id)
+        if member_id is not None:
+            query = query.where(self._visible_to_member(scope, member_id))
         if status:
-            query = query.where(ServiceTicket.status == status)
-        return list(
-            self._s.execute(
-                query.order_by(ServiceTicket.created_at.desc()).limit(max(1, min(limit, 500)))
-            ).scalars()
+            # One status, or several comma-separated. The queue screen used
+            # to ask for each open status in its own request and merge the
+            # answers in the browser, which cannot be paged and cannot be
+            # counted (20 ก.ย. 2569).
+            wanted = [part.strip() for part in str(status).split(",") if part.strip()]
+            query = (
+                query.where(ServiceTicket.status == wanted[0]) if len(wanted) == 1
+                else query.where(ServiceTicket.status.in_(wanted))
+            )
+        clause = like_any(q, *self.SEARCH)
+        if clause is not None:
+            query = query.where(clause)
+        return query
+
+    def list_for_license(
+        self, scope: TenantScope, *, status: str | None = None, q: str | None = None,
+        limit: int = 100, offset: int | None = None,
+    ) -> list[ServiceTicket]:
+        query = self._narrow(
+            select(ServiceTicket), scope, status=status, q=q, member_id=None,
+        ).order_by(ServiceTicket.created_at.desc(), ServiceTicket.id.desc())
+        return list(self._s.execute(
+            page(query, limit=max(1, min(limit, 500)), offset=offset)
+        ).scalars())
+
+    def count_for_license(
+        self, scope: TenantScope, *, status: str | None = None, q: str | None = None,
+        member_id: uuid.UUID | None = None,
+    ) -> int:
+        """How many match — counted through the SAME visibility predicate."""
+        query = self._narrow(
+            select(func.count()).select_from(ServiceTicket),
+            scope, status=status, q=q, member_id=member_id,
         )
+        return int(self._s.execute(query).scalar() or 0)
 
     def list_visible_to(
-        self, scope: TenantScope, *, member_id: uuid.UUID, limit: int = 100,
+        self, scope: TenantScope, *, member_id: uuid.UUID, status: str | None = None,
+        q: str | None = None, limit: int = 100, offset: int | None = None,
     ) -> list[ServiceTicket]:
         """What one technician may see (12.1 visibility).
 
@@ -238,15 +285,12 @@ class ServiceTicketRepository:
         another customer's address because a colleague happens to own that
         job.
         """
-        query = select(ServiceTicket).where(
-            ServiceTicket.license_id == scope.license_id,
-            self._visible_to_member(scope, member_id),
-        )
-        return list(
-            self._s.execute(
-                query.order_by(ServiceTicket.created_at.desc()).limit(max(1, min(limit, 500)))
-            ).scalars()
-        )
+        query = self._narrow(
+            select(ServiceTicket), scope, status=status, q=q, member_id=member_id,
+        ).order_by(ServiceTicket.created_at.desc(), ServiceTicket.id.desc())
+        return list(self._s.execute(
+            page(query, limit=max(1, min(limit, 500)), offset=offset)
+        ).scalars())
 
     # ------------------------------------------------------------- update
 

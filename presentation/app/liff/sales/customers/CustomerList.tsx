@@ -9,7 +9,8 @@ import { Badge, Count, Empty } from "../_components";
 import { ConfirmDialog, useConfirm } from "../../_confirm";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
-import { ListFilters, matchesQuery } from "../../_filters";
+import { ListFilters } from "../../_filters";
+import { usePagedList } from "../../_paged-list";
 import { InlineCreateForm } from "../../_inline-create";
 import {
   ListControls, byNewest, byOldest, useListControls,
@@ -45,14 +46,11 @@ export default function CustomerList({ liffId }: { liffId: string }) {
   // dictionary under their own sections.
   const stageLabel = (stage: string) =>
     stage === "contact" ? t.customer.title : t.customer.lead;
-  const [customers, setCustomers] = useState<Customer[]>([]);
-  const [totalHeld, setTotalHeld] = useState<number | null>(null);
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
   const [busy, setBusy] = useState(false);
   const { request: confirming, ask, close: closeConfirm } = useConfirm();
   const [busyId, setBusyId] = useState("");
-  const [query, setQuery] = useState("");
   const [stage, setStage] = useState("");
 
   const say = useCallback((message: string, kind?: "ok" | "error") => {
@@ -62,32 +60,32 @@ export default function CustomerList({ liffId }: { liffId: string }) {
   const session = useSalesSession(liffId, say);
   const { token, licenseId, permissions } = session;
 
-  const load = useCallback(async () => {
-    if (!token || !licenseId) return;
-    const response = await fetch(`/api/phase2/licenses/${licenseId}/customers`, {
-      headers: proxyHeaders(token, licenseId),
-    });
-    if (!response.ok) {
-      throw new Error(
-        response.status === 403
+  // Searched and paged by the SERVER. It used to fetch the list and filter
+  // it here, which cannot find the 600th customer of 800 behind a cap of
+  // 500 — the cap hid records rather than slowing the page (20 ก.ย. 2569).
+  const listError = useCallback(
+    (_message: string, httpStatus?: number) =>
+      say(
+        httpStatus === 403
           ? t.dashboard.noPermission
-          : `${t.dashboard.loadFailed} (${response.status})`,
-      );
-    }
-    setCustomers((await response.json()) as Customer[]);
-    // What the shop HAS, not what this page received. Without it the count
-    // below reads "500 of 500" for a shop with 3,000 (round 20j).
-    const said = response.headers.get("X-Total-Count");
-    setTotalHeld(said === null ? null : Number(said));
-    say("");
-  }, [licenseId, say, t, token]);
+          : `${t.dashboard.loadFailed}${httpStatus ? ` (${httpStatus})` : ""}`,
+        "error",
+      ),
+    [say, t],
+  );
+  const list = usePagedList<Customer>({
+    token, licenseId, ready: session.ready,
+    path: `licenses/${licenseId}/customers`,
+    params: { stage },
+    onError: listError,
+  });
+  const customers = list.rows;
+  const totalHeld = list.total;
+  const load = list.reload;
 
   useEffect(() => {
-    if (!session.ready) return;
-    void load().catch((error: unknown) =>
-      say(error instanceof Error ? error.message : t.dashboard.loadFailed, "error"),
-    );
-  }, [session.ready, load, say, t]);
+    if (session.ready && !list.busy) say("");
+  }, [session.ready, list.busy, say]);
 
   async function createCustomer(values: Record<string, string>) {
     if (values.phone && !/^\+?[\d\s\-().]+$/.test(values.phone)) {
@@ -148,7 +146,7 @@ export default function CustomerList({ liffId }: { liffId: string }) {
         say(response.status === 403 ? t.dashboard.customers.archiveDenied : await failureText(response), "error");
         return;
       }
-      setCustomers((rows) => rows.filter((row) => row.id !== customer.id));
+      list.setRows((rows) => rows.filter((row) => row.id !== customer.id));
       // The success says WHAT went, by name and code — "saved" tells the
       // person nothing they can check.
       say(
@@ -188,17 +186,9 @@ export default function CustomerList({ liffId }: { liffId: string }) {
     }
   }
 
-  // Filtered in the browser rather than by refetching: the tenant-scoped
-  // list is already loaded and SMB-scale, so a round trip per keystroke
-  // would add latency for no benefit.
-  const searched = customers.filter(
-    (customer) =>
-      (!stage || customer.stage === stage) &&
-      matchesQuery(query, [
-        fullName(customer), customer.phone, customer.email, customer.customer_id,
-        stageLabel(customer.stage),
-      ]),
-  );
+  // The rows ARE the answer: the stage and the search term were applied by
+  // the database, so there is nothing left to filter here.
+  const searched = customers;
 
   const sorts = [
     { key: "newest", label: t.dashboard.list.newest, compare: byNewest<Customer> },
@@ -248,8 +238,8 @@ export default function CustomerList({ liffId }: { liffId: string }) {
       statusTone={tone}
     >
       <ListFilters
-        query={query}
-        onQuery={setQuery}
+        query={list.query}
+        onQuery={list.setQuery}
         placeholder={t.dashboard.customers.searchHint}
         status={stage}
         statuses={[
@@ -276,6 +266,13 @@ export default function CustomerList({ liffId }: { liffId: string }) {
             .replace("{shown}", String(customers.length))
             .replace("{total}", String(totalHeld))}
         </p>
+      )}
+      {list.hasMore && (
+        <div className="actions">
+          <button type="button" className="btn" disabled={list.busy} onClick={list.loadMore}>
+            {list.busy ? t.dashboard.opening : t.dashboard.list.loadMore}
+          </button>
+        </div>
       )}
 
       {can("customer.create") && (
@@ -306,11 +303,11 @@ export default function CustomerList({ liffId }: { liffId: string }) {
       {visible.length === 0 ? (
         <Empty
           message={
-            customers.length === 0
-              ? t.dashboard.customers.empty
-              : query
-                ? `${t.dashboard.customers.noMatch}: “${query}”`
-                : t.dashboard.customers.noMatch
+            list.searching
+              ? t.dashboard.opening
+              : list.query
+                ? `${t.dashboard.customers.noMatch}: “${list.query}”`
+                : t.dashboard.customers.empty
           }
         />
       ) : (

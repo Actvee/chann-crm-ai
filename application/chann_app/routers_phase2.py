@@ -618,7 +618,9 @@ async def patch_company_profile(
 async def list_quotes(
     license_id: str,
     status_filter: str | None = None,
+    q: str | None = None,
     limit: int = 500,
+    offset: int = 0,
     response: Response = None,  # type: ignore[assignment]
     principal: TenantPrincipal = Depends(get_tenant_principal),
     client: DataClient = Depends(get_data_client),
@@ -626,7 +628,9 @@ async def list_quotes(
     _require_same_tenant(principal, license_id)
     principal.require("quote.read")
     try:
-        rows, total = await client.list_quotes_with_total(license_id, status_filter, limit=limit)
+        rows, total = await client.list_quotes_with_total(
+            license_id, status_filter, limit=limit, q=q, offset=offset,
+        )
         if response is not None:
             response.headers["X-Total-Count"] = str(total)
         return rows
@@ -819,7 +823,9 @@ def _company_incomplete(company: dict, exc: Exception) -> dict:
 async def list_customers(
     license_id: str,
     stage: str | None = None,
+    q: str | None = None,
     limit: int = 500,
+    offset: int = 0,
     response: Response = None,  # type: ignore[assignment]
     principal: TenantPrincipal = Depends(get_tenant_principal),
     client: DataClient = Depends(get_data_client),
@@ -834,7 +840,9 @@ async def list_customers(
     if principal.is_customer:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="staff only")
     try:
-        rows, total = await client.list_customers_with_total(license_id, stage, limit=limit)
+        rows, total = await client.list_customers_with_total(
+            license_id, stage, limit=limit, q=q, offset=offset,
+        )
     except DataTierError as exc:
         raise _propagate(exc)
     # The body shape is unchanged — a bare array, as every caller expects.
@@ -935,7 +943,9 @@ async def my_orders(
 async def list_deals(
     license_id: str,
     stage: str | None = None,
+    q: str | None = None,
     limit: int = 500,
+    offset: int = 0,
     response: Response = None,  # type: ignore[assignment]
     principal: TenantPrincipal = Depends(get_tenant_principal),
     client: DataClient = Depends(get_data_client),
@@ -943,7 +953,9 @@ async def list_deals(
     _require_same_tenant(principal, license_id)
     principal.require("deal.read")
     try:
-        rows, total = await client.list_deals_with_total(license_id, stage, limit=limit)
+        rows, total = await client.list_deals_with_total(
+            license_id, stage, limit=limit, q=q, offset=offset,
+        )
     except DataTierError as exc:
         raise _propagate(exc)
     if response is not None:
@@ -954,20 +966,34 @@ async def list_deals(
 @router.get("/licenses/{license_id}/products")
 async def list_products(
     license_id: str,
+    category: str | None = None,
+    q: str | None = None,
     limit: int = 200,
+    offset: int = 0,
+    response: Response = None,  # type: ignore[assignment]
     principal: TenantPrincipal = Depends(get_tenant_principal),
     client: DataClient = Depends(get_data_client),
 ):
     """product.read OR product.manage (review C8): a salesperson picking a
     catalogue line for a deal needs the list, not the right to change it.
     product.manage keeps working so roles built before product.read
-    existed lose nothing."""
+    existed lose nothing.
+
+    `q` is answered by the database; the screen used to search the page it
+    already held, which finds nothing past the ceiling (20 ก.ย. 2569).
+    """
     _require_same_tenant(principal, license_id)
     principal.require_any("product.read", "product.manage")
     try:
-        return await client.list_products(license_id, limit=max(1, min(limit, 1000)))
+        rows, total = await client.list_products_with_total(
+            license_id, category=category, q=q,
+            limit=max(1, min(limit, 1000)), offset=offset,
+        )
     except DataTierError as exc:
         raise _propagate(exc)
+    if response is not None:
+        response.headers["X-Total-Count"] = str(total)
+    return rows
 
 
 # ----------------------------------------------- Phase 10 dashboard writes
@@ -1614,23 +1640,35 @@ async def claim_warranty(
 async def list_warranties(
     license_id: str,
     serial_number: str | None = None,
+    q: str | None = None,
     limit: int | None = None,
+    offset: int = 0,
+    response: Response = None,  # type: ignore[assignment]
     principal: TenantPrincipal = Depends(get_tenant_principal),
     client: DataClient = Depends(get_data_client),
 ):
     """The shop's book of registered units (staff). A customer principal
-    gets only their own rows, the same as /mine."""
+    gets only their own rows, the same as /mine.
+
+    `serial_number` stays an exact lookup — it answers "this unit". `q` is
+    the shop searching its own book (20 ก.ย. 2569).
+    """
     _require_same_tenant(principal, license_id)
     principal.require("warranty.read")
     try:
         if principal.is_customer:
             return await client.list_warranties(license_id, customer_chann_uid=principal.chann_uid)
-        return await client.list_warranties(
-            license_id, serial_number=serial_number,
-            limit=max(1, min(limit, 500)) if limit else None,
+        if serial_number:
+            return await client.list_warranties(license_id, serial_number=serial_number)
+        rows, total = await client.list_warranties_with_total(
+            license_id, q=q,
+            limit=max(1, min(limit, 500)) if limit else None, offset=offset,
         )
     except DataTierError as exc:
         raise _propagate(exc)
+    if response is not None:
+        response.headers["X-Total-Count"] = str(total)
+    return rows
 
 
 @router.get("/licenses/{license_id}/warranties/mine")
@@ -1928,7 +1966,10 @@ async def list_tickets(
     license_id: str,
     status: str | None = None,
     visible_to: str | None = None,
+    q: str | None = None,
     limit: int | None = None,
+    offset: int = 0,
+    response: Response = None,  # type: ignore[assignment]
     principal: TenantPrincipal = Depends(get_tenant_principal),
     client: DataClient = Depends(get_data_client),
 ):
@@ -1941,13 +1982,19 @@ async def list_tickets(
         # reports page called this route bare (review D3, 6 Sep 2026).
         visible_to = await _member_of(client, license_id, principal)
     try:
-        rows = await client.list_tickets(
-            license_id, status=status, visible_to=visible_to,
-            limit=max(1, min(limit, 500)) if limit else None,
+        rows, total = await client.list_tickets_with_total(
+            license_id, status=status, visible_to=visible_to, q=q,
+            limit=max(1, min(limit, 500)) if limit else None, offset=offset,
         )
         if principal.is_customer:
             # A customer sees their own repairs, never the shop's queue.
             rows = [r for r in rows if str(r.get("customer_chann_uid") or "") == principal.chann_uid]
+            # ...so the tenant's total is not theirs to be told, either. A
+            # count from the server here would say how many jobs the shop
+            # has (20 ก.ย. 2569).
+            total = len(rows)
+        if response is not None:
+            response.headers["X-Total-Count"] = str(total)
         # The machine each job is about, composed here rather than stored
         # on the ticket: `TicketOut` is the ticket's own row, and a copy of
         # the product name on it would be a second thing to keep in step

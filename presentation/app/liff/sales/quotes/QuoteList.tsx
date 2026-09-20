@@ -6,7 +6,8 @@ import { useCallback, useEffect, useState } from "react";
 import { Badge, Count, Empty } from "../_components";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
-import { ListFilters, matchesQuery, optionsFrom } from "../../_filters";
+import { ListFilters, optionsFrom } from "../../_filters";
+import { usePagedList } from "../../_paged-list";
 import { InlineCreateForm } from "../../_inline-create";
 import {
   ListControls, byNewest, byOldest, useListControls,
@@ -34,12 +35,10 @@ export default function QuoteList({ liffId }: { liffId: string }) {
   const statusLabel = (status: string) =>
     (t.quote.status as Record<string, string>)[status] ?? status;
   const { request: confirming, ask, close: closeConfirm } = useConfirm();
-  const [quotes, setQuotes] = useState<Quote[]>([]);
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
   const [busyId, setBusyId] = useState("");
   const [busy, setBusy] = useState(false);
-  const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [openDeals, setOpenDeals] = useState<{ id: string; label: string; keywords: string }[]>([]);
 
@@ -50,21 +49,24 @@ export default function QuoteList({ liffId }: { liffId: string }) {
   const session = useSalesSession(liffId, say);
   const { token, licenseId, permissions } = session;
 
-  const load = useCallback(async () => {
-    if (!token || !licenseId) return;
-    const response = await fetch(`/api/phase2/licenses/${licenseId}/quotes`, {
-      headers: proxyHeaders(token, licenseId),
-    });
-    if (!response.ok) {
-      throw new Error(
-        response.status === 403
+  const listError = useCallback(
+    (_message: string, httpStatus?: number) =>
+      say(
+        httpStatus === 403
           ? t.dashboard.noPermission
-          : `${t.dashboard.loadFailed} (${response.status})`,
-      );
-    }
-    setQuotes((await response.json()) as Quote[]);
-    say("");
-  }, [licenseId, say, t, token]);
+          : `${t.dashboard.loadFailed}${httpStatus ? ` (${httpStatus})` : ""}`,
+        "error",
+      ),
+    [say, t],
+  );
+  const list = usePagedList<Quote>({
+    token, licenseId, ready: session.ready,
+    path: `licenses/${licenseId}/quotes`,
+    params: { status_filter: statusFilter },
+    onError: listError,
+  });
+  const quotes = list.rows;
+  const load = list.reload;
 
   const loadDeals = useCallback(async () => {
     if (!token || !licenseId || !permissions.has("quote.create")) return;
@@ -114,10 +116,11 @@ export default function QuoteList({ liffId }: { liffId: string }) {
   }, [licenseId, permissions, say, t, token]);
 
   useEffect(() => {
+    if (session.ready && !list.busy) say("");
+  }, [session.ready, list.busy, say]);
+
+  useEffect(() => {
     if (!session.ready) return;
-    void load().catch((error: unknown) =>
-      say(error instanceof Error ? error.message : t.dashboard.loadFailed, "error"),
-    );
     void loadDeals().catch(() => undefined);
   }, [session.ready, load, loadDeals, say, t]);
 
@@ -229,15 +232,8 @@ export default function QuoteList({ liffId }: { liffId: string }) {
       compare: (a: Quote, b: Quote) => b.quote_id.localeCompare(a.quote_id),
     },
   ];
-  const filtered = quotes.filter(
-    (quote) =>
-      (!statusFilter || quote.status === statusFilter) &&
-      matchesQuery(query, [
-        quote.quote_id,
-        statusLabel(quote.status),
-        quote.generated_document_id ? t.dashboard.quotes.issued : t.dashboard.quotes.notIssued,
-      ]),
-  );
+  // Status and search were applied by the database (round 20N).
+  const filtered = quotes;
   const controls = useListControls(filtered, sorts, "newest");
   const visibleQuotes = controls.visible;
   const can = (key: string) => !session.suspended && permissions.has(key);
@@ -258,8 +254,8 @@ export default function QuoteList({ liffId }: { liffId: string }) {
       statusTone={tone}
     >
       <ListFilters
-        query={query}
-        onQuery={setQuery}
+        query={list.query}
+        onQuery={list.setQuery}
         status={statusFilter}
         statuses={optionsFrom(t.quote.status as Record<string, string>)}
         onStatus={setStatusFilter}
@@ -275,7 +271,14 @@ export default function QuoteList({ liffId }: { liffId: string }) {
         onTo={controls.setTo}
       />
 
-      <Count shown={visibleQuotes.length} total={quotes.length} />
+      <Count shown={visibleQuotes.length} total={list.total ?? quotes.length} />
+      {list.hasMore && (
+        <div className="actions">
+          <button type="button" className="btn" disabled={list.busy} onClick={list.loadMore}>
+            {list.busy ? t.dashboard.opening : t.dashboard.list.loadMore}
+          </button>
+        </div>
+      )}
 
       {can("quote.create") && openDeals.length > 0 && (
         <InlineCreateForm
@@ -298,7 +301,15 @@ export default function QuoteList({ liffId }: { liffId: string }) {
       )}
 
       {visibleQuotes.length === 0 ? (
-        <Empty message={quotes.length === 0 ? t.dashboard.quotes.empty : t.dashboard.noMatch} />
+        <Empty
+          message={
+            list.searching
+              ? t.dashboard.opening
+              : list.query || statusFilter
+                ? t.dashboard.noMatch
+                : t.dashboard.quotes.empty
+          }
+        />
       ) : (
         <ul className="list">
           {visibleQuotes.map((quote) => (

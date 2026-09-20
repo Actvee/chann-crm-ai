@@ -150,6 +150,7 @@ export const th = {
       from: "ตั้งแต่",
       to: "ถึง",
       clear: "ล้างตัวกรอง",
+      loadMore: "โหลดเพิ่ม",
       newest: "ใหม่สุดก่อน",
       oldest: "เก่าสุดก่อน",
       highestValue: "มูลค่าสูงสุด",

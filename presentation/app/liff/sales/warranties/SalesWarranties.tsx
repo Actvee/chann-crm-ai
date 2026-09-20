@@ -6,7 +6,8 @@ import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { CsvImport } from "../_csv-import";
 import { FieldRow } from "../../_field-row";
-import { ListFilters, matchesQuery, optionsFrom } from "../../_filters";
+import { ListFilters, optionsFrom } from "../../_filters";
+import { usePagedList } from "../../_paged-list";
 import { shortDate } from "../../_list-controls";
 import { PickerOption, SearchablePicker } from "../../_searchable-picker";
 import { useFailureText } from "../_format";
@@ -66,7 +67,6 @@ export default function SalesWarranties({ liffId }: { liffId: string }) {
   const failureText = useFailureText();
   const copy = t.dashboard.warranties;
 
-  const [rows, setRows] = useState<Warranty[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [customers, setCustomers] = useState<PickerOption[]>([]);
   const [status, setStatus] = useState(t.dashboard.opening);
@@ -79,7 +79,6 @@ export default function SalesWarranties({ liffId }: { liffId: string }) {
   const [searchedSerial, setSearchedSerial] = useState("");
   // The serial search above asks the server for one sticker anywhere in
   // the book; these narrow the page already loaded, by anything on a row.
-  const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
 
   const [serial, setSerial] = useState("");
@@ -103,30 +102,45 @@ export default function SalesWarranties({ liffId }: { liffId: string }) {
   const session = useSalesSession(liffId, say);
   const { token, licenseId, permissions } = session;
 
+  const listError = useCallback(
+    (_message: string, httpStatus?: number) =>
+      say(
+        httpStatus === 403
+          ? t.dashboard.noPermission
+          : `${t.dashboard.loadFailed}${httpStatus ? ` (${httpStatus})` : ""}`,
+        "error",
+      ),
+    [say, t],
+  );
+  // Two questions, one list. `serial_number` is the exact lookup — "this
+  // unit" — and `q` is the shop searching its own book; both are answered
+  // by the database now, so neither is limited to the rows that happened
+  // to be on the page (round 20N).
+  const list = usePagedList<Warranty>({
+    token, licenseId, ready: session.ready,
+    path: `licenses/${licenseId}/warranties`,
+    params: { status: statusFilter, serial_number: searchedSerial },
+    onError: listError,
+  });
+  const rows = list.rows;
+
   const load = useCallback(
     async (serialNumber = "") => {
-      if (!token || !licenseId) return;
-      const headers = proxyHeaders(token, licenseId);
-      const url = serialNumber
-        ? `/api/phase2/licenses/${licenseId}/warranties?serial_number=${encodeURIComponent(serialNumber)}`
-        : `/api/phase2/licenses/${licenseId}/warranties?limit=${PAGE}`;
-      const response = await fetch(url, { headers });
-      if (!response.ok) {
-        throw new Error(
-          response.status === 403
-            ? t.dashboard.noPermission
-            : `${t.dashboard.loadFailed} (${response.status})`,
-        );
-      }
-      const found = (await response.json()) as Warranty[];
-      setRows(found);
+      // Changing the serial refetches through the hook; same call shape as
+      // before so every caller below is untouched.
       setSearchedSerial(serialNumber);
-      if (serialNumber && found.length === 0) {
-        say(s.warranties.serialNotFound.replace("{serial}", serialNumber), "error");
-      }
+      if (serialNumber === searchedSerial) await list.reload();
     },
-    [token, licenseId, t, s, say],
+    [list, searchedSerial],
   );
+
+  // Said once per answer, not once per render.
+  useEffect(() => {
+    if (!searchedSerial || list.busy) return;
+    if (rows.length === 0) {
+      say(s.warranties.serialNotFound.replace("{serial}", searchedSerial), "error");
+    }
+  }, [searchedSerial, rows.length, list.busy, s, say]);
 
   const loadPickers = useCallback(async () => {
     if (!token || !licenseId) return;
@@ -265,14 +279,8 @@ export default function SalesWarranties({ liffId }: { liffId: string }) {
   }
 
   const canCreate = !session.suspended && permissions.has("warranty.create");
-  const visible = rows.filter(
-    (row) =>
-      (!statusFilter || (row.status ?? "") === statusFilter) &&
-      matchesQuery(query, [
-        row.serial_number, row.product_name, row.warranty_number, row.contact_name,
-        row.contact_code,
-      ]),
-  );
+  // Status, serial and search were all applied by the database.
+  const visible = rows;
 
   return (
     <SalesShell
@@ -399,18 +407,35 @@ export default function SalesWarranties({ liffId }: { liffId: string }) {
           </h2>
         </div>
         <ListFilters
-          query={query}
-          onQuery={setQuery}
+          query={list.query}
+          onQuery={list.setQuery}
           status={statusFilter}
           statuses={optionsFrom(copy.status as Record<string, string>)}
           onStatus={setStatusFilter}
         />
-        {!searchedSerial && rows.length >= PAGE && (
-          <p className="count">{s.errors.showingLatest.replace("{count}", String(rows.length))}</p>
+        {list.total !== null && list.total > rows.length && (
+          <p className="count">
+            {t.dashboard.showingOf
+              .replace("{shown}", String(rows.length))
+              .replace("{total}", String(list.total))}
+          </p>
+        )}
+        {list.hasMore && (
+          <div className="actions">
+            <button type="button" className="btn" disabled={list.busy} onClick={list.loadMore}>
+              {list.busy ? t.dashboard.opening : t.dashboard.list.loadMore}
+            </button>
+          </div>
         )}
         {visible.length === 0 ? (
           <div className="empty">
-            <p>{rows.length === 0 ? copy.empty : t.dashboard.noMatch}</p>
+            <p>
+              {list.searching
+                ? t.dashboard.opening
+                : list.query || statusFilter || searchedSerial
+                  ? t.dashboard.noMatch
+                  : copy.empty}
+            </p>
           </div>
         ) : (
           <ul className="list">

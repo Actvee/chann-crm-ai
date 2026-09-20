@@ -5,7 +5,8 @@ import { useCallback, useEffect, useState } from "react";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { FieldRow } from "../../_field-row";
-import { ListFilters, matchesQuery, optionsFrom } from "../../_filters";
+import { ListFilters, optionsFrom } from "../../_filters";
+import { usePagedList } from "../../_paged-list";
 import { Ticket, formatWhen, machineLine, ticketStage } from "../../_tickets";
 import { dispatchFieldLabels, useFailureText } from "../_format";
 import { proxyHeaders } from "../_lib";
@@ -52,7 +53,6 @@ export default function SalesTickets({ liffId }: { liffId: string }) {
   const statusLabel = (status: string) =>
     (copy.status as Record<string, string>)[status] ?? status;
 
-  const [tickets, setTickets] = useState<Ticket[]>([]);
   const [blockers, setBlockers] = useState<Record<string, string[]>>({});
   const [technicians, setTechnicians] = useState<Technician[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
@@ -60,7 +60,6 @@ export default function SalesTickets({ liffId }: { liffId: string }) {
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
   const [busyId, setBusyId] = useState("");
   const [showDone, setShowDone] = useState(false);
-  const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [target, setTarget] = useState<Record<string, string>>({});
   const [editing, setEditing] = useState<string>("");
@@ -77,57 +76,67 @@ export default function SalesTickets({ liffId }: { liffId: string }) {
   const session = useSalesSession(liffId, say);
   const { token, licenseId, permissions } = session;
 
-  const load = useCallback(async () => {
+  const listError = useCallback(
+    (_message: string, httpStatus?: number) =>
+      say(
+        httpStatus === 403
+          ? t.dashboard.noPermission
+          : `${t.dashboard.loadFailed}${httpStatus ? ` (${httpStatus})` : ""}`,
+        "error",
+      ),
+    [say, t],
+  );
+  // One request, not one per status. The queue used to fetch each open
+  // status separately and merge the answers in the browser, which cannot
+  // be paged and cannot be counted — the Data tier takes a comma-separated
+  // list now (round 20N).
+  const list = usePagedList<Ticket>({
+    token, licenseId, ready: session.ready,
+    path: `licenses/${licenseId}/tickets`,
+    params: { status: statusFilter || (showDone ? "" : OPEN_STATUSES.join(",")) },
+    onError: listError,
+  });
+  const tickets = list.rows;
+
+  const load = list.reload;
+
+  // Only for the ones still waiting to go out; a dispatched ticket's gate
+  // result is history and not worth a request each.
+  useEffect(() => {
     if (!token || !licenseId) return;
     const headers = proxyHeaders(token, licenseId);
-    // Server-side status filter: the finished ones are not downloaded
-    // to be hidden, and each open status gets its own window.
-    const urls = showDone
-      ? [`/api/phase2/licenses/${licenseId}/tickets?limit=${PAGE}`]
-      : OPEN_STATUSES.map(
-          (value) => `/api/phase2/licenses/${licenseId}/tickets?status=${value}&limit=${PAGE}`,
-        );
-    const responses = await Promise.all(urls.map((url) => fetch(url, { headers })));
-    const failed = responses.find((response) => !response.ok);
-    if (failed) {
-      throw new Error(
-        failed.status === 403
-          ? t.dashboard.noPermission
-          : `${t.dashboard.loadFailed} (${failed.status})`,
+    const waiting = tickets.filter((row) => row.status === "open");
+    if (waiting.length === 0) return;
+    let live = true;
+    void (async () => {
+      const found: Record<string, string[]> = {};
+      await Promise.all(
+        waiting.map(async (row) => {
+          const check = await fetch(
+            `/api/phase2/licenses/${licenseId}/tickets/${row.id}/dispatch-check`,
+            { headers },
+          );
+          if (check.ok) {
+            const body = (await check.json()) as { missing?: string[]; missing_fields?: string[] };
+            // The column names, said in the reader's language (review C11);
+            // the Thai labels are the fallback for an older Data tier.
+            const names = body.missing_fields?.length
+              ? dispatchFieldLabels(body.missing_fields, t)
+              : body.missing ?? [];
+            if (names.length) found[row.id] = names;
+          } else {
+            // A failed check must not read as "ready to dispatch": the
+            // dispatcher would act on an answer nobody gave.
+            found[row.id] = [copy.dispatchCheckFailed];
+          }
+        }),
       );
-    }
-    const rows = (await Promise.all(responses.map((response) => response.json() as Promise<Ticket[]>)))
-      .flat()
-      .sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")));
-    setTickets(rows);
-
-    // Only for the ones still waiting to go out; a dispatched ticket's
-    // gate result is history and not worth a request each.
-    const waiting = rows.filter((row) => row.status === "open");
-    const found: Record<string, string[]> = {};
-    await Promise.all(
-      waiting.map(async (row) => {
-        const check = await fetch(
-          `/api/phase2/licenses/${licenseId}/tickets/${row.id}/dispatch-check`,
-          { headers },
-        );
-        if (check.ok) {
-          const body = (await check.json()) as { missing?: string[]; missing_fields?: string[] };
-          // The column names, said in the reader's language (review C11);
-          // the Thai labels are the fallback for an older Data tier.
-          const names = body.missing_fields?.length
-            ? dispatchFieldLabels(body.missing_fields, t)
-            : body.missing ?? [];
-          if (names.length) found[row.id] = names;
-        } else {
-          // A failed check must not read as "ready to dispatch": the
-          // dispatcher would act on an answer nobody gave.
-          found[row.id] = [copy.dispatchCheckFailed];
-        }
-      }),
-    );
-    setBlockers(found);
-  }, [token, licenseId, showDone, t, copy.dispatchCheckFailed]);
+      if (live) setBlockers(found);
+    })();
+    return () => {
+      live = false;
+    };
+  }, [tickets, token, licenseId, t, copy.dispatchCheckFailed]);
 
   const loadPeople = useCallback(async () => {
     if (!token || !licenseId) return;
@@ -294,16 +303,8 @@ export default function SalesTickets({ liffId }: { liffId: string }) {
     }
     return technicians.find((tech) => tech.id === x.assigned_to_ref)?.display_name ?? "";
   };
-  const visible = tickets.filter(
-    (x) =>
-      (showDone || !DONE_STATUSES.includes(x.status)) &&
-      (!statusFilter || x.status === statusFilter) &&
-      matchesQuery(query, [
-        x.ticket_number, x.customer_name, x.customer_phone, x.issue_description,
-        x.service_address, x.serial_number, x.product_name, statusLabel(x.status),
-        targetLabel(x),
-      ]),
-  );
+  // Status and search were applied by the database (round 20N).
+  const visible = tickets;
 
   return (
     <SalesShell
@@ -316,8 +317,8 @@ export default function SalesTickets({ liffId }: { liffId: string }) {
       statusTone={tone}
     >
       <ListFilters
-        query={query}
-        onQuery={setQuery}
+        query={list.query}
+        onQuery={list.setQuery}
         status={statusFilter}
         statuses={optionsFrom(copy.status as Record<string, string>)}
         onStatus={(value) => {
@@ -339,12 +340,29 @@ export default function SalesTickets({ liffId }: { liffId: string }) {
           {showDone ? copy.hideDone : copy.showDone}
         </button>
       </ListFilters>
-      {tickets.length >= PAGE && (
-        <p className="count">{s.errors.showingLatest.replace("{count}", String(tickets.length))}</p>
+      {list.total !== null && list.total > tickets.length && (
+        <p className="count">
+          {t.dashboard.showingOf
+            .replace("{shown}", String(tickets.length))
+            .replace("{total}", String(list.total))}
+        </p>
+      )}
+      {list.hasMore && (
+        <div className="actions">
+          <button type="button" className="btn" disabled={list.busy} onClick={list.loadMore}>
+            {list.busy ? t.dashboard.opening : t.dashboard.list.loadMore}
+          </button>
+        </div>
       )}
       {visible.length === 0 ? (
         <div className="empty">
-          <p>{tickets.length === 0 ? copy.empty : t.dashboard.noMatch}</p>
+          <p>
+            {list.searching
+              ? t.dashboard.opening
+              : list.query || statusFilter
+                ? t.dashboard.noMatch
+                : copy.empty}
+          </p>
         </div>
       ) : (
         <ul className="list">

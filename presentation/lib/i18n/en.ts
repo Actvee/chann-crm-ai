@@ -148,6 +148,7 @@ export const en: Dictionary = {
       from: "From",
       to: "To",
       clear: "Clear",
+      loadMore: "Load more",
       newest: "Newest first",
       oldest: "Oldest first",
       highestValue: "Highest value",

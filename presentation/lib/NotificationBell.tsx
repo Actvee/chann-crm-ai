@@ -104,6 +104,10 @@ export function NotificationBell({ idToken, licenseId }: Props) {
   const [items, setItems] = useState<Notification[]>([]);
   const [error, setError] = useState(false);
   const [loading, setLoading] = useState(false);
+  //: Where the panel's top edge goes, measured from the bell. The top bar
+  //: wraps to a second row on a narrow phone, so its height is not a
+  //: constant a stylesheet could hold.
+  const [panelTop, setPanelTop] = useState(0);
   const panelId = useId();
 
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -155,10 +159,24 @@ export function NotificationBell({ idToken, licenseId }: Props) {
     triggerRef.current?.focus();
   }, []);
 
+  const placePanel = useCallback(() => {
+    const bell = triggerRef.current?.getBoundingClientRect();
+    if (bell) setPanelTop(Math.round(bell.bottom + 8));
+  }, []);
+
   const openList = useCallback(() => {
+    placePanel();
     setOpen(true);
     void load();
-  }, [load]);
+  }, [load, placePanel]);
+
+  // Rotating the phone or opening the keyboard moves the bar; the panel
+  // follows rather than floating over the wrong place.
+  useEffect(() => {
+    if (!open) return;
+    window.addEventListener("resize", placePanel);
+    return () => window.removeEventListener("resize", placePanel);
+  }, [open, placePanel]);
 
   // Escape and a click outside both dismiss. Bound only while open, so the
   // closed bell costs the page nothing.
@@ -321,6 +339,7 @@ export function NotificationBell({ idToken, licenseId }: Props) {
           role="dialog"
           aria-label={copy.title}
           tabIndex={-1}
+          style={{ top: panelTop }}
         >
           <div className="notif-head">
             <h2>{copy.title}</h2>

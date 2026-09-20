@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { FieldRow } from "../../_field-row";
-import { ListFilters, matchesQuery } from "../../_filters";
+import { ListFilters } from "../../_filters";
+import { usePagedList } from "../../_paged-list";
 import { Count, Empty } from "../_components";
 import { CsvImport } from "../_csv-import";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
@@ -45,7 +46,6 @@ export default function ProductList({ liffId }: { liffId: string }) {
   const s = useSalesText();
   const { money } = useFormatters();
   const failureText = useFailureText();
-  const [products, setProducts] = useState<Product[]>([]);
   const [adding, setAdding] = useState(false);
   // Editing an existing row locks its code (review C19): the save is an
   // upsert keyed on product_id, so a changed code created a second
@@ -55,7 +55,6 @@ export default function ProductList({ liffId }: { liffId: string }) {
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
-  const [query, setQuery] = useState("");
   const [category, setCategory] = useState("");
 
   const say = useCallback((message: string, kind?: "ok" | "error") => {
@@ -65,42 +64,53 @@ export default function ProductList({ liffId }: { liffId: string }) {
   const session = useSalesSession(liffId, say);
   const { token, licenseId, permissions } = session;
 
-  const load = useCallback(async () => {
-    if (!token || !licenseId) return;
-    const response = await fetch(`/api/phase2/licenses/${licenseId}/products?limit=${PAGE}`, {
-      headers: proxyHeaders(token, licenseId),
-    });
-    if (!response.ok) {
-      throw new Error(
-        response.status === 403
+  const listError = useCallback(
+    (_message: string, httpStatus?: number) =>
+      say(
+        httpStatus === 403
           ? t.dashboard.noPermission
-          : `${t.dashboard.loadFailed} (${response.status})`,
-      );
-    }
-    setProducts((await response.json()) as Product[]);
-    say("");
-  }, [licenseId, say, t, token]);
+          : `${t.dashboard.loadFailed}${httpStatus ? ` (${httpStatus})` : ""}`,
+        "error",
+      ),
+    [say, t],
+  );
+  const list = usePagedList<Product>({
+    token, licenseId, ready: session.ready,
+    path: `licenses/${licenseId}/products`,
+    params: { category },
+    onError: listError,
+  });
+  const products = list.rows;
+  const load = list.reload;
 
   useEffect(() => {
-    if (!session.ready) return;
-    void load().catch((error: unknown) =>
-      say(error instanceof Error ? error.message : t.dashboard.loadFailed, "error"),
-    );
-  }, [session.ready, load, say, t]);
+    if (session.ready && !list.busy) say("");
+  }, [session.ready, list.busy, say]);
 
   // The categories the catalogue actually uses, so the select never
   // offers one with nothing in it; no categories, no select.
-  const categories = Array.from(
-    new Set(products.map((product) => (product.category ?? "").trim()).filter(Boolean)),
-  ).sort((a, b) => a.localeCompare(b, "th"));
-  const visible = products.filter(
-    (product) =>
-      (!category || (product.category ?? "").trim() === category) &&
-      matchesQuery(query, [
-        product.product_name, product.product_id, product.sku, product.category,
-        product.description,
-      ]),
-  );
+  //
+  // KNOWN LIMIT (round 20N): the options come from the rows loaded so
+  // far. Before this they came from one fetch of up to a thousand rows,
+  // so the select has not lost anything — but a catalogue past that, with
+  // a category used only by a late row, will not offer it until the page
+  // holding it has been loaded. A `distinct category` endpoint is the
+  // proper fix and is its own small round; keeping the options SEEN so
+  // far means the select only ever grows, never drops one mid-browse.
+  const [seenCategories, setSeenCategories] = useState<string[]>([]);
+  useEffect(() => {
+    setSeenCategories((known) => {
+      const next = new Set(known);
+      for (const product of products) {
+        const name = (product.category ?? "").trim();
+        if (name) next.add(name);
+      }
+      return next.size === known.length ? known : Array.from(next);
+    });
+  }, [products]);
+  const categories = [...seenCategories].sort((a, b) => a.localeCompare(b, "th"));
+  // Category and search were applied by the database.
+  const visible = products;
 
   async function saveProduct() {
     // Both are required by the Data tier. Catching it here means the
@@ -156,8 +166,8 @@ export default function ProductList({ liffId }: { liffId: string }) {
       statusTone={tone}
     >
       <ListFilters
-        query={query}
-        onQuery={setQuery}
+        query={list.query}
+        onQuery={list.setQuery}
         placeholder={t.dashboard.products.searchHint}
         status={category}
         statuses={
@@ -169,7 +179,14 @@ export default function ProductList({ liffId }: { liffId: string }) {
         onStatus={setCategory}
       />
 
-      <Count shown={visible.length} total={products.length} />
+      <Count shown={visible.length} total={list.total ?? products.length} />
+      {list.hasMore && (
+        <div className="actions">
+          <button type="button" className="btn" disabled={list.busy} onClick={list.loadMore}>
+            {list.busy ? t.dashboard.opening : t.dashboard.list.loadMore}
+          </button>
+        </div>
+      )}
       {products.length >= PAGE && (
         <p className="count">{s.errors.showingLatest.replace("{count}", String(products.length))}</p>
       )}
@@ -261,11 +278,13 @@ export default function ProductList({ liffId }: { liffId: string }) {
       {visible.length === 0 ? (
         <Empty
           message={
-            products.length === 0
-              ? t.dashboard.products.empty
-              : query
-                ? `${t.dashboard.products.noMatch}: “${query}”`
-                : t.dashboard.products.noMatch
+            list.searching
+              ? t.dashboard.opening
+              : list.query
+                ? `${t.dashboard.products.noMatch}: “${list.query}”`
+                : category
+                  ? t.dashboard.products.noMatch
+                  : t.dashboard.products.empty
           }
         />
       ) : (

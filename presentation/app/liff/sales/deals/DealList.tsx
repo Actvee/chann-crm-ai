@@ -7,7 +7,8 @@ import { Badge, Count, Empty } from "../_components";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { FieldRow } from "../../_field-row";
-import { ListFilters, matchesQuery, optionsFrom } from "../../_filters";
+import { ListFilters, optionsFrom } from "../../_filters";
+import { usePagedList } from "../../_paged-list";
 import { InlineCreateForm } from "../../_inline-create";
 import {
   ListControls, byNewest, byOldest, shortDate, useListControls,
@@ -63,7 +64,6 @@ export default function DealList({ liffId }: { liffId: string }) {
   const failureText = useFailureText();
   const stageLabel = (stage: string) =>
     (t.deal.stage as Record<string, string>)[stage] ?? stage;
-  const [deals, setDeals] = useState<Deal[]>([]);
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
   const [busy, setBusy] = useState(false);
@@ -71,8 +71,8 @@ export default function DealList({ liffId }: { liffId: string }) {
     { id: string; name: string; keywords?: string }[]
   >([]);
   const [busyId, setBusyId] = useState("");
-  const [query, setQuery] = useState("");
-  // "" is every deal, "open" the work queue, otherwise one stage.
+  // "" is every deal, "open" the work queue, otherwise one stage. All
+  // three are answered by the database now (round 20N).
   const [stageFilter, setStageFilter] = useState("");
   // Why a deal was lost, asked inline (review C20): window.prompt is
   // silently a no-op inside some LINE webviews, which made "ปิดไม่สำเร็จ"
@@ -87,21 +87,24 @@ export default function DealList({ liffId }: { liffId: string }) {
   const session = useSalesSession(liffId, say);
   const { token, licenseId, permissions } = session;
 
-  const load = useCallback(async () => {
-    if (!token || !licenseId) return;
-    const response = await fetch(`/api/phase2/licenses/${licenseId}/deals`, {
-      headers: proxyHeaders(token, licenseId),
-    });
-    if (!response.ok) {
-      throw new Error(
-        response.status === 403
+  const listError = useCallback(
+    (_message: string, httpStatus?: number) =>
+      say(
+        httpStatus === 403
           ? t.dashboard.noPermission
-          : `${t.dashboard.loadFailed} (${response.status})`,
-      );
-    }
-    setDeals((await response.json()) as Deal[]);
-    say("");
-  }, [licenseId, say, t, token]);
+          : `${t.dashboard.loadFailed}${httpStatus ? ` (${httpStatus})` : ""}`,
+        "error",
+      ),
+    [say, t],
+  );
+  const list = usePagedList<Deal>({
+    token, licenseId, ready: session.ready,
+    path: `licenses/${licenseId}/deals`,
+    params: { stage: stageFilter },
+    onError: listError,
+  });
+  const deals = list.rows;
+  const load = list.reload;
 
   const loadContacts = useCallback(async () => {
     if (!token || !licenseId || !permissions.has("deal.create")) return;
@@ -139,11 +142,12 @@ export default function DealList({ liffId }: { liffId: string }) {
 
   useEffect(() => {
     if (!session.ready) return;
-    void load().catch((error: unknown) =>
-      say(error instanceof Error ? error.message : t.dashboard.loadFailed, "error"),
-    );
     void loadContacts().catch(() => undefined);
-  }, [session.ready, load, loadContacts, say, t]);
+  }, [session.ready, loadContacts]);
+
+  useEffect(() => {
+    if (session.ready && !list.busy) say("");
+  }, [session.ready, list.busy, say]);
 
   async function createDeal(values: Record<string, string>) {
     setBusy(true);
@@ -220,19 +224,9 @@ export default function DealList({ liffId }: { liffId: string }) {
   // (deal.create); everyone else still finds a deal by code or note.
   const contactName = (deal: Deal) =>
     contacts.find((contact) => contact.id === deal.contact_id)?.name ?? "";
-  const stageFiltered = deals.filter(
-    (deal) =>
-      (stageFilter === "open"
-        ? // Filtering on the two terminal stages rather than listing the open
-          // ones means a stage added later counts as open by default, which is
-          // the safer direction to be wrong in for a work queue.
-          !["won", "lost"].includes(deal.stage)
-        : !stageFilter || deal.stage === stageFilter) &&
-      matchesQuery(query, [
-        deal.deal_id, deal.notes, stageLabel(deal.stage), contactName(deal),
-        deal.amount, deal.expected_close_date,
-      ]),
-  );
+  // The stage and the search were applied by the database — "open" too,
+  // which the Data tier now understands as "neither won nor lost".
+  const stageFiltered = deals;
 
   const sorts = [
     { key: "newest", label: t.dashboard.list.newest, compare: byNewest<Deal> },
@@ -268,8 +262,8 @@ export default function DealList({ liffId }: { liffId: string }) {
       statusTone={tone}
     >
       <ListFilters
-        query={query}
-        onQuery={setQuery}
+        query={list.query}
+        onQuery={list.setQuery}
         placeholder={t.dashboard.deals.searchHint}
         status={stageFilter}
         statuses={[
@@ -289,7 +283,14 @@ export default function DealList({ liffId }: { liffId: string }) {
         onTo={controls.setTo}
       />
 
-      <Count shown={visible.length} total={deals.length} />
+      <Count shown={visible.length} total={list.total ?? deals.length} />
+      {list.hasMore && (
+        <div className="actions">
+          <button type="button" className="btn" disabled={list.busy} onClick={list.loadMore}>
+            {list.busy ? t.dashboard.opening : t.dashboard.list.loadMore}
+          </button>
+        </div>
+      )}
 
       {can("deal.create") && contacts.length > 0 && (
         <InlineCreateForm
@@ -356,11 +357,15 @@ export default function DealList({ liffId }: { liffId: string }) {
       {visible.length === 0 ? (
         <Empty
           message={
-            deals.length === 0
-              ? t.dashboard.deals.empty
-              : stageFilter === "open" && !query
-                ? t.dashboard.deals.noOpen
-                : t.dashboard.noMatch
+            list.searching
+              ? t.dashboard.opening
+              : list.query
+                ? t.dashboard.noMatch
+                : stageFilter === "open"
+                  ? t.dashboard.deals.noOpen
+                  : stageFilter
+                    ? t.dashboard.noMatch
+                    : t.dashboard.deals.empty
           }
         />
       ) : (

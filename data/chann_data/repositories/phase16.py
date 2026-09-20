@@ -27,6 +27,7 @@ from .locks import serialise
 
 from ..models import Customer, License, Product, Warranty
 from .localtime import bangkok_today
+from .search import like_any, page
 from .tenant_scope import TenantScope
 
 WARRANTY_STATUSES = frozenset({"active", "expired", "void"})
@@ -261,15 +262,44 @@ class WarrantyRepository:
             ).scalars()
         )
 
-    def list_for_license(self, scope: TenantScope, limit: int = 100) -> list[Warranty]:
-        return list(
-            self._s.execute(
-                select(Warranty)
-                .where(Warranty.license_id == scope.license_id)
-                .order_by(Warranty.created_at.desc())
-                .limit(max(1, min(limit, 500)))
-            ).scalars()
+    #: What a person types when they are looking for a registration.
+    SEARCH = (Warranty.warranty_number, Warranty.serial_number, Warranty.product_name)
+
+    def _narrow(self, query, scope: TenantScope, status: str | None, q: str | None):
+        """The one place a warranty list is narrowed — page and count alike.
+
+        Note this is the TENANT's own list. The cross-tenant serial lookup
+        below stays an exact match on purpose: a substring search there
+        would let anyone walk another company's inventory one keystroke at
+        a time, which is the whole reason that query is written the way it
+        is. Searching inside your own shop is a different question.
+        """
+        query = query.where(Warranty.license_id == scope.license_id)
+        if status:
+            query = query.where(Warranty.status == status)
+        clause = like_any(q, *self.SEARCH)
+        if clause is not None:
+            query = query.where(clause)
+        return query
+
+    def list_for_license(
+        self, scope: TenantScope, limit: int = 100, *, status: str | None = None,
+        q: str | None = None, offset: int | None = None,
+    ) -> list[Warranty]:
+        query = self._narrow(select(Warranty), scope, status, q).order_by(
+            Warranty.created_at.desc(), Warranty.id.desc(),
         )
+        return list(self._s.execute(
+            page(query, limit=max(1, min(limit, 500)), offset=offset)
+        ).scalars())
+
+    def count_for_license(
+        self, scope: TenantScope, *, status: str | None = None, q: str | None = None,
+    ) -> int:
+        """How many match, so a capped page can say what it left out."""
+        return int(self._s.execute(
+            self._narrow(select(func.count()).select_from(Warranty), scope, status, q)
+        ).scalar() or 0)
 
     # ------------------------------------------------- cross-tenant (16.4)
 
