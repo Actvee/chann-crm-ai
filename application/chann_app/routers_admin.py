@@ -233,6 +233,13 @@ async def liff_guide(
                 "key": step["key"],
                 "title": step["title"][language],
                 "body": step["body"][language],
+                # One line per thing to do (20 ก.ย. 2569); absent on the
+                # guides that still carry their bullets in `body`.
+                "how": [
+                    {"group": item["group"][language]} if "group" in item
+                    else {"text": item[language], "type": item.get("type")}
+                    for item in step.get("how") or []
+                ] or None,
                 "example": step.get("example"),
                 "image_slot": step["image"],
                 "image_url": help_image_url(step["image"], absolute=False) or None,

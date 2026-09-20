@@ -133,7 +133,7 @@ export function BulkPaste({
   // (owner, 20 ก.ย. 2569).
   return (
     <>
-      <button type="button" className="btn" onClick={() => setOpen(true)}>
+      <button type="button" className="btn" data-variant="quiet" onClick={() => setOpen(true)}>
         {copy.title}
       </button>
       <Sheet open={open} title={copy.title} onClose={() => setOpen(false)}>

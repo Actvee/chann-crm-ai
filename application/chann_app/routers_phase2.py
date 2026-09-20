@@ -944,6 +944,7 @@ async def list_deals(
     license_id: str,
     stage: str | None = None,
     q: str | None = None,
+    contact_id: str | None = None,
     limit: int = 500,
     offset: int = 0,
     response: Response = None,  # type: ignore[assignment]
@@ -953,9 +954,16 @@ async def list_deals(
     _require_same_tenant(principal, license_id)
     principal.require("deal.read")
     try:
-        rows, total = await client.list_deals_with_total(
-            license_id, stage, limit=limit, q=q, offset=offset,
-        )
+        if contact_id:
+            # One customer's deals, for the panel beside a conversation
+            # (owner, 20 ก.ย. 2569). The Data tier answers this by contact
+            # rather than by page; a customer has a handful, not thousands.
+            rows = await client.list_deals(license_id, stage, contact_id=contact_id)
+            total = len(rows)
+        else:
+            rows, total = await client.list_deals_with_total(
+                license_id, stage, limit=limit, q=q, offset=offset,
+            )
     except DataTierError as exc:
         raise _propagate(exc)
     if response is not None:
@@ -1189,6 +1197,25 @@ async def archive_customer(
     principal.require("customer.archive")
     try:
         return await client.archive_customer(license_id, customer_id, actor_id=principal.chann_uid)
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.post("/licenses/{license_id}/deals/{deal_id}/archive")
+async def archive_deal(
+    license_id: str,
+    deal_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """The platform's soft delete for a deal, behind deal.archive — the
+    same call chat makes after "ยืนยันลบ". Chat could archive a deal and
+    the dashboard could not, which the parity rule forbids; it surfaced
+    when the owner asked for several at once (20 ก.ย. 2569)."""
+    _require_same_tenant(principal, license_id)
+    principal.require("deal.archive")
+    try:
+        return await client.archive_deal(license_id, deal_id, actor_id=principal.chann_uid)
     except DataTierError as exc:
         raise _propagate(exc)
 
@@ -1986,6 +2013,7 @@ async def list_tickets(
     status: str | None = None,
     visible_to: str | None = None,
     q: str | None = None,
+    contact_id: str | None = None,
     limit: int | None = None,
     offset: int = 0,
     response: Response = None,  # type: ignore[assignment]
@@ -2002,7 +2030,7 @@ async def list_tickets(
         visible_to = await _member_of(client, license_id, principal)
     try:
         rows, total = await client.list_tickets_with_total(
-            license_id, status=status, visible_to=visible_to, q=q,
+            license_id, status=status, visible_to=visible_to, q=q, contact_id=contact_id,
             limit=max(1, min(limit, 500)) if limit else None, offset=offset,
         )
         if principal.is_customer:

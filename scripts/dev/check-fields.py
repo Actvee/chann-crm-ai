@@ -98,6 +98,9 @@ COMPOSED_FIELDS = {
     # an asset link to the Word file the version was compiled from, or null
     "source_docx_url",
     "keys",  # picker options, local only
+    # routers_admin composes the guide's `how` lines (20 ก.ย. 2569): a
+    # sub-heading {group} or a line {text, type} — no *Out schema, no table
+    "group", "text",
     # services/ticket_machine.py adds it to each row of GET tickets: the
     # cover state of the unit the fault is about, taken from the warranty
     # behind the ticket's serial. product_name/warranty_number/warranty_end

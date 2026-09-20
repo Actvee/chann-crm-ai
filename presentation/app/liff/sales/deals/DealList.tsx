@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { Badge, Count, Empty } from "../_components";
+import { BulkBar, SelectCheck, runEach, useBulkSummary, useSelection } from "../../_bulk";
+import { ConfirmDialog, useConfirm } from "../../_confirm";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { FieldRow } from "../../_field-row";
@@ -79,6 +81,14 @@ export default function DealList({ liffId }: { liffId: string }) {
   // a button that did nothing.
   const [losing, setLosing] = useState<Deal | null>(null);
   const [lostReason, setLostReason] = useState("");
+  // Several deals at once (owner, 20 ก.ย. 2569): the same stage call per
+  // row, one reason for every deal lost together, one confirmation for
+  // every deal archived together.
+  const selection = useSelection();
+  const summarise = useBulkSummary();
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [losingMany, setLosingMany] = useState<Deal[] | null>(null);
+  const { request: confirming, ask, close: closeConfirm } = useConfirm();
 
   const say = useCallback((message: string, kind?: "ok" | "error") => {
     setStatus(message);
@@ -211,6 +221,79 @@ export default function DealList({ liffId }: { liffId: string }) {
     }
   }
 
+  const chosen = () => deals.filter((row) => selection.ids.has(row.id));
+
+  /** One stage for every chosen deal that may take it. Deals the state
+   *  machine would refuse (won → won) are left out, not sent to fail. */
+  async function setStageChosen(stage: string, reason?: string) {
+    const rows = chosen().filter((row) => moves(row).includes(stage));
+    if (rows.length === 0) return;
+    setBulkBusy(true);
+    say(t.dashboard.working);
+    try {
+      const result = await runEach(rows, async (row) => {
+        const response = await fetch(`/api/phase2/licenses/${licenseId}/deals/${row.id}/stage`, {
+          method: "POST",
+          headers: proxyHeaders(token, licenseId),
+          body: JSON.stringify({
+            stage,
+            allow_reopen: stage === "new" && permissions.has("deal.reopen"),
+            lost_reason: reason?.trim() || undefined,
+          }),
+        });
+        return response.ok;
+      });
+      setLosingMany(null);
+      setLostReason("");
+      await load();
+      selection.leave();
+      say(summarise(result.ok.length, rows.length), result.failed.length ? "error" : "ok");
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  async function archiveChosen() {
+    const rows = chosen();
+    if (rows.length === 0) return;
+    const copy = t.dashboard.deals;
+    const ok = await ask({
+      action: copy.archive,
+      target: copy.archiveManyTarget.replace("{n}", String(rows.length)),
+      code: rows.slice(0, 6).map((row) => row.deal_id).join(", ") + (rows.length > 6 ? " …" : ""),
+      affects: [copy.archiveAffects],
+      reversible: copy.archiveKeeps,
+      confirmLabel: copy.archiveMany.replace("{n}", String(rows.length)),
+    });
+    if (!ok) return;
+    setBulkBusy(true);
+    say(t.dashboard.working);
+    try {
+      const result = await runEach(rows, async (row) => {
+        const response = await fetch(`/api/phase2/licenses/${licenseId}/deals/${row.id}/archive`, {
+          method: "POST",
+          headers: proxyHeaders(token, licenseId),
+        });
+        if (response.status === 403) say(copy.archiveDenied, "error");
+        return response.ok;
+      });
+      await load();
+      selection.leave();
+      say(summarise(result.ok.length, rows.length), result.failed.length ? "error" : "ok");
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  /** The stages at least one chosen deal can move to — the bar's buttons. */
+  const stagesForChosen = () => {
+    const seen: string[] = [];
+    for (const row of chosen()) {
+      for (const stage of moves(row)) if (!seen.includes(stage)) seen.push(stage);
+    }
+    return seen;
+  };
+
   function askOrSet(deal: Deal, stage: string) {
     if (stage === "lost") {
       setLosing(deal);
@@ -283,15 +366,6 @@ export default function DealList({ liffId }: { liffId: string }) {
         onTo={controls.setTo}
       />
 
-      <Count shown={visible.length} total={list.total ?? deals.length} />
-      {list.hasMore && (
-        <div className="actions">
-          <button type="button" className="btn" disabled={list.busy} onClick={list.loadMore}>
-            {list.busy ? t.dashboard.opening : t.dashboard.list.loadMore}
-          </button>
-        </div>
-      )}
-
       {can("deal.create") && contacts.length > 0 && (
         <InlineCreateForm
           title={t.dashboard.deals.add}
@@ -313,10 +387,15 @@ export default function DealList({ liffId }: { liffId: string }) {
         />
       )}
 
-      {losing && (
+      {(losing || losingMany) && (
         <section className="section" style={{ marginBottom: 16 }}>
           <div className="section-head">
-            <h2>{s.deals.lostReasonTitle} — <span className="code">{losing.deal_id}</span></h2>
+            <h2>
+              {losingMany
+                ? t.dashboard.deals.lostManyTitle.replace("{n}", String(losingMany.length))
+                : s.deals.lostReasonTitle}
+              {losing && <> — <span className="code">{losing.deal_id}</span></>}
+            </h2>
           </div>
           <dl className="fields">
             <FieldRow label={t.dashboard.deals.lostReason}>
@@ -335,8 +414,11 @@ export default function DealList({ liffId }: { liffId: string }) {
                 type="button"
                 className="btn"
                 data-variant="quiet"
-                onClick={() => setLosing(null)}
-                disabled={busyId === losing.id}
+                onClick={() => {
+                  setLosing(null);
+                  setLosingMany(null);
+                }}
+                disabled={Boolean(busyId) || bulkBusy}
               >
                 {t.common.cancel}
               </button>
@@ -344,15 +426,28 @@ export default function DealList({ liffId }: { liffId: string }) {
                 type="button"
                 className="btn"
                 data-variant="danger"
-                onClick={() => void setStage(losing, "lost", lostReason)}
-                disabled={busyId === losing.id}
+                onClick={() =>
+                  losingMany ? void setStageChosen("lost", lostReason) : losing && void setStage(losing, "lost", lostReason)
+                }
+                disabled={Boolean(busyId) || bulkBusy}
               >
-                {busyId === losing.id ? t.dashboard.saving : s.deals.confirmLost}
+                {busyId || bulkBusy ? t.dashboard.saving : s.deals.confirmLost}
               </button>
             </div>
           </dl>
         </section>
       )}
+
+      <div className="list-head">
+        <Count shown={visible.length} total={list.total ?? deals.length} />
+        <div className="list-tools">
+          {(can("deal.update") || can("deal.archive")) && visible.length > 0 && !selection.on && (
+            <button type="button" className="btn" data-variant="quiet" onClick={selection.enter}>
+              {t.dashboard.list.selectMode}
+            </button>
+          )}
+        </div>
+      </div>
 
       {visible.length === 0 ? (
         <Empty
@@ -371,7 +466,20 @@ export default function DealList({ liffId }: { liffId: string }) {
       ) : (
         <ul className="list">
           {visible.map((deal) => (
-            <li key={deal.id} className="card" data-stage={deal.stage}>
+            <li
+              key={deal.id}
+              className="card"
+              data-stage={deal.stage}
+              data-selectable={selection.on ? "true" : undefined}
+              data-selected={selection.on && selection.ids.has(deal.id) ? "true" : undefined}
+            >
+              {selection.on && (
+                <SelectCheck
+                  checked={selection.ids.has(deal.id)}
+                  onChange={() => selection.toggle(deal.id)}
+                  label={t.dashboard.list.selectRow.replace("{name}", deal.deal_id)}
+                />
+              )}
               {/* `.row-link`, like every other list — it also draws the
                   chevron that says the row opens something. */}
               <Link className="row-link" href={`/liff/sales/deals/${deal.id}`}>
@@ -424,6 +532,59 @@ export default function DealList({ liffId }: { liffId: string }) {
           ))}
         </ul>
       )}
+      {list.hasMore && (
+        <div className="actions">
+          <button type="button" className="btn" disabled={list.busy} onClick={list.loadMore}>
+            {list.busy ? t.dashboard.opening : t.dashboard.list.loadMore}
+          </button>
+        </div>
+      )}
+      {selection.on && (
+        <BulkBar
+          count={selection.count}
+          shown={visible.length}
+          onSelectAll={() => selection.select(visible.map((row) => row.id))}
+          onClear={selection.clear}
+          onDone={selection.leave}
+          busy={bulkBusy}
+        >
+          {stagesForChosen().map((stage) => (
+            <button
+              key={stage}
+              type="button"
+              className="btn"
+              data-variant={stage === "won" ? "primary" : undefined}
+              disabled={bulkBusy}
+              onClick={() => {
+                if (stage === "lost") {
+                  setLosingMany(chosen().filter((row) => moves(row).includes("lost")));
+                  setLosing(null);
+                  setLostReason("");
+                  window.scrollTo({ top: 0 });
+                } else {
+                  void setStageChosen(stage);
+                }
+              }}
+            >
+              {t.dashboard.deals.changeManyTo
+                .replace("{n}", String(chosen().filter((row) => moves(row).includes(stage)).length))
+                .replace("{stage}", stageLabel(stage))}
+            </button>
+          ))}
+          {can("deal.archive") && (
+            <button
+              type="button"
+              className="btn"
+              data-variant="danger"
+              disabled={bulkBusy || selection.count === 0}
+              onClick={() => void archiveChosen()}
+            >
+              {t.dashboard.deals.archiveMany.replace("{n}", String(selection.count))}
+            </button>
+          )}
+        </BulkBar>
+      )}
+      <ConfirmDialog request={confirming} onClose={closeConfirm} busy={bulkBusy} />
     </SalesShell>
   );
 }

@@ -5161,7 +5161,9 @@ class TestUsageHelp:
         assert "1. " in reply.text and reply.text.count("\n") <= 14
         assert any(send == "วิธีใช้ 6" for _label, send in reply.quick_replies)
         step = await handle_chat_message(client, message="วิธีใช้ 6", ctx=_ctx())
-        assert "รายชื่อลูกค้า" in step.text and "▸ พิมพ์" in step.text
+        # One line per thing to do, the words to type at its end (20 ก.ย.
+        # 2569) — the old "▸ พิมพ์:" example line is now every line.
+        assert 'พิมพ์ "รายชื่อลูกค้า"' in step.text
 
     async def test_every_phrasing_reaches_the_same_guide(self):
         for phrasing in ("ช่วยเหลือ", "ใช้ยังไง", "ทำอะไรได้บ้าง", "help", "?", "ตัวอย่างคำสั่ง"):

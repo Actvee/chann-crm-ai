@@ -61,3 +61,17 @@ export async function markNotificationRead(
   });
   if (!res.ok) throw new Error(`mark read failed: ${res.status}`);
 }
+
+/** Clears the whole badge server-side — every unread row, not the loaded page. */
+export async function markAllNotificationsRead(
+  idToken: string,
+  licenseId: string,
+): Promise<number> {
+  const res = await fetch(`${BASE}/notifications/read-all`, {
+    method: "POST",
+    headers: authHeaders(idToken, licenseId),
+  });
+  if (!res.ok) throw new Error(`mark all read failed: ${res.status}`);
+  const body = await res.json();
+  return Number(body.marked_read ?? 0);
+}

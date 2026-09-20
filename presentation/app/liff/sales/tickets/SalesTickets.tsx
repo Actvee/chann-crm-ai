@@ -99,6 +99,14 @@ export default function SalesTickets({ liffId }: { liffId: string }) {
   const tickets = list.rows;
 
   const load = list.reload;
+  // Opened from somewhere that names one job — the customer panel beside
+  // a conversation links "T-2026-0001" here (20 ก.ย. 2569). The number
+  // becomes the search, so the page opens on that job and nothing else.
+  const setQuery = list.setQuery;
+  useEffect(() => {
+    const wanted = new URLSearchParams(window.location.search).get("q");
+    if (wanted) setQuery(wanted);
+  }, [setQuery]);
 
   // Only for the ones still waiting to go out; a dispatched ticket's gate
   // result is history and not worth a request each.

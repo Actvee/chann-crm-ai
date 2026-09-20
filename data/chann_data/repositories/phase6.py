@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime, time, timedelta, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from ..models import FollowUp, LicenseMember, LineMessageEntityMap, Note, Notification
@@ -215,6 +215,32 @@ class NotificationRepository:
             row.read_at = func.now()
             self._s.flush()
         return row
+
+    def mark_all_read(self, scope: TenantScope, chann_uid: str) -> int:
+        """Clear the whole badge for one member, and say how many it cleared.
+
+        The dashboard's "อ่านทั้งหมด" used to mark the fifty rows it had
+        loaded, one call each, and the badge — which is `unread_count`,
+        taken over EVERY row — stayed lit for whatever sat beyond the
+        fifty. A person who reads everything and still sees a number does
+        not trust the number again (owner, 20 ก.ย. 2569).
+
+        Same narrowing as `unread_count`: this member, dashboard-delivered,
+        still unread. LINE-only rows are never shown so they are never
+        "read"; rows already read keep their first-seen timestamp.
+        """
+        result = self._s.execute(
+            update(Notification)
+            .where(
+                Notification.license_id == scope.license_id,
+                Notification.target_chann_uid == chann_uid,
+                Notification.delivery_dashboard.is_(True),
+                Notification.read_at.is_(None),
+            )
+            .values(read_at=func.now())
+        )
+        self._s.flush()
+        return int(result.rowcount or 0)
 
 
 class FollowUpRepository:

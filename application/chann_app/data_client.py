@@ -548,6 +548,14 @@ class DataClient:
         )
         return self._unwrap(resp)
 
+    async def mark_all_notifications_read(self, license_id: str, chann_uid: str) -> int:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}"
+            f"/members/{chann_uid}/notifications/read-all",
+            headers=self._headers,
+        )
+        return int(self._unwrap(resp)["marked_read"])
+
     async def register_warranty(
         self, license_id: str, payload: dict, actor_id: str | None = None,
     ) -> dict:
@@ -1245,7 +1253,8 @@ class DataClient:
 
     async def list_tickets_with_total(
         self, license_id: str, *, status: str | None = None, visible_to: str | None = None,
-        q: str | None = None, limit: int | None = None, offset: int | None = None,
+        q: str | None = None, contact_id: str | None = None,
+        limit: int | None = None, offset: int | None = None,
     ) -> tuple[list[dict], int]:
         """A page of jobs, and how many match.
 
@@ -1260,6 +1269,8 @@ class DataClient:
             params["visible_to"] = visible_to
         if q:
             params["q"] = q
+        if contact_id:
+            params["contact_id"] = contact_id
         if limit:
             params["limit"] = limit
         if offset:

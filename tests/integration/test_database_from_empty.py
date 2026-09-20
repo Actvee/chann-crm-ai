@@ -994,6 +994,89 @@ class TestPhase6DataLayer:
             # re-reading must not move the timestamp
             assert row.read_at == first_seen
 
+    def test_read_all_clears_the_whole_badge_not_just_the_loaded_page(self, migrated_db):
+        """The dashboard lists fifty; the badge counts everything.
+
+        "อ่านทั้งหมด" used to mark the fifty loaded rows one call each and
+        leave the badge lit for the rest (owner, 20 ก.ย. 2569). The sweep
+        must clear every unread row of THIS member, leave the other member's
+        rows and the LINE-only rows alone, and keep a first-seen timestamp
+        that was already there.
+        """
+        from sqlalchemy.orm import Session
+
+        from chann_data.repositories.phase6 import NotificationRepository
+        from chann_data.repositories.tenant_scope import TenantScope
+
+        with Session(migrated_db) as session:
+            lic, owner, member = _phase2_tenant(session)
+            lic_id = lic.id
+            owner_uid, member_uid = owner.chann_uid, member.chann_uid
+            session.commit()
+
+        # More rows than the dashboard ever loads at once.
+        with Session(migrated_db) as session:
+            scope = TenantScope(lic_id)
+            repo = NotificationRepository(session)
+            for i in range(60):
+                repo.create(
+                    scope, target_chann_uid=owner_uid, type="followup_due",
+                    message=f"ครบกำหนดติดตาม {i}",
+                )
+            already = repo.create(
+                scope, target_chann_uid=owner_uid, type="sla_warning",
+                message="อ่านไปแล้ว",
+            )
+            repo.create(
+                scope, target_chann_uid=member_uid, type="sla_warning",
+                message="ของอีกคน",
+            )
+            repo.create(
+                scope, target_chann_uid=owner_uid, type="chat_session_new",
+                message="เฉพาะ LINE", delivery_dashboard=False,
+            )
+            already_id = already.id
+            session.commit()
+
+        with Session(migrated_db) as session:
+            scope = TenantScope(lic_id)
+            repo = NotificationRepository(session)
+            repo.mark_read(scope, already_id, owner_uid)
+            session.commit()
+        with Session(migrated_db) as session:
+            scope = TenantScope(lic_id)
+            repo = NotificationRepository(session)
+            first_seen = repo.mark_read(scope, already_id, owner_uid).read_at
+            assert repo.unread_count(scope, owner_uid) == 60
+            # What the old code did: mark what the list shows, which is not everything.
+            assert len(repo.list_for_member(scope, owner_uid, unread_only=True)) == 50
+
+            marked = repo.mark_all_read(scope, owner_uid)
+            session.commit()
+            assert marked == 60
+
+        with Session(migrated_db) as session:
+            scope = TenantScope(lic_id)
+            repo = NotificationRepository(session)
+            assert repo.unread_count(scope, owner_uid) == 0
+            # Nobody else's badge moved.
+            assert repo.unread_count(scope, member_uid) == 1
+            # The row read earlier keeps the time it was first seen.
+            row = next(r for r in repo.list_for_member(scope, owner_uid) if r.id == already_id)
+            assert row.read_at == first_seen
+            # A LINE-only row is never shown, so it is never "read".
+            from chann_data.models import Notification
+            from sqlalchemy import select
+            line_only = session.execute(
+                select(Notification).where(
+                    Notification.license_id == lic_id,
+                    Notification.delivery_dashboard.is_(False),
+                )
+            ).scalar_one()
+            assert line_only.read_at is None
+            # Nothing left to clear: the sweep says so instead of pretending.
+            assert repo.mark_all_read(scope, owner_uid) == 0
+
     def test_follow_up_lifecycle_and_due_scan(self, migrated_db):
         from datetime import date, timedelta
 

@@ -286,6 +286,10 @@ class UnreadCountOut(BaseModel):
     unread_count: int
 
 
+class MarkedReadOut(BaseModel):
+    marked_read: int
+
+
 class FollowUpIn(BaseModel):
     entity_type: str
     entity_id: uuid.UUID
@@ -1267,6 +1271,10 @@ class ChatSessionOut(BaseModel):
     license_id: uuid.UUID
     customer_chann_uid: str
     customer_name: str | None = None
+    # The shop's record of this person, when they are in the contact book:
+    # the way from a conversation to the deals, jobs and notes about them.
+    customer_record_id: uuid.UUID | None = None
+    customer_code: str | None = None
     status: str
     assigned_to: uuid.UUID | None
     product_id: uuid.UUID | None

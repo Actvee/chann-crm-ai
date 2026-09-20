@@ -22030,8 +22030,10 @@ async def _resolve_deal_archive_confirm(
     """The answer to "เก็บถาวรดีล … ใช่ไหมครับ". Same vocabulary as the
     customer archive, and the permission is re-checked here because the
     confirmation can arrive after a role change."""
-    row = (pending.get("fields") or {}).get("deal") or {}
-    code = str(row.get("deal_id") or "")
+    held = pending.get("fields") or {}
+    rows = [r for r in (held.get("deals") or []) if isinstance(r, dict)] or [held.get("deal") or {}]
+    row = rows[0]
+    code = ", ".join(str(r.get("deal_id") or "") for r in rows)
     if _matches_any(message, DUPLICATE_CANCEL_PHRASES):
         await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
         return ChatReply(text=_t(DEAL_ARCHIVE_CANCELLED, language).format(code=code))
@@ -22044,6 +22046,21 @@ async def _resolve_deal_archive_confirm(
         await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
         return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
     await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
+    if len(rows) > 1:
+        done: list[str] = []
+        problems: list[str] = []
+        for each in rows:
+            try:
+                await client.archive_deal(str(license_id), str(each.get("id")), actor_id=ctx.chann_uid)
+                done.append(str(each.get("deal_id") or ""))
+            except Exception as exc:  # noqa: BLE001
+                if _is_not_found(exc):
+                    problems.append("• " + _t(QUOTE_DEAL_NOT_FOUND, language).format(deal_id=each.get("deal_id")))
+                else:
+                    log.exception("could not archive deal %s", each.get("id"))
+                    problems.append("• " + _t(BULK_ITEM_FAILED, language).format(what=each.get("deal_id")))
+        text = _t(BULK_DEALS_ARCHIVED, language).format(n=len(done), codes=", ".join(done))
+        return ChatReply(text="\n".join([text, *problems]), intent={"action": "archive", "entity": "deal"})
     try:
         await client.archive_deal(str(license_id), str(row.get("id")), actor_id=ctx.chann_uid)
     except Exception as exc:  # noqa: BLE001
@@ -24371,12 +24388,17 @@ async def _route_chat_message(
             else:
                 await _drop_pending_quietly(client, ctx)
                 _note_road(road="pending")
+                # One deal, or every deal the bulk road closed together —
+                # the same reason for all of them (20 ก.ย. 2569).
+                ids = [str(i) for i in (held.get("deal_ids") or [held.get("deal_id")]) if i]
+                codes = [str(c) for c in (held.get("deal_codes") or [held.get("deal_code")]) if c]
                 try:
-                    await client.update_deal(str(license_id), str(held.get("deal_id")), {"lost_reason": answer[:500]}, actor_id=ctx.chann_uid)
+                    for deal_id in ids:
+                        await client.update_deal(str(license_id), deal_id, {"lost_reason": answer[:500]}, actor_id=ctx.chann_uid)
                 except Exception:  # noqa: BLE001
                     log.exception("could not record the lost reason")
                     return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
-                return ChatReply(text=_t(DEAL_LOST_REASON_SAVED, language).format(deal_id=held.get("deal_code"), reason=answer[:120]))
+                return ChatReply(text=_t(DEAL_LOST_REASON_SAVED, language).format(deal_id=", ".join(codes), reason=answer[:120]))
         if early_pending is not None and early_pending.get("entity") == "ticket_reschedule":
             # "ขอเลื่อนนัด" was answered "เลื่อนไปวันไหนครับ"; the bare date
             # typed next is that answer (audit [44], 15 ก.ย. 2569).
@@ -24400,6 +24422,25 @@ async def _route_chat_message(
                 return await _route_chat_message(
                     client, message=f"{held.get('trigger') or 'มอบหมาย'} {held.get('code') or ''} ให้ {answer}",
                     ctx=ctx, language=language, ai_client=ai_client,
+                )
+            early_pending = None
+        if early_pending is not None and early_pending.get("entity") == "ai_report_clarify":
+            # The answer to the report engine's own question, given back to
+            # it WITH the question and the original request. Anything that
+            # is plainly something else — a command, a tile, a long
+            # message — drops the question instead.
+            held = early_pending.get("fields") or {}
+            answer = (message or "").strip()
+            await _drop_pending_quietly(client, ctx)
+            if answer and held.get("message") and not _is_new_command(message, ctx.oa) \
+                    and not _is_menu_tile(message, ctx.oa) and not _is_ai_report_request(message) \
+                    and len(answer) <= 200:
+                _note_road(road="pending")
+                return await _handle_ai_report(
+                    client, ctx=ctx, license_id=license_id, message=str(held.get("message")),
+                    permission_keys=permission_keys, language=language, ai_client=ai_client,
+                    with_chart=bool(held.get("with_chart")),
+                    clarified=(str(held.get("question") or ""), answer),
                 )
             early_pending = None
         if early_pending is not None and early_pending.get("entity") == "name_pick":
@@ -26729,7 +26770,13 @@ async def _model_road(
         intent = {**intent, "fields": fields}
 
     together = _items_read_together(intent)
-    if together:
+    bulk = _items_done_together(intent)
+    if bulk:
+        reply = await _execute_bulk(
+            client, items=bulk, ctx=ctx, license_id=license_id, message=message,
+            permission_keys=permission_keys, language=language,
+        )
+    elif together:
         replies = []
         for item in together:
             replies.append(await _execute_intent(
@@ -26769,6 +26816,222 @@ def _items_read_together(intent: dict) -> list[dict]:
         if str(item.get("entity") or "") not in _READ_TOGETHER_ENTITIES or verb != "create":
             return []
     return items
+
+
+#: The writes the chat will do for several records in one sentence. Each
+#: is a road the single-record handlers already own; the bulk road only
+#: resolves every target first and answers once (owner, 20 ก.ย. 2569:
+#: "อัพเดตจากลูกค้ามุ่งหวังเป็นยืนยันหลายๆคน หรือการลบลูกค้าหรือดีล
+#: ทีละหลาย record"). Same pairs as the dashboard's selection bar, by the
+#: parity rule.
+_BULK_PAIRS = frozenset({
+    ("promote", "customer"), ("archive", "customer"), ("archive", "deal"), ("update", "deal"),
+})
+#: Where the model puts several targets when it does not chain them under
+#: and_then: "ลบดีล DL-0001 DL-0002 DL-0003" came back as
+#: {"deal_codes": [...]} and "ย้ายดีล … ไปชนะ" as {"deal_codes": [...],
+#: "status": "won"} (measured on DEV's model, 20 ก.ย. 2569).
+_BULK_LIST_KEYS = {
+    "deal": ("deal_codes", "codes", "deal_ids"),
+    "customer": ("target_names", "names", "customer_codes", "codes", "customers"),
+}
+_BULK_SINGULAR = {"deal": "deal_code", "customer": "target_name"}
+
+
+def _canonical_verb(item: dict) -> str:
+    raw = str(item.get("action") or "").strip().lower()
+    return ACTION_ALIASES.get(raw, raw)
+
+
+def _items_done_together(intent: dict) -> list[dict]:
+    """Several records, one verb: the singular intents to carry out.
+
+    Two shapes reach here. Names come as an and_then chain, one reading
+    per person, all the same verb ("เปลี่ยน สมชาย สมหญิง สมศรี เป็น
+    ลูกค้ายืนยัน" → three promote/customer). Codes come as a list under
+    one key on a single reading. Both become a list of singular intents
+    so the per-record handlers stay the only place a record is written.
+    Empty for one record, for a chain that mixes verbs, and for any pair
+    the bulk road does not carry — those go their usual way."""
+    head = {k: v for k, v in intent.items() if k != "and_then"}
+    verb, entity = _canonical_verb(head), str(head.get("entity") or "")
+    if (verb, entity) not in _BULK_PAIRS:
+        return []
+    more = [m for m in (intent.get("and_then") or []) if isinstance(m, dict)]
+    if more:
+        items = [head, *more]
+        if any((_canonical_verb(item), str(item.get("entity") or "")) != (verb, entity) for item in items):
+            return []
+        return [{**item, "action": verb} for item in items]
+    fields = dict(head.get("fields") or {})
+    for key in _BULK_LIST_KEYS[entity]:
+        values = fields.get(key)
+        if not isinstance(values, list):
+            continue
+        targets = [str(v).strip() for v in values if str(v or "").strip()]
+        if len(targets) < 2:
+            continue
+        rest = {k: v for k, v in fields.items() if k not in _BULK_LIST_KEYS[entity]}
+        return [
+            {**head, "action": verb, "fields": {**rest, _BULK_SINGULAR[entity]: target}, "missing": []}
+            for target in targets
+        ]
+    return []
+
+
+def _first_line(text: str) -> str:
+    return (text or "").strip().split("\n", 1)[0]
+
+
+async def _execute_bulk(
+    client: DataClient, *, items: list[dict], ctx: ResolvedContext, license_id, message: str,
+    permission_keys: list[str], language: str,
+) -> ChatReply:
+    """Carry out one verb over several records and answer once.
+
+    Reads stay per record: a name that matches nobody, or several people,
+    is reported on its own line — never guessed (rule 3) — and the rest
+    go ahead. A destructive verb asks ONCE for the whole set, through the
+    same confirmation the single archive uses, so "ยืนยันลบ" means the
+    same thing whether it is one record or ten."""
+    verb, entity = _canonical_verb(items[0]), str(items[0].get("entity") or "")
+    needed = required_permission(verb, entity)
+    if needed is not None and (needed not in set(permission_keys) or not _oa_allows(ctx.oa, needed)):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language), quick_reply_url=_guide_button(ctx.oa, language))
+    license_id = str(license_id)
+    _note_road(road="bulk", verb=verb, entity=entity, n=len(items))
+
+    if entity == "customer":
+        names = []
+        for item in items:
+            fields = item.get("fields") or {}
+            name = str(fields.get("target_name") or fields.get("code") or "").strip()
+            if name:
+                names.append(name)
+        rows: list[dict] = []
+        problems: list[str] = []
+        for name in names:
+            # ctx is deliberately not passed: an ambiguous name must not
+            # park a picker that the next name's lookup would overwrite.
+            row, err = await _find_one_customer_by_name(client, license_id, name, language)
+            if err is not None:
+                problems.append(f"• {name}: {_first_line(err.text)}")
+            elif all(str(r.get("id")) != str(row.get("id")) for r in rows):
+                rows.append(row)
+        if verb == "promote":
+            done: list[str] = []
+            for row in rows:
+                try:
+                    reply = await _apply_customer_action(
+                        client, chosen_row=row, action="promote", fields={},
+                        ctx=ctx, license_id=license_id, language=language,
+                    )
+                    done.append("• " + _first_line(reply.text))
+                except Exception:  # noqa: BLE001
+                    log.exception("bulk promote failed for %s", row.get("id"))
+                    problems.append("• " + _t(BULK_ITEM_FAILED, language).format(what=_display_name(row)))
+            head = _t(BULK_PROMOTED_HEAD, language).format(done=len(done), total=len(names))
+            return ChatReply(
+                text="\n".join([head, *done, *problems]),
+                intent={"action": "promote", "entity": "customer"},
+            )
+        if not rows:
+            return ChatReply(text="\n".join(problems) or _t(ARCHIVE_NEEDS_NAME, language))
+        await client.set_pending_intent(
+            ctx.chann_uid, ctx.oa, action="resolve", entity="customer_archive_confirm",
+            fields={"customers": rows}, missing=[], ttl_seconds=DUPLICATE_TTL_S,
+        )
+        listed = ", ".join(f"{_display_name(r)} ({_customer_code(r)})" for r in rows)
+        text = _t(BULK_ARCHIVE_CONFIRM, language).format(n=len(rows), names=listed)
+        if problems:
+            text += "\n" + "\n".join(problems)
+        return ChatReply(text=text, quick_replies=[("ยืนยันลบ", "ยืนยันลบ"), ("ยกเลิก", "ยกเลิก")])
+
+    # ---- deals
+    codes: list[str] = []
+    for item in items:
+        fields = item.get("fields") or {}
+        code = str(fields.get("deal_code") or fields.get("code") or fields.get("deal_id") or "").strip().upper()
+        if code and code not in codes:
+            codes.append(code)
+    if verb == "archive":
+        deals: list[dict] = []
+        problems = []
+        for code in codes:
+            deal = await _resolve_entity(client, license_id, "deal", code)
+            if deal is None:
+                problems.append("• " + _t(QUOTE_DEAL_NOT_FOUND, language).format(deal_id=code))
+            else:
+                deals.append({"id": str(deal["id"]), "deal_id": str(deal.get("deal_id") or code)})
+        if not deals:
+            return ChatReply(text="\n".join(problems) or _t(DEAL_ARCHIVE_NEEDS_CODE, language))
+        await client.set_pending_intent(
+            ctx.chann_uid, ctx.oa, action="resolve", entity="deal_archive_confirm",
+            fields={"deals": deals}, missing=[], ttl_seconds=DUPLICATE_TTL_S,
+        )
+        text = _t(BULK_DEAL_ARCHIVE_CONFIRM, language).format(
+            n=len(deals), codes=", ".join(d["deal_id"] for d in deals),
+        )
+        if problems:
+            text += "\n" + "\n".join(problems)
+        return ChatReply(text=text, quick_replies=[("ยืนยันลบ", "ยืนยันลบ"), ("ยกเลิก", "ยกเลิก")])
+
+    # update: the stage, for each. Amounts and dates stay one deal at a time.
+    fields = items[0].get("fields") or {}
+    stage = str(fields.get("stage") or fields.get("status") or "").strip().lower()
+    stage = _DEAL_STAGE_SYNONYMS.get(stage, stage)
+    if not stage:
+        return ChatReply(text=_t(BULK_ONE_AT_A_TIME, language))
+    lines: list[str] = []
+    closed: list[tuple[str, str]] = []
+    for code in codes:
+        reply = await _handle_deal_stage_command(
+            client, license_id=license_id, deal_code=code, target_stage=stage,
+            permission_keys=permission_keys, language=language, actor_id=ctx.chann_uid,
+            message=message, ctx=None,
+        )
+        lines.append("• " + _first_line(reply.text))
+        if reply.entity_id:
+            closed.append((str(reply.entity_id), code))
+    text = _t(BULK_STAGE_HEAD, language).format(done=len(closed), total=len(codes)) + "\n" + "\n".join(lines)
+    quick: list[tuple[str, str]] = []
+    said_why = re.search(r"(?:เพราะ|เนื่องจาก|เหตุผล[:：]?|because|reason[:：]?)\s*\S", message or "")
+    if stage == "lost" and closed and not said_why:
+        # One reason for the lot, asked once — the same question the
+        # single road asks, holding every deal it just closed.
+        try:
+            await client.set_pending_intent(
+                ctx.chann_uid, ctx.oa, action="resolve", entity="deal_lost_reason",
+                fields={
+                    "deal_id": closed[0][0], "deal_code": closed[0][1],
+                    "deal_ids": [c[0] for c in closed], "deal_codes": [c[1] for c in closed],
+                },
+                missing=["lost_reason"], ttl_seconds=DEAL_CONTEXT_TTL_S,
+            )
+            text += "\n" + _t(DEAL_LOST_ASK_REASON, language)
+            quick.append(("ข้าม", "ข้าม"))
+        except Exception:  # noqa: BLE001
+            log.exception("could not hold the lost-reason question")
+    return ChatReply(text=text, intent={"action": "update", "entity": "deal"}, quick_replies=quick)
+
+
+BULK_PROMOTED_HEAD = {"th": "ยืนยันเป็นลูกค้าแล้ว {done}/{total} คน", "en": "Promoted {done} of {total}"}
+BULK_ARCHIVE_CONFIRM = {
+    "th": "จะลบออกจากรายชื่อ {n} คน: {names}\nข้อมูลเก็บถาวร ไม่แสดงอีก ประวัติงาน/ดีลยังอยู่ — ยืนยันไหมครับ",
+    "en": "Remove {n} from the list: {names}\nArchived, not erased; their jobs and deals stay. Confirm?",
+}
+BULK_ARCHIVED_DONE = {"th": "ลบออกจากรายชื่อแล้ว {n} คน: {names} (เก็บถาวร)", "en": "Removed {n} from the list: {names} (archived)."}
+BULK_DEAL_ARCHIVE_CONFIRM = {
+    "th": "จะเก็บถาวรดีล {n} รายการ: {codes} — ยืนยันไหมครับ",
+    "en": "Archive {n} deals: {codes} — confirm?",
+}
+BULK_DEALS_ARCHIVED = {"th": "เก็บถาวรดีลแล้ว {n} รายการ: {codes}", "en": "Archived {n} deals: {codes}."}
+BULK_STAGE_HEAD = {"th": "เปลี่ยนสถานะดีลแล้ว {done}/{total} รายการ", "en": "Changed {done} of {total} deals"}
+BULK_ONE_AT_A_TIME = {
+    "th": "แก้รายละเอียดดีลทำได้ทีละดีลครับ (หลายดีลพร้อมกันได้เฉพาะเปลี่ยนสถานะกับลบ)",
+    "en": "Deal details are edited one deal at a time (several at once works for the stage and for archiving).",
+}
+BULK_ITEM_FAILED = {"th": "{what}: ทำไม่สำเร็จ", "en": "{what}: failed"}
 
 
 def _items_left_for_later(intent: dict, language: str) -> str:
@@ -27678,6 +27941,7 @@ def _is_ai_report_request(message: str) -> bool:
 async def _handle_ai_report(
     client: DataClient, *, ctx: ResolvedContext, license_id, message: str,
     permission_keys: list[str], language: str, ai_client=None, with_chart: bool = False,
+    clarified: tuple[str, str] | None = None,
 ) -> ChatReply:
     from . import reports_ai
 
@@ -27696,7 +27960,7 @@ async def _handle_ai_report(
     # An explicit "สร้างรายงานด้วย AI: …" is stripped to what was actually
     # asked for, and noted in the log so an AI-drawn chart can be told from
     # a ready-made one without reading code (owner, 17 ก.ย. 2569).
-    asked_outright = ai_report_asked_outright(message)
+    asked_outright = ai_report_asked_outright(message) if clarified is None else None
     if asked_outright:
         log.info("chat.ai_report explicit=1 oa=%s chars=%d", ctx.oa, len(asked_outright))
         message = asked_outright
@@ -27706,7 +27970,7 @@ async def _handle_ai_report(
         out = await reports_ai.handle_report_request(
             client, license_id=str(license_id), message=message, language=language,
             actor_id=ctx.chann_uid, ai_client=ai_client, company_name=company,
-            with_chart=with_chart,
+            with_chart=with_chart, clarified=clarified,
         )
     except reports_ai.ReportSpecInvalid as exc:
         return ChatReply(text=_t(reports_ai.INVALID, language).format(reason=str(exc)))
@@ -27716,7 +27980,21 @@ async def _handle_ai_report(
         log.exception("ai report failed for %s", ctx.chann_uid)
         return ChatReply(text=_t(AI_REPORT_UNAVAILABLE, language))
     if out.get("clarify"):
-        return ChatReply(text=out["clarify"])
+        # A question with a memory. It used to be returned bare, so the
+        # answer typed next — "แยกตามเจ้าของ" to "เทียบตามเจ้าของ หรือ
+        # แยกตามช่วงเวลา?" — arrived as a sentence of its own, was read as
+        # a deal listing, and the report never happened (owner, 20 ก.ย.
+        # 2569). The request, the question and whether a picture was asked
+        # for are held; the early pending road hands the answer back here.
+        try:
+            await client.set_pending_intent(
+                ctx.chann_uid, ctx.oa, action="report", entity="ai_report_clarify",
+                fields={"message": message, "question": str(out["clarify"]), "with_chart": bool(with_chart)},
+                missing=[], ttl_seconds=PENDING_INTENT_TTL_S,
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("could not hold the report question")
+        return ChatReply(text=out["clarify"], intent={"action": "report", "entity": "clarify"})
     # The picture is the metered part (owner's rule, 17 ก.ย. 2569), so the
     # count moves when a picture exists — not before one is attempted.
     # Spending up front charged a shop for reports that came back as a
@@ -28225,8 +28503,11 @@ async def _resolve_archive_confirm(
     client: DataClient, *, ctx: ResolvedContext, license_id, message: str, pending: dict,
     permission_keys: list[str], language: str,
 ) -> ChatReply:
-    row = (pending.get("fields") or {}).get("customer") or {}
-    name = _display_name(row)
+    held = pending.get("fields") or {}
+    # One person, or the several the bulk road held (20 ก.ย. 2569).
+    rows = [r for r in (held.get("customers") or []) if isinstance(r, dict)] or [held.get("customer") or {}]
+    row = rows[0]
+    name = ", ".join(_display_name(r) for r in rows)
     if _matches_any(message, DUPLICATE_CANCEL_PHRASES):
         await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
         return ChatReply(text=_t(ARCHIVE_CANCELLED, language).format(name=name))
@@ -28239,6 +28520,23 @@ async def _resolve_archive_confirm(
         await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
         return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
     await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
+    if len(rows) > 1:
+        done: list[dict] = []
+        problems: list[str] = []
+        for each in rows:
+            try:
+                await client.archive_customer(str(license_id), each["id"], actor_id=ctx.chann_uid)
+                done.append(each)
+            except Exception as exc:  # noqa: BLE001
+                if _is_not_found(exc):
+                    problems.append("• " + _t(CUSTOMER_NOT_FOUND, language).format(name=_display_name(each)))
+                else:
+                    log.exception("could not archive customer %s", each.get("id"))
+                    problems.append("• " + _t(BULK_ITEM_FAILED, language).format(what=_display_name(each)))
+        text = _t(BULK_ARCHIVED_DONE, language).format(
+            n=len(done), names=", ".join(f"{_display_name(r)} ({_customer_code(r)})" for r in done),
+        )
+        return ChatReply(text="\n".join([text, *problems]), intent={"action": "archive", "entity": "customer"})
     try:
         await client.archive_customer(str(license_id), row["id"], actor_id=ctx.chann_uid)
     except Exception as exc:  # noqa: BLE001

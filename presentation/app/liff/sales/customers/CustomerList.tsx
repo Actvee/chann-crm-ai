@@ -7,6 +7,7 @@ import { BulkPaste } from "../_bulk-paste";
 import { CsvImport } from "../_csv-import";
 import { Badge, Count, Empty } from "../_components";
 import { ConfirmDialog, useConfirm } from "../../_confirm";
+import { BulkBar, SelectCheck, runEach, useBulkSummary, useSelection } from "../../_bulk";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { ListFilters } from "../../_filters";
@@ -52,6 +53,11 @@ export default function CustomerList({ liffId }: { liffId: string }) {
   const { request: confirming, ask, close: closeConfirm } = useConfirm();
   const [busyId, setBusyId] = useState("");
   const [stage, setStage] = useState("");
+  // Several rows at once (owner, 20 ก.ย. 2569). The rows chosen are
+  // ids, so a reload that reorders the list cannot move the choice.
+  const selection = useSelection();
+  const summarise = useBulkSummary();
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   const say = useCallback((message: string, kind?: "ok" | "error") => {
     setStatus(message);
@@ -186,6 +192,68 @@ export default function CustomerList({ liffId }: { liffId: string }) {
     }
   }
 
+  /** The rows chosen, in list order — what every bulk verb starts from. */
+  const chosen = () => customers.filter((row) => selection.ids.has(row.id));
+
+  async function promoteChosen() {
+    // Only a lead can be confirmed; a contact among the chosen rows is
+    // skipped rather than sent to a route that would refuse it.
+    const leads = chosen().filter((row) => row.stage === "lead");
+    if (leads.length === 0) {
+      say(t.dashboard.customers.promoteManyOnlyLeads, "error");
+      return;
+    }
+    setBulkBusy(true);
+    say(t.dashboard.working);
+    try {
+      const result = await runEach(leads, async (row) => {
+        const response = await fetch(
+          `/api/phase2/licenses/${licenseId}/customers/${row.id}/promote`,
+          { method: "POST", headers: proxyHeaders(token, licenseId) },
+        );
+        return response.ok;
+      });
+      await load();
+      selection.leave();
+      say(summarise(result.ok.length, leads.length), result.failed.length ? "error" : "ok");
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  async function archiveChosen() {
+    const rows = chosen();
+    if (rows.length === 0) return;
+    const copy = t.dashboard.customers;
+    // The same dialog as one row: the verb, WHO by name, what survives.
+    // The names are listed so "3 คน" cannot hide the wrong person.
+    const ok = await ask({
+      action: copy.archiveAction,
+      target: copy.archiveManyTarget.replace("{n}", String(rows.length)),
+      code: rows.slice(0, 6).map((row) => fullName(row)).join(", ") + (rows.length > 6 ? " …" : ""),
+      affects: [copy.archiveAlsoDeals, copy.archiveAlsoHistory],
+      reversible: copy.archiveKeeps,
+      confirmLabel: copy.archiveMany.replace("{n}", String(rows.length)),
+    });
+    if (!ok) return;
+    setBulkBusy(true);
+    say(t.dashboard.working);
+    try {
+      const result = await runEach(rows, async (row) => {
+        const response = await fetch(
+          `/api/phase2/licenses/${licenseId}/customers/${row.id}/archive`,
+          { method: "POST", headers: proxyHeaders(token, licenseId) },
+        );
+        return response.ok;
+      });
+      await load();
+      selection.leave();
+      say(summarise(result.ok.length, rows.length), result.failed.length ? "error" : "ok");
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
   // The rows ARE the answer: the stage and the search term were applied by
   // the database, so there is nothing left to filter here.
   const searched = customers;
@@ -259,31 +327,6 @@ export default function CustomerList({ liffId }: { liffId: string }) {
         onTo={controls.setTo}
       />
 
-      <Count shown={visible.length} total={customers.length} />
-      {totalHeld !== null && totalHeld > customers.length && (
-        <p className="hint">
-          {t.dashboard.showingOf
-            .replace("{shown}", String(customers.length))
-            .replace("{total}", String(totalHeld))}
-        </p>
-      )}
-      {list.hasMore && (
-        <div className="actions">
-          <button type="button" className="btn" disabled={list.busy} onClick={list.loadMore}>
-            {list.busy ? t.dashboard.opening : t.dashboard.list.loadMore}
-          </button>
-        </div>
-      )}
-
-      {/* One row, two doors. Both used to be open sections on the page
-          (owner, 20 ก.ย. 2569). */}
-      {can("customer.create") && (
-        <div className="actions">
-          <BulkPaste token={token} licenseId={licenseId} onDone={() => void load()} />
-          <CsvImport kind="customers" token={token} licenseId={licenseId} onDone={() => void load()} />
-        </div>
-      )}
-
       {can("customer.create") && (
         <InlineCreateForm
           title={t.dashboard.customers.add}
@@ -301,6 +344,27 @@ export default function CustomerList({ liffId }: { liffId: string }) {
         />
       )}
 
+      {/* The line that introduces the list: how many, and the tools that
+          act on the list as a whole. The import and paste doors were a
+          row of their own between the count and the create form, which
+          read as neither (owner, 20 ก.ย. 2569: "ตำแหน่งปุ่มยังไม่เหมาะ"). */}
+      <div className="list-head">
+        <Count shown={visible.length} total={totalHeld ?? customers.length} />
+        <div className="list-tools">
+          {(can("customer.update") || can("customer.archive")) && visible.length > 0 && !selection.on && (
+            <button type="button" className="btn" data-variant="quiet" onClick={selection.enter}>
+              {t.dashboard.list.selectMode}
+            </button>
+          )}
+          {can("customer.create") && (
+            <>
+              <BulkPaste token={token} licenseId={licenseId} onDone={() => void load()} />
+              <CsvImport kind="customers" token={token} licenseId={licenseId} onDone={() => void load()} />
+            </>
+          )}
+        </div>
+      </div>
+
       {visible.length === 0 ? (
         <Empty
           message={
@@ -314,7 +378,20 @@ export default function CustomerList({ liffId }: { liffId: string }) {
       ) : (
         <ul className="list">
           {visible.map((customer) => (
-            <li key={customer.id} className="card" data-stage={customer.stage}>
+            <li
+              key={customer.id}
+              className="card"
+              data-stage={customer.stage}
+              data-selectable={selection.on ? "true" : undefined}
+              data-selected={selection.on && selection.ids.has(customer.id) ? "true" : undefined}
+            >
+              {selection.on && (
+                <SelectCheck
+                  checked={selection.ids.has(customer.id)}
+                  onChange={() => selection.toggle(customer.id)}
+                  label={t.dashboard.list.selectRow.replace("{name}", fullName(customer))}
+                />
+              )}
               {/* The whole row opens the detail view — a list you cannot
                   drill into is a report, not a tool. `.row-link` rather
                   than a hand-written `textDecoration: none`: three lists
@@ -376,7 +453,47 @@ export default function CustomerList({ liffId }: { liffId: string }) {
           ))}
         </ul>
       )}
-      <ConfirmDialog request={confirming} onClose={closeConfirm} busy={Boolean(busyId)} />
+      {list.hasMore && (
+        <div className="actions">
+          <button type="button" className="btn" disabled={list.busy} onClick={list.loadMore}>
+            {list.busy ? t.dashboard.opening : t.dashboard.list.loadMore}
+          </button>
+        </div>
+      )}
+      {selection.on && (
+        <BulkBar
+          count={selection.count}
+          shown={visible.length}
+          onSelectAll={() => selection.select(visible.map((row) => row.id))}
+          onClear={selection.clear}
+          onDone={selection.leave}
+          busy={bulkBusy}
+        >
+          {can("customer.update") && (
+            <button
+              type="button"
+              className="btn"
+              data-variant="primary"
+              disabled={bulkBusy || selection.count === 0}
+              onClick={() => void promoteChosen()}
+            >
+              {t.dashboard.customers.promoteMany.replace("{n}", String(selection.count))}
+            </button>
+          )}
+          {can("customer.archive") && (
+            <button
+              type="button"
+              className="btn"
+              data-variant="danger"
+              disabled={bulkBusy || selection.count === 0}
+              onClick={() => void archiveChosen()}
+            >
+              {t.dashboard.customers.archiveMany.replace("{n}", String(selection.count))}
+            </button>
+          )}
+        </BulkBar>
+      )}
+      <ConfirmDialog request={confirming} onClose={closeConfirm} busy={Boolean(busyId) || bulkBusy} />
     </SalesShell>
   );
 }

@@ -224,7 +224,7 @@ class ServiceTicketRepository:
     )
 
     def _narrow(self, query, scope: TenantScope, *, status: str | None, q: str | None,
-                member_id: uuid.UUID | None):
+                member_id: uuid.UUID | None, contact_id: uuid.UUID | None = None):
         """The one place a ticket list is narrowed — page and count alike.
 
         `member_id` carries the 12.1 visibility predicate. It has to be in
@@ -236,6 +236,10 @@ class ServiceTicketRepository:
         query = query.where(ServiceTicket.license_id == scope.license_id)
         if member_id is not None:
             query = query.where(self._visible_to_member(scope, member_id))
+        if contact_id is not None:
+            # One customer's jobs — what the chat page opens beside a
+            # conversation (owner, 20 ก.ย. 2569).
+            query = query.where(ServiceTicket.contact_id == contact_id)
         if status:
             # One status, or several comma-separated. The queue screen used
             # to ask for each open status in its own request and merge the
@@ -253,10 +257,10 @@ class ServiceTicketRepository:
 
     def list_for_license(
         self, scope: TenantScope, *, status: str | None = None, q: str | None = None,
-        limit: int = 100, offset: int | None = None,
+        contact_id: uuid.UUID | None = None, limit: int = 100, offset: int | None = None,
     ) -> list[ServiceTicket]:
         query = self._narrow(
-            select(ServiceTicket), scope, status=status, q=q, member_id=None,
+            select(ServiceTicket), scope, status=status, q=q, member_id=None, contact_id=contact_id,
         ).order_by(ServiceTicket.created_at.desc(), ServiceTicket.id.desc())
         return list(self._s.execute(
             page(query, limit=max(1, min(limit, 500)), offset=offset)
@@ -264,18 +268,19 @@ class ServiceTicketRepository:
 
     def count_for_license(
         self, scope: TenantScope, *, status: str | None = None, q: str | None = None,
-        member_id: uuid.UUID | None = None,
+        member_id: uuid.UUID | None = None, contact_id: uuid.UUID | None = None,
     ) -> int:
         """How many match — counted through the SAME visibility predicate."""
         query = self._narrow(
             select(func.count()).select_from(ServiceTicket),
-            scope, status=status, q=q, member_id=member_id,
+            scope, status=status, q=q, member_id=member_id, contact_id=contact_id,
         )
         return int(self._s.execute(query).scalar() or 0)
 
     def list_visible_to(
         self, scope: TenantScope, *, member_id: uuid.UUID, status: str | None = None,
-        q: str | None = None, limit: int = 100, offset: int | None = None,
+        q: str | None = None, contact_id: uuid.UUID | None = None,
+        limit: int = 100, offset: int | None = None,
     ) -> list[ServiceTicket]:
         """What one technician may see (12.1 visibility).
 
@@ -286,7 +291,7 @@ class ServiceTicketRepository:
         job.
         """
         query = self._narrow(
-            select(ServiceTicket), scope, status=status, q=q, member_id=member_id,
+            select(ServiceTicket), scope, status=status, q=q, member_id=member_id, contact_id=contact_id,
         ).order_by(ServiceTicket.created_at.desc(), ServiceTicket.id.desc())
         return list(self._s.execute(
             page(query, limit=max(1, min(limit, 500)), offset=offset)

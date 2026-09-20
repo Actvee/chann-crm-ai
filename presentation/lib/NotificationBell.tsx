@@ -8,6 +8,7 @@ import { useLanguage } from "@/lib/i18n/LanguageProvider";
 import {
   fetchNotifications,
   fetchUnreadCount,
+  markAllNotificationsRead,
   markNotificationRead,
   type Notification,
 } from "@/lib/notifications";
@@ -224,20 +225,20 @@ export function NotificationBell({ idToken, licenseId }: Props) {
   );
 
   const readAll = useCallback(async () => {
-    const ids = items.filter((n) => !n.read_at).map((n) => n.id);
-    if (ids.length === 0) return;
+    // Not "the unread rows on screen": the badge is counted server-side
+    // over EVERY row, and the list shows fifty. Marking the fifty one call
+    // each left the badge lit for whatever sat beyond them, and a person
+    // who has read everything and still sees a number stops trusting the
+    // number (owner, 20 ก.ย. 2569). One call clears the whole badge.
     const now = new Date().toISOString();
     setItems((prev) => prev.map((n) => (n.read_at ? n : { ...n, read_at: now })));
     setCount(0);
     try {
-      // The list is capped at 50, so this is a handful of calls rather than
-      // a sweep. There is no bulk route yet; adding one for this is a Data
-      // tier change this round does not need.
-      await Promise.all(ids.map((id) => markNotificationRead(idToken, licenseId, id)));
+      await markAllNotificationsRead(idToken, licenseId);
     } finally {
       void refreshCount();
     }
-  }, [items, idToken, licenseId, refreshCount]);
+  }, [idToken, licenseId, refreshCount]);
 
   const unread = items.filter((n) => !n.read_at);
   const shown = count > COUNT_CAP ? `${COUNT_CAP}+` : String(count);
@@ -343,7 +344,10 @@ export function NotificationBell({ idToken, licenseId }: Props) {
         >
           <div className="notif-head">
             <h2>{copy.title}</h2>
-            {unread.length > 0 && (
+            {(count > 0 || unread.length > 0) && (
+              // Offered while the BADGE says something is unread, not only
+              // while an unread row is on screen: the rows beyond the loaded
+              // fifty are exactly the ones this button exists to clear.
               <button type="button" className="notif-readall" onClick={() => void readAll()}>
                 {copy.markAllRead}
               </button>

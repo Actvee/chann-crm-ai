@@ -8,11 +8,15 @@ import { proxyHeaders } from "../_lib";
 import { useSalesSession } from "../_session";
 import { SalesShell } from "../_shell";
 import { ConfirmDialog, useConfirm } from "../../_confirm";
+import { CustomerContext } from "./_customer-context";
 
 type ChatSession = {
   id: string;
   customer_chann_uid: string;
   customer_name?: string | null;
+  /** The shop's record of this person, when they are in the contact book. */
+  customer_record_id?: string | null;
+  customer_code?: string | null;
   status: string;
   assigned_to?: string | null;
   sla_deadline?: string | null;
@@ -442,10 +446,20 @@ export default function SalesChats({ liffId }: { liffId: string }) {
         <div className="chat-thread-title">
           <strong>{nameOf(selected)}</strong>
           <span className="card-meta">
+            {selected.customer_code ? `${selected.customer_code} · ` : ""}
             {statusLabel(selected.status)}
             {slaChip(selected) ? ` · ${slaChip(selected)?.text}` : ""}
           </span>
         </div>
+        {/* Who this is, in the shop's own terms: their deals, jobs and
+            notes, each a link to the record (owner, 20 ก.ย. 2569). */}
+        <CustomerContext
+          token={session.token}
+          licenseId={session.licenseId}
+          permissions={session.permissions}
+          name={nameOf(selected)}
+          recordId={selected.customer_record_id ?? null}
+        />
         {isLive(selected) && canReply && (
           <button type="button" className="btn" data-variant="quiet" disabled={busy} onClick={() => void close()}>
             {copy.close}

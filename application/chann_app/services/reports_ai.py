@@ -264,7 +264,10 @@ def build_system_prompt() -> str:
         "เดือนนี้ = this_month; 3 เดือน = last_3_months; ปีนี้ = this_year; แยกตาม = group_by.\n\n"
         "Reply with JSON only, no prose:\n"
         '{"entity": "...", "metric": "count", "field": null, "filter": {}, "group_by": null, "date_range": null, "date_field": null}\n'
-        'If the request is not a report about these entities, or is too vague to pick an entity, reply {"clarify": "<one short question in the user\'s language>"}.'
+        'If the request is not a report about these entities, or is too vague to pick an entity, reply {"clarify": "<one short question in the user\'s language>"}.\n'
+        "A request that compares TWO of these entities (customers against deals, tickets against warranties) cannot be one spec: "
+        "ask which one to report first, naming both as concrete options in the question. "
+        "When the message carries an earlier question of yours and the user's answer to it, treat the answer as part of the request and reply with the spec, not another question."
     )
 
 
@@ -287,11 +290,22 @@ def extract_json(raw: str) -> dict:
     return data
 
 
-async def generate_query_spec(message: str, *, language: str = "th", client=None) -> dict:
+async def generate_query_spec(
+    message: str, *, language: str = "th", client=None, clarified: tuple[str, str] | None = None,
+) -> dict:
     """The model's JSON, parsed but NOT yet validated — the caller decides
-    between a spec, a clarifying question, and a refusal."""
+    between a spec, a clarifying question, and a refusal.
+
+    `clarified` is (the question the model asked last turn, the person's
+    answer). Both go back with the original request, because the answer
+    on its own is not a request: "แยกตามเจ้าของ" typed after "เทียบตาม
+    เจ้าของ หรือ แยกตามช่วงเวลา?" was read as a fresh sentence and answered
+    with a list of deals (owner, 20 ก.ย. 2569)."""
     prompt = build_system_prompt()
     user = f"Language: {language}\nRequest: {message.strip()}"
+    if clarified is not None:
+        question, answer = clarified
+        user += f"\nYou asked: {str(question).strip()}\nThe user answered: {str(answer).strip()}"
     try:
         raw = await complete(system_prompt=prompt, user_message=user, thinking=True, max_tokens=600, client=client)
     except AINotConfigured:
@@ -567,7 +581,7 @@ async def run_spec(client: DataClient, *, license_id: str, spec: dict, actor_id:
 async def handle_report_request(
     client: DataClient, *, license_id: str, message: str, language: str = "th",
     actor_id: str | None = None, ai_client=None, company_name: str = "", with_files: bool = True,
-    with_chart: bool = False,
+    with_chart: bool = False, clarified: tuple[str, str] | None = None,
 ) -> dict:
     """The whole path for one request. Returns one of:
     {"clarify": question} · {"spec", "result", "text", "files", "chart",
@@ -577,7 +591,7 @@ async def handle_report_request(
     `with_chart` is the same result in its picture form — asked for only
     when the person said "กราฟ", because drawing and storing one costs a
     round trip that a plain report should not pay for."""
-    data = await generate_query_spec(message, language=language, client=ai_client)
+    data = await generate_query_spec(message, language=language, client=ai_client, clarified=clarified)
     if data.get("clarify"):
         return {"clarify": str(data["clarify"])[:300]}
     spec = validate_query_spec(data)

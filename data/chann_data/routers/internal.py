@@ -243,6 +243,7 @@ from ..schemas import (
     MessageEntityMapOut,
     NotificationIn,
     NotificationOut,
+    MarkedReadOut,
     UnreadCountOut,
     AuthorizationContextOut,
     BreakGlassTransferIn,
@@ -1437,6 +1438,28 @@ def notification_unread_count(
     return UnreadCountOut(
         unread_count=NotificationRepository(session).unread_count(scope, chann_uid)
     )
+
+
+@router.post(
+    "/licenses/{license_id}/members/{chann_uid}/notifications/read-all",
+    response_model=MarkedReadOut,
+)
+def mark_all_notifications_read(
+    license_id: uuid.UUID, chann_uid: str, session: Session = Depends(get_session)
+):
+    """One statement for the whole badge, not one call per loaded row.
+
+    No route takes a bare id directly under /notifications (the single-row
+    one ends in /read), so "read-all" cannot be mistaken for a UUID.
+    """
+    scope = TenantScope(license_id=license_id)
+    try:
+        marked = NotificationRepository(session).mark_all_read(scope, chann_uid)
+        session.commit()
+        return MarkedReadOut(marked_read=marked)
+    except Exception as exc:
+        session.rollback()
+        raise _phase6_http_error(exc)
 
 
 @router.post(
@@ -4011,6 +4034,7 @@ def list_tickets(
     status: str | None = None,
     visible_to: uuid.UUID | None = None,
     q: str | None = None,
+    contact_id: uuid.UUID | None = None,
     limit: int = 100,
     offset: int = 0,
     response: Response = None,  # type: ignore[assignment]
@@ -4032,19 +4056,22 @@ def list_tickets(
         # technician's list was pinned to the repository default whatever
         # the caller asked for (17 ก.ย. 2569).
         rows = repo.list_visible_to(
-            scope, member_id=visible_to, status=status, q=q,
+            scope, member_id=visible_to, status=status, q=q, contact_id=contact_id,
             limit=limit, offset=max(0, int(offset)),
         )
         # Counted through the SAME visibility predicate. A total taken
         # without it would tell a technician "20 of 50" and so tell them
         # thirty jobs exist that they may not see — the number is the leak
         # (20 ก.ย. 2569).
-        total = repo.count_for_license(scope, status=status, q=q, member_id=visible_to)
+        total = repo.count_for_license(
+            scope, status=status, q=q, member_id=visible_to, contact_id=contact_id,
+        )
     else:
         rows = repo.list_for_license(
-            scope, status=status, q=q, limit=limit, offset=max(0, int(offset)),
+            scope, status=status, q=q, contact_id=contact_id,
+            limit=limit, offset=max(0, int(offset)),
         )
-        total = repo.count_for_license(scope, status=status, q=q)
+        total = repo.count_for_license(scope, status=status, q=q, contact_id=contact_id)
     if response is not None:
         response.headers["X-Total-Count"] = str(total)
     return rows
@@ -5353,17 +5380,41 @@ def _chat_sessions_out(session: Session, scope: TenantScope, rows: list) -> list
     summaries = repo.summaries(scope, [r.id for r in rows])
     uids = sorted({r.customer_chann_uid for r in rows})
     names: dict[str, str | None] = {}
+    # The shop's own record of the person comes first. The list used to
+    # show the LINE display name, which is whatever the customer typed
+    # into LINE — a nickname, an emoji, blank — and fell back to the raw
+    # CHN-… id, so staff saw "CHN-C-8f2a…" for a customer they had saved
+    # as สมชาย ใจดี an hour earlier (owner, 20 ก.ย. 2569). The record also
+    # gives the page a way to the customer's deals, jobs and notes.
+    records: dict[str, tuple[uuid.UUID, str]] = {}
     if uids:
+        from ..models import Customer
+
+        for customer in session.execute(
+            select(Customer).where(
+                Customer.license_id == scope.license_id,
+                Customer.customer_chann_uid.in_(uids),
+                Customer.archived_at.is_(None),
+            )
+        ).scalars():
+            uid = str(customer.customer_chann_uid)
+            records[uid] = (customer.id, customer.customer_id)
+            saved = " ".join(p for p in (customer.first_name, customer.last_name) if p).strip()
+            if saved:
+                names[uid] = saved
         for identity in session.execute(
             select(ChannIdentity).where(ChannIdentity.chann_uid.in_(uids))
         ).scalars():
-            names[identity.chann_uid] = identity.display_name
+            names.setdefault(identity.chann_uid, identity.display_name)
     out = []
     for r in rows:
         summary = summaries.get(r.id, {})
+        record = records.get(r.customer_chann_uid)
         out.append(ChatSessionOut(
             id=r.id, license_id=r.license_id, customer_chann_uid=r.customer_chann_uid,
             customer_name=names.get(r.customer_chann_uid), status=r.status,
+            customer_record_id=record[0] if record else None,
+            customer_code=record[1] if record else None,
             assigned_to=r.assigned_to, product_id=r.product_id, sla_deadline=r.sla_deadline,
             timeout_at=r.timeout_at, escalated_at=r.escalated_at, closed_at=r.closed_at,
             created_at=r.created_at, updated_at=r.updated_at,

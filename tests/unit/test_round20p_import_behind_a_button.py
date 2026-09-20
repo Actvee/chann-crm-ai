@@ -114,8 +114,11 @@ class TestThePagesOnlyShowTheDoor:
 
     def test_the_buttons_share_one_row(self):
         src = read(LIFF / "sales/customers/CustomerList.tsx")
-        row = src[src.index("<BulkPaste") - 200: src.index("<CsvImport") + 200]
-        assert 'className="actions"' in row
+        # 600 back, not 200: the "select several" button now opens the row.
+        row = src[src.index("<BulkPaste") - 600: src.index("<CsvImport") + 200]
+        # 20Q: the row is the list head's tool group, not a free-floating
+        # actions row between the count and the create form.
+        assert 'className="list-tools"' in row
 
     def test_every_tool_is_still_gated_on_the_permission_that_writes(self):
         for name, gate in (

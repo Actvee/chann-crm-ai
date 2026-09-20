@@ -99,6 +99,26 @@ async def unread_count(
     }
 
 
+@router.post("/notifications/read-all")
+async def mark_all_read(
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """The bell's "อ่านทั้งหมด".
+
+    Before this the dashboard marked the fifty rows it had loaded one call
+    each, and the badge — counted server-side over every row — stayed lit
+    for the rest. No route takes a bare id directly under /notifications
+    (the single-row one ends in /read), so "read-all" is never tried as a
+    UUID.
+    """
+    return {
+        "marked_read": await client.mark_all_notifications_read(
+            principal.license_id, principal.chann_uid
+        )
+    }
+
+
 @router.post("/notifications/{notification_id}/read")
 async def mark_read(
     notification_id: uuid.UUID,

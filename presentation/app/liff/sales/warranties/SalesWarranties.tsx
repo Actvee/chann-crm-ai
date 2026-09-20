@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { CsvImport } from "../_csv-import";
+import { Count } from "../_components";
 import { FieldRow } from "../../_field-row";
 import { ListFilters, optionsFrom } from "../../_filters";
 import { usePagedList } from "../../_paged-list";
@@ -332,12 +333,6 @@ export default function SalesWarranties({ liffId }: { liffId: string }) {
       </div>
 
       {canCreate && (
-        <div className="actions">
-          <CsvImport kind="warranties" token={token} licenseId={licenseId} onDone={() => load()} />
-        </div>
-      )}
-
-      {canCreate && (
         <section className="section">
           <div className="section-head">
             <h2>{copy.register}</h2>
@@ -415,20 +410,14 @@ export default function SalesWarranties({ liffId }: { liffId: string }) {
           statuses={optionsFrom(copy.status as Record<string, string>)}
           onStatus={setStatusFilter}
         />
-        {list.total !== null && list.total > rows.length && (
-          <p className="count">
-            {t.dashboard.showingOf
-              .replace("{shown}", String(rows.length))
-              .replace("{total}", String(list.total))}
-          </p>
-        )}
-        {list.hasMore && (
-          <div className="actions">
-            <button type="button" className="btn" disabled={list.busy} onClick={list.loadMore}>
-              {list.busy ? t.dashboard.opening : t.dashboard.list.loadMore}
-            </button>
-          </div>
-        )}
+        <div className="list-head">
+          <Count shown={visible.length} total={list.total ?? rows.length} />
+          {canCreate && (
+            <div className="list-tools">
+              <CsvImport kind="warranties" token={token} licenseId={licenseId} onDone={() => load()} />
+            </div>
+          )}
+        </div>
         {visible.length === 0 ? (
           <div className="empty">
             <p>
@@ -558,6 +547,13 @@ export default function SalesWarranties({ liffId }: { liffId: string }) {
               </li>
             ))}
           </ul>
+        )}
+        {list.hasMore && (
+          <div className="actions">
+            <button type="button" className="btn" disabled={list.busy} onClick={list.loadMore}>
+              {list.busy ? t.dashboard.opening : t.dashboard.list.loadMore}
+            </button>
+          </div>
         )}
       </section>
     </SalesShell>

@@ -483,6 +483,18 @@ body {
 .guide-image { display: block; width: 100%; border-radius: 12px; margin: 8px 0 10px; }
 .guide-step code { background: var(--soft, #f3f3f3); padding: 2px 6px; border-radius: 6px; }
 
+/* One line per thing to do (owner, 20 ก.ย. 2569): body text at 16px with
+   1.6 line-height and a bounded measure, so a line is read in one pass;
+   the words to type sit on their own line under the sentence they belong
+   to instead of inside it. */
+.guide-lead { color: var(--ink-soft); margin: 0 0 10px; }
+.guide-how { list-style: none; margin: 0 0 12px; padding: 0; display: grid; gap: 10px; max-width: 62ch; }
+.guide-how li { padding-left: 18px; position: relative; line-height: 1.6; }
+.guide-how li::before { content: "•"; position: absolute; left: 4px; color: var(--accent); }
+.guide-how li.guide-group { padding-left: 0; margin-top: 6px; font-weight: 600; color: var(--ink); }
+.guide-how li.guide-group::before { content: none; }
+.guide-type { display: block; margin-top: 3px; font-size: 14px; color: var(--ink-soft); overflow-wrap: anywhere; }
+
 .page-intro {
   color: var(--ink-soft);
   font-size: 14.5px;
@@ -2535,3 +2547,163 @@ button.notif-open {
 }
 
 .sheet-body .section > .section-head { display: none; }
+
+/* ------------------------------------------------ list head and tools */
+
+/* Where a list's occasional tools live: on the line that introduces the
+   list, beside its count, right-aligned — not in a row of their own
+   floating between the count and the create form, which is where round
+   20P left them (owner, 20 ก.ย. 2569: "ตำแหน่งปุ่มยังไม่เหมาะ"). The
+   create form keeps the primary button; these are secondary and dressed
+   as such (ui-ux-pro-max: primary vs secondary separated, 8px between
+   targets, 44px tall). */
+.list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  flex-wrap: wrap;
+  margin: 4px 0 10px;
+}
+
+.list-head .count {
+  margin: 0;
+}
+
+.list-tools {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+
+.list-tools .btn[data-variant="quiet"] {
+  color: var(--accent-deep);
+  padding-left: 10px;
+  padding-right: 10px;
+}
+
+/* ------------------------------------------------------ bulk selection */
+
+/* A row in selection mode makes room on its left for the box; the box is
+   a 44px target around a 22px mark. */
+.card[data-selectable="true"] {
+  padding-left: 58px;
+}
+
+.select-check {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.select-check input {
+  position: absolute;
+  opacity: 0;
+  width: 44px;
+  height: 44px;
+  margin: 0;
+  cursor: pointer;
+}
+
+.select-check span {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 2px solid var(--line-strong);
+  background: var(--surface);
+}
+
+.select-check input:checked + span {
+  background: var(--accent);
+  border-color: var(--accent);
+  /* A mark drawn in CSS so it reads in both themes without an asset. */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M5 10.5l3.2 3L15 6.5' fill='none' stroke='%23fff' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-size: 18px;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+.select-check input:focus-visible + span {
+  outline: 2px solid var(--stage-proposed);
+  outline-offset: 2px;
+}
+
+.card[data-selected="true"] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent) inset;
+}
+
+/* The bar sits at the bottom of the screen while rows are being chosen —
+   where the thumb is — and clears the phone's home indicator. Opaque, no
+   blur, for the same WebKit reason as the topbar. */
+.bulk-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 6;
+  margin: 12px -16px 0;
+  padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px));
+  background: var(--surface);
+  border-top: 1px solid var(--line-strong);
+  box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.08);
+  display: grid;
+  gap: 8px;
+}
+
+.bulk-count {
+  margin: 0;
+  font-weight: 600;
+  font-size: 14.5px;
+}
+
+.bulk-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ------------------------------------------- chat: the customer beside */
+
+.context-head {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.context-head strong {
+  font-size: 17px;
+}
+
+.context-list {
+  list-style: none;
+  margin: 0 0 14px;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.context-list li {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.context-list .row-link {
+  padding: 10px 12px;
+  min-height: 44px;
+}
+
+.context-list .card-meta {
+  margin-top: 2px;
+}
+
+.context-note {
+  padding: 10px 12px;
+  white-space: pre-wrap;
+}

@@ -33,9 +33,6 @@ type Product = {
   warranty_months?: number | null;
 };
 
-// The Data tier's cap; asked for explicitly (review C10) rather than
-// taking a default of 200 that hid the rest of a bigger catalogue.
-const PAGE = 1000;
 
 const BLANK = {
   product_id: "", product_name: "", unit_price: "", category: "", sku: "", description: "", warranty_months: "",
@@ -184,24 +181,6 @@ export default function ProductList({ liffId }: { liffId: string }) {
         onStatus={setCategory}
       />
 
-      <Count shown={visible.length} total={list.total ?? products.length} />
-      {list.hasMore && (
-        <div className="actions">
-          <button type="button" className="btn" disabled={list.busy} onClick={list.loadMore}>
-            {list.busy ? t.dashboard.opening : t.dashboard.list.loadMore}
-          </button>
-        </div>
-      )}
-      {products.length >= PAGE && (
-        <p className="count">{s.errors.showingLatest.replace("{count}", String(products.length))}</p>
-      )}
-
-      {canManage && (
-        <div className="actions">
-          <CsvImport kind="products" token={token} licenseId={licenseId} onDone={() => load()} />
-        </div>
-      )}
-
       {!canManage && !session.suspended && session.ready && (
         <p className="card-meta" style={{ marginBottom: 12 }}>{s.products.readOnly}</p>
       )}
@@ -282,6 +261,15 @@ export default function ProductList({ liffId }: { liffId: string }) {
         </section>
       )}
 
+      <div className="list-head">
+        <Count shown={visible.length} total={list.total ?? products.length} />
+        {canManage && (
+          <div className="list-tools">
+            <CsvImport kind="products" token={token} licenseId={licenseId} onDone={() => load()} />
+          </div>
+        )}
+      </div>
+
       {visible.length === 0 ? (
         <Empty
           message={
@@ -343,6 +331,13 @@ export default function ProductList({ liffId }: { liffId: string }) {
             </li>
           ))}
         </ul>
+      )}
+      {list.hasMore && (
+        <div className="actions">
+          <button type="button" className="btn" disabled={list.busy} onClick={list.loadMore}>
+            {list.busy ? t.dashboard.opening : t.dashboard.list.loadMore}
+          </button>
+        </div>
       )}
     </SalesShell>
   );

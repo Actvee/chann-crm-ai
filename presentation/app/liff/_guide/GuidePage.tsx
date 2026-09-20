@@ -7,10 +7,23 @@ import { useLanguage } from "@/lib/i18n/LanguageProvider";
 import { AppShell } from "../sales/_components";
 import { Audience, initLiffSession, openExternal } from "../_shared";
 
+/** A sub-heading inside a step. */
+type HowGroup = {
+  group: string;
+};
+/** One thing to do, and the words to type for it. */
+type HowText = {
+  text: string;
+  type?: string | null;
+};
+type HowLine = HowGroup | HowText;
+
 type Step = {
   key: string;
   title: string;
   body: string;
+  /** One line per thing to do, the words to type beside it (20 ก.ย. 2569). */
+  how?: HowLine[] | null;
   example?: string | null;
   image_url?: string | null;
   image_slot: string;
@@ -92,8 +105,29 @@ export default function GuidePage({ liffId, audience }: { liffId: string; audien
                       alt={step.title}
                     />
                   ) : null}
-                  <p>{step.body}</p>
-                  {step.example && (
+                  {/* The lead, then one line per thing to do. The body
+                      used to be a twelve-clause paragraph, which on a
+                      phone is a wall (owner, 20 ก.ย. 2569: "อ่านไม่รู้เรื่อง"). */}
+                  <p className={step.how ? "guide-lead" : undefined}>{step.body}</p>
+                  {step.how && (
+                    <ul className="guide-how">
+                      {step.how.map((line, i) =>
+                        "group" in line ? (
+                          <li key={i} className="guide-group">{line.group}</li>
+                        ) : (
+                          <li key={i}>
+                            {line.text}
+                            {line.type && (
+                              <span className="guide-type">
+                                {t.dashboard.guide.type}: <code>{line.type}</code>
+                              </span>
+                            )}
+                          </li>
+                        ),
+                      )}
+                    </ul>
+                  )}
+                  {step.example && !step.how && (
                     <p className="card-meta">
                       {t.dashboard.guide.type}: <code>{step.example}</code>
                     </p>

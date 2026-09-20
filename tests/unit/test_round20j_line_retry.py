@@ -315,4 +315,6 @@ class TestACappedListSaysSo:
             encoding="utf-8",
         )
         assert "usePagedList" in page
-        assert "showingOf" in page
+        # The total reaches the count line (20Q moved it from a separate
+        # "showingOf" hint into the list head's Count).
+        assert "total={totalHeld" in page
