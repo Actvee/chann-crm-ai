@@ -2,6 +2,8 @@
 
 import { useMemo, useState } from "react";
 
+import { Sheet } from "../_sheet";
+
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { proxyHeaders } from "./_lib";
@@ -79,6 +81,7 @@ export function BulkPaste({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState<ImportResult | null>(null);
+  const [open, setOpen] = useState(false);
 
   const parsed = useMemo(
     () =>
@@ -125,7 +128,15 @@ export function BulkPaste({
     }
   }
 
+  // Behind a button, like the CSV import beside it: pasting a list of
+  // customers is a job a shop does when it arrives, not every visit
+  // (owner, 20 ก.ย. 2569).
   return (
+    <>
+      <button type="button" className="btn" onClick={() => setOpen(true)}>
+        {copy.title}
+      </button>
+      <Sheet open={open} title={copy.title} onClose={() => setOpen(false)}>
     <section className="section">
       <div className="section-head">
         <h2>{copy.title}</h2>
@@ -198,5 +209,7 @@ export function BulkPaste({
         )}
       </dl>
     </section>
+      </Sheet>
+    </>
   );
 }

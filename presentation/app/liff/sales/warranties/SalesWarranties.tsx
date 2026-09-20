@@ -332,7 +332,9 @@ export default function SalesWarranties({ liffId }: { liffId: string }) {
       </div>
 
       {canCreate && (
-        <CsvImport kind="warranties" token={token} licenseId={licenseId} onDone={() => load()} />
+        <div className="actions">
+          <CsvImport kind="warranties" token={token} licenseId={licenseId} onDone={() => load()} />
+        </div>
       )}
 
       {canCreate && (

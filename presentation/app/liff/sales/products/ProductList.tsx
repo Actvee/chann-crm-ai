@@ -197,7 +197,9 @@ export default function ProductList({ liffId }: { liffId: string }) {
       )}
 
       {canManage && (
-        <CsvImport kind="products" token={token} licenseId={licenseId} onDone={() => load()} />
+        <div className="actions">
+          <CsvImport kind="products" token={token} licenseId={licenseId} onDone={() => load()} />
+        </div>
       )}
 
       {!canManage && !session.suspended && session.ready && (

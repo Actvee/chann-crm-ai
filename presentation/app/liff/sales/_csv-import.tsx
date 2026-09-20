@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import { Sheet } from "../_sheet";
+
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { openExternal, proxyHeaders } from "./_lib";
@@ -108,9 +110,14 @@ export function CsvImport({
   const [result, setResult] = useState<ImportResult | null>(null);
   const [sample, setSample] = useState<string>("");
   const [copied, setCopied] = useState(false);
+  const [open, setOpen] = useState(false);
   const samplePath = `/samples/${kind}.csv`;
 
+  // Fetched when the panel opens, not on every page load: the sample is
+  // only ever read inside the panel, and importing is a once-a-shop job
+  // (round 20O). Once is enough — `sample` is the guard.
   useEffect(() => {
+    if (!open || sample) return;
     let alive = true;
     fetch(samplePath)
       .then((r) => (r.ok ? r.text() : ""))
@@ -121,7 +128,7 @@ export function CsvImport({
     return () => {
       alive = false;
     };
-  }, [samplePath]);
+  }, [open, sample, samplePath]);
 
   async function copySample() {
     try {
@@ -184,10 +191,22 @@ export function CsvImport({
 
   const fieldId = `csv-${kind}`;
   const sampleRows = sample ? parseCsv(sample) : [];
+  const title =
+    kind === "products" ? copy.titleProducts
+    : kind === "customers" ? copy.titleCustomers
+    : copy.titleWarranties;
+  // Behind a button: a sample table, a file picker and the errors from the
+  // last run were sitting open on the list page for a job most shops do
+  // once (owner, 20 ก.ย. 2569).
   return (
+    <>
+      <button type="button" className="btn" onClick={() => setOpen(true)}>
+        {title}
+      </button>
+      <Sheet open={open} title={title} onClose={() => setOpen(false)} wide>
     <section className="section">
       <div className="section-head">
-        <h2>{kind === "products" ? copy.titleProducts : kind === "customers" ? copy.titleCustomers : copy.titleWarranties}</h2>
+        <h2>{title}</h2>
       </div>
       <p className="card-meta" style={{ padding: "10px 16px 0" }}>
         {kind === "products" ? copy.hintProducts : kind === "customers" ? copy.hintCustomers : copy.hintWarranties}
@@ -312,5 +331,7 @@ export function CsvImport({
         </div>
       )}
     </section>
+      </Sheet>
+    </>
   );
 }

@@ -275,12 +275,13 @@ export default function CustomerList({ liffId }: { liffId: string }) {
         </div>
       )}
 
+      {/* One row, two doors. Both used to be open sections on the page
+          (owner, 20 ก.ย. 2569). */}
       {can("customer.create") && (
-        <BulkPaste token={token} licenseId={licenseId} onDone={() => void load()} />
-      )}
-
-      {can("customer.create") && (
-        <CsvImport kind="customers" token={token} licenseId={licenseId} onDone={() => void load()} />
+        <div className="actions">
+          <BulkPaste token={token} licenseId={licenseId} onDone={() => void load()} />
+          <CsvImport kind="customers" token={token} licenseId={licenseId} onDone={() => void load()} />
+        </div>
       )}
 
       {can("customer.create") && (

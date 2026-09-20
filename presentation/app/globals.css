@@ -2452,3 +2452,86 @@ button.notif-open {
   text-decoration: underline;
   cursor: pointer;
 }
+
+/* Round 20O — a panel for work that is occasional.
+   The bulk-add and import tools used to sit open on the list pages: a
+   sample table, a file picker and a paste box in front of everyone, every
+   visit, for a job most people do once (owner, 20 ก.ย. 2569). The veil
+   and the shape follow ConfirmDialog so the two read as one product; the
+   panel is wider and scrolls, because this one holds a form and a table
+   rather than a sentence. */
+.sheet-veil {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(16, 18, 24, 0.45);
+  padding: 16px;
+  padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+}
+
+@media (min-width: 480px) {
+  .sheet-veil { align-items: center; }
+}
+
+.sheet-panel {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 460px;
+  /* Never taller than the screen: the body scrolls, the header stays. */
+  max-height: min(86vh, 720px);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 18px 48px rgba(16, 18, 24, 0.22);
+}
+
+.sheet-panel[data-wide="true"] { max-width: 560px; }
+
+.sheet-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.sheet-head h2 {
+  flex: 1 1 auto;
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  min-width: 0;
+}
+
+.sheet-close {
+  flex: none;
+  min-width: 44px;
+  min-height: 44px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--ink-soft);
+  font-size: 18px;
+  cursor: pointer;
+}
+
+.sheet-body {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 4px 0 14px;
+}
+
+/* The tools inside were written as full-width page sections; inside the
+   panel they are the whole content, so their own frame comes off. */
+.sheet-body .section {
+  border: 0;
+  border-radius: 0;
+  background: none;
+  margin: 0;
+}
+
+.sheet-body .section > .section-head { display: none; }
