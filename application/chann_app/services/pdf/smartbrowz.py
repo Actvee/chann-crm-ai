@@ -39,7 +39,7 @@ from zcatalyst_sdk.exceptions import CatalystAppError, CatalystError
 from zcatalyst_sdk.types import ICatalystOptions
 
 from ...config import settings
-from .base import PdfOptions, PdfResult
+from .base import PdfOptions, PdfResult, RendererUnavailable
 
 log = logging.getLogger(__name__)
 
@@ -81,7 +81,31 @@ def _collapse_duplicate_path_slashes(url: str) -> str:
     return host + re.sub(r"/{2,}", "/", rest)
 
 
+#: (connect, read) seconds for a call to Zoho. The SDK's own default is
+#: (60, 30). A render normally answers in 3–4 s; on 21 ก.ย. 2569 one took
+#: longer than 30 and the next, 23 s later, took 3.5. A shorter read and
+#: one retry (render() below) recover that case in well under the time the
+#: SDK's single attempt spent failing, which matters inside a LINE webhook.
+ZOHO_TIMEOUT = (10, 20)
+_ZOHO_HOSTS = ("zoho.com", "zohoapis.com", "catalyst.zoho.com")
+#: Between the two attempts. Patched to 0 in tests.
+_RETRY_PAUSE_S = 1.0
+_RENDER_ATTEMPTS = 2
+
+
+def _is_zoho(url: str) -> bool:
+    match = re.match(r"^https?://([^/]+)", url or "")
+    host = (match.group(1) if match else "").lower()
+    return any(host == h or host.endswith("." + h) for h in _ZOHO_HOSTS)
+
+
 def _patched_session_request(self, method, url, *args, **kwargs):
+    # The timeout is set here, at the same boundary, for the same reason:
+    # the SDK passes its own default explicitly, so nothing short of the
+    # session sees ours. Zoho only — google-cloud-storage rides the same
+    # requests library and keeps its own limits.
+    if _is_zoho(url):
+        kwargs["timeout"] = ZOHO_TIMEOUT
     return _ORIGINAL_SESSION_REQUEST(
         self, method, _collapse_duplicate_path_slashes(url), *args, **kwargs
     )
@@ -102,6 +126,13 @@ class SmartBrowzRenderError(RuntimeError):
     a genuine provider-side failure. Per 10.6, this must always surface
     as a clear failure; nothing in this module ever falls back to
     fabricating a document."""
+
+
+class SmartBrowzUnavailable(SmartBrowzRenderError, RendererUnavailable):
+    """Zoho did not answer in time, twice. Both names on purpose: routes
+    that catch SmartBrowzRenderError keep working, and services that only
+    know the renderer seam catch RendererUnavailable."""
+
 
 
 def _require_config() -> None:
@@ -177,14 +208,30 @@ class SmartBrowzPdfRenderer:
         _require_config()
         app = _get_or_init_app()
         smart_browz = app.smart_browz()
-        try:
-            result = await asyncio.to_thread(
-                smart_browz.convert_to_pdf, html, _to_sdk_pdf_options(options),
-            )
-        except CatalystError as exc:
-            raise SmartBrowzRenderError(f"SmartBrowz/Zoho rejected the render: {exc}") from exc
-        except Exception as exc:  # noqa: BLE001
-            raise SmartBrowzRenderError(f"Unexpected error calling SmartBrowz: {exc}") from exc
+        # Rendering has no side effect on our side (the store and the row
+        # come after), so a second attempt after a timeout costs nothing
+        # but time. One retry: a slow answer recovers, an outage is said
+        # in words within ~45 s rather than a stack trace after 30.
+        last: Exception | None = None
+        for attempt in range(1, _RENDER_ATTEMPTS + 1):
+            try:
+                result = await asyncio.to_thread(
+                    smart_browz.convert_to_pdf, html, _to_sdk_pdf_options(options),
+                )
+                break
+            except CatalystError as exc:
+                raise SmartBrowzRenderError(f"SmartBrowz/Zoho rejected the render: {exc}") from exc
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
+                last = exc
+                log.warning("SmartBrowz did not answer (attempt %d/%d): %s", attempt, _RENDER_ATTEMPTS, exc)
+                if attempt < _RENDER_ATTEMPTS and _RETRY_PAUSE_S:
+                    await asyncio.sleep(_RETRY_PAUSE_S)
+            except Exception as exc:  # noqa: BLE001
+                raise SmartBrowzRenderError(f"Unexpected error calling SmartBrowz: {exc}") from exc
+        else:
+            raise SmartBrowzUnavailable(
+                "SmartBrowz (Zoho) did not answer in time — try again in a moment"
+            ) from last
         content = getattr(result, "content", None) or result
         return PdfResult(content=content, url=None, renderer=self.name)
 

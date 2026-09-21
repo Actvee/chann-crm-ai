@@ -14,6 +14,14 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 
+class RendererUnavailable(RuntimeError):
+    """The provider did not answer in time (or the connection dropped)
+    even after a retry — a transient outage, not a bad document. Callers
+    tell the person to try again in a moment; nothing on our side needs
+    fixing. Raised by an adapter as a subclass of its own error too, so
+    code catching the adapter's error still catches it."""
+
+
 @dataclass
 class PdfOptions:
     page_format: str = "A4"

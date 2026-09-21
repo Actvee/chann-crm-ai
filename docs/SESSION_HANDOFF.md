@@ -7,7 +7,27 @@
 เจ้าของสั่ง 10 ก.ย.: *"ต่อจากนี้ให้บันทึก model first แบบนี้ในทุกๆที่ อย่าให้หลุดอีก
 เพราะการใช้กฎแบบเดิมเลย น่าจะทำให้ประสบการณ์ใช้งานแย่ลง"*
 
-**รอบ 20T (21 ก.ย. — DEV `__20T_SHA__`): หน้าแชทเป็นจอเดียวบนมือถือ · ส่งรูปในแชท**
+**รอบ 20U (21 ก.ย. — DEV `__20U_SHA__`): ออกเอกสารล้มเพราะ Zoho ตอบช้าครั้งเดียว**
+
+- **เหตุการณ์ 16:04:** เจ้าของพิมพ์ `ออกเอกสาร Q-2026-0009` ใน Sale OA แล้วได้ "ออกเอกสารไม่สำเร็จ: Unexpected
+  error calling SmartBrowz: HTTPSConnectionPool(host='api.catalyst.zoho.com') Read timed out (read timeout=30)"
+  · log ของ application (09:04:16–09:04:47Z) บอกชัด: render ผ่าน zcatalyst SDK รอ 30 วิ (DEFAULT_TIMEOUT ของ SDK
+  = (60, 30)) แล้วหมดเวลา · **ครั้งถัดไป 23 วิต่อมา ผ่านใน 3.5 วิ** (Q-2026-0009 ถูกเก็บที่ 09:05:13Z) · ทั้งเดือน
+  ก.ย. มี timeout จาก Zoho ครั้งเดียวคือครั้งนี้ — สาเหตุอยู่ที่ Zoho ไม่ใช่โค้ด แต่โค้ดไม่มี retry และโยน
+  ข้อความดิบของ provider ให้คน
+- **แก้ที่ตะเข็บ:** `SmartBrowzPdfRenderer.render` ลอง 2 ครั้งเมื่อเจอ `requests` Timeout/ConnectionError
+  (render ไม่มี side effect ฝั่งเรา — store และ row มาทีหลัง) · timeout ต่อครั้งเป็น `(10, 20)` ตั้งที่
+  `_patched_session_request` **เฉพาะ host zoho** (GCS ใช้ requests เดียวกัน ห้ามโดน) เพราะ SDK ส่ง timeout
+  ของตัวเองเป็น kwarg ชัด ๆ จึงต้องทับที่ session · ล้มทั้งสองครั้ง → `SmartBrowzUnavailable` ซึ่งเป็นทั้ง
+  `SmartBrowzRenderError` (route เดิมยังจับได้) และ `RendererUnavailable` ใน `pdf/base.py` (ตะเข็บที่ chat
+  รู้จักได้โดยไม่ import smartbrowz — boundary test อนุญาตให้ import โมดูลนั้นได้ไฟล์เดียว) · CatalystError
+  (Zoho ปฏิเสธ HTML) ไม่ retry
+- **คำที่คนเห็น:** แชท → `QUOTE_RENDERER_SLOW` "ระบบสร้าง PDF ตอบช้าผิดปกติ จึงยังไม่ได้ออกเอกสาร Q-… — ลองอีกครั้ง
+  ได้เลย" + ปุ่ม "ลองอีกครั้ง" (= `ออกเอกสาร Q-…`) · dashboard → 504 พร้อมประโยคเดียวกัน (เดิม 502 + stack)
+- เทสต์: `test_smartbrowz_pdf_renderer.py::TestATransientTimeoutIsRetried` (5) · `test_quote_issue.py::
+  TestASlowRendererIsSaidInWords` (1)
+
+**รอบ 20T (21 ก.ย. — DEV `15738ac`): หน้าแชทเป็นจอเดียวบนมือถือ · ส่งรูปในแชท**
 
 - **"สไลด์หน้าแชทกับตัวหน้า liff แยกกัน … ใช้งานยาก"** — สาเหตุจาก CSS: บนมือถือ `.chat-scroll` มี
   `max-height: calc(100dvh - 300px)` และ scrollbar ของตัวเอง อยู่ในการ์ดที่อยู่ในหน้าที่เลื่อนได้อีกชั้น

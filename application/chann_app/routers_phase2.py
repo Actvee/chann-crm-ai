@@ -665,7 +665,7 @@ async def render_quote_pdf(
 
     from .services.documents.html import render_quote_html
     from .services.documents.snapshot import QuoteNotRenderable, build_quote_snapshot
-    from .services.pdf.base import PdfOptions, get_renderer
+    from .services.pdf.base import PdfOptions, RendererUnavailable, get_renderer
     from .services.pdf.smartbrowz import SmartBrowzNotConfigured, SmartBrowzRenderError
 
     _require_same_tenant(principal, license_id)
@@ -705,6 +705,9 @@ async def render_quote_pdf(
         )
     except SmartBrowzNotConfigured as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
+    except RendererUnavailable as exc:
+        # Transient, and the sentence already says "try again".
+        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail=str(exc))
     except SmartBrowzRenderError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
 
@@ -745,6 +748,7 @@ async def issue_quote(
     asserting the customer was sent exactly those bytes.
     """
     from .services.documents.snapshot import QuoteNotRenderable
+    from .services.pdf.base import RendererUnavailable
     from .services.pdf.smartbrowz import SmartBrowzNotConfigured, SmartBrowzRenderError
     from .services.quote_issue import QuoteAlreadyIssued, issue_quote_document
     from .services.storage.base import DocumentStoreError, DocumentStoreNotConfigured
@@ -788,6 +792,9 @@ async def issue_quote(
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
     except DocumentStoreNotConfigured as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
+    except RendererUnavailable as exc:
+        # Transient, and the sentence already says "try again".
+        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail=str(exc))
     except SmartBrowzRenderError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
     except DocumentStoreError as exc:

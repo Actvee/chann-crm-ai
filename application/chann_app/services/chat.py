@@ -11853,6 +11853,15 @@ QUOTE_ISSUE_FAILED = {
     "en": "Could not issue the document: {detail}",
 }
 
+#: Owner, 21 ก.ย. 2569 16:04: the person read "Unexpected error calling
+#: SmartBrowz: HTTPSConnectionPool(host=…) Read timed out" — the provider's
+#: one slow answer, in the provider's words. The cause is outside the shop
+#: and the cure is a button.
+QUOTE_RENDERER_SLOW = {
+    "th": "ระบบสร้าง PDF ตอบช้าผิดปกติ จึงยังไม่ได้ออกเอกสาร {quote_id} — ลองอีกครั้งได้เลย (ปกติใช้เวลาไม่กี่วินาที)",
+    "en": "The PDF service did not answer in time, so {quote_id} was not issued — please try again (it normally takes a few seconds).",
+}
+
 
 def document_download_url(license_id: str, document_id: str) -> str | None:
     """A tappable link to an issued document, or None when it cannot be built.
@@ -11880,6 +11889,7 @@ async def _handle_quote_issue(
     language: str, actor_id: str, allow_reissue: bool,
 ) -> ChatReply:
     from .documents.snapshot import QuoteNotRenderable
+    from .pdf.base import RendererUnavailable
     from .quote_issue import QuoteAlreadyIssued, issue_quote_document
     from .storage.base import (
         DocumentStoreError, DocumentStoreNotConfigured, get_document_store,
@@ -11926,6 +11936,12 @@ async def _handle_quote_issue(
         )
     except DocumentStoreNotConfigured as exc:
         return ChatReply(text=_t(QUOTE_ISSUE_FAILED, language).format(detail=str(exc)))
+    except RendererUnavailable:
+        log.warning("quote %s not issued: renderer did not answer in time", quote.get("quote_id"))
+        return ChatReply(
+            text=_t(QUOTE_RENDERER_SLOW, language).format(quote_id=quote.get("quote_id")),
+            quick_replies=[("ลองอีกครั้ง", f"ออกเอกสาร {quote.get('quote_id')}")],
+        )
     except Exception as exc:  # noqa: BLE001
         log.exception("quote issue failed")
         return ChatReply(text=_t(QUOTE_ISSUE_FAILED, language).format(detail=str(exc)[:160]))

@@ -24,6 +24,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import requests
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "application"))
@@ -171,3 +172,93 @@ class TestDuplicateSlashWorkaround:
         import requests
 
         assert getattr(requests.Session.request, "_chann_dedup_slash_patch", False) is True
+
+
+class _SlowThenFine:
+    """A SmartBrowz that times out N times, then answers."""
+
+    def __init__(self, failures, exc=None):
+        self.calls = 0
+        self.failures = failures
+        self.exc = exc or requests.exceptions.ReadTimeout(
+            "HTTPSConnectionPool(host='api.catalyst.zoho.com', port=443): Read timed out. (read timeout=20)"
+        )
+
+    def convert_to_pdf(self, html, options):
+        self.calls += 1
+        if self.calls <= self.failures:
+            raise self.exc
+        return b"%PDF-1.4 fine"
+
+
+def _wire(monkeypatch, browz):
+    import chann_app.services.pdf.smartbrowz as module
+
+    class _App:
+        def smart_browz(self):
+            return browz
+
+    monkeypatch.setattr(module, "_require_config", lambda: None)
+    monkeypatch.setattr(module, "_get_or_init_app", lambda: _App())
+    monkeypatch.setattr(module, "_RETRY_PAUSE_S", 0)
+
+
+class TestATransientTimeoutIsRetried:
+    """Owner, 21 ก.ย. 2569 16:04: "ออกเอกสารไม่สำเร็จ: Unexpected error calling
+    SmartBrowz: … Read timed out. (read timeout=30)". Zoho answered the
+    very next attempt in 3.5 s. One slow answer must not be the person's
+    problem, and when it is, the words must say what to do."""
+
+    async def test_one_slow_answer_is_tried_again_and_succeeds(self, monkeypatch):
+        browz = _SlowThenFine(failures=1)
+        _wire(monkeypatch, browz)
+        result = await SmartBrowzPdfRenderer().render("<p>x</p>", PdfOptions(), idempotency_key="k")
+        assert result.content == b"%PDF-1.4 fine"
+        assert browz.calls == 2
+
+    async def test_two_slow_answers_are_said_in_words_not_a_stack_trace(self, monkeypatch):
+        from chann_app.services.pdf.base import RendererUnavailable
+        from chann_app.services.pdf.smartbrowz import SmartBrowzUnavailable
+
+        browz = _SlowThenFine(failures=5)
+        _wire(monkeypatch, browz)
+        with pytest.raises(SmartBrowzUnavailable) as caught:
+            await SmartBrowzPdfRenderer().render("<p>x</p>", PdfOptions(), idempotency_key="k")
+        assert browz.calls == 2, "one retry, not a storm"
+        assert isinstance(caught.value, RendererUnavailable)
+        assert isinstance(caught.value, SmartBrowzRenderError), "callers catching the old name still catch it"
+        assert "HTTPSConnectionPool" not in str(caught.value)
+        assert "try again" in str(caught.value)
+
+    async def test_a_connection_error_is_retried_too(self, monkeypatch):
+        browz = _SlowThenFine(failures=1, exc=requests.exceptions.ConnectionError("reset by peer"))
+        _wire(monkeypatch, browz)
+        result = await SmartBrowzPdfRenderer().render("<p>x</p>", PdfOptions(), idempotency_key="k")
+        assert result.content and browz.calls == 2
+
+    async def test_a_rejection_by_zoho_is_not_retried(self, monkeypatch):
+        from zcatalyst_sdk.exceptions import CatalystError
+
+        browz = _SlowThenFine(failures=5, exc=CatalystError("INVALID_HTML", "bad html"))
+        _wire(monkeypatch, browz)
+        with pytest.raises(SmartBrowzRenderError, match="rejected"):
+            await SmartBrowzPdfRenderer().render("<p>x</p>", PdfOptions(), idempotency_key="k")
+        assert browz.calls == 1
+
+    def test_only_zoho_calls_get_the_shorter_read_timeout(self, monkeypatch):
+        """The session patch is process-wide (GCS goes through requests too);
+        the tighter timeout must reach Zoho only."""
+        import chann_app.services.pdf.smartbrowz as module
+
+        seen = []
+
+        def fake_original(self, method, url, *args, **kwargs):
+            seen.append((url, kwargs.get("timeout")))
+            return "ok"
+
+        monkeypatch.setattr(module, "_ORIGINAL_SESSION_REQUEST", fake_original)
+        session = requests.Session()
+        module._patched_session_request(session, "POST", "https://api.catalyst.zoho.com/baas//v1/x", timeout=(60, 30))
+        module._patched_session_request(session, "GET", "https://storage.googleapis.com/b/o", timeout=(60, 30))
+        assert seen[0] == ("https://api.catalyst.zoho.com/baas/v1/x", module.ZOHO_TIMEOUT)
+        assert seen[1] == ("https://storage.googleapis.com/b/o", (60, 30))

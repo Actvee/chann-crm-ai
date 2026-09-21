@@ -247,3 +247,38 @@ class TestIssueQuoteDocument:
         with pytest.raises(QuoteNotRenderable):
             await issue_quote_document(_FakeClient(), license_id="lic-1", **fixtures)
         assert store.puts == []
+
+
+class TestASlowRendererIsSaidInWords:
+    """The chat road (owner, 21 ก.ย. 2569 16:04): a renderer that did not
+    answer in time gets its own sentence and a button to try again — not
+    the exception's text."""
+
+    async def test_the_chat_reply_names_the_cause_and_offers_a_retry(self, monkeypatch):
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from chann_app.services import chat, quote_issue as qi
+        from chann_app.services.pdf.base import RendererUnavailable
+        from test_phase6_chat import FakeDataClient
+
+        async def slow(*a, **k):
+            raise RendererUnavailable("SmartBrowz (Zoho) did not answer in time — try again in a moment")
+
+        monkeypatch.setattr(qi, "issue_quote_document", slow)
+        client = FakeDataClient(role="owner", permission_keys=["quote.read", "quote.update"])
+        client._quotes = [{"id": "Q1", "quote_id": "Q-2026-0009", "deal_id": "DEAL-1", "status": "draft"}]
+        client._deals = [{"id": "DEAL-1", "deal_id": "D-1", "contact_id": "CUST-1", "stage": "proposed"}]
+        client._customers = [{"id": "CUST-1", "customer_id": "C-1", "first_name": "สมชาย"}]
+        reply = await chat._handle_quote_issue(
+            client, license_id="lic-1", code="Q-2026-0009", permission_keys=["quote.update"],
+            language="th", actor_id="m1", allow_reissue=False,
+        )
+        assert "HTTPSConnectionPool" not in reply.text and "SmartBrowz" not in reply.text
+        assert "ช้า" in reply.text or "ไม่ตอบ" in reply.text
+        assert ("ลองอีกครั้ง", "ออกเอกสาร Q-2026-0009") in reply.quick_replies
+
+        reply_en = await chat._handle_quote_issue(
+            client, license_id="lic-1", code="Q-2026-0009", permission_keys=["quote.update"],
+            language="en", actor_id="m1", allow_reissue=False,
+        )
+        assert "try again" in reply_en.text.lower()
