@@ -5405,7 +5405,10 @@ def _chat_sessions_out(session: Session, scope: TenantScope, rows: list) -> list
         for identity in session.execute(
             select(ChannIdentity).where(ChannIdentity.chann_uid.in_(uids))
         ).scalars():
-            names.setdefault(identity.chann_uid, identity.display_name)
+            # The name the person registered, before whatever LINE calls
+            # them: a nickname or an emoji is not who the shop knows.
+            registered = " ".join(p for p in (identity.first_name, identity.last_name) if p).strip()
+            names.setdefault(identity.chann_uid, registered or identity.display_name)
     out = []
     for r in rows:
         summary = summaries.get(r.id, {})

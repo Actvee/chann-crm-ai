@@ -10,7 +10,7 @@ from decimal import Decimal, InvalidOperation
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..models import Customer, Deal, DealProduct, License, LicenseMember, Product
+from ..models import ChannIdentity, Customer, Deal, DealProduct, License, LicenseMember, Product
 
 #: What a person types when they are looking for a customer or a deal.
 #: The LIST and the COUNT are built from this same tuple, so a total can
@@ -251,8 +251,34 @@ class CustomerRepository:
             if own is not None and own.id != match.id:
                 return own
             match.customer_chann_uid = customer_chann_uid
+            self.fill_names_from_identity(match)
             self._s.flush()
         return match
+
+    def fill_names_from_identity(self, row: Customer) -> bool:
+        """A record with no name takes the name its person registered.
+
+        A staff-typed row is often a phone number and nothing else — the
+        caller's number from a missed call — and when that person links
+        on LINE the row becomes theirs but stayed nameless: the chat
+        page then showed "CHN-S-000002" for a customer who had typed
+        สมชาย ใจดี into their own profile (owner, 21 ก.ย. 2569). Only an
+        EMPTY name is filled; a name the shop typed is the shop's.
+        Returns True when something was written."""
+        if not row.customer_chann_uid:
+            return False
+        if (row.first_name or "").strip() or (row.last_name or "").strip():
+            return False
+        identity = self._s.get(ChannIdentity, row.customer_chann_uid)
+        if identity is None:
+            return False
+        first = (identity.first_name or "").strip()
+        last = (identity.last_name or "").strip()
+        if not (first or last):
+            return False
+        row.first_name = first or None
+        row.last_name = last or None
+        return True
 
     def link_identity_by_phone(
         self, scope: TenantScope, *, phone: str, customer_chann_uid: str,

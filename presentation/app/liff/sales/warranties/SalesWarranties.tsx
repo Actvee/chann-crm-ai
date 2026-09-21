@@ -48,10 +48,6 @@ type Customer = {
   customer_id?: string | null;
 };
 
-// The Data tier's cap for the book; explicit so the page knows what it
-// asked for (review C10) and can say when the shop has more.
-const PAGE = 500;
-
 /**
  * The shop's book of sold units (Phase 7.5, the staff half).
  *
@@ -73,14 +69,13 @@ export default function SalesWarranties({ liffId }: { liffId: string }) {
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
   const [busy, setBusy] = useState(false);
-  // A serial looked up on the server (review C10): the list shows the
-  // latest units, and a unit sold two years ago is found by its sticker,
-  // not by scrolling.
-  const [serialQuery, setSerialQuery] = useState("");
-  const [searchedSerial, setSearchedSerial] = useState("");
-  // The serial search above asks the server for one sticker anywhere in
-  // the book; these narrow the page already loaded, by anything on a row.
+  // Both answered by the database (round 20N): the search box finds a
+  // sticker anywhere in the book, so the separate "search by serial"
+  // box it used to sit under is gone (owner, 21 ก.ย. 2569).
   const [statusFilter, setStatusFilter] = useState("");
+  // The registration form opens from its heading; a form for a job done
+  // once per sale does not sit open above the book every visit.
+  const [registering, setRegistering] = useState(false);
 
   const [serial, setSerial] = useState("");
   const [productId, setProductId] = useState("");
@@ -113,35 +108,16 @@ export default function SalesWarranties({ liffId }: { liffId: string }) {
       ),
     [say, t],
   );
-  // Two questions, one list. `serial_number` is the exact lookup — "this
-  // unit" — and `q` is the shop searching its own book; both are answered
-  // by the database now, so neither is limited to the rows that happened
-  // to be on the page (round 20N).
+  // Searched and paged by the database, so a unit sold two years ago is
+  // found by its sticker, not by scrolling (round 20N).
   const list = usePagedList<Warranty>({
     token, licenseId, ready: session.ready,
     path: `licenses/${licenseId}/warranties`,
-    params: { status: statusFilter, serial_number: searchedSerial },
+    params: { status: statusFilter },
     onError: listError,
   });
   const rows = list.rows;
-
-  const load = useCallback(
-    async (serialNumber = "") => {
-      // Changing the serial refetches through the hook; same call shape as
-      // before so every caller below is untouched.
-      setSearchedSerial(serialNumber);
-      if (serialNumber === searchedSerial) await list.reload();
-    },
-    [list, searchedSerial],
-  );
-
-  // Said once per answer, not once per render.
-  useEffect(() => {
-    if (!searchedSerial || list.busy) return;
-    if (rows.length === 0) {
-      say(s.warranties.serialNotFound.replace("{serial}", searchedSerial), "error");
-    }
-  }, [searchedSerial, rows.length, list.busy, s, say]);
+  const load = list.reload;
 
   const loadPickers = useCallback(async () => {
     if (!token || !licenseId) return;
@@ -271,6 +247,7 @@ export default function SalesWarranties({ liffId }: { liffId: string }) {
       setStart("");
       setMonths("");
       say(copy.registered, "ok");
+      setRegistering(false);
       await load();
     } catch {
       say(copy.actionFailed, "error");
@@ -294,49 +271,19 @@ export default function SalesWarranties({ liffId }: { liffId: string }) {
     >
       <p className="page-intro">{copy.intro}</p>
 
-      <label className="field">
-        <span>{s.warranties.serialSearch}</span>
-        <input
-          type="search"
-          value={serialQuery}
-          autoCapitalize="characters"
-          placeholder={s.warranties.serialSearchHint}
-          onChange={(event) => setSerialQuery(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") void load(serialQuery.trim()).catch(() => undefined);
-          }}
-        />
-      </label>
-      <div className="actions" style={{ marginBottom: 14 }}>
-        <button
-          type="button"
-          className="btn"
-          data-variant="primary"
-          disabled={!serialQuery.trim()}
-          onClick={() => void load(serialQuery.trim()).catch(() => undefined)}
-        >
-          {s.warranties.search}
-        </button>
-        {searchedSerial && (
-          <button
-            type="button"
-            className="btn"
-            data-variant="quiet"
-            onClick={() => {
-              setSerialQuery("");
-              void load().then(() => say("")).catch(() => undefined);
-            }}
-          >
-            {s.warranties.clearSearch}
-          </button>
-        )}
-      </div>
-
       {canCreate && (
         <section className="section">
+          {/* The same shape as "เพิ่มสินค้า" on the products page: the
+              action in the heading, the form inside once asked for. */}
           <div className="section-head">
             <h2>{copy.register}</h2>
+            {!registering && (
+              <button type="button" className="btn" data-variant="primary" onClick={() => setRegistering(true)}>
+                {copy.register}
+              </button>
+            )}
           </div>
+          {registering && (
           <dl className="fields">
             <FieldRow label={copy.serial}>
               {(id) => (
@@ -386,6 +333,15 @@ export default function SalesWarranties({ liffId }: { liffId: string }) {
               <button
                 type="button"
                 className="btn"
+                data-variant="quiet"
+                disabled={busy}
+                onClick={() => setRegistering(false)}
+              >
+                {t.common.cancel}
+              </button>
+              <button
+                type="button"
+                className="btn"
                 data-variant="primary"
                 disabled={busy || !serial.trim()}
                 onClick={() => void register()}
@@ -394,168 +350,166 @@ export default function SalesWarranties({ liffId }: { liffId: string }) {
               </button>
             </div>
           </dl>
+          )}
         </section>
       )}
 
-      <section className="section">
-        <div className="section-head">
-          <h2>
-            {copy.title} ({visible.length})
-          </h2>
-        </div>
-        <ListFilters
-          query={list.query}
-          onQuery={list.setQuery}
-          status={statusFilter}
-          statuses={optionsFrom(copy.status as Record<string, string>)}
-          onStatus={setStatusFilter}
-        />
-        <div className="list-head">
-          <Count shown={visible.length} total={list.total ?? rows.length} />
-          {canCreate && (
-            <div className="list-tools">
-              <CsvImport kind="warranties" token={token} licenseId={licenseId} onDone={() => load()} />
-            </div>
-          )}
-        </div>
-        {visible.length === 0 ? (
-          <div className="empty">
-            <p>
-              {list.searching
-                ? t.dashboard.opening
-                : list.query || statusFilter || searchedSerial
-                  ? t.dashboard.noMatch
-                  : copy.empty}
-            </p>
+      {/* The book itself, at page level like every other list: it used to
+          sit inside a bordered section with no padding, so the cards and
+          the filter bar touched the frame (owner, 21 ก.ย. 2569). */}
+      <ListFilters
+        query={list.query}
+        onQuery={list.setQuery}
+        placeholder={copy.searchHint}
+        status={statusFilter}
+        statuses={optionsFrom(copy.status as Record<string, string>)}
+        onStatus={setStatusFilter}
+      />
+      <div className="list-head">
+        <Count shown={visible.length} total={list.total ?? rows.length} />
+        {canCreate && (
+          <div className="list-tools">
+            <CsvImport kind="warranties" token={token} licenseId={licenseId} onDone={() => load()} />
           </div>
-        ) : (
-          <ul className="list">
-            {visible.map((row) => (
-              <li key={row.id} className="card">
-                <div className="card-title">
-                  {row.serial_number}
-                  {row.product_name ? ` · ${row.product_name}` : ""}
-                  <span
-                    className="badge"
-                    data-tone={row.customer_chann_uid ? "ok" : undefined}
-                    style={{ marginLeft: 8 }}
+        )}
+      </div>
+      {visible.length === 0 ? (
+        <div className="empty">
+          <p>
+            {list.searching
+              ? t.dashboard.opening
+              : list.query || statusFilter
+                ? t.dashboard.noMatch
+                : copy.empty}
+          </p>
+        </div>
+      ) : (
+        <ul className="list">
+          {visible.map((row) => (
+            <li key={row.id} className="card">
+              <div className="card-title">
+                {row.serial_number}
+                {row.product_name ? ` · ${row.product_name}` : ""}
+                <span
+                  className="badge"
+                  data-tone={row.customer_chann_uid ? "ok" : undefined}
+                  style={{ marginLeft: 8 }}
+                >
+                  {row.contact_name
+                    ? `${copy.contact} ${row.contact_name}${row.contact_code ? ` (${row.contact_code})` : ""} · ${row.customer_chann_uid ? copy.lineLinked : copy.lineNotLinked}`
+                    : row.customer_chann_uid ? copy.claimed : copy.unclaimed}
+                </span>
+              </div>
+              <div className="card-meta">
+                {row.warranty_number}
+                {row.warranty_end ? ` · ${copy.expires} ${shortDate(row.warranty_end, locale)}` : ` · ${copy.noPurchaseDate}`}
+              </div>
+              {!row.warranty_start && permissions.has("warranty.update") && (
+                <div className="actions">
+                  <input
+                    type="date"
+                    aria-label={copy.warrantyStart}
+                    value={dateFor[row.id] ?? ""}
+                    onChange={(e) => setDateFor({ ...dateFor, [row.id]: e.target.value })}
+                  />
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={busy || !dateFor[row.id]}
+                    onClick={() => void setPurchaseDate(row)}
                   >
-                    {row.contact_name
-                      ? `${copy.contact} ${row.contact_name}${row.contact_code ? ` (${row.contact_code})` : ""} · ${row.customer_chann_uid ? copy.lineLinked : copy.lineNotLinked}`
-                      : row.customer_chann_uid ? copy.claimed : copy.unclaimed}
-                  </span>
+                    {copy.setPurchaseDate}
+                  </button>
                 </div>
-                <div className="card-meta">
-                  {row.warranty_number}
-                  {row.warranty_end ? ` · ${copy.expires} ${shortDate(row.warranty_end, locale)}` : ` · ${copy.noPurchaseDate}`}
+              )}
+              {/* A registration with a date was read-only: the period and
+                  the end could not be changed at all, so nobody could try
+                  an expiry (owner's tester, 16 ก.ย. 2569). */}
+              {row.warranty_start && permissions.has("warranty.update") && (
+                <div className="actions">
+                  <button
+                    type="button"
+                    className="btn"
+                    data-variant="quiet"
+                    aria-expanded={editing === row.id}
+                    onClick={() => {
+                      setEditing(editing === row.id ? "" : row.id);
+                      setEditStart(row.warranty_start ?? "");
+                      setEditEnd(row.warranty_end ?? "");
+                      setEditMonths("");
+                    }}
+                  >
+                    {copy.edit}
+                  </button>
                 </div>
-                {!row.warranty_start && permissions.has("warranty.update") && (
-                  <div className="actions">
-                    <input
-                      type="date"
-                      aria-label={copy.warrantyStart}
-                      value={dateFor[row.id] ?? ""}
-                      onChange={(e) => setDateFor({ ...dateFor, [row.id]: e.target.value })}
-                    />
-                    <button
-                      type="button"
-                      className="btn"
-                      disabled={busy || !dateFor[row.id]}
-                      onClick={() => void setPurchaseDate(row)}
-                    >
-                      {copy.setPurchaseDate}
-                    </button>
-                  </div>
-                )}
-                {/* A registration with a date was read-only: the period and
-                    the end could not be changed at all, so nobody could try
-                    an expiry (owner's tester, 16 ก.ย. 2569). */}
-                {row.warranty_start && permissions.has("warranty.update") && (
-                  <div className="actions">
-                    <button
-                      type="button"
-                      className="btn"
-                      data-variant="quiet"
-                      aria-expanded={editing === row.id}
-                      onClick={() => {
-                        setEditing(editing === row.id ? "" : row.id);
-                        setEditStart(row.warranty_start ?? "");
-                        setEditEnd(row.warranty_end ?? "");
-                        setEditMonths("");
-                      }}
-                    >
-                      {copy.edit}
-                    </button>
-                  </div>
-                )}
-                {editing === row.id && (
-                  <dl className="fields">
-                    <FieldRow label={copy.warrantyStart}>
-                      {(id) => (
+              )}
+              {editing === row.id && (
+                <dl className="fields">
+                  <FieldRow label={copy.warrantyStart}>
+                    {(id) => (
+                      <input
+                        id={id}
+                        type="date"
+                        value={editStart}
+                        onChange={(e) => setEditStart(e.target.value)}
+                      />
+                    )}
+                  </FieldRow>
+                  <FieldRow label={copy.warrantyMonths}>
+                    {(id) => (
+                      <>
+                        <input
+                          id={id}
+                          inputMode="numeric"
+                          placeholder={String(productMonths(row) ?? "")}
+                          value={editMonths}
+                          onChange={(e) => setEditMonths(e.target.value)}
+                        />
+                        <span className="hint">
+                          {productMonths(row)
+                            ? copy.fromProduct.replace("{months}", String(productMonths(row)))
+                            : copy.warrantyMonthsHint}
+                        </span>
+                      </>
+                    )}
+                  </FieldRow>
+                  <FieldRow label={copy.warrantyEnd}>
+                    {(id) => (
+                      <>
                         <input
                           id={id}
                           type="date"
-                          value={editStart}
-                          onChange={(e) => setEditStart(e.target.value)}
+                          value={editEnd}
+                          onChange={(e) => setEditEnd(e.target.value)}
                         />
-                      )}
-                    </FieldRow>
-                    <FieldRow label={copy.warrantyMonths}>
-                      {(id) => (
-                        <>
-                          <input
-                            id={id}
-                            inputMode="numeric"
-                            placeholder={String(productMonths(row) ?? "")}
-                            value={editMonths}
-                            onChange={(e) => setEditMonths(e.target.value)}
-                          />
-                          <span className="hint">
-                            {productMonths(row)
-                              ? copy.fromProduct.replace("{months}", String(productMonths(row)))
-                              : copy.warrantyMonthsHint}
-                          </span>
-                        </>
-                      )}
-                    </FieldRow>
-                    <FieldRow label={copy.warrantyEnd}>
-                      {(id) => (
-                        <>
-                          <input
-                            id={id}
-                            type="date"
-                            value={editEnd}
-                            onChange={(e) => setEditEnd(e.target.value)}
-                          />
-                          <span className="hint">{copy.editHint}</span>
-                        </>
-                      )}
-                    </FieldRow>
-                    <div className="actions">
-                      <button
-                        type="button"
-                        className="btn"
-                        data-variant="primary"
-                        disabled={busy}
-                        onClick={() => void saveCover(row)}
-                      >
-                        {copy.saveWarranty}
-                      </button>
-                    </div>
-                  </dl>
-                )}
-              </li>
-            ))}
-          </ul>
-        )}
-        {list.hasMore && (
-          <div className="actions">
-            <button type="button" className="btn" disabled={list.busy} onClick={list.loadMore}>
-              {list.busy ? t.dashboard.opening : t.dashboard.list.loadMore}
-            </button>
-          </div>
-        )}
-      </section>
+                        <span className="hint">{copy.editHint}</span>
+                      </>
+                    )}
+                  </FieldRow>
+                  <div className="actions">
+                    <button
+                      type="button"
+                      className="btn"
+                      data-variant="primary"
+                      disabled={busy}
+                      onClick={() => void saveCover(row)}
+                    >
+                      {copy.saveWarranty}
+                    </button>
+                  </div>
+                </dl>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {list.hasMore && (
+        <div className="actions">
+          <button type="button" className="btn" disabled={list.busy} onClick={list.loadMore}>
+            {list.busy ? t.dashboard.opening : t.dashboard.list.loadMore}
+          </button>
+        </div>
+      )}
     </SalesShell>
   );
 }

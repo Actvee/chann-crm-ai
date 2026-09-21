@@ -1092,26 +1092,78 @@ fieldset.group legend {
 
 /* --------------------------------------------------------- list controls */
 
+/* The filter bar. It was a bare flex row of 12px labels over 13.5px
+   inputs with no frame — controls that looked unplaced and, on iOS,
+   zoomed the page on focus because the text was under 16px (owner,
+   21 ก.ย. 2569: "UI ของการกรองข้อมูล เหมือนยังไม่ได้ออกแบบ"). Now one
+   card: the search across the top, the narrower controls in a grid
+   under it, every box 44px tall with a visible label above it
+   (ui-ux-pro-max: label above input, 44px targets, 8px+ between them,
+   16px text so the phone keyboard does not zoom). */
 .list-controls {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 14px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px 12px;
   align-items: end;
-  margin: 0 0 14px;
+  margin: 0 0 12px;
+  padding: 12px 14px 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
 }
 
 .list-controls label {
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  font-size: 12px;
-  color: var(--ink-faint);
+  gap: 5px;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink-soft);
+}
+
+/* The search is the control people reach for; it gets the whole first line. */
+.list-controls label:has(> input[type="search"]) {
+  grid-column: 1 / -1;
 }
 
 .list-controls select,
 .list-controls input {
-  font-size: 13.5px;
-  padding: 6px 8px;
+  font: inherit;
+  font-size: 16px;
+  width: 100%;
+  min-height: 44px;
+  padding: 9px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.list-controls select:focus,
+.list-controls input:focus {
+  outline: 2px solid var(--stage-proposed);
+  outline-offset: -1px;
+}
+
+.list-controls > .btn {
+  align-self: end;
+  justify-self: start;
+}
+
+/* A second bar right under the first (sort and dates under search and
+   status) reads as one card, not two stacked boxes. */
+.list-controls + .list-controls {
+  margin-top: -13px;
+  padding-top: 2px;
+  border-top: 0;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+/* Inside a section card the bar keeps the card's gutter. */
+.section > .list-controls {
+  margin: 12px 16px 0;
 }
 
 /* Phase 15 — live chat threads (dashboard and customer home). */
@@ -1462,6 +1514,26 @@ fieldset.group legend {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* The head carries two actions now ("ข้อมูลลูกค้า", "ปิดการสนทนา"). On a
+   phone they take a line of their own under the name rather than
+   squeezing the name to an ellipsis. */
+.chat-thread-head {
+  flex-wrap: wrap;
+}
+
+.chat-thread-tools {
+  display: flex;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+@media (max-width: 600px) {
+  .chat-thread-tools {
+    flex: 1 0 100%;
+    justify-content: flex-end;
+  }
 }
 
 .chat-scroll {
@@ -2534,7 +2606,11 @@ button.notif-open {
 .sheet-body {
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  padding: 4px 0 14px;
+  /* A 16px gutter, the same as the page: the customer panel's lists sat
+     flush against the panel's edge (owner, 21 ก.ย. 2569: "ชิดขอบเกินไป").
+     The import tools below take the gutter back, because their own
+     field rows already carry it. */
+  padding: 10px 16px 18px;
 }
 
 /* The tools inside were written as full-width page sections; inside the
@@ -2543,7 +2619,7 @@ button.notif-open {
   border: 0;
   border-radius: 0;
   background: none;
-  margin: 0;
+  margin: 0 -16px;
 }
 
 .sheet-body .section > .section-head { display: none; }

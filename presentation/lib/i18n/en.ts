@@ -343,6 +343,7 @@ export const en: Dictionary = {
     },
     warranties: {
       title: "Registered units",
+      searchHint: "Serial, product or customer name",
       status: { active: "In warranty", expired: "Expired", void: "Void" },
       intro: "Record each unit sold with its S/N. When the customer types the S/N in the customer LINE, the unit is attached to them and faults can be filed against it",
       empty: "No registered units yet",

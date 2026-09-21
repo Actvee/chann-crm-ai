@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..models import ChannIdentity, CustomerLicenseLink, LicenseMember
+from ..models import ChannIdentity, Customer, CustomerLicenseLink, LicenseMember
 
 EDITABLE_FIELDS = frozenset(
     {"first_name", "last_name", "phone", "email", "address"}
@@ -94,8 +94,35 @@ class ProfileRepository:
             identity.registered = True
             identity.registered_at = datetime.now(timezone.utc)
 
+        if ("first_name" in fields or "last_name" in fields) and (identity.first_name or identity.last_name):
+            # The name just registered reaches every shop's record of this
+            # person that has none — a customer who linked before typing
+            # their name was a bare id on the chat page (21 ก.ย. 2569).
+            self.fill_nameless_customer_rows(chann_uid)
+
         self._s.flush()
         return identity
+
+    def fill_nameless_customer_rows(self, chann_uid: str) -> int:
+        """Customer rows of this identity with no name take the identity's.
+        Only empty names: a name the shop typed is the shop's."""
+        identity = self._s.get(ChannIdentity, chann_uid)
+        if identity is None:
+            return 0
+        first = (identity.first_name or "").strip() or None
+        last = (identity.last_name or "").strip() or None
+        if not (first or last):
+            return 0
+        rows = self._s.execute(
+            select(Customer).where(Customer.customer_chann_uid == chann_uid)
+        ).scalars().all()
+        n = 0
+        for row in rows:
+            if (row.first_name or "").strip() or (row.last_name or "").strip():
+                continue
+            row.first_name, row.last_name = first, last
+            n += 1
+        return n
 
     def may_edit_on_behalf(
         self, *, actor_chann_uid: str, target_chann_uid: str, license_id

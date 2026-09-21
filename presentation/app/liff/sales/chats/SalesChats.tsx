@@ -453,18 +453,20 @@ export default function SalesChats({ liffId }: { liffId: string }) {
         </div>
         {/* Who this is, in the shop's own terms: their deals, jobs and
             notes, each a link to the record (owner, 20 ก.ย. 2569). */}
-        <CustomerContext
-          token={session.token}
-          licenseId={session.licenseId}
-          permissions={session.permissions}
-          name={nameOf(selected)}
-          recordId={selected.customer_record_id ?? null}
-        />
-        {isLive(selected) && canReply && (
-          <button type="button" className="btn" data-variant="quiet" disabled={busy} onClick={() => void close()}>
-            {copy.close}
-          </button>
-        )}
+        <div className="chat-thread-tools">
+          <CustomerContext
+            token={session.token}
+            licenseId={session.licenseId}
+            permissions={session.permissions}
+            name={nameOf(selected)}
+            recordId={selected.customer_record_id ?? null}
+          />
+          {isLive(selected) && canReply && (
+            <button type="button" className="btn" data-variant="quiet" disabled={busy} onClick={() => void close()}>
+              {copy.close}
+            </button>
+          )}
+        </div>
       </header>
       <div className="chat-scroll" ref={scroller} onScroll={onScroll}>
         {messages.length === 0 ? (
