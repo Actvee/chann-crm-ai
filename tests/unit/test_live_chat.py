@@ -77,10 +77,11 @@ class ChatFake(FakeDataClient):
         return [m for m in self._chat_messages if m["session_id"] == session_id]
 
     async def add_chat_message(self, license_id, session_id, *, sender_type, content,
-                               sender_chann_uid=None, content_en=None, sla_minutes=30, timeout_minutes=120):
+                               sender_chann_uid=None, content_en=None, sla_minutes=30, timeout_minutes=120, image_path=None):
         self.recorded.append(("add_chat_message", session_id, sender_type, content))
         row = {"id": f"cm-{len(self._chat_messages) + 1}", "session_id": session_id,
-               "sender_type": sender_type, "content": content, "sender_chann_uid": sender_chann_uid}
+               "sender_type": sender_type, "content": content, "sender_chann_uid": sender_chann_uid,
+               "image_path": image_path}
         self._chat_messages.append(row)
         for s in self._chat_sessions:
             if s["id"] == session_id and sender_type == "agent" and s["status"] == "open":

@@ -182,11 +182,14 @@ class ChatSessionRepository:
         self, scope: TenantScope, session_id: uuid.UUID, *,
         sender_type: str, content: str, sender_chann_uid: str | None = None,
         content_en: str | None = None, sla_minutes: int = 30, timeout_minutes: int = 60,
+        image_path: str | None = None,
     ) -> ChatMessage:
         if sender_type not in SENDER_TYPES:
             raise ChatSessionConflict(f"unknown sender type: {sender_type!r}")
         content = (content or "").strip()
-        if not content:
+        image_path = (image_path or "").strip() or None
+        # A picture may go without words; words may not go without words.
+        if not content and not image_path:
             raise ChatSessionConflict("empty message")
         row = self.require(scope, session_id)
         # The customer speaks only into a live conversation; the shop may
@@ -197,6 +200,7 @@ class ChatSessionRepository:
         message = ChatMessage(
             session_id=row.id, license_id=scope.license_id, sender_type=sender_type,
             sender_chann_uid=sender_chann_uid, content=content, content_en=content_en,
+            image_path=image_path,
         )
         self._s.add(message)
         now = _now()
@@ -275,9 +279,10 @@ class ChatSessionRepository:
                 ).order_by(ChatMessage.created_at.desc()).limit(1)
             ).scalars().first()
             out[session_id] = {
-                "last_message": last.content if last else None,
+                "last_message": (last.content or None) if last else None,
                 "last_sender_type": last.sender_type if last else None,
                 "last_message_at": last.created_at if last else None,
+                "last_message_image": bool(last.image_path) if last else False,
                 "unread_from_customer": int(unread.get(session_id, 0)),
             }
         return out

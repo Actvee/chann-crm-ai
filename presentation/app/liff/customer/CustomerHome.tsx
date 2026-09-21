@@ -43,7 +43,7 @@ type StoreProduct = {
 };
 
 type ChatSessionView = { id: string; status: string };
-type ChatLine = { id: string; sender_type: string; content: string; created_at: string };
+type ChatLine = { id: string; sender_type: string; content: string; image_url?: string | null; created_at: string };
 
 type Order = {
   id: string;
@@ -551,7 +551,12 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
                         ? t.dashboard.customer.chatYou
                         : t.dashboard.customer.chatShop}
                     </div>
-                    <div>{line.content}</div>
+                    {line.image_url && (
+                      <a className="bubble-image" href={line.image_url} target="_blank" rel="noreferrer">
+                        <img src={line.image_url} alt={t.dashboard.customer.chatImage} loading="lazy" />
+                      </a>
+                    )}
+                    {line.content && <div>{line.content}</div>}
                   </li>
                 ))}
               </ul>

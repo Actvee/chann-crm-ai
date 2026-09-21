@@ -97,6 +97,7 @@ COMPOSED_FIELDS = {
     # routers_phase2 adds it to each row of GET document-templates/{id}/versions:
     # an asset link to the Word file the version was compiled from, or null
     "source_docx_url",
+    "image_url",  # chat messages: an asset link beside image_path (round 20T)
     "keys",  # picker options, local only
     # routers_admin composes the guide's `how` lines (20 ก.ย. 2569): a
     # sub-heading {group} or a line {text, type} — no *Out schema, no table

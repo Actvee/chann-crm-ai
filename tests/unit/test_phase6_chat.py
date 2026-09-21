@@ -1823,14 +1823,14 @@ class FakeDataClient:
 
     async def add_chat_message(self, license_id, session_id, *, sender_type, content,
                                sender_chann_uid=None, content_en=None,
-                               sla_minutes=30, timeout_minutes=60):
+                               sla_minutes=30, timeout_minutes=60, image_path=None):
         from chann_app.data_client import DataTierError
 
         self.recorded.append(("add_chat_message", license_id, session_id, sender_type, content))
         if sender_type not in ("customer", "agent", "ai", "system"):
             raise DataTierError(409, f"unknown sender type: {sender_type!r}")
         content = (content or "").strip()
-        if not content:
+        if not content and not image_path:
             raise DataTierError(409, "empty message")
         session = self._require_chat_session(license_id, session_id)
         # The customer speaks only into a live conversation; the shop may
@@ -1842,6 +1842,7 @@ class FakeDataClient:
             "session_id": str(session_id), "license_id": str(license_id),
             "sender_type": sender_type, "sender_chann_uid": sender_chann_uid,
             "content": content, "content_en": content_en, "is_read": False,
+            "image_path": image_path,
             # The real rows are timestamped, and whether a line is the
             # conversation's opening one is read off that (round 19h).
             "created_at": self._chat_clock(),

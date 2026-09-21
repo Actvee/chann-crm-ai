@@ -21,6 +21,7 @@ from .routers_admin import get_data_client, require_admin
 from .services import approval as approval_service
 from .services import storefront as storefront_service
 from .services import csv_import, live_chat
+from .services.chat_images import with_image_links
 from .services.authorization import TenantPrincipal, resolve_tenant_principal
 from .services.documents.selection import TEMPLATE_DOCUMENT_TYPES
 from .services.identity import member_channel
@@ -4244,6 +4245,13 @@ class ChatLineBody(BaseModel):
     content: str = Field(min_length=1, max_length=4000)
 
 
+class ChatImageBody(BaseModel):
+    """A picture into the conversation (round 20T): a data: URL from the
+    browser, as the job photos travel, and the words to go with it."""
+    image: str
+    caption: str | None = Field(default=None, max_length=1000)
+
+
 class ChatOpenBody(BaseModel):
     content: str | None = Field(default=None, max_length=4000)
     product_id: str | None = None
@@ -4390,6 +4398,7 @@ async def start_chat_session_from_shop(
 
 @router.get("/licenses/{license_id}/chat-sessions/{session_id}/messages")
 async def list_chat_messages(
+    request: Request,
     license_id: str,
     session_id: str,
     since: str | None = None,
@@ -4409,7 +4418,10 @@ async def list_chat_messages(
         )
     except DataTierError as exc:
         raise _propagate(exc)
-    return {"session": session, "messages": rows}
+    # A picture on the thread comes back as a link the page can show
+    # (round 20T); the request origin is the fallback base, as for the
+    # job photos.
+    return {"session": session, "messages": with_image_links(rows, base_url=str(request.base_url))}
 
 
 @router.post("/licenses/{license_id}/chat-sessions/{session_id}/messages", status_code=201)
@@ -4444,6 +4456,60 @@ async def send_chat_message(
         )
     except DataTierError as exc:
         raise _propagate(exc)
+
+
+@router.post("/licenses/{license_id}/chat-sessions/{session_id}/images", status_code=201)
+async def send_chat_image(
+    request: Request,
+    license_id: str,
+    session_id: str,
+    payload: ChatImageBody,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Round 20T — a picture into the conversation, with or without words.
+    The same rules as a line of text: a customer only into a live one, the
+    shop into any (a parked one gets the reopen invitation). The picture
+    is normalised and stored first; the row and the LINE push follow."""
+    from .services.chat_images import chat_image_link, store_chat_image
+    from .services.photos import PhotoRefused
+
+    _require_same_tenant(principal, license_id)
+    session = await _chat_session_for(client, principal, license_id, session_id)
+    if principal.is_customer and str(session.get("status")) not in ("open", "assigned"):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"error": "chat_session_closed"})
+    if not principal.is_customer:
+        principal.require("chat_session.reply")
+    content, content_type = _decode_data_url(payload.image)
+    try:
+        path = await store_chat_image(
+            license_id=license_id, session_id=session_id, content=content, content_type=content_type,
+        )
+    except PhotoRefused as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:  # noqa: BLE001 — the store said no; the row must not pretend
+        log.exception("chat picture could not be stored")
+        raise HTTPException(status_code=502, detail=f"picture could not be stored: {exc}")
+    caption = (payload.caption or "").strip()
+    link = chat_image_link(path, base_url=str(request.base_url))
+    try:
+        if principal.is_customer:
+            row = await live_chat.customer_message(
+                client, license_id=license_id, session=session, chann_uid=principal.chann_uid,
+                text=caption, image_path=path,
+            )
+        else:
+            member = await client.get_member(
+                license_id, principal.chann_uid, channel=member_channel(principal.audience),
+            )
+            row = await live_chat.agent_reply(
+                client, license_id=license_id, session=session, agent_chann_uid=principal.chann_uid,
+                member_id=str(member.get("id")) if member else None, text=caption,
+                image_path=path, image_url=link,
+            )
+    except DataTierError as exc:
+        raise _propagate(exc)
+    return {**row, "image_url": link}
 
 
 @router.post("/licenses/{license_id}/chat-sessions/{session_id}/close")

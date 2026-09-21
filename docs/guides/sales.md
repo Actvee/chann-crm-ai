@@ -128,6 +128,7 @@ _- Or dashboard > tickets_
 
 - LINE แจ้งทุกคนแค่ตอนเปิดแชทใหม่พร้อมข้อความแรก ที่เหลืออ่านและตอบบนหน้าแชทลูกค้า · คนแรกที่ตอบเป็นเจ้าของการสนทนา
 - ปุ่ม "ข้อมูลลูกค้า" บนหัวแชท เปิดดูดีล งานซ่อม และบันทึกของคนนี้ กดไปที่เรคอร์ดได้เลย
+- ส่งรูปได้ — กดปุ่มแนบรูปข้างช่องพิมพ์ เลือกรูป พิมพ์คำอธิบายถ้าต้องการ แล้วกดส่งรูป ลูกค้าเห็นเป็นรูปใน LINE · รูปที่ลูกค้าส่งมาระหว่างคุยขึ้นในแชทนี้เช่นกัน
 - ร้านเริ่มคุยเองก็ได้ — ลูกค้าต้องผูก LINE กับร้านแล้ว → พิมพ์ "คุยกับลูกค้า สมชาย"
 - หรือจากงาน → พิมพ์ "คุยกับลูกค้า T-2026-0001"
 - ใส่ข้อความแรกต่อท้ายได้ → พิมพ์ "คุยกับลูกค้า สมชาย: พรุ่งนี้ช่างไปได้ไหม"
@@ -144,6 +145,7 @@ _EN: Customer chats — A customer who taps "talk to the shop" appears under hom
 
 _- LINE announces a NEW conversation with the first thing they said; the rest is read and answered on the chats page · the first to answer owns it_
 _- The "Customer" button on the thread opens their deals, jobs and notes, each a link to the record_
+_- Pictures go too — tap the attach button beside the box, pick one, add a caption if you like, then send; the customer sees it as a picture in LINE · a picture the customer sends while talking shows here as well_
 _- The shop can open the conversation — the customer must be linked on LINE → type "คุยกับลูกค้า สมชาย"_
 _- Or from a job → type "คุยกับลูกค้า T-2026-0001"_
 _- A first line may follow a colon → type "คุยกับลูกค้า สมชาย: พรุ่งนี้ช่างไปได้ไหม"_

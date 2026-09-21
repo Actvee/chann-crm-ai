@@ -14,7 +14,7 @@ import logging
 import uuid
 
 from ..data_client import DataClient
-from ..line.client import LineReplyError, push_text
+from ..line.client import LineReplyError, image_message, push_messages, push_text, text_message
 
 log = logging.getLogger(__name__)
 
@@ -82,8 +82,13 @@ async def send_notification(
     language: str = "th",
     oa: str | None = None,
     quick_reply: list | None = None,
+    images: list[str] | None = None,
 ) -> dict:
     """Record, then push. Returns the stored notification either way.
+
+    `images` (round 20T): https links pushed as picture messages BEFORE
+    the words, in one request, so the customer sees the photo and then
+    the line about it — with the quick reply still on the last message.
 
     `quick_reply` exists so that the pushes which carry a button — the
     live-chat lines that offer "จบการสนทนา" and "คุยกับร้าน" — can come
@@ -129,10 +134,17 @@ async def send_notification(
 
     text = message_en if (language == "en" and message_en) else message
     try:
-        sent_ids = await push_text(
-            oa or TYPE_TO_OA.get(type, DEFAULT_OA), target_line_user_id, text,
-            quick_reply=quick_reply,
-        )
+        pictures = [image_message(u) for u in (images or [])[:4] if str(u).startswith("https://")]
+        if pictures:
+            sent_ids = await push_messages(
+                oa or TYPE_TO_OA.get(type, DEFAULT_OA), target_line_user_id,
+                [*pictures, text_message(text, quick_reply=quick_reply)],
+            )
+        else:
+            sent_ids = await push_text(
+                oa or TYPE_TO_OA.get(type, DEFAULT_OA), target_line_user_id, text,
+                quick_reply=quick_reply,
+            )
     except LineReplyError as exc:
         # Deliberately swallowed: the notification is already durable, and
         # raising here would fail whatever business action triggered it —

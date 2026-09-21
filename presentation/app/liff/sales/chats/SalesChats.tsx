@@ -24,6 +24,8 @@ type ChatSession = {
   last_message?: string | null;
   last_sender_type?: string | null;
   last_message_at?: string | null;
+  /** The newest line is a picture (its caption, if any, is last_message). */
+  last_message_image?: boolean;
   unread_from_customer?: number;
   updated_at: string;
 };
@@ -33,10 +35,49 @@ type ChatMessage = {
   sender_type: string;
   sender_chann_uid?: string | null;
   content: string;
+  /** A picture on the thread (round 20T): a link good for a year. */
+  image_url?: string | null;
   created_at: string;
 };
 
 const POLL_MS = 8000;
+const PHONE = "(max-width: 759px)";
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+const IMAGE_EDGE = 1600;
+
+/**
+ * A picture picked on the phone, shrunk in the browser before it travels:
+ * a 4000-pixel camera JPEG is 3–6 MB, and the server would shrink it to
+ * 1600 pixels anyway (chat_images.py) — doing it here first saves the
+ * upload on a mobile connection and shows the preview instantly. Anything
+ * that cannot be drawn (a HEIC the browser will not decode) goes up as it
+ * is, and the server has the last word on what is and is not an image.
+ */
+async function shrinkImage(file: File): Promise<string> {
+  const asDataUrl = () =>
+    new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+  try {
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, IMAGE_EDGE / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("no canvas");
+    context.fillStyle = "#fff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close();
+    return canvas.toDataURL("image/jpeg", 0.85);
+  } catch {
+    return asDataUrl();
+  }
+}
 
 function clock(iso?: string | null): string {
   if (!iso) return "";
@@ -106,10 +147,14 @@ export default function SalesChats({ liffId }: { liffId: string }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
+  // The picture waiting in the composer, as the data: URL that will be sent.
+  const [attachment, setAttachment] = useState<{ dataUrl: string; name: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
   const scroller = useRef<HTMLDivElement | null>(null);
+  const pane = useRef<HTMLElement | null>(null);
+  const fileInput = useRef<HTMLInputElement | null>(null);
   const stickToBottom = useRef(true);
   const lastMessageId = useRef<string>("");
   //: Bumped by every list request; a reply whose number is stale is ignored.
@@ -253,6 +298,55 @@ export default function SalesChats({ liffId }: { liffId: string }) {
     if (stickToBottom.current) el.scrollTop = el.scrollHeight;
   }, [messages]);
 
+  // On a phone the open conversation IS the screen (owner, 21 ก.ย. 2569:
+  // "มีการสไลด์หน้าแชทกับตัวหน้า liff แยกกัน … ใช้งานยาก"). Before this the
+  // thread was a box with its own scrollbar inside a page that also
+  // scrolled, so a thumb reading the thread kept dragging the whole page,
+  // and the composer sat wherever the page had scrolled to. Now the pane
+  // is fixed over the page with ONE scroll region — the messages — the
+  // page underneath is locked, and the pane is sized to the visual
+  // viewport so the composer rides up with the keyboard instead of
+  // disappearing behind it (iOS does not shrink 100dvh for the keyboard).
+  useEffect(() => {
+    if (!selectedId) return;
+    const phone = window.matchMedia(PHONE);
+    const viewport = window.visualViewport;
+    const root = document.documentElement;
+    const fit = () => {
+      const el = pane.current;
+      if (!el) return;
+      if (!phone.matches) {
+        root.removeAttribute("data-chat-open");
+        el.style.height = "";
+        el.style.top = "";
+        return;
+      }
+      root.setAttribute("data-chat-open", "true");
+      if (viewport) {
+        el.style.height = `${Math.round(viewport.height)}px`;
+        el.style.top = `${Math.round(viewport.offsetTop)}px`;
+      }
+      if (stickToBottom.current && scroller.current) {
+        scroller.current.scrollTop = scroller.current.scrollHeight;
+      }
+    };
+    fit();
+    viewport?.addEventListener("resize", fit);
+    viewport?.addEventListener("scroll", fit);
+    phone.addEventListener("change", fit);
+    return () => {
+      viewport?.removeEventListener("resize", fit);
+      viewport?.removeEventListener("scroll", fit);
+      phone.removeEventListener("change", fit);
+      root.removeAttribute("data-chat-open");
+      const el = pane.current;
+      if (el) {
+        el.style.height = "";
+        el.style.top = "";
+      }
+    };
+  }, [selectedId]);
+
   function onScroll() {
     const el = scroller.current;
     if (!el) return;
@@ -262,6 +356,7 @@ export default function SalesChats({ liffId }: { liffId: string }) {
   async function open(session: ChatSession) {
     setSelectedId(session.id);
     setMessages([]);
+    setAttachment(null);
     lastMessageId.current = "";
     stickToBottom.current = true;
     try {
@@ -272,25 +367,61 @@ export default function SalesChats({ liffId }: { liffId: string }) {
     }
   }
 
+  async function pickImage(file: File | null) {
+    if (fileInput.current) fileInput.current.value = "";
+    if (!file) return;
+    // The two refusals the server makes, said before the upload and in
+    // the person's language (as the job photos do, review D12).
+    if (file.size > MAX_IMAGE_BYTES) {
+      say(copy.imageTooLarge, "error");
+      return;
+    }
+    if (file.type && !file.type.startsWith("image/")) {
+      say(copy.imageNotImage, "error");
+      return;
+    }
+    try {
+      setAttachment({ dataUrl: await shrinkImage(file), name: file.name });
+      say(copy.imageReady, "ok");
+    } catch {
+      say(copy.imageNotImage, "error");
+    }
+  }
+
   async function reply() {
-    if (!selected || !draft.trim()) return;
+    if (!selected) return;
+    const words = draft.trim();
+    if (!words && !attachment) return;
     setBusy(true);
     try {
-      const response = await fetch(
-        `/api/phase2/licenses/${licenseId}/chat-sessions/${selected.id}/messages`,
-        {
-          method: "POST",
-          headers: { ...proxyHeaders(token, licenseId), "Content-Type": "application/json" },
-          body: JSON.stringify({ content: draft.trim() }),
-        },
-      );
-      if (!response.ok) throw new Error(String(response.status));
+      // A picture goes with its caption in ONE line; words alone go the
+      // usual way. Same conversation, same rules, one more shape.
+      const response = attachment
+        ? await fetch(`/api/phase2/licenses/${licenseId}/chat-sessions/${selected.id}/images`, {
+            method: "POST",
+            headers: { ...proxyHeaders(token, licenseId), "Content-Type": "application/json" },
+            body: JSON.stringify({ image: attachment.dataUrl, caption: words || null }),
+          })
+        : await fetch(`/api/phase2/licenses/${licenseId}/chat-sessions/${selected.id}/messages`, {
+            method: "POST",
+            headers: { ...proxyHeaders(token, licenseId), "Content-Type": "application/json" },
+            body: JSON.stringify({ content: words }),
+          });
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as { detail?: unknown } | null;
+        const detail = typeof body?.detail === "string" ? body.detail : "";
+        if (detail.includes("10 MB")) throw new Error(copy.imageTooLarge);
+        if (detail.includes("not an image")) throw new Error(copy.imageNotImage);
+        throw new Error(copy.sendFailed);
+      }
       setDraft("");
+      setAttachment(null);
       stickToBottom.current = true;
+      say("");
       await loadThread(selected.id);
       await loadSessions();
-    } catch {
-      say(copy.sendFailed, "error");
+    } catch (error) {
+      say(error instanceof Error && error.message ? error.message : copy.sendFailed, "error");
     } finally {
       setBusy(false);
     }
@@ -398,7 +529,8 @@ export default function SalesChats({ liffId }: { liffId: string }) {
                     </span>
                     <span className="chat-row-preview">
                       {row.last_sender_type === "agent" ? `${copy.shop}: ` : ""}
-                      {row.last_message || statusLabel(row.status)}
+                      {row.last_message_image ? "📷 " : ""}
+                      {row.last_message || (row.last_message_image ? copy.imageWord : statusLabel(row.status))}
                     </span>
                     <span className="chat-row-chips">
                       <span className="chip" data-tone={isLive(row) ? "live" : "muted"}>{statusLabel(row.status)}</span>
@@ -428,7 +560,7 @@ export default function SalesChats({ liffId }: { liffId: string }) {
   }
 
   const thread = selected ? (
-    <section className="chat-thread-pane" aria-label={nameOf(selected)}>
+    <section className="chat-thread-pane" aria-label={nameOf(selected)} ref={pane}>
       <header className="chat-thread-head">
         <button
           type="button"
@@ -481,7 +613,14 @@ export default function SalesChats({ liffId }: { liffId: string }) {
                   className="bubble"
                   data-side={m.sender_type === "customer" ? "them" : m.sender_type === "agent" ? "us" : "system"}
                 >
-                  <div className="bubble-body">{m.content}</div>
+                  {m.image_url && (
+                    // The picture opens full size in a new tab; the bubble
+                    // shows it at bubble width, never wider than the thread.
+                    <a className="bubble-image" href={m.image_url} target="_blank" rel="noreferrer">
+                      <img src={m.image_url} alt={copy.imageAlt} loading="lazy" />
+                    </a>
+                  )}
+                  {m.content && <div className="bubble-body">{m.content}</div>}
                   <div className="bubble-meta">
                     {m.sender_type === "customer" ? copy.customer : m.sender_type === "agent" ? copy.shop : statusLabel(m.sender_type)}
                     {" · "}
@@ -500,28 +639,82 @@ export default function SalesChats({ liffId }: { liffId: string }) {
         (
           <form
             className="chat-composer"
+            data-attached={attachment ? "true" : undefined}
             onSubmit={(e) => {
               e.preventDefault();
               void reply();
             }}
           >
-            <label className="sr-only" htmlFor="chat-draft">{copy.replyPlaceholder}</label>
-            <textarea
-              id="chat-draft"
-              rows={1}
-              value={draft}
-              placeholder={copy.replyPlaceholder}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  void reply();
-                }
-              }}
-            />
-            <button type="submit" className="btn" data-variant="primary" disabled={busy || !draft.trim()}>
-              {busy ? t.dashboard.related.saving : copy.send}
-            </button>
+            {attachment && (
+              /* The picture waits here until it is sent, with its name and
+                 a way to take it back; the words typed below become its
+                 caption. */
+              <div className="chat-attachment" role="group" aria-label={copy.attachImage}>
+                <img src={attachment.dataUrl} alt="" />
+                <span className="chat-attachment-name">{attachment.name}</span>
+                <button
+                  type="button"
+                  className="btn"
+                  data-variant="quiet"
+                  onClick={() => setAttachment(null)}
+                  disabled={busy}
+                  aria-label={copy.removeImage}
+                >
+                  ✕
+                </button>
+              </div>
+            )}
+            <div className="chat-composer-row">
+              <input
+                ref={fileInput}
+                type="file"
+                accept="image/*"
+                className="sr-only"
+                id="chat-image"
+                onChange={(e) => void pickImage(e.target.files?.[0] ?? null)}
+                disabled={busy}
+              />
+              {/* A real button for the file picker, not a styled label:
+                  the keyboard reaches it and the 44px hit area is its own
+                  (ui-ux-pro-max, Touch & Interaction). */}
+              <button
+                type="button"
+                className="btn chat-attach"
+                data-variant="quiet"
+                aria-label={copy.attachImage}
+                title={copy.attachImage}
+                disabled={busy}
+                onClick={() => fileInput.current?.click()}
+              >
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <rect x="3" y="5" width="18" height="14" rx="2" />
+                  <circle cx="8.5" cy="10" r="1.5" />
+                  <path d="M21 15l-5-5-8 8" />
+                </svg>
+              </button>
+              <label className="sr-only" htmlFor="chat-draft">{copy.replyPlaceholder}</label>
+              <textarea
+                id="chat-draft"
+                rows={1}
+                value={draft}
+                placeholder={attachment ? copy.captionPlaceholder : copy.replyPlaceholder}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    void reply();
+                  }
+                }}
+              />
+              <button
+                type="submit"
+                className="btn"
+                data-variant="primary"
+                disabled={busy || (!draft.trim() && !attachment)}
+              >
+                {busy ? t.dashboard.related.saving : attachment ? copy.sendImage : copy.send}
+              </button>
+            </div>
           </form>
         )
       ) : (

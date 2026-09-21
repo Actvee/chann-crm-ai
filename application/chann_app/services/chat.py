@@ -33,6 +33,7 @@ from .guides import (
 )
 from . import notify as _notify_mod
 from .thai_datetime import DATE_FORMATS, local_today, thai_number_words
+from .chat_images import store_chat_image
 from .photos import PhotoRefused, store_ticket_photo
 from ..line.client import get_message_content
 from .ai.intent import parse_intent, unavailable_reply
@@ -6025,6 +6026,31 @@ async def handle_incoming_image(
     if ctx.resolution is not TenantResolution.SINGLE:
         return ChatReply(text=greet(ctx, language))
     license_id = str(ctx.license_id)
+    if oa == "customer":
+        # Round 20T: talking to the shop right now — the picture is a line
+        # of that conversation, not evidence on a job (and there may be no
+        # job). No echo, as with a typed line: the person is talking to a
+        # person.
+        try:
+            talking = await live_chat.live_session(client, license_id=license_id, chann_uid=ctx.chann_uid)
+        except Exception:  # noqa: BLE001
+            log.exception("could not look up a live conversation for a picture")
+            talking = None
+        if talking is not None:
+            try:
+                content, content_type = await get_message_content(oa, message_id)
+                path = await store_chat_image(
+                    license_id=license_id, session_id=str(talking["id"]),
+                    content=content, content_type=content_type,
+                )
+                await live_chat.customer_message(
+                    client, license_id=license_id, session=talking, chann_uid=ctx.chann_uid,
+                    text="", language=language, image_path=path,
+                )
+            except Exception:  # noqa: BLE001
+                log.exception("a picture for the conversation could not be stored")
+                return ChatReply(text=_t(PHOTO_FAILED, language))
+            return ChatReply(text="", entity_type="chat_session", entity_id=str(talking.get("id") or ""))
     ticket = None
     member_id = None
     photo_type = "evidence"

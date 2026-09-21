@@ -1324,6 +1324,9 @@ class ChatMessage(Base):
     sender_chann_uid: Mapped[str | None] = mapped_column(String(32))
     content: Mapped[str] = mapped_column(Text, nullable=False)
     content_en: Mapped[str | None] = mapped_column(Text)
+    #: Round 20T — a picture in the conversation: the stored object's
+    #: path (gs://…), with `content` as its caption or empty.
+    image_path: Mapped[str | None] = mapped_column(Text)
     is_read: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False,

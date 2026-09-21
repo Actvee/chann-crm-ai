@@ -1253,6 +1253,9 @@ class ChatMessageIn(BaseModel):
     content_en: str | None = None
     sla_minutes: int = 30
     timeout_minutes: int = 60
+    #: A picture (round 20T): the stored path; `content` is then the
+    #: caption and may be empty.
+    image_path: str | None = None
 
 
 class ChatSessionAssignIn(BaseModel):
@@ -1266,6 +1269,7 @@ class ChatMessageOut(BaseModel):
     sender_chann_uid: str | None
     content: str
     content_en: str | None
+    image_path: str | None = None
     is_read: bool
     created_at: datetime
 
@@ -1291,6 +1295,8 @@ class ChatSessionOut(BaseModel):
     last_message: str | None = None
     last_sender_type: str | None = None
     last_message_at: datetime | None = None
+    #: The newest line is a picture (its caption, if any, is last_message).
+    last_message_image: bool = False
     unread_from_customer: int = 0
 
 

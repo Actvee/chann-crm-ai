@@ -325,6 +325,8 @@ GUIDES: dict[str, dict] = {
                     {"th": "LINE แจ้งทุกคนแค่ตอนเปิดแชทใหม่พร้อมข้อความแรก ที่เหลืออ่านและตอบบนหน้าแชทลูกค้า · คนแรกที่ตอบเป็นเจ้าของการสนทนา",
                      "en": "LINE announces a NEW conversation with the first thing they said; the rest is read and answered on the chats page · the first to answer owns it"},
                     {"th": "ปุ่ม \"ข้อมูลลูกค้า\" บนหัวแชท เปิดดูดีล งานซ่อม และบันทึกของคนนี้ กดไปที่เรคอร์ดได้เลย", "en": "The \"Customer\" button on the thread opens their deals, jobs and notes, each a link to the record"},
+                    {"th": "ส่งรูปได้ — กดปุ่มแนบรูปข้างช่องพิมพ์ เลือกรูป พิมพ์คำอธิบายถ้าต้องการ แล้วกดส่งรูป ลูกค้าเห็นเป็นรูปใน LINE · รูปที่ลูกค้าส่งมาระหว่างคุยขึ้นในแชทนี้เช่นกัน",
+                     "en": "Pictures go too — tap the attach button beside the box, pick one, add a caption if you like, then send; the customer sees it as a picture in LINE · a picture the customer sends while talking shows here as well"},
                     {"th": "ร้านเริ่มคุยเองก็ได้ — ลูกค้าต้องผูก LINE กับร้านแล้ว", "en": "The shop can open the conversation — the customer must be linked on LINE", "type": "คุยกับลูกค้า สมชาย"},
                     {"th": "หรือจากงาน", "en": "Or from a job", "type": "คุยกับลูกค้า T-2026-0001"},
                     {"th": "ใส่ข้อความแรกต่อท้ายได้", "en": "A first line may follow a colon", "type": "คุยกับลูกค้า สมชาย: พรุ่งนี้ช่างไปได้ไหม"},

@@ -2111,7 +2111,7 @@ class DataClient:
     async def add_chat_message(
         self, license_id: str, session_id: str, *, sender_type: str, content: str,
         sender_chann_uid: str | None = None, content_en: str | None = None,
-        sla_minutes: int = 30, timeout_minutes: int = 60,
+        sla_minutes: int = 30, timeout_minutes: int = 60, image_path: str | None = None,
     ) -> dict:
         resp = await self._client.post(
             f"{self._base}/internal/v1/licenses/{license_id}/chat-sessions/{session_id}/messages",
@@ -2120,6 +2120,7 @@ class DataClient:
                 "sender_type": sender_type, "content": content,
                 "sender_chann_uid": sender_chann_uid, "content_en": content_en,
                 "sla_minutes": sla_minutes, "timeout_minutes": timeout_minutes,
+                "image_path": image_path,
             },
         )
         return self._unwrap(resp)

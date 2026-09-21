@@ -7,7 +7,38 @@
 เจ้าของสั่ง 10 ก.ย.: *"ต่อจากนี้ให้บันทึก model first แบบนี้ในทุกๆที่ อย่าให้หลุดอีก
 เพราะการใช้กฎแบบเดิมเลย น่าจะทำให้ประสบการณ์ใช้งานแย่ลง"*
 
-**รอบ 20S (21 ก.ย. — DEV `__20S_SHA__`): ชื่อ LINE เมื่อไม่มีอะไรดีกว่า · ตัวกรองซ่อนหลังปุ่ม**
+**รอบ 20T (21 ก.ย. — DEV `__20T_SHA__`): หน้าแชทเป็นจอเดียวบนมือถือ · ส่งรูปในแชท**
+
+- **"สไลด์หน้าแชทกับตัวหน้า liff แยกกัน … ใช้งานยาก"** — สาเหตุจาก CSS: บนมือถือ `.chat-scroll` มี
+  `max-height: calc(100dvh - 300px)` และ scrollbar ของตัวเอง อยู่ในการ์ดที่อยู่ในหน้าที่เลื่อนได้อีกชั้น
+  นิ้วที่อ่านแชทจึงลากทั้งหน้า และช่องพิมพ์อยู่ตรงไหนก็ได้ที่หน้าเลื่อนไปถึง · ตอนนี้เมื่อเปิดแชทบนจอ ≤759px
+  `.chat-thread-pane` เป็น `position: fixed` เต็มจอ (`html[data-chat-open]` ล็อกหน้าใต้), หัวแชทอยู่บน
+  (มีปุ่มกลับ) ข้อความเป็น**ที่เดียวที่เลื่อน** ช่องพิมพ์อยู่ล่าง · `SalesChats.tsx` ตั้งความสูงของแผงจาก
+  `visualViewport` (iOS ไม่ลด 100dvh ให้คีย์บอร์ด) ช่องพิมพ์จึงลอยขึ้นมาเหนือคีย์บอร์ด · จอกว้าง:
+  `.chat-layout` สูง `calc(100dvh - 150px)` รายการและแชทเลื่อนภายใน หน้าไม่เลื่อน · ฐานข้อมูลของ skill
+  ไม่มีข้อเรื่อง nested scroll — ใช้ default "หนึ่งจอหนึ่งที่เลื่อน" ตาม console ที่หน้าอ้างอยู่แล้ว (SalesIQ)
+- **ส่งรูปให้ลูกค้า** — คอลัมน์ใหม่ `chat_messages.image_path` (migration **0034_chat_message_images**;
+  `content` ว่างได้เมื่อมีรูป — "รูปไปโดยไม่มีคำได้ คำไปโดยไม่มีคำไม่ได้") · `services/chat_images.py`:
+  ทุกรูปถูก **normalise ก่อนเก็บ** ด้วย Pillow (หมุนตาม EXIF · ย่อด้านยาว ≤1600px · JPEG ≤1MB — LINE
+  รับ preview ≤1MB และรูปกล้อง 4000px มัก 3–6MB) เก็บที่ `documents/<lic>/chats/<session>/…jpg`
+  ในถัง GCS เดิม · ลิงก์เป็น asset token **อายุ 1 ปี** (LINE ดึงรูปใหม่ทุกครั้งที่แสดง) และใช้
+  `PUBLIC_BASE_URL` ก่อน `request.base_url` เพราะ LINE รับเฉพาะ https และหลัง proxy ของ Cloud Run
+  request มักบอก http · ถนน: `POST chat-sessions/{id}/images` (data: URL + caption เหมือนรูปงานซ่อม) →
+  `live_chat.agent_reply(image_path, image_url)` → `send_notification(images=)` ส่ง image message
+  ก่อน text ใน push เดียว (quick reply ยังอยู่บนข้อความสุดท้าย) · แชทที่ปิด/พักได้รูปพร้อมคำเชิญ ·
+  `GET …/messages` เติม `image_url` ให้ทุกแถว (`with_image_links`) · หน้าแชท: ปุ่มแนบรูป 44px
+  ข้างช่องพิมพ์ ย่อรูปในเบราว์เซอร์ก่อนส่ง (canvas 1600px) แสดง preview + ชื่อไฟล์ + ปุ่มเอาออก
+  คำที่พิมพ์กลายเป็น caption ปุ่มเปลี่ยนเป็น "ส่งรูป" · bubble แสดงรูป (`.bubble-image` จองพื้นที่
+  ไม่ให้บรรทัดกระโดด) กดเปิดเต็ม · รายการแชท preview ขึ้น "📷 รูปภาพ"
+- **รูปที่ลูกค้าส่งระหว่างคุยกับร้าน** — `handle_incoming_image` บน Customer OA เช็ค `live_session`
+  ก่อน: มีอยู่ → เก็บลงแชท (`customer_message(image_path=)`, พนักงานได้ LINE "📷 รูปภาพ" ตามกฎเดิม
+  คือแจ้งเฉพาะบรรทัดเปิด) ไม่ echo · ไม่มี → ถนนเดิม (รูปไปงานซ่อมที่เปิดอยู่ / "ยังไม่มีงาน") ·
+  หน้า Customer LIFF แสดงรูปในบรรทัดแชทด้วย
+- เทสต์: `tests/unit/test_round20t_chat_images.py` (19) · `tests/integration/test_round20t_chat_images.py`
+  (2, บน Postgres) · fake ของ `add_chat_message` ทั้งสองไฟล์รับ `image_path` และเก็บไว้ในแถว ·
+  `check-fields` รู้จัก `image_url` (composed) · คู่มือขั้น "แชทลูกค้า" มีบรรทัดเรื่องรูป
+
+**รอบ 20S (21 ก.ย. — DEV `514b05f`): ชื่อ LINE เมื่อไม่มีอะไรดีกว่า · ตัวกรองซ่อนหลังปุ่ม**
 
 - **"ถ้าไม่มีข้อมูลในระบบเรา ใช้ชื่อ LINE ได้ไหม"** — fallback มีอยู่แล้ว (เรคอร์ด → ชื่อที่ลงทะเบียน →
   `display_name` → id) แต่ **`display_name` ว่างตลอด**: webhook เรียก `resolve_context` โดยไม่ส่งชื่อ และ

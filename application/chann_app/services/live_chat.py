@@ -19,6 +19,11 @@ from ..data_client import DataClient, DataTierError
 from ..line.client import LineReplyError, quick_reply_item
 from .notify import send_notification
 
+#: How a picture is named in a LINE line that cannot show it (the
+#: agent's notification) or that goes beside it (the customer's).
+PICTURE_WORD = "📷 รูปภาพ"
+PICTURE_WORD_EN = "📷 picture"
+
 #: The type the live-chat customer pushes are recorded under. A plain
 #: string column, no CHECK constraint (unlike audit_log.action), but it is
 #: named here once so the tally and the code cannot disagree about it.
@@ -140,7 +145,7 @@ async def _customer_language(client: DataClient, chann_uid: str) -> str:
 
 async def _push_customer(
     client: DataClient, *, license_id: str, chann_uid: str, text: str,
-    text_en: str | None = None,
+    text_en: str | None = None, images: list[str] | None = None,
 ) -> bool:
     """A line to the customer's LINE, in the language they read.
 
@@ -168,6 +173,7 @@ async def _push_customer(
             # Every line from the shop carries the way out — the tester
             # (16 ก.ย. 2569) asked for "จบการสนทนา" to be reachable all along.
             quick_reply=[quick_reply_item("จบการสนทนา", "จบการสนทนา")],
+            images=images,
         )
         return True
     except (LineReplyError, Exception):  # noqa: BLE001
@@ -296,21 +302,29 @@ async def start_session_by_shop(
 
 async def customer_message(
     client: DataClient, *, license_id: str, session: dict, chann_uid: str, text: str,
-    language: str = "th",
+    language: str = "th", image_path: str | None = None,
 ) -> dict:
     """A line from the customer into their running conversation. The
     agent who owns it hears in LINE; before anyone owns it, the dashboard
-    badge is enough — every agent was already pushed when it opened."""
+    badge is enough — every agent was already pushed when it opened.
+
+    A picture (round 20T) is a line like any other: stored on the thread,
+    and the agent's LINE says "📷 รูปภาพ" — the picture itself is on the
+    dashboard, where the answer is written anyway."""
     sla, timeout = await chat_settings(client, license_id)
     message = await client.add_chat_message(
         str(license_id), str(session["id"]), sender_type="customer", content=text,
         sender_chann_uid=chann_uid, sla_minutes=sla, timeout_minutes=timeout,
+        image_path=image_path,
     )
     agents = await _agents(client, license_id)
     assigned = str(session.get("assigned_to") or "")
     owner = [m for m in agents if str(m.get("id")) == assigned] if assigned else []
     shown = _shown(session)
-    line = f"💬 {shown}: {text.strip()[:300]}"
+    said = text.strip()[:300]
+    if image_path:
+        said = f"{PICTURE_WORD} {said}".strip()
+    line = f"💬 {shown}: {said}"
     # Owner, 16 ก.ย. 2569: "ให้มีแจ้งเตือนแค่ตอนแชทเปิดใหม่เข้ามาพร้อมข้อความ
     # ที่ทักมาตอนแรกก็พอ … ที่เหลือก็ไปแชทในหน้า Dashboard" — and a
     # conversation the customer REOPENS counts as a new one. Opening it is
@@ -347,6 +361,7 @@ async def _is_the_opening_line(client: DataClient, license_id: str, session: dic
 async def agent_reply(
     client: DataClient, *, license_id: str, session: dict, agent_chann_uid: str,
     member_id: str | None, text: str, language: str = "th",
+    image_path: str | None = None, image_url: str | None = None,
 ) -> dict:
     """The shop answers — from the dashboard, never LINE directly (15.4).
     Whoever answers owns the conversation from then on, the SLA clock
@@ -356,13 +371,19 @@ async def agent_reply(
     the thread and the customer is INVITED back — one LINE with the
     answer and a "คุยกับร้าน" button; reopening shows the answer again
     and continues as usual. Nothing is assigned until they do."""
+    # A picture with no words (round 20T): the LINE line says a picture
+    # came, so the customer is not pushed an empty message; the
+    # picture itself rides along as an image message when it has a link.
+    images = [image_url] if (image_path and image_url) else None
     if str(session.get("status") or "") not in LIVE:
         message = await client.add_chat_message(
             str(license_id), str(session["id"]), sender_type="agent", content=text,
-            sender_chann_uid=agent_chann_uid,
+            sender_chann_uid=agent_chann_uid, image_path=image_path,
         )
         shop = await company_name(client, license_id)
         preview = text.strip()[:300]
+        if image_path:
+            preview = f"{PICTURE_WORD} {preview}".strip()
         th = (
             f"💬 {shop} ตอบกลับแล้ว:\n\"{preview}\"\n\n"
             "เปิดแชทคุยกับร้านนี้ต่อไหมครับ แตะ \"คุยกับร้าน\" (ข้อความที่ร้านตอบจะขึ้นให้อีกครั้ง)"
@@ -373,7 +394,7 @@ async def agent_reply(
         )
         await _push_customer_invite(
             client, license_id=str(license_id),
-            chann_uid=str(session["customer_chann_uid"]), text=th, text_en=en,
+            chann_uid=str(session["customer_chann_uid"]), text=th, text_en=en, images=images,
         )
         return message
     if member_id and str(session.get("assigned_to") or "") != str(member_id):
@@ -387,19 +408,26 @@ async def agent_reply(
     message = await client.add_chat_message(
         str(license_id), str(session["id"]), sender_type="agent", content=text,
         sender_chann_uid=agent_chann_uid, sla_minutes=sla, timeout_minutes=timeout,
+        image_path=image_path,
     )
     shop = await company_name(client, license_id)
+    said = text.strip()
+    said_en = said
+    if image_path:
+        said = f"{PICTURE_WORD} {said}".strip()
+        said_en = f"{PICTURE_WORD_EN} {said_en}".strip()
     await _push_customer(
         client, license_id=str(license_id), chann_uid=str(session["customer_chann_uid"]),
-        text=f"💬 {shop}: {text.strip()}\n(ตอบกลับได้เลยในแชทนี้ · พิมพ์ \"จบการสนทนา\" เมื่อเสร็จ)",
-        text_en=f"💬 {shop}: {text.strip()}\n(reply right here · type \"end chat\" when done)",
+        text=f"💬 {shop}: {said}\n(ตอบกลับได้เลยในแชทนี้ · พิมพ์ \"จบการสนทนา\" เมื่อเสร็จ)",
+        text_en=f"💬 {shop}: {said_en}\n(reply right here · type \"end chat\" when done)",
+        images=images,
     )
     return message
 
 
 async def _push_customer_invite(
     client: DataClient, *, license_id: str, chann_uid: str, text: str,
-    text_en: str | None = None,
+    text_en: str | None = None, images: list[str] | None = None,
 ) -> bool:
     """A push with the one button that reopens the conversation."""
     try:
@@ -417,6 +445,7 @@ async def _push_customer_invite(
             delivery_dashboard=False,
             oa="customer",
             quick_reply=[quick_reply_item("คุยกับร้าน", "คุยกับร้าน")],
+            images=images,
         )
         return True
     except (LineReplyError, Exception):  # noqa: BLE001

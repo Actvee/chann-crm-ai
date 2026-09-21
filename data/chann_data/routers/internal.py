@@ -5450,6 +5450,7 @@ def _chat_sessions_out(session: Session, scope: TenantScope, rows: list) -> list
             last_message=summary.get("last_message"),
             last_sender_type=summary.get("last_sender_type"),
             last_message_at=summary.get("last_message_at"),
+            last_message_image=bool(summary.get("last_message_image")),
             unread_from_customer=int(summary.get("unread_from_customer") or 0),
         ))
     return out
@@ -5545,6 +5546,7 @@ def add_chat_message(
             scope, session_id, sender_type=payload.sender_type, content=payload.content,
             sender_chann_uid=payload.sender_chann_uid, content_en=payload.content_en,
             sla_minutes=payload.sla_minutes, timeout_minutes=payload.timeout_minutes,
+            image_path=payload.image_path,
         )
         session.commit()
         session.refresh(row)

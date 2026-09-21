@@ -1262,22 +1262,69 @@ fieldset.group legend {
   min-height: calc(100dvh - 140px);
 }
 
+/* Round 20T — one scroll region per screen (owner, 21 ก.ย. 2569: "สไลด์
+   หน้าแชทกับตัวหน้า liff แยกกัน … ใช้งานยาก"). On a wide screen the
+   two panes take the height that is left under the bar and scroll
+   INSIDE — the page itself stays put, so the composer and the list's
+   tabs never scroll away. Nothing in the skill's database names nested
+   scrolling; this is the console pattern the page already cites (Zoho
+   SalesIQ), applied as a default. */
 @media (min-width: 760px) {
   .chat-layout {
     grid-template-columns: 320px minmax(0, 1fr);
     align-items: stretch;
+    height: calc(100dvh - 150px);
+    min-height: 480px;
+  }
+  .chat-rows {
+    flex: 1;
+    min-height: 0;
+  }
+  .chat-scroll {
+    max-height: none;
   }
   [data-phone-only="true"] {
     display: none;
   }
 }
 
+/* On a phone the open conversation IS the screen: the pane sits fixed
+   over the page (which is locked underneath), the head at the top with
+   the way back, the messages the one thing that scrolls, the composer
+   at the bottom. SalesChats.tsx sizes the pane to the visual viewport so
+   the composer rides up with the keyboard. */
 @media (max-width: 759px) {
   .chat-list[data-hidden-on-phone="true"] {
     display: none;
   }
   .chat-layout:not([data-thread-open="true"]) .chat-thread-pane {
     display: none;
+  }
+  html[data-chat-open="true"],
+  html[data-chat-open="true"] body {
+    overflow: hidden;
+    height: 100%;
+  }
+  .chat-layout[data-thread-open="true"] .chat-thread-pane {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100dvh;
+    z-index: 30;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+  .chat-layout[data-thread-open="true"] .chat-thread-head {
+    padding-top: calc(10px + env(safe-area-inset-top, 0px));
+  }
+  .chat-layout[data-thread-open="true"] .chat-scroll {
+    max-height: none;
+    min-height: 0;
+  }
+  .chat-layout[data-thread-open="true"] .chat-composer {
+    position: static;
   }
 }
 
@@ -1673,20 +1720,108 @@ fieldset.group legend {
   font-variant-numeric: tabular-nums;
 }
 
+/* A picture on the thread (round 20T): bubble-wide, never wider than the
+   thread, with its space reserved so lines below do not jump as it loads
+   (ui-ux-pro-max: reserve space, CLS < 0.1; images scale with container). */
+.bubble-image {
+  display: block;
+  border-radius: 16px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: var(--chip-bg);
+  max-width: 100%;
+  min-height: 80px;
+  min-width: 120px;
+}
+
+.bubble-image img {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  max-height: 360px;
+  object-fit: contain;
+  background: var(--chip-bg);
+}
+
+.bubble-image:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.chat-line .bubble-image {
+  max-width: 280px;
+  margin: 4px 0;
+}
+
 .bubble[data-side="us"] .bubble-meta {
   text-align: right;
 }
 
 .chat-composer {
-  display: flex;
+  display: grid;
   gap: 8px;
-  align-items: flex-end;
   padding: 10px 12px;
   border-top: 1px solid var(--line);
   background: var(--surface);
   position: sticky;
   bottom: 0;
   padding-bottom: calc(10px + env(safe-area-inset-bottom));
+}
+
+.chat-composer-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+/* The attach button: 44px square, icon with an accessible name, sits on
+   the textarea's baseline. */
+.chat-attach {
+  flex: 0 0 auto;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* The picture waiting to be sent: a thumbnail, its name, a way to take
+   it back — above the words that will be its caption. */
+.chat-attachment {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--paper);
+}
+
+.chat-attachment img {
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: 8px;
+  flex: 0 0 auto;
+  background: var(--chip-bg);
+}
+
+.chat-attachment-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-attachment .btn {
+  flex: 0 0 auto;
+  min-width: 44px;
+  padding-inline: 0;
 }
 
 .chat-composer textarea {
