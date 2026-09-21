@@ -69,8 +69,10 @@ export function ListControls({
   onTo: (value: string) => void;
 }) {
   const { t } = useLanguage();
+  // Rendered inside ListFilters' panel now (21 ก.ย. 2569), so this is a
+  // row of controls, not a second card under the first.
   return (
-    <div className="list-controls">
+    <div className="filter-row">
       <label>
         <span>{t.dashboard.list.sort}</span>
         <select value={sortKey} onChange={(event) => onSort(event.target.value)}>

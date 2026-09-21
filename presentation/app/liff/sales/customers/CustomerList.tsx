@@ -315,17 +315,17 @@ export default function CustomerList({ liffId }: { liffId: string }) {
           { value: "contact", label: t.customer.title },
         ]}
         onStatus={setStage}
-      />
-
-      <ListControls
-        sorts={sorts}
-        sortKey={controls.sortKey}
-        onSort={controls.setSortKey}
-        from={controls.from}
-        to={controls.to}
-        onFrom={controls.setFrom}
-        onTo={controls.setTo}
-      />
+      >
+        <ListControls
+          sorts={sorts}
+          sortKey={controls.sortKey}
+          onSort={controls.setSortKey}
+          from={controls.from}
+          to={controls.to}
+          onFrom={controls.setFrom}
+          onTo={controls.setTo}
+        />
+      </ListFilters>
 
       {can("customer.create") && (
         <InlineCreateForm

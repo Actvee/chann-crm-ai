@@ -289,6 +289,40 @@ async def link_rich_menu(
 
 
 LINE_CONTENT_URL = "https://api-data.line.me/v2/bot/message/{id}/content"
+LINE_PROFILE_URL = "https://api.line.me/v2/bot/profile/{user_id}"
+
+
+async def get_profile_name(oa: str, line_user_id: str, client: httpx.AsyncClient | None = None) -> str | None:
+    """What LINE calls this person — their display name — or None.
+
+    The identity row has carried a display_name column since Phase 1 and
+    nothing ever filled it: the webhook resolved identities without asking
+    LINE, so the chat page's "LINE name" fallback was always empty and a
+    customer with no record showed as CHN-C-… (owner, 21 ก.ย. 2569: "ถ้า
+    ไม่มีข้อมูลในระบบเราให้ใช้ชื่อ LINE"). Best-effort and quick: a
+    failure here is a missing nicety, not a reason to drop the message.
+    LINE answers only for people who are friends of this OA, which
+    everyone who messages it is."""
+    access_token = channel_access_token(oa)
+    if not access_token:
+        return None
+    owns_client = client is None
+    client = client or httpx.AsyncClient(timeout=5.0)
+    try:
+        response = await client.get(
+            LINE_PROFILE_URL.format(user_id=line_user_id),
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        if response.status_code != 200:
+            return None
+        name = str((response.json() or {}).get("displayName") or "").strip()
+        return name[:255] or None
+    except Exception:  # noqa: BLE001 — a name is a courtesy, never a failure
+        log.info("LINE profile fetch failed for %s on %s", line_user_id, oa)
+        return None
+    finally:
+        if owns_client:
+            await client.aclose()
 
 
 async def get_message_content(oa: str, message_id: str) -> tuple[bytes, str]:

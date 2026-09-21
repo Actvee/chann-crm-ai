@@ -123,6 +123,7 @@ export const th = {
       status: "สถานะ",
       all: "ทั้งหมด",
       category: "หมวดหมู่",
+      toggle: "ตัวกรอง",
     },
     opening: "กำลังเปิด…",
     noMatch: "ไม่พบรายการที่ตรงกัน",

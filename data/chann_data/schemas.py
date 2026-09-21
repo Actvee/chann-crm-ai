@@ -15,6 +15,10 @@ class IdentityOut(BaseModel):
     display_name: str | None = None
 
 
+class DisplayNameIn(BaseModel):
+    display_name: str
+
+
 class IdentityResolveIn(BaseModel):
     line_user_id: str
     primary_role: Literal["customer", "sales", "technician"]

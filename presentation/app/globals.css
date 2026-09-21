@@ -1096,15 +1096,13 @@ fieldset.group legend {
    inputs with no frame — controls that looked unplaced and, on iOS,
    zoomed the page on focus because the text was under 16px (owner,
    21 ก.ย. 2569: "UI ของการกรองข้อมูล เหมือนยังไม่ได้ออกแบบ"). Now one
-   card: the search across the top, the narrower controls in a grid
-   under it, every box 44px tall with a visible label above it
-   (ui-ux-pro-max: label above input, 44px targets, 8px+ between them,
-   16px text so the phone keyboard does not zoom). */
+   card: the search across the top with a "ตัวกรอง" toggle beside it,
+   and every other control in a panel that slides out on request
+   (owner: "ตัวกรองทั้งหมด ทำเป็นตัวซ่อนไว้ ถ้าเปิดค่อยสไลด์ออกมา") —
+   every box 44px tall with a visible label above it (ui-ux-pro-max:
+   label above input, 44px targets, 8px+ between them, 16px text so the
+   phone keyboard does not zoom, reduced motion honoured). */
 .list-controls {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 10px 12px;
-  align-items: end;
   margin: 0 0 12px;
   padding: 12px 14px 14px;
   background: var(--surface);
@@ -1112,7 +1110,8 @@ fieldset.group legend {
   border-radius: var(--radius);
 }
 
-.list-controls label {
+.list-controls label,
+.filter-row label {
   display: flex;
   flex-direction: column;
   gap: 5px;
@@ -1120,11 +1119,6 @@ fieldset.group legend {
   font-size: 13px;
   font-weight: 500;
   color: var(--ink-soft);
-}
-
-/* The search is the control people reach for; it gets the whole first line. */
-.list-controls label:has(> input[type="search"]) {
-  grid-column: 1 / -1;
 }
 
 .list-controls select,
@@ -1146,25 +1140,89 @@ fieldset.group legend {
   outline-offset: -1px;
 }
 
-.list-controls > .btn {
+/* The search is the control people reach for; it gets the whole first
+   line, with the toggle at its right end. */
+.filter-head {
+  display: flex;
+  gap: 10px;
+  align-items: end;
+}
+
+.filter-head > label {
+  flex: 1 1 auto;
+}
+
+.filter-toggle {
+  flex: none;
+  gap: 8px;
+}
+
+.filter-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--paper);
+  color: var(--accent-deep);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The panel slides: a grid row that grows from 0 to its content. The
+   closed panel is also invisible to the keyboard and to a screen
+   reader, not merely 0px tall. */
+.filter-panel {
+  display: grid;
+  grid-template-rows: 0fr;
+  visibility: hidden;
+  transition: grid-template-rows 200ms ease, visibility 0s linear 200ms;
+}
+
+.filter-panel[data-open="true"] {
+  grid-template-rows: 1fr;
+  visibility: visible;
+  transition: grid-template-rows 200ms ease, visibility 0s;
+}
+
+.filter-panel-body {
+  min-height: 0;
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px 12px;
+  align-items: end;
+}
+
+.filter-panel[data-open="true"] .filter-panel-body {
+  padding-top: 12px;
+}
+
+/* Sort and dates, as a row across the panel's full width. */
+.filter-row {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px 12px;
+  align-items: end;
+}
+
+.filter-panel-body > .btn,
+.filter-row > .btn {
   align-self: end;
   justify-self: start;
 }
 
-/* A second bar right under the first (sort and dates under search and
-   status) reads as one card, not two stacked boxes. */
-.list-controls + .list-controls {
-  margin-top: -13px;
-  padding-top: 2px;
-  border-top: 0;
-  border-top-left-radius: 0;
-  border-top-right-radius: 0;
+@media (prefers-reduced-motion: reduce) {
+  .filter-panel,
+  .filter-panel[data-open="true"] {
+    transition: none;
+  }
 }
 
-/* Inside a section card the bar keeps the card's gutter. */
-.section > .list-controls {
-  margin: 12px 16px 0;
-}
 
 /* Phase 15 — live chat threads (dashboard and customer home). */
 .chat-thread {

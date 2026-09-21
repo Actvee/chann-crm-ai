@@ -25,7 +25,7 @@ from ..services.chat import (
 )
 from ..services.ai.intent import unavailable_reply
 from ..services.registration import first_contact, handle_registration, is_unregistered
-from ..services.identity import resolve_context
+from ..services.identity import ensure_display_name, resolve_context
 from .client import (
     LineReplyError,
     flex_list_message,
@@ -240,6 +240,10 @@ async def handle_webhook(
 
             try:
                 ctx = await resolve_context(client, oa, line_user_id)
+                # The LINE name, the first time this person is seen without
+                # one (21 ก.ย. 2569): the chat page and the customer record
+                # fall back to it when the shop has nothing better.
+                ctx = await ensure_display_name(client, ctx, oa=oa, line_user_id=line_user_id)
                 user_text = (event.get("message") or {}).get("text") or ""
                 # Phase 16.3: the person's own language, on every OA. Stored
                 # against the identity, so a customer who chose English at

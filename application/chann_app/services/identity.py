@@ -108,6 +108,33 @@ async def resolve_context(client: DataClient, oa: str, line_user_id: str,
 log = logging.getLogger(__name__)
 
 
+async def ensure_display_name(
+    client: DataClient, ctx: ResolvedContext, *, oa: str, line_user_id: str, fetch=None,
+) -> ResolvedContext:
+    """Fill a nameless identity with what LINE calls the person.
+
+    Asked once per person: the name is stored on the identity, so the
+    next message finds it there and LINE is not asked again. Every
+    failure — no token, LINE down, the person not a friend — leaves the
+    context exactly as it was; the message goes on without the name.
+    `fetch` is the LINE call, injectable for tests."""
+    # getattr, not ctx.display_name: nothing on this road may raise past
+    # the webhook, and a context built elsewhere may not carry the field.
+    if getattr(ctx, "display_name", None):
+        return ctx
+    try:
+        from ..line.client import get_profile_name
+
+        name = await (fetch or get_profile_name)(oa, line_user_id)
+        if not name:
+            return ctx
+        await client.set_identity_display_name(ctx.chann_uid, name)
+        ctx.display_name = name
+    except Exception:  # noqa: BLE001
+        log.exception("could not store the LINE display name for %s", getattr(ctx, "chann_uid", "?"))
+    return ctx
+
+
 async def apply_active_tenant(
     client: DataClient, chann_uid: str, oa: str, memberships: list[dict],
 ) -> tuple[list[dict], list[dict]]:

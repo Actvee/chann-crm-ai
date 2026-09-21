@@ -259,17 +259,17 @@ export default function QuoteList({ liffId }: { liffId: string }) {
         status={statusFilter}
         statuses={optionsFrom(t.quote.status as Record<string, string>)}
         onStatus={setStatusFilter}
-      />
-
-      <ListControls
-        sorts={sorts}
-        sortKey={controls.sortKey}
-        onSort={controls.setSortKey}
-        from={controls.from}
-        to={controls.to}
-        onFrom={controls.setFrom}
-        onTo={controls.setTo}
-      />
+      >
+        <ListControls
+          sorts={sorts}
+          sortKey={controls.sortKey}
+          onSort={controls.setSortKey}
+          from={controls.from}
+          to={controls.to}
+          onFrom={controls.setFrom}
+          onTo={controls.setTo}
+        />
+      </ListFilters>
 
       <Count shown={visibleQuotes.length} total={list.total ?? quotes.length} />
       {list.hasMore && (

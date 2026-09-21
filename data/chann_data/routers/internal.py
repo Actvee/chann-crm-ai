@@ -247,6 +247,7 @@ from ..schemas import (
     UnreadCountOut,
     AuthorizationContextOut,
     BreakGlassTransferIn,
+    DisplayNameIn,
     IdentityOut,
     IdentityResolveIn,
     LicenseSettingOut,
@@ -538,6 +539,31 @@ def resolve_identity(payload: IdentityResolveIn, session: Session = Depends(get_
     )
     cache.set(k_identity(payload.line_user_id), out.model_dump(), settings.cache_ttl_identity_s)
     return out
+
+
+@router.patch("/identities/{chann_uid}/display-name", response_model=IdentityOut)
+def set_identity_display_name(
+    chann_uid: str, payload: DisplayNameIn, session: Session = Depends(get_session),
+):
+    """The LINE display name, learned after first contact (21 ก.ย. 2569).
+
+    The resolve route above caches the identity per line_user_id, name
+    included, so the cached copy is dropped here — otherwise the next
+    webhook would keep reading the nameless row for the cache's lifetime
+    and fetch the name from LINE again."""
+    repo = IdentityRepository(session)
+    try:
+        identity = repo.set_display_name(chann_uid, payload.display_name)
+    except MemberNotFound:
+        raise HTTPException(status_code=404, detail="identity not found")
+    session.commit()
+    cache.invalidate(k_identity(identity.line_user_id))
+    return IdentityOut(
+        chann_uid=identity.chann_uid,
+        line_user_id=identity.line_user_id,
+        primary_role=identity.primary_role,
+        display_name=identity.display_name,
+    )
 
 
 @router.get("/identities/{chann_uid}/memberships", response_model=list[MembershipOut])

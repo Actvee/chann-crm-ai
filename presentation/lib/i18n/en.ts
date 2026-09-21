@@ -121,6 +121,7 @@ export const en: Dictionary = {
       status: "Status",
       all: "All",
       category: "Category",
+      toggle: "Filters",
     },
     opening: "Opening…",
     noMatch: "No matches",

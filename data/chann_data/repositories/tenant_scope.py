@@ -226,6 +226,19 @@ class IdentityRepository:
         self._s.flush()
         return identity
 
+    def set_display_name(self, chann_uid: str, display_name: str) -> ChannIdentity:
+        """What LINE calls this person, learned after the row was made.
+
+        Rows are created from the webhook without a name (the resolve
+        route never asks LINE), so this is the road the name arrives by
+        — once, when it is first missing (21 ก.ย. 2569)."""
+        identity = self.get(chann_uid)
+        if identity is None:
+            raise MemberNotFound(f"no identity {chann_uid}")
+        identity.display_name = (display_name or "").strip()[:255] or None
+        self._s.flush()
+        return identity
+
     def next_chann_uid(self, primary_role: str) -> str:
         """CHN-C-000123 / CHN-S-000045 / CHN-T-000012.
 

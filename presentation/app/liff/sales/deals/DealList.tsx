@@ -354,17 +354,17 @@ export default function DealList({ liffId }: { liffId: string }) {
           ...optionsFrom(t.deal.stage as Record<string, string>),
         ]}
         onStatus={setStageFilter}
-      />
-
-      <ListControls
-        sorts={sorts}
-        sortKey={controls.sortKey}
-        onSort={controls.setSortKey}
-        from={controls.from}
-        to={controls.to}
-        onFrom={controls.setFrom}
-        onTo={controls.setTo}
-      />
+      >
+        <ListControls
+          sorts={sorts}
+          sortKey={controls.sortKey}
+          onSort={controls.setSortKey}
+          from={controls.from}
+          to={controls.to}
+          onFrom={controls.setFrom}
+          onTo={controls.setTo}
+        />
+      </ListFilters>
 
       {can("deal.create") && contacts.length > 0 && (
         <InlineCreateForm

@@ -104,6 +104,14 @@ class DataClient:
         )
         return self._unwrap(resp)
 
+    async def set_identity_display_name(self, chann_uid: str, display_name: str) -> dict:
+        resp = await self._client.patch(
+            f"{self._base}/internal/v1/identities/{chann_uid}/display-name",
+            headers=self._headers,
+            json={"display_name": display_name},
+        )
+        return self._unwrap(resp)
+
     async def health(self) -> dict:
         resp = await self._client.get(f"{self._base}/health")
         return self._unwrap(resp)
