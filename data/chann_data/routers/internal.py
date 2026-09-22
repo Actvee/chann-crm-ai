@@ -3119,6 +3119,7 @@ def get_quote(
 @router.get("/licenses/{license_id}/quotes", response_model=list[QuoteOut])
 def list_quotes(
     license_id: uuid.UUID, status_: str | None = None, q: str | None = None,
+    deal_id: uuid.UUID | None = None,
     limit: int = 500, offset: int = 0,
     response: Response = None,  # type: ignore[assignment]
     session: Session = Depends(get_session),
@@ -3134,11 +3135,11 @@ def list_quotes(
     repo = QuoteRepository(session)
     capped = max(1, min(int(limit), 2000))
     rows = repo.list_for_license(
-        scope, status=status_, q=q, limit=capped, offset=max(0, int(offset)),
+        scope, status=status_, q=q, deal_id=deal_id, limit=capped, offset=max(0, int(offset)),
     )
     if response is not None:
         response.headers["X-Total-Count"] = str(
-            repo.count_for_license(scope, status=status_, q=q)
+            repo.count_for_license(scope, status=status_, q=q, deal_id=deal_id)
         )
     return [QuoteOut.model_validate(r, from_attributes=True) for r in rows]
 
@@ -3551,6 +3552,7 @@ def invoice_summary(license_id: uuid.UUID, session: Session = Depends(get_sessio
 def list_invoices(
     license_id: uuid.UUID, status_: str | None = None, contact_id: uuid.UUID | None = None,
     customer_chann_uid: str | None = None, q: str | None = None, overdue: bool = False,
+    deal_id: uuid.UUID | None = None,
     limit: int = 500, offset: int = 0,
     response: Response = None,  # type: ignore[assignment]
     session: Session = Depends(get_session),
@@ -3563,7 +3565,7 @@ def list_invoices(
     capped = max(1, min(int(limit), 2000))
     narrow = dict(
         status=status_, contact_id=contact_id, customer_chann_uid=customer_chann_uid,
-        q=q, overdue=overdue,
+        q=q, overdue=overdue, deal_id=deal_id,
     )
     rows = repo.list_for_license(scope, limit=capped, offset=max(0, int(offset)), **narrow)
     if response is not None:

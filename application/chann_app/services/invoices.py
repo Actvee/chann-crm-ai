@@ -201,6 +201,26 @@ async def create_from_deal(
     )
 
 
+async def billable_deals(client: DataClient, license_id: str, contact_id: str) -> list[dict]:
+    """The customer's deals an invoice can be made from, newest first as
+    the Data tier lists them.
+
+    Owner, 22 ก.ย. 2569: "ใบแจ้งหนี้จะไม่ผูกกับลูกค้าโดยตรง อย่างน้อยจะมีดีล
+    เกิดขึ้น" — a bill never stands on a customer alone; it hangs off a
+    deal (and, when there is one, that deal's quotation). So "ออกใบแจ้งหนี้
+    ให้ สมชาย" means "from สมชาย's deal": the one deal that has lines when
+    there is one, a choice when there are several, and a plain "สร้างดีล
+    ก่อน" when there is none. A lost deal is not offered — its lines were
+    the goods the customer did NOT buy. A won deal is: a won deal with no
+    invoice yet is exactly the one that needs a bill.
+    """
+    rows = await client.list_deals(str(license_id), contact_id=str(contact_id))
+    return [
+        d for d in rows
+        if d.get("products") and str(d.get("stage") or "").lower() != "lost"
+    ]
+
+
 def _quote_discount(quote: dict, lines: list[dict]) -> Decimal:
     """The quote's discount as an amount — the snapshot builder's rule."""
     subtotal = sum(

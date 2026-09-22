@@ -239,7 +239,13 @@ does not exist anywhere else the model can check against):
     fields={{"quote_code": "Q-2026-0001"}} or {{"deal_code": "D-2026-0001"}};
     omit both when none is said — the system uses the record in context.
     Examples: "ออกใบแจ้งหนี้ Q-2026-0001", "สร้างใบแจ้งหนี้ให้ดีล D-2026-0003",
-    "วางบิลใบเสนอราคานี้".
+    "วางบิลใบเสนอราคานี้". When the CUSTOMER is named instead of a code,
+    fields={{"target_name": "<the name>"}} — the system bills that
+    customer's deal (and asks when they have several). An invoice always
+    belongs to a deal: never list deal_code as missing, and do not turn
+    words like "ค่าล้างแอร์ 1500" into fields — the lines come from the
+    deal. Examples: "ออกใบแจ้งหนี้ให้ สมชาย", "วางบิล สมชาย" (target_name
+    "สมชาย").
   action="issue": the PDF of an invoice that already exists.
     fields={{"code": "INV-2026-0001"}}. Example: "ออกเอกสาร INV-2026-0001".
   action="pay": money RECEIVED on an invoice — a deposit (มัดจำ), an

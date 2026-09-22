@@ -627,6 +627,7 @@ async def list_quotes(
     license_id: str,
     status_filter: str | None = None,
     q: str | None = None,
+    deal_id: str | None = None,
     limit: int = 500,
     offset: int = 0,
     response: Response = None,  # type: ignore[assignment]
@@ -636,8 +637,9 @@ async def list_quotes(
     _require_same_tenant(principal, license_id)
     principal.require("quote.read")
     try:
+        # `deal_id` (round 20X): the invoice form lists one deal's quotes.
         rows, total = await client.list_quotes_with_total(
-            license_id, status_filter, limit=limit, q=q, offset=offset,
+            license_id, status_filter, limit=limit, q=q, offset=offset, deal_id=deal_id,
         )
         if response is not None:
             response.headers["X-Total-Count"] = str(total)
@@ -2687,6 +2689,7 @@ async def list_invoices(
     status_filter: str | None = None,
     q: str | None = None,
     contact_id: str | None = None,
+    deal_id: str | None = None,
     overdue: bool = False,
     limit: int = 500,
     offset: int = 0,
@@ -2697,8 +2700,10 @@ async def list_invoices(
     _require_same_tenant(principal, license_id)
     principal.require("invoice.read")
     try:
+        # `deal_id` (round 20X): the deal page's bills, and the invoices
+        # page opened from it with the same filter in the URL.
         rows, total = await client.list_invoices_with_total(
-            license_id, status=status_filter, q=q, contact_id=contact_id, overdue=overdue,
+            license_id, status=status_filter, q=q, contact_id=contact_id, deal_id=deal_id, overdue=overdue,
             # Scoped by construction for a customer: their contact's rows only.
             customer_chann_uid=principal.chann_uid if principal.is_customer else None,
             limit=limit, offset=offset,

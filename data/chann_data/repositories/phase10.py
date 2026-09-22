@@ -405,6 +405,7 @@ class QuoteRepository:
 
     def list_for_license(
         self, scope: TenantScope, *, status: str | None = None, q: str | None = None,
+        deal_id: uuid.UUID | None = None,
         limit: int | None = None, offset: int | None = None,
     ) -> list[Quote]:
         """Quotes, newest first.
@@ -415,15 +416,23 @@ class QuoteRepository:
         a shop writes. `id` breaks the created_at tie so a page boundary
         cannot repeat or skip a row.
         """
-        query = self._narrow(select(Quote), scope, status, q)
+        query = self._narrow(select(Quote), scope, status, q, deal_id=deal_id)
         query = query.order_by(Quote.created_at.desc(), Quote.id.desc())
         return list(self._s.execute(page(query, limit=limit, offset=offset)).scalars())
 
-    def _narrow(self, query, scope: TenantScope, status: str | None, q: str | None):
+    def _narrow(
+        self, query, scope: TenantScope, status: str | None, q: str | None,
+        deal_id: uuid.UUID | None = None,
+    ):
         """The one place a quote list is narrowed — page and count alike."""
         query = query.where(Quote.license_id == scope.license_id)
         if status:
             query = query.where(Quote.status == status)
+        if deal_id is not None:
+            # Round 20X: one deal's quotations, for the invoice form's
+            # quote select — the page must not download every quote in
+            # the shop to find the three that belong to this deal.
+            query = query.where(Quote.deal_id == deal_id)
         clause = like_any(q, Quote.quote_id)
         if clause is not None:
             query = query.where(clause)
@@ -431,10 +440,11 @@ class QuoteRepository:
 
     def count_for_license(
         self, scope: TenantScope, *, status: str | None = None, q: str | None = None,
+        deal_id: uuid.UUID | None = None,
     ) -> int:
         """How many match, so a capped page can say what it left out."""
         return int(self._s.execute(
-            self._narrow(select(func.count()).select_from(Quote), scope, status, q)
+            self._narrow(select(func.count()).select_from(Quote), scope, status, q, deal_id=deal_id)
         ).scalar() or 0)
 
     def transition_status(

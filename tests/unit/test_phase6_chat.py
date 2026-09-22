@@ -1073,13 +1073,15 @@ class FakeDataClient:
 
     async def list_invoices_with_total(self, license_id, *, status=None, contact_id=None,
                                        customer_chann_uid=None, q=None, overdue=False,
-                                       limit=None, offset=None):
+                                       deal_id=None, limit=None, offset=None):
         self.recorded.append(("list_invoices", license_id, status, customer_chann_uid, q, overdue))
         rows = list(getattr(self, "_invoices", []))
         if status:
             rows = [r for r in rows if r.get("status") == status]
         if contact_id:
             rows = [r for r in rows if str(r.get("contact_id")) == str(contact_id)]
+        if deal_id:
+            rows = [r for r in rows if str(r.get("deal_id")) == str(deal_id)]
         if customer_chann_uid:
             mine = {str(c.get("id")) for c in self._customers if c.get("customer_chann_uid") == customer_chann_uid}
             rows = [r for r in rows if str(r.get("contact_id")) in mine]
@@ -1822,6 +1824,19 @@ class FakeDataClient:
         if status:
             return [q for q in quotes if q["status"] == status]
         return quotes
+
+    async def list_quotes_with_total(self, license_id, status=None, limit=None, *,
+                                     q=None, offset=None, deal_id=None):
+        """The route's page of quotes (round 20X). The route had passed
+        `q` and `offset` to a client that did not take them since round
+        20N, and no fake implemented this method, so nothing noticed."""
+        rows = self._search(await self.list_quotes(license_id, status), q, ("quote_id",))
+        if deal_id:
+            rows = [r for r in rows if str(r.get("deal_id")) == str(deal_id)]
+        total = len(rows)
+        if offset:
+            rows = rows[int(offset):]
+        return (rows[: int(limit)] if limit else rows), total
 
     async def update_deal(self, license_id, deal_id, fields, actor_id=None):
         self.recorded.append(("update_deal", license_id, deal_id, fields))

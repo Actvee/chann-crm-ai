@@ -16,6 +16,7 @@ import { useFailureText, useFormatters } from "../_format";
 import { openExternal, proxyHeaders } from "../_lib";
 import { useSalesSession } from "../_session";
 import { SalesShell } from "../_shell";
+import { InvoiceCreateSheet, type CreatedInvoice } from "./_create-sheet";
 
 /**
  * Round 20V — invoices, payments and receipts (owner, 21 ก.ย. 2569:
@@ -32,6 +33,12 @@ import { SalesShell } from "../_shell";
  * echoes it (ui-ux-pro-max: never colour alone). The amount field uses
  * inputMode="decimal" so a phone opens the number keyboard, and every
  * field has a visible label.
+ *
+ * Round 20X (owner, 22 ก.ย. 2569: "invoice ต้องมีตัวเลือกให้ผูกกับ deal หรือ
+ * ลูกค้าได้"): the page can now MAKE an invoice — "สร้างใบแจ้งหนี้" opens
+ * the form in `_create-sheet.tsx` — and honours `?contact_id=` and
+ * `?deal_id=` as filters, so the customer page and the deal page can
+ * link to "their" bills. `&create=1` on either opens the form prefilled.
  */
 
 type Payment = {
@@ -97,6 +104,24 @@ export default function InvoiceList({ liffId }: { liffId: string }) {
   const [open, setOpen] = useState<Invoice | null>(null);
   const [paying, setPaying] = useState(false);
   const [form, setForm] = useState({ amount: "", method: "transfer", paid_at: "", reference: "" });
+  // Round 20X: the create form and the URL's filters.
+  const [creating, setCreating] = useState(false);
+  const [contactFilter, setContactFilter] = useState("");
+  const [dealFilter, setDealFilter] = useState("");
+  const [filterName, setFilterName] = useState("");
+  const [prefill, setPrefill] = useState<{ contactId?: string; dealId?: string }>({});
+
+  useEffect(() => {
+    // Read once, on the client: the page is rendered dynamically and the
+    // LIFF redirect can only carry query strings.
+    const params = new URLSearchParams(window.location.search);
+    const contactId = params.get("contact_id") ?? "";
+    const dealId = params.get("deal_id") ?? "";
+    setContactFilter(contactId);
+    setDealFilter(dealId);
+    setPrefill({ contactId: contactId || undefined, dealId: dealId || undefined });
+    if (params.get("create") === "1") setCreating(true);
+  }, []);
 
   const say = useCallback((message: string, kind?: "ok" | "error") => {
     setStatus(message);
@@ -118,11 +143,58 @@ export default function InvoiceList({ liffId }: { liffId: string }) {
   const list = usePagedList<Invoice>({
     token, licenseId, ready: session.ready,
     path: `licenses/${licenseId}/invoices`,
-    params: { status_filter: statusFilter, overdue: overdueOnly ? "true" : "" },
+    params: {
+      status_filter: statusFilter, overdue: overdueOnly ? "true" : "",
+      contact_id: contactFilter, deal_id: dealFilter,
+    },
     onError: listError,
   });
   const invoices = list.rows;
   const load = list.reload;
+
+  // The filter chip names the record, not its id: "เฉพาะลูกค้า สมชาย ใจดี"
+  // rather than a UUID nobody can read.
+  useEffect(() => {
+    if (!session.ready || !token || !licenseId) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const headers = proxyHeaders(token, licenseId);
+        if (dealFilter) {
+          const response = await fetch(`/api/phase2/licenses/${licenseId}/deals/${dealFilter}`, { headers });
+          if (!cancelled && response.ok) setFilterName(String(((await response.json()) as { deal_id?: string }).deal_id ?? ""));
+        } else if (contactFilter) {
+          const response = await fetch(`/api/phase2/licenses/${licenseId}/customers/${contactFilter}`, { headers });
+          if (!cancelled && response.ok) {
+            const row = (await response.json()) as { first_name?: string | null; last_name?: string | null; customer_id?: string };
+            setFilterName([row.first_name, row.last_name].filter(Boolean).join(" ") || String(row.customer_id ?? ""));
+          }
+        } else {
+          setFilterName("");
+        }
+      } catch {
+        // The chip falls back to its plain label.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [session.ready, token, licenseId, contactFilter, dealFilter]);
+
+  function clearFilters() {
+    setContactFilter("");
+    setDealFilter("");
+    setFilterName("");
+    window.history.replaceState(null, "", window.location.pathname);
+  }
+
+  /** After the form: the list refreshes and the new bill's own sheet
+   *  opens, where the PDF and the payment buttons are. */
+  async function created(invoice: CreatedInvoice) {
+    setCreating(false);
+    await load();
+    await openInvoice(invoice as unknown as Invoice);
+  }
 
   useEffect(() => {
     if (session.ready && !list.busy) say("");
@@ -131,6 +203,7 @@ export default function InvoiceList({ liffId }: { liffId: string }) {
   const can = (key: string) => !session.suspended && permissions.has(key);
   const canUpdate = can("invoice.update");
   const canVoid = can("invoice.void");
+  const canCreate = can("invoice.create");
 
   /** The row with its ledger: the list leaves `payments` empty on purpose. */
   async function openInvoice(row: Invoice) {
@@ -356,7 +429,32 @@ export default function InvoiceList({ liffId }: { liffId: string }) {
       </ListFilters>
 
       <div className="list-head">
-        <Count shown={visible.length} total={list.total ?? invoices.length} />
+        {/* A list narrowed by a URL the person cannot see is a puzzle
+            (the filter bar's own rule): the narrowing is named, by the
+            record's name or code, with the way out beside it. */}
+        {contactFilter || dealFilter ? (
+          <p className="count">
+            {dealFilter
+              ? t.dashboard.invoices.filteredByDeal.replace("{code}", filterName || dealFilter)
+              : t.dashboard.invoices.filteredByCustomer.replace("{name}", filterName || contactFilter)}
+          </p>
+        ) : (
+          <Count shown={visible.length} total={list.total ?? invoices.length} />
+        )}
+        {(canCreate || contactFilter || dealFilter) && (
+          <div className="list-tools">
+            {(contactFilter || dealFilter) && (
+              <button type="button" className="btn" data-variant="quiet" onClick={clearFilters}>
+                {t.dashboard.invoices.clearFilter}
+              </button>
+            )}
+            {canCreate && (
+              <button type="button" className="btn" data-variant="primary" onClick={() => setCreating(true)}>
+                {t.dashboard.invoices.create}
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {visible.length === 0 ? (
@@ -635,6 +733,16 @@ export default function InvoiceList({ liffId }: { liffId: string }) {
           </>
         )}
       </Sheet>
+
+      <InvoiceCreateSheet
+        open={creating}
+        onClose={() => setCreating(false)}
+        token={token}
+        licenseId={licenseId}
+        prefill={prefill}
+        onCreated={created}
+        say={say}
+      />
 
       <ConfirmDialog request={confirming} onClose={closeConfirm} busy={busy} />
     </SalesShell>

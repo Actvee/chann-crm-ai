@@ -409,6 +409,7 @@ GUIDES: dict[str, dict] = {
                     {"th": "ค้นรายการสินค้า", "en": "Search the catalogue", "type": "ค้นหาสินค้า พัดลม"},
                     {"group": {"th": "ใบแจ้งหนี้และใบเสร็จ", "en": "Invoices and receipts"}},
                     {"th": "ออกใบแจ้งหนี้จากใบเสนอราคาที่ส่งแล้ว (หรือจากดีล) — ได้เลขที่ INV ยอดรวม กำหนดชำระ 30 วัน และลิงก์ PDF ในคำตอบเดียว", "en": "Invoice a sent quote (or a deal) — the INV number, total, 30-day due date and PDF link come back in one reply", "type": "ออกใบแจ้งหนี้ Q-2026-0001 · สร้างใบแจ้งหนี้ให้ดีล D-2026-0001"},
+                    {"th": "บอกแค่ชื่อลูกค้าก็ได้ — ระบบออกจากดีลของเขา (หลายดีลมีปุ่มให้เลือก ไม่มีดีลบอกให้สร้างก่อน เพราะใบแจ้งหนี้ผูกกับดีลเสมอ) · บนจอ: \"สร้างใบแจ้งหนี้\" ในหน้าใบแจ้งหนี้ (ลูกค้า → ดีล → ใบเสนอราคา) หรือ \"ออกใบแจ้งหนี้\" ในหน้าดีล/ลูกค้า", "en": "The customer's name is enough — the bill comes from their deal (several: buttons to choose; none: create one first, an invoice always belongs to a deal) · on screen: \"สร้างใบแจ้งหนี้\" on the invoices page (customer → deal → quote) or \"ออกใบแจ้งหนี้\" on the deal/customer page", "type": "ออกใบแจ้งหนี้ให้ สมชาย"},
                     {"th": "ดูใบแจ้งหนี้ / รายการ / ยอดค้างชำระ", "en": "One invoice, the list, what is owed", "type": "ใบแจ้งหนี้ INV-2026-0001 · รายการใบแจ้งหนี้ · ยอดค้างชำระ"},
                     {"th": "บันทึกรับชำระ: จำนวนเงินกับช่องทาง (เงินสด/โอน/พร้อมเพย์/บัตร) มัดจำก็ได้ ไม่บอกจำนวนระบบถาม ตอบ \"5000\" หรือ \"ครบ\" ได้เลย", "en": "Record a payment: amount and method (cash/transfer/PromptPay/card), a deposit is fine; with no amount it asks — answer \"5000\" or \"ครบ\"", "type": "รับชำระ INV-2026-0001 5000 โอน · มัดจำ INV-2026-0001 2000 เงินสด · รับชำระ INV-2026-0001 ครบ"},
                     {"th": "ออกใบเสร็จเมื่อชำระครบ — ระบบส่งลิงก์ให้ลูกค้าทาง LINE ให้ด้วย", "en": "Issue the receipt once paid in full — the customer gets the link on LINE", "type": "ออกใบเสร็จ INV-2026-0001"},
@@ -483,6 +484,7 @@ GUIDES: dict[str, dict] = {
                 "how": [
                     {"group": {"th": "บนหน้าจอ", "en": "On the dashboard"}},
                     {"th": "เปลี่ยนบทบาท · นำออก / กลับมาใช้งาน (นำช่างออก = ถอดจากทีมและคืนงานที่ค้างเข้าคิว)", "en": "Change a role · remove / reactivate (removing a technician takes them off teams and returns their open jobs to the queue)"},
+                    {"th": "หน้าจอ > บทบาท: แต่ละบทบาทเป็นแถวสั้น ๆ บอกจำนวนสิทธิ์และกลุ่ม แตะ \"รายละเอียด\" ถึงเห็นรายการสิทธิ์ · สร้าง/แก้ในแผงเดียว กางทีละกลุ่ม เลือกทั้งกลุ่มได้", "en": "Home > Roles: each role is one short row with its permission count and groups; \"Details\" shows the list · create/edit in one sheet, one collapsed group at a time, whole-group select"},
                     {"th": "รีเซ็ตการลงทะเบียน เมื่อแชทของคนนั้นค้าง", "en": "Reset onboarding when someone's chat is stuck"},
                     {"th": "เจ้าของร้านนำออกไม่ได้ ต้องโอนความเป็นเจ้าของก่อน", "en": "The owner cannot be removed; transfer ownership first"},
                     {"group": {"th": "เพิ่มคน", "en": "Adding people"}},

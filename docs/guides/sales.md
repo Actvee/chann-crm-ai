@@ -222,6 +222,7 @@ _- The customer already heard at check-out that the job was finished and what wa
 
 **ใบแจ้งหนี้และใบเสร็จ**
 - ออกใบแจ้งหนี้จากใบเสนอราคาที่ส่งแล้ว (หรือจากดีล) — ได้เลขที่ INV ยอดรวม กำหนดชำระ 30 วัน และลิงก์ PDF ในคำตอบเดียว → พิมพ์ "ออกใบแจ้งหนี้ Q-2026-0001 · สร้างใบแจ้งหนี้ให้ดีล D-2026-0001"
+- บอกแค่ชื่อลูกค้าก็ได้ — ระบบออกจากดีลของเขา (หลายดีลมีปุ่มให้เลือก ไม่มีดีลบอกให้สร้างก่อน เพราะใบแจ้งหนี้ผูกกับดีลเสมอ) · บนจอ: "สร้างใบแจ้งหนี้" ในหน้าใบแจ้งหนี้ (ลูกค้า → ดีล → ใบเสนอราคา) หรือ "ออกใบแจ้งหนี้" ในหน้าดีล/ลูกค้า → พิมพ์ "ออกใบแจ้งหนี้ให้ สมชาย"
 - ดูใบแจ้งหนี้ / รายการ / ยอดค้างชำระ → พิมพ์ "ใบแจ้งหนี้ INV-2026-0001 · รายการใบแจ้งหนี้ · ยอดค้างชำระ"
 - บันทึกรับชำระ: จำนวนเงินกับช่องทาง (เงินสด/โอน/พร้อมเพย์/บัตร) มัดจำก็ได้ ไม่บอกจำนวนระบบถาม ตอบ "5000" หรือ "ครบ" ได้เลย → พิมพ์ "รับชำระ INV-2026-0001 5000 โอน · มัดจำ INV-2026-0001 2000 เงินสด · รับชำระ INV-2026-0001 ครบ"
 - ออกใบเสร็จเมื่อชำระครบ — ระบบส่งลิงก์ให้ลูกค้าทาง LINE ให้ด้วย → พิมพ์ "ออกใบเสร็จ INV-2026-0001"
@@ -277,6 +278,7 @@ _- Search the catalogue → type "ค้นหาสินค้า พัดล
 
 **Invoices and receipts**
 _- Invoice a sent quote (or a deal) — the INV number, total, 30-day due date and PDF link come back in one reply → type "ออกใบแจ้งหนี้ Q-2026-0001 · สร้างใบแจ้งหนี้ให้ดีล D-2026-0001"_
+_- The customer's name is enough — the bill comes from their deal (several: buttons to choose; none: create one first, an invoice always belongs to a deal) · on screen: "สร้างใบแจ้งหนี้" on the invoices page (customer → deal → quote) or "ออกใบแจ้งหนี้" on the deal/customer page → type "ออกใบแจ้งหนี้ให้ สมชาย"_
 _- One invoice, the list, what is owed → type "ใบแจ้งหนี้ INV-2026-0001 · รายการใบแจ้งหนี้ · ยอดค้างชำระ"_
 _- Record a payment: amount and method (cash/transfer/PromptPay/card), a deposit is fine; with no amount it asks — answer "5000" or "ครบ" → type "รับชำระ INV-2026-0001 5000 โอน · มัดจำ INV-2026-0001 2000 เงินสด · รับชำระ INV-2026-0001 ครบ"_
 _- Issue the receipt once paid in full — the customer gets the link on LINE → type "ออกใบเสร็จ INV-2026-0001"_
@@ -367,6 +369,7 @@ _- Switch language → type "เปลี่ยนภาษาเป็นอั
 
 **บนหน้าจอ**
 - เปลี่ยนบทบาท · นำออก / กลับมาใช้งาน (นำช่างออก = ถอดจากทีมและคืนงานที่ค้างเข้าคิว)
+- หน้าจอ > บทบาท: แต่ละบทบาทเป็นแถวสั้น ๆ บอกจำนวนสิทธิ์และกลุ่ม แตะ "รายละเอียด" ถึงเห็นรายการสิทธิ์ · สร้าง/แก้ในแผงเดียว กางทีละกลุ่ม เลือกทั้งกลุ่มได้
 - รีเซ็ตการลงทะเบียน เมื่อแชทของคนนั้นค้าง
 - เจ้าของร้านนำออกไม่ได้ ต้องโอนความเป็นเจ้าของก่อน
 
@@ -394,6 +397,7 @@ _EN: Members — Home > Members (next to roles): who is linked to the company on
 
 **On the dashboard**
 _- Change a role · remove / reactivate (removing a technician takes them off teams and returns their open jobs to the queue)_
+_- Home > Roles: each role is one short row with its permission count and groups; "Details" shows the list · create/edit in one sheet, one collapsed group at a time, whole-group select_
 _- Reset onboarding when someone's chat is stuck_
 _- The owner cannot be removed; transfer ownership first_
 

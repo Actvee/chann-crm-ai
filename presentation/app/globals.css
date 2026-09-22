@@ -3036,3 +3036,226 @@ button.notif-open {
   padding: 10px 12px;
   white-space: pre-wrap;
 }
+
+/* ------------------------------------------------------------ roles page */
+/* Round 20Y (owner, 22 ก.ย. 2569): permissions are folded away — a compact
+   row per role, the detail and the editor in a sheet, every group a
+   collapsed <details> in the editor. */
+
+.role-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.role-row {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 6px 8px 6px 14px;
+}
+
+.role-row-main {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  padding: 8px 0;
+  min-height: 44px;
+  cursor: pointer;
+  border-radius: 8px;
+}
+
+.role-row-main:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.role-row-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-weight: 600;
+  font-size: 16px;
+}
+
+.role-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.role-row-groups {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.role-row-actions {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+@media (max-width: 480px) {
+  .role-row {
+    flex-wrap: wrap;
+  }
+  .role-row-actions {
+    flex-direction: row;
+    flex: 1 0 100%;
+    justify-content: flex-end;
+  }
+}
+
+.perm-view-group {
+  margin: 0 0 12px;
+}
+
+.perm-view-group h3 {
+  margin: 0 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-soft);
+  letter-spacing: 0.02em;
+}
+
+.perm-view-group ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.perm-view-group li {
+  font-size: 14px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: var(--chip-bg);
+  color: var(--ink);
+}
+
+.perm-editor {
+  display: grid;
+  gap: 8px;
+}
+
+/* A group: the summary is the 44px row a thumb opens; the count chip
+   says how much of the group is on without opening it. The chevron is
+   drawn, not a glyph, so it rotates with [open]. */
+.perm-group {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  padding: 0 12px;
+}
+
+.perm-group > summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.perm-group > summary::-webkit-details-marker {
+  display: none;
+}
+
+.perm-group > summary::after {
+  content: "";
+  margin-left: auto;
+  width: 10px;
+  height: 10px;
+  border-right: 2px solid var(--ink-soft);
+  border-bottom: 2px solid var(--ink-soft);
+  transform: rotate(45deg);
+  transition: transform 160ms ease;
+  flex: 0 0 auto;
+}
+
+.perm-group[open] > summary::after {
+  transform: rotate(-135deg);
+}
+
+.perm-group > summary:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+.perm-group-name {
+  flex: 1;
+  min-width: 0;
+}
+
+.perm-group-tools {
+  display: flex;
+  gap: 6px;
+  padding: 2px 0 6px;
+  border-top: 1px solid var(--line);
+  margin-top: -2px;
+}
+
+.perm-option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  font-size: 15px;
+  padding: 2px 0;
+}
+
+.perm-option input {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  accent-color: var(--accent);
+}
+
+.perm-option-key {
+  margin-left: 6px;
+  font-size: 11.5px;
+  opacity: 0.6;
+}
+
+/* The count and the buttons stay in reach while a long list scrolls. */
+.perm-foot {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 10px 0 calc(8px + env(safe-area-inset-bottom, 0px));
+  margin-top: 4px;
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .perm-group > summary::after {
+    transition: none;
+  }
+}

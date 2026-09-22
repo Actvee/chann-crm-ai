@@ -8,7 +8,7 @@ import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { Badge } from "../../_components";
 import { ConfirmDialog, useConfirm } from "../../../_confirm";
-import { useFailureText } from "../../_format";
+import { useFailureText, useFormatters } from "../../_format";
 import { OwnerControl, memberLabel, useSalesMembers, type SalesMember } from "../../_owner";
 import { proxyHeaders } from "../../_lib";
 import { FieldSection, RecordHead, RelatedHeading } from "../../_record";
@@ -40,6 +40,15 @@ type Deal = {
   products?: unknown[];
 };
 
+type InvoiceRow = {
+  id: string;
+  invoice_id: string;
+  status: string;
+  total: string;
+  outstanding: string;
+  is_overdue: boolean;
+};
+
 function fullName(c: Customer | null): string {
   if (!c) return "";
   return [c.first_name, c.last_name].filter(Boolean).join(" ") || "—";
@@ -61,8 +70,15 @@ export default function CustomerDetail({
   const dealStageLabel = (stage: string) =>
     (t.deal.stage as Record<string, string>)[stage] ?? stage;
 
+  const { money } = useFormatters();
+  const invoiceStatusLabel = (status: string) =>
+    (t.invoice.status as Record<string, string>)[status] ?? status;
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [deals, setDeals] = useState<Deal[]>([]);
+  // Round 20X: the customer's bills — count, what is owed, and the way
+  // to the list. Loaded on its own so a refusal (no invoice.read) leaves
+  // the rest of the page whole.
+  const [invoices, setInvoices] = useState<InvoiceRow[] | null>(null);
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
   const router = useRouter();
@@ -109,6 +125,27 @@ export default function CustomerDetail({
       say(error instanceof Error ? error.message : t.dashboard.loadFailed, "error"),
     );
   }, [session.ready, load, say, t]);
+
+  useEffect(() => {
+    if (!session.ready || !token || !licenseId || !permissions.has("invoice.read")) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const search = new URLSearchParams({ contact_id: customerId, limit: "50" });
+        const response = await fetch(`/api/phase2/licenses/${licenseId}/invoices?${search}`, {
+          headers: proxyHeaders(token, licenseId),
+          cache: "no-store",
+        });
+        if (!cancelled && response.ok) setInvoices((await response.json()) as InvoiceRow[]);
+      } catch {
+        // The section simply does not appear; the page's own error line
+        // is for the customer record.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [session.ready, token, licenseId, customerId, permissions]);
 
   async function createDeal() {
     setBusy(true);
@@ -323,6 +360,69 @@ export default function CustomerDetail({
                 </li>
               ))}
             </ul>
+          )}
+
+          {invoices !== null && (
+            <>
+              <RelatedHeading title={t.dashboard.invoices.related} count={invoices.length} />
+              {/* Round 20X: "ออกใบแจ้งหนี้" from the customer — the form
+                  opens with this customer chosen and the deal still to be
+                  picked, because a bill always belongs to a deal (owner,
+                  22 ก.ย. 2569). Offered whenever the person may create
+                  one: with no deal to bill, the form says "สร้างดีลก่อน"
+                  and links back here, which is clearer than a button
+                  that is missing for a reason nobody can see. */}
+              {can("invoice.create") && (
+                <div className="actions" style={{ margin: "0 0 12px" }}>
+                  <Link className="btn" data-variant="primary" href={`/liff/sales/invoices?contact_id=${customerId}&create=1`}>
+                    {t.dashboard.invoices.forThisCustomer}
+                  </Link>
+                </div>
+              )}
+              {invoices.length === 0 ? (
+                <div className="empty">
+                  <p>{t.dashboard.invoices.relatedNone}</p>
+                </div>
+              ) : (
+                <>
+                  <p className="count">
+                    {t.dashboard.invoices.relatedOutstanding.replace(
+                      "{total}",
+                      money(invoices.reduce((sum, row) => sum + Number(row.outstanding ?? 0), 0)),
+                    )}
+                  </p>
+                  <ul className="list">
+                    {invoices.slice(0, 5).map((row) => (
+                      <li key={row.id} className="card" data-stage={row.status} data-overdue={row.is_overdue ? "true" : undefined}>
+                        <Link className="row-link" href={`/liff/sales/invoices?contact_id=${customerId}`}>
+                          <span className="row-body">
+                            <span className="card-title">
+                              <span className="code">{row.invoice_id}</span>
+                              <Badge stage={row.status} label={invoiceStatusLabel(row.status)} />
+                              {row.is_overdue && <Badge stage="overdue" label={t.dashboard.invoices.overdue} />}
+                            </span>
+                            <span className="card-meta">
+                              {t.dashboard.invoices.total} <span className="money-line">{money(row.total)}</span>
+                              {Number(row.outstanding) > 0 && (
+                                <>
+                                  {" · "}
+                                  {t.dashboard.invoices.outstanding} <span className="money-line">{money(row.outstanding)}</span>
+                                </>
+                              )}
+                            </span>
+                          </span>
+                        </Link>
+                      </li>
+                    ))}
+                  </ul>
+                  <div className="actions" style={{ margin: "0 0 12px" }}>
+                    <Link className="btn" href={`/liff/sales/invoices?contact_id=${customerId}`}>
+                      {t.dashboard.invoices.relatedAll}
+                    </Link>
+                  </div>
+                </>
+              )}
+            </>
           )}
 
           <RelatedActivity

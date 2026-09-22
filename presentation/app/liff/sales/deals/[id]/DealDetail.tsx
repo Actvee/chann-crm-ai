@@ -532,17 +532,28 @@ export default function DealDetail({
               enforced in the Data Tier, and offering the button before
               then is offering a button that fails. quote.create is the
               key the route checks (review C7), not deal.update. */}
-          {can("quote.create") && items.length > 0 && (
+          {(can("quote.create") || can("invoice.create")) && items.length > 0 && (
             <div className="actions" style={{ margin: "0 0 12px" }}>
-              <button
-                type="button"
-                className="btn"
-                data-variant="primary"
-                onClick={() => void createQuote()}
-                disabled={busy}
-              >
-                {busy ? t.dashboard.saving : t.dashboard.quotes.addForThisDeal}
-              </button>
+              {can("quote.create") && (
+                <button
+                  type="button"
+                  className="btn"
+                  data-variant="primary"
+                  onClick={() => void createQuote()}
+                  disabled={busy}
+                >
+                  {busy ? t.dashboard.saving : t.dashboard.quotes.addForThisDeal}
+                </button>
+              )}
+              {/* Round 20X: the bill, from the deal it belongs to (owner,
+                  22 ก.ย. 2569: an invoice always hangs off a deal). Opens
+                  the invoices page's form with this deal chosen; a lost
+                  deal is not billed — its lines are what was not bought. */}
+              {can("invoice.create") && deal.stage !== "lost" && (
+                <Link className="btn" href={`/liff/sales/invoices?deal_id=${deal.id}&create=1`}>
+                  {t.dashboard.invoices.forThisDeal}
+                </Link>
+              )}
             </div>
           )}
 

@@ -255,6 +255,12 @@ export function navGroups(t: Dictionary, audience: Audience): NavGroup[] {
         { key: "customers", href: "/liff/sales/customers", label: t.customer.title, icon: ICONS.customers, needs: ["customer.read"] },
         { key: "deals", href: "/liff/sales/deals", label: t.deal.title, icon: ICONS.deals, needs: ["deal.read"] },
         { key: "quotes", href: "/liff/sales/quotes", label: t.quote.title, icon: ICONS.quotes, needs: ["quote.read"] },
+        // Round 20X: the bill sits with the sale it closes. Round 20V filed
+        // it under paperwork; the owner asked the same day, 22 ก.ย. 2569:
+        // "ทำไมใน ใบแจ้งหนี้ไม่อยู่ใน section งานขาย" — a bill is the last
+        // step of selling, right after the quotation, and the person who
+        // issues it is the one who made the deal.
+        { key: "invoices", href: "/liff/sales/invoices", label: t.dashboard.invoices.title, icon: ICONS.invoices, needs: ["invoice.read"] },
         // Appointments existed only inside a customer's or a deal's page,
         // so seeing the week meant opening records one at a time (owner,
         // 17 ก.ย. 2569).
@@ -282,10 +288,6 @@ export function navGroups(t: Dictionary, audience: Audience): NavGroup[] {
         // Round 20V: the survey answers, collected since Phase 14 and
         // never shown. Beside the AI reports, behind the same key.
         { key: "satisfaction", href: "/liff/sales/reports/satisfaction", label: t.dashboard.satisfaction.title, icon: ICONS.satisfaction, needs: ["view_reports"] },
-        // Round 20V: the bill after the quotation. Paperwork, not selling —
-        // an invoice is a document the shop keeps and a receipt it hands
-        // over, and CS reads them without ever selling anything.
-        { key: "invoices", href: "/liff/sales/invoices", label: t.dashboard.invoices.title, icon: ICONS.invoices, needs: ["invoice.read"] },
         { key: "approvals", href: "/liff/sales/approvals", label: t.dashboard.approvals.title, icon: ICONS.approvals, needs: ["approval.view"] },
         { key: "templates", href: "/liff/sales/templates", label: t.dashboard.templates.title, icon: ICONS.templates, needs: ["setting.manage"] },
         // The page has existed and been deployed all along with no way in:

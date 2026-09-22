@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
@@ -11,6 +11,7 @@ import { useSalesSession } from "../_session";
 import { SalesShell } from "../_shell";
 import { useSalesText } from "../_strings";
 import { ConfirmDialog, useConfirm } from "../../_confirm";
+import { Sheet } from "../../_sheet";
 
 type Role = {
   role_name: string;
@@ -24,33 +25,48 @@ type CatalogEntry = {
   label?: { th?: string; en?: string } | null;
 };
 
+type Group = { key: string; entries: CatalogEntry[] };
+
+/** How many group names a role row shows before "+n กลุ่ม". */
+const ROW_GROUPS = 3;
+
 /**
- * Roles and company settings.
+ * Roles: who may do what.
  *
- * Rebuilt on the shared shell (review C4/C5/C7, 6 Sep 2026): this page
- * ran its own LIFF handshake with a local company picker, so it was the
- * one Sales page with no suspended-shop notice, no server-persisted shop
- * choice, and a form that let anyone try to save a role and learn about
- * role.manage from the 403.
+ * Owner, 22 ก.ย. 2569: "หน้าจัดการสิทธิ์ให้ออกแบบใหม่ … เน้นซ้อนสิทธิ์ต่างๆไว้ก่อน
+ * และแสดงเฉพาะตอนดูรายละเอียด สร้างหรือแก้ไข". The page used to print every
+ * permission of every role as one comma-joined paragraph and then the
+ * whole 50-box pick-list under it, always — a wall the eye could not
+ * scan (ui-ux-pro-max: progressive disclosure — reveal complex options
+ * progressively, never all upfront).
+ *
+ * Now: a compact row per role (name, how many permissions, the first
+ * few groups, "+n"), and the permissions themselves only in the detail
+ * sheet, or in the editor sheet where every group is a collapsed
+ * section that opens on its own (native <details>, so the keyboard and
+ * a screen reader get it for free). The "+n" is itself the way into the
+ * detail — a chip that hides values must be operable, not decorative.
  */
 export default function RoleManagement({ liffId }: { liffId: string }) {
   const { t, locale } = useLanguage();
   const s = useSalesText();
   const failureText = useFailureText();
   const [roles, setRoles] = useState<Role[]>([]);
-  const [roleName, setRoleName] = useState("");
-  // A set, not a comma-separated string. The old textarea required a shop
-  // owner to know that "customer.read" exists and to spell it exactly; a
-  // typo granted nothing and said nothing.
-  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
-  const [editingRoleName, setEditingRoleName] = useState("");
-  const [settingKey, setSettingKey] = useState("");
-  const [settingValue, setSettingValue] = useState("");
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
   const { request: confirming, ask, close: closeConfirm } = useConfirm();
   const [busy, setBusy] = useState(false);
+
+  // The one sheet that is open: a role's detail, or the editor (a new
+  // role when `editing` is null).
+  const [viewing, setViewing] = useState<Role | null>(null);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editing, setEditing] = useState<Role | null>(null);
+  const [roleName, setRoleName] = useState("");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [settingKey, setSettingKey] = useState("");
+  const [settingValue, setSettingValue] = useState("");
 
   const say = useCallback((message: string, kind?: "ok" | "error") => {
     setStatus(message);
@@ -58,20 +74,36 @@ export default function RoleManagement({ liffId }: { liffId: string }) {
   }, []);
   const session = useSalesSession(liffId, say);
   const { token, licenseId, permissions } = session;
-
-  // A permission key is for the API; a person reads the catalogue label.
-  const permissionLabel = (key: string) => {
-    const entry = catalog.find((row) => row.key === key);
-    return entry?.label?.[locale] ?? entry?.label?.th ?? key;
-  };
-
   const headers = useCallback(() => proxyHeaders(token, licenseId), [token, licenseId]);
+
+  const groupLabel = (key: string) =>
+    (t.role.groups as Record<string, string>)[key] ?? key;
+  const permissionLabel = (entry: CatalogEntry) =>
+    entry.label?.[locale] ?? entry.label?.th ?? entry.key;
+
+  // The catalogue, grouped the way the server groups it (the key's
+  // prefix). Platform-admin keys are never a tenant's to grant.
+  const groups: Group[] = useMemo(() => {
+    const byGroup = new Map<string, CatalogEntry[]>();
+    for (const entry of catalog) {
+      if (entry.key.startsWith("platform.admin.")) continue;
+      const key = entry.group ?? "general";
+      byGroup.set(key, [...(byGroup.get(key) ?? []), entry]);
+    }
+    return Array.from(byGroup, ([key, entries]) => ({ key, entries }));
+  }, [catalog]);
+
+  /** The groups a role touches, in catalogue order, with the entries it holds. */
+  const groupsOf = (role: Role): Group[] => {
+    const held = new Set(role.permission_keys);
+    return groups
+      .map((g) => ({ key: g.key, entries: g.entries.filter((e) => held.has(e.key)) }))
+      .filter((g) => g.entries.length > 0);
+  };
 
   const loadRoles = useCallback(async () => {
     if (!token || !licenseId) return;
-    const response = await fetch(`/api/phase2/licenses/${licenseId}/roles`, {
-      headers: headers(),
-    });
+    const response = await fetch(`/api/phase2/licenses/${licenseId}/roles`, { headers: headers() });
     if (!response.ok) {
       throw new Error(
         response.status === 403
@@ -80,20 +112,14 @@ export default function RoleManagement({ liffId }: { liffId: string }) {
       );
     }
     setRoles((await response.json()) as Role[]);
-
-    // Loaded alongside the roles: the catalogue is platform-wide and does
-    // not change while someone is editing, so once is enough.
+    // The catalogue is platform-wide and does not change while someone
+    // is editing, so once is enough.
     try {
-      const catalogResponse = await fetch("/api/phase2/permissions/catalog", {
-        headers: headers(),
-      });
-      if (catalogResponse.ok) {
-        setCatalog((await catalogResponse.json()) as CatalogEntry[]);
-      }
+      const catalogResponse = await fetch("/api/phase2/permissions/catalog", { headers: headers() });
+      if (catalogResponse.ok) setCatalog((await catalogResponse.json()) as CatalogEntry[]);
     } catch {
-      // A missing catalogue leaves the form with nothing to pick, which is
-      // visible. A hardcoded fallback list would be worse: it would drift
-      // from what the server actually enforces.
+      // A missing catalogue leaves the editor with nothing to pick, which
+      // is visible. A hardcoded list would drift from what is enforced.
     }
     say(t.role.ready, "ok");
   }, [headers, licenseId, say, t, token]);
@@ -105,45 +131,49 @@ export default function RoleManagement({ liffId }: { liffId: string }) {
     );
   }, [session.ready, loadRoles, say, t]);
 
+  function openCreate() {
+    setEditing(null);
+    setRoleName("");
+    setSelected(new Set());
+    setViewing(null);
+    setEditorOpen(true);
+  }
+
+  function openEdit(role: Role) {
+    setEditing(role);
+    setRoleName(role.role_name);
+    setSelected(new Set(role.permission_keys));
+    setViewing(null);
+    setEditorOpen(true);
+  }
+
+  function closeEditor() {
+    setEditorOpen(false);
+    setEditing(null);
+  }
+
   async function saveRole(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const permissionKeys = Array.from(selected);
-    const target = editingRoleName
-      ? `/api/phase2/licenses/${licenseId}/roles/${encodeURIComponent(editingRoleName)}`
+    const target = editing
+      ? `/api/phase2/licenses/${licenseId}/roles/${encodeURIComponent(editing.role_name)}`
       : `/api/phase2/licenses/${licenseId}/roles`;
     setBusy(true);
     try {
       const response = await fetch(target, {
-        method: editingRoleName ? "PATCH" : "POST",
+        method: editing ? "PATCH" : "POST",
         headers: headers(),
-        body: JSON.stringify({ role_name: roleName, permission_keys: permissionKeys }),
+        body: JSON.stringify({ role_name: roleName, permission_keys: Array.from(selected) }),
       });
       if (!response.ok) {
         say(await failureText(response), "error");
         return;
       }
-      setRoleName("");
-      setSelected(new Set());
-      setEditingRoleName("");
+      closeEditor();
       say(t.role.saved, "ok");
       await loadRoles();
     } finally {
       setBusy(false);
     }
-  }
-
-  function editRole(role: Role) {
-    setEditingRoleName(role.role_name);
-    setRoleName(role.role_name);
-    setSelected(new Set(role.permission_keys));
-    say(t.role.editing.replace("{name}", role.role_name));
-  }
-
-  function cancelEdit() {
-    setEditingRoleName("");
-    setRoleName("");
-    setSelected(new Set());
-    say(t.role.editCancelled);
   }
 
   async function deleteRole(role: Role) {
@@ -166,6 +196,7 @@ export default function RoleManagement({ liffId }: { liffId: string }) {
         say(await failureText(response), "error");
         return;
       }
+      setViewing(null);
       say(t.role.deleted, "ok");
       await loadRoles();
     } finally {
@@ -185,11 +216,7 @@ export default function RoleManagement({ liffId }: { liffId: string }) {
     try {
       const response = await fetch(
         `/api/phase2/licenses/${licenseId}/settings/${encodeURIComponent(settingKey)}`,
-        {
-          method: "PUT",
-          headers: headers(),
-          body: JSON.stringify({ setting_value: parsed }),
-        },
+        { method: "PUT", headers: headers(), body: JSON.stringify({ setting_value: parsed }) },
       );
       say(response.ok ? t.licenseSetting.saved : await failureText(response), response.ok ? "ok" : "error");
     } finally {
@@ -197,10 +224,36 @@ export default function RoleManagement({ liffId }: { liffId: string }) {
     }
   }
 
+  function setGroup(group: Group, on: boolean) {
+    const next = new Set(selected);
+    for (const entry of group.entries) {
+      if (on) next.add(entry.key);
+      else next.delete(entry.key);
+    }
+    setSelected(next);
+  }
+
   // The keys the routes check (review C7): roles are role.manage,
   // settings are setting.manage. A suspended shop edits neither.
   const canManageRoles = !session.suspended && permissions.has("role.manage");
   const canManageSettings = !session.suspended && permissions.has("setting.manage");
+
+  const rowSummary = (role: Role) => {
+    if (role.is_owner) return null;
+    const held = groupsOf(role);
+    const shown = held.slice(0, ROW_GROUPS);
+    const more = held.length - shown.length;
+    return (
+      <span className="role-row-groups">
+        {shown.map((g) => (
+          <span key={g.key} className="chip" data-tone="muted">{groupLabel(g.key)}</span>
+        ))}
+        {more > 0 && (
+          <span className="chip" data-tone="muted">{t.role.moreGroups.replace("{count}", String(more))}</span>
+        )}
+      </span>
+    );
+  };
 
   return (
     <SalesShell
@@ -221,103 +274,130 @@ export default function RoleManagement({ liffId }: { liffId: string }) {
         <p className="card-meta" style={{ marginBottom: 12 }}>{s.roles.readOnly}</p>
       )}
 
-      <section>
-        <h2>{t.role.permissionMatrix}</h2>
+      <div className="list-head">
+        <span className="count">{t.role.rolesCount.replace("{count}", String(roles.length))}</span>
+        {canManageRoles && (
+          <button type="button" className="btn" data-variant="primary" onClick={openCreate} disabled={busy}>
+            {t.role.createCustomRole}
+          </button>
+        )}
+      </div>
+
+      <ul className="role-list">
         {roles.map((role) => (
-          <article key={role.role_name} className="card" style={{ margin: "8px 0" }}>
-            <div className="card-title">
-              {role.role_name}
-              {role.is_owner && (
-                <span className="badge" data-stage="won">
-                  {t.role.protectedOwner}
-                </span>
-              )}
-            </div>
-            <p className="card-meta">
-              {role.permission_keys.map(permissionLabel).join(", ") || t.role.noPermissions}
-            </p>
-            {!role.is_owner && canManageRoles && (
-              <div className="card-actions">
-                <button
-                  type="button"
-                  className="btn"
-                  data-variant="quiet"
-                  onClick={() => editRole(role)}
-                  disabled={busy}
-                >
+          <li key={role.role_name} className="role-row">
+            {/* The whole name column opens the detail; the actions are
+                their own buttons so a thumb never opens the sheet by
+                accident while aiming at "แก้ไข". */}
+            <button type="button" className="role-row-main" onClick={() => setViewing(role)}>
+              <span className="role-row-name">
+                {role.role_name}
+                {role.is_owner && <span className="badge" data-stage="won">{t.role.protectedOwner}</span>}
+              </span>
+              <span className="card-meta role-row-meta">
+                {role.is_owner
+                  ? t.role.allPermissions
+                  : t.role.permissionCount.replace("{count}", String(role.permission_keys.length))}
+                {rowSummary(role)}
+              </span>
+            </button>
+            <div className="role-row-actions">
+              <button type="button" className="btn" data-variant="quiet" onClick={() => setViewing(role)}>
+                {t.role.detail}
+              </button>
+              {!role.is_owner && canManageRoles && (
+                <button type="button" className="btn" data-variant="quiet" onClick={() => openEdit(role)} disabled={busy}>
                   {t.role.editRole}
                 </button>
-                <button
-                  type="button"
-                  className="btn"
-                  data-variant="quiet"
-                  onClick={() => void deleteRole(role)}
-                  disabled={busy}
-                >
+              )}
+            </div>
+          </li>
+        ))}
+      </ul>
+
+      {/* Detail: the permissions, grouped, read-only — the only place
+          they are spelled out besides the editor. */}
+      <Sheet open={viewing !== null} title={viewing?.role_name ?? ""} onClose={() => setViewing(null)}>
+        {viewing && (
+          <>
+            {viewing.is_owner ? (
+              <p className="card-meta">{t.role.allPermissions}</p>
+            ) : groupsOf(viewing).length === 0 ? (
+              <p className="card-meta">{t.role.noPermissions}</p>
+            ) : (
+              <>
+                <p className="card-meta" style={{ margin: "0 0 10px" }}>
+                  {t.role.permissionCount.replace("{count}", String(viewing.permission_keys.length))}
+                </p>
+                {groupsOf(viewing).map((g) => (
+                  <div key={g.key} className="perm-view-group">
+                    <h3>{groupLabel(g.key)}</h3>
+                    <ul>
+                      {g.entries.map((entry) => (
+                        <li key={entry.key}>{permissionLabel(entry)}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+              </>
+            )}
+            {!viewing.is_owner && canManageRoles && (
+              <div className="actions" style={{ marginTop: 16 }}>
+                <button type="button" className="btn" data-variant="primary" onClick={() => openEdit(viewing)} disabled={busy}>
+                  {t.role.editRole}
+                </button>
+                <button type="button" className="btn" data-variant="danger" onClick={() => void deleteRole(viewing)} disabled={busy}>
                   {t.role.deleteRole}
                 </button>
               </div>
             )}
-          </article>
-        ))}
-      </section>
+          </>
+        )}
+      </Sheet>
 
-      {canManageRoles && (
-        <form onSubmit={saveRole} style={{ display: "grid", gap: 8, marginTop: 24 }}>
-          <h2>
-            {editingRoleName
-              ? t.role.editingTitle.replace("{name}", editingRoleName)
-              : t.role.createCustomRole}
-          </h2>
+      {/* Editor: name, then one collapsed section per group. A group's
+          summary says how many of its permissions are on, so the whole
+          role can be read without opening anything; open a group to
+          change it, or take the whole group in one tap. */}
+      <Sheet
+        open={editorOpen}
+        title={editing ? t.role.editingTitle.replace("{name}", editing.role_name) : t.role.createCustomRole}
+        onClose={closeEditor}
+      >
+        <form onSubmit={saveRole} className="perm-editor">
           <label className="field">
             <span>{t.role.roleName}</span>
             <input value={roleName} onChange={(event) => setRoleName(event.target.value)} required />
           </label>
-          <fieldset style={{ border: "1px solid var(--line)", borderRadius: 8, padding: 12 }}>
-            <legend style={{ fontSize: 13.5, color: "var(--ink-soft)" }}>
-              {t.role.permissionKeys}
-            </legend>
-            {catalog.length === 0 ? (
-              <p className="card-meta">{t.role.catalogUnavailable}</p>
-            ) : (
-              Object.entries(
-                catalog.reduce<Record<string, CatalogEntry[]>>((groups, entry) => {
-                  // Platform-admin keys are never a tenant's to grant.
-                  if (entry.key.startsWith("platform.admin.")) return groups;
-                  const group = entry.group ?? "general";
-                  groups[group] = [...(groups[group] ?? []), entry];
-                  return groups;
-                }, {}),
-              ).map(([group, entries]) => (
-                <div key={group} style={{ marginBottom: 10 }}>
-                  <p
-                    style={{
-                      margin: "6px 0 4px",
-                      fontSize: 12.5,
-                      color: "var(--ink-faint)",
-                      textTransform: "uppercase",
-                      letterSpacing: "0.04em",
-                    }}
-                  >
-                    {group}
-                  </p>
-                  {entries.map((entry) => (
-                    <label
-                      key={entry.key}
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 10,
-                        // 44px so it is a real tap target on a phone, not a
-                        // 13px checkbox someone has to aim at.
-                        minHeight: 44,
-                        fontSize: 15,
-                      }}
-                    >
+          <p className="card-meta" style={{ margin: "4px 0 0" }}>{t.role.editorHint}</p>
+          {catalog.length === 0 ? (
+            <p className="card-meta">{t.role.catalogUnavailable}</p>
+          ) : (
+            groups.map((g) => {
+              const on = g.entries.filter((e) => selected.has(e.key)).length;
+              return (
+                <details key={g.key} className="perm-group">
+                  <summary>
+                    <span className="perm-group-name">{groupLabel(g.key)}</span>
+                    <span className="chip" data-tone={on > 0 ? "live" : "muted"}>
+                      {t.role.groupProgress
+                        .replace("{selected}", String(on))
+                        .replace("{total}", String(g.entries.length))}
+                    </span>
+                  </summary>
+                  <div className="perm-group-tools">
+                    <button type="button" className="btn" data-variant="quiet" onClick={() => setGroup(g, true)}>
+                      {t.role.selectGroup}
+                    </button>
+                    <button type="button" className="btn" data-variant="quiet" onClick={() => setGroup(g, false)} disabled={on === 0}>
+                      {t.role.clearGroup}
+                    </button>
+                  </div>
+                  {g.entries.map((entry) => (
+                    <label key={entry.key} className="perm-option">
                       <input
                         type="checkbox"
                         checked={selected.has(entry.key)}
-                        style={{ width: 20, height: 20, flex: "none" }}
                         onChange={(event) => {
                           const next = new Set(selected);
                           if (event.target.checked) next.add(entry.key);
@@ -326,59 +406,57 @@ export default function RoleManagement({ liffId }: { liffId: string }) {
                         }}
                       />
                       <span>
-                        {entry.label?.[locale] ?? entry.label?.th ?? entry.key}
-                        {/* The key itself, quietly. Someone reading the API
-                            docs or a support thread needs to connect the two. */}
-                        <span
-                          className="code"
-                          style={{ marginLeft: 6, fontSize: 11.5, opacity: 0.6 }}
-                        >
-                          {entry.key}
-                        </span>
+                        {permissionLabel(entry)}
+                        {/* The key itself, quietly, for anyone reading a
+                            support thread or the API docs. */}
+                        <span className="code perm-option-key">{entry.key}</span>
                       </span>
                     </label>
                   ))}
-                </div>
-              ))
-            )}
-            <p className="card-meta" style={{ marginTop: 8 }}>
+                </details>
+              );
+            })
+          )}
+          <div className="perm-foot">
+            <span className="card-meta" aria-live="polite">
               {t.role.selectedCount.replace("{count}", String(selected.size))}
-            </p>
-          </fieldset>
-          <div className="actions">
-            <button type="submit" className="btn" data-variant="primary" disabled={!licenseId || busy}>
-              {busy
-                ? t.dashboard.saving
-                : editingRoleName
-                  ? t.role.saveEdit
-                  : t.role.createButton}
-            </button>
-            {editingRoleName && (
-              <button type="button" className="btn" data-variant="quiet" onClick={cancelEdit} disabled={busy}>
+            </span>
+            <div className="actions">
+              <button type="button" className="btn" data-variant="quiet" onClick={closeEditor} disabled={busy}>
                 {t.common.cancel}
               </button>
-            )}
+              <button type="submit" className="btn" data-variant="primary" disabled={!licenseId || busy}>
+                {busy ? t.dashboard.saving : editing ? t.role.saveEdit : t.role.createButton}
+              </button>
+            </div>
           </div>
         </form>
-      )}
+      </Sheet>
 
+      {/* A raw key/value form is a developer's tool, not the page's job:
+          folded away under its own heading so it never competes with the
+          roles for attention. */}
       {canManageSettings && (
-        <form onSubmit={saveSetting} style={{ display: "grid", gap: 8, marginTop: 32 }}>
-          <h2>{t.licenseSetting.title}</h2>
-          <label className="field">
-            <span>{t.licenseSetting.settingKey}</span>
-            <input value={settingKey} onChange={(event) => setSettingKey(event.target.value)} required />
-          </label>
-          <label className="field">
-            <span>{t.licenseSetting.settingValue}</span>
-            <textarea value={settingValue} onChange={(event) => setSettingValue(event.target.value)} required />
-          </label>
-          <div className="actions">
-            <button type="submit" className="btn" data-variant="primary" disabled={!licenseId || busy}>
-              {busy ? t.dashboard.saving : t.licenseSetting.saveButton}
-            </button>
-          </div>
-        </form>
+        <details className="perm-group" style={{ marginTop: 24 }}>
+          <summary>
+            <span className="perm-group-name">{t.role.advancedSettings}</span>
+          </summary>
+          <form onSubmit={saveSetting} style={{ display: "grid", gap: 8, padding: "4px 0 8px" }}>
+            <label className="field">
+              <span>{t.licenseSetting.settingKey}</span>
+              <input value={settingKey} onChange={(event) => setSettingKey(event.target.value)} required />
+            </label>
+            <label className="field">
+              <span>{t.licenseSetting.settingValue}</span>
+              <textarea value={settingValue} onChange={(event) => setSettingValue(event.target.value)} required />
+            </label>
+            <div className="actions">
+              <button type="submit" className="btn" data-variant="primary" disabled={!licenseId || busy}>
+                {busy ? t.dashboard.saving : t.licenseSetting.saveButton}
+              </button>
+            </div>
+          </form>
+        </details>
       )}
       <ConfirmDialog request={confirming} onClose={closeConfirm} busy={Boolean(busy)} />
     </SalesShell>

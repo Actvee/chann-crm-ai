@@ -23060,8 +23060,23 @@ INVOICE_DEAL_EMPTY = {
     "en": "Deal {code} has no products yet, so there is nothing to invoice.",
 }
 INVOICE_WHICH = {
-    "th": "ออกใบแจ้งหนี้จากใบเสนอราคาหรือดีลไหนครับ พิมพ์รหัสด้วย เช่น \"ออกใบแจ้งหนี้ Q-2026-0001\"",
-    "en": "Which quote or deal should be invoiced? Include the code, e.g. \"ออกใบแจ้งหนี้ Q-2026-0001\".",
+    "th": "ออกใบแจ้งหนี้จากใบเสนอราคาหรือดีลไหนครับ พิมพ์รหัสหรือชื่อลูกค้าด้วย เช่น \"ออกใบแจ้งหนี้ Q-2026-0001\" หรือ \"ออกใบแจ้งหนี้ให้ สมชาย\"",
+    "en": "Which quote or deal should be invoiced? Include the code or the customer's name, e.g. \"ออกใบแจ้งหนี้ Q-2026-0001\" or \"ออกใบแจ้งหนี้ให้ สมชาย\".",
+}
+# Round 20X — "ออกใบแจ้งหนี้ให้ สมชาย". Owner, 22 ก.ย. 2569: an invoice always
+# hangs off a deal, so the customer's name is a way of finding the deal,
+# never a way around it.
+INVOICE_CUSTOMER_NO_DEAL = {
+    "th": "{name} ยังไม่มีดีล — สร้างดีลก่อน แล้วค่อยออกใบแจ้งหนี้ (ใบแจ้งหนี้ผูกกับดีลเสมอ)",
+    "en": "{name} has no deal yet — create one first, then invoice it (an invoice always belongs to a deal).",
+}
+INVOICE_CUSTOMER_DEAL_EMPTY = {
+    "th": "{name} มีดีล {code} แต่ยังไม่มีรายการสินค้า — เพิ่มสินค้าในดีลก่อน แล้วค่อยออกใบแจ้งหนี้",
+    "en": "{name} has deal {code} but it has no lines yet — add the products to the deal first, then invoice it.",
+}
+INVOICE_CUSTOMER_WHICH_DEAL = {
+    "th": "{name} มีหลายดีล ออกใบแจ้งหนี้จากดีลไหนครับ",
+    "en": "{name} has several deals — which one should be invoiced?",
 }
 INVOICE_WHICH_INV = {
     "th": "ใบแจ้งหนี้ใบไหนครับ พิมพ์รหัสด้วย เช่น \"{example} INV-2026-0001\"",
@@ -23511,6 +23526,80 @@ async def _handle_invoice_create(
         found_d = _DEAL_CODE_RE_INV.search(message or "")
         quote_code = found_q.group(1).upper() if found_q else ""
         deal_code = found_d.group(1).upper() if (found_d and not quote_code) else ""
+    target_name = _strip_honorific(_strip_polite_tail(str(fields.get("target_name") or "").strip()))
+    if not quote_code and not deal_code and target_name:
+        # "ออกใบแจ้งหนี้ให้ สมชาย" (round 20X): the name finds the deal. The
+        # picker on a duplicate name is the one every create shares
+        # (_find_one_customer_by_name → customer_disambiguation → this
+        # handler again with the chosen code in target_name).
+        customer, err = await _find_one_customer_by_name(
+            client, license_id, target_name, language, ctx=ctx,
+            resume_entity="invoice", resume_action="create", resume_fields=dict(fields),
+        )
+        if err is not None:
+            return err
+        name = _display_name(customer)
+        deals = await invoice_service.billable_deals(client, license_id, str(customer["id"]))
+        if not deals:
+            # None at all, or none with lines — said apart, because the
+            # way forward differs: open a deal, or add the products.
+            try:
+                any_deals = [
+                    d for d in await client.list_deals(license_id, contact_id=str(customer["id"]))
+                    if str(d.get("stage") or "").lower() != "lost"
+                ]
+            except Exception:  # noqa: BLE001
+                any_deals = []
+            await _remember_entity(
+                client, ctx, entity_type="customer", entity_id=str(customer["id"]),
+                code=str(customer.get("customer_id") or ""),
+            )
+            if any_deals:
+                code = str(any_deals[0].get("deal_id") or "")
+                return ChatReply(
+                    text=_t(INVOICE_CUSTOMER_DEAL_EMPTY, language).format(name=name, code=code),
+                    entity_type="customer", entity_id=str(customer["id"]),
+                    quick_replies=[("เพิ่มสินค้า", f"เพิ่มสินค้า เข้าดีล {code}")],
+                )
+            return ChatReply(
+                text=_t(INVOICE_CUSTOMER_NO_DEAL, language).format(name=name),
+                entity_type="customer", entity_id=str(customer["id"]),
+                quick_replies=[("สร้างดีล", f"สร้างดีลให้ {name}")],
+            )
+        if len(deals) > 1:
+            # Several deals: a choice, never a guess (rule 3). Each button
+            # re-sends the order with the deal's code, the way the name
+            # picker does — no pending state to get stale.
+            shown = deals[:LIST_LIMIT]
+            lines = [
+                f"· {d.get('deal_id') or '-'} · {_label(DEAL_STAGE_LABELS, d.get('stage'), language)}"
+                f" · {len(d.get('products') or [])} รายการ"
+                for d in shown
+            ]
+            return ChatReply(
+                text=_t(INVOICE_CUSTOMER_WHICH_DEAL, language).format(name=name) + "\n" + "\n".join(lines),
+                quick_replies=[
+                    (str(d.get("deal_id") or "")[:20], f"ออกใบแจ้งหนี้ให้ดีล {d.get('deal_id')}")
+                    for d in deals[:4]
+                ],
+            )
+        deal_code = str(deals[0].get("deal_id") or "").upper()
+        # The deal's own quotation, when it has one that was sent or
+        # accepted: a discount agreed on the offer stays on the bill, the
+        # way the dashboard form pre-selects it. Naming the deal by code
+        # ("ให้ดีล D-…") still bills the deal's lines as before.
+        try:
+            offered = [
+                q for q in await client.list_quotes(license_id)
+                if str(q.get("deal_id") or "") == str(deals[0].get("id") or "")
+                and str(q.get("status") or "").lower() in invoice_service.BILLABLE_QUOTE_STATUSES
+            ]
+        except Exception:  # noqa: BLE001
+            offered = []
+        if offered:
+            newest = max(offered, key=lambda q: str(q.get("created_at") or ""))
+            quote_code = str(newest.get("quote_id") or "").upper()
+            deal_code = ""
     if not quote_code and not deal_code:
         ref = await _last_entity_ref(client, ctx)
         if ref and ref.get("code"):

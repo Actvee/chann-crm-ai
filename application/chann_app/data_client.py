@@ -2208,13 +2208,28 @@ class DataClient:
 
     async def list_quotes_with_total(
         self, license_id: str, status: str | None = None, limit: int | None = None,
+        *, q: str | None = None, offset: int | None = None, deal_id: str | None = None,
     ) -> tuple[list[dict], int]:
-        """A page of quotes, and how many there really are."""
+        """A page of quotes, and how many there really are.
+
+        `q` and `offset` have been sent by GET /quotes since round 20N; this
+        method never took them, so every quote list on the dashboard was a
+        TypeError behind a 500 — found in round 20X while adding `deal_id`
+        (the tier-seam lesson in CLAUDE.md, again: the fake had no
+        list_quotes_with_total at all, so no test walked the seam).
+        """
         params: dict = {}
         if status:
             params["status_"] = status
+        if q:
+            params["q"] = q
+        if deal_id:
+            # Round 20X: one deal's quotations, for the invoice form.
+            params["deal_id"] = deal_id
         if limit:
             params["limit"] = limit
+        if offset:
+            params["offset"] = offset
         resp = await self._client.get(
             f"{self._base}/internal/v1/licenses/{license_id}/quotes",
             headers=self._headers, params=params or None,
@@ -2498,6 +2513,7 @@ class DataClient:
     async def list_invoices_with_total(
         self, license_id: str, *, status: str | None = None, contact_id: str | None = None,
         customer_chann_uid: str | None = None, q: str | None = None, overdue: bool = False,
+        deal_id: str | None = None,
         limit: int | None = None, offset: int | None = None,
     ) -> tuple[list[dict], int]:
         """A page of invoices and how many match — the round 20N shape."""
@@ -2506,6 +2522,8 @@ class DataClient:
             params["status_"] = status
         if contact_id:
             params["contact_id"] = contact_id
+        if deal_id:
+            params["deal_id"] = deal_id
         if customer_chann_uid:
             params["customer_chann_uid"] = customer_chann_uid
         if q:

@@ -1,0 +1,77 @@
+name: round20x-invoice-by-customer
+description: the sentence "ออกใบแจ้งหนี้ให้ สมชาย" (owner, 22 ก.ย. 2569 - an invoice always hangs off a deal,
+  so the customer's name is a way of finding the deal) - with no deal the reply says to create
+  one first, with one deal that has lines the bill is made from it, with several the choice is
+  buttons that re-send the order with the deal's code, and a duplicate name gets the name
+  picker. Every reading is the deployed model's own (scripts/dev/ask-model.py, 22 ก.ย. 2569).
+  The fake has no PDF engine, so the invoice is created and the reply says the PDF was not
+  issued - the number and the total still come back.
+backend: fake
+actor:
+  oa: sales
+  role: sales
+  language: th
+  permissions: sales
+steps:
+- seed:
+    raw:
+      company_profile:
+        legal_name: บริษัท ทดสอบ จำกัด
+        company_name: ร้านทดสอบ
+        tax_id: '0105558123456'
+        company_address: 99/1
+        company_phone: '021234567'
+        company_email: a@b.com
+        open_hours: null
+        vat_rate: '0.07'
+    customers:
+    - ref: somchai
+      first_name: สมชาย
+      last_name: ใจดี
+      phone: '0812345678'
+    - ref: somying
+      first_name: สมหญิง
+      last_name: รักดี
+      phone: '0899999999'
+- send:
+    message: ออกใบแจ้งหนี้ให้ สมหญิง
+    ai: {action: create, entity: invoice, fields: {target_name: สมหญิง}, missing: []}
+  expect:
+    contains: ['สมหญิง รักดี ยังไม่มีดีล', 'สร้างดีลก่อน']
+    quick_replies_include: ['สร้างดีลให้ สมหญิง รักดี']
+    not_contains: ['INV-']
+    is_not: [generic_error, not_sure, permission, not_found]
+- seed:
+    deals:
+    - ref: deal1
+      contact_id: $somchai
+    call:
+    - method: add_deal_product
+      args: {deal_id: $deal1.id, payload: {product_name: แอร์ 12000 BTU, qty: 2, quoted_unit_price: '15000.00'}}
+- send:
+    message: ออกใบแจ้งหนี้ให้ สมชาย
+    ai: {action: create, entity: invoice, fields: {target_name: สมชาย}, missing: []}
+  expect:
+    contains: ['INV-2026-0001', '32,100.00']
+    is_not: [generic_error, not_sure, permission, not_found]
+- seed:
+    deals:
+    - ref: deal2
+      contact_id: $somchai
+    call:
+    - method: add_deal_product
+      args: {deal_id: $deal2.id, payload: {product_name: พัดลม, qty: 1, quoted_unit_price: '1500.00'}}
+- send:
+    message: ออกใบแจ้งหนี้ให้ สมชาย
+    ai: {action: create, entity: invoice, fields: {target_name: สมชาย}, missing: []}
+  expect:
+    contains: ['สมชาย ใจดี มีหลายดีล', 'D-2026-0001', 'D-2026-0002']
+    quick_replies_include: ['ออกใบแจ้งหนี้ให้ดีล D-2026-0002']
+    not_contains: ['INV-2026-0002']
+    is_not: [generic_error, not_sure, permission, not_found]
+- send:
+    message: ออกใบแจ้งหนี้ให้ดีล D-2026-0002
+    ai: {action: create, entity: invoice, fields: {deal_code: D-2026-0002}, missing: []}
+  expect:
+    contains: ['INV-2026-0002', '1,605.00']
+    is_not: [generic_error, not_sure, permission, not_found]
