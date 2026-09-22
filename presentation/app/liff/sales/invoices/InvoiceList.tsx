@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { Badge, Count, Empty } from "../_components";
+import { RelatedLinks } from "../_record";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { ListFilters, optionsFrom } from "../../_filters";
@@ -66,6 +67,7 @@ type Invoice = {
   status: string;
   contact_id?: string | null;
   quote_id?: string | null;
+  deal_id?: string | null;
   issue_date?: string | null;
   due_date?: string | null;
   total: string;
@@ -110,6 +112,7 @@ export default function InvoiceList({ liffId }: { liffId: string }) {
   const [dealFilter, setDealFilter] = useState("");
   const [filterName, setFilterName] = useState("");
   const [prefill, setPrefill] = useState<{ contactId?: string; dealId?: string }>({});
+  const [wantedId, setWantedId] = useState("");
 
   useEffect(() => {
     // Read once, on the client: the page is rendered dynamically and the
@@ -117,6 +120,10 @@ export default function InvoiceList({ liffId }: { liffId: string }) {
     const params = new URLSearchParams(window.location.search);
     const contactId = params.get("contact_id") ?? "";
     const dealId = params.get("deal_id") ?? "";
+    // Round 21A: a quote (or a freshly created bill) points straight at
+    // one invoice — the page opens it instead of making someone find it.
+    const wanted = params.get("invoice_id") ?? "";
+    if (wanted) setWantedId(wanted);
     setContactFilter(contactId);
     setDealFilter(dealId);
     setPrefill({ contactId: contactId || undefined, dealId: dealId || undefined });
@@ -199,6 +206,31 @@ export default function InvoiceList({ liffId }: { liffId: string }) {
   useEffect(() => {
     if (session.ready && !list.busy) say("");
   }, [session.ready, list.busy, say]);
+
+  // The invoice a link named (?invoice_id=…): fetched on its own, so it
+  // opens even when it is not on the first page of the list.
+  useEffect(() => {
+    if (!session.ready || !token || !licenseId || !wantedId) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await fetch(`/api/phase2/licenses/${licenseId}/invoices/${wantedId}`, {
+          headers: proxyHeaders(token, licenseId),
+        });
+        if (!cancelled && response.ok) {
+          setOpen((await response.json()) as Invoice);
+          setPaying(false);
+        }
+      } catch {
+        /* the list is still there to find it in */
+      } finally {
+        if (!cancelled) setWantedId("");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [session.ready, token, licenseId, wantedId]);
 
   const can = (key: string) => !session.suspended && permissions.has(key);
   const canUpdate = can("invoice.update");
@@ -536,9 +568,24 @@ export default function InvoiceList({ liffId }: { liffId: string }) {
               {open.is_overdue && <Badge stage="overdue" label={t.dashboard.invoices.overdue} />}
               {" "}
               {customerName(open)}
-              {open.data_snapshot?.quote?.quote_id ? ` · ${open.data_snapshot.quote.quote_id}` : ""}
-              {open.data_snapshot?.deal?.deal_id ? ` · ${open.data_snapshot.deal.deal_id}` : ""}
             </p>
+
+            {/* Owner, 22 ก.ย. 2569: "จากใบแจ้งหนี้ก็ควรกดไปที่ record ที่
+                เกี่ยวข้องได้ด้วย" — the codes were printed as text, so the
+                way back to the deal was the search box. */}
+            <RelatedLinks
+              items={[
+                ...(open.contact_id
+                  ? [{ href: `/liff/sales/customers/${open.contact_id}`, label: t.customer.title, code: customerName(open) }]
+                  : []),
+                ...(open.deal_id
+                  ? [{ href: `/liff/sales/deals/${open.deal_id}`, label: t.deal.title, code: open.data_snapshot?.deal?.deal_id ?? "" }]
+                  : []),
+                ...(open.quote_id
+                  ? [{ href: `/liff/sales/quotes/${open.quote_id}`, label: t.quote.title, code: open.data_snapshot?.quote?.quote_id ?? "" }]
+                  : []),
+              ]}
+            />
 
             <dl className="fields">
               <FieldRow label={t.dashboard.invoices.total}>
@@ -603,12 +650,19 @@ export default function InvoiceList({ liffId }: { liffId: string }) {
                   {open.receipt_document_id ? t.dashboard.invoices.reissueReceipt : t.dashboard.invoices.issueReceipt}
                 </button>
               )}
-              {canVoid && (open.status === "draft" || open.status === "issued") && Number(open.paid_amount) === 0 && (
-                <button type="button" className="btn" data-variant="quiet" disabled={busy} onClick={() => void voidInvoice(open)}>
+            </div>
+
+            {/* Undoing a bill is not one of the things you do WITH it: its
+                own row, under a rule, in the danger colour — and the word
+                is "ยกเลิก", because a bill that went out is voided, never
+                deleted (owner, 22 ก.ย. 2569). */}
+            {canVoid && (open.status === "draft" || open.status === "issued") && Number(open.paid_amount) === 0 && (
+              <div className="actions record-danger">
+                <button type="button" className="btn" data-variant="danger" disabled={busy} onClick={() => void voidInvoice(open)}>
                   {t.dashboard.invoices.voidAction}
                 </button>
-              )}
-            </div>
+              </div>
+            )}
 
             {paying && (
               <form

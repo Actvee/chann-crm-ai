@@ -11,7 +11,7 @@ import { FieldRow } from "../../../_field-row";
 import { shortDate } from "../../../_list-controls";
 import { ProductLineForm } from "../../../_product-line-form";
 import { useFailureText, useFormatters } from "../../_format";
-import { RecordHead, RelatedHeading } from "../../_record";
+import { RecordActions, RecordHead, RelatedHeading, RelatedLinks, StatusSection } from "../../_record";
 import { RelatedActivity } from "../../_related";
 import { openExternal, proxyHeaders } from "../../_lib";
 import { useSalesSession } from "../../_session";
@@ -24,6 +24,13 @@ type Product = {
   product_name?: string | null;
   qty?: number | string | null;
   quoted_unit_price?: string | number | null;
+};
+
+type InvoiceRef = {
+  id: string;
+  invoice_id: string;
+  status: string;
+  outstanding?: string | null;
 };
 
 type Detail = {
@@ -88,6 +95,10 @@ export default function QuoteDetail({
   const [editingTerms, setEditingTerms] = useState(false);
   const [terms, setTerms] = useState({ valid_until: "", discount: "" });
   const [busy, setBusy] = useState(false);
+  // Round 21A: the bills already raised from this quote. The page used
+  // to offer "ออกใบแจ้งหนี้" whatever had happened, so the only way to
+  // know whether one existed was to go and look (owner, 22 ก.ย. 2569).
+  const [invoices, setInvoices] = useState<InvoiceRef[]>([]);
   const router = useRouter();
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
@@ -116,6 +127,21 @@ export default function QuoteDetail({
     setLines((await response.json()) as Product[]);
   }, [licenseId, quoteId, say, t, token]);
 
+  const loadInvoices = useCallback(async () => {
+    if (!token || !licenseId) return;
+    try {
+      const response = await fetch(
+        `/api/phase2/licenses/${licenseId}/invoices?quote_id=${quoteId}`,
+        { headers: proxyHeaders(token, licenseId) },
+      );
+      // Silent on failure: a quote still reads without knowing its bills,
+      // and invoice.read is a permission a salesperson may not hold.
+      if (response.ok) setInvoices((await response.json()) as InvoiceRef[]);
+    } catch {
+      /* the quote is the point of this page */
+    }
+  }, [licenseId, quoteId, token]);
+
   const load = useCallback(async () => {
     if (!token || !licenseId) return;
     const response = await fetch(
@@ -131,8 +157,9 @@ export default function QuoteDetail({
     }
     setDetail((await response.json()) as Detail);
     await loadLines();
+    if (permissions.has("invoice.read")) await loadInvoices();
     say("");
-  }, [licenseId, loadLines, quoteId, say, t, token]);
+  }, [licenseId, loadLines, loadInvoices, permissions, quoteId, say, t, token]);
 
   useEffect(() => {
     if (!session.ready) return;
@@ -205,7 +232,7 @@ export default function QuoteDetail({
         return;
       }
       say(t.dashboard.invoices.created.replace("{code}", invoice.invoice_id), "ok");
-      router.push("/liff/sales/invoices");
+      router.push(`/liff/sales/invoices?invoice_id=${invoice.id}`);
     } catch (error) {
       say(error instanceof Error ? error.message : t.common.error, "error");
     } finally {
@@ -470,93 +497,123 @@ export default function QuoteDetail({
             stage={detail.quote.status}
             title={detail.quote.quote_id}
             badge={<Badge stage={detail.quote.status} label={statusLabel(detail.quote.status)} />}
-            subtitle={
-              <>
-                {detail.customer && (
-                  <Link href={`/liff/sales/customers/${detail.customer.id}`}>
-                    {[detail.customer.first_name, detail.customer.last_name]
-                      .filter(Boolean)
-                      .join(" ")}
-                  </Link>
-                )}
-                {detail.deal && (
-                  <>
-                    {" · "}
-                    <Link href={`/liff/sales/deals/${detail.deal.id}`}>
-                      {detail.deal.deal_id}
-                    </Link>
-                  </>
-                )}
-              </>
+          />
+
+          {/* Where this quote came from and what came of it — each one a
+              link, both ways (owner, 22 ก.ย. 2569). */}
+          <RelatedLinks
+            items={[
+              ...(detail.customer
+                ? [{
+                    href: `/liff/sales/customers/${detail.customer.id}`,
+                    label: t.customer.title,
+                    code: [detail.customer.first_name, detail.customer.last_name].filter(Boolean).join(" ")
+                      || detail.customer.customer_id,
+                  }]
+                : []),
+              ...(detail.deal
+                ? [{ href: `/liff/sales/deals/${detail.deal.id}`, label: t.deal.title, code: detail.deal.deal_id }]
+                : []),
+              ...invoices.map((invoice) => ({
+                href: `/liff/sales/invoices?invoice_id=${invoice.id}`,
+                label: t.invoice.title,
+                code: invoice.invoice_id,
+              })),
+            ]}
+          />
+
+          {/* 1. What the quote IS, and the moves the state machine allows
+                 from here — nothing else in this block. */}
+          <StatusSection
+            title={t.dashboard.record.statusOf.replace("{record}", t.quote.title)}
+            current={<Badge stage={detail.quote.status} label={statusLabel(detail.quote.status)} />}
+            moves={
+              moves.length ? (
+                <>
+                  {moves.map((next) => (
+                    <button
+                      key={next}
+                      type="button"
+                      className="btn"
+                      data-variant={next === "rejected" ? "danger" : undefined}
+                      onClick={() => void setQuoteStatus(next)}
+                      disabled={busy}
+                    >
+                      {actionLabel(next)}
+                    </button>
+                  ))}
+                </>
+              ) : undefined
             }
-            actions={
-              <>
-                {issuable && (
-                  <button
-                    type="button"
-                    className="btn"
-                    data-variant={detail.quote.generated_document_id ? undefined : "primary"}
-                    onClick={() => void issue()}
-                    disabled={busy}
-                  >
-                    {detail.quote.generated_document_id
-                      ? t.dashboard.quotes.reissue
-                      : t.dashboard.quotes.issue}
-                  </button>
-                )}
-                {/* The moves the state machine allows from here, and
-                    only those. Voiding a wrong quote is "rejected": it
-                    cannot be edited once issued, so the honest path is
-                    to drop this one and issue a replacement. */}
-                {moves.map((next) => (
-                  <button
-                    key={next}
-                    type="button"
-                    className="btn"
-                    data-variant={next === "accepted" ? "primary" : "quiet"}
-                    onClick={() => void setQuoteStatus(next)}
-                    disabled={busy}
-                  >
-                    {actionLabel(next)}
-                  </button>
-                ))}
-                {detail.quote.generated_document_id ? (
-                  <button
-                    type="button"
-                    className="btn"
-                    onClick={() => void openDocument()}
-                    disabled={busy}
-                  >
-                    {busy ? t.dashboard.working : t.dashboard.quotes.view}
-                  </button>
-                ) : null}
-                {/* Round 20V: the bill after the quotation. Only a sent or
-                    accepted quote can be billed (services/invoices.py says
-                    why), and only with invoice.create — the same call chat
-                    makes for "ออกใบแจ้งหนี้ Q-…". */}
-                {can("invoice.create") && (quoteStatus === "sent" || quoteStatus === "accepted") && (
-                  <button
-                    type="button"
-                    className="btn"
-                    data-variant="primary"
-                    onClick={() => void createInvoice()}
-                    disabled={busy}
-                  >
-                    {t.dashboard.invoices.fromQuote}
-                  </button>
-                )}
-              </>
+            note={
+              moves.length === 0
+                ? s.quotes.final
+                : !canUpdate && !session.suspended
+                  ? s.quotes.needsUpdate
+                  : undefined
             }
           />
 
-          {quoteStatus === "draft" && canUpdate && !detail.quote.generated_document_id && (
-            <p className="card-meta" style={{ marginBottom: 14 }}>{s.quotes.issueBeforeSend}</p>
-          )}
-          {!canUpdate && !session.suspended && (
-            <p className="card-meta" style={{ marginBottom: 14 }}>{s.quotes.needsUpdate}</p>
-          )}
-          {(NEXT_STATUSES[quoteStatus] ?? []).length === 0 && (
-            <p className="card-meta" style={{ marginBottom: 14 }}>{s.quotes.final}</p>
+          {/* 2. What you can DO with it: the document, and the bill. One
+                 primary — whichever is the next honest step. */}
+          {(issuable || detail.quote.generated_document_id || can("invoice.create") || invoices.length > 0) && (
+            <RecordActions
+              title={t.dashboard.record.documentsTitle}
+              note={
+                quoteStatus === "draft" && canUpdate && !detail.quote.generated_document_id
+                  ? s.quotes.issueBeforeSend
+                  : undefined
+              }
+            >
+              {invoices.length > 0 && (
+                <div className="record-note-row" style={{ width: "100%" }}>
+                  <span>
+                    {t.dashboard.invoices.alreadyRaised.replace("{code}", invoices[0].invoice_id)}
+                  </span>
+                  <Link className="btn" href={`/liff/sales/invoices?invoice_id=${invoices[0].id}`}>
+                    {t.dashboard.invoices.openInvoice}
+                  </Link>
+                </div>
+              )}
+              {issuable && (
+                <button
+                  type="button"
+                  className="btn"
+                  data-variant={detail.quote.generated_document_id ? undefined : "primary"}
+                  onClick={() => void issue()}
+                  disabled={busy}
+                >
+                  {detail.quote.generated_document_id
+                    ? t.dashboard.quotes.reissue
+                    : t.dashboard.quotes.issue}
+                </button>
+              )}
+              {detail.quote.generated_document_id && (
+                <button type="button" className="btn" onClick={() => void openDocument()} disabled={busy}>
+                  {busy ? t.dashboard.working : t.dashboard.quotes.view}
+                </button>
+              )}
+              {/* Round 20V: the bill after the quotation. Only a sent or
+                  accepted quote can be billed (services/invoices.py says
+                  why), and only with invoice.create — the same call chat
+                  makes for "ออกใบแจ้งหนี้ Q-…". Once one exists this is no
+                  longer the primary thing to press. */}
+              {can("invoice.create") && (quoteStatus === "sent" || quoteStatus === "accepted") && (
+                <button
+                  type="button"
+                  className="btn"
+                  data-variant={
+                    invoices.length === 0 && detail.quote.generated_document_id ? "primary" : undefined
+                  }
+                  onClick={() => void createInvoice()}
+                  disabled={busy}
+                >
+                  {invoices.length > 0
+                    ? t.dashboard.invoices.fromQuoteAgain
+                    : t.dashboard.invoices.fromQuote}
+                </button>
+              )}
+            </RecordActions>
           )}
 
           {/* When the offer stops standing, and what came off the price.

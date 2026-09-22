@@ -2513,7 +2513,7 @@ class DataClient:
     async def list_invoices_with_total(
         self, license_id: str, *, status: str | None = None, contact_id: str | None = None,
         customer_chann_uid: str | None = None, q: str | None = None, overdue: bool = False,
-        deal_id: str | None = None,
+        deal_id: str | None = None, quote_id: str | None = None,
         limit: int | None = None, offset: int | None = None,
     ) -> tuple[list[dict], int]:
         """A page of invoices and how many match — the round 20N shape."""
@@ -2524,6 +2524,8 @@ class DataClient:
             params["contact_id"] = contact_id
         if deal_id:
             params["deal_id"] = deal_id
+        if quote_id:
+            params["quote_id"] = quote_id
         if customer_chann_uid:
             params["customer_chann_uid"] = customer_chann_uid
         if q:

@@ -11,7 +11,7 @@ import { ConfirmDialog, useConfirm } from "../../../_confirm";
 import { useFailureText, useFormatters } from "../../_format";
 import { OwnerControl, memberLabel, useSalesMembers, type SalesMember } from "../../_owner";
 import { proxyHeaders } from "../../_lib";
-import { FieldSection, RecordHead, RelatedHeading } from "../../_record";
+import { FieldSection, RecordHead, RelatedHeading, StatusSection } from "../../_record";
 import { RelatedActivity } from "../../_related";
 import { useSalesSession } from "../../_session";
 import { SalesShell } from "../../_shell";
@@ -276,18 +276,20 @@ export default function CustomerDetail({
             title={fullName(customer)}
             subtitle={<span className="code">{customer.customer_id}</span>}
             badge={<Badge stage={customer.stage} label={stageLabel(customer.stage)} />}
-            actions={
+          />
+
+          {/* Lead → customer is a change of what this record IS, so it
+              lives in the status block with its own heading rather than
+              beside the buttons that do things (owner, 22 ก.ย. 2569). */}
+          <StatusSection
+            title={t.dashboard.record.statusOf.replace("{record}", t.customer.title)}
+            current={<Badge stage={customer.stage} label={stageLabel(customer.stage)} />}
+            moves={
               customer.stage === "lead" && canEdit ? (
-                <button
-                  type="button"
-                  className="btn"
-                  data-variant="primary"
-                  onClick={() => void promote()}
-                  disabled={busy}
-                >
+                <button type="button" className="btn" onClick={() => void promote()} disabled={busy}>
                   {busy ? t.dashboard.saving : t.dashboard.customers.promote}
                 </button>
-              ) : null
+              ) : undefined
             }
           />
 

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { ReactNode, useEffect, useState } from "react";
 
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
@@ -218,6 +219,102 @@ export function RecordHead({
       )}
       {actions && <div className="actions">{actions}</div>}
     </div>
+  );
+}
+
+/**
+ * The record's stage, and the moves allowed from here — on its own.
+ *
+ * Owner, 22 ก.ย. 2569: "ปุ่มออกใบแจ้งหนี้ กับปุ่มสถานะ … ตอนนี้ปนกันมั่วไป
+ * หมด ให้แยกระหว่างส่วนอัพเดตสถานะ กับปุ่มอื่น". Changing what a record IS
+ * and doing something WITH it are two different decisions; one row of
+ * buttons made them look like a menu of equals, and three of them were
+ * styled primary at once (ui-ux-pro-max: one primary CTA per screen,
+ * destructive actions visually separated, related items grouped).
+ *
+ * A move that ends the record badly (rejected, lost) is `danger`; the
+ * rest are plain. The primary button of the page belongs to the actions
+ * block beside this one, never here.
+ */
+export function StatusSection({
+  title,
+  current,
+  moves,
+  note,
+  children,
+}: {
+  title: string;
+  /** The badge for the stage the record is in now. */
+  current: ReactNode;
+  moves?: ReactNode;
+  /** Why there is nothing to press — a final stage, or no permission. */
+  note?: ReactNode;
+  children?: ReactNode;
+}) {
+  return (
+    <section className="section record-status">
+      <div className="section-head">
+        <h2>{title}</h2>
+        <span className="record-status-now">{current}</span>
+      </div>
+      {moves && <div className="actions record-status-moves">{moves}</div>}
+      {note && <p className="card-meta record-status-note">{note}</p>}
+      {children}
+    </section>
+  );
+}
+
+/**
+ * What this record lets you DO: issue the document, bill it, open what
+ * came of it. One primary among them; anything that undoes a record
+ * sits in `danger`, on its own line under a rule.
+ */
+export function RecordActions({
+  title,
+  children,
+  danger,
+  note,
+}: {
+  title: string;
+  children: ReactNode;
+  danger?: ReactNode;
+  note?: ReactNode;
+}) {
+  return (
+    <section className="section record-actions">
+      <div className="section-head">
+        <h2>{title}</h2>
+      </div>
+      <div className="actions">{children}</div>
+      {note && <p className="card-meta record-status-note">{note}</p>}
+      {danger && <div className="actions record-danger">{danger}</div>}
+    </section>
+  );
+}
+
+/**
+ * The records on the other end of this one, each a link.
+ *
+ * Owner, 22 ก.ย. 2569: "จากใบแจ้งหนี้ก็ควรกดไปที่ record ที่เกี่ยวข้องได้
+ * ด้วย". Every page already knew the codes; it printed them as text, so
+ * the way from a bill back to its deal was the search box.
+ */
+export function RelatedLinks({
+  items,
+}: {
+  items: { href: string; label: string; code?: string | null }[];
+}) {
+  const shown = items.filter((item) => item.href);
+  if (shown.length === 0) return null;
+  return (
+    <nav className="record-links" aria-label={shown[0].label}>
+      {shown.map((item) => (
+        <Link key={item.href + item.label} className="record-link" href={item.href}>
+          <span className="record-link-label">{item.label}</span>
+          {item.code && <span className="code">{item.code}</span>}
+        </Link>
+      ))}
+    </nav>
   );
 }
 

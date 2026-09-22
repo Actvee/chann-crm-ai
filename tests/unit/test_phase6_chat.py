@@ -1073,13 +1073,17 @@ class FakeDataClient:
 
     async def list_invoices_with_total(self, license_id, *, status=None, contact_id=None,
                                        customer_chann_uid=None, q=None, overdue=False,
-                                       deal_id=None, limit=None, offset=None):
+                                       deal_id=None, quote_id=None, limit=None, offset=None):
         self.recorded.append(("list_invoices", license_id, status, customer_chann_uid, q, overdue))
         rows = list(getattr(self, "_invoices", []))
         if status:
             rows = [r for r in rows if r.get("status") == status]
         if contact_id:
             rows = [r for r in rows if str(r.get("contact_id")) == str(contact_id)]
+        if deal_id:
+            rows = [r for r in rows if str(r.get("deal_id")) == str(deal_id)]
+        if quote_id:
+            rows = [r for r in rows if str(r.get("quote_id")) == str(quote_id)]
         if deal_id:
             rows = [r for r in rows if str(r.get("deal_id")) == str(deal_id)]
         if customer_chann_uid:

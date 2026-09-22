@@ -1112,6 +1112,11 @@ A service report uses this set instead:
       incomplete: "Cannot issue yet — complete the company profile first",
       note: "Preview builds a PDF for checking only and stores nothing. Issue stores the file permanently with a SHA-256 record of which file the customer received.",
     },
+    record: {
+      statusOf: "{record} status",
+      documentsTitle: "Documents & invoices",
+      actionsTitle: "Actions",
+    },
     invoices: {
       title: "Invoices",
       empty: "No invoices yet. Issue one from a sent quote, or type “ออกใบแจ้งหนี้ Q-…” in chat",
@@ -1161,6 +1166,9 @@ A service report uses this set instead:
       cancel: "Cancel",
       needsUpdate: "Issuing, recording payments and receipts need the invoice permission",
       fromQuote: "Issue invoice",
+      alreadyRaised: "Invoice {code} was raised from this quote",
+      openInvoice: "Open invoice",
+      fromQuoteAgain: "Raise another invoice",
       fromQuoteAffects: "Creates an invoice from this quote's lines and discount, then issues the PDF",
       fromQuoteKeeps: "The quote does not change",
       created: "Invoice {code} issued",

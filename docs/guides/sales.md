@@ -64,7 +64,7 @@ _- Needs the shop settings permission_
 
 พิมพ์: `ลงทะเบียนสินค้า SN12345678 แอร์ ให้ลูกค้า สมชาย`
 
-[IMAGE: sales-units — ตารางเครื่องที่ลงทะเบียน: S/N, สินค้า, สถานะ 'ลูกค้าผูกแล้ว' / 'ยังไม่มีลูกค้าผูก' ธีมเขียว]
+[IMAGE: sales-units — หน้าจอ 'ทะเบียนสินค้า' ธีมเขียว: ปุ่ม 'บันทึกเครื่อง' ที่หัวข้อ ช่องค้นหา ปุ่ม 'นำเข้า CSV' และรายการเครื่องที่บอกลูกค้าที่ผูกและว่าผูก LINE แล้วหรือยัง]
 
 _EN: Record sold units — Register the units you sold against the customer — they can check the warranty themselves, and repairs attach to the unit._
 
@@ -106,7 +106,7 @@ _- A job you open for a caller is linked to their registered unit, with buttons 
 
 พิมพ์: `มอบหมาย T-2026-0001 ให้ทีม แอร์`
 
-[IMAGE: sales-dispatch — หน้าจอ 'งานซ่อม' บนแดชบอร์ด การ์ดงาน T-2026-0001 มีช่อง 'มอบหมายให้…' เลือกทีมแอร์ และปุ่มมอบหมายสีเขียว]
+[IMAGE: sales-dispatch — หน้าจอ 'งานซ่อม' บนแดชบอร์ด การ์ดงาน T-2026-0001 มีช่อง 'มอบหมายให้…' เลือกทีมแอร์ และปุ่มมอบหมายสีเขียว ด้านล่างเป็นงานอื่นในร้านพร้อมป้ายสถานะ]
 
 _EN: Repairs: dispatch — You hear when a customer reports, with the machine and its warranty state — the job waits for the shop; technicians do not see it until it is assigned or opened._
 
@@ -149,7 +149,7 @@ _- Switch it off — confirmed first; new work is then assigned by hand → type
 
 พิมพ์: `หน้าจอ > แชทลูกค้า`
 
-[IMAGE: sales-chats — หน้าจอแดชบอร์ดสีเขียว รายการแชทลูกค้า 2 รายการ รายการแรกมีป้าย 'ลูกค้ารอคำตอบ' ด้านล่างเป็นบทสนทนาและช่องพิมพ์คำตอบ ปุ่ม 'ส่ง' และ 'ปิดการสนทนา']
+[IMAGE: sales-chats — หน้าจอแดชบอร์ดสีเขียว รายการแชทลูกค้า 2 รายการ รายการแรกมีป้าย 'ลูกค้ารอคำตอบ' ด้านขวาเป็นบทสนทนา มีรูปที่ร้านส่งและรูปที่ลูกค้าส่ง ด้านล่างมีปุ่มแนบรูป ช่องพิมพ์คำตอบ และปุ่ม 'ส่ง']
 
 _EN: Customer chats — A customer who taps "talk to the shop" appears under home > Customer chats — answer there only; a reply in the shop's LINE never reaches them._
 
@@ -177,7 +177,7 @@ _- Set both times (or on the company page) → type "ตั้งค่าแช
 
 พิมพ์: `อนุมัติ SR-2026-0001`
 
-[IMAGE: sales-approve — การ์ดรายงาน SR-2026-0001: ปัญหาที่พบ / สิ่งที่แก้ไข พร้อมปุ่ม 'อนุมัติ' สีเขียว และ 'ตีกลับ' สีเทา]
+[IMAGE: sales-approve — การ์ดรายงาน SR-2026-0001: ปัญหาที่พบ / สิ่งที่แก้ไข พร้อมปุ่ม 'อนุมัติ' สีเขียว และ 'ตีกลับ' ด้านล่างเป็นคิวที่เหลือพร้อมป้าย รอตรวจ / อนุมัติแล้ว]
 
 _EN: Repairs: review reports — When a technician closes a job you hear — review the report, approve or reject; once every step passes the customer gets the survey and the PDF._
 
@@ -244,7 +244,7 @@ _- The customer already heard at check-out that the job was finished and what wa
 
 พิมพ์: `งานวันนี้`
 
-[IMAGE: sales-crm — แดชบอร์ดขายธีมเขียว: เมนู navigation ด้านซ้าย จัดกลุ่มเป็น งานขาย / งานบริการ / เอกสารและรายงาน / จัดการร้าน กำลังเปิดหน้ารายชื่อลูกค้า]
+[IMAGE: sales-crm — แดชบอร์ดขายธีมเขียว: เมนูด้านซ้ายจัดกลุ่มเป็น งานขาย (แชทลูกค้า ลูกค้า ดีล ใบเสนอราคา ใบแจ้งหนี้ นัดหมาย สินค้า) / งานบริการ / เอกสารและรายงาน / จัดการร้าน ด้านขวาเป็นมูลค่าไปป์ไลน์ ทางลัด 'เริ่มงานต่อ' และดีลที่ต้องตามวันนี้]
 
 _EN: Customers, deals, quotes — Customers, deals, quotes, appointments and notes — type it as you would say it; a duplicate name gets a choice, never a guess._
 
@@ -321,7 +321,7 @@ _- Everyone one person holds, to another — listed, then confirmed · on screen
 
 พิมพ์: `สรุปงานค้างแยกตามช่าง`
 
-[IMAGE: sales-ai-report — แชท LINE ข้อความ 'สรุปงานค้างแยกตามช่าง' ตอบกลับเป็นรายการชื่อช่างกับตัวเลข ถัดมาข้อความ 'ขอกราฟยอดขาย' ตอบกลับเป็นรูปกราฟแท่งสีเขียว และหน้าจอตารางมีกราฟแท่งสีเขียว]
+[IMAGE: sales-ai-report — แชท LINE ข้อความ 'สรุปงานค้างแยกตามช่าง' ตอบกลับเป็นรายการชื่อช่างกับตัวเลขและลิงก์ไฟล์ ถัดมาเป็นกราฟแท่งสีเขียวของจำนวนงานต่อช่าง]
 
 _EN: Ask for a report — Type what you want to know in plain words and get the numbers at once; ask for a picture when you want one._
 
@@ -349,12 +349,12 @@ _- What customers scored after a repair — average, answered, per technician (t
 - ดูตัวอย่างที่คุณมีสิทธิ์ → พิมพ์ "วิธีใช้"
 - ดูสิทธิ์ทั้งหมด → พิมพ์ "ทำอะไรได้บ้าง"
 - ล้างเฉพาะบทสนทนา ข้อมูลไม่หาย → พิมพ์ "เริ่มใหม่"
-- สิทธิ์ขอได้จากเจ้าของร้าน (แดชบอร์ด > บทบาทและทีม)
+- สิทธิ์ขอได้จากเจ้าของร้าน (แดชบอร์ด > จัดการสิทธิ์และบทบาท)
 - สลับภาษา → พิมพ์ "เปลี่ยนภาษาเป็นอังกฤษ"
 
 พิมพ์: `วิธีใช้`
 
-[IMAGE: sales-help — หน้าจอ 'บทบาทและทีม' แสดงรายชื่อสมาชิกและสิทธิ์เป็น toggle ธีมเขียว]
+[IMAGE: sales-help — หน้าจอ 'จัดการสิทธิ์และบทบาท' ธีมเขียว: รายละเอียดบทบาท ขาย เป็นหมวดสิทธิ์ที่พับไว้พร้อมตัวเลข 5/6 4/4 หมวดหนึ่งกางอยู่เห็นรายการสิทธิ์ ด้านล่างเป็นการ์ด 'ติดขัด?']
 
 _EN: Stuck — Not sure what to type, or talking in circles — three ways out._
 

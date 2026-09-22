@@ -11174,7 +11174,7 @@ def _asks_for_approval_list(message: str) -> bool:
     return _looks_like_a_question(message) and "อนุมัติ" in lowered and "ไม่อนุมัติ" not in lowered
 
 APPROVAL_NOT_AN_APPROVER = {
-    "th": "ไม่มีรายงานที่รอคุณอนุมัติครับ (บทบาทของคุณไม่ได้อยู่ในขั้นตอนอนุมัติ — เจ้าของร้านเพิ่มสิทธิ์ให้ได้ที่ แดชบอร์ด > บทบาทและทีม)",
+    "th": "ไม่มีรายงานที่รอคุณอนุมัติครับ (บทบาทของคุณไม่ได้อยู่ในขั้นตอนอนุมัติ — เจ้าของร้านเพิ่มสิทธิ์ให้ได้ที่ แดชบอร์ด > จัดการสิทธิ์และบทบาท)",
     "en": "Nothing is waiting for your approval (your role is not an approval step — the owner can add that under dashboard > roles and team).",
 }
 APPROVAL_NONE_PENDING = {
@@ -19873,7 +19873,7 @@ GUIDE_POINTER = {
 SUGGEST_NO_PERMISSION_LEAD = {
     "th": (
         "⛔ คุณยังไม่มีสิทธิ์ทำสิ่งนี้\n"
-        "ขอสิทธิ์ได้จากเจ้าของร้านหรือแอดมิน (แดชบอร์ด > บทบาทและทีม)\n"
+        "ขอสิทธิ์ได้จากเจ้าของร้านหรือแอดมิน (แดชบอร์ด > จัดการสิทธิ์และบทบาท)\n"
         "พิมพ์ \"วิธีใช้\" เพื่อเปิดคู่มือการใช้งาน"
     ),
     "en": (
@@ -19883,7 +19883,7 @@ SUGGEST_NO_PERMISSION_LEAD = {
     ),
 }
 SUGGEST_NO_PERMISSION_NAMED = {
-    "th": "⛔ คุณยังไม่มีสิทธิ์ทำสิ่งนี้ — ต้องมีสิทธิ์ «{needed}»\nขอได้จากเจ้าของร้านหรือแอดมิน (แดชบอร์ด > บทบาทและทีม)",
+    "th": "⛔ คุณยังไม่มีสิทธิ์ทำสิ่งนี้ — ต้องมีสิทธิ์ «{needed}»\nขอได้จากเจ้าของร้านหรือแอดมิน (แดชบอร์ด > จัดการสิทธิ์และบทบาท)",
     "en": "⛔ Not allowed — this needs «{needed}»\nAsk the owner or an admin (dashboard > roles and team)",
 }
 SUGGEST_UNKNOWN_FEATURE_LEAD = {
@@ -20133,7 +20133,7 @@ PERMISSION_ASK_PHRASES = (
 )
 CAPABILITY_DETAIL_HEADER = {"th": "{group} — สิ่งที่คุณทำได้ตอนนี้:", "en": "{group} — what you can do now:"}
 CAPABILITY_DETAIL_NONE = {
-    "th": "{group} — บัญชีของคุณยังไม่มีสิทธิ์ในหมวดนี้ ขอได้จากเจ้าของร้านหรือแอดมิน (แดชบอร์ด > บทบาทและทีม)",
+    "th": "{group} — บัญชีของคุณยังไม่มีสิทธิ์ในหมวดนี้ ขอได้จากเจ้าของร้านหรือแอดมิน (แดชบอร์ด > จัดการสิทธิ์และบทบาท)",
     "en": "{group} — your account has no permission in this area yet. Ask the shop owner or an admin (dashboard > roles and team).",
 }
 CAPABILITY_HELD = {"th": "สิทธิ์ที่มี: {labels}", "en": "Permissions held: {labels}"}

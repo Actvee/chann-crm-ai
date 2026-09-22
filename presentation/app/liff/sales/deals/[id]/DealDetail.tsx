@@ -12,7 +12,7 @@ import { shortDate } from "../../../_list-controls";
 import { useFailureText, useFormatters } from "../../_format";
 import { proxyHeaders } from "../../_lib";
 import { ProductLineForm } from "../../../_product-line-form";
-import { FieldSection, RecordHead, RelatedHeading } from "../../_record";
+import { FieldSection, RecordActions, RecordHead, RelatedHeading, RelatedLinks, StatusSection } from "../../_record";
 import { RelatedActivity } from "../../_related";
 import { useSalesSession } from "../../_session";
 import { SalesShell } from "../../_shell";
@@ -395,22 +395,45 @@ export default function DealDetail({
                 </Link>
               ) : null
             }
-            actions={
-              moves.length
-                ? moves.map((stage) => (
+          />
+
+          <RelatedLinks
+            items={
+              customer
+                ? [{
+                    href: `/liff/sales/customers/${customer.id}`,
+                    label: t.customer.title,
+                    code: [customer.first_name, customer.last_name].filter(Boolean).join(" ") || customer.customer_id,
+                  }]
+                : []
+            }
+          />
+
+          {/* The stage of the deal and the moves allowed from here, apart
+              from the buttons that make documents (owner, 22 ก.ย. 2569).
+              A move that ends it badly is the danger one. */}
+          <StatusSection
+            title={t.dashboard.record.statusOf.replace("{record}", t.deal.title)}
+            current={<Badge stage={deal.stage} label={stageLabel(deal.stage)} />}
+            moves={
+              moves.length ? (
+                <>
+                  {moves.map((stage) => (
                     <button
                       key={stage}
                       type="button"
                       className="btn"
-                      data-variant={stage === "won" ? "primary" : undefined}
+                      data-variant={stage === "lost" ? "danger" : undefined}
                       onClick={() => askOrSet(stage)}
                       disabled={busy}
                     >
                       {t.dashboard.deals.changeTo.replace("{stage}", stageLabel(stage))}
                     </button>
-                  ))
-                : null
+                  ))}
+                </>
+              ) : undefined
             }
+            note={moves.length === 0 ? s.deals.finalStage : undefined}
           />
 
           {canTransfer && (
@@ -533,7 +556,7 @@ export default function DealDetail({
               then is offering a button that fails. quote.create is the
               key the route checks (review C7), not deal.update. */}
           {(can("quote.create") || can("invoice.create")) && items.length > 0 && (
-            <div className="actions" style={{ margin: "0 0 12px" }}>
+            <RecordActions title={t.dashboard.record.documentsTitle}>
               {can("quote.create") && (
                 <button
                   type="button"
@@ -554,7 +577,7 @@ export default function DealDetail({
                   {t.dashboard.invoices.forThisDeal}
                 </Link>
               )}
-            </div>
+            </RecordActions>
           )}
 
           <RelatedHeading

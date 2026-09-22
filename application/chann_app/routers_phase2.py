@@ -2705,6 +2705,7 @@ async def list_invoices(
     q: str | None = None,
     contact_id: str | None = None,
     deal_id: str | None = None,
+    quote_id: str | None = None,
     overdue: bool = False,
     limit: int = 500,
     offset: int = 0,
@@ -2718,7 +2719,9 @@ async def list_invoices(
         # `deal_id` (round 20X): the deal page's bills, and the invoices
         # page opened from it with the same filter in the URL.
         rows, total = await client.list_invoices_with_total(
-            license_id, status=status_filter, q=q, contact_id=contact_id, deal_id=deal_id, overdue=overdue,
+            license_id, status=status_filter, q=q, contact_id=contact_id, deal_id=deal_id,
+            # Round 21A: a quote page asking whether it has been billed.
+            quote_id=quote_id, overdue=overdue,
             # Scoped by construction for a customer: their contact's rows only.
             customer_chann_uid=principal.chann_uid if principal.is_customer else None,
             limit=limit, offset=offset,

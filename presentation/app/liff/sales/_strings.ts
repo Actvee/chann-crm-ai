@@ -45,6 +45,7 @@ const th = {
     lastNameAndPhone: "ต้องมีนามสกุลและเบอร์โทร (ชื่อจะเว้นก็ได้)",
   },
   deals: {
+    finalStage: "ดีลนี้ปิดแล้ว — สถานะสุดท้าย",
     lostReasonTitle: "ปิดดีลไม่สำเร็จ — เพราะอะไร",
     lostReasonHint: "เว้นว่างได้ แต่เหตุผลช่วยให้รู้ว่าแพ้เพราะอะไรบ่อย",
     confirmLost: "บันทึกว่าปิดไม่สำเร็จ",
@@ -240,6 +241,7 @@ const en: typeof th = {
     lastNameAndPhone: "A last name and a phone number are required (the first name is optional)",
   },
   deals: {
+    finalStage: "This deal is closed — a final stage",
     lostReasonTitle: "Deal lost — why?",
     lostReasonHint: "Optional, but a reason shows what keeps losing deals",
     confirmLost: "Mark as lost",

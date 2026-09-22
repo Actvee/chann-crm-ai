@@ -3259,3 +3259,89 @@ button.notif-open {
     transition: none;
   }
 }
+
+/* --------------------------------------------------- record page actions */
+/* Round 21A (owner, 22 ก.ย. 2569): "ปุ่มออกใบแจ้งหนี้ กับปุ่มสถานะ … ปนกัน
+   มั่วไปหมด ให้แยกระหว่างส่วนอัพเดตสถานะ กับปุ่มอื่น" — a status block, an
+   actions block, destructive apart, and the related records as links. */
+
+.record-status .section-head,
+.record-actions .section-head {
+  align-items: center;
+}
+
+.record-status-now {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.record-status-moves {
+  padding-top: 2px;
+}
+
+.record-status-note {
+  margin: 6px 0 0;
+}
+
+/* The undo of a record: under a rule, never shoulder to shoulder with
+   the button that moves it forward. */
+.record-danger {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.record-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 14px;
+}
+
+.record-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 14px;
+  text-decoration: none;
+}
+
+.record-link:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.record-link-label {
+  color: var(--ink-soft);
+}
+
+.record-link .code {
+  font-size: 13px;
+}
+
+/* A bill already raised from this record: a line that says so, and the
+   way to it. Never a second "ออกใบแจ้งหนี้" that would raise another. */
+.record-note-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--paper);
+  margin: 0 0 10px;
+  font-size: 14px;
+}
+
+.record-note-row .btn {
+  margin-left: auto;
+}
