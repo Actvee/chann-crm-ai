@@ -162,6 +162,39 @@ async def after_customer_linked(
     return {"created": created, "linked": linked, "customer_id": customer_uuid, "notified": notified}
 
 
+async def after_warranty_registered(
+    client: DataClient, *, license_id: str, warranty: dict, language: str = "th",
+) -> int:
+    """Round 20Z — the shop hears when a registration put someone new on
+    its customer list.
+
+    The Data Tier decides (`customer_created`); this only says it out
+    loud, because a row that appears in the shop's list without a word is
+    exactly the kind of silent write the owner has sent back before.
+    Nothing here may fail the registration: the customer's unit is
+    already theirs.
+    """
+    if not (warranty or {}).get("customer_created"):
+        return 0
+    name = str(warranty.get("contact_name") or "").strip() or "ลูกค้า"
+    code = str(warranty.get("contact_code") or "")
+    serial = str(warranty.get("serial_number") or "")
+    product = str(warranty.get("product_name") or "").strip()
+    unit = f"{product} (S/N {serial})" if product else f"S/N {serial}"
+    text = (
+        f"ลูกค้าลงทะเบียนสินค้า: {name}" + (f" · {code}" if code else "") + f"\n{unit}\n"
+        "เพิ่มเข้ารายชื่อให้แล้วเป็น \"ลูกค้า\" (ไม่ใช่ลูกค้ามุ่งหวัง) เพราะเครื่องนี้เป็นของร้าน"
+    )
+    text_en = (
+        f"A customer registered a unit: {name}" + (f" · {code}" if code else "") + f"\n{unit}\n"
+        "Added to your customer list as a customer (not a lead) — the unit is one of yours"
+    )
+    return await _tell_the_shop(
+        client, license_id, text, language, text_en=text_en,
+        customer_uuid=str(warranty.get("contact_id") or "") or None,
+    )
+
+
 async def _tell_the_shop(
     client: DataClient, license_id: str, text: str, language: str,
     text_en: str | None = None, customer_uuid: str | None = None,

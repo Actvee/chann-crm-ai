@@ -55,6 +55,7 @@ _- Needs the shop settings permission_
 - ลงทะเบียนเครื่องให้ลูกค้า — ผูกกับเรคอร์ดลูกค้าคนนั้นทันที (ระบบตอบ "ผูกกับลูกค้า สมชาย (C-…) แล้ว") → พิมพ์ "ลงทะเบียนสินค้า SN12345678 แอร์ ให้ลูกค้า สมชาย"
 - ไม่มีลูกค้าชื่อนั้น ระบบถามก่อน ไม่ลงทะเบียนเงียบ ๆ · ไม่ระบุลูกค้าก็ลงทะเบียนได้
 - ลูกค้าพิมพ์ S/N นี้ใน LINE ลูกค้าเพื่อดูประกันเอง
+- ลูกค้าที่ลงทะเบียนเครื่องเอง จะเข้ารายชื่อเป็น "ลูกค้า" ทันที (ไม่ใช่ลูกค้ามุ่งหวัง) และเครื่องผูกกับเรคอร์ดนั้นให้เอง — ร้านได้แจ้งเตือน
 - วันที่ซื้อใส่ทีหลังได้ (ยังไม่กำหนดวันหมดประกันจนกว่าจะรู้) → พิมพ์ "วันที่ซื้อ SN12345678 1 ก.ย. 2569"
 - หรือใส่ตั้งแต่แรก → พิมพ์ "ลงทะเบียนสินค้า SN12345678 แอร์ ซื้อวันที่ 1 ก.ย. 2569 ประกัน 2 ปี"
 - ระยะประกันเริ่มต้นมาจากสินค้าแต่ละตัว (หรือช่องระยะประกันในหน้าสินค้า) → พิมพ์ "สินค้า FAN01 รับประกัน 2 ปี"
@@ -70,6 +71,7 @@ _EN: Record sold units — Register the units you sold against the customer — 
 _- Register a unit for a customer — attached to their record at once → type "ลงทะเบียนสินค้า SN12345678 แอร์ ให้ลูกค้า สมชาย"_
 _- An unknown name is asked about, never registered silently · a unit can be registered with no customer_
 _- The customer types this S/N in the customer LINE to see the warranty_
+_- Someone who registers a unit joins the customer list as a customer (not a lead) and the unit is linked to that record — the shop is told_
 _- The purchase date can come later (no end date until it is known) → type "วันที่ซื้อ SN12345678 1 ก.ย. 2569"_
 _- Or give it at once → type "ลงทะเบียนสินค้า SN12345678 แอร์ ซื้อวันที่ 1 ก.ย. 2569 ประกัน 2 ปี"_
 _- The default period comes from the product (or the warranty field on the products page) → type "สินค้า FAN01 รับประกัน 2 ปี"_

@@ -285,6 +285,8 @@ GUIDES: dict[str, dict] = {
                      "type": "ลงทะเบียนสินค้า SN12345678 แอร์ ให้ลูกค้า สมชาย"},
                     {"th": "ไม่มีลูกค้าชื่อนั้น ระบบถามก่อน ไม่ลงทะเบียนเงียบ ๆ · ไม่ระบุลูกค้าก็ลงทะเบียนได้", "en": "An unknown name is asked about, never registered silently · a unit can be registered with no customer"},
                     {"th": "ลูกค้าพิมพ์ S/N นี้ใน LINE ลูกค้าเพื่อดูประกันเอง", "en": "The customer types this S/N in the customer LINE to see the warranty"},
+                    {"th": "ลูกค้าที่ลงทะเบียนเครื่องเอง จะเข้ารายชื่อเป็น \"ลูกค้า\" ทันที (ไม่ใช่ลูกค้ามุ่งหวัง) และเครื่องผูกกับเรคอร์ดนั้นให้เอง — ร้านได้แจ้งเตือน",
+                     "en": "Someone who registers a unit joins the customer list as a customer (not a lead) and the unit is linked to that record — the shop is told"},
                     {"th": "วันที่ซื้อใส่ทีหลังได้ (ยังไม่กำหนดวันหมดประกันจนกว่าจะรู้)", "en": "The purchase date can come later (no end date until it is known)", "type": "วันที่ซื้อ SN12345678 1 ก.ย. 2569"},
                     {"th": "หรือใส่ตั้งแต่แรก", "en": "Or give it at once", "type": "ลงทะเบียนสินค้า SN12345678 แอร์ ซื้อวันที่ 1 ก.ย. 2569 ประกัน 2 ปี"},
                     {"th": "ระยะประกันเริ่มต้นมาจากสินค้าแต่ละตัว (หรือช่องระยะประกันในหน้าสินค้า)", "en": "The default period comes from the product (or the warranty field on the products page)", "type": "สินค้า FAN01 รับประกัน 2 ปี"},

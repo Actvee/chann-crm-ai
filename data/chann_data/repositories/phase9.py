@@ -431,6 +431,67 @@ class CustomerRepository:
         self._s.flush()
         return row
 
+    def promote_if_lead(self, scope: TenantScope, customer_id: uuid.UUID) -> bool:
+        """Round 20Z — a lead the shop has just recorded as OWNING one of
+        its units becomes a customer. True when the stage moved."""
+        row = self.get(scope, customer_id)
+        if row is None or row.stage == "contact":
+            return False
+        row.stage = "contact"
+        self._s.flush()
+        return True
+
+    def ensure_contact_for_identity(
+        self, scope: TenantScope, chann_uid: str, *, reason: str | None = None,
+    ) -> tuple[Customer | None, str]:
+        """The shop's customer row for this person, as a CONTACT.
+
+        Owner, 22 ก.ย. 2569: "ลูกค้าที่เข้ามาผ่านการลงทะเบียนรับประกันสินค้า
+        ควรจะกลายเป็นลูกค้าเลย ไม่ใช่ลูกค้ามุ่งหวัง". Someone holding a unit
+        this shop sold and recorded is not a prospect: the sale already
+        happened. A row that exists is promoted; a shop with no row for
+        them gains one, named from the person's own profile.
+
+        Creating it does NOT wait for `auto_accept_new_customers`: that
+        setting is about a stranger who merely linked on LINE, and this
+        person is on the shop's own register. The caller tells the shop
+        either way, so nothing appears silently.
+
+        Returns (row, "created" | "promoted" | "unchanged" | "conflict").
+        A conflict is a phone that belongs to another identity's record —
+        nothing is written and the shop is asked to sort it out.
+        """
+        existing = self.find_by_chann_uid(scope, chann_uid)
+        if existing is not None:
+            # An archived row is left archived: removing it was the shop's
+            # own decision and this is not the place to undo it. The stage
+            # is still corrected, so it comes back as a customer.
+            return existing, ("unchanged" if not self.promote_if_lead(scope, existing.id) else "promoted")
+        identity = self._s.execute(
+            select(ChannIdentity).where(ChannIdentity.chann_uid == chann_uid)
+        ).scalars().first()
+        if identity is None:
+            return None, "conflict"
+        try:
+            row = self.create(
+                scope,
+                first_name=(identity.first_name or None),
+                last_name=(identity.last_name or None),
+                phone=(identity.phone or None),
+                email=(identity.email or None),
+                customer_chann_uid=chann_uid,
+                notes=reason,
+                stage="contact",
+            )
+        except Phase9Duplicate:
+            # The number is another identity's customer. Writing a second
+            # row would split one person's history in two.
+            return None, "conflict"
+        # create() may have attached the identity to a row the staff keyed
+        # in by hand; that row is a customer now too.
+        self.promote_if_lead(scope, row.id)
+        return row, ("created" if row.customer_chann_uid == chann_uid else "promoted")
+
     def archive(self, scope: TenantScope, customer_id: uuid.UUID) -> Customer:
         row = self.get(scope, customer_id)
         if row is None:

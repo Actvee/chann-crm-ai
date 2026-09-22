@@ -5437,9 +5437,30 @@ def claim_warranty(
             actor_type="user", actor_id=x_actor_id or None, action="update",
             field_changes=diff_fields({}, {"customer_chann_uid": row.customer_chann_uid}),
         )
+        # Round 20Z — registering a unit makes the person a customer of
+        # this shop, and the unit points at that record. Until now the
+        # claim wrote only the LINE identity, so the shop's list still
+        # called a machine's owner "ลูกค้ามุ่งหวัง", or did not know them.
+        customers = CustomerRepository(session)
+        contact, outcome = customers.ensure_contact_for_identity(
+            scope, payload.customer_chann_uid,
+            reason=f"ลงทะเบียนสินค้า S/N {row.serial_number}",
+        )
+        if contact is not None:
+            if row.contact_id is None:
+                row.contact_id = contact.id
+            if outcome in ("created", "promoted"):
+                AuditRepository(session).write(
+                    license_id=license_id, entity_type="customer", entity_id=contact.id,
+                    actor_type="user", actor_id=x_actor_id or None,
+                    action="create" if outcome == "created" else "update",
+                    field_changes=diff_fields({}, {"stage": contact.stage}),
+                )
         session.commit()
         session.refresh(row)
-        return _warranty_out(row)
+        if contact is not None:
+            session.refresh(contact)
+        return {**_warranty_out(row, contact), "customer_created": outcome == "created"}
     except Exception as exc:
         session.rollback()
         raise _warranty_error(exc)

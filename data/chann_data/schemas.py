@@ -1331,6 +1331,14 @@ class WarrantyOut(BaseModel):
 
 
 # ---------------------------------------------------------------- Phase 15
+class WarrantyClaimOut(WarrantyOut):
+    """What the claim route answers (round 20Z): the unit, plus whether
+    the shop gained a customer record from this registration — the
+    Application tier tells the shop when it did."""
+
+    customer_created: bool = False
+
+
 class ChatSessionOpenIn(BaseModel):
     customer_chann_uid: str
     product_id: uuid.UUID | None = None

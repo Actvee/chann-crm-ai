@@ -3961,6 +3961,15 @@ async def _claim_serial(
              **({"warranty_start": warranty_start} if warranty_start else {})},
             actor_id=ctx.chann_uid,
         )
+        # Round 20Z: the shop hears when this registration added someone
+        # to its customer list. Never in the customer's way — a courtesy
+        # to the shop, after their unit is already registered.
+        try:
+            from .onboarding import after_warranty_registered
+
+            await after_warranty_registered(client, license_id=str(license_id), warranty=row)
+        except Exception:  # noqa: BLE001
+            log.exception("could not announce the customer behind %s", serial)
         return "ok", row
     except DataTierError as exc:
         if exc.status_code == 404:

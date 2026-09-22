@@ -1622,7 +1622,7 @@ async def register_warranty(
         # Owner rule (3 Sep): a customer cannot invent a unit. Their
         # "register" is a claim on a serial the shop recorded.
         try:
-            return await client.claim_warranty(
+            claimed = await client.claim_warranty(
                 license_id,
                 {"serial_number": payload.serial_number,
                  "customer_chann_uid": principal.chann_uid,
@@ -1631,6 +1631,8 @@ async def register_warranty(
             )
         except DataTierError as exc:
             raise _propagate(exc)
+        await _announce_registration(client, license_id, claimed)
+        return claimed
     try:
         return await client.register_warranty(
             license_id,
@@ -1677,6 +1679,17 @@ async def set_warranty_purchase(
         raise _propagate(exc)
 
 
+async def _announce_registration(client: DataClient, license_id: str, warranty: dict) -> None:
+    """Round 20Z — tell the shop when a registration put someone new on
+    its customer list. Best effort: the unit is already registered."""
+    from .services.onboarding import after_warranty_registered
+
+    try:
+        await after_warranty_registered(client, license_id=str(license_id), warranty=warranty)
+    except Exception:  # noqa: BLE001
+        log.exception("could not announce the customer behind a registration")
+
+
 @router.post("/licenses/{license_id}/warranties/claim")
 async def claim_warranty(
     license_id: str,
@@ -1690,13 +1703,15 @@ async def claim_warranty(
     _require_same_tenant(principal, license_id)
     principal.require("warranty.create")
     try:
-        return await client.claim_warranty(
+        claimed = await client.claim_warranty(
             license_id,
             {"serial_number": payload.serial_number, "customer_chann_uid": principal.chann_uid},
             actor_id=principal.chann_uid,
         )
     except DataTierError as exc:
         raise _propagate(exc)
+    await _announce_registration(client, license_id, claimed)
+    return claimed
 
 
 @router.get("/licenses/{license_id}/warranties")
