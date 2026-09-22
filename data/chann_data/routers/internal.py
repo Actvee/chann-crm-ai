@@ -148,7 +148,7 @@ from ..schemas import (
     ChatSessionAssignIn,
     ChatSessionOpenIn,
     ChatSessionOut,
-    ChatSweepOut,
+    ChatEscalateOut, ChatSweepOut,
     AuditLogOut,
     CompanyProfileIn,
     CompanyProfileOut,
@@ -5580,6 +5580,30 @@ def assign_chat_session(
         raise _chat_http_error(exc)
 
 
+@router.post("/licenses/{license_id}/chat-sessions/{session_id}/escalate", response_model=ChatEscalateOut)
+def escalate_chat_session(
+    license_id: uuid.UUID, session_id: uuid.UUID, undo: bool = False,
+    session: Session = Depends(get_session),
+):
+    """Round 20W — the sweep claims the conversation it is about to warn
+    the shop about (`claimed: true`), or learns another sweep holds it
+    (`claimed: false`, nothing to do). `undo=true` gives a claim back when
+    the warning could not be sent, so the next sweep retries."""
+    scope = TenantScope(license_id=license_id)
+    try:
+        repo = ChatSessionRepository(session)
+        repo.require(scope, session_id)
+        claimed = (
+            repo.release_escalation(scope, session_id) if undo
+            else repo.claim_escalation(scope, session_id)
+        )
+        session.commit()
+        return ChatEscalateOut(claimed=claimed)
+    except Exception as exc:
+        session.rollback()
+        raise _chat_http_error(exc)
+
+
 @router.post("/licenses/{license_id}/chat-sessions/{session_id}/close", response_model=ChatSessionOut)
 def close_chat_session(
     license_id: uuid.UUID, session_id: uuid.UUID, status: str = "closed",
@@ -5631,9 +5655,11 @@ def sweep_chat_sessions(session: Session = Depends(get_session)):
     marked here so the next run does not repeat them."""
     repo = ChatSessionRepository(session)
     try:
+        # Overdue rows are handed back UNMARKED (round 20W): the Application
+        # tier claims each one right before it tells the shop, and releases
+        # it if the telling fails. Stamping them here — before anyone was
+        # told — is how every warning on DEV was lost on 21 ก.ย. 2569.
         overdue = repo.sla_overdue()
-        for row in overdue:
-            repo.mark_escalated(row)
         timed_out = repo.time_out()
         session.commit()
         # Grouped by licence rather than one call per row: _chat_sessions_out

@@ -4300,10 +4300,20 @@ def _sweep_soon(client: DataClient) -> None:
     _last_sweep_at = now
 
     async def _run() -> None:
+        # Its OWN client, never the request's (round 20W): the request that
+        # started this task returns at once, its DataClient is closed by
+        # the dependency's `finally`, and the sweep then died mid-flight
+        # with httpcore.ReadError — 40 times on DEV over 20–21 ก.ย. 2569,
+        # each time after the Data tier had already stamped the overdue
+        # rows, which is why no "ยังไม่ได้รับคำตอบ" warning ever reached the
+        # shop.
+        own = DataClient()
         try:
-            await live_chat.sweep(client)
+            await live_chat.sweep(own)
         except Exception:  # noqa: BLE001 — the scheduler runs it again in five minutes
             logging.getLogger(__name__).exception("chat sweep from the dashboard failed")
+        finally:
+            await own.aclose()
 
     try:
         asyncio.get_running_loop().create_task(_run())

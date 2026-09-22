@@ -480,6 +480,68 @@ async def close_session(
     return closed
 
 
+async def _escalate_one(client: DataClient, *, session: dict, license_id: str) -> int:
+    """One overdue conversation, claimed: the shop is warned (the owner,
+    or every agent while nobody owns it), the conversation is parked and
+    the customer told. Returns how many people were told. Raises when the
+    warning itself could not be sent, so the caller can release the claim;
+    a shop with nobody to reach is not a failure (see the warning log)."""
+    agents = await _agents(client, license_id)
+    assigned = str(session.get("assigned_to") or "")
+    owner = [m for m in agents if str(m.get("id")) == assigned] if assigned else []
+    waited = ""
+    deadline = session.get("sla_deadline")
+    if deadline:
+        try:
+            dt = datetime.fromisoformat(str(deadline).replace("Z", "+00:00"))
+            minutes = int((datetime.now(timezone.utc) - dt).total_seconds() // 60)
+            waited = f" (เลยกำหนดตอบ {minutes} นาที)" if minutes > 0 else ""
+        except ValueError:
+            waited = ""
+    text = f"⏰ ลูกค้า {_shown(session)} ยังไม่ได้รับคำตอบ{waited}\nตอบได้ที่ หน้าจอ > แชทลูกค้า"
+    text_en = (
+        f"⏰ Customer {_shown(session)} is still waiting for an answer"
+        + (waited.replace("เลยกำหนดตอบ", "reply overdue by").replace("นาที", "min") if waited else "")
+        + "\nAnswer under home > Customer chats"
+    )
+    told = await _tell(
+        client, license_id=license_id, members=owner or agents, text=text, text_en=text_en,
+        type="sla_warning", session_id=str(session.get("id")), language="th",
+    )
+    if not told:
+        # The owner reported "ไม่มีการแจ้งเตือนใดๆเลย" (16 ก.ย. 2569) and
+        # nothing in the log could confirm or deny it. An overdue
+        # conversation that reaches nobody is now a line someone can
+        # find: it means the shop has no agent with a LINE target, not
+        # that the clock failed.
+        log.warning(
+            "chat sweep: %s overdue in %s reached nobody (%d agent(s), %d owner(s))",
+            session.get("id"), license_id, len(agents), len(owner),
+        )
+    # Owner, 4 Sep: past the answer time the conversation is parked and
+    # the customer told; the shop's later answer invites them back.
+    try:
+        await client.close_chat_session(
+            license_id, str(session.get("id")), actor_id="system", status="unanswered",
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("could not park an unanswered chat: %s", exc)
+    shop = await company_name(client, license_id)
+    await _push_customer(
+        client, license_id=str(license_id),
+        chann_uid=str(session.get("customer_chann_uid") or ""),
+        text=(
+            f"💬 ขออภัยครับ เจ้าหน้าที่ของ {shop} ยังไม่ว่างตอบในตอนนี้ จะติดต่อกลับโดยเร็ว "
+            "ขอปิดการสนทนาไว้ก่อน — เมื่อร้านตอบ ระบบจะแจ้งให้เปิดแชทต่อ"
+        ),
+        text_en=(
+            f"💬 Sorry — nobody at {shop} is free to answer right now; they will get back to you soon. "
+            "The chat is paused; you will be told when the shop answers."
+        ),
+    )
+    return told
+
+
 async def sweep(client: DataClient) -> dict:
     """The platform's clock: overdue answers are escalated to the agent
     who owns the conversation (or every agent while nobody does), and
@@ -493,60 +555,28 @@ async def sweep(client: DataClient) -> dict:
     escalated = 0
     for session in result.get("escalated") or []:
         license_id = str(session.get("license_id"))
-        agents = await _agents(client, license_id)
-        assigned = str(session.get("assigned_to") or "")
-        owner = [m for m in agents if str(m.get("id")) == assigned] if assigned else []
-        waited = ""
-        deadline = session.get("sla_deadline")
-        if deadline:
-            try:
-                dt = datetime.fromisoformat(str(deadline).replace("Z", "+00:00"))
-                minutes = int((datetime.now(timezone.utc) - dt).total_seconds() // 60)
-                waited = f" (เลยกำหนดตอบ {minutes} นาที)" if minutes > 0 else ""
-            except ValueError:
-                waited = ""
-        text = f"⏰ ลูกค้า {_shown(session)} ยังไม่ได้รับคำตอบ{waited}\nตอบได้ที่ หน้าจอ > แชทลูกค้า"
-        text_en = (
-            f"⏰ Customer {_shown(session)} is still waiting for an answer"
-            + (waited.replace("เลยกำหนดตอบ", "reply overdue by").replace("นาที", "min") if waited else "")
-            + "\nAnswer under home > Customer chats"
-        )
-        told = await _tell(
-            client, license_id=license_id, members=owner or agents, text=text, text_en=text_en,
-            type="sla_warning", session_id=str(session.get("id")), language="th",
-        )
-        escalated += told
-        if not told:
-            # The owner reported "ไม่มีการแจ้งเตือนใดๆเลย" (16 ก.ย. 2569) and
-            # nothing in the log could confirm or deny it. An overdue
-            # conversation that reaches nobody is now a line someone can
-            # find: it means the shop has no agent with a LINE target, not
-            # that the clock failed.
-            log.warning(
-                "chat sweep: %s overdue in %s reached nobody (%d agent(s), %d owner(s))",
-                session.get("id"), license_id, len(agents), len(owner),
-            )
-        # Owner, 4 Sep: past the answer time the conversation is parked and
-        # the customer told; the shop's later answer invites them back.
+        session_id = str(session.get("id"))
+        # Round 20W: claim the row first — the Data tier no longer stamps it.
+        # Two sweeps overlap routinely (the scheduler every five minutes, a
+        # dashboard-driven one once a minute); the one that holds the claim
+        # tells the shop, the other stays quiet.
         try:
-            await client.close_chat_session(
-                license_id, str(session.get("id")), actor_id="system", status="unanswered",
-            )
-        except Exception as exc:  # noqa: BLE001
-            log.warning("could not park an unanswered chat: %s", exc)
-        shop = await company_name(client, license_id)
-        await _push_customer(
-            client, license_id=str(license_id),
-            chann_uid=str(session.get("customer_chann_uid") or ""),
-            text=(
-                f"💬 ขออภัยครับ เจ้าหน้าที่ของ {shop} ยังไม่ว่างตอบในตอนนี้ จะติดต่อกลับโดยเร็ว "
-                "ขอปิดการสนทนาไว้ก่อน — เมื่อร้านตอบ ระบบจะแจ้งให้เปิดแชทต่อ"
-            ),
-            text_en=(
-                f"💬 Sorry — nobody at {shop} is free to answer right now; they will get back to you soon. "
-                "The chat is paused; you will be told when the shop answers."
-            ),
-        )
+            if not await client.claim_chat_escalation(license_id, session_id):
+                continue
+        except Exception:  # noqa: BLE001 — cannot claim → cannot safely warn; next sweep
+            log.exception("could not claim an overdue conversation %s", session_id)
+            continue
+        try:
+            escalated += await _escalate_one(client, session=session, license_id=license_id)
+        except Exception:  # noqa: BLE001
+            # The exact failure of 21 ก.ย. 2569 (a ReadError mid-sweep). The
+            # claim goes back, so the warning is tried again in five
+            # minutes instead of being lost with the row already stamped.
+            log.exception("overdue warning for %s failed; releasing the claim", session_id)
+            try:
+                await client.release_chat_escalation(license_id, session_id)
+            except Exception:  # noqa: BLE001
+                log.exception("could not release the claim on %s", session_id)
     timed_out = 0
     for session in result.get("timed_out") or []:
         license_id = str(session.get("license_id"))

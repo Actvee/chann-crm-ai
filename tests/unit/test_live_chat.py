@@ -37,6 +37,7 @@ class ChatFake(FakeDataClient):
         self._chat_sessions: list[dict] = []
         self._chat_messages: list[dict] = []
         self._sweep_result = {"escalated": [], "timed_out": []}
+        self._claimed: set[str] = set()
         self._members = list(MEMBERS)
         self._settings = []
         self._line_targets = {"CHN-S-000001": "line-cust", "CHN-CS": "line-cs", "CHN-OWNER": "line-owner"}
@@ -112,6 +113,23 @@ class ChatFake(FakeDataClient):
     async def sweep_chat_sessions(self):
         self.recorded.append(("sweep_chat_sessions",))
         return self._sweep_result
+
+    async def aclose(self):
+        return None
+
+    async def claim_chat_escalation(self, license_id, session_id):
+        """Round 20W: the sweep that will do the telling claims the row;
+        a second sweep gets False and stays quiet."""
+        self.recorded.append(("claim_chat_escalation", license_id, session_id))
+        if session_id in self._claimed:
+            return False
+        self._claimed.add(session_id)
+        return True
+
+    async def release_chat_escalation(self, license_id, session_id):
+        self.recorded.append(("release_chat_escalation", license_id, session_id))
+        self._claimed.discard(session_id)
+        return True
 
     async def get_company_profile(self, license_id):
         return {"company_name": "ร้านเย็นสบาย"}
@@ -322,8 +340,12 @@ def _cs_principal(keys=("chat_session.view", "chat_session.reply")):
 
 
 class TestRoutes:
-    def test_customer_opens_then_cs_answers(self, pushes):
+    def test_customer_opens_then_cs_answers(self, pushes, monkeypatch):
         http, client = _harness(_customer_principal())
+        # Round 20W: the dashboard-driven sweep builds its own DataClient
+        # instead of borrowing the request's; here that is the same fake.
+        monkeypatch.setattr(routers_phase2, "DataClient", lambda: client)
+        monkeypatch.setattr(routers_phase2, "_last_sweep_at", 0.0)
         response = http.post(
             f"/api/v1/licenses/{LICENSE_ID}/chat-sessions", json={"content": "ราคาเท่าไหร่"},
         )

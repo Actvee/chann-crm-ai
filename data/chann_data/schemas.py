@@ -1305,6 +1305,11 @@ class ChatSweepOut(BaseModel):
     timed_out: list[ChatSessionOut]
 
 
+class ChatEscalateOut(BaseModel):
+    #: Round 20W: whether THIS caller now holds the warning for the row.
+    claimed: bool
+
+
 # ---------------------------------------------------------------- Phase 16.5
 class ConsentIn(BaseModel):
     version: str

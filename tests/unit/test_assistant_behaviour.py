@@ -2375,19 +2375,35 @@ class TestTheCustomerHearsWhatHappenedAtTheirDoor:
         assert "T-2026-0001" in to_customer[-1][2]
 
 
+def _tomorrow_thai() -> str:
+    """"21 ก.ย. 2569" was tomorrow when the test below was written and a
+    day in the past from 22 ก.ย. 2569 on, when the move was refused and the
+    request stayed open — the third midnight regression of this kind (see
+    _tomorrow / _next_friday). The rule under test is that the shop's move
+    closes the customer's request; the date is not the rule."""
+    from datetime import timedelta
+
+    from chann_app.services.thai_datetime import local_today
+
+    day = local_today() + timedelta(days=1)
+    months = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."]
+    return f"{day.day} {months[day.month - 1]} {day.year + 543}"
+
+
 class TestACustomersRequestIsClosedWhenTheShopActs:
     @pytest.mark.asyncio
     async def test_the_move_closes_the_open_request(self):
         from test_phase6_chat import _ctx
         from chann_app.services import chat
         client = _linked_customer()
+        when = _tomorrow_thai()
         await client.create_note("L1", {"entity_type": "service_ticket", "entity_id": "t1",
-                                        "body": f"{chat.CUSTOMER_REQUEST_MARK}: ลูกค้าขอเลื่อนนัดเป็น 21 ก.ย. 2569"}, actor_id="CHN-S-000001")
+                                        "body": f"{chat.CUSTOMER_REQUEST_MARK}: ลูกค้าขอเลื่อนนัดเป็น {when}"}, actor_id="CHN-S-000001")
         assert await chat._pending_customer_requests(client, "L1", "t1", "th")
         client._members = [{"id": "member-1", "chann_uid": "CHN-S-000001", "role": "sales", "status": "active"}]
         reply = await chat._handle_technician_situation(
             client, ctx=_ctx(oa="sales", primary_role="sales"), license_id="L1",
-            message="เลื่อนนัด T-2026-0001 21 ก.ย. 2569 10:00", kind="reschedule",
+            message=f"เลื่อนนัด T-2026-0001 {when} 10:00", kind="reschedule",
             permission_keys=["ticket.read", "ticket.update"], language="th",
         )
         assert "เลื่อน" in reply.text, reply.text

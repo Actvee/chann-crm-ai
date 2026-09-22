@@ -16,7 +16,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from ..models import ChatMessage, ChatSession
@@ -291,22 +291,57 @@ class ChatSessionRepository:
 
     def sla_overdue(self, *, now: datetime | None = None) -> list[ChatSession]:
         """Live conversations the shop has left past the deadline and not
-        yet been told about. The caller marks them escalated."""
+        yet been told about. A plain read (round 20W): the caller CLAIMS
+        each row it will act on with claim_escalation, which is what keeps
+        two overlapping sweeps from both pushing the warning."""
         now = now or _now()
-        # skip_locked: the sweep runs from every webhook, the dashboard
-        # poll and the scheduler; overlapping runs both pushed the warning.
         return list(self._s.execute(
             select(ChatSession).where(
                 ChatSession.status.in_(LIVE_STATUSES),
                 ChatSession.sla_deadline.is_not(None),
                 ChatSession.sla_deadline < now,
                 ChatSession.escalated_at.is_(None),
-            ).order_by(ChatSession.sla_deadline.asc()).with_for_update(skip_locked=True)
+            ).order_by(ChatSession.sla_deadline.asc())
         ).scalars())
 
     def mark_escalated(self, row: ChatSession, *, now: datetime | None = None) -> None:
         row.escalated_at = now or _now()
         self._s.flush()
+
+    def claim_escalation(self, scope: TenantScope, session_id: uuid.UUID, *, now: datetime | None = None) -> bool:
+        """Round 20W: the sweep that is about to tell the shop takes the
+        row; a second sweep that arrives meanwhile gets False and says
+        nothing. One atomic UPDATE, not a read then a write, because the
+        scheduler and a dashboard-driven sweep can run at the same
+        moment. Only a LIVE, still-unwarned conversation can be claimed."""
+        result = self._s.execute(
+            update(ChatSession).where(
+                ChatSession.license_id == scope.license_id,
+                ChatSession.id == session_id,
+                ChatSession.status.in_(LIVE_STATUSES),
+                ChatSession.escalated_at.is_(None),
+            ).values(escalated_at=now or _now())
+        )
+        self._s.flush()
+        return bool(result.rowcount)
+
+    def release_escalation(self, scope: TenantScope, session_id: uuid.UUID) -> bool:
+        """The telling failed after the claim: give the row back so the
+        next sweep tries again. Before this the Data tier stamped the row
+        before anyone was told, and a sweep that died after that stamp
+        (DEV, 21 ก.ย. 2569: httpcore.ReadError on a dashboard-driven
+        sweep) lost the warning for good — the tester saw the "customer
+        wants to talk" line and then nothing, ever."""
+        result = self._s.execute(
+            update(ChatSession).where(
+                ChatSession.license_id == scope.license_id,
+                ChatSession.id == session_id,
+                ChatSession.status.in_(LIVE_STATUSES),
+                ChatSession.escalated_at.is_not(None),
+            ).values(escalated_at=None)
+        )
+        self._s.flush()
+        return bool(result.rowcount)
 
     def time_out(self, *, now: datetime | None = None) -> list[ChatSession]:
         """Close every live conversation nobody has touched past its

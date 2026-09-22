@@ -7,7 +7,29 @@
 เจ้าของสั่ง 10 ก.ย.: *"ต่อจากนี้ให้บันทึก model first แบบนี้ในทุกๆที่ อย่าให้หลุดอีก
 เพราะการใช้กฎแบบเดิมเลย น่าจะทำให้ประสบการณ์ใช้งานแย่ลง"*
 
-**รอบ 20U (21 ก.ย. — DEV `__20U_SHA__`): ออกเอกสารล้มเพราะ Zoho ตอบช้าครั้งเดียว**
+**รอบ 20W (22 ก.ย. — DEV `__20W_SHA__`): คำเตือน "ลูกค้ายังไม่ได้รับคำตอบ" ที่ไม่เคยไปถึงใคร**
+
+- **ผู้ทดสอบ:** "แจ้งแค่ครั้งแรกตอนลูกค้าขอคุย ถ้าไม่มีเจ้าหน้าที่ตอบก็ไม่มีแจ้งเตือนซ้ำ" · ฟีเจอร์**มีอยู่แล้ว**ตั้งแต่
+  Phase 15 (⏰ ลูกค้า … ยังไม่ได้รับคำตอบ ไป LINE+กระดิ่งของเจ้าของแชท/ทุกคน ครั้งเดียวเมื่อครบ SLA แล้วพักแชท
+  และบอกลูกค้า) — แต่ log DEV 20–21 ก.ย. บอกว่าไม่เคยส่งจริง: scheduler sweep พิมพ์ "0 overdue → 0 told,
+  1 timed out" ทุกครั้ง ขณะที่ "chat sweep from the dashboard failed … httpcore.ReadError" 40 ครั้ง
+- **สาเหตุสองชั้น (ไม่ต้องเดา):** (1) `sweep_chat_sessions` ฝั่ง Data **ประทับ `escalated_at` แล้ว commit ก่อน**
+  ที่ Application จะบอกใคร — sweep ที่ตายกลางทางจึงทำให้แถวถูกนับว่า "เตือนแล้ว" ตลอดไป (2) `_sweep_soon`
+  ในหน้าแชทของ dashboard สร้าง background task ที่**ยืม DataClient ของ request** ซึ่งถูก `aclose()` ทันทีที่
+  request คืนค่า → ReadError ทุกครั้ง · และเพราะ dashboard poll ทุก 8 วิ sweep ตัวนี้จึงชิงแถวไปก่อน scheduler
+  (5 นาที) เสมอ → คำเตือนหายทุกใบ
+- **แก้ที่ต้นเหตุ ไม่เพิ่ม push:** Data ส่งแถวเกินกำหนดกลับมา**โดยไม่ประทับ** + route ใหม่
+  `POST …/chat-sessions/{id}/escalate[?undo=true]` (`claim_escalation` = UPDATE เดียว WHERE escalated_at IS NULL
+  AND live → `claimed: true/false`; `release_escalation` คืนสิทธิ์) · `live_chat.sweep` claim ก่อน → `_escalate_one`
+  (บอกร้าน พักแชท บอกลูกค้า) → ถ้าโยน exception ก็ release ให้ sweep ถัดไปลองใหม่ · ร้านที่ไม่มีใครรับ LINE ยังเป็น
+  warning log เดิม ไม่ใช่ failure · `_sweep_soon` สร้าง `DataClient()` ของตัวเองและปิดเอง
+- จำนวน push ต่อแชท**เท่าเดิม** (เตือน 1 ครั้ง + บอกลูกค้า 1 ครั้ง) — เจ้าของกำชับว่าไม่ทำอะไรที่เปลืองขึ้น ·
+  ถ้าอยากเตือนซ้ำแบบไม่มีค่าใช้จ่าย ทำได้ทางกระดิ่งบน dashboard เท่านั้น (ยังไม่ทำ)
+- เทสต์: `tests/unit/test_round20w_sla_warning.py` (6: claim/ปล่อยคืน/ไม่ซ้ำ/ไม่มีใครรับ + sweep ของ dashboard
+  ใช้ client ตัวเอง) · `tests/integration/test_round20w_sla_warning.py` (2 บน Postgres: claim ครั้งเดียว ปล่อยคืนได้
+  พักแล้วไม่กลับมา แยกร้าน) · fake ใน test_live_chat รู้จัก claim/release
+
+**รอบ 20U (21 ก.ย. — DEV `e573c24`): ออกเอกสารล้มเพราะ Zoho ตอบช้าครั้งเดียว**
 
 - **เหตุการณ์ 16:04:** เจ้าของพิมพ์ `ออกเอกสาร Q-2026-0009` ใน Sale OA แล้วได้ "ออกเอกสารไม่สำเร็จ: Unexpected
   error calling SmartBrowz: HTTPSConnectionPool(host='api.catalyst.zoho.com') Read timed out (read timeout=30)"

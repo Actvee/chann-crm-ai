@@ -2157,6 +2157,22 @@ class DataClient:
         )
         return self._unwrap(resp)
 
+    async def claim_chat_escalation(self, license_id: str, session_id: str) -> bool:
+        """Round 20W: True when this sweep now owns the overdue warning for
+        the conversation; False when another sweep got there first."""
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/chat-sessions/{session_id}/escalate",
+            headers=self._headers,
+        )
+        return bool(self._unwrap(resp).get("claimed"))
+
+    async def release_chat_escalation(self, license_id: str, session_id: str) -> bool:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/chat-sessions/{session_id}/escalate",
+            headers=self._headers, params={"undo": "true"},
+        )
+        return bool(self._unwrap(resp).get("claimed"))
+
     # ------------------------------------------------------------ Phase 10
 
     async def create_quote(
