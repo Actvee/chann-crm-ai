@@ -1012,7 +1012,166 @@ class FakeDataClient:
         self._generated_documents = docs + [row]
         return row
 
+    # ------------------------------------------------------------ Round 20V
+    # Invoices, payments and receipts — the same arithmetic and the same
+    # state machine as data/chann_data/repositories/invoices.py, so a chat
+    # test proves the road and the reply, not a friendlier fake.
+
+    def _invoice_out(self, row):
+        from decimal import Decimal
+
+        total = Decimal(str(row.get("total") or 0))
+        paid = Decimal(str(row.get("paid_amount") or 0))
+        status = str(row.get("status") or "")
+        out = dict(row)
+        out["outstanding"] = str((total - paid) if status not in ("void", "paid") else Decimal("0"))
+        due = row.get("due_date")
+        out["is_overdue"] = bool(
+            status in ("issued", "partially_paid") and due and str(due) < "2026-09-21"
+        )
+        out.setdefault("payments", [])
+        return out
+
+    async def create_invoice(self, license_id, payload, actor_id=None):
+        self.recorded.append(("create_invoice", license_id, dict(payload), actor_id))
+        rows = getattr(self, "_invoices", [])
+        if payload.get("quote_id"):
+            live = next((r for r in rows if r.get("quote_id") == payload["quote_id"] and r.get("status") != "void"), None)
+            if live is not None:
+                from chann_app.data_client import DataTierError
+                raise DataTierError(409, f"quote already has invoice {live['invoice_id']}")
+        row = {
+            "id": f"INV-{len(rows) + 1}", "license_id": license_id,
+            "invoice_id": f"INV-2026-{len(rows) + 1:04d}",
+            "quote_id": payload.get("quote_id"), "deal_id": payload.get("deal_id"),
+            "contact_id": payload.get("contact_id"), "status": "draft",
+            "issue_date": None, "due_date": None, "currency": "THB",
+            "subtotal": str(payload.get("subtotal") or "0"),
+            "discount_amount": str(payload.get("discount_amount") or "0"),
+            "vat_rate": payload.get("vat_rate"), "vat_amount": str(payload.get("vat_amount") or "0"),
+            "total": str(payload.get("total") or "0"), "paid_amount": "0.00",
+            "note": payload.get("note"), "data_snapshot": payload.get("data_snapshot"),
+            "generated_document_id": None, "receipt_document_id": None,
+            "created_by": payload.get("created_by"), "archived_at": None,
+            "created_at": "2026-09-21T00:00:00+00:00", "updated_at": "2026-09-21T00:00:00+00:00",
+            "payments": [],
+        }
+        self._invoices = rows + [row]
+        return self._invoice_out(row)
+
+    def _invoice_row(self, invoice_id):
+        row = next((r for r in getattr(self, "_invoices", []) if str(r.get("id")) == str(invoice_id)), None)
+        if row is None:
+            from chann_app.data_client import DataTierError
+            raise DataTierError(404, "invoice not found")
+        return row
+
+    async def get_invoice(self, license_id, invoice_id):
+        self.recorded.append(("get_invoice", license_id, invoice_id))
+        row = next((r for r in getattr(self, "_invoices", []) if str(r.get("id")) == str(invoice_id)), None)
+        return self._invoice_out(row) if row else None
+
+    async def list_invoices_with_total(self, license_id, *, status=None, contact_id=None,
+                                       customer_chann_uid=None, q=None, overdue=False,
+                                       limit=None, offset=None):
+        self.recorded.append(("list_invoices", license_id, status, customer_chann_uid, q, overdue))
+        rows = list(getattr(self, "_invoices", []))
+        if status:
+            rows = [r for r in rows if r.get("status") == status]
+        if contact_id:
+            rows = [r for r in rows if str(r.get("contact_id")) == str(contact_id)]
+        if customer_chann_uid:
+            mine = {str(c.get("id")) for c in self._customers if c.get("customer_chann_uid") == customer_chann_uid}
+            rows = [r for r in rows if str(r.get("contact_id")) in mine]
+        if q:
+            rows = [r for r in rows if q.lower() in str(r.get("invoice_id") or "").lower()]
+        out = [self._invoice_out(r) for r in rows]
+        if overdue:
+            out = [r for r in out if r["is_overdue"]]
+        out = list(reversed(out))
+        total = len(out)
+        return out[(offset or 0):(offset or 0) + (limit or 500)], total
+
+    async def list_invoices(self, license_id, *, status=None, customer_chann_uid=None, overdue=False, limit=None):
+        rows, _ = await self.list_invoices_with_total(
+            license_id, status=status, customer_chann_uid=customer_chann_uid, overdue=overdue, limit=limit,
+        )
+        return rows
+
+    async def invoice_summary(self, license_id):
+        from decimal import Decimal
+        rows = [self._invoice_out(r) for r in getattr(self, "_invoices", []) if r.get("status") in ("issued", "partially_paid")]
+        return {"open_count": len(rows), "overdue_count": sum(1 for r in rows if r["is_overdue"]),
+                "outstanding_total": str(sum((Decimal(r["outstanding"]) for r in rows), Decimal("0")))}
+
+    async def issue_invoice(self, license_id, invoice_id, *, document_id=None, issue_date=None, due_date=None, actor_id=None):
+        from datetime import date, timedelta
+        self.recorded.append(("issue_invoice", license_id, invoice_id, document_id, str(due_date or "")))
+        row = self._invoice_row(invoice_id)
+        if row["status"] != "draft":
+            from chann_app.data_client import DataTierError
+            raise DataTierError(409, f"invoice {row['invoice_id']} is already {row['status']}")
+        issued = issue_date or date(2026, 9, 21)
+        row["issue_date"] = issued.isoformat()
+        row["due_date"] = (due_date or (issued + timedelta(days=30))).isoformat()
+        row["status"] = "issued"
+        if document_id:
+            row["generated_document_id"] = document_id
+        return self._invoice_out(row)
+
+    async def link_invoice_document(self, license_id, invoice_id, document_id, actor_id=None):
+        self.recorded.append(("link_invoice_document", license_id, invoice_id, document_id))
+        row = self._invoice_row(invoice_id)
+        row["generated_document_id"] = document_id
+        return self._invoice_out(row)
+
+    async def add_invoice_payment(self, license_id, invoice_id, payload, actor_id=None):
+        from decimal import Decimal
+        from chann_app.data_client import DataTierError
+        self.recorded.append(("add_invoice_payment", license_id, invoice_id, dict(payload), actor_id))
+        row = self._invoice_row(invoice_id)
+        if row["status"] not in ("issued", "partially_paid"):
+            raise DataTierError(409, f"invoice {row['invoice_id']} is {row['status']}")
+        amount = Decimal(str(payload["amount"]))
+        outstanding = Decimal(row["total"]) - Decimal(row["paid_amount"])
+        if amount <= 0 or amount > outstanding:
+            raise DataTierError(409, f"payment {amount} exceeds the outstanding {outstanding}")
+        row["payments"] = row.get("payments", []) + [{
+            "id": f"PAY-{len(row.get('payments', [])) + 1}", "invoice_id": row["id"], "amount": str(amount),
+            "method": payload.get("method") or "transfer", "paid_at": payload.get("paid_at") or "2026-09-21T03:00:00+00:00",
+            "reference": payload.get("reference"), "note": payload.get("note"), "recorded_by": payload.get("recorded_by"),
+            "created_at": "2026-09-21T03:00:00+00:00",
+        }]
+        row["paid_amount"] = str(Decimal(row["paid_amount"]) + amount)
+        row["status"] = "paid" if Decimal(row["paid_amount"]) >= Decimal(row["total"]) else "partially_paid"
+        return self._invoice_out(row)
+
+    async def void_invoice(self, license_id, invoice_id, actor_id=None):
+        from decimal import Decimal
+        from chann_app.data_client import DataTierError
+        self.recorded.append(("void_invoice", license_id, invoice_id, actor_id))
+        row = self._invoice_row(invoice_id)
+        if Decimal(row["paid_amount"]) > 0:
+            raise DataTierError(409, f"invoice {row['invoice_id']} has payments recorded and cannot be voided")
+        row["status"] = "void"
+        return self._invoice_out(row)
+
+    async def set_invoice_receipt_document(self, license_id, invoice_id, document_id, actor_id=None):
+        from chann_app.data_client import DataTierError
+        self.recorded.append(("set_invoice_receipt_document", license_id, invoice_id, document_id))
+        row = self._invoice_row(invoice_id)
+        if row["status"] != "paid":
+            raise DataTierError(409, f"invoice {row['invoice_id']} is not paid in full")
+        row["receipt_document_id"] = document_id
+        return self._invoice_out(row)
+
     async def get_generated_document(self, license_id, document_id):
+        # A document this fake recorded comes back as recorded — the
+        # invoice routes read `source_entity_type` off it to decide whether
+        # a customer may open it (round 20V). Anything else is the old stub.
+        for row in getattr(self, "_generated_documents", []):
+            if str(row.get("id")) == str(document_id):
+                return dict(row)
         return {"id": document_id, "sha256": "abc123", "output_path": f"gs://b/{document_id}.pdf"}
 
     async def attach_report_document(self, license_id, report_id, *, document_id, pdf_path, actor_id=None):
@@ -1100,6 +1259,41 @@ class FakeDataClient:
 
     async def get_assignment_rules(self, license_id):
         return list(getattr(self, "_assignment_rules", []))
+
+    async def deactivate_assignment_rule(self, license_id, scope, actor_id=None):
+        # Round 20V: mirrors the Data route — the active row for the scope
+        # is marked inactive and returned; None when there was none.
+        self.recorded.append(("deactivate_assignment_rule", license_id, scope))
+        for row in getattr(self, "_assignment_rules", []):
+            if row.get("is_active") and str(row.get("scope") or "technician") == scope:
+                row["is_active"] = False
+                return dict(row)
+        return None
+
+    async def set_customer_owner(self, license_id, customer_id, owner_member_id, actor_id=None):
+        self.recorded.append(("set_customer_owner", license_id, customer_id, owner_member_id))
+        row = next((c for c in self._customers if str(c.get("id")) == str(customer_id)), None)
+        if row is None:
+            raise NotFoundForTest("customer not found")
+        row["owner_member_id"] = owner_member_id
+        return dict(row)
+
+    async def set_deal_owner(self, license_id, deal_id, owner_member_id, actor_id=None):
+        self.recorded.append(("set_deal_owner", license_id, deal_id, owner_member_id))
+        row = next((d for d in self._deals if str(d.get("id")) == str(deal_id)), None)
+        if row is None:
+            raise NotFoundForTest("deal not found")
+        row["owner_member_id"] = owner_member_id
+        return dict(row)
+
+    async def survey_summary(self, license_id, *, days=30):
+        self.recorded.append(("survey_summary", license_id, days))
+        summary = getattr(self, "_survey_summary", None)
+        if summary is None:
+            summary = {"days": days, "scale": {"1": "ไม่ดี", "2": "พอใช้", "3": "ดีเยี่ยม"},
+                       "answered": 0, "pending": 0, "average": None, "response_rate": None,
+                       "distribution": {"1": 0, "2": 0, "3": 0}, "technicians": [], "recent": []}
+        return {**summary, "days": days}
 
     async def list_roles(self, license_id):
         # Mirrors RoleOut's shape as far as chat reads it (role_name).
@@ -1615,6 +1809,12 @@ class FakeDataClient:
         row["published_at"] = "2026-09-09T00:00:00+00:00"
         self.recorded.append(("publish_document_template_version", license_id, str(version_id)))
         return dict(row)
+
+    async def get_quote(self, license_id, quote_id):
+        # The real client has had it since Phase 10; the invoice routes
+        # (round 20V) are the first Application code to reach it by id.
+        self.recorded.append(("get_quote", license_id, quote_id))
+        return next((q for q in getattr(self, "_quotes", []) if str(q.get("id")) == str(quote_id)), None)
 
     async def list_quotes(self, license_id, status=None):
         self.recorded.append(("list_quotes", license_id, status))
@@ -6989,6 +7189,10 @@ class TestButtonsTheSystemWritesDoNotNeedTheAI:
         triggers += list(module.DUPLICATE_USE_PHRASES) + list(module.DUPLICATE_MERGE_PHRASES) + list(module.DUPLICATE_CANCEL_PHRASES)
         triggers += list(module.MERGE_REPLACE_PHRASES) + list(module.MERGE_KEEP_PHRASES) + list(module.ARCHIVE_CONFIRM_PHRASES)
         triggers += list(module.DEAL_CONTEXT_YES) + list(module.DEAL_CONTEXT_NO)
+        # Round 20V: the bill's buttons are read by the model (entity
+        # "invoice", measured with ask-model.py) — the words are the guide's
+        # vocabulary and the customer OA's exact read-only phrases.
+        triggers += list(module.INVOICE_COMMAND_WORDS) + list(module.CUSTOMER_INVOICE_WORDS) + list(module.CUSTOMER_RECEIPT_WORDS)
         dead = []
         for text in sorted(sent):
             probe = re.sub(r"\{[^}]*\}", "X", text).lower()
@@ -7019,6 +7223,9 @@ class TestButtonsTheSystemWritesDoNotNeedTheAI:
             # round 20i: the roster, read by the model as ("read","member")
             # — same as the profile edit above, no trigger tuple of its own
             "รายชื่อสมาชิก",
+            # round 20V: the answer to "รับชำระ INV-… เท่าไหร่" — read by
+            # _payment_amount_in in the closed follow-up, never the model
+            "ครบ",
         }
         remaining = [t for t in dead if t not in handled_by_literal]
         assert not remaining, f"buttons that lead nowhere: {remaining}"

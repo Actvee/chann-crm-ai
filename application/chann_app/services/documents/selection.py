@@ -34,15 +34,17 @@ log = logging.getLogger(__name__)
 # The document types a shop can upload a template for: the ones with a
 # real issue path behind them. A type nothing renders would be a slot a
 # shop could fill and never see used, so it is not offered.
-TEMPLATE_DOCUMENT_TYPES = ("quote", "service_report")
+# Round 20V: the invoice and the receipt render through the same engine
+# (services/invoices.py), so a shop may lay them out too.
+TEMPLATE_DOCUMENT_TYPES = ("quote", "service_report", "invoice", "receipt")
 
 
 def is_builtin_template(template: dict) -> bool:
     """The system's own layout, registered as a row so that
     `generated_documents.template_version_id` can point at it.
 
-    Case-insensitive: the codes are `BUILTIN-QUOTE` and
-    `BUILTIN-SERVICE-REPORT`, and a lowercase `startswith("builtin")` —
+    Case-insensitive: the codes are `BUILTIN-QUOTE`, `BUILTIN-SERVICE-REPORT`,
+    `BUILTIN-INVOICE` and `BUILTIN-RECEIPT`, and a lowercase `startswith("builtin")` —
     which is what the templates page used — matched neither, so the
     built-in was listed as if a shop could edit it.
     """

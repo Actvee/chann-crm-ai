@@ -858,6 +858,19 @@ class DataClient:
         )
         return set((self._unwrap(resp) or {}).get("entity_ids") or [])
 
+    async def deactivate_assignment_rule(
+        self, license_id: str, scope: str, actor_id: str | None = None,
+    ) -> dict | None:
+        """Switch the active rule for a scope off; None when there was
+        none (round 20V)."""
+        resp = await self._client.delete(
+            f"{self._base}/internal/v1/licenses/{license_id}/assignment-rules/{quote(scope, safe='')}",
+            headers=self._headers_for(actor_id),
+        )
+        if resp.status_code == 404:
+            return None
+        return self._unwrap(resp)
+
     async def line_target_of(self, chann_uid: str) -> str | None:
         """The LINE user id to push to, or None if this person has none."""
         resp = await self._client.get(
@@ -2459,6 +2472,124 @@ class DataClient:
         )
         return self._unwrap(resp)
 
+    # ---------------------------------------------------------- Round 20V
+    # Invoices, payments and receipts (owner, 21 ก.ย. 2569: "รวมเอาเรื่อง
+    # invoice"). The Data tier owns the numbering, the ledger arithmetic and
+    # the state machine; these are thin calls, one per route.
+
+    async def create_invoice(
+        self, license_id: str, payload: dict, actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/invoices",
+            headers=self._headers_for(actor_id), json=payload,
+        )
+        return self._unwrap(resp)
+
+    async def get_invoice(self, license_id: str, invoice_id: str) -> dict | None:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/invoices/{invoice_id}",
+            headers=self._headers,
+        )
+        if resp.status_code == 404:
+            return None
+        return self._unwrap(resp)
+
+    async def list_invoices_with_total(
+        self, license_id: str, *, status: str | None = None, contact_id: str | None = None,
+        customer_chann_uid: str | None = None, q: str | None = None, overdue: bool = False,
+        limit: int | None = None, offset: int | None = None,
+    ) -> tuple[list[dict], int]:
+        """A page of invoices and how many match — the round 20N shape."""
+        params: dict = {}
+        if status:
+            params["status_"] = status
+        if contact_id:
+            params["contact_id"] = contact_id
+        if customer_chann_uid:
+            params["customer_chann_uid"] = customer_chann_uid
+        if q:
+            params["q"] = q
+        if overdue:
+            params["overdue"] = "true"
+        if limit:
+            params["limit"] = limit
+        if offset:
+            params["offset"] = offset
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/invoices",
+            headers=self._headers, params=params or None,
+        )
+        rows = self._unwrap(resp)
+        return rows, _total_of(resp, rows)
+
+    async def list_invoices(
+        self, license_id: str, *, status: str | None = None, customer_chann_uid: str | None = None,
+        overdue: bool = False, limit: int | None = None,
+    ) -> list[dict]:
+        rows, _total = await self.list_invoices_with_total(
+            license_id, status=status, customer_chann_uid=customer_chann_uid, overdue=overdue, limit=limit,
+        )
+        return rows
+
+    async def invoice_summary(self, license_id: str) -> dict:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/invoices/summary",
+            headers=self._headers,
+        )
+        return self._unwrap(resp)
+
+    async def issue_invoice(
+        self, license_id: str, invoice_id: str, *, document_id: str | None = None,
+        issue_date=None, due_date=None, actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/invoices/{invoice_id}/issue",
+            headers=self._headers_for(actor_id),
+            json={
+                "document_id": document_id,
+                "issue_date": issue_date.isoformat() if issue_date else None,
+                "due_date": due_date.isoformat() if due_date else None,
+            },
+        )
+        return self._unwrap(resp)
+
+    async def link_invoice_document(
+        self, license_id: str, invoice_id: str, document_id: str, actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/invoices/{invoice_id}/document",
+            headers=self._headers_for(actor_id), json={"document_id": document_id},
+        )
+        return self._unwrap(resp)
+
+    async def add_invoice_payment(
+        self, license_id: str, invoice_id: str, payload: dict, actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/invoices/{invoice_id}/payments",
+            headers=self._headers_for(actor_id), json=payload,
+        )
+        return self._unwrap(resp)
+
+    async def void_invoice(
+        self, license_id: str, invoice_id: str, actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/invoices/{invoice_id}/void",
+            headers=self._headers_for(actor_id),
+        )
+        return self._unwrap(resp)
+
+    async def set_invoice_receipt_document(
+        self, license_id: str, invoice_id: str, document_id: str, actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/invoices/{invoice_id}/receipt-document",
+            headers=self._headers_for(actor_id), json={"document_id": document_id},
+        )
+        return self._unwrap(resp)
+
     # ---------------------------------------------------------- Phase 14
     # Approval workflows, steps and satisfaction surveys. The Data Tier
     # owns every rule (who may act, what "all approved" means); these are
@@ -2530,6 +2661,14 @@ class DataClient:
                 "approve": approve, "member_id": member_id,
                 "roles": list(roles), "reason": reason, "override": override,
             },
+        )
+        return self._unwrap(resp)
+
+    async def survey_summary(self, license_id: str, *, days: int = 30) -> dict:
+        """The satisfaction figures over 30, 90 or 365 days (round 20V)."""
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/surveys/summary",
+            headers=self._headers, params={"days": int(days)},
         )
         return self._unwrap(resp)
 

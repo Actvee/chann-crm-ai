@@ -47,8 +47,17 @@ ALLOWED_ENTITIES: dict[str, dict] = {
                "date_fields": ("created_at", "valid_until")},
     "warranties": {"fields": ("status", "product_id", "warranty_end", "created_at"),
                    "enums": {"status": ("active", "expired", "void")}, "date_fields": ("created_at", "warranty_end")},
+    # Round 20V: the satisfaction answers. No filterable column and no
+    # group — a score (1–3) to average, over the day it was answered.
+    "surveys": {"fields": ("submitted_at", "created_at"), "enums": {}, "date_fields": ("submitted_at", "created_at")},
+    # Round 20V: "ยอดค้างชำระเดือนนี้" = sum of `outstanding` on invoices
+    # issued this month whose status is issued/partially_paid.
+    "invoices": {"fields": ("status", "created_at", "issue_date", "due_date"),
+                 "enums": {"status": ("draft", "issued", "partially_paid", "paid", "void")},
+                 "date_fields": ("issue_date", "created_at", "due_date")},
 }
-NUMERIC_FIELDS = {"deals": ("amount",), "quotes": ("discount_amount",)}
+NUMERIC_FIELDS = {"deals": ("amount",), "quotes": ("discount_amount",), "surveys": ("score",),
+                  "invoices": ("total", "paid_amount", "outstanding")}
 ALLOWED_METRICS = ("count", "sum", "avg", "min", "max")
 ALLOWED_GROUP_BY = ("owner_member_id", "stage", "status", "product_id", "assigned_to")
 ALLOWED_DATE_RANGES = ("today", "yesterday", "last_7_days", "last_30_days", "this_month", "last_month", "last_3_months", "this_year", "last_year")
@@ -59,6 +68,8 @@ ENTITY_LABEL = {
     "deals": {"th": "ดีล", "en": "deals"}, "customers": {"th": "ลูกค้า", "en": "customers"},
     "tickets": {"th": "งานซ่อม", "en": "tickets"}, "quotes": {"th": "ใบเสนอราคา", "en": "quotes"},
     "warranties": {"th": "การรับประกัน", "en": "warranties"},
+    "surveys": {"th": "ความพึงพอใจ", "en": "satisfaction surveys"},
+    "invoices": {"th": "ใบแจ้งหนี้", "en": "invoices"},
 }
 RANGE_LABEL = {
     "today": {"th": "วันนี้", "en": "today"}, "yesterday": {"th": "เมื่อวาน", "en": "yesterday"},
@@ -80,6 +91,13 @@ FIELD_LABEL = {
     "warranty_end": {"th": "วันสิ้นสุดประกัน", "en": "warranty end"},
     "amount": {"th": "มูลค่า", "en": "amount"},
     "discount_amount": {"th": "ส่วนลด", "en": "discount"},
+    "submitted_at": {"th": "วันที่ตอบ", "en": "answered"},
+    "score": {"th": "คะแนน", "en": "score"},
+    "issue_date": {"th": "วันที่ออกใบแจ้งหนี้", "en": "issue date"},
+    "due_date": {"th": "กำหนดชำระ", "en": "due date"},
+    "total": {"th": "ยอดรวม", "en": "total"},
+    "paid_amount": {"th": "ยอดที่ชำระแล้ว", "en": "paid"},
+    "outstanding": {"th": "ยอดค้างชำระ", "en": "outstanding"},
 }
 METRIC_LABEL = {
     "count": {"th": "จำนวน", "en": "count"}, "sum": {"th": "ผลรวม", "en": "total"}, "avg": {"th": "ค่าเฉลี่ย", "en": "average"},
@@ -110,6 +128,9 @@ VALUE_LABEL = {
         "expired": {"th": "หมดอายุ", "en": "Expired"},
         "active": {"th": "ยังคุ้มครอง", "en": "Active"},
         "void": {"th": "เป็นโมฆะ", "en": "Void"},
+        "issued": {"th": "ออกแล้ว รอชำระ", "en": "Issued"},
+        "partially_paid": {"th": "ชำระบางส่วน", "en": "Partially paid"},
+        "paid": {"th": "ชำระครบ", "en": "Paid"},
     },
 }
 
@@ -259,8 +280,10 @@ def build_system_prompt() -> str:
         f"date_range: one of {list(ALLOWED_DATE_RANGES)} or null\n"
         "date_field: which date field the range applies to (default created_at)\n\n"
         "Thai hints: ดีล/ยอดขาย = deals; ยอดขายรวม/มูลค่ารวม = metric sum of field amount on deals; ปิดสำเร็จ/ชนะ = stage won; แพ้ = lost; ลูกค้า = customers; "
-        "งาน/ใบงาน/ticket = tickets; งานค้าง = status open or assigned or in_progress (pick 'open' if they say ค้าง and no other clue, "
+        "ความพึงพอใจ/คะแนนลูกค้า = surveys (metric avg of field score, date_field submitted_at); งาน/ใบงาน/ticket = tickets; งานค้าง = status open or assigned or in_progress (pick 'open' if they say ค้าง and no other clue, "
         "or omit the status filter and group by status); ช่าง = assigned_to; ใบเสนอราคา = quotes; รับประกัน = warranties; "
+        "ใบแจ้งหนี้/ยอดค้างชำระ = invoices (ยอดค้าง = sum of outstanding with filter status issued or partially_paid; "
+        "ยอดที่เก็บได้ = sum of paid_amount; date_field issue_date); "
         "เดือนนี้ = this_month; 3 เดือน = last_3_months; ปีนี้ = this_year; แยกตาม = group_by.\n\n"
         "Reply with JSON only, no prose:\n"
         '{"entity": "...", "metric": "count", "field": null, "filter": {}, "group_by": null, "date_range": null, "date_field": null}\n'

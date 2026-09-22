@@ -1,8 +1,8 @@
 {
- "cases": 1168,
+ "cases": 1170,
  "per_oa": {
   "customer": {
-   "read": 231,
+   "read": 233,
    "rule": 113
   },
   "sales": {
@@ -14,7 +14,7 @@
    "rule": 23
   }
  },
- "reached_model": 991,
+ "reached_model": 993,
  "roads": {
   "customer\t15/9 10.30": true,
   "customer\t55555 โอเค": false,
@@ -244,6 +244,7 @@
   "customer\tยกเลิกค่ะ": false,
   "customer\tยกเลิกงานเมื่อกี้": false,
   "customer\tยกเลิกอันเมื่อกี้": true,
+  "customer\tยอดค้างเท่าไหร่": true,
   "customer\tยังอยู่ในประกันไหมคะ": true,
   "customer\tรบกวนช่างมาดูแอร์ให้หน่อยได้ไหมคะ": true,
   "customer\tรบกวนด้วยค่ะ แอร์ไม่เย็น": true,
@@ -348,6 +349,7 @@
   "customer\tใช้งานยังไงอ่ะ": false,
   "customer\tใช้ยังไงคะเนี่ย": false,
   "customer\tใบรับประกัน": true,
+  "customer\tใบแจ้งหนี้ของฉันค่ะ": true,
   "customer\tได้ครับ": false,
   "customer\tได้ทุกวันเลยค่ะ": true,
   "customer\tไปที่ร้านได้ไหม": true,

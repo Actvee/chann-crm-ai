@@ -295,7 +295,7 @@ class TestTheSampleDownload:
         assert response.content == build_sample_docx(document_type)
 
     def test_an_unknown_document_type_is_404(self):
-        assert self._http().get("/api/v1/document-template-samples/invoice").status_code == 404
+        assert self._http().get("/api/v1/document-template-samples/poster").status_code == 404
 
     def test_only_docx_is_offered(self):
         response = self._http().get(

@@ -91,10 +91,10 @@ SALES_KEYS = [
     "followup.read", "followup.update", "note.create", "note.read", "ticket.read", "ticket.create",
     "ticket.update", "ticket.assign", "service_report.read", "warranty.read", "warranty.create",
     "team.manage", "member.manage", "setting.manage", "approval.view", "approval.approve", "approval.reject",
-    "approval.manage", "view_reports",
+    "approval.manage", "view_reports", "invoice.read", "invoice.create", "invoice.update", "invoice.void",
 ]
 TECH_KEYS = ["ticket.read", "ticket.update", "ticket.close", "service_report.create", "service_report.read", "warranty.read"]
-CUST_KEYS = ["customer.read", "ticket.create", "ticket.read", "warranty.read", "warranty.create"]
+CUST_KEYS = ["customer.read", "ticket.create", "ticket.read", "warranty.read", "warranty.create", "invoice.read"]
 
 results = []
 
@@ -316,10 +316,16 @@ async def customer():
         ("ซ่อมเสร็จยัง", "any"), ("งานของฉัน", "rule"), ("ประกัน", "any"), ("ประกันของฉัน", "rule"), ("เครื่องผมยังมีประกันไหม", "any"),
         ("หมดประกันเมื่อไหร่", "any"), ("ลงทะเบียน", "any"), ("ลงทะเบียนสินค้า SN12345678", "rule"), ("SN12345678", "any"),
         ("ราคาแอร์เท่าไหร่", "any"), ("มีแอร์รุ่นไหนบ้าง", "any"), ("อยากซื้อแอร์", "any"), ("สินค้า", "any"), ("ดูสินค้า", "rule"),
+        # Round 20V: the receipt and the bills are answered (the fake holds none, so the
+        # reply is "no invoices yet" — a real answer, not a shrug; the model reads them first,
+        # the typed words answer when it shrugs — test_chat_phrasings pins the text). BEFORE "คุยกับร้าน":
+        # once a conversation is open every later line is forwarded to the shop with an
+        # empty reply, which the classifier would read as a pass that tests nothing.
+        ("ขอใบเสร็จ", "ai"), ("ใบแจ้งหนี้ของฉัน", "ai"), ("ยอดค้าง", "ai"),
         ("ค้นหา พัดลม", "any"), ("คุยกับร้าน", "any"), ("คุยกับร้าน ราคาล้างแอร์", "any"), ("ขอคุยกับพนักงาน", "any"),  # storefront/live chat live in other modules the fake lacks
         ("ติดต่อร้าน", "rule"), ("เบอร์ร้าน", "rule"), ("ร้านเปิดกี่โมง", "any"), ("เลื่อนนัด", "rule"), ("เลื่อนนัดเป็นวันศุกร์", "rule"),
         ("ขอเลื่อนเป็นพรุ่งนี้", "rule"), ("ยกเลิก", "rule"), ("ยกเลิกงาน", "rule"), ("ไม่ซ่อมแล้ว", "any"),
-        ("เปลี่ยนที่อยู่", "any"), ("แก้เบอร์เป็น 0899999999", "ai"), ("ที่อยู่ 99/1 สุขุมวิท", "any"), ("ขอใบเสร็จ", "any"),
+        ("เปลี่ยนที่อยู่", "any"), ("แก้เบอร์เป็น 0899999999", "ai"), ("ที่อยู่ 99/1 สุขุมวิท", "any"),
         ("จ่ายเงินยังไง", "any"), ("โปรไฟล์", "rule"), ("ข้อมูลของฉัน", "rule"), ("เปลี่ยนภาษา", "rule"), ("ประวัติการซื้อ", "rule"),
     ]
     await run("customer", c, cases)

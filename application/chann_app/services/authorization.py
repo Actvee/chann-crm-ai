@@ -30,6 +30,10 @@ CUSTOMER_PERMISSION_KEYS = frozenset({
     "customer.read",
     "ticket.create", "ticket.read",
     "warranty.read", "warranty.create",
+    # Round 20V: their own bills and receipts, read only. Every invoice
+    # route narrows a customer principal to rows whose contact carries
+    # their chann_uid, and refuses every write.
+    "invoice.read",
 })
 from .identity import OA_TO_ROLE
 

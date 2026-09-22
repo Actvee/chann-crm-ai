@@ -137,6 +137,21 @@ ACTION_WORDS: dict[str, tuple[str, ...]] = {
     # create (audit [70], 15 ก.ย. 2569).
     "customer_create": ("เพิ่มลูกค้า", "สร้างลูกค้า", "ลูกค้าใหม่", "เพิ่มรายชื่อ", "add customer", "new customer", "create customer"),
     "record_delete": ("ลบ", "ยกเลิก", "เอาออก", "นำออก", "delete", "remove", "cancel"),
+    # Handing a customer or a deal to a colleague (round 20V): "ไม่ต้องโอน
+    # ให้สมหญิงแล้ว" refuses, "โอนลูกค้ายังไง" asks.
+    "record_transfer": ("โอน", "ย้าย", "ส่งต่อ", "ให้ดูแล", "ดูแลแทน", "transfer", "reassign", "hand over"),
+    # Round 20V — the bill after the quotation. "ยังไม่ต้องออกใบแจ้งหนี้"
+    # refuses; "ลูกค้าบอกว่าจะโอนพรุ่งนี้" is a report, not a receipt of
+    # money; "ขอใบเสร็จได้ไหม" on the sales OA is a question.
+    "invoice_create": (
+        "ออกใบแจ้งหนี้", "สร้างใบแจ้งหนี้", "ทำใบแจ้งหนี้", "เปิดใบแจ้งหนี้", "ใบแจ้งหนี้",
+        "ใบวางบิล", "วางบิล", "invoice", "bill",
+    ),
+    "invoice_payment": (
+        "รับชำระ", "บันทึกรับชำระ", "รับเงิน", "มัดจำ", "ชำระ", "จ่ายแล้ว", "โอนแล้ว", "จ่าย", "โอน",
+        "payment", "paid", "deposit", "transfer",
+    ),
+    "receipt_issue": ("ออกใบเสร็จ", "ใบเสร็จ", "receipt"),
     # Retiring a product from the catalogue. Its own entry because the
     # catch-all above could not bind to the sentence people actually type:
     # "ไม่ต้องเอาพัดลมไอเย็นออกจากรายการสินค้า" has "เอา" and "ออก" with the

@@ -37,9 +37,11 @@ import zipfile
 from datetime import datetime, timezone
 
 from .report_snapshot import build_service_report_snapshot
-from .snapshot import build_quote_snapshot
+from .snapshot import build_invoice_snapshot, build_quote_snapshot, build_receipt_snapshot
 
-SAMPLE_DOCUMENT_TYPES = ("quote", "service_report")
+SAMPLE_DOCUMENT_TYPES = ("quote", "service_report", "invoice", "receipt")
+# The types whose sample carries the repeating `{{#line_items}}` row.
+LINE_ITEM_DOCUMENT_TYPES = ("quote", "invoice", "receipt")
 
 # Frozen, so the generated sample is byte-identical run to run and a
 # download can be cached. A moving date would also make the tests that
@@ -129,6 +131,68 @@ def sample_service_report_snapshot() -> dict:
     )
 
 
+_SAMPLE_CUSTOMER = {
+    "first_name": "สมชาย",
+    "last_name": "ใจดี",
+    "phone": "0812345678",
+    "email": "somchai@example.com",
+    "address": "45/7 หมู่ 3 ต.บางพลี อ.บางพลี จ.สมุทรปราการ 10540",
+}
+_SAMPLE_LINES = [
+    {
+        "product_name": "เครื่องปรับอากาศ 12,000 BTU (Inverter)",
+        "qty": 2,
+        "quoted_unit_price": "18500.00",
+        "notes": "รับประกันคอมเพรสเซอร์ 5 ปี",
+    },
+    {
+        "product_name": "ค่าติดตั้งพร้อมท่อน้ำยา 4 เมตร",
+        "qty": 2,
+        "quoted_unit_price": "3500.00",
+        "notes": "ราคารวมค่าแรงและอุปกรณ์มาตรฐาน",
+    },
+]
+
+
+def sample_invoice_snapshot() -> dict:
+    """A representative invoice (round 20V), frozen through the real
+    builder — the quote's lines and customer, now a demand for payment."""
+    return build_invoice_snapshot(
+        lines=_SAMPLE_LINES,
+        customer=_SAMPLE_CUSTOMER,
+        company=_SAMPLE_COMPANY,
+        invoice={
+            "invoice_id": "INV-2026-0042", "status": "issued",
+            "issue_date": "2026-09-01", "due_date": "2026-10-01",
+            "note": "โอนเข้าบัญชีตามที่ระบุท้ายเอกสาร",
+        },
+        quote={"quote_id": "QT-2026-0042"},
+        deal={"deal_id": "DL-2026-0100"},
+        discount="500.00",
+        issued_at=_SAMPLE_AT,
+    )
+
+
+def sample_receipt_snapshot() -> dict:
+    """A representative receipt: the sample invoice, paid in two parts."""
+    invoice = {
+        "invoice_id": "INV-2026-0042", "status": "paid",
+        "issue_date": "2026-09-01", "due_date": "2026-10-01",
+        "data_snapshot": sample_invoice_snapshot(),
+    }
+    return build_receipt_snapshot(
+        invoice=invoice,
+        payments=[
+            {"amount": "10000.00", "method": "transfer", "paid_at": "2026-09-02T03:00:00+00:00",
+             "reference": "KBANK 1234"},
+            {"amount": "36545.00", "method": "promptpay", "paid_at": "2026-09-20T03:00:00+00:00",
+             "reference": ""},
+        ],
+        company=_SAMPLE_COMPANY,
+        issued_at=_SAMPLE_AT,
+    )
+
+
 def sample_snapshot(document_type: str = "quote") -> dict:
     """The representative snapshot for a document type.
 
@@ -138,6 +202,10 @@ def sample_snapshot(document_type: str = "quote") -> dict:
     """
     if document_type == "service_report":
         return sample_service_report_snapshot()
+    if document_type == "invoice":
+        return sample_invoice_snapshot()
+    if document_type == "receipt":
+        return sample_receipt_snapshot()
     return sample_quote_snapshot()
 
 
@@ -197,6 +265,58 @@ LEGEND: dict[str, list[tuple[str, str]]] = {
         ("technician.phone", "เบอร์โทรช่าง"),
         ("issued_on", "วันที่ออกเอกสาร"),
     ],
+    "invoice": [
+        ("company.name", "ชื่อบริษัทตามหนังสือรับรอง"),
+        ("company.trading_name", "ชื่อร้าน / ชื่อที่ใช้ค้าขาย"),
+        ("company.tax_id", "เลขประจำตัวผู้เสียภาษี"),
+        ("company.address", "ที่อยู่บริษัท"),
+        ("company.phone", "เบอร์โทรบริษัท"),
+        ("company.email", "อีเมลบริษัท"),
+        ("customer.name", "ชื่อลูกค้า"),
+        ("customer.phone", "เบอร์โทรลูกค้า"),
+        ("customer.email", "อีเมลลูกค้า"),
+        ("customer.address", "ที่อยู่ลูกค้า"),
+        ("invoice.invoice_id", "เลขที่ใบแจ้งหนี้"),
+        ("invoice.issue_date", "วันที่ออกใบแจ้งหนี้"),
+        ("invoice.due_date", "กำหนดชำระภายในวันที่"),
+        ("invoice.status", "สถานะใบแจ้งหนี้"),
+        ("invoice.note", "หมายเหตุ"),
+        ("quote.quote_id", "เลขที่ใบเสนอราคาอ้างอิง"),
+        ("deal.deal_id", "เลขที่ดีลอ้างอิง"),
+        ("issued_on", "วันที่ออกเอกสาร"),
+        ("totals.subtotal", "รวมเป็นเงิน (ก่อนส่วนลด)"),
+        ("totals.discount_amount", "ส่วนลด"),
+        ("totals.net_total", "ยอดหลังหักส่วนลด"),
+        ("totals.vat_rate_percent", "อัตราภาษีมูลค่าเพิ่ม (%)"),
+        ("totals.vat_amount", "ภาษีมูลค่าเพิ่ม"),
+        ("totals.grand_total", "จำนวนเงินรวมทั้งสิ้น"),
+    ],
+    "receipt": [
+        ("company.name", "ชื่อบริษัทตามหนังสือรับรอง"),
+        ("company.trading_name", "ชื่อร้าน / ชื่อที่ใช้ค้าขาย"),
+        ("company.tax_id", "เลขประจำตัวผู้เสียภาษี"),
+        ("company.address", "ที่อยู่บริษัท"),
+        ("company.phone", "เบอร์โทรบริษัท"),
+        ("company.email", "อีเมลบริษัท"),
+        ("customer.name", "ชื่อลูกค้า"),
+        ("customer.phone", "เบอร์โทรลูกค้า"),
+        ("customer.address", "ที่อยู่ลูกค้า"),
+        ("receipt.receipt_id", "เลขที่ใบเสร็จ"),
+        ("receipt.invoice_id", "เลขที่ใบแจ้งหนี้อ้างอิง"),
+        ("receipt.paid_total", "รับชำระแล้วทั้งสิ้น"),
+        ("receipt.payment_count", "จำนวนครั้งที่ชำระ"),
+        ("receipt.last_paid_on", "วันที่ชำระครั้งสุดท้าย"),
+        ("receipt.methods", "ช่องทางที่ชำระ"),
+        ("invoice.invoice_id", "เลขที่ใบแจ้งหนี้"),
+        ("invoice.issue_date", "วันที่ออกใบแจ้งหนี้"),
+        ("issued_on", "วันที่ออกใบเสร็จ"),
+        ("totals.subtotal", "รวมเป็นเงิน (ก่อนส่วนลด)"),
+        ("totals.discount_amount", "ส่วนลด"),
+        ("totals.net_total", "ยอดหลังหักส่วนลด"),
+        ("totals.vat_rate_percent", "อัตราภาษีมูลค่าเพิ่ม (%)"),
+        ("totals.vat_amount", "ภาษีมูลค่าเพิ่ม"),
+        ("totals.grand_total", "จำนวนเงินรวมทั้งสิ้น"),
+    ],
 }
 
 # The repeating row inside `{{#line_items}}`, which only the quote has.
@@ -213,7 +333,7 @@ LINE_ITEM_LEGEND: list[tuple[str, str]] = [
 def placeholders_used_by_samples(document_type: str) -> list[str]:
     """Every placeholder a generated sample puts in the document."""
     names = [name for name, _ in LEGEND[document_type]]
-    if document_type == "quote":
+    if document_type in LINE_ITEM_DOCUMENT_TYPES:
         names += [name for name, _ in LINE_ITEM_LEGEND]
     return names
 
@@ -352,7 +472,7 @@ _LEGEND_HEAD_TH = "ตารางอธิบายช่องข้อมู�
 def _legend_block(document_type: str) -> str:
     rows = [["ช่องข้อมูล", "จะกลายเป็น"]]
     rows += [[f"{{{{{name}}}}}", label] for name, label in LEGEND[document_type]]
-    if document_type == "quote":
+    if document_type in LINE_ITEM_DOCUMENT_TYPES:
         rows += [
             ["{{#line_items}} ... {{/line_items}}", "บล็อกรายการสินค้า (ทำซ้ำต่อ 1 รายการ)"],
         ]
@@ -414,6 +534,76 @@ def _quote_sample_body() -> str:
     ])
 
 
+def _money_document_sample_body(document_type: str) -> str:
+    """The invoice and the receipt samples (round 20V): the quotation's
+    page with the document's own numbers and dates, and the receipt's
+    paid-in-full line. One body for both so they cannot drift apart."""
+    receipt = document_type == "receipt"
+    head_rows = (
+        [
+            ["เลขที่", "{{receipt.receipt_id}}", "วันที่", "{{issued_on}}"],
+            ["อ้างอิงใบแจ้งหนี้", "{{receipt.invoice_id}}", "ชำระเมื่อ", "{{receipt.last_paid_on}}"],
+        ] if receipt else [
+            ["เลขที่", "{{invoice.invoice_id}}", "วันที่", "{{invoice.issue_date}}"],
+            ["กำหนดชำระ", "{{invoice.due_date}}", "อ้างอิงใบเสนอราคา", "{{quote.quote_id}}"],
+            ["อ้างอิงดีล", "{{deal.deal_id}}", "ออกเอกสารเมื่อ", "{{issued_on}}"],
+        ]
+    )
+    tail = (
+        [
+            _para("รับชำระแล้วทั้งสิ้น {{receipt.paid_total}} บาท ({{receipt.payment_count}} ครั้ง ผ่าน {{receipt.methods}})", bold=True),
+            _para("อ้างอิงใบแจ้งหนี้ {{invoice.invoice_id}} ออกเมื่อ {{invoice.issue_date}}"),
+            _para("ชื่อร้าน: {{company.trading_name}}"),
+            _para(),
+            _para("ผู้รับเงิน ..............................        ผู้จ่ายเงิน .............................."),
+        ] if receipt else [
+            _para("สถานะเอกสาร: {{invoice.status}}   หมายเหตุ: {{invoice.note}}"),
+            _para("ชื่อร้าน: {{company.trading_name}}"),
+            _para(),
+            _para("ผู้ออกใบแจ้งหนี้ ..............................        ผู้รับ .............................."),
+        ]
+    )
+    return "".join([
+        _para("ตัวอย่างแบบฟอร์มใบเสร็จรับเงิน" if receipt else "ตัวอย่างแบบฟอร์มใบแจ้งหนี้", style="Heading1"),
+        _para(_intro_th("customer.name")),
+        _para(_INTRO_HOWTO_TH),
+        _legend_block(document_type),
+        _para("— ตัดตั้งแต่บรรทัดนี้ลงไปคือตัวแบบฟอร์มจริง —"),
+        _para(),
+        _para("{{company.name}}", bold=True, style="Heading1"),
+        _para("{{company.address}}"),
+        _para("โทร {{company.phone}}   อีเมล {{company.email}}"),
+        _para("เลขประจำตัวผู้เสียภาษี {{company.tax_id}}"),
+        _para(),
+        _para("ใบเสร็จรับเงิน" if receipt else "ใบแจ้งหนี้", style="Heading1"),
+        _table(head_rows, header=False),
+        _para("ได้รับเงินจาก" if receipt else "เรียกเก็บเงินจาก", style="Heading2"),
+        _para("{{customer.name}}"),
+        _para("{{customer.address}}"),
+        _para("โทร {{customer.phone}}" + ("" if receipt else "   อีเมล {{customer.email}}")),
+        _para(),
+        _para("รายการสินค้าและบริการ", style="Heading2"),
+        _table([
+            ["ลำดับ", "รายการ", "จำนวน", "ราคา/หน่วย", "จำนวนเงิน"],
+            [
+                "{{#line_items}}{{item.index}}",
+                "{{item.product_name}} {{item.notes}}",
+                "{{item.qty}}",
+                "{{item.unit_price}}",
+                "{{item.line_total}}{{/line_items}}",
+            ],
+        ]),
+        _table([
+            ["รวมเป็นเงิน", "{{totals.subtotal}}"],
+            ["ส่วนลด", "{{totals.discount_amount}}"],
+            ["ยอดหลังหักส่วนลด", "{{totals.net_total}}"],
+            ["ภาษีมูลค่าเพิ่ม {{totals.vat_rate_percent}}%", "{{totals.vat_amount}}"],
+            ["จำนวนเงินรวมทั้งสิ้น", "{{totals.grand_total}}"],
+        ], header=False),
+        *tail,
+    ])
+
+
 def _service_report_sample_body() -> str:
     return "".join([
         _para("ตัวอย่างแบบฟอร์มรายงานการซ่อม (Service Report)", style="Heading1"),
@@ -458,6 +648,8 @@ def _service_report_sample_body() -> str:
 _SAMPLE_FILENAMES = {
     "quote": "chann-template-quotation.docx",
     "service_report": "chann-template-service-report.docx",
+    "invoice": "chann-template-invoice.docx",
+    "receipt": "chann-template-receipt.docx",
 }
 
 
@@ -471,4 +663,6 @@ def build_sample_docx(document_type: str) -> bytes:
         return _package(_quote_sample_body())
     if document_type == "service_report":
         return _package(_service_report_sample_body())
+    if document_type in ("invoice", "receipt"):
+        return _package(_money_document_sample_body(document_type))
     raise KeyError(document_type)

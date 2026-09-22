@@ -9,6 +9,7 @@
     "customer-status": "/api/v1/guide/images/customer-status.png",
     "customer-after": "/api/v1/guide/images/customer-after.png",
     "customer-pdpa": "/api/v1/guide/images/customer-pdpa.png",
+    "customer-invoices": "/api/v1/guide/images/customer-invoices.png",
     "tech-join": "/api/v1/guide/images/tech-join.png",
     "tech-take": "/api/v1/guide/images/tech-take.png",
     "tech-checkin": "/api/v1/guide/images/tech-checkin.png",

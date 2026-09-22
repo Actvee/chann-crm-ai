@@ -89,6 +89,23 @@ class AssignmentRuleRepository:
         self._s.flush()
         return row
 
+    def deactivate_active(self, scope: TenantScope, *, rule_scope: str) -> AssignmentRule | None:
+        """Switch the active rule for a scope off, keeping the row.
+
+        The same shape as the deactivation upsert_active does before it
+        writes a new rule — without the new rule. Until 21 ก.ย. 2569 a shop
+        that set a rule from chat could only REPLACE it; there was no way
+        to go back to "nobody is assigned automatically" (owner's gap
+        list). None when there was nothing active, so the caller can say
+        so rather than confirm a change that did not happen.
+        """
+        existing = self.get_active(scope, rule_scope=rule_scope)
+        if existing is None:
+            return None
+        existing.is_active = False
+        self._s.flush()
+        return existing
+
     def list_for_license(self, scope: TenantScope) -> list[AssignmentRule]:
         return list(
             self._s.execute(

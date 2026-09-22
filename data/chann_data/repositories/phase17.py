@@ -16,7 +16,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..models import (
-    ChannIdentity, Customer, Deal, LicenseMember, Product, Quote, ServiceTicket, Warranty,
+    INVOICE_STATUSES, ChannIdentity, Customer, Deal, Invoice, LicenseMember, Product, Quote,
+    SatisfactionSurvey, ServiceTicket, Warranty,
 )
 from .phase9 import DEAL_STAGES
 from .phase10 import QUOTE_STATUSES
@@ -73,12 +74,43 @@ ENTITIES: dict[str, dict] = {
         "enums": {"status": WARRANTY_STATUSES},
         "date_fields": ("created_at", "warranty_end"),
     },
+    # Round 20V: the satisfaction answers, averaged. An unanswered row has
+    # no submitted_at and no score, so a range on submitted_at and an
+    # avg of score both leave it out on their own.
+    "surveys": {
+        "model": SatisfactionSurvey,
+        "fields": {
+            "submitted_at": SatisfactionSurvey.submitted_at, "created_at": SatisfactionSurvey.created_at,
+        },
+        "enums": {},
+        "date_fields": ("submitted_at", "created_at"),
+    },
+    # Round 20V: "ยอดค้างชำระเดือนนี้" is a sum over the bills issued this
+    # month. `issue_date` is the date a shop means by "this month's
+    # invoices"; `due_date` answers "what falls due next week".
+    "invoices": {
+        "model": Invoice,
+        "fields": {
+            "status": Invoice.status, "created_at": Invoice.created_at,
+            "issue_date": Invoice.issue_date, "due_date": Invoice.due_date,
+        },
+        "enums": {"status": frozenset(INVOICE_STATUSES)},
+        "date_fields": ("issue_date", "created_at", "due_date"),
+    },
 }
 # Numeric columns a sum/avg/min/max may target. Small on purpose: every
 # entry here is a number the whole tenant may see through a report.
 NUMERIC_FIELDS: dict[str, dict] = {
     "deals": {"amount": Deal.amount},
     "quotes": {"discount_amount": Quote.discount_amount},
+    "surveys": {"score": SatisfactionSurvey.score},
+    # `outstanding` is the same arithmetic the invoice row itself reports
+    # (total − paid), so the report and the list agree; a void or draft
+    # invoice is excluded by filtering on status, which the prompt says.
+    "invoices": {
+        "total": Invoice.total, "paid_amount": Invoice.paid_amount,
+        "outstanding": Invoice.total - Invoice.paid_amount,
+    },
 }
 METRICS = ("count", "sum", "avg", "min", "max")
 GROUP_BY = ("owner_member_id", "stage", "status", "product_id", "assigned_to")

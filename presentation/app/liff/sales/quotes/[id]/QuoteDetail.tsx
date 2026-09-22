@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
@@ -87,6 +88,7 @@ export default function QuoteDetail({
   const [editingTerms, setEditingTerms] = useState(false);
   const [terms, setTerms] = useState({ valid_until: "", discount: "" });
   const [busy, setBusy] = useState(false);
+  const router = useRouter();
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
 
@@ -160,6 +162,50 @@ export default function QuoteDetail({
       const { url } = (await response.json()) as { url: string };
       openExternal(url);
       say("");
+    } catch (error) {
+      say(error instanceof Error ? error.message : t.common.error, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Round 20V — an invoice from this quote, then its PDF, then the
+   *  invoices page with it in hand. Two calls, because the Data tier
+   *  numbers the invoice first and the PDF prints that number. */
+  async function createInvoice() {
+    if (!detail) return;
+    const ok = await ask({
+      action: t.dashboard.invoices.fromQuote,
+      target: t.dashboard.quotes.quoteWord,
+      code: quoteId,
+      affects: [t.dashboard.invoices.fromQuoteAffects],
+      reversible: t.dashboard.invoices.fromQuoteKeeps,
+      confirmLabel: t.dashboard.invoices.fromQuote,
+    });
+    if (!ok) return;
+    setBusy(true);
+    say(t.dashboard.working);
+    try {
+      const created = await fetch(
+        `/api/phase2/licenses/${licenseId}/quotes/${quoteId}/invoice`,
+        { method: "POST", headers: proxyHeaders(token, licenseId), body: JSON.stringify({}) },
+      );
+      if (!created.ok) {
+        say(await failureText(created), "error");
+        return;
+      }
+      const invoice = (await created.json()) as { id: string; invoice_id: string };
+      const issued = await fetch(
+        `/api/phase2/licenses/${licenseId}/invoices/${invoice.id}/issue`,
+        { method: "POST", headers: proxyHeaders(token, licenseId) },
+      );
+      if (!issued.ok) {
+        // The invoice exists as a draft; the PDF can be issued from its page.
+        say(await failureText(issued), "error");
+        return;
+      }
+      say(t.dashboard.invoices.created.replace("{code}", invoice.invoice_id), "ok");
+      router.push("/liff/sales/invoices");
     } catch (error) {
       say(error instanceof Error ? error.message : t.common.error, "error");
     } finally {
@@ -484,6 +530,21 @@ export default function QuoteDetail({
                     {busy ? t.dashboard.working : t.dashboard.quotes.view}
                   </button>
                 ) : null}
+                {/* Round 20V: the bill after the quotation. Only a sent or
+                    accepted quote can be billed (services/invoices.py says
+                    why), and only with invoice.create — the same call chat
+                    makes for "ออกใบแจ้งหนี้ Q-…". */}
+                {can("invoice.create") && (quoteStatus === "sent" || quoteStatus === "accepted") && (
+                  <button
+                    type="button"
+                    className="btn"
+                    data-variant="primary"
+                    onClick={() => void createInvoice()}
+                    disabled={busy}
+                  >
+                    {t.dashboard.invoices.fromQuote}
+                  </button>
+                )}
               </>
             }
           />

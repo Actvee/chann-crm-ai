@@ -98,6 +98,10 @@ _- A job you open for a caller is linked to their registered unit, with buttons 
 - บันทึกสาเหตุและวิธีแก้ด้วยก็ได้ → พิมพ์ "ปิดงาน T-2026-0001 สาเหตุ ฟิวส์ขาด แก้ไข เปลี่ยนฟิวส์"
 - หรือทำบนแดชบอร์ด > งานซ่อม
 
+**กฎมอบหมายอัตโนมัติ**
+- ดูกฎที่ใช้อยู่ (หน้าข้อมูลบริษัทก็แสดงและแก้ได้) → พิมพ์ "ดูกฎมอบหมาย"
+- ปิดกฎ — ระบบถามยืนยันก่อน แล้วงานใหม่ต้องมอบหมายเอง → พิมพ์ "ปิดกฎมอบหมาย"
+
 พิมพ์: `มอบหมาย T-2026-0001 ให้ทีม แอร์`
 
 [IMAGE: sales-dispatch — หน้าจอ 'งานซ่อม' บนแดชบอร์ด การ์ดงาน T-2026-0001 มีช่อง 'มอบหมายให้…' เลือกทีมแอร์ และปุ่มมอบหมายสีเขียว]
@@ -121,6 +125,10 @@ _- Set your own time → type "เลื่อนนัด T-2026-0001 พรุ
 _- Close it, no check-in → type "ปิดงาน T-2026-0001"_
 _- Record cause and fix too → type "ปิดงาน T-2026-0001 สาเหตุ ฟิวส์ขาด แก้ไข เปลี่ยนฟิวส์"_
 _- Or dashboard > tickets_
+
+**The automatic rule**
+_- See the active rule (the company page shows and edits it too) → type "ดูกฎมอบหมาย"_
+_- Switch it off — confirmed first; new work is then assigned by hand → type "ปิดกฎมอบหมาย"_
 
 ## 4. แชทลูกค้า
 
@@ -212,6 +220,13 @@ _- The customer already heard at check-out that the job was finished and what wa
 - ออกเอกสารใบเสนอราคา → พิมพ์ "ออกเอกสาร Q-2026-0001"
 - ค้นรายการสินค้า → พิมพ์ "ค้นหาสินค้า พัดลม"
 
+**ใบแจ้งหนี้และใบเสร็จ**
+- ออกใบแจ้งหนี้จากใบเสนอราคาที่ส่งแล้ว (หรือจากดีล) — ได้เลขที่ INV ยอดรวม กำหนดชำระ 30 วัน และลิงก์ PDF ในคำตอบเดียว → พิมพ์ "ออกใบแจ้งหนี้ Q-2026-0001 · สร้างใบแจ้งหนี้ให้ดีล D-2026-0001"
+- ดูใบแจ้งหนี้ / รายการ / ยอดค้างชำระ → พิมพ์ "ใบแจ้งหนี้ INV-2026-0001 · รายการใบแจ้งหนี้ · ยอดค้างชำระ"
+- บันทึกรับชำระ: จำนวนเงินกับช่องทาง (เงินสด/โอน/พร้อมเพย์/บัตร) มัดจำก็ได้ ไม่บอกจำนวนระบบถาม ตอบ "5000" หรือ "ครบ" ได้เลย → พิมพ์ "รับชำระ INV-2026-0001 5000 โอน · มัดจำ INV-2026-0001 2000 เงินสด · รับชำระ INV-2026-0001 ครบ"
+- ออกใบเสร็จเมื่อชำระครบ — ระบบส่งลิงก์ให้ลูกค้าทาง LINE ให้ด้วย → พิมพ์ "ออกใบเสร็จ INV-2026-0001"
+- ยกเลิกใบแจ้งหนี้ (ถามยืนยันก่อน ยกเลิกได้เฉพาะใบที่ยังไม่มีการรับชำระ) → พิมพ์ "ยกเลิกใบแจ้งหนี้ INV-2026-0001"
+
 **นัดหมายและบันทึก**
 - ดูสิ่งที่ต้องทำวันนี้ → พิมพ์ "งานวันนี้"
 - ตั้งเตือน → พิมพ์ "เตือน D-2026-0001 พรุ่งนี้"
@@ -219,6 +234,10 @@ _- The customer already heard at check-out that the job was finished and what wa
 - ยกเลิกแต่เก็บประวัติไว้ → พิมพ์ "ยกเลิกนัด สมชาย"
 - บนหน้าลูกค้า/ดีล/ใบเสนอราคา มีปุ่ม แก้ไขนัด และ ลบนัด (ลบมีกล่องยืนยัน)
 - กำลังเพิ่มลูกค้าอยู่แล้วพิมพ์คำสั่งอื่น ระบบถามก่อนว่าจะเปลี่ยนไปทำสิ่งนั้นหรือทำต่อ (ถ้าเปลี่ยน ระบบยังจำลูกค้าที่ค้างไว้ให้เปิดดีลได้)
+
+**โอนให้พนักงานคนอื่น**
+- โอนลูกค้าหรือดีลให้เพื่อนร่วมงานดูแล — คนที่รับจะได้รับแจ้งใน LINE (ต้องมีสิทธิ์โอนงาน · ชื่อซ้ำจะมีปุ่มให้เลือก) → พิมพ์ "โอนลูกค้า สมชาย ให้ สมหญิง · โอนดีล D-2026-0001 ให้ สมหญิง"
+- ทั้งหมดของคนหนึ่งไปอีกคน — ระบบแจงรายชื่อแล้วถามยืนยัน · บนหน้าจอ: ช่อง "เจ้าของ" ในหน้าลูกค้า/ดีล หรือเลือกหลายรายการแล้ว "เปลี่ยนเจ้าของ" → พิมพ์ "โอนลูกค้าทั้งหมดของ สมชาย ให้ สมหญิง"
 
 พิมพ์: `งานวันนี้`
 
@@ -256,6 +275,13 @@ _- Set / reduce / remove / reprice — every reply states the deal total → typ
 _- Issue the quotation → type "ออกเอกสาร Q-2026-0001"_
 _- Search the catalogue → type "ค้นหาสินค้า พัดลม"_
 
+**Invoices and receipts**
+_- Invoice a sent quote (or a deal) — the INV number, total, 30-day due date and PDF link come back in one reply → type "ออกใบแจ้งหนี้ Q-2026-0001 · สร้างใบแจ้งหนี้ให้ดีล D-2026-0001"_
+_- One invoice, the list, what is owed → type "ใบแจ้งหนี้ INV-2026-0001 · รายการใบแจ้งหนี้ · ยอดค้างชำระ"_
+_- Record a payment: amount and method (cash/transfer/PromptPay/card), a deposit is fine; with no amount it asks — answer "5000" or "ครบ" → type "รับชำระ INV-2026-0001 5000 โอน · มัดจำ INV-2026-0001 2000 เงินสด · รับชำระ INV-2026-0001 ครบ"_
+_- Issue the receipt once paid in full — the customer gets the link on LINE → type "ออกใบเสร็จ INV-2026-0001"_
+_- Void an invoice (asks first; only one with no payments) → type "ยกเลิกใบแจ้งหนี้ INV-2026-0001"_
+
 **Appointments and notes**
 _- Today's list → type "งานวันนี้"_
 _- Set a reminder → type "เตือน D-2026-0001 พรุ่งนี้"_
@@ -263,6 +289,10 @@ _- Move the appointment you already have → type "เลื่อนนัด C
 _- Cancel, history kept → type "ยกเลิกนัด สมชาย"_
 _- The customer, deal and quote pages have Edit appointment and Delete appointment (delete asks first)_
 _- Typing another command while a customer is half-added asks whether to switch or continue (the half-added customer is still offered for the deal)_
+
+**Handing over to a colleague**
+_- Hand a customer or a deal to a colleague; they are told on LINE (needs the reassign permission; a duplicate name gets buttons) → type "โอนลูกค้า สมชาย ให้ สมหญิง · โอนดีล D-2026-0001 ให้ สมหญิง"_
+_- Everyone one person holds, to another — listed, then confirmed · on screen: the "Owner" field on a customer/deal, or select rows and "Change owner" → type "โอนลูกค้าทั้งหมดของ สมชาย ให้ สมหญิง"_
 
 ## 7. ถามรายงานด้วย AI
 
@@ -283,6 +313,7 @@ _- Typing another command while a customer is half-added asks whether to switch 
 - ใต้ตารางมีปุ่ม "ปรับรายงานนี้" เปลี่ยนช่วงเวลา/การแยกกลุ่ม/ตัวเลข แล้วกด "ดูใหม่ตามที่ปรับ" ไม่ต้องพิมพ์ใหม่
 - ต้องมีสิทธิ์ "ดูรายงาน" (Sale มีตั้งแต่ต้น CS ต้องให้เจ้าของเปิด) กราฟยอดขายตามสถานะดีลใช้สิทธิ์ "ดูดีล"
 - AI ไม่แตะฐานข้อมูลเอง — มันแปลคำถามเป็นรายการที่ระบบอนุญาต แล้วนับจากข้อมูลของร้านคุณเท่านั้น
+- คะแนนที่ลูกค้าให้หลังงานซ่อม — เฉลี่ย จำนวนที่ตอบ แยกตามช่าง (เมนู "ความพึงพอใจ" บนหน้าจอ) → พิมพ์ "คะแนนความพึงพอใจ · ความพึงพอใจของช่าง สมศักดิ์"
 
 พิมพ์: `สรุปงานค้างแยกตามช่าง`
 
@@ -305,6 +336,7 @@ _- "AI reports" adds a table with bars and CSV/PDF downloads_
 _- "Adjust this report" under the table changes the period/grouping/measure without retyping_
 _- Needs the "View reports" permission (Sales has it; the owner grants it to CS); the pipeline chart uses "View deals"_
 _- The AI never touches the database — it turns the question into an allowed query, counted over your shop's data only_
+_- What customers scored after a repair — average, answered, per technician (the "Satisfaction" page on screen) → type "คะแนนความพึงพอใจ · ความพึงพอใจของช่าง สมศักดิ์"_
 
 ## 8. ติดขัด
 

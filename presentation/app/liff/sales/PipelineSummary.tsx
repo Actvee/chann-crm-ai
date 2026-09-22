@@ -15,6 +15,13 @@ type Pipeline = {
   undated_open_count: number;
 };
 
+/** What the shop is owed (round 20V) — one cheap query beside the pipeline. */
+type InvoiceSummary = {
+  open_count: number;
+  overdue_count: number;
+  outstanding_total: string;
+};
+
 function money(value: string | number | undefined): string {
   const n = Number(value ?? 0);
   return n.toLocaleString("th-TH", { maximumFractionDigits: 0 });
@@ -34,6 +41,7 @@ export default function PipelineSummary({ liffId }: { liffId: string }) {
   const { t } = useLanguage();
   const [data, setData] = useState<Pipeline | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "error" | "hidden">("loading");
+  const [owed, setOwed] = useState<InvoiceSummary | null>(null);
 
   const load = useCallback(async () => {
     setState("loading");
@@ -54,6 +62,17 @@ export default function PipelineSummary({ liffId }: { liffId: string }) {
       if (!response.ok) throw new Error("pipeline unavailable");
       setData((await response.json()) as Pipeline);
       setState("ready");
+      // Optional, and silent when refused: a person without invoice.read
+      // still gets the pipeline, and a failed summary is not an error card.
+      try {
+        const bills = await fetch(
+          `/api/phase2/licenses/${license}/invoices/summary`,
+          { headers: proxyHeaders(session.token, license) },
+        );
+        setOwed(bills.ok ? ((await bills.json()) as InvoiceSummary) : null);
+      } catch {
+        setOwed(null);
+      }
     } catch {
       setState("error");
     }
@@ -93,15 +112,28 @@ export default function PipelineSummary({ liffId }: { liffId: string }) {
           <span className="pipeline-value">{money(closing)}</span>
           <span className="pipeline-label">{t.dashboard.pipeline.closingThisMonth}</span>
         </div>
+        {owed && owed.open_count > 0 && (
+          <div>
+            <span className="pipeline-value">{money(owed.outstanding_total)}</span>
+            <span className="pipeline-label">
+              {t.dashboard.pipeline.outstanding.replace("{count}", String(owed.open_count))}
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Two ways the number above can mislead, and both are a job rather
           than a figure: an overdue deal is not a forecast, and a forecast
           that ignores half the pipeline is not one either. They are links,
           because the only useful answer to either is to open the deals. */}
-      {(data.overdue_count > 0 || data.undated_open_count > 0) && (
+      {(data.overdue_count > 0 || data.undated_open_count > 0 || (owed?.overdue_count ?? 0) > 0) && (
         <div className="pipeline-attention">
           <span className="pipeline-label">{t.dashboard.home.attention}</span>
+          {(owed?.overdue_count ?? 0) > 0 && (
+            <Link href="/liff/sales/invoices">
+              {t.dashboard.pipeline.invoicesOverdue.replace("{count}", String(owed?.overdue_count ?? 0))}
+            </Link>
+          )}
           {data.overdue_count > 0 && (
             <Link href="/liff/sales/deals">
               {t.dashboard.pipeline.overdue.replace("{count}", String(data.overdue_count))}

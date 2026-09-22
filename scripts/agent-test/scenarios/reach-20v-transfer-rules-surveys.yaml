@@ -1,0 +1,104 @@
+# Round 20V — four things that were built and that no person could reach
+# (owner, 21 ก.ย. 2569: "ทำได้ในโค้ด แต่คนหาไม่เจอ").
+#
+# Handing a customer to a colleague names both owners in the reply; the
+# assignment rule can be shown and switched off, with a confirmation first;
+# the satisfaction figures are answered in a few lines. The model answers
+# here are what DEV's model returned for each sentence (ask-model.py,
+# 21 ก.ย. 2569) — the road is proven; the reading is measured separately.
+name: reach-20v-transfer-rules-surveys
+description: a customer is handed over, the assignment rule is closed after a confirmation, and satisfaction is answered
+backend: fake
+actor:
+  oa: sales
+  role: owner
+  language: th
+  permissions: all
+
+steps:
+  - seed:
+      customers:
+        - ref: somchai
+          first_name: "สมชาย"
+          last_name: "ใจดี"
+          phone: "0812345678"
+      members:
+        - ref: somying
+          chann_uid: "CHN-SOMYING"
+          role: sales
+          first_name: "สมหญิง"
+          last_name: "ขยัน"
+
+  - send:
+      message: "โอนลูกค้า สมชาย ให้ สมหญิง"
+      ai:
+        action: transfer
+        entity: customer
+        fields:
+          target_name: "สมชาย"
+          to_name: "สมหญิง"
+        missing: []
+    expect:
+      contains: ["สมชาย ใจดี", "C-2026-0001", "ให้ สมหญิง ขยัน"]
+      is_not: [not_sure, generic_error, permission, not_found, not_a_feature]
+
+  # A refusal the model still reads as a transfer writes nothing.
+  - send:
+      message: "ไม่ต้องโอนลูกค้า สมชาย ให้ สมหญิง แล้ว"
+      ai:
+        action: transfer
+        entity: customer
+        fields:
+          target_name: "สมชาย"
+          to_name: "สมหญิง"
+        missing: []
+    expect:
+      contains: "ยังไม่ได้โอน"
+      is_not: [generic_error, permission]
+
+  - send: "ดูกฎมอบหมาย"
+    expect:
+      contains: "ยังไม่ได้ตั้งกฎมอบหมาย"
+      is_not: [not_sure, generic_error, permission]
+
+  - seed:
+      raw:
+        assignment_rules:
+          - id: rule-1
+            scope: technician
+            is_active: true
+            rules_json:
+              version: 1
+              scope: technician
+              selection_strategy: least_load
+              match_criteria:
+                - field: product.category
+                  operator: equals
+                  value: "แอร์"
+                  assign_to_team: "AC Team"
+
+  - send: "ปิดกฎมอบหมาย"
+    expect:
+      contains: ["จะปิดกฎมอบหมายช่าง", "ทีม AC Team", "ยืนยัน"]
+      is_not: [not_sure, generic_error, permission]
+
+  - send: "ยืนยันปิดกฎ"
+    expect:
+      contains: "ปิดกฎมอบหมายช่างแล้ว"
+      is_not: [generic_error, permission]
+
+  - send: "ดูกฎมอบหมาย"
+    expect:
+      contains: "ยังไม่ได้ตั้งกฎมอบหมาย"
+
+  - send:
+      message: "คะแนนความพึงพอใจ"
+      ai:
+        action: read
+        entity: survey
+        fields: {}
+        missing: []
+    expect:
+      contains: "ยังไม่มีคำตอบแบบสำรวจ"
+      is_not: [not_sure, generic_error, permission, not_a_feature]
+      not_contains: ["submitted_at", "response_rate"]

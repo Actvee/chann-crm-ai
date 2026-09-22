@@ -37,6 +37,16 @@ PERMISSION_KEYS = frozenset(
         "quote.read",
         "quote.create",
         "quote.update",
+        # Round 20V (owner, 21 ก.ย. 2569: "รวมเอาเรื่อง invoice"): the bill
+        # after the quotation. `update` covers issuing the PDF, recording a
+        # payment and issuing the receipt — one key for "work the bill";
+        # `void` is its own key because voiding is the one action that
+        # makes a demand for money disappear, and a shop may well want a
+        # salesperson to bill and collect but not to cancel.
+        "invoice.read",
+        "invoice.create",
+        "invoice.update",
+        "invoice.void",
         "service_report.read",
         "service_report.create",
         "service_report.update",
@@ -88,6 +98,10 @@ DEFAULT_ROLE_TEMPLATES: dict[str, frozenset[str] | None] = {
             *(key for key in PERMISSION_KEYS if key.startswith("followup.")),
             *(key for key in PERMISSION_KEYS if key.startswith("quote.")),
             *(key for key in PERMISSION_KEYS if key.startswith("warranty.")),
+            # Bill and collect, but not cancel (see invoice.void above).
+            "invoice.read",
+            "invoice.create",
+            "invoice.update",
             "product.read",
             "chat_session.view",
             "chat_session.reply",
@@ -104,6 +118,9 @@ DEFAULT_ROLE_TEMPLATES: dict[str, frozenset[str] | None] = {
             "customer.read",
             "customer.update",
             "product.read",
+            # CS answers "จ่ายแล้วหรือยัง" on the phone; the ledger is read
+            # there and written by sales.
+            "invoice.read",
             "audit_log.view",
             "reassign_records",
         }
@@ -165,6 +182,10 @@ PERMISSION_DESCRIPTIONS: dict[str, dict[str, str]] = {
     "quote.read": {"th": "ดูใบเสนอราคา", "en": "View quotes"},
     "quote.create": {"th": "สร้างใบเสนอราคา", "en": "Create quotes"},
     "quote.update": {"th": "แก้ไขใบเสนอราคา", "en": "Edit quotes"},
+    "invoice.read": {"th": "ดูใบแจ้งหนี้และใบเสร็จ", "en": "View invoices and receipts"},
+    "invoice.create": {"th": "สร้างใบแจ้งหนี้", "en": "Create invoices"},
+    "invoice.update": {"th": "ออกใบแจ้งหนี้ บันทึกรับชำระ และออกใบเสร็จ", "en": "Issue invoices, record payments and issue receipts"},
+    "invoice.void": {"th": "ยกเลิกใบแจ้งหนี้", "en": "Void invoices"},
     "service_report.read": {"th": "ดูใบรายงานบริการ", "en": "View service reports"},
     "service_report.create": {"th": "สร้างใบรายงานบริการ", "en": "Create service reports"},
     "service_report.update": {"th": "แก้ไขใบรายงานบริการ", "en": "Edit service reports"},

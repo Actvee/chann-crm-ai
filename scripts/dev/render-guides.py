@@ -26,7 +26,7 @@ from chann_data.permissions import PERMISSION_KEYS, describe  # noqa: E402
 OUT = ROOT / "docs" / "guides"
 
 GROUP_TH = {
-    "customer": "ลูกค้า", "deal": "ดีล", "quote": "ใบเสนอราคา", "product": "สินค้า",
+    "customer": "ลูกค้า", "deal": "ดีล", "quote": "ใบเสนอราคา", "invoice": "ใบแจ้งหนี้และใบเสร็จ", "product": "สินค้า",
     "note": "บันทึก", "followup": "การติดตาม", "ticket": "งานซ่อม", "service_report": "รายงานการซ่อม",
     "warranty": "รับประกัน", "approval": "การอนุมัติ", "team": "ทีมช่าง", "member": "สมาชิก",
     "role": "บทบาท", "setting": "ตั้งค่าร้าน", "report": "รายงานสรุป", "assignment_rule": "กฎมอบหมายงาน",

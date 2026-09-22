@@ -7,18 +7,22 @@ import { useCallback, useEffect, useState } from "react";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { Badge } from "../../_components";
+import { ConfirmDialog, useConfirm } from "../../../_confirm";
 import { useFailureText } from "../../_format";
+import { OwnerControl, memberLabel, useSalesMembers, type SalesMember } from "../../_owner";
 import { proxyHeaders } from "../../_lib";
 import { FieldSection, RecordHead, RelatedHeading } from "../../_record";
 import { RelatedActivity } from "../../_related";
 import { useSalesSession } from "../../_session";
 import { SalesShell } from "../../_shell";
+import { useSalesText } from "../../_strings";
 
 type Customer = {
   created_at?: string | null;
   updated_at?: string | null;
   id: string;
   customer_id: string;
+  owner_member_id?: string | null;
   first_name?: string | null;
   last_name?: string | null;
   stage: string;
@@ -49,7 +53,9 @@ export default function CustomerDetail({
   customerId: string;
 }) {
   const { t } = useLanguage();
+  const s = useSalesText();
   const failureText = useFailureText();
+  const { request: confirming, ask, close: closeConfirm } = useConfirm();
   const stageLabel = (stage: string) =>
     stage === "contact" ? t.customer.title : t.customer.lead;
   const dealStageLabel = (stage: string) =>
@@ -177,6 +183,42 @@ export default function CustomerDetail({
 
   const can = (key: string) => !session.suspended && permissions.has(key);
   const canEdit = can("customer.update");
+  // Round 20V: handing the customer to a colleague. The roster is fetched
+  // only for someone who holds the key; the control asks before it writes.
+  const canTransfer = can("reassign_records");
+  const members = useSalesMembers(token, licenseId, canTransfer && session.ready);
+
+  async function handTo(member: SalesMember) {
+    if (!customer) return;
+    const name = memberLabel(member, member.chann_uid);
+    const ok = await ask({
+      action: s.transfer.action.replace("{name}", name),
+      target: fullName(customer),
+      code: customer.customer_id,
+      affects: [s.transfer.affects.replace("{name}", name)],
+      reversible: s.transfer.reversible,
+      confirmLabel: s.transfer.action.replace("{name}", name),
+    });
+    if (!ok) return;
+    setBusy(true);
+    try {
+      const response = await fetch(`/api/phase2/licenses/${licenseId}/customers/${customer.id}/owner`, {
+        method: "PATCH",
+        headers: proxyHeaders(token, licenseId),
+        body: JSON.stringify({ owner_member_id: member.id }),
+      });
+      if (!response.ok) {
+        say(response.status === 403 ? s.transfer.denied : await failureText(response), "error");
+        return;
+      }
+      say(s.transfer.done.replace("{label}", `${fullName(customer)} (${customer.customer_id})`).replace("{name}", name), "ok");
+      await load();
+    } catch {
+      say(t.common.error, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <SalesShell
@@ -230,6 +272,10 @@ export default function CustomerDetail({
               { name: "notes", label: t.dashboard.fields.notes, editable: true, type: "textarea" },
             ]}
           />
+
+          {canTransfer && (
+            <OwnerControl members={members} ownerId={customer.owner_member_id} busy={busy} onPick={(m) => void handTo(m)} />
+          )}
 
           <RelatedHeading title={t.deal.title} count={deals.length} />
 
@@ -289,6 +335,7 @@ export default function CustomerDetail({
           />
         </>
       )}
+      <ConfirmDialog request={confirming} onClose={closeConfirm} busy={busy} />
     </SalesShell>
   );
 }

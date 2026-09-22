@@ -43,16 +43,18 @@ from html.parser import HTMLParser
 from ..ai.client import complete
 from .fill import unknown_placeholders
 from .html import _FONT_IMPORT, _FONT_STACK
-from .samples import LEGEND, LINE_ITEM_LEGEND, sample_snapshot
+from .samples import LEGEND, LINE_ITEM_DOCUMENT_TYPES, LINE_ITEM_LEGEND, sample_snapshot
 
 # Only the two the renderer actually has a snapshot builder for. A template
 # for anything else would pass every check here and then have nothing to
 # fill it at issue time.
-DESIGNABLE_DOCUMENT_TYPES = ("quote", "service_report")
+DESIGNABLE_DOCUMENT_TYPES = ("quote", "service_report", "invoice", "receipt")
 
 DOCUMENT_TYPE_LABELS = {
     "quote": {"th": "ใบเสนอราคา", "en": "quotation"},
     "service_report": {"th": "ใบรายงานการซ่อม", "en": "service report"},
+    "invoice": {"th": "ใบแจ้งหนี้", "en": "invoice"},
+    "receipt": {"th": "ใบเสร็จรับเงิน", "en": "receipt"},
 }
 
 # Room for a full A4 layout. The chat tier's 1024 default truncates a
@@ -88,7 +90,7 @@ def vocabulary_for(document_type: str) -> list[tuple[str, str]]:
     `fill_template` would leave blank.
     """
     rows = list(LEGEND[document_type])
-    if document_type == "quote":
+    if document_type in LINE_ITEM_DOCUMENT_TYPES:
         rows += list(LINE_ITEM_LEGEND)
     return rows
 
@@ -99,7 +101,7 @@ def known_placeholders(document_type: str) -> set[str]:
 
 def _vocabulary_block(document_type: str) -> str:
     lines = [f"  {{{{{name}}}}} — {label}" for name, label in vocabulary_for(document_type)]
-    if document_type == "quote":
+    if document_type in LINE_ITEM_DOCUMENT_TYPES:
         lines.insert(
             len(LEGEND[document_type]),
             "  {{#line_items}} ... {{/line_items}} — wrap ONE <tr> in these two "

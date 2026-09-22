@@ -44,6 +44,12 @@ TYPE_TO_OA = {
     "sla_warning": "technician",
     "followup_due": "sales",
     "warranty_expiring": "sales",
+    # Round 20V: a customer or a deal handed to a colleague — told on the
+    # Sales OA, with the record's code and who handed it over.
+    "record_reassigned": "sales",
+    # Round 20V: the receipt goes to the customer who paid, on their OA,
+    # with the link — the one push a bill makes to the person who owes it.
+    "receipt_issued": "customer",
 }
 DEFAULT_OA = "sales"
 

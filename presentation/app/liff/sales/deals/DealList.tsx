@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { Badge, Count, Empty } from "../_components";
 import { BulkBar, SelectCheck, runEach, useBulkSummary, useSelection } from "../../_bulk";
+import { OwnerSheet, memberLabel, useSalesMembers, type SalesMember } from "../_owner";
 import { ConfirmDialog, useConfirm } from "../../_confirm";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
@@ -85,6 +86,8 @@ export default function DealList({ liffId }: { liffId: string }) {
   // row, one reason for every deal lost together, one confirmation for
   // every deal archived together.
   const selection = useSelection();
+  // Round 20V: several deals to one colleague, from the bar.
+  const [handingOver, setHandingOver] = useState(false);
   const summarise = useBulkSummary();
   const [bulkBusy, setBulkBusy] = useState(false);
   const [losingMany, setLosingMany] = useState<Deal[] | null>(null);
@@ -253,6 +256,35 @@ export default function DealList({ liffId }: { liffId: string }) {
     }
   }
 
+  async function handChosenTo(member: SalesMember) {
+    const rows = chosen();
+    if (rows.length === 0) return;
+    setBulkBusy(true);
+    say(t.dashboard.working);
+    try {
+      const result = await runEach(rows, async (row) => {
+        const response = await fetch(`/api/phase2/licenses/${licenseId}/deals/${row.id}/owner`, {
+          method: "PATCH",
+          headers: proxyHeaders(token, licenseId),
+          body: JSON.stringify({ owner_member_id: member.id }),
+        });
+        if (response.status === 403) say(s.transfer.denied, "error");
+        return response.ok;
+      });
+      setHandingOver(false);
+      await load();
+      selection.leave();
+      say(
+        result.failed.length
+          ? summarise(result.ok.length, rows.length)
+          : s.transfer.done.replace("{label}", summarise(result.ok.length, rows.length)).replace("{name}", memberLabel(member, member.chann_uid)),
+        result.failed.length ? "error" : "ok",
+      );
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
   async function archiveChosen() {
     const rows = chosen();
     if (rows.length === 0) return;
@@ -331,6 +363,7 @@ export default function DealList({ liffId }: { liffId: string }) {
   const controls = useListControls(stageFiltered, sorts, "newest");
   const visible = controls.visible;
   const can = (key: string) => !session.suspended && permissions.has(key);
+  const members = useSalesMembers(token, licenseId, can("reassign_records") && session.ready);
   // The stage buttons need deal.update (C7); the list offered them to
   // everyone who could read.
   const moves = (deal: Deal) => (can("deal.update") ? nextStages(deal.stage, can("deal.reopen")) : []);
@@ -441,7 +474,7 @@ export default function DealList({ liffId }: { liffId: string }) {
       <div className="list-head">
         <Count shown={visible.length} total={list.total ?? deals.length} />
         <div className="list-tools">
-          {(can("deal.update") || can("deal.archive")) && visible.length > 0 && !selection.on && (
+          {(can("deal.update") || can("deal.archive") || can("reassign_records")) && visible.length > 0 && !selection.on && (
             <button type="button" className="btn" data-variant="quiet" onClick={selection.enter}>
               {t.dashboard.list.selectMode}
             </button>
@@ -571,6 +604,16 @@ export default function DealList({ liffId }: { liffId: string }) {
                 .replace("{stage}", stageLabel(stage))}
             </button>
           ))}
+          {can("reassign_records") && members.length > 0 && (
+            <button
+              type="button"
+              className="btn"
+              disabled={bulkBusy || selection.count === 0}
+              onClick={() => setHandingOver(true)}
+            >
+              {s.transfer.many.replace("{n}", String(selection.count))}
+            </button>
+          )}
           {can("deal.archive") && (
             <button
               type="button"
@@ -584,6 +627,14 @@ export default function DealList({ liffId }: { liffId: string }) {
           )}
         </BulkBar>
       )}
+      <OwnerSheet
+        open={handingOver}
+        count={selection.count}
+        members={members}
+        busy={bulkBusy}
+        onClose={() => setHandingOver(false)}
+        onConfirm={(m) => void handChosenTo(m)}
+      />
       <ConfirmDialog request={confirming} onClose={closeConfirm} busy={bulkBusy} />
     </SalesShell>
   );

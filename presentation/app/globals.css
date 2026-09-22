@@ -283,6 +283,22 @@ body {
 .card[data-stage="draft"]::before {
   background: var(--stage-new);
 }
+/* Round 20V — the invoice's own states. Words carry the meaning on the
+   badge; colour only echoes it. "paid" sits with the won greens, "void"
+   with the lost reds, the two open states with the proposed blue. */
+.card[data-stage="issued"]::before,
+.card[data-stage="partially_paid"]::before {
+  background: var(--stage-proposed);
+}
+.card[data-stage="paid"]::before {
+  background: var(--stage-won);
+}
+.card[data-stage="void"]::before {
+  background: var(--stage-lost);
+}
+.card[data-overdue="true"]::before {
+  background: var(--danger);
+}
 
 .card-title {
   font-weight: 600;
@@ -354,6 +370,26 @@ body {
 .badge[data-stage="rejected"] {
   background: var(--stage-lost-soft);
   color: var(--danger-ink);
+}
+.badge[data-stage="issued"],
+.badge[data-stage="partially_paid"] {
+  background: var(--stage-proposed-soft);
+  color: var(--stage-proposed-ink);
+}
+.badge[data-stage="paid"] {
+  background: var(--ok-soft);
+  color: var(--ok-ink);
+}
+.badge[data-stage="void"],
+.badge[data-stage="overdue"] {
+  background: var(--danger-soft);
+  color: var(--danger-ink);
+}
+/* The money column on an invoice row: data font, right-aligned, so two
+   rows compare by eye. */
+.money-line {
+  font-family: var(--font-data);
+  white-space: nowrap;
 }
 
 /* -------------------------------------------------------------- buttons */
@@ -907,6 +943,30 @@ fieldset.group legend {
 .row-link .row-body {
   flex: 1;
   min-width: 0;
+}
+/* A row that opens a sheet rather than a page is a <button>, and a button
+   is the same row to the eye and the thumb (round 20V): full width, the
+   card's own type, the same chevron, a 44px target. */
+button.row-link {
+  width: 100%;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  min-height: 44px;
+}
+.filter-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  font-size: 16px;
+}
+.filter-check input {
+  width: 22px;
+  height: 22px;
 }
 
 .row-link::after {

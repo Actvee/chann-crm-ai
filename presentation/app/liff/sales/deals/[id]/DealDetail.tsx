@@ -18,6 +18,7 @@ import { useSalesSession } from "../../_session";
 import { SalesShell } from "../../_shell";
 import { useSalesText } from "../../_strings";
 import { ConfirmDialog, useConfirm } from "../../../_confirm";
+import { OwnerControl, memberLabel, useSalesMembers, type SalesMember } from "../../_owner";
 
 type Product = {
   id: string;
@@ -105,6 +106,9 @@ export default function DealDetail({
   }, []);
   const session = useSalesSession(liffId, say);
   const { token, licenseId, permissions } = session;
+  // Round 20V: handing the deal to a colleague (reassign_records).
+  const canTransfer = !session.suspended && permissions.has("reassign_records");
+  const members = useSalesMembers(token, licenseId, canTransfer && session.ready);
 
   const load = useCallback(async () => {
     if (!token || !licenseId) return;
@@ -334,6 +338,37 @@ export default function DealDetail({
   );
   const moves = deal && canEdit ? nextStages(deal.stage, can("deal.reopen")) : [];
 
+  async function handTo(member: SalesMember) {
+    if (!deal) return;
+    const name = memberLabel(member, member.chann_uid);
+    const ok = await ask({
+      action: s.transfer.action.replace("{name}", name),
+      target: deal.deal_id,
+      affects: [s.transfer.affects.replace("{name}", name)],
+      reversible: s.transfer.reversible,
+      confirmLabel: s.transfer.action.replace("{name}", name),
+    });
+    if (!ok) return;
+    setBusy(true);
+    try {
+      const response = await fetch(`/api/phase2/licenses/${licenseId}/deals/${deal.id}/owner`, {
+        method: "PATCH",
+        headers: proxyHeaders(token, licenseId),
+        body: JSON.stringify({ owner_member_id: member.id }),
+      });
+      if (!response.ok) {
+        say(response.status === 403 ? s.transfer.denied : await failureText(response), "error");
+        return;
+      }
+      say(s.transfer.done.replace("{label}", deal.deal_id).replace("{name}", name), "ok");
+      await load();
+    } catch {
+      say(t.common.error, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <SalesShell
       session={session}
@@ -377,6 +412,10 @@ export default function DealDetail({
                 : null
             }
           />
+
+          {canTransfer && (
+            <OwnerControl members={members} ownerId={deal.owner_member_id} busy={busy} onPick={(m) => void handTo(m)} />
+          )}
 
           {losing && (
             <section className="section" style={{ marginBottom: 14 }}>

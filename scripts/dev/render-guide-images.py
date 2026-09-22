@@ -254,6 +254,16 @@ def customer_register(c: Canvas):
     c.caption("ต้องลงทะเบียนก่อนแจ้งซ่อม ระบบจะรู้ว่าเครื่องไหน")
 
 
+def customer_invoices(c: Canvas):
+    # Round 20V — the receipt, asked for in the customer's own words.
+    c.phone_frame()
+    c.bubble("ขอใบเสร็จ", "user")
+    c.bubble("ใบเสร็จของ INV-2026-0001 (ยอด 32,100.00 บาท):\nhttps://…/documents/…", "bot", chips=["ใบแจ้งหนี้ของฉัน", "คุยกับร้าน"])
+    c.bubble("ยอดค้าง", "user")
+    c.bubble("ใบแจ้งหนี้ของคุณ\nINV-2026-0002 · รอชำระ · ยอด 5,350.00 บาท · ค้าง 5,350.00 · ครบกำหนด 21 ต.ค. 2569\n\nยอดค้างรวม 5,350.00 บาท — ทางร้านจะติดต่อเรื่องช่องทางชำระครับ", "bot", chips=["ขอใบเสร็จ", "คุยกับร้าน"])
+    c.caption("ใบเสร็จมาเองในแชทเมื่อร้านออกให้ · ยอดค้างดูได้ทุกเมื่อ")
+
+
 def customer_report(c: Canvas):
     c.phone_frame()
     c.bubble("แอร์ไม่เย็น มีน้ำหยด", "user")
@@ -504,7 +514,7 @@ def permissions_overview(c: Canvas):
 SCENES = {
     "customer": {"customer-link": customer_link, "customer-shop": customer_shop, "customer-chat": customer_chat,
                  "customer-register": customer_register, "customer-report": customer_report, "customer-status": customer_status,
-                 "customer-after": customer_after, "customer-pdpa": customer_pdpa},
+                 "customer-after": customer_after, "customer-pdpa": customer_pdpa, "customer-invoices": customer_invoices},
     "technician": {"tech-join": tech_join, "tech-take": tech_take, "tech-checkin": tech_checkin, "tech-finish": tech_finish,
                    "tech-approved": tech_approved},
     "sales": {"sales-setup": sales_setup, "sales-members": sales_members, "sales-units": sales_units, "sales-dispatch": sales_dispatch, "sales-chats": sales_chats,

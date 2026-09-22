@@ -107,6 +107,12 @@ from ..repositories.phase10 import (
     Phase10NotFound,
     QuoteRepository,
 )
+from ..repositories.invoices import (
+    InvoiceConflict,
+    InvoiceNotFound,
+    InvoiceRepository,
+    is_overdue,
+)
 from ..repositories.profile import (
     ProfileConflict,
     ProfileNotFound,
@@ -167,6 +173,13 @@ from ..schemas import (
     DocumentTemplateVersionOut,
     GeneratedDocumentIn,
     GeneratedDocumentOut,
+    InvoiceDocumentIn,
+    InvoiceIn,
+    InvoiceIssueIn,
+    InvoiceOut,
+    InvoicePaymentIn,
+    InvoicePaymentOut,
+    InvoiceSummaryOut,
     QuoteIn,
     QuoteOut,
     QuoteStatusIn,
@@ -3449,6 +3462,280 @@ def get_generated_document(
     return GeneratedDocumentOut.model_validate(row, from_attributes=True)
 
 
+# ------------------------------------------------------------ Round 20V
+# Invoices, payments and receipts. Owner, 21 ก.ย. 2569: "ทำข้อ 2 … รวมเอาเรื่อง
+# invoice". The Application builds the snapshot and renders the PDFs; this
+# tier numbers, keeps the ledger and enforces the state machine
+# (repositories/invoices.py). Audit verbs are the existing ones only —
+# `create` for the row and each payment, `status` for issue/void,
+# `link_document` for the PDFs — because audit_log.action is a CHECK
+# constraint and issuing a quote once died on a verb nobody had added.
+
+
+def _invoice_http_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, InvoiceNotFound):
+        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    if isinstance(exc, InvoiceConflict):
+        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    if isinstance(exc, IntegrityError):
+        return _integrity_conflict(exc)
+    if isinstance(exc, HTTPException):
+        return exc
+    log.exception("unhandled data-tier error: %s", exc)
+    return HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="internal error"
+    )
+
+
+def _invoice_out(row, payments: list | None = None) -> InvoiceOut:
+    """The row plus what is derived from it. `outstanding` and `is_overdue`
+    are computed here, from the one rule in the repository, so the list and
+    the detail can never disagree about what is owed."""
+    outstanding = Decimal(str(row.total)) - Decimal(str(row.paid_amount))
+    if row.status in ("void", "paid"):
+        outstanding = Decimal("0")
+    return InvoiceOut(
+        id=row.id, license_id=row.license_id, invoice_id=row.invoice_id,
+        quote_id=row.quote_id, deal_id=row.deal_id, contact_id=row.contact_id,
+        status=row.status, issue_date=row.issue_date, due_date=row.due_date,
+        currency=row.currency, subtotal=row.subtotal, discount_amount=row.discount_amount,
+        vat_rate=row.vat_rate, vat_amount=row.vat_amount, total=row.total,
+        paid_amount=row.paid_amount, note=row.note, data_snapshot=row.data_snapshot,
+        generated_document_id=row.generated_document_id,
+        receipt_document_id=row.receipt_document_id, created_by=row.created_by,
+        archived_at=row.archived_at, created_at=row.created_at, updated_at=row.updated_at,
+        outstanding=outstanding.quantize(Decimal("0.01")), is_overdue=is_overdue(row),
+        payments=[InvoicePaymentOut.model_validate(p, from_attributes=True) for p in (payments or [])],
+    )
+
+
+@router.post("/licenses/{license_id}/invoices", response_model=InvoiceOut, status_code=201)
+def create_invoice(
+    license_id: uuid.UUID, payload: InvoiceIn,
+    session: Session = Depends(get_session), x_actor_id: str = Header(default=""),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = InvoiceRepository(session).create(
+            scope, quote_id=payload.quote_id, deal_id=payload.deal_id,
+            contact_id=payload.contact_id, subtotal=payload.subtotal,
+            discount_amount=payload.discount_amount, vat_rate=payload.vat_rate,
+            vat_amount=payload.vat_amount, total=payload.total, currency=payload.currency,
+            note=payload.note, data_snapshot=payload.data_snapshot,
+            created_by=payload.created_by or (x_actor_id or None),
+        )
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="invoice", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="create",
+            field_changes=diff_fields({}, {
+                "invoice_id": row.invoice_id, "status": row.status, "total": row.total,
+                "quote_id": row.quote_id,
+            }),
+        )
+        session.commit()
+        return _invoice_out(row)
+    except Exception as exc:
+        session.rollback()
+        raise _invoice_http_error(exc)
+
+
+@router.get("/licenses/{license_id}/invoices/summary", response_model=InvoiceSummaryOut)
+def invoice_summary(license_id: uuid.UUID, session: Session = Depends(get_session)):
+    """What the shop is owed right now. Declared before `/{invoice_id}` so
+    the word "summary" is not read as an id."""
+    scope = TenantScope(license_id=license_id)
+    return InvoiceSummaryOut(**InvoiceRepository(session).summary(scope))
+
+
+@router.get("/licenses/{license_id}/invoices", response_model=list[InvoiceOut])
+def list_invoices(
+    license_id: uuid.UUID, status_: str | None = None, contact_id: uuid.UUID | None = None,
+    customer_chann_uid: str | None = None, q: str | None = None, overdue: bool = False,
+    limit: int = 500, offset: int = 0,
+    response: Response = None,  # type: ignore[assignment]
+    session: Session = Depends(get_session),
+):
+    """Invoices, newest first, capped, searched and counted — the round 20N
+    shape. `overdue=true` narrows to the bills past their due date, by the
+    same rule that sets `is_overdue` on each row."""
+    scope = TenantScope(license_id=license_id)
+    repo = InvoiceRepository(session)
+    capped = max(1, min(int(limit), 2000))
+    narrow = dict(
+        status=status_, contact_id=contact_id, customer_chann_uid=customer_chann_uid,
+        q=q, overdue=overdue,
+    )
+    rows = repo.list_for_license(scope, limit=capped, offset=max(0, int(offset)), **narrow)
+    if response is not None:
+        response.headers["X-Total-Count"] = str(repo.count_for_license(scope, **narrow))
+    return [_invoice_out(r) for r in rows]
+
+
+@router.get("/licenses/{license_id}/invoices/{invoice_id}", response_model=InvoiceOut)
+def get_invoice(
+    license_id: uuid.UUID, invoice_id: uuid.UUID, session: Session = Depends(get_session),
+):
+    scope = TenantScope(license_id=license_id)
+    repo = InvoiceRepository(session)
+    row = repo.get(scope, invoice_id)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="invoice not found")
+    return _invoice_out(row, repo.list_payments(scope, row.id))
+
+
+@router.post("/licenses/{license_id}/invoices/{invoice_id}/issue", response_model=InvoiceOut)
+def issue_invoice(
+    license_id: uuid.UUID, invoice_id: uuid.UUID, payload: InvoiceIssueIn | None = None,
+    session: Session = Depends(get_session), x_actor_id: str = Header(default=""),
+):
+    scope = TenantScope(license_id=license_id)
+    payload = payload or InvoiceIssueIn()
+    try:
+        repo = InvoiceRepository(session)
+        before = repo.get(scope, invoice_id)
+        before_status = before.status if before else None
+        row = repo.issue(
+            scope, invoice_id, document_id=payload.document_id,
+            issue_date=payload.issue_date, due_date=payload.due_date,
+        )
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="invoice", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="status",
+            field_changes=diff_fields(
+                {"status": before_status, "generated_document_id": None},
+                {"status": row.status, "generated_document_id": row.generated_document_id,
+                 "issue_date": row.issue_date, "due_date": row.due_date},
+            ),
+        )
+        session.commit()
+        return _invoice_out(row, repo.list_payments(scope, row.id))
+    except Exception as exc:
+        session.rollback()
+        raise _invoice_http_error(exc)
+
+
+@router.post("/licenses/{license_id}/invoices/{invoice_id}/document", response_model=InvoiceOut)
+def link_invoice_document(
+    license_id: uuid.UUID, invoice_id: uuid.UUID, payload: InvoiceDocumentIn,
+    session: Session = Depends(get_session), x_actor_id: str = Header(default=""),
+):
+    """A re-issued invoice PDF: the link moves, the old document row stays."""
+    scope = TenantScope(license_id=license_id)
+    try:
+        repo = InvoiceRepository(session)
+        before = repo.get(scope, invoice_id)
+        was = before.generated_document_id if before else None
+        row = repo.link_document(scope, invoice_id, payload.document_id)
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="invoice", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="link_document",
+            field_changes=diff_fields(
+                {"generated_document_id": was},
+                {"generated_document_id": row.generated_document_id},
+            ),
+        )
+        session.commit()
+        return _invoice_out(row, repo.list_payments(scope, row.id))
+    except Exception as exc:
+        session.rollback()
+        raise _invoice_http_error(exc)
+
+
+@router.post(
+    "/licenses/{license_id}/invoices/{invoice_id}/payments", response_model=InvoiceOut,
+    status_code=201,
+)
+def add_invoice_payment(
+    license_id: uuid.UUID, invoice_id: uuid.UUID, payload: InvoicePaymentIn,
+    session: Session = Depends(get_session), x_actor_id: str = Header(default=""),
+):
+    """One receipt of money. Two audit rows in one transaction: the payment
+    itself (create) and the invoice's status if it moved."""
+    scope = TenantScope(license_id=license_id)
+    try:
+        repo = InvoiceRepository(session)
+        before = repo.get(scope, invoice_id)
+        before_status = before.status if before else None
+        before_paid = before.paid_amount if before else None
+        row, payment = repo.add_payment(
+            scope, invoice_id, amount=payload.amount, method=payload.method,
+            paid_at=payload.paid_at, reference=payload.reference, note=payload.note,
+            recorded_by=payload.recorded_by or (x_actor_id or None),
+        )
+        audit = AuditRepository(session)
+        audit.write(
+            license_id=license_id, entity_type="invoice_payment", entity_id=payment.id,
+            actor_type="user", actor_id=x_actor_id or None, action="create",
+            field_changes=diff_fields({}, {
+                "invoice_id": row.invoice_id, "amount": payment.amount,
+                "method": payment.method, "reference": payment.reference,
+            }),
+        )
+        audit.write(
+            license_id=license_id, entity_type="invoice", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="status",
+            field_changes=diff_fields(
+                {"status": before_status, "paid_amount": before_paid},
+                {"status": row.status, "paid_amount": row.paid_amount},
+            ),
+        )
+        session.commit()
+        return _invoice_out(row, repo.list_payments(scope, row.id))
+    except Exception as exc:
+        session.rollback()
+        raise _invoice_http_error(exc)
+
+
+@router.post("/licenses/{license_id}/invoices/{invoice_id}/void", response_model=InvoiceOut)
+def void_invoice(
+    license_id: uuid.UUID, invoice_id: uuid.UUID,
+    session: Session = Depends(get_session), x_actor_id: str = Header(default=""),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        repo = InvoiceRepository(session)
+        before = repo.get(scope, invoice_id)
+        before_status = before.status if before else None
+        row = repo.void(scope, invoice_id)
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="invoice", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="status",
+            field_changes=diff_fields({"status": before_status}, {"status": row.status}),
+        )
+        session.commit()
+        return _invoice_out(row, repo.list_payments(scope, row.id))
+    except Exception as exc:
+        session.rollback()
+        raise _invoice_http_error(exc)
+
+
+@router.post(
+    "/licenses/{license_id}/invoices/{invoice_id}/receipt-document", response_model=InvoiceOut,
+)
+def set_invoice_receipt_document(
+    license_id: uuid.UUID, invoice_id: uuid.UUID, payload: InvoiceDocumentIn,
+    session: Session = Depends(get_session), x_actor_id: str = Header(default=""),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        repo = InvoiceRepository(session)
+        before = repo.get(scope, invoice_id)
+        was = before.receipt_document_id if before else None
+        row = repo.set_receipt_document(scope, invoice_id, payload.document_id)
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="invoice", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="link_document",
+            field_changes=diff_fields(
+                {"receipt_document_id": was}, {"receipt_document_id": row.receipt_document_id},
+            ),
+        )
+        session.commit()
+        return _invoice_out(row, repo.list_payments(scope, row.id))
+    except Exception as exc:
+        session.rollback()
+        raise _invoice_http_error(exc)
+
+
 # --------------------------------------------------------- Phase 10 company
 
 
@@ -3904,6 +4191,42 @@ def upsert_assignment_rule(
         session.commit()
         session.refresh(row)
         return row
+    except Exception as exc:
+        session.rollback()
+        raise _phase2_http_error(exc)
+
+
+@router.delete(
+    "/licenses/{license_id}/assignment-rules/{rule_scope}", response_model=AssignmentRuleOut,
+)
+def deactivate_assignment_rule(
+    license_id: uuid.UUID,
+    rule_scope: str,
+    session: Session = Depends(get_session),
+    x_actor_id: str = Header(default=""),
+):
+    """Switch the active rule for a scope off (round 20V).
+
+    The row is kept and marked inactive, exactly as a replacement does to
+    its predecessor; 404 when nothing is active, so "ปิดกฎ" on a shop with
+    no rule is answered honestly rather than with a no-op "done".
+    """
+    scope = TenantScope(license_id=license_id)
+    try:
+        row = AssignmentRuleRepository(session).deactivate_active(scope, rule_scope=rule_scope)
+        if row is None:
+            raise HTTPException(status_code=404, detail="no active assignment rule for this scope")
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="assignment_rule", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="update",
+            field_changes=diff_fields({"is_active": True}, {"is_active": False}),
+        )
+        session.commit()
+        session.refresh(row)
+        return row
+    except HTTPException:
+        session.rollback()
+        raise
     except Exception as exc:
         session.rollback()
         raise _phase2_http_error(exc)
@@ -4817,6 +5140,20 @@ def act_on_approval_step(
     except Exception as exc:
         session.rollback()
         raise _approval_error(exc)
+
+
+@router.get("/licenses/{license_id}/surveys/summary")
+def survey_summary(
+    license_id: uuid.UUID, days: int = 30, session: Session = Depends(get_session),
+):
+    """The satisfaction figures over a window (round 20V): counts, the
+    average, the spread, per technician, and the latest answers. Built as
+    a dict by the repository, the way every survey row already is."""
+    from ..repositories.phase14 import ApprovalRepository
+
+    if days not in (30, 90, 365):
+        raise HTTPException(status_code=422, detail="days must be 30, 90 or 365")
+    return ApprovalRepository(session).survey_summary(TenantScope(license_id=license_id), days=days)
 
 
 @router.post("/licenses/{license_id}/surveys/for-ticket/{ticket_id}")

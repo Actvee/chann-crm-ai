@@ -1,0 +1,111 @@
+name: round20v-invoices
+description: the bill after the quotation (owner, 21 ก.ย. 2569 "รวมเอาเรื่อง invoice") - a sent
+  quote is invoiced in one sentence, the amount is asked when missing and read by hand,
+  a deposit and the balance settle it, the receipt needs full payment, void asks first and
+  is refused once money was received. Every reading is the deployed model's own
+  (scripts/dev/ask-model.py, 21 ก.ย. 2569). The fake has no PDF engine, so the invoice is
+  created and the reply says the PDF was not issued - the number and the total still come back.
+backend: fake
+actor:
+  oa: sales
+  role: sales
+  language: th
+  permissions: sales
+steps:
+- seed:
+    raw:
+      company_profile:
+        legal_name: บริษัท ทดสอบ จำกัด
+        company_name: ร้านทดสอบ
+        tax_id: '0105558123456'
+        company_address: 99/1
+        company_phone: '021234567'
+        company_email: a@b.com
+        open_hours: null
+        vat_rate: '0.07'
+    customers:
+    - ref: somchai
+      first_name: สมชาย
+      last_name: ใจดี
+      phone: '0812345678'
+    deals:
+    - ref: deal1
+      contact_id: $somchai
+    call:
+    - method: add_deal_product
+      args: {deal_id: $deal1.id, payload: {product_name: แอร์ 12000 BTU, qty: 2, quoted_unit_price: '15000.00'}}
+    quotes:
+    - ref: quote1
+      deal_id: $deal1.id
+- seed:
+    call:
+    - method: set_quote_status
+      args: {quote_id: $quote1.id, status: sent}
+- send:
+    message: ยังไม่ต้องออกใบแจ้งหนี้ Q-2026-0001 นะ
+    ai: {action: create, entity: invoice, fields: {quote_code: Q-2026-0001}, missing: []}
+  expect:
+    contains: ยังไม่ได้ออกใบแจ้งหนี้
+    not_contains: ['INV-2026-0001']
+    is_not: [generic_error, permission]
+- send:
+    message: ออกใบแจ้งหนี้ Q-2026-0001
+    ai: {action: create, entity: invoice, fields: {quote_code: Q-2026-0001}, missing: []}
+  expect:
+    contains: INV-2026-0001
+    is_not: [generic_error, not_sure, permission, not_found]
+- seed:
+    call:
+    - method: issue_invoice
+      args: {invoice_id: INV-1}
+- send:
+    message: ใบแจ้งหนี้ INV-2026-0001
+    ai: {action: read, entity: invoice, fields: {code: INV-2026-0001}, missing: []}
+  expect:
+    contains: ['INV-2026-0001', 'ค้าง 32,100.00']
+    quick_replies_include: ['รับชำระ INV-2026-0001']
+    is_not: [generic_error, not_sure, permission, not_found]
+- send:
+    message: รายการใบแจ้งหนี้
+    ai: {action: read, entity: invoice, fields: {}, missing: []}
+  expect:
+    contains: INV-2026-0001
+    not_contains: ['ลูกค้า: สมชาย']
+    is_not: [generic_error, not_sure, permission, not_found]
+- send:
+    message: มัดจำ INV-2026-0001 2000 เงินสด
+    ai: {action: pay, entity: invoice, fields: {code: INV-2026-0001, amount: 2000, method: cash}, missing: []}
+  expect:
+    contains: ['2,000.00 บาท (เงินสด)', 'ชำระบางส่วน']
+    is_not: [generic_error, not_sure, permission, not_found]
+- send:
+    message: ออกใบเสร็จ INV-2026-0001
+    ai: {action: receipt, entity: invoice, fields: {code: INV-2026-0001}, missing: []}
+  expect:
+    contains: ยังชำระไม่ครบ
+    is_not: [generic_error, not_sure, permission, not_found]
+- send:
+    message: ยกเลิกใบแจ้งหนี้ INV-2026-0001
+    ai: {action: void, entity: invoice, fields: {code: INV-2026-0001}, missing: []}
+  expect:
+    contains: ยกเลิก INV-2026-0001 ไม่ได้
+    is_not: [generic_error, not_sure, permission, not_found]
+- send:
+    message: รับชำระ INV-2026-0001
+    ai: {action: pay, entity: invoice, fields: {code: INV-2026-0001}, missing: []}
+  expect:
+    contains: เท่าไหร่ครับ
+    quick_replies_include: ['ครบ']
+    is_not: [generic_error, not_sure, permission, not_found]
+- send: ครบ
+  expect:
+    contains: ['30,100.00', 'ชำระครบ']
+    quick_replies_include: ['ออกใบเสร็จ INV-2026-0001']
+    used_ai: false
+    is_not: [generic_error, not_sure, permission, not_found]
+- send:
+    message: ยอดค้างชำระ
+    ai: {action: read, entity: invoice, fields: {scope: outstanding}, missing: []}
+  expect:
+    contains: ไม่มียอดค้างชำระ
+    is_not: [generic_error, not_sure, permission, not_found]

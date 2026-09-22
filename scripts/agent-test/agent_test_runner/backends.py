@@ -40,6 +40,8 @@ SALES_KEYS = [
     "warranty.read", "warranty.create", "team.manage", "member.manage",
     "setting.manage", "approval.view", "approval.approve", "approval.reject",
     "approval.manage", "view_reports",
+    # Round 20V — the bill after the quotation.
+    "invoice.read", "invoice.create", "invoice.update", "invoice.void",
 ]
 TECHNICIAN_KEYS = [
     "ticket.read", "ticket.update", "ticket.close", "service_report.create",

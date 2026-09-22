@@ -53,6 +53,10 @@ ACCEPTED = {
         "warranties/claim the customer home posts to (owner rule, 3 Sep: the shop "
         "records the unit, the customer claims it by serial)"
     ),
+    ("invoice", "issue"): (
+        "both — POST invoices/{id}/issue is the invoice PDF, which the checker reads as the "
+        "update verb (as it does the quote's /issue); chat's \"ออกเอกสาร INV-…\" makes the same call"
+    ),
     ("audit_log", "read"): "dashboard only — a compliance trail is read in its own screen; chat says so",
     ("member", "read"): "both, via the roles/members screen",
     ("member", "update"): "dashboard only — the roles/members screen; chat answers that it cannot",
@@ -81,12 +85,17 @@ ACCEPTED = {
     # Phase 14: a customer answers the survey from the quick reply chat
     # pushes and from the home-screen card; there is no staff permission
     # behind it, so it is not an (action, entity) in ACTION_PERMISSIONS.
-    ("survey", "read"): "customer home card; chat pushes the survey itself",
+    # ("survey", "read") left this list in round 20V: the shop reads the
+    # answers back on /reports/satisfaction and with "คะแนนความพึงพอใจ",
+    # registered as ("read", "survey") behind view_reports.
     ("survey", "update"): "customer answers in chat (quick reply) and on the home card",
     # PUT approval-workflows replaces the whole flow (the Data Tier retires
     # the old row); there is no separate create, and chat's ตั้งการอนุมัติ
     # is the same replace — registered as ("update", "approval").
     ("approval", "create"): "PUT replaces the flow; both surfaces do that as 'update'",
+    # Round 20V: the company page PUTs the assignment rule (an upsert, so
+    # the scan counts it as create too); chat's "ตั้งกฎมอบหมาย …" is the
+    # same replace and is registered under both verbs.
     # A photo arrives as an image message, not as a sentence — there is no
     # wording that could attach one, which is why ACTION_PERMISSIONS has
     # read/update/delete for photo and no create.
@@ -146,6 +155,10 @@ NO_HANDLER_YET = {
 # resolves to line_item rather than quote.
 URL_ENTITIES = [
     ("approval-workflows", "approval"),
+    # Round 20V: its own entity, so the company page's GET/PUT/DELETE on
+    # assignment-rules are read as the rule and not as the generic
+    # settings screen.
+    ("assignment-rules", "assignment_rule"),
     ("service-reports", "service_report"),
     ("approvals", "approval"),
     ("surveys", "survey"),
@@ -162,6 +175,10 @@ URL_ENTITIES = [
     ("invites", "invite"),
     ("sales-groups", "sales_group"),
     ("warranties", "warranty"),
+    # Round 20V: the bill. `quotes/X/invoice` (create from the quote page)
+    # is the singular; the list, detail and verbs are the plural.
+    ("invoices", "invoice"),
+    ("invoice", "invoice"),
     ("products", "product"),
     ("customers", "customer"),
     ("settings", "setting"),
@@ -183,14 +200,25 @@ METHOD_ACTIONS = {"GET": "read", "POST": "create", "PATCH": "update",
 # one of these wrong on the first run of this script.
 VERB_SEGMENTS = {
     "claim": "claim", "close": "close", "assign": "assign", "release": "release",
-    "promote": "promote", "archive": "archive", "void": "update",
+    # `void` was "update" while nothing voided anything; the invoice makes it
+    # a verb of its own with its own key (round 20V).
+    "promote": "promote", "archive": "archive", "void": "void",
     "issue": "update", "status": "update", "check-in": "check_in",
+    # Round 20V: POST invoices/X/payments records a receipt of money,
+    # POST invoices/X/receipt issues the receipt PDF.
+    "payments": "pay", "receipt": "receipt",
     "check-out": "check_out", "link": "read", "preview": "read",
     "publish": "update", "reopen": "update", "revoke": "delete",
     # Phase 14: acting on an approval step; answering a survey is the
     # customer updating their own row.
     "approve": "approve", "reject": "reject", "answer": "update",
     "pending": "read",
+    # Round 20V: PATCH .../customers/X/owner and .../deals/X/owner hand
+    # the record to a colleague — reassign_records, registered as
+    # ("transfer", customer|deal), not an ordinary edit.
+    "owner": "transfer",
+    # GET surveys/summary is the shop reading the answers back.
+    "summary": "read",
     # Phase 13.4: POST .../document issues (or returns) the report PDF.
     "document": "issue",
 }

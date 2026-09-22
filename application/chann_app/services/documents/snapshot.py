@@ -234,3 +234,161 @@ def build_quote_snapshot(
 
 def snapshot_issued_date(snapshot: dict) -> date:
     return date.fromisoformat(snapshot["issued_on"])
+
+
+# ------------------------------------------------------------ Round 20V
+# The invoice and the receipt, frozen the same way. Owner, 21 ก.ย. 2569:
+# "ทำข้อ 2 … รวมเอาเรื่อง invoice". The lines and the arithmetic are the
+# quotation's — `build_line_items` and `compute_totals` — so an invoice
+# made from a quote prints the same numbers the quote did, to the satang,
+# and a VAT rule fixed in one place stays fixed in both documents.
+
+PAYMENT_METHOD_LABELS = {
+    "cash": {"th": "เงินสด", "en": "cash"},
+    "transfer": {"th": "โอนเงิน", "en": "bank transfer"},
+    "promptpay": {"th": "พร้อมเพย์", "en": "PromptPay"},
+    "card": {"th": "บัตร", "en": "card"},
+    "other": {"th": "อื่น ๆ", "en": "other"},
+}
+
+
+def build_invoice_snapshot(
+    *,
+    lines: list[dict],
+    customer: dict,
+    company: dict,
+    invoice: dict | None = None,
+    quote: dict | None = None,
+    deal: dict | None = None,
+    discount=None,
+    issued_at: datetime | None = None,
+    due_date: date | None = None,
+) -> dict:
+    """The complete, frozen input to an invoice render.
+
+    `lines` are deal/quote product rows (product_name, qty,
+    quoted_unit_price, notes) — whichever record the invoice is made from;
+    the caller decides, this freezes. `invoice` may be empty at creation:
+    the number and the dates are stamped by `restamp_invoice_snapshot`
+    when the Data tier has allocated them, so the snapshot stored on the
+    row and the one printed on the PDF are the same object.
+
+    Refuses, like the quote, when the company profile is not
+    document-ready: an invoice with a blank tax id is not a tax document.
+    """
+    missing = company.get("missing_for_documents") or []
+    if missing:
+        raise QuoteNotRenderable(
+            "company profile is incomplete: " + ", ".join(missing)
+        )
+    line_items = build_line_items(lines or [])
+    totals = compute_totals(line_items, company.get("vat_rate"), discount)
+    stamped_at = issued_at or datetime.now(timezone.utc)
+    invoice = invoice or {}
+    return {
+        "snapshot_version": SNAPSHOT_VERSION,
+        "issued_at": stamped_at.isoformat(),
+        "issued_on": str(invoice.get("issue_date") or stamped_at.date().isoformat()),
+        "company": {
+            "name": company.get("legal_name") or company.get("company_name") or "",
+            "trading_name": company.get("company_name") or "",
+            "tax_id": company.get("tax_id") or "",
+            "address": company.get("company_address") or "",
+            "phone": company.get("company_phone") or "",
+            "email": company.get("company_email") or "",
+        },
+        "customer": {
+            "name": _customer_display_name(customer),
+            "phone": customer.get("phone") or "",
+            "email": customer.get("email") or "",
+            "address": customer.get("address") or "",
+        },
+        "invoice": {
+            "invoice_id": invoice.get("invoice_id") or "",
+            "status": invoice.get("status") or "draft",
+            "issue_date": str(invoice.get("issue_date") or ""),
+            "due_date": str(due_date or invoice.get("due_date") or ""),
+            "note": invoice.get("note") or "",
+        },
+        "quote": {"quote_id": (quote or {}).get("quote_id") or ""},
+        "deal": {"deal_id": (deal or {}).get("deal_id") or ""},
+        "line_items": line_items,
+        "totals": totals,
+    }
+
+
+def restamp_invoice_snapshot(
+    snapshot: dict, *, invoice: dict, issued_at: datetime | None = None,
+) -> dict:
+    """The stored snapshot with the invoice's allocated number and dates.
+
+    Numbering and the due date come from the Data tier after the snapshot
+    was first built, so the copy the PDF prints is refreshed from the row
+    — and only those fields: the lines, the customer and the totals stay
+    exactly as frozen at creation.
+    """
+    stamped_at = issued_at or datetime.now(timezone.utc)
+    out = dict(snapshot or {})
+    out["issued_at"] = stamped_at.isoformat()
+    out["issued_on"] = str(invoice.get("issue_date") or stamped_at.date().isoformat())
+    out["invoice"] = {
+        **(out.get("invoice") or {}),
+        "invoice_id": invoice.get("invoice_id") or "",
+        "status": invoice.get("status") or "",
+        "issue_date": str(invoice.get("issue_date") or out["issued_on"]),
+        "due_date": str(invoice.get("due_date") or ""),
+        "note": invoice.get("note") or (out.get("invoice") or {}).get("note") or "",
+    }
+    return out
+
+
+def build_receipt_snapshot(
+    *, invoice: dict, payments: list[dict], company: dict, language: str = "th",
+    issued_at: datetime | None = None,
+) -> dict:
+    """The receipt: the invoice's frozen snapshot plus the ledger.
+
+    Issued only for an invoice paid in full (repositories/invoices.py
+    refuses the link otherwise), so `receipt.paid_total` equals the grand
+    total and the document can say "received in full". A deposit is not
+    a receipt — it is a line on this table, printed when the balance
+    clears. Money stays Decimal→str; the method is printed in words, in
+    the same vocabulary the chat and the dashboard use.
+    """
+    missing = company.get("missing_for_documents") or []
+    if missing:
+        raise QuoteNotRenderable(
+            "company profile is incomplete: " + ", ".join(missing)
+        )
+    base = restamp_invoice_snapshot(invoice.get("data_snapshot") or {}, invoice=invoice)
+    stamped_at = issued_at or datetime.now(timezone.utc)
+    rows = []
+    paid_total = Decimal("0")
+    for index, payment in enumerate(payments or [], start=1):
+        amount = _money(payment.get("amount"))
+        paid_total += amount
+        method = str(payment.get("method") or "other")
+        rows.append({
+            "line_no": index,
+            "paid_on": str(payment.get("paid_at") or "")[:10],
+            "method": method,
+            "method_label": (PAYMENT_METHOD_LABELS.get(method) or PAYMENT_METHOD_LABELS["other"])[
+                "en" if language == "en" else "th"
+            ],
+            "reference": payment.get("reference") or "",
+            "amount": str(amount),
+        })
+    return {
+        **base,
+        "issued_at": stamped_at.isoformat(),
+        "issued_on": stamped_at.date().isoformat(),
+        "receipt": {
+            "receipt_id": f"RCPT-{invoice.get('invoice_id') or ''}",
+            "invoice_id": invoice.get("invoice_id") or "",
+            "paid_total": str(_money(paid_total)),
+            "payment_count": len(rows),
+            "last_paid_on": rows[-1]["paid_on"] if rows else "",
+            "methods": ", ".join(sorted({r["method_label"] for r in rows})),
+        },
+        "payments": rows,
+    }

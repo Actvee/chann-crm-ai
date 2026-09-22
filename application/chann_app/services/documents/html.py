@@ -226,3 +226,223 @@ def render_quote_html(snapshot: dict) -> str:
 </footer>
 </body>
 </html>"""
+
+
+# ------------------------------------------------------------ Round 20V
+# The invoice and the receipt: the quotation's page, with a different
+# title, a due date instead of a validity note, and — on the receipt — the
+# ledger under the totals. One stylesheet, so a shop's three documents
+# look like they came from the same shop.
+
+_PAGE_CSS = f"""
+  {_FONT_IMPORT}
+  @page {{ size: A4; margin: 18mm 16mm; }}
+  * {{ box-sizing: border-box; }}
+  body {{ font-family: {_FONT_STACK}; font-size: 13px; color: #111; margin: 0; }}
+  header {{ display: flex; justify-content: space-between; align-items: flex-start;
+            border-bottom: 2px solid #111; padding-bottom: 12px; }}
+  .company-name {{ font-size: 18px; font-weight: 700; }}
+  .muted {{ color: #555; }}
+  .doc-title {{ font-size: 22px; font-weight: 700; text-align: right; }}
+  .meta {{ text-align: right; margin-top: 6px; }}
+  .parties {{ display: flex; gap: 24px; margin: 18px 0; }}
+  .parties section {{ flex: 1; }}
+  .parties h2 {{ font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
+                 color: #555; margin: 0 0 4px; }}
+  table.items {{ width: 100%; border-collapse: collapse; margin-top: 8px; }}
+  table.items th, table.items td {{ border: 1px solid #bbb; padding: 7px 8px;
+                                    vertical-align: top; }}
+  table.items thead th {{ background: #f2f2f2; font-size: 12px; }}
+  td.num, th.num {{ text-align: right; white-space: nowrap; }}
+  td.empty {{ text-align: center; color: #777; padding: 18px; }}
+  .note {{ color: #666; font-size: 11px; margin-top: 3px; }}
+  table.totals {{ margin-left: auto; margin-top: 12px; border-collapse: collapse;
+                  min-width: 260px; }}
+  table.totals th, table.totals td {{ padding: 6px 10px; border-bottom: 1px solid #ddd; }}
+  table.totals th {{ text-align: left; font-weight: 500; }}
+  table.totals tr.grand th, table.totals tr.grand td {{ font-weight: 700;
+                                                        border-bottom: 2px solid #111; }}
+  table.totals tr.paid th, table.totals tr.paid td {{ color: #178a50; font-weight: 700; }}
+  .due {{ margin-top: 14px; font-weight: 600; }}
+  .stamp {{ margin-top: 14px; padding: 8px 12px; border: 2px solid #178a50; color: #178a50;
+            display: inline-block; font-weight: 700; letter-spacing: .04em; }}
+  .remark {{ margin-top: 10px; color: #444; }}
+  h3 {{ font-size: 13px; margin: 20px 0 4px; }}
+  footer {{ margin-top: 36px; display: flex; justify-content: space-between; }}
+  .sign {{ width: 45%; text-align: center; }}
+  .sign .line {{ margin-top: 46px; border-top: 1px solid #555; padding-top: 5px;
+                 color: #555; font-size: 12px; }}
+"""
+
+
+def _company_block(company: dict) -> str:
+    contact_bits = [b for b in (company.get("phone"), company.get("email")) if b]
+    contact = escape(" · ".join(contact_bits)) if contact_bits else ""
+    return (
+        f'<div class="company-name">{escape(company["name"])}</div>'
+        f'<div class="muted">{escape(company["address"])}</div>'
+        f'<div class="muted">เลขประจำตัวผู้เสียภาษี {escape(company["tax_id"])}</div>'
+        f'<div class="muted">{contact}</div>'
+    )
+
+
+def _customer_block(customer: dict, heading: str) -> str:
+    bits = [b for b in (customer.get("phone"), customer.get("email")) if b]
+    contact = escape(" · ".join(bits)) if bits else ""
+    return (
+        f"<section><h2>{heading}</h2>"
+        f'<div><strong>{escape(customer["name"]) or "-"}</strong></div>'
+        f'<div class="muted">{escape(customer["address"])}</div>'
+        f'<div class="muted">{contact}</div></section>'
+    )
+
+
+def _references(snapshot: dict) -> str:
+    refs = []
+    if (snapshot.get("quote") or {}).get("quote_id"):
+        refs.append(f'อ้างอิงใบเสนอราคา {escape(snapshot["quote"]["quote_id"])}')
+    if (snapshot.get("deal") or {}).get("deal_id"):
+        refs.append(f'อ้างอิงดีล {escape(snapshot["deal"]["deal_id"])}')
+    return "<br>".join(refs)
+
+
+def render_invoice_html(snapshot: dict) -> str:
+    invoice = snapshot["invoice"]
+    due = (
+        f'<p class="due">กำหนดชำระภายในวันที่ {escape(str(invoice["due_date"]))}</p>'
+        if invoice.get("due_date") else ""
+    )
+    remark = (
+        f'<p class="remark">หมายเหตุ: {escape(str(invoice["note"]))}</p>'
+        if invoice.get("note") else ""
+    )
+    return f"""<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<title>ใบแจ้งหนี้ {escape(invoice["invoice_id"])}</title>
+<style>{_PAGE_CSS}</style>
+</head>
+<body>
+<header>
+  <div>{_company_block(snapshot["company"])}</div>
+  <div>
+    <div class="doc-title">ใบแจ้งหนี้</div>
+    <div class="meta muted">
+      เลขที่ {escape(invoice["invoice_id"])}<br>
+      วันที่ {escape(snapshot["issued_on"])}<br>
+      {_references(snapshot)}
+    </div>
+  </div>
+</header>
+
+<div class="parties">{_customer_block(snapshot["customer"], "เรียกเก็บเงินจาก")}</div>
+
+<table class="items">
+  <thead>
+    <tr>
+      <th class="num" style="width:6%">#</th>
+      <th>รายการ</th>
+      <th class="num" style="width:10%">จำนวน</th>
+      <th class="num" style="width:18%">ราคา/หน่วย</th>
+      <th class="num" style="width:20%">จำนวนเงิน</th>
+    </tr>
+  </thead>
+  <tbody>{_rows(snapshot["line_items"])}</tbody>
+</table>
+
+<table class="totals">{_totals_rows(snapshot["totals"])}</table>
+{due}
+{remark}
+
+<footer>
+  <div class="sign"><div class="line">ผู้ออกใบแจ้งหนี้</div></div>
+  <div class="sign"><div class="line">ผู้รับ</div></div>
+</footer>
+</body>
+</html>"""
+
+
+def _payment_rows(payments: list[dict]) -> str:
+    if not payments:
+        return '<tr><td colspan="5" class="empty">ไม่มีรายการรับชำระ</td></tr>'
+    out = []
+    for row in payments:
+        reference = escape(str(row.get("reference") or "-"))
+        out.append(
+            "<tr>"
+            f'<td class="num">{row["line_no"]}</td>'
+            f'<td>{escape(str(row.get("paid_on") or ""))}</td>'
+            f'<td>{escape(str(row.get("method_label") or ""))}</td>'
+            f"<td>{reference}</td>"
+            f'<td class="num">{_fmt_money(row["amount"])}</td>'
+            "</tr>"
+        )
+    return "".join(out)
+
+
+def render_receipt_html(snapshot: dict) -> str:
+    receipt = snapshot["receipt"]
+    invoice = snapshot["invoice"]
+    totals = dict(snapshot["totals"])
+    return f"""<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<title>ใบเสร็จรับเงิน {escape(receipt["receipt_id"])}</title>
+<style>{_PAGE_CSS}</style>
+</head>
+<body>
+<header>
+  <div>{_company_block(snapshot["company"])}</div>
+  <div>
+    <div class="doc-title">ใบเสร็จรับเงิน</div>
+    <div class="meta muted">
+      เลขที่ {escape(receipt["receipt_id"])}<br>
+      วันที่ {escape(snapshot["issued_on"])}<br>
+      อ้างอิงใบแจ้งหนี้ {escape(invoice["invoice_id"])}
+    </div>
+  </div>
+</header>
+
+<div class="parties">{_customer_block(snapshot["customer"], "ได้รับเงินจาก")}</div>
+
+<table class="items">
+  <thead>
+    <tr>
+      <th class="num" style="width:6%">#</th>
+      <th>รายการ</th>
+      <th class="num" style="width:10%">จำนวน</th>
+      <th class="num" style="width:18%">ราคา/หน่วย</th>
+      <th class="num" style="width:20%">จำนวนเงิน</th>
+    </tr>
+  </thead>
+  <tbody>{_rows(snapshot["line_items"])}</tbody>
+</table>
+
+<table class="totals">{_totals_rows(totals)}
+<tr class="paid"><th>รับชำระแล้วทั้งสิ้น</th><td class="num">{_fmt_money(receipt["paid_total"])}</td></tr>
+</table>
+
+<h3>รายการรับชำระ</h3>
+<table class="items">
+  <thead>
+    <tr>
+      <th class="num" style="width:6%">#</th>
+      <th style="width:18%">วันที่</th>
+      <th style="width:18%">ช่องทาง</th>
+      <th>อ้างอิง</th>
+      <th class="num" style="width:20%">จำนวนเงิน</th>
+    </tr>
+  </thead>
+  <tbody>{_payment_rows(snapshot.get("payments") or [])}</tbody>
+</table>
+
+<p class="stamp">ชำระครบถ้วนแล้ว</p>
+
+<footer>
+  <div class="sign"><div class="line">ผู้รับเงิน</div></div>
+  <div class="sign"><div class="line">ผู้จ่ายเงิน</div></div>
+</footer>
+</body>
+</html>"""

@@ -224,6 +224,8 @@ SPEC = {
     "c.product_list": [A(h=["storefront", "_storefront_browse_reply"]), A(text=PRODUCT_TXT, partial=True)],
     "c.search": [A(h=["storefront"])],
     "c.payment": [A(h=["_handle_customer_chat_start"]), A(text=["คุยกับร้าน", "talk to the shop"], partial=True)],
+    # Round 20V: their own bills and receipts, by the typed words or the model's read/invoice.
+    "c.invoice": [A(h=["_handle_customer_invoices"])],
     "c.profile": [A(h=["_handle_customer_profile_view"]), A(ai=True, h=["_handle_customer_contact"], partial=True)],
     "c.orders": [A(h=["_handle_orders_mine"])],
     "c.lang": [A(h=["_switch_language"])],

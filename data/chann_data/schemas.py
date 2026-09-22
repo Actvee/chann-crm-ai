@@ -1121,6 +1121,98 @@ class QuoteStatusIn(BaseModel):
     status: str
 
 
+# ------------------------------------------------------------ Round 20V
+# Invoices after the quotation. The money fields arrive as strings from
+# the Application's Decimal arithmetic and leave as Decimal; `is_overdue`
+# and `outstanding` are derived on the way out (repositories/invoices.py
+# holds the one definition), never stored.
+
+
+class InvoiceIn(BaseModel):
+    quote_id: uuid.UUID | None = None
+    deal_id: uuid.UUID | None = None
+    contact_id: uuid.UUID | None = None
+    subtotal: Decimal | str | float = "0"
+    discount_amount: Decimal | str | float = "0"
+    vat_rate: Decimal | str | float | None = None
+    vat_amount: Decimal | str | float = "0"
+    total: Decimal | str | float = "0"
+    currency: str = "THB"
+    note: str | None = None
+    data_snapshot: dict | None = None
+    created_by: str | None = None
+
+
+class InvoiceIssueIn(BaseModel):
+    document_id: uuid.UUID | None = None
+    issue_date: date | None = None
+    due_date: date | None = None
+
+
+class InvoiceDocumentIn(BaseModel):
+    document_id: uuid.UUID
+
+
+class InvoicePaymentIn(BaseModel):
+    amount: Decimal | str | float
+    method: str = "transfer"
+    paid_at: datetime | None = None
+    reference: str | None = None
+    note: str | None = None
+    recorded_by: str | None = None
+
+
+class InvoicePaymentOut(BaseModel):
+    id: uuid.UUID
+    invoice_id: uuid.UUID
+    amount: Decimal
+    method: str
+    paid_at: datetime
+    reference: str | None
+    note: str | None
+    recorded_by: str | None
+    created_at: datetime
+
+
+class InvoiceOut(BaseModel):
+    id: uuid.UUID
+    license_id: uuid.UUID
+    invoice_id: str
+    quote_id: uuid.UUID | None
+    deal_id: uuid.UUID | None
+    contact_id: uuid.UUID | None
+    status: str
+    issue_date: date | None
+    due_date: date | None
+    currency: str
+    subtotal: Decimal
+    discount_amount: Decimal
+    vat_rate: Decimal | None
+    vat_amount: Decimal
+    total: Decimal
+    paid_amount: Decimal
+    note: str | None
+    data_snapshot: dict | None
+    generated_document_id: uuid.UUID | None
+    receipt_document_id: uuid.UUID | None
+    created_by: str | None
+    archived_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+    # Derived, never stored (see repositories/invoices.py).
+    outstanding: Decimal
+    is_overdue: bool
+    # The ledger travels with the detail; the list leaves it empty so two
+    # hundred rows do not carry two hundred payment sets.
+    payments: list[InvoicePaymentOut] = []
+
+
+class InvoiceSummaryOut(BaseModel):
+    open_count: int
+    overdue_count: int
+    outstanding_total: Decimal
+
+
 class DocumentTemplateIn(BaseModel):
     document_type: str
     template_code: str

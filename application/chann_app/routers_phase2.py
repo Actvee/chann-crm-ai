@@ -123,6 +123,10 @@ def _document_filename(document: dict) -> str:
     kind = str(document.get("document_type") or "document")
     if kind == "service_report":
         prefix, code = "report", str((snapshot.get("report") or {}).get("report_id") or "")
+    elif kind == "invoice":
+        prefix, code = "invoice", str((snapshot.get("invoice") or {}).get("invoice_id") or "")
+    elif kind == "receipt":
+        prefix, code = "receipt", str((snapshot.get("invoice") or {}).get("invoice_id") or "")
     else:
         prefix, code = ("quote" if kind == "quote" else kind), str((snapshot.get("quote") or {}).get("quote_id") or "")
     safe = re.sub(r"[^A-Za-z0-9_-]+", "-", code).strip("-")
@@ -511,7 +515,10 @@ async def list_members_with_names(
     _require_same_tenant(principal, license_id)
     _staff_only(principal)
     if not principal.is_owner:
-        principal.require_any("member.manage", "team.manage", "role.manage")
+        # reassign_records too (round 20V): handing a customer or a deal to
+        # a colleague means picking the colleague, and the picker is this
+        # list. Names only — the same rows the roster shows.
+        principal.require_any("member.manage", "team.manage", "role.manage", "reassign_records")
     try:
         members = await client.list_members(license_id)
     except DataTierError as exc:
@@ -1320,13 +1327,13 @@ async def get_document_bytes(
     )
 
     _require_same_tenant(principal, license_id)
-    principal.require("quote.read")
+    principal.require_any("quote.read", "invoice.read")
 
     try:
         document = await client.get_generated_document(license_id, document_id)
     except DataTierError as exc:
         raise _propagate(exc)
-    if document is None:
+    if document is None or not await _document_readable_by(client, principal, license_id, document):
         raise HTTPException(status_code=404, detail="document not found")
 
     try:
@@ -1962,6 +1969,139 @@ async def put_approval_workflow(
     return {**(saved or {}), "summary": approval_service.describe_workflow(rules)}
 
 
+# ---------------------------------------------------------------------------
+# Round 20V — four things that were built and that no person could reach
+# (owner, 21 ก.ย. 2569: "ทำได้ในโค้ด แต่คนหาไม่เจอ"). Assignment rules had
+# Data routes and a chat command to SET one and nothing to show or switch
+# one off; the satisfaction surveys were collected and never read back.
+
+
+def _rule_with_words(row: dict | None) -> dict | None:
+    from .services.ai.assignment_policy import describe_rule
+
+    if not row:
+        return None
+    return {**row, "summary": describe_rule(row.get("rules_json") or {}, "th")}
+
+
+@router.get("/licenses/{license_id}/assignment-rules")
+async def list_assignment_rules(
+    license_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """The active rule per scope, in words as well as JSON. setting.manage
+    — the same key chat's "ตั้งกฎมอบหมาย" checks, because the spec gives
+    assignment rules no permission of their own."""
+    _require_same_tenant(principal, license_id)
+    principal.require("setting.manage")
+    try:
+        rows = await client.get_assignment_rules(license_id)
+    except DataTierError as exc:
+        raise _propagate(exc)
+    return [_rule_with_words(r) for r in rows if r.get("is_active")]
+
+
+@router.put("/licenses/{license_id}/assignment-rules")
+async def put_assignment_rule(
+    license_id: str,
+    payload: dict,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Replace the active rule for a scope — from a typed policy (the same
+    model call chat uses) or from the rule JSON the company page edited.
+    Either way the rule is validated against the engine's closed
+    vocabulary and its teams must exist, exactly as chat insists."""
+    from .services.ai.assignment_policy import policy_to_rule, team_problems
+    from .services.assignment_validation import validate_rule
+
+    _require_same_tenant(principal, license_id)
+    principal.require("setting.manage")
+    try:
+        teams = [str(t.get("team_name")) for t in await client.list_technician_teams(license_id) if t.get("team_name")]
+        groups = [str(g.get("group_name")) for g in await client.list_sales_groups(license_id) if g.get("group_name")]
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+    policy = str(payload.get("policy") or "").strip()
+    rule = payload.get("rules_json")
+    scope_hint = str(payload.get("scope") or "").strip() or None
+    if policy:
+        rule, problems = await policy_to_rule(
+            policy, teams=teams, sales_groups=groups, scope_hint=scope_hint,
+        )
+        if rule is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"error": "policy_not_understood", "problems": problems},
+            )
+    elif isinstance(rule, dict):
+        rule = dict(rule)
+        rule.setdefault("version", 1)
+        if scope_hint:
+            rule["scope"] = scope_hint
+        problems = validate_rule(rule) or team_problems(rule, teams=teams, sales_groups=groups)
+        if problems:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"error": "rule_invalid", "problems": problems},
+            )
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"error": "policy_or_rules_required"},
+        )
+    try:
+        saved = await client.upsert_assignment_rule(
+            license_id, scope=str(rule.get("scope") or "technician"), rules_json=rule,
+            actor_id=principal.chann_uid,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+    return _rule_with_words(saved)
+
+
+@router.delete("/licenses/{license_id}/assignment-rules/{rule_scope}")
+async def delete_assignment_rule(
+    license_id: str,
+    rule_scope: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Switch the rule for a scope off. 404 when none is active."""
+    _require_same_tenant(principal, license_id)
+    principal.require("setting.manage")
+    if rule_scope not in ("technician", "sales"):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"error": "scope_invalid"})
+    try:
+        row = await client.deactivate_assignment_rule(license_id, rule_scope, actor_id=principal.chann_uid)
+    except DataTierError as exc:
+        raise _propagate(exc)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"error": "no_active_rule"})
+    return _rule_with_words(row)
+
+
+@router.get("/licenses/{license_id}/surveys/summary")
+async def survey_summary(
+    license_id: str,
+    days: int = 30,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """The satisfaction figures for the reports page and chat: view_reports,
+    like the AI reports beside it."""
+    _require_same_tenant(principal, license_id)
+    principal.require("view_reports")
+    if days not in (30, 90, 365):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"error": "days_invalid"})
+    try:
+        return await client.survey_summary(license_id, days=days)
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
 @router.get("/licenses/{license_id}/surveys/pending")
 async def pending_survey(
     license_id: str,
@@ -2425,6 +2565,360 @@ async def list_service_reports(
         return rows
     except DataTierError as exc:
         raise _propagate(exc)
+
+
+# ------------------------------------------------------------ Round 20V
+# Invoices, payments and receipts — the step after the quotation. Owner,
+# 21 ก.ย. 2569: "ทำข้อ 2 … รวมเอาเรื่อง invoice". A customer principal may
+# list and read only the bills whose contact carries their chann_uid, and
+# never writes; staff act by the four invoice.* keys.
+
+
+async def _document_readable_by(
+    client: DataClient, principal: TenantPrincipal, license_id: str, document: dict,
+) -> bool:
+    """Staff read any of the shop's documents. A customer reads only the
+    invoice and receipt PDFs of their OWN bills — found through the
+    contact row, the way tickets and warranties are scoped."""
+    if not principal.is_customer:
+        return True
+    if str(document.get("source_entity_type") or "") != "invoice":
+        return False
+    try:
+        invoice = await client.get_invoice(license_id, str(document.get("source_entity_id") or ""))
+    except DataTierError:
+        return False
+    return invoice is not None and await _invoice_is_mine(client, principal, license_id, invoice)
+
+
+async def _invoice_is_mine(
+    client: DataClient, principal: TenantPrincipal, license_id: str, invoice: dict,
+) -> bool:
+    if not invoice.get("contact_id"):
+        return False
+    try:
+        customer = await client.get_customer(license_id, str(invoice["contact_id"]))
+    except DataTierError:
+        return False
+    return bool(customer) and str(customer.get("customer_chann_uid") or "") == principal.chann_uid
+
+
+async def _invoice_or_404(client: DataClient, principal: TenantPrincipal, license_id: str, invoice_id: str) -> dict:
+    try:
+        invoice = await client.get_invoice(license_id, invoice_id)
+    except DataTierError as exc:
+        raise _propagate(exc)
+    if invoice is None or (principal.is_customer and not await _invoice_is_mine(client, principal, license_id, invoice)):
+        raise HTTPException(status_code=404, detail="invoice not found")
+    return invoice
+
+
+def _invoice_document_error(exc: Exception, *, code: str) -> HTTPException:
+    """The quote's error taxonomy, for the invoice and the receipt: the
+    dashboard already translates these statuses (409 company_incomplete /
+    already_issued, 503 not configured, 504 slow renderer, 502 provider)."""
+    from .services.documents.snapshot import QuoteNotRenderable
+    from .services.invoices import InvoiceAlreadyIssued, InvoiceNotOpen, InvoiceNotPaid, QuoteNotBillable
+    from .services.pdf.base import RendererUnavailable
+    from .services.pdf.smartbrowz import SmartBrowzNotConfigured, SmartBrowzRenderError
+    from .services.storage.base import DocumentStoreError, DocumentStoreNotConfigured
+
+    if isinstance(exc, InvoiceAlreadyIssued):
+        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail={
+            "error": "already_issued", "reason_code": "already_issued", "message": str(exc),
+        })
+    if isinstance(exc, (InvoiceNotPaid, InvoiceNotOpen, QuoteNotBillable)):
+        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail={
+            "error": "invoice_state", "reason_code": "invoice_state", "message": str(exc), "code": code,
+        })
+    if isinstance(exc, QuoteNotRenderable):
+        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail={
+            "error": "company_incomplete", "reason_code": "company_incomplete", "message": str(exc),
+        })
+    if isinstance(exc, (SmartBrowzNotConfigured, DocumentStoreNotConfigured)):
+        return HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
+    if isinstance(exc, RendererUnavailable):
+        # Transient, and the sentence already says "try again".
+        return HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail=str(exc))
+    if isinstance(exc, (SmartBrowzRenderError, DocumentStoreError)):
+        return HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+    if isinstance(exc, DataTierError):
+        return _propagate(exc)
+    log.exception("invoice document step failed for %s", code)
+    return HTTPException(status_code=500, detail=str(exc)[:200])
+
+
+class InvoiceCreateIn(BaseModel):
+    quote_id: str | None = None
+    deal_id: str | None = None
+    note: str | None = None
+
+
+class InvoicePaymentBody(BaseModel):
+    amount: str | float | int | None = None
+    full: bool = False
+    method: str = "transfer"
+    reference: str | None = None
+    note: str | None = None
+    paid_at: datetime | None = None
+
+
+@router.get("/licenses/{license_id}/invoices/summary")
+async def invoice_summary(
+    license_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """What the shop is owed — the overview tile. Staff only: a customer's
+    own balance is the sum of their rows, not the shop's book."""
+    _require_same_tenant(principal, license_id)
+    principal.require("invoice.read")
+    if principal.is_customer:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="staff only")
+    try:
+        return await client.invoice_summary(license_id)
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.get("/licenses/{license_id}/invoices")
+async def list_invoices(
+    license_id: str,
+    status_filter: str | None = None,
+    q: str | None = None,
+    contact_id: str | None = None,
+    overdue: bool = False,
+    limit: int = 500,
+    offset: int = 0,
+    response: Response = None,  # type: ignore[assignment]
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    _require_same_tenant(principal, license_id)
+    principal.require("invoice.read")
+    try:
+        rows, total = await client.list_invoices_with_total(
+            license_id, status=status_filter, q=q, contact_id=contact_id, overdue=overdue,
+            # Scoped by construction for a customer: their contact's rows only.
+            customer_chann_uid=principal.chann_uid if principal.is_customer else None,
+            limit=limit, offset=offset,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+    if response is not None:
+        response.headers["X-Total-Count"] = str(total)
+    return rows
+
+
+@router.get("/licenses/{license_id}/invoices/{invoice_id}")
+async def get_invoice(
+    license_id: str,
+    invoice_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    _require_same_tenant(principal, license_id)
+    principal.require("invoice.read")
+    return await _invoice_or_404(client, principal, license_id, invoice_id)
+
+
+async def _create_invoice(
+    client: DataClient, principal: TenantPrincipal, license_id: str, *,
+    quote_id: str | None, deal_id: str | None, note: str | None,
+) -> dict:
+    from .services import invoices as invoice_service
+
+    _require_same_tenant(principal, license_id)
+    principal.require("invoice.create")
+    if principal.is_customer:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="staff only")
+    if not quote_id and not deal_id:
+        raise HTTPException(status_code=422, detail="quote_id or deal_id is required")
+    try:
+        quote = None
+        if quote_id:
+            quote = await client.get_quote(license_id, quote_id)
+            if quote is None:
+                raise HTTPException(status_code=404, detail="quote not found")
+            deal_id = str(quote["deal_id"])
+        deal = await client.get_deal(license_id, str(deal_id))
+        if deal is None:
+            raise HTTPException(status_code=404, detail="deal not found")
+        customer = await client.get_customer(license_id, str(deal["contact_id"]))
+        if customer is None:
+            raise HTTPException(status_code=404, detail="customer not found")
+        company = await client.get_company_profile(license_id)
+        if quote is not None:
+            return await invoice_service.create_from_quote(
+                client, license_id=license_id, quote=quote, deal=deal, customer=customer,
+                company=company, actor_id=principal.chann_uid, note=note,
+            )
+        return await invoice_service.create_from_deal(
+            client, license_id=license_id, deal=deal, customer=customer, company=company,
+            actor_id=principal.chann_uid, note=note,
+        )
+    except DataTierError as exc:
+        raise _with_reason(exc)
+    except Exception as exc:  # noqa: BLE001
+        if isinstance(exc, HTTPException):
+            raise
+        raise _invoice_document_error(exc, code=quote_id or deal_id or "")
+
+
+@router.post("/licenses/{license_id}/invoices", status_code=201)
+async def create_invoice(
+    license_id: str,
+    payload: InvoiceCreateIn,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """A draft invoice from a quote or straight from a deal."""
+    _require_same_tenant(principal, license_id)
+    principal.require("invoice.create")
+    return await _create_invoice(
+        client, principal, license_id, quote_id=payload.quote_id, deal_id=payload.deal_id, note=payload.note,
+    )
+
+
+@router.post("/licenses/{license_id}/quotes/{quote_id}/invoice", status_code=201)
+async def create_invoice_from_quote(
+    license_id: str,
+    quote_id: str,
+    payload: InvoiceCreateIn | None = None,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """The button on the quote: "ออกใบแจ้งหนี้". Same call as POST /invoices
+    with quote_id; here so the quote page needs no body."""
+    _require_same_tenant(principal, license_id)
+    principal.require("invoice.create")
+    return await _create_invoice(
+        client, principal, license_id, quote_id=quote_id, deal_id=None,
+        note=(payload.note if payload else None),
+    )
+
+
+@router.post("/licenses/{license_id}/invoices/{invoice_id}/issue")
+async def issue_invoice(
+    license_id: str,
+    invoice_id: str,
+    allow_reissue: bool = False,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Render, store and record the invoice PDF; draft → issued."""
+    from .services import invoices as invoice_service
+
+    _require_same_tenant(principal, license_id)
+    principal.require("invoice.update")
+    if principal.is_customer:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="staff only")
+    invoice = await _invoice_or_404(client, principal, license_id, invoice_id)
+    try:
+        company = await client.get_company_profile(license_id)
+        invoice, document = await invoice_service.issue_invoice_document(
+            client, license_id=license_id, invoice=invoice, company=company,
+            actor_id=principal.chann_uid, allow_reissue=allow_reissue,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise _invoice_document_error(exc, code=str(invoice.get("invoice_id") or ""))
+    return {
+        "invoice": invoice,
+        "generated_document_id": document.get("id"),
+        "sha256": document.get("sha256"),
+        "renderer": document.get("renderer"),
+    }
+
+
+@router.post("/licenses/{license_id}/invoices/{invoice_id}/payments", status_code=201)
+async def record_invoice_payment(
+    license_id: str,
+    invoice_id: str,
+    payload: InvoicePaymentBody,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """One receipt of money: a deposit, an instalment, or `full` for the
+    balance. Returns the invoice as it now stands, payments included."""
+    from .services import invoices as invoice_service
+
+    _require_same_tenant(principal, license_id)
+    principal.require("invoice.update")
+    if principal.is_customer:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="staff only")
+    invoice = await _invoice_or_404(client, principal, license_id, invoice_id)
+    if not payload.full and payload.amount in (None, ""):
+        raise HTTPException(status_code=422, detail="amount is required unless full=true")
+    try:
+        return await invoice_service.record_payment(
+            client, license_id=license_id, invoice=invoice, amount=payload.amount,
+            method=payload.method, reference=payload.reference, note=payload.note,
+            paid_at=payload.paid_at, actor_id=principal.chann_uid, full=payload.full,
+        )
+    except invoice_service.PaymentInvalid as exc:
+        raise HTTPException(status_code=422, detail={
+            "error": "payment_invalid", "reason_code": "payment_invalid", "message": str(exc),
+        })
+    except DataTierError as exc:
+        raise _with_reason(exc)
+    except Exception as exc:  # noqa: BLE001
+        raise _invoice_document_error(exc, code=str(invoice.get("invoice_id") or ""))
+
+
+@router.post("/licenses/{license_id}/invoices/{invoice_id}/receipt")
+async def issue_invoice_receipt(
+    license_id: str,
+    invoice_id: str,
+    allow_reissue: bool = False,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """The receipt PDF for a bill paid in full — and one LINE line to the
+    customer with the link."""
+    from .services import invoices as invoice_service
+
+    _require_same_tenant(principal, license_id)
+    principal.require("invoice.update")
+    if principal.is_customer:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="staff only")
+    invoice = await _invoice_or_404(client, principal, license_id, invoice_id)
+    try:
+        company = await client.get_company_profile(license_id)
+        invoice, document = await invoice_service.issue_receipt_document(
+            client, license_id=license_id, invoice=invoice, company=company,
+            actor_id=principal.chann_uid, allow_reissue=allow_reissue,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise _invoice_document_error(exc, code=str(invoice.get("invoice_id") or ""))
+    notified = await invoice_service.notify_customer_receipt(
+        client, license_id=license_id, invoice=invoice, document=document,
+    )
+    return {
+        "invoice": invoice,
+        "receipt_document_id": document.get("id"),
+        "sha256": document.get("sha256"),
+        "customer_notified": notified,
+    }
+
+
+@router.post("/licenses/{license_id}/invoices/{invoice_id}/void")
+async def void_invoice(
+    license_id: str,
+    invoice_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Void — its own key, and only while nothing was paid (the Data tier
+    says so with a 409 the page translates)."""
+    _require_same_tenant(principal, license_id)
+    principal.require("invoice.void")
+    if principal.is_customer:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="staff only")
+    await _invoice_or_404(client, principal, license_id, invoice_id)
+    try:
+        return await client.void_invoice(license_id, invoice_id, actor_id=principal.chann_uid)
+    except DataTierError as exc:
+        raise _with_reason(exc)
 
 
 # -------------------------------------------------------------------- quotes
@@ -3332,13 +3826,13 @@ async def get_document_link(
     from .auth.document_link import issue_document_token
 
     _require_same_tenant(principal, license_id)
-    principal.require("quote.read")
+    principal.require_any("quote.read", "invoice.read")
 
     try:
         document = await client.get_generated_document(license_id, document_id)
     except DataTierError as exc:
         raise _propagate(exc)
-    if document is None:
+    if document is None or not await _document_readable_by(client, principal, license_id, document):
         raise HTTPException(status_code=404, detail="document not found")
 
     base = (settings.public_base_url or "").rstrip("/")

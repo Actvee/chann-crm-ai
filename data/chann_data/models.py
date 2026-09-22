@@ -1196,6 +1196,125 @@ class GeneratedDocument(Base):
     )
 
 
+# ------------------------------------------------------------ Round 20V
+# Invoices and receipts after the quotation. Owner, 21 ก.ย. 2569: "ทำข้อ 2 …
+# รวมเอาเรื่อง invoice" — the gap was that a quotation is the last document
+# this system could produce, so nothing recorded what the customer owes,
+# what they have paid (a deposit, the balance) and what is overdue.
+
+
+INVOICE_STATUSES = ("draft", "issued", "partially_paid", "paid", "void")
+PAYMENT_METHODS = ("cash", "transfer", "promptpay", "card", "other")
+
+
+class Invoice(TimestampMixin, Base):
+    """A demand for payment, made from a quotation (or a deal), and the
+    money received against it.
+
+    `invoice_id` is per tenant like the quote's: a customer-facing document
+    number, `INV-YYYY-NNNN`. `quote_id`, `deal_id` and `contact_id` are all
+    nullable because an invoice outlives the records it came from — a
+    quote can be superseded and a deal archived while the bill still
+    stands — and RESTRICT on the two that are kept so a paid invoice can
+    never point at a customer who no longer exists.
+
+    The money columns are COPIED from the frozen `data_snapshot` at
+    creation, never recomputed: the snapshot is what the PDF prints and
+    the columns are what a report sums, and the two must agree to the
+    satang. `paid_amount` is the cached sum of `invoice_payments` for the
+    same reason the status is stored — a list of two hundred invoices must
+    not join two hundred payment sets to say which are outstanding.
+
+    "Overdue" is NOT a status. It is `due_date < today` on an issued or
+    partially paid invoice, derived at read time, because a status that
+    depended on the calendar would have to be swept every midnight and
+    would still be wrong for the seven hours the UTC date lags Bangkok.
+    """
+
+    __tablename__ = "invoices"
+    __table_args__ = (
+        UniqueConstraint("license_id", "invoice_id", name="uq_invoices_license_invoice_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    license_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("licenses.id", ondelete="RESTRICT"),
+        nullable=False, index=True,
+    )
+    invoice_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    quote_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("quotes.id", ondelete="SET NULL")
+    )
+    deal_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("deals.id", ondelete="RESTRICT")
+    )
+    contact_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("customers.id", ondelete="RESTRICT")
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft")
+    issue_date: Mapped[date | None] = mapped_column(Date)
+    due_date: Mapped[date | None] = mapped_column(Date)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="THB")
+    subtotal: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=Decimal("0"))
+    discount_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=Decimal("0"))
+    # A fraction (0.07), frozen from the company profile at creation, or
+    # NULL for a shop that is not VAT-registered — which is not 0.
+    vat_rate: Mapped[Decimal | None] = mapped_column(Numeric(6, 4))
+    vat_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=Decimal("0"))
+    total: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=Decimal("0"))
+    paid_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=Decimal("0"))
+    note: Mapped[str | None] = mapped_column(Text)
+    # The lines, the company and the customer as they were when the invoice
+    # was made — the same shape the quotation freezes, so the PDF and the
+    # receipt print from one record and reprint identically later.
+    data_snapshot: Mapped[dict | None] = mapped_column(JSONB)
+    generated_document_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("generated_documents.id", ondelete="SET NULL")
+    )
+    receipt_document_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("generated_documents.id", ondelete="SET NULL")
+    )
+    # The actor's chann_uid, as the audit trail records it (X-Actor-Id is
+    # a chann_uid, not a member row), so the column can be filled from the
+    # customer OA and from a scheduled job alike.
+    created_by: Mapped[str | None] = mapped_column(String(64))
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class InvoicePayment(Base):
+    """One receipt of money against an invoice: a deposit, an instalment,
+    or the balance. Never edited — a wrong payment is voided by the shop
+    recording a correcting one, so the ledger reads as it happened.
+
+    `method` is a closed set (cash, transfer, promptpay, card, other); the
+    chat road maps the Thai words onto it and the dashboard offers the
+    same five, so a report can group by it without normalising free text.
+    """
+
+    __tablename__ = "invoice_payments"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    license_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("licenses.id", ondelete="RESTRICT"),
+        nullable=False, index=True,
+    )
+    invoice_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("invoices.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    method: Mapped[str] = mapped_column(String(16), nullable=False, default="transfer")
+    paid_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    reference: Mapped[str | None] = mapped_column(String(64))
+    note: Mapped[str | None] = mapped_column(Text)
+    recorded_by: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 # ------------------------------------------------------------ Phase 14
 # Approval workflows and satisfaction surveys. Owner decisions (3 Sep):
 # the default flow is a single step, the CS who owns the ticket; "ปิดงาน"

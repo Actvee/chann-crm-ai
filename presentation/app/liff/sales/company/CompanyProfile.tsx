@@ -27,6 +27,14 @@ type Profile = {
 };
 
 type Member = { id: string; chann_uid: string; role: string; display_name: string; phone?: string | null };
+// Round 20V: the assignment rule as the Data tier stores it (rules_json is
+// the engine's own JSON — chann_data/assignment_engine.py reads exactly
+// these keys) plus the words the Application tier adds.
+type RuleCriterion = { field: string; operator: string; value: unknown; assign_to_team: string };
+type RuleCapacity = { max_per_day?: number; mode?: string };
+type RuleJson = { match_criteria?: RuleCriterion[]; selection_strategy?: string; capacity_constraint?: RuleCapacity | null };
+type Rule = { id: string; scope: string; is_active: boolean; rules_json: RuleJson; summary?: string };
+const RULE_SCOPES = ["technician", "sales"] as const;
 type Transfer = { id: string; status: string; from_chann_uid?: string | null; to_chann_uid?: string | null };
 
 export default function CompanyProfile({ liffId }: { liffId: string }) {
@@ -84,6 +92,16 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
   const [pending, setPending] = useState<Transfer | null>(null);
   const [nominee, setNominee] = useState("");
   const [transferring, setTransferring] = useState(false);
+  // Round 20V: the assignment rules. Settable from chat since 11.6 and
+  // never shown or switched off anywhere (owner's gap list, 21 ก.ย.).
+  const [rules, setRules] = useState<Rule[] | null>(null);
+  const [ruleEditing, setRuleEditing] = useState<(typeof RULE_SCOPES)[number] | null>(null);
+  const [rulePolicy, setRulePolicy] = useState("");
+  const [ruleTeam, setRuleTeam] = useState("");
+  const [ruleStrategy, setRuleStrategy] = useState("round_robin");
+  const [ruleCap, setRuleCap] = useState("");
+  const [ruleCapMode, setRuleCapMode] = useState("hard_block");
+  const [ruleBusy, setRuleBusy] = useState(false);
 
   const say = useCallback((message: string, kind?: "ok" | "error") => {
     setStatus(message);
@@ -168,6 +186,15 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
     }
   }, [licenseId, session.channUid, session.isOwner, token]);
 
+  const loadRules = useCallback(async () => {
+    if (!token || !licenseId) return;
+    const response = await fetch(`/api/phase2/licenses/${licenseId}/assignment-rules`, {
+      headers: proxyHeaders(token, licenseId),
+    });
+    if (!response.ok) return;  // no setting.manage: the section stays hidden
+    setRules((await response.json()) as Rule[]);
+  }, [licenseId, token]);
+
   useEffect(() => {
     if (!session.ready) return;
     void load().catch((error: unknown) =>
@@ -175,7 +202,126 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
     );
     void loadSettings().catch(() => undefined);
     void loadTransfer().catch(() => undefined);
-  }, [session.ready, load, loadSettings, loadTransfer, say, t]);
+    void loadRules().catch(() => undefined);
+  }, [session.ready, load, loadSettings, loadTransfer, loadRules, say, t]);
+
+  const ruleFor = (scope: string) => rules?.find((r) => r.scope === scope && r.is_active) ?? null;
+
+  function openRuleEditor(scope: (typeof RULE_SCOPES)[number]) {
+    const current = ruleFor(scope)?.rules_json;
+    setRulePolicy("");
+    setRuleTeam(current?.match_criteria?.[0]?.assign_to_team ?? "");
+    setRuleStrategy(current?.selection_strategy ?? "round_robin");
+    setRuleCap(current?.capacity_constraint?.max_per_day ? String(current.capacity_constraint.max_per_day) : "");
+    setRuleCapMode(current?.capacity_constraint?.mode ?? "hard_block");
+    setRuleEditing(scope);
+  }
+
+  async function saveRule() {
+    if (!ruleEditing) return;
+    const body: Record<string, unknown> = { scope: ruleEditing };
+    if (rulePolicy.trim()) {
+      // The typed policy goes to the same model call chat uses; the reply
+      // is the validated rule, shown back in words.
+      body.policy = rulePolicy.trim();
+    } else {
+      const current = ruleFor(ruleEditing)?.rules_json ?? {};
+      const criteria = (current.match_criteria ?? []).map((c) => ({ ...c, assign_to_team: ruleTeam || c.assign_to_team }));
+      body.rules_json = {
+        ...current,
+        version: 1,
+        scope: ruleEditing,
+        match_criteria: criteria.length ? criteria : (ruleTeam
+          ? [{ field: ruleEditing === "sales" ? "customer.stage" : "product.category", operator: "not_equals", value: "", assign_to_team: ruleTeam }]
+          : []),
+        selection_strategy: ruleStrategy,
+        capacity_constraint: ruleCap.trim() ? { max_per_day: Number(ruleCap), mode: ruleCapMode } : undefined,
+        fallback: "round_robin_in_team",
+        no_active_fallback: "assign_to_owner_or_admin",
+      };
+    }
+    setRuleBusy(true);
+    try {
+      const response = await fetch(`/api/phase2/licenses/${licenseId}/assignment-rules`, {
+        method: "PUT",
+        headers: proxyHeaders(token, licenseId),
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) {
+        const detail = (await response.json().catch(() => ({}))) as { detail?: { problems?: string[] } };
+        const problems = detail.detail?.problems;
+        say(problems?.length ? s.rules.notUnderstood.replace("{problems}", problems.join(" · ")) : await failureText(response), "error");
+        return;
+      }
+      say(s.rules.saved, "ok");
+      setRuleEditing(null);
+      await loadRules();
+    } catch {
+      say(t.common.error, "error");
+    } finally {
+      setRuleBusy(false);
+    }
+  }
+
+  async function closeRule(scope: (typeof RULE_SCOPES)[number]) {
+    const ok = await ask({
+      action: s.rules.closeAction,
+      target: scope === "sales" ? s.rules.scopeSales : s.rules.scopeTechnician,
+      affects: [s.rules.closeAffects],
+      reversible: s.rules.closeKeeps,
+      confirmLabel: s.rules.close,
+    });
+    if (!ok) return;
+    setRuleBusy(true);
+    try {
+      const response = await fetch(`/api/phase2/licenses/${licenseId}/assignment-rules/${scope}`, {
+        method: "DELETE",
+        headers: proxyHeaders(token, licenseId),
+      });
+      if (!response.ok) {
+        say(await failureText(response), "error");
+        return;
+      }
+      say(s.rules.closed, "ok");
+      setRuleEditing(null);
+      await loadRules();
+    } catch {
+      say(t.common.error, "error");
+    } finally {
+      setRuleBusy(false);
+    }
+  }
+
+  /** The rule in the shop's words — from its structure, never a summary
+   *  written elsewhere, so what is shown is what will execute. */
+  function ruleLines(rule: Rule): string[] {
+    const r = rule.rules_json;
+    const lines: string[] = [];
+    const criteria = r.match_criteria ?? [];
+    const real = criteria.filter((c) => !(c.operator === "not_equals" && c.value === ""));
+    if (real.length === 0) {
+      lines.push(criteria[0]?.assign_to_team ? `${s.rules.noConditions} → ${s.rules.team} ${criteria[0].assign_to_team}` : s.rules.noConditions);
+    } else {
+      for (const c of real) {
+        lines.push(
+          s.rules.conditionLine
+            .replace("{field}", (s.rules.fields as Record<string, string>)[c.field] ?? c.field)
+            .replace("{operator}", (s.rules.operators as Record<string, string>)[c.operator] ?? c.operator)
+            .replace("{value}", Array.isArray(c.value) ? c.value.join(", ") : String(c.value ?? ""))
+            .replace("{team}", c.assign_to_team),
+        );
+      }
+    }
+    const strategy = (s.rules.strategies as Record<string, string>)[r.selection_strategy ?? "round_robin"] ?? r.selection_strategy ?? "";
+    lines.push(`${s.rules.strategy}: ${strategy}`);
+    const cap = r.capacity_constraint;
+    lines.push(
+      `${s.rules.capacity}: ${cap?.max_per_day
+        ? s.rules.capacityLine.replace("{n}", String(cap.max_per_day)).replace("{mode}", cap.mode === "soft_warn" ? s.rules.softWarn : s.rules.hardBlock)
+        : s.rules.noCapacity}`,
+    );
+    return lines;
+  }
 
   async function saveChatPolicy() {
     const sla = Number(chatSla);
@@ -637,6 +783,116 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
         </section>
       )}
 
+      {rules !== null && canEdit && (
+        <section className="section" style={{ marginTop: 16 }}>
+          <div className="section-head">
+            <h2>{s.rules.title}</h2>
+          </div>
+          <p className="hint" style={{ marginBottom: 10 }}>{s.rules.intro}</p>
+          {RULE_SCOPES.map((scope) => {
+            const rule = ruleFor(scope);
+            return (
+              <div className="card" key={scope} style={{ marginBottom: 10 }}>
+                <div className="card-title">
+                  {scope === "sales" ? s.rules.scopeSales : s.rules.scopeTechnician}
+                  {" "}
+                  <span className="chip" data-tone={rule ? "live" : "muted"}>
+                    {rule ? c.autoAcceptOn : c.autoAcceptOff}
+                  </span>
+                </div>
+                {rule ? (
+                  <ul className="card-meta" style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+                    {ruleLines(rule).map((line) => (
+                      <li key={line}>{line}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <div className="card-meta">{s.rules.none}</div>
+                )}
+                {ruleEditing === scope ? (
+                  <dl className="fields" style={{ marginTop: 10 }}>
+                    <FieldRow label={s.rules.policy}>
+                      {(id) => (
+                        <textarea
+                          id={id}
+                          rows={2}
+                          value={rulePolicy}
+                          placeholder={s.rules.policyHint}
+                          onChange={(event) => setRulePolicy(event.target.value)}
+                        />
+                      )}
+                    </FieldRow>
+                    <FieldRow label={s.rules.team}>
+                      {(id) => (
+                        <input id={id} value={ruleTeam} disabled={Boolean(rulePolicy.trim())} onChange={(event) => setRuleTeam(event.target.value)} />
+                      )}
+                    </FieldRow>
+                    <FieldRow label={s.rules.strategy}>
+                      {(id) => (
+                        <select id={id} value={ruleStrategy} disabled={Boolean(rulePolicy.trim())} onChange={(event) => setRuleStrategy(event.target.value)}>
+                          {Object.entries(s.rules.strategies).map(([value, label]) => (
+                            <option key={value} value={value}>{label}</option>
+                          ))}
+                        </select>
+                      )}
+                    </FieldRow>
+                    <FieldRow label={s.rules.capacity}>
+                      {(id) => (
+                        <input
+                          id={id}
+                          type="number"
+                          inputMode="numeric"
+                          min={1}
+                          value={ruleCap}
+                          placeholder={s.rules.noCapacity}
+                          disabled={Boolean(rulePolicy.trim())}
+                          onChange={(event) => setRuleCap(event.target.value)}
+                        />
+                      )}
+                    </FieldRow>
+                    {ruleCap.trim() && !rulePolicy.trim() && (
+                      <FieldRow label={s.rules.capacity}>
+                        {(id) => (
+                          <select id={id} value={ruleCapMode} onChange={(event) => setRuleCapMode(event.target.value)}>
+                            <option value="hard_block">{s.rules.hardBlock}</option>
+                            <option value="soft_warn">{s.rules.softWarn}</option>
+                          </select>
+                        )}
+                      </FieldRow>
+                    )}
+                    <div className="actions">
+                      <button type="button" className="btn" data-variant="quiet" disabled={ruleBusy} onClick={() => setRuleEditing(null)}>
+                        {t.common.cancel}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn"
+                        data-variant="primary"
+                        disabled={ruleBusy || (!rulePolicy.trim() && !ruleTeam.trim())}
+                        onClick={() => void saveRule()}
+                      >
+                        {ruleBusy ? t.dashboard.saving : s.rules.save}
+                      </button>
+                    </div>
+                  </dl>
+                ) : (
+                  <div className="card-actions">
+                    <button type="button" className="btn" disabled={ruleBusy} onClick={() => openRuleEditor(scope)}>
+                      {s.rules.edit}
+                    </button>
+                    {rule && (
+                      <button type="button" className="btn" data-variant="danger" disabled={ruleBusy} onClick={() => void closeRule(scope)}>
+                        {s.rules.close}
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </section>
+      )}
+
       {/* E6: two-party owner transfer. The Data tier has had the routes
           since Phase 2 and nothing on any screen or in chat called them,
           so a shop could never change hands. Owner only — it is not a
@@ -682,7 +938,7 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
           )}
         </section>
       )}
-      <ConfirmDialog request={confirming} onClose={closeConfirm} busy={Boolean(transferring)} />
+      <ConfirmDialog request={confirming} onClose={closeConfirm} busy={Boolean(transferring) || ruleBusy} />
     </SalesShell>
   );
 }

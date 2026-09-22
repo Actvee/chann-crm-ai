@@ -202,6 +202,26 @@ PHOTO_DELETE = Capability(
     action="delete", entity="photo", required=("index",), optional=("code",),
     never_needed=("code",),
 )
+#: Round 20V — the bill is made FROM a quote or a deal the handler finds
+#: (the code said, or the record in context), so nothing is asked for first.
+INVOICE_CREATE = Capability(
+    action="create", entity="invoice",
+    required=(), optional=("quote_code", "deal_code", "target_name", "note"),
+    never_needed=("quote_code", "deal_code", "target_name", "note"),
+)
+#: A payment's amount is asked for by the handler itself, as a closed
+#: follow-up read by hand ("รับชำระ INV-…" → "เท่าไหร่ครับ"), never by the
+#: generic slot-fill — which would send "5000" back to the model.
+INVOICE_PAY = Capability(
+    action="pay", entity="invoice",
+    required=(), optional=("code", "amount", "method", "reference", "full"),
+    never_needed=("code", "amount", "payment_amount", "method", "reference", "full"),
+)
+INVOICE_UPDATE = Capability(
+    action="update", entity="invoice",
+    required=(), optional=("code", "amount", "method", "status"),
+    never_needed=("code", "amount", "payment_amount", "method", "status"),
+)
 PHOTO_UPDATE = Capability(
     action="update", entity="photo", required=("index", "caption"), optional=("code",),
     never_needed=("code",),
@@ -215,6 +235,7 @@ REGISTRY: dict[tuple[str, str], Capability] = {
         TICKET_CLAIM, TICKET_READ, TICKET_UPDATE, TICKET_ASSIGN, LINE_ITEM_CREATE, LINE_ITEM_UPDATE, SERVICE_REPORT_CHECK_IN, SERVICE_REPORT_CHECK_OUT,
         SERVICE_REPORT_CREATE,
         PHOTO_READ, PHOTO_DELETE, PHOTO_UPDATE,
+        INVOICE_CREATE, INVOICE_PAY, INVOICE_UPDATE,
     )
 }
 

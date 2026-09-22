@@ -188,10 +188,11 @@ async def _issue(monkeypatch, client, store):
 # --------------------------------------------------------- the rule alone
 
 class TestTheRuleOnItsOwn:
-    def test_only_the_two_types_something_actually_renders_are_offered(self):
+    def test_only_the_types_something_actually_renders_are_offered(self):
         """A template slot for a document nothing issues is a file a shop
-        would maintain for nothing."""
-        assert TEMPLATE_DOCUMENT_TYPES == ("quote", "service_report")
+        would maintain for nothing. Round 20V added the invoice and the
+        receipt with the engine that issues them (services/invoices.py)."""
+        assert TEMPLATE_DOCUMENT_TYPES == ("quote", "service_report", "invoice", "receipt")
 
     def test_the_builtin_is_recognised_whatever_its_case(self):
         """The codes are BUILTIN-QUOTE and BUILTIN-SERVICE-REPORT; the

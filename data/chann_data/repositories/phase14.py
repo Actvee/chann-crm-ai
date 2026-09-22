@@ -24,9 +24,9 @@ see, let alone pass, a step in tenant B, and the multi-tenant test in
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from ..models import CustomRole, LicenseMember
@@ -425,3 +425,113 @@ class ApprovalRepository:
         row.submitted_at = datetime.now(timezone.utc)
         self._s.flush()
         return row
+
+    # ------------------------------------------------------- survey summary
+
+    def survey_summary(self, scope: TenantScope, *, days: int = 30, now: datetime | None = None) -> dict:
+        """What the customers said, over a window — for the one page and
+        the one chat answer that show it.
+
+        Surveys have been created, pushed and answered since Phase 14 and
+        nothing ever read them back (owner's gap list, 21 ก.ย. 2569:
+        "ทำได้ในโค้ด แต่คนหาไม่เจอ"). The window is by the survey's own
+        clock: answered means `submitted_at` inside it, pending means
+        created inside it and still unanswered — so a survey sent
+        yesterday and answered today counts once, as answered.
+
+        Per technician is by the job the survey belongs to: the member the
+        ticket was assigned to, or the team when it was given to a team
+        and never claimed. Names come from the identity row, the way the
+        members list shows them; a technician removed since keeps their
+        row here because the score is about the job, not the roster.
+        """
+        from ..models import ChannIdentity, TechnicianTeam
+
+        now = now or datetime.now(timezone.utc)
+        since = now - timedelta(days=max(1, int(days)))
+        rows = list(self._s.execute(
+            select(SatisfactionSurvey, ServiceTicket)
+            .join(ServiceTicket, ServiceTicket.id == SatisfactionSurvey.ticket_id)
+            .where(
+                SatisfactionSurvey.license_id == scope.license_id,
+                or_(
+                    SatisfactionSurvey.submitted_at >= since,
+                    and_(SatisfactionSurvey.submitted_at.is_(None), SatisfactionSurvey.created_at >= since),
+                ),
+            )
+            .order_by(SatisfactionSurvey.submitted_at.desc().nulls_last(), SatisfactionSurvey.created_at.desc())
+        ).all())
+
+        answered = [(s, t) for s, t in rows if s.submitted_at is not None and s.score is not None]
+        pending = [(s, t) for s, t in rows if s.submitted_at is None]
+        scale = dict(DEFAULT_SCALE)
+        for s, _ in answered:
+            if s.scale_config_json:
+                scale = dict(s.scale_config_json)
+                break
+        distribution = {key: 0 for key in scale}
+        for s, _ in answered:
+            distribution[str(s.score)] = distribution.get(str(s.score), 0) + 1
+
+        # Who did the job. One lookup per distinct target, not per row.
+        member_ids = {t.assigned_to_ref for _, t in rows if t.assigned_target_type == "technician" and t.assigned_to_ref}
+        team_ids = {t.assigned_to_ref for _, t in rows if t.assigned_target_type == "technician_team" and t.assigned_to_ref}
+        names: dict[tuple[str, str], str] = {}
+        if member_ids:
+            for member, identity in self._s.execute(
+                select(LicenseMember, ChannIdentity)
+                .join(ChannIdentity, ChannIdentity.chann_uid == LicenseMember.chann_uid, isouter=True)
+                .where(LicenseMember.id.in_(member_ids))
+            ).all():
+                full = " ".join(p for p in ((identity.first_name if identity else None), (identity.last_name if identity else None)) if p).strip()
+                names[("technician", str(member.id))] = full or (identity.display_name if identity else None) or member.chann_uid
+        if team_ids:
+            for team in self._s.execute(select(TechnicianTeam).where(TechnicianTeam.id.in_(team_ids))).scalars():
+                names[("technician_team", str(team.id))] = team.team_name
+
+        def _who(ticket: ServiceTicket) -> tuple[str, str] | None:
+            if ticket.assigned_to_ref and ticket.assigned_target_type in ("technician", "technician_team"):
+                return (ticket.assigned_target_type, str(ticket.assigned_to_ref))
+            return None
+
+        per: dict[tuple[str, str], dict] = {}
+        for s, t in answered:
+            key = _who(t)
+            if key is None:
+                continue
+            bucket = per.setdefault(key, {
+                "target_type": key[0], "target_ref": key[1],
+                "display_name": names.get(key) or key[1],
+                "answered": 0, "total_score": 0, "distribution": {k: 0 for k in scale},
+            })
+            bucket["answered"] += 1
+            bucket["total_score"] += int(s.score)
+            bucket["distribution"][str(s.score)] = bucket["distribution"].get(str(s.score), 0) + 1
+        technicians = []
+        for bucket in per.values():
+            total = bucket.pop("total_score")
+            bucket["average"] = round(total / bucket["answered"], 2) if bucket["answered"] else None
+            technicians.append(bucket)
+        technicians.sort(key=lambda b: (-(b["average"] or 0), -b["answered"], b["display_name"]))
+
+        recent = [
+            {
+                "survey_id": str(s.id), "ticket_id": str(t.id), "ticket_number": t.ticket_number,
+                "customer_name": t.customer_name, "score": s.score, "score_label": scale.get(str(s.score)),
+                "comment": s.comment, "submitted_at": s.submitted_at.isoformat() if s.submitted_at else None,
+                "technician_name": names.get(_who(t)) if _who(t) else None,
+            }
+            for s, t in answered[:20]
+        ]
+        asked = len(answered) + len(pending)
+        return {
+            "days": int(days),
+            "scale": scale,
+            "answered": len(answered),
+            "pending": len(pending),
+            "average": round(sum(int(s.score) for s, _ in answered) / len(answered), 2) if answered else None,
+            "response_rate": round(len(answered) / asked, 3) if asked else None,
+            "distribution": distribution,
+            "technicians": technicians,
+            "recent": recent,
+        }

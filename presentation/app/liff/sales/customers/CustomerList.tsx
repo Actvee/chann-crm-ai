@@ -8,6 +8,7 @@ import { CsvImport } from "../_csv-import";
 import { Badge, Count, Empty } from "../_components";
 import { ConfirmDialog, useConfirm } from "../../_confirm";
 import { BulkBar, SelectCheck, runEach, useBulkSummary, useSelection } from "../../_bulk";
+import { OwnerSheet, memberLabel, useSalesMembers, type SalesMember } from "../_owner";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { ListFilters } from "../../_filters";
@@ -58,6 +59,8 @@ export default function CustomerList({ liffId }: { liffId: string }) {
   const selection = useSelection();
   const summarise = useBulkSummary();
   const [bulkBusy, setBulkBusy] = useState(false);
+  // Round 20V: several customers to one colleague, from the bar.
+  const [handingOver, setHandingOver] = useState(false);
 
   const say = useCallback((message: string, kind?: "ok" | "error") => {
     setStatus(message);
@@ -195,6 +198,35 @@ export default function CustomerList({ liffId }: { liffId: string }) {
   /** The rows chosen, in list order — what every bulk verb starts from. */
   const chosen = () => customers.filter((row) => selection.ids.has(row.id));
 
+  async function handChosenTo(member: SalesMember) {
+    const rows = chosen();
+    if (rows.length === 0) return;
+    setBulkBusy(true);
+    say(t.dashboard.working);
+    try {
+      const result = await runEach(rows, async (row) => {
+        const response = await fetch(`/api/phase2/licenses/${licenseId}/customers/${row.id}/owner`, {
+          method: "PATCH",
+          headers: proxyHeaders(token, licenseId),
+          body: JSON.stringify({ owner_member_id: member.id }),
+        });
+        if (response.status === 403) say(s.transfer.denied, "error");
+        return response.ok;
+      });
+      setHandingOver(false);
+      await load();
+      selection.leave();
+      say(
+        result.failed.length
+          ? summarise(result.ok.length, rows.length)
+          : s.transfer.done.replace("{label}", summarise(result.ok.length, rows.length)).replace("{name}", memberLabel(member, member.chann_uid)),
+        result.failed.length ? "error" : "ok",
+      );
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
   async function promoteChosen() {
     // Only a lead can be confirmed; a contact among the chosen rows is
     // skipped rather than sent to a route that would refuse it.
@@ -272,6 +304,7 @@ export default function CustomerList({ liffId }: { liffId: string }) {
   // Every control is gated on the key its route actually checks (C7);
   // a suspended shop offers none of them (C4).
   const can = (key: string) => !session.suspended && permissions.has(key);
+  const members = useSalesMembers(token, licenseId, can("reassign_records") && session.ready);
 
   /** Round 19g: open the conversation with a customer who is linked on LINE. */
   async function chatWith(customer: Customer) {
@@ -351,7 +384,7 @@ export default function CustomerList({ liffId }: { liffId: string }) {
       <div className="list-head">
         <Count shown={visible.length} total={totalHeld ?? customers.length} />
         <div className="list-tools">
-          {(can("customer.update") || can("customer.archive")) && visible.length > 0 && !selection.on && (
+          {(can("customer.update") || can("customer.archive") || can("reassign_records")) && visible.length > 0 && !selection.on && (
             <button type="button" className="btn" data-variant="quiet" onClick={selection.enter}>
               {t.dashboard.list.selectMode}
             </button>
@@ -480,6 +513,16 @@ export default function CustomerList({ liffId }: { liffId: string }) {
               {t.dashboard.customers.promoteMany.replace("{n}", String(selection.count))}
             </button>
           )}
+          {can("reassign_records") && members.length > 0 && (
+            <button
+              type="button"
+              className="btn"
+              disabled={bulkBusy || selection.count === 0}
+              onClick={() => setHandingOver(true)}
+            >
+              {s.transfer.many.replace("{n}", String(selection.count))}
+            </button>
+          )}
           {can("customer.archive") && (
             <button
               type="button"
@@ -493,6 +536,14 @@ export default function CustomerList({ liffId }: { liffId: string }) {
           )}
         </BulkBar>
       )}
+      <OwnerSheet
+        open={handingOver}
+        count={selection.count}
+        members={members}
+        busy={bulkBusy}
+        onClose={() => setHandingOver(false)}
+        onConfirm={(m) => void handChosenTo(m)}
+      />
       <ConfirmDialog request={confirming} onClose={closeConfirm} busy={Boolean(busyId) || bulkBusy} />
     </SalesShell>
   );

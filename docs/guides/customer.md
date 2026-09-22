@@ -83,3 +83,13 @@ _EN: After the repair — The moment the technician closes the job you are told 
 [IMAGE: customer-pdpa — แชท LINE ข้อความ 'ขอข้อมูลของฉัน' ตอบกลับเป็นลิงก์หน้าสรุปข้อมูล และปุ่ม 'ยืนยันลบข้อมูล' สีส้ม ไอคอนโล่ PDPA]
 
 _EN: Your personal data (PDPA) — The first time, consent is asked before linking a shop (answer "accept"). "my data" gives a 24-hour link to a page with everything; "delete my data" plus a confirmation erases your name, phone, address, chat lines and pictures from every shop (job history stays, without your name). The profile section on the home screen has the same buttons._
+
+## 9. ใบแจ้งหนี้และใบเสร็จ
+
+พิมพ์ "ใบแจ้งหนี้ของฉัน" หรือ "ยอดค้าง" เพื่อดูใบแจ้งหนี้ของคุณกับร้านนี้ ยอดที่ค้าง และวันครบกำหนด · พิมพ์ "ขอใบเสร็จ" — ถ้าชำระครบแล้วจะได้ลิงก์ใบเสร็จ ถ้ายังค้างระบบบอกยอดค้างและทางร้านจะติดต่อเรื่องช่องทางชำระ · เมื่อร้านออกใบเสร็จ ระบบส่งลิงก์มาให้ในแชทนี้เอง · บนหน้าจอลูกค้ามีส่วน "ใบแจ้งหนี้และใบเสร็จ" พร้อมปุ่มเปิด PDF
+
+พิมพ์: `ขอใบเสร็จ`
+
+[IMAGE: customer-invoices — หน้าจอแชท: ลูกค้าพิมพ์ 'ขอใบเสร็จ' บอทตอบ 'ใบเสร็จของ INV-2026-0001 (ยอด 32,100.00 บาท):' พร้อมลิงก์ ไอคอนใบเสร็จสีส้ม]
+
+_EN: Invoices and receipts — Type "my invoices" or "outstanding" to see your invoices with this shop, what is owed and when it is due. "receipt": the receipt link once paid in full; otherwise what is outstanding, and the shop will contact you about how to pay. When the shop issues a receipt the link arrives in this chat. The home screen has the same list with PDF buttons._

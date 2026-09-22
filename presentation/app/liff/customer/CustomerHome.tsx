@@ -13,7 +13,7 @@ import { ProfileCard } from "../_profile-card";
 import { ShopSwitcher } from "../_shop-switcher";
 import { ListFilters, matchesQuery, optionsFrom } from "../_filters";
 import { Ticket, TicketRow } from "../_tickets";
-import { Membership, completeLiffRedirect, initLiffSession, proxyHeaders } from "../_shared";
+import { Membership, completeLiffRedirect, initLiffSession, openExternal, proxyHeaders } from "../_shared";
 import { ConfirmDialog, useConfirm } from "../_confirm";
 
 type Warranty = {
@@ -45,6 +45,18 @@ type StoreProduct = {
 type ChatSessionView = { id: string; status: string };
 type ChatLine = { id: string; sender_type: string; content: string; image_url?: string | null; created_at: string };
 
+type CustomerInvoice = {
+  id: string;
+  invoice_id: string;
+  status: string;
+  total: string;
+  outstanding: string;
+  due_date?: string | null;
+  is_overdue: boolean;
+  generated_document_id?: string | null;
+  receipt_document_id?: string | null;
+};
+
 type Order = {
   id: string;
   deal_id: string;
@@ -67,7 +79,7 @@ type Order = {
  * proves better than typing would.
  */
 export default function CustomerHome({ liffId }: { liffId: string }) {
-  const { t, bindSession } = useLanguage();
+  const { t, locale, bindSession } = useLanguage();
   const statusLabel = (status: string) =>
     (t.dashboard.tickets.status as Record<string, string>)[status] ?? status;
 
@@ -107,6 +119,7 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
   const [shopResults, setShopResults] = useState<StoreProduct[]>([]);
   const [shopSearched, setShopSearched] = useState(false);
   const [orders, setOrders] = useState<Order[]>([]);
+  const [invoices, setInvoices] = useState<CustomerInvoice[]>([]);
 
   // Phase 15: the customer's conversation with this shop — the same
   // thread the chat's "คุยกับร้าน" runs; the shop answers from its
@@ -124,17 +137,20 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
     async (currentToken = token, license = licenseId) => {
       if (!currentToken || !license) return;
       const headers = proxyHeaders(currentToken, license, "customer");
-      const [ticketsRes, warrantiesRes, surveyRes, ordersRes] = await Promise.all([
+      const [ticketsRes, warrantiesRes, surveyRes, ordersRes, invoicesRes] = await Promise.all([
         fetch(`/api/phase2/licenses/${license}/tickets`, { headers }),
         fetch(`/api/phase2/licenses/${license}/warranties/mine`, { headers }),
         fetch(`/api/phase2/licenses/${license}/surveys/pending`, { headers }),
         fetch(`/api/phase2/licenses/${license}/deals/mine`, { headers }),
+        // Round 20V: their own bills and receipts — the route narrows a
+        // customer principal to the rows whose contact is theirs.
+        fetch(`/api/phase2/licenses/${license}/invoices`, { headers }),
       ]);
       // A failed load must not read as "you have no repairs": the empty
       // state and the error state are different facts, and a customer
       // who sees the first when the second is true stops trusting the
       // page. Same rule the technician home applies.
-      const failed = [ticketsRes, warrantiesRes, surveyRes, ordersRes].find((res) => !res.ok);
+      const failed = [ticketsRes, warrantiesRes, surveyRes, ordersRes, invoicesRes].find((res) => !res.ok);
       if (failed) {
         throw new Error(
           failed.status === 403
@@ -145,6 +161,12 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
       setTickets((await ticketsRes.json()) as Ticket[]);
       setWarranties((await warrantiesRes.json()) as Warranty[]);
       setOrders((await ordersRes.json()) as Order[]);
+      // A draft is the shop's, not yet the customer's; a void one never was.
+      setInvoices(
+        ((await invoicesRes.json()) as CustomerInvoice[]).filter(
+          (row) => row.status !== "draft" && row.status !== "void",
+        ),
+      );
       const pending = (await surveyRes.json()) as {
         survey: Survey | null;
         ticket: Ticket | null;
@@ -153,6 +175,29 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
       setSurveyTicket(pending.ticket);
     },
     [token, licenseId, t],
+  );
+
+  /** A signed https link to the customer's own invoice or receipt PDF —
+   *  opened by the browser, never a blob: URL (LINE refuses those). */
+  const openCustomerDocument = useCallback(
+    async (documentId: string) => {
+      if (!token || !licenseId) return;
+      try {
+        const response = await fetch(
+          `/api/phase2/licenses/${licenseId}/documents/${documentId}/link`,
+          { headers: proxyHeaders(token, licenseId, "customer") },
+        );
+        if (!response.ok) {
+          say(`${t.dashboard.loadFailed} (${response.status})`, "error");
+          return;
+        }
+        const { url } = (await response.json()) as { url: string };
+        openExternal(url);
+      } catch (error) {
+        say(error instanceof Error ? error.message : t.common.error, "error");
+      }
+    },
+    [token, licenseId, say, t],
   );
 
   const loadChat = useCallback(
@@ -851,6 +896,73 @@ export default function CustomerHome({ liffId }: { liffId: string }) {
                   </li>
                 ))}
               </ul>
+            )}
+          </section>
+
+          <section className="section">
+            <div className="section-head">
+              <h2>
+                {t.dashboard.customer.invoices} ({invoices.length})
+              </h2>
+            </div>
+            {invoices.length === 0 ? (
+              <div className="empty">
+                <p>{t.dashboard.customer.noInvoices}</p>
+              </div>
+            ) : (
+              <>
+                <ul className="list">
+                  {invoices.map((row) => (
+                    <li key={row.id} className="card" data-stage={row.status}>
+                      <div className="card-title">
+                        <span className="code">{row.invoice_id}</span>{" "}
+                        {(t.invoice.status as Record<string, string>)[row.status] ?? row.status}
+                        {row.is_overdue ? ` · ${t.dashboard.invoices.overdue}` : ""}
+                      </div>
+                      <div className="card-meta">
+                        {Number(row.total).toLocaleString(locale === "en" ? "en-US" : "th-TH", { minimumFractionDigits: 2 })}
+                        {Number(row.outstanding) > 0
+                          ? ` · ${t.dashboard.customer.outstanding} ${Number(row.outstanding).toLocaleString(locale === "en" ? "en-US" : "th-TH", { minimumFractionDigits: 2 })}`
+                          : ""}
+                        {Number(row.outstanding) > 0 && row.due_date
+                          ? ` · ${t.dashboard.customer.dueOn} ${shortDate(row.due_date)}`
+                          : ""}
+                      </div>
+                      <div className="card-actions">
+                        {row.generated_document_id && (
+                          <button
+                            type="button"
+                            className="btn"
+                            onClick={() => void openCustomerDocument(String(row.generated_document_id))}
+                          >
+                            {t.dashboard.customer.invoicePdf}
+                          </button>
+                        )}
+                        {row.receipt_document_id && (
+                          <button
+                            type="button"
+                            className="btn"
+                            data-variant="primary"
+                            onClick={() => void openCustomerDocument(String(row.receipt_document_id))}
+                          >
+                            {t.dashboard.customer.receipt}
+                          </button>
+                        )}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+                {invoices.some((row) => Number(row.outstanding) > 0) && (
+                  <p className="footnote">
+                    {t.dashboard.customer.totalOwed.replace(
+                      "{total}",
+                      invoices
+                        .reduce((sum, row) => sum + Number(row.outstanding || 0), 0)
+                        .toLocaleString(locale === "en" ? "en-US" : "th-TH", { minimumFractionDigits: 2 }),
+                    )}
+                  </p>
+                )}
+              </>
             )}
           </section>
           </>

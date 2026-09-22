@@ -270,13 +270,24 @@ def _customer():
 
 
 class TestCustomerCatchAll:
-    @pytest.mark.parametrize("phrasing", ["จ่ายเงินยังไง", "ขอใบเสร็จ", "asdfgh"])
+    @pytest.mark.parametrize("phrasing", ["จ่ายเงินยังไง", "asdfgh"])
     async def test_not_a_fault_opens_no_job_and_offers_the_shop(self, phrasing):
         client = _customer()
         reply, calls = await say(client, "customer", phrasing)
         assert not [r for r in client.recorded if r[0] == "create_ticket"], phrasing
         assert "ยังไม่แน่ใจ" in reply.text
         assert any(send.startswith("คุยกับร้าน ") for _l, send in reply.quick_replies)
+
+    @pytest.mark.parametrize("phrasing", ["ขอใบเสร็จ", "ใบแจ้งหนี้ของฉัน", "ยอดค้าง"])
+    async def test_a_receipt_or_bill_question_is_answered_not_shrugged(self, phrasing):
+        """Round 20V: these two sat on the known-unanswered list. Now the
+        customer's own bills answer them — here, with none on file, the
+        honest "no invoices yet" — and no repair job is opened."""
+        client = _customer()
+        reply, calls = await say(client, "customer", phrasing)
+        assert not [r for r in client.recorded if r[0] == "create_ticket"], phrasing
+        assert "ยังไม่แน่ใจ" not in reply.text
+        assert "ยังไม่มีใบแจ้งหนี้" in reply.text
 
     @pytest.mark.parametrize("phrasing", ["ราคาแอร์เท่าไหร่", "มีแอร์รุ่นไหนบ้าง", "อยากซื้อแอร์"])
     async def test_a_product_question_points_at_the_storefront(self, phrasing):

@@ -502,8 +502,13 @@ CUSTOMER = [
        ai={"action": "suggest", "entity": None, "fields": {}, "missing": []}),
     _e("โอนเงินได้ไหม รับบัตรเครดิตไหม", "c.payment", "question payment",
        ai={"action": "suggest", "entity": None, "fields": {}, "missing": []}),
-    _e("ขอใบเสร็จด้วยค่ะ", "c.payment", "polite_prefix particle",
-       ai={"action": "suggest", "entity": None, "fields": {}, "missing": []}),
+    # ---- invoices and receipts (round 20V) — the model's real answers, 22 ก.ย. 2569
+    _e("ขอใบเสร็จด้วยค่ะ", "c.invoice", "polite_prefix particle",
+       ai={"action": "read", "entity": "invoice", "fields": {"document": "receipt"}, "missing": []}),
+    _e("ใบแจ้งหนี้ของฉันค่ะ", "c.invoice", "particle",
+       ai={"action": "read", "entity": "invoice", "fields": {}, "missing": []}),
+    _e("ยอดค้างเท่าไหร่", "c.invoice", "question",
+       ai={"action": "read", "entity": "invoice", "fields": {"scope": "outstanding"}, "missing": []}),
     # ---- profile / orders / language ----------------------------------------
     _e("ข้อมูลของฉันค่ะ", "c.profile", "particle",
        ai={"action": "read", "entity": "profile", "fields": {}, "missing": []}),

@@ -82,6 +82,17 @@ ACCEPTED_TS: dict[tuple[str, str], str] = {
     ("ServiceReports.tsx", "PdfResult"): "POST service-reports/{id}/document returns {document_id, sha256, url} from routers_phase2",
     ("MemberManagement.tsx", "MemberRow"): "GET licenses/{id}/members?include_removed=1 is composed by routers_phase2: one row per (member, OA) with channel, is_owner, joined_at and the profile's display_name/phone",
     ("DocumentTemplates.tsx", "InUse"): "GET document-templates/in-use is composed by routers_phase2 from documents/selection.py: {source, template_id, template_name, version_id, version} per document type",
+    # Round 20V — GET surveys/summary is a dict built by phase14.survey_summary
+    # (counts, average, spread, per technician, latest answers), not a schema.
+    ("Satisfaction.tsx", "Summary"): "GET surveys/summary is built by ApprovalRepository.survey_summary, not a schema",
+    ("Satisfaction.tsx", "Technician"): "one row of survey_summary['technicians']",
+    ("Satisfaction.tsx", "Recent"): "one row of survey_summary['recent']",
+    # The rule's own JSON (assignment_engine.py's keys) plus `summary` from
+    # describe_rule, added by routers_phase2's assignment-rules routes.
+    ("CompanyProfile.tsx", "Rule"): "GET/PUT assignment-rules: AssignmentRuleOut plus rules_json's engine keys and `summary` from describe_rule",
+    ("CompanyProfile.tsx", "RuleCriterion"): "one entry of rules_json.match_criteria (assignment_engine.py)",
+    ("CompanyProfile.tsx", "RuleJson"): "the rules_json JSON column, keyed as assignment_engine.py reads it",
+    ("CompanyProfile.tsx", "RuleCapacity"): "rules_json.capacity_constraint",
 }
 
 # Application-composed fields any TS type may declare (added by routers_phase2).
@@ -92,6 +103,10 @@ COMPOSED_FIELDS = {
     "reason_code",  # _with_reason (C11)
     "ready", "missing",  # dispatch-check
     "url", "sha256", "generated_document_id", "output_path", "renderer",  # documents
+    # The invoice's frozen snapshot (round 20V): the page reads the lines and
+    # the grand total out of `data_snapshot`, which the Data tier stores as
+    # opaque JSON — its keys are the Application's snapshot contract.
+    "line_items", "grand_total",
     "created",  # open chat session
     "summary",  # approval workflow
     # routers_phase2 adds it to each row of GET document-templates/{id}/versions:

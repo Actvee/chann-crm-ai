@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+import { ConfirmDialog, useConfirm } from "../../_confirm";
+import { BulkBar, SelectCheck, runEach, useBulkSummary, useSelection } from "../../_bulk";
 import { FieldRow } from "../../_field-row";
 import { ListFilters } from "../../_filters";
 import { usePagedList } from "../../_paged-list";
@@ -53,6 +55,16 @@ export default function ProductList({ liffId }: { liffId: string }) {
   const [status, setStatus] = useState(t.dashboard.opening);
   const [tone, setTone] = useState<"ok" | "error" | undefined>();
   const [category, setCategory] = useState("");
+  // Round 20V: retiring a product. POST .../archive has existed behind
+  // product.manage and chat's "ลบสินค้า" since 11 ก.ย.; this list had no
+  // button, and docs claimed the page owned the deletion (owner's gap
+  // list, 21 ก.ย. 2569). Asked first, one row or many, saying what the
+  // archive leaves alone.
+  const { request: confirming, ask, close: closeConfirm } = useConfirm();
+  const [busyId, setBusyId] = useState("");
+  const selection = useSelection();
+  const summarise = useBulkSummary();
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   const say = useCallback((message: string, kind?: "ok" | "error") => {
     setStatus(message);
@@ -157,6 +169,72 @@ export default function ProductList({ liffId }: { liffId: string }) {
   // The list itself needs only product.read (review C8); changing it
   // needs product.manage. A suspended shop changes nothing.
   const canManage = !session.suspended && permissions.has("product.manage");
+
+  const productLabel = (product: Product) => product.product_name || product.product_id || "—";
+  const productCode = (product: Product) => product.product_id || product.sku || "";
+
+  async function archiveOne(product: Product) {
+    const ok = await ask({
+      action: s.products.archiveAction,
+      target: productLabel(product),
+      code: productCode(product),
+      affects: [s.products.archiveKeepsDeals],
+      reversible: s.products.archiveKeepsRow,
+      confirmLabel: s.products.archive,
+    });
+    if (!ok) return;
+    setBusyId(product.id);
+    try {
+      const response = await fetch(
+        `/api/phase2/licenses/${licenseId}/products/${encodeURIComponent(productCode(product) || product.id)}/archive`,
+        { method: "POST", headers: proxyHeaders(token, licenseId) },
+      );
+      if (!response.ok) {
+        say(await failureText(response), "error");
+        return;
+      }
+      // Archived rows leave the list: the route filters them out, so the
+      // page drops the row rather than refetching the whole catalogue.
+      list.setRows((rows) => rows.filter((row) => row.id !== product.id));
+      say(s.products.archived.replace("{name}", productLabel(product)).replace("{code}", productCode(product)), "ok");
+    } catch {
+      say(t.common.error, "error");
+    } finally {
+      setBusyId("");
+    }
+  }
+
+  const chosen = () => products.filter((row) => selection.ids.has(row.id));
+
+  async function archiveChosen() {
+    const rows = chosen();
+    if (rows.length === 0) return;
+    const ok = await ask({
+      action: s.products.archiveAction,
+      target: s.products.archiveManyTarget.replace("{n}", String(rows.length)),
+      code: rows.slice(0, 6).map(productLabel).join(", ") + (rows.length > 6 ? " …" : ""),
+      affects: [s.products.archiveKeepsDeals],
+      reversible: s.products.archiveKeepsRow,
+      confirmLabel: s.products.archiveMany.replace("{n}", String(rows.length)),
+    });
+    if (!ok) return;
+    setBulkBusy(true);
+    say(t.dashboard.working);
+    try {
+      const result = await runEach(rows, async (row) => {
+        const response = await fetch(
+          `/api/phase2/licenses/${licenseId}/products/${encodeURIComponent(productCode(row) || row.id)}/archive`,
+          { method: "POST", headers: proxyHeaders(token, licenseId) },
+        );
+        return response.ok;
+      });
+      await load();
+      selection.leave();
+      say(summarise(result.ok.length, rows.length), result.failed.length ? "error" : "ok");
+    } finally {
+      setBulkBusy(false);
+    }
+  }
 
   return (
     <SalesShell
@@ -266,6 +344,11 @@ export default function ProductList({ liffId }: { liffId: string }) {
         {canManage && (
           <div className="list-tools">
             <CsvImport kind="products" token={token} licenseId={licenseId} onDone={() => load()} />
+            {visible.length > 0 && !selection.on && (
+              <button type="button" className="btn" data-variant="quiet" onClick={selection.enter}>
+                {t.dashboard.list.selectMode}
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -285,7 +368,19 @@ export default function ProductList({ liffId }: { liffId: string }) {
       ) : (
         <ul className="list">
           {visible.map((product) => (
-            <li key={product.id} className="card">
+            <li
+              key={product.id}
+              className="card"
+              data-selectable={selection.on ? "true" : undefined}
+              data-selected={selection.on && selection.ids.has(product.id) ? "true" : undefined}
+            >
+              {selection.on && (
+                <SelectCheck
+                  checked={selection.ids.has(product.id)}
+                  onChange={() => selection.toggle(product.id)}
+                  label={t.dashboard.list.selectRow.replace("{name}", productLabel(product))}
+                />
+              )}
               <div className="card-title">{product.product_name || "—"}</div>
               <div className="card-meta">
                 <span className="code">
@@ -326,6 +421,15 @@ export default function ProductList({ liffId }: { liffId: string }) {
                   >
                     {t.common.edit}
                   </button>
+                  <button
+                    type="button"
+                    className="btn"
+                    data-variant="danger"
+                    disabled={busyId === product.id || bulkBusy}
+                    onClick={() => void archiveOne(product)}
+                  >
+                    {busyId === product.id ? t.dashboard.saving : s.products.archive}
+                  </button>
                 </div>
               )}
             </li>
@@ -339,6 +443,27 @@ export default function ProductList({ liffId }: { liffId: string }) {
           </button>
         </div>
       )}
+      {selection.on && (
+        <BulkBar
+          count={selection.count}
+          shown={visible.length}
+          onSelectAll={() => selection.select(visible.map((row) => row.id))}
+          onClear={selection.clear}
+          onDone={selection.leave}
+          busy={bulkBusy}
+        >
+          <button
+            type="button"
+            className="btn"
+            data-variant="danger"
+            disabled={bulkBusy || selection.count === 0}
+            onClick={() => void archiveChosen()}
+          >
+            {s.products.archiveMany.replace("{n}", String(selection.count))}
+          </button>
+        </BulkBar>
+      )}
+      <ConfirmDialog request={confirming} onClose={closeConfirm} busy={Boolean(busyId) || bulkBusy} />
     </SalesShell>
   );
 }

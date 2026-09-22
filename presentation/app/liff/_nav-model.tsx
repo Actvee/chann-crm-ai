@@ -61,6 +61,12 @@ function glyph(children: ReactNode): ReactNode {
 }
 
 export const ICONS = {
+  invoices: glyph(
+    <>
+      <path d="M6 3.5h12a1 1 0 0 1 1 1v16l-3-1.8-3 1.8-3-1.8-3 1.8V4.5a1 1 0 0 1 1-1z" />
+      <path d="M9 8.5h6M9 12h6M9 15.5h3" />
+    </>,
+  ),
   overview: glyph(<path d="M3 10.6 12 4l9 6.6V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z" />),
   appointments: glyph(
     <>
@@ -129,6 +135,13 @@ export const ICONS = {
     <>
       <circle cx="12" cy="12" r="8.6" />
       <path d="m8 12.2 2.8 2.8L16.2 9.6" />
+    </>,
+  ),
+  satisfaction: glyph(
+    <>
+      <circle cx="12" cy="12" r="8.6" />
+      <path d="M8.6 14.2c.8 1.3 2 2 3.4 2s2.6-.7 3.4-2" />
+      <path d="M9.2 9.6h.01M14.8 9.6h.01" strokeWidth="2.4" />
     </>,
   ),
   aiReports: glyph(
@@ -266,6 +279,13 @@ export function navGroups(t: Dictionary, audience: Audience): NavGroup[] {
         // the longer prefix first when both would light up.
         { key: "reports", href: "/liff/sales/reports", label: t.dashboard.reports.title, icon: ICONS.reports, needs: ["ticket.read"] },
         { key: "aiReports", href: "/liff/sales/reports/ai", label: t.dashboard.aiReports.title, icon: ICONS.aiReports, needs: ["view_reports"] },
+        // Round 20V: the survey answers, collected since Phase 14 and
+        // never shown. Beside the AI reports, behind the same key.
+        { key: "satisfaction", href: "/liff/sales/reports/satisfaction", label: t.dashboard.satisfaction.title, icon: ICONS.satisfaction, needs: ["view_reports"] },
+        // Round 20V: the bill after the quotation. Paperwork, not selling —
+        // an invoice is a document the shop keeps and a receipt it hands
+        // over, and CS reads them without ever selling anything.
+        { key: "invoices", href: "/liff/sales/invoices", label: t.dashboard.invoices.title, icon: ICONS.invoices, needs: ["invoice.read"] },
         { key: "approvals", href: "/liff/sales/approvals", label: t.dashboard.approvals.title, icon: ICONS.approvals, needs: ["approval.view"] },
         { key: "templates", href: "/liff/sales/templates", label: t.dashboard.templates.title, icon: ICONS.templates, needs: ["setting.manage"] },
         // The page has existed and been deployed all along with no way in:

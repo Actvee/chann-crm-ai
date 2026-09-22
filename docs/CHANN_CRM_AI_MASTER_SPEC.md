@@ -4070,6 +4070,7 @@ Appendix เดิมเขียน `contact.read/create/update/archive` (Phase
 | `assignment_rule.manage` | ตั้ง policy prompt → assignment rule | 11 | 🆕 ใหม่ |
 | `ticket.read/create/update/assign/close` | จัดการ ticket + assign ให้ช่าง | 12 | เดิม |
 | `quote.read/create/update` | จัดการ quote | 10 | เดิม |
+| `invoice.read/create/update/void` | ใบแจ้งหนี้หลังใบเสนอราคา: ดู · สร้างจาก quote/deal · ออก PDF+รับชำระ+ออกใบเสร็จ (`update`) · ยกเลิก (`void` แยก key เพราะเป็นการทำให้หนี้หายไป) — ลูกค้าถือ `invoice.read` เฉพาะใบของตัวเอง | 20V | 🆕 ใหม่ |
 | `service_report.read/create/update` | จัดการ service report | 13 | เดิม |
 | `approval.view/approve/reject` | approval workflow | 14 | เดิม |
 | `chat_session.view` | ดู chat session ที่เปิดอยู่ก่อน assign | 15 | 🆕 ใหม่ |
@@ -4094,8 +4095,8 @@ Appendix เดิมเขียน `contact.read/create/update/archive` (Phase
 
 - **Owner**: ทุก key (ตามเดิม — fixed role)
 - **Admin**: ทุก key ยกเว้น `platform.admin.*` (เดิม + เพิ่ม `product.manage`, `team.manage`, `assignment_rule.manage`, `chat_session.*`, `billing.manage`, `pdpa.request.*`)
-- **Member (Sales/Tech ทั่วไป)**: `customer.*`, `deal.*`, `note.*`, `followup.*`, `quote.*`, `ticket.*`, `chat_session.view/claim/reply`, `view_reports`, `reassign_records`, `billing.view` — ไม่มี `*.manage`, ไม่มี `chat_session.transfer`
-- **CS**: `ticket.*`, `service_report.*`, `approval.*`, `chat_session.*`, `audit_log.view` ไม่เปิด `view_reports` เป็น default (ตามหลักการข้อ 22)
+- **Member (Sales/Tech ทั่วไป)**: `customer.*`, `deal.*`, `note.*`, `followup.*`, `quote.*`, `invoice.read/create/update` (ไม่มี `invoice.void`), `ticket.*`, `chat_session.view/claim/reply`, `view_reports`, `reassign_records`, `billing.view` — ไม่มี `*.manage`, ไม่มี `chat_session.transfer`
+- **CS**: `ticket.*`, `service_report.*`, `approval.*`, `chat_session.*`, `invoice.read`, `audit_log.view` ไม่เปิด `view_reports` เป็น default (ตามหลักการข้อ 22)
 
 ---
 
