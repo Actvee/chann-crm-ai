@@ -247,6 +247,11 @@ ACTION_PERMISSIONS: dict[tuple[str, str], str] = {
     ("create", "assignment_rule"): "setting.manage",
     ("update", "assignment_rule"): "setting.manage",
     ("delete", "assignment_rule"): "setting.manage",
+    # Round 21B: the owner's outside access. setting.manage gates the road;
+    # the handlers add "owner only" on top, and the Data tier enforces it.
+    ("read", "api_key"): "setting.manage",
+    ("delete", "api_key"): "setting.manage",
+    ("create", "api_key"): "setting.manage",
     # The satisfaction surveys, collected since Phase 14 and never read
     # back. view_reports, like the AI reports beside them.
     ("read", "survey"): "view_reports",
@@ -12232,6 +12237,8 @@ DASHBOARD_PATHS = {
     # The document-templates page, so a chat-designed draft can be opened,
     # previewed and published on screen as well as from the reply.
     "templates": "templates",
+    # Round 21B: the owner's API-key page (Task 13 links here from chat).
+    "api-keys": "api-keys",
     "index": "",
 }
 
@@ -16275,6 +16282,193 @@ async def _handle_invite_revoke(
     )
 
 
+# ------------------------------------------------ round 21B: API keys from chat
+
+API_KEY_LIST_HEAD = {"th": "API key ของร้าน:", "en": "This shop's API keys:"}
+API_KEY_LINE = {"th": "• {name} — {prefix}… · {last}", "en": "• {name} — {prefix}… · {last}"}
+API_KEY_LAST_USED = {"th": "ใช้ล่าสุด {when}", "en": "last used {when}"}
+API_KEY_NEVER_USED = {"th": "ยังไม่เคยใช้", "en": "never used"}
+API_KEY_LIST_FOOT = {"th": "สร้าง/เพิกถอนได้ที่หน้า API ในแดชบอร์ด", "en": "Create or revoke on the dashboard's API page"}
+API_KEY_NONE = {
+    "th": "ร้านยังไม่มี API key — สร้างได้ที่หน้า API ในแดชบอร์ด (เจ้าของร้านเท่านั้น) แล้วส่งให้ผู้พัฒนาระบบภายนอก",
+    "en": "No API keys yet — make one on the dashboard's API page (owner only) and hand it to the outside developer.",
+}
+API_KEY_OWNER_ONLY = {
+    "th": "API key จัดการได้เฉพาะเจ้าของร้านครับ",
+    "en": "Only the shop owner manages API keys.",
+}
+API_KEY_CREATE_ON_SCREEN = {
+    "th": "สร้าง API key ทำที่หน้าจอเท่านั้นครับ — key จะแสดงครั้งเดียวและไม่ควรอยู่ในแชท กดปุ่มด้านล่างเพื่อเปิดหน้า API",
+    "en": "API keys are made on the screen only — the key is shown once and should never sit in a chat. Tap below to open the API page.",
+}
+API_KEY_WHICH = {
+    "th": "จะเพิกถอน key ไหนครับ — {names}\nพิมพ์ชื่อด้วย เช่น \"เพิกถอน API key {first}\"",
+    "en": "Which key — {names}? Name it, e.g. \"revoke API key {first}\".",
+}
+API_KEY_NOT_FOUND = {"th": "ไม่พบ API key ชื่อ \"{name}\"", "en": "No API key named \"{name}\"."}
+API_KEY_REVOKE_ASK = {
+    "th": "จะเพิกถอน API key \"{name}\" ({prefix}…) — ระบบภายนอกที่ใช้ key นี้จะเรียกไม่ได้ทันที ยืนยันไหมครับ",
+    "en": "Revoke API key \"{name}\" ({prefix}…)? Any system using it stops at once. Confirm?",
+}
+# `name` has no uniqueness constraint (round 21B review — CLAUDE.md's rule
+# "ชื่อซ้ำต้องได้ปุ่มเลือก … ห้ามเดา ห้ามเงียบ"): two live keys can share a
+# name, and picking the first one revoked whichever came first in the
+# list, silently, from underneath the person asking for the other one.
+# The picker carries the same warning the single-key confirm
+# (API_KEY_REVOKE_ASK) shows: whichever one is chosen, something outside
+# stops working at once — and the picker is the LAST screen before the
+# confirm button, so leaving it out here meant the person could tap
+# through without ever being told (round 21B review).
+API_KEY_REVOKE_AMBIGUOUS = {
+    "th": "มี API key หลายรายการชื่อ \"{name}\" เลือกอันไหนครับ — ระบบภายนอกที่ใช้ key นี้จะเรียกไม่ได้ทันที\n{options}",
+    "en": 'Several API keys are named "{name}" — which one? Any system using it stops at once.\n{options}',
+}
+API_KEY_REVOKED = {"th": "เพิกถอน API key \"{name}\" แล้ว", "en": "API key \"{name}\" revoked."}
+API_KEY_REVOKE_CONFIRM_PREFIX = "ยืนยันเพิกถอน API key "
+API_KEY_LIST_LINES = 10
+# The display prefix is always exactly "chann_live_" + 4 characters
+# (data/chann_data/repositories/api_keys.py PREFIX_DISPLAY_LEN) — unique by
+# construction, so a match on it never needs a picker. Matches equally
+# inside a pasted full key (which starts with the same 15 characters).
+_API_KEY_PREFIX_RE = re.compile(r"chann_live_[A-Za-z0-9]{4}")
+
+
+def _is_owner_here(ctx: ResolvedContext) -> bool:
+    first = ctx.memberships[0] if ctx.memberships else {}
+    return bool(first.get("is_owner"))
+
+
+def _api_key_line(row: dict, language: str) -> str:
+    last = (_t(API_KEY_LAST_USED, language).format(when=_short_date(row["last_used_at"]).strip())
+            if row.get("last_used_at") else _t(API_KEY_NEVER_USED, language))
+    return _t(API_KEY_LINE, language).format(name=row.get("name") or "-", prefix=row.get("key_prefix") or "", last=last)
+
+
+def _live_api_keys(rows: list[dict]) -> list[dict]:
+    return [r for r in rows if not r.get("revoked_at")]
+
+
+def _api_key_prefix_in(text: str) -> str:
+    match = _API_KEY_PREFIX_RE.search(str(text or ""))
+    return match.group(0) if match else ""
+
+
+def _find_api_keys(rows: list[dict], name: str, prefix: str) -> list[dict]:
+    """Every live key the identifier could mean.
+
+    Prefix wins outright — it is unique by construction, so a match there
+    is never ambiguous and is checked first. A name is only used when no
+    prefix was given or none matched, and CAN come back with more than one
+    row: that is the case the caller must turn into a choice, not a guess.
+    """
+    if prefix:
+        hit = [r for r in rows if str(r.get("key_prefix") or "").lower() == prefix.lower()]
+        if hit:
+            return hit
+    if name:
+        return [r for r in rows if _normalise(r.get("name") or "") == _normalise(name)]
+    return []
+
+
+async def _handle_api_key_list(
+    client: DataClient, *, ctx: ResolvedContext, license_id, permission_keys: list[str], language: str,
+) -> ChatReply:
+    if "setting.manage" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    if not _is_owner_here(ctx):
+        return ChatReply(text=_t(API_KEY_OWNER_ONLY, language))
+    try:
+        rows = _live_api_keys(await client.list_api_keys(str(license_id)))
+    except Exception:  # noqa: BLE001
+        log.exception("api key list")
+        return ChatReply(text=unavailable_reply(language))
+    button = _dashboard_button("api-keys", language)
+    if not rows:
+        return ChatReply(text=_t(API_KEY_NONE, language), quick_reply_url=button)
+    lines = _capped([_api_key_line(r, language) for r in rows[:API_KEY_LIST_LINES]], len(rows), language)
+    return ChatReply(
+        text=f"{_t(API_KEY_LIST_HEAD, language)}\n" + "\n".join(lines) + f"\n{_t(API_KEY_LIST_FOOT, language)}",
+        quick_reply_url=button,
+    )
+
+
+async def _handle_api_key_revoke(
+    client: DataClient, *, ctx: ResolvedContext, license_id, intent: dict, message: str,
+    permission_keys: list[str], language: str,
+) -> ChatReply:
+    if "setting.manage" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    if not _is_owner_here(ctx):
+        return ChatReply(text=_t(API_KEY_OWNER_ONLY, language))
+    fields = intent.get("fields") or {}
+    text = (message or "").strip()
+    confirmed = bool(fields.get("confirm")) or text.startswith(API_KEY_REVOKE_CONFIRM_PREFIX)
+    name = str(fields.get("target_name") or fields.get("name") or "").strip()
+    if text.startswith(API_KEY_REVOKE_CONFIRM_PREFIX):
+        name = text[len(API_KEY_REVOKE_CONFIRM_PREFIX):].strip() or name
+    # A prefix is also a valid identifier — typed on its own ("เพิกถอน
+    # API key chann_live_ab12"), or inside the button this handler itself
+    # sends below. Checked first: it is unique by construction, so a hit
+    # here is never ambiguous even when several keys share a name.
+    prefix = _api_key_prefix_in(name) or _api_key_prefix_in(text)
+    try:
+        rows = _live_api_keys(await client.list_api_keys(str(license_id)))
+    except Exception:  # noqa: BLE001
+        log.exception("api key list before revoke")
+        return ChatReply(text=unavailable_reply(language))
+    if not name and not prefix:
+        names = " / ".join(r.get("name") or "-" for r in rows) or "-"
+        return ChatReply(text=_t(API_KEY_WHICH, language).format(names=names, first=(rows[0].get("name") if rows else "…")))
+    candidates = _find_api_keys(rows, name, prefix)
+    if not candidates:
+        return ChatReply(text=_t(API_KEY_NOT_FOUND, language).format(name=name or prefix))
+    if len(candidates) > 1:
+        # Two live keys share this name. CLAUDE.md's standing rule: a
+        # duplicate name becomes a CHOICE, never a guess and never
+        # silence — the same requirement `_AmbiguousName`/`_name_choice`
+        # exist for elsewhere. The button re-sends the confirm prefix with
+        # the KEY'S OWN PREFIX (unique), not the shared name, so tapping
+        # it can never land back here undecided.
+        shown = candidates[:4]
+        lines = [f"{i}. {_api_key_line(c, language)[2:]}" for i, c in enumerate(shown, 1)]
+        return ChatReply(
+            text=_t(API_KEY_REVOKE_AMBIGUOUS, language).format(name=name or prefix, options="\n".join(lines)),
+            quick_replies=[
+                (str(c.get("key_prefix") or ""), f"{API_KEY_REVOKE_CONFIRM_PREFIX}{c.get('key_prefix') or ''}")
+                for c in shown
+            ] + [(_t({"th": "ยกเลิก", "en": "Cancel"}, language), "ยกเลิก")],
+        )
+    match = candidates[0]
+    if not confirmed:
+        return ChatReply(
+            text=_t(API_KEY_REVOKE_ASK, language).format(name=match["name"], prefix=match.get("key_prefix") or ""),
+            quick_replies=[
+                (_t({"th": "ยืนยันเพิกถอน", "en": "Confirm"}, language), f"{API_KEY_REVOKE_CONFIRM_PREFIX}{match['name']}"),
+                (_t({"th": "ยกเลิก", "en": "Cancel"}, language), "ยกเลิก"),
+            ],
+        )
+    try:
+        await client.revoke_api_key(str(license_id), str(match["id"]), actor_id=ctx.chann_uid)
+    except DataTierError as exc:
+        if exc.status_code == 403:
+            return ChatReply(text=_t(API_KEY_OWNER_ONLY, language))
+        log.exception("api key revoke")
+        return ChatReply(text=unavailable_reply(language))
+    except Exception:  # noqa: BLE001
+        log.exception("api key revoke")
+        return ChatReply(text=unavailable_reply(language))
+    return ChatReply(text=_t(API_KEY_REVOKED, language).format(name=match["name"]),
+                     quick_reply_url=_dashboard_button("api-keys", language))
+
+
+def _handle_api_key_create_pointer(ctx: ResolvedContext, language: str, permission_keys: list[str]) -> ChatReply:
+    if "setting.manage" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    if not _is_owner_here(ctx):
+        return ChatReply(text=_t(API_KEY_OWNER_ONLY, language))
+    return ChatReply(text=_t(API_KEY_CREATE_ON_SCREEN, language), quick_reply_url=_dashboard_button("api-keys", language))
+
+
 # ------------------------------------------------ people, roles, and this thread
 #
 # Three capabilities the dashboard has had for months and chat answered
@@ -17199,6 +17393,19 @@ async def _handle_ai_understood_intent(
                 client, ctx=ctx, license_id=license_id, intent=intent,
                 message=message, language=language,
             )
+
+    if entity == "api_key":
+        if action in READ_ACTIONS:
+            return await _handle_api_key_list(
+                client, ctx=ctx, license_id=license_id, permission_keys=permission_keys, language=language,
+            )
+        if action in ("delete", "cancel", "revoke", "reject", "archive"):
+            return await _handle_api_key_revoke(
+                client, ctx=ctx, license_id=license_id, intent=intent, message=message,
+                permission_keys=permission_keys, language=language,
+            )
+        if action in ("create", "update"):
+            return _handle_api_key_create_pointer(ctx, language, permission_keys)
 
     # Understood as a category but not as something with a handler behind
     # it. Saying what IS possible beats "not a feature", which is wrong —
@@ -19913,6 +20120,7 @@ GROUP_LABELS: dict[str, dict[str, str]] = {
     "audit_log": {"th": "ประวัติการใช้งาน", "en": "Audit log"},
     "pdpa": {"th": "คำขอ PDPA", "en": "PDPA requests"},
     "billing": {"th": "การเรียกเก็บเงิน", "en": "Billing"},
+    "api_key": {"th": "API สำหรับระบบภายนอก", "en": "API keys"},
     "general": {"th": "ทั่วไป", "en": "General"},
 }
 
@@ -29188,6 +29396,9 @@ async def _execute_intent(
         # _handle_ai_understood_intent does nothing at all until its entity
         # is on THIS list. It is the list that decides what is reachable.
         "audit_log", "invite",
+        # Round 21B: the same lesson a third time — api_key's handlers live
+        # inside _handle_ai_understood_intent right after invite's.
+        "api_key",
     ):
         # "approval" was handled inside _handle_ai_understood_intent and
         # never dispatched TO it: "มีอะไรรอผมตรวจบ้าง" and "อนุมัติ
@@ -29632,6 +29843,7 @@ ENTITY_DASHBOARD_PAGE: dict[str, tuple[str, dict[str, str]]] = {
     "audit_log": ("history", {"th": "ประวัติการใช้งาน", "en": "Activity"}),
     "invite": ("members", {"th": "สมาชิกและสิทธิ์", "en": "Members and permissions"}),
     "report": ("index", {"th": "แดชบอร์ด", "en": "Dashboard"}),
+    "api_key": ("api-keys", {"th": "API สำหรับระบบภายนอก", "en": "API"}),
 }
 NO_HANDLER_ON_PAGE = {
     "th": "แต่ในแชทยังทำรายการนี้ไม่ได้ ทำได้ที่หน้า \"{page}\" ในแดชบอร์ดครับ",

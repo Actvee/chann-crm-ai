@@ -94,7 +94,14 @@ def refuse_if_suspended(license_status: str | None, method: str | None) -> None:
         return
     raise HTTPException(
         status_code=status.HTTP_423_LOCKED,
-        detail={"error": "tenant_suspended"},
+        # `error` stays the wire code the LIFF pages translate
+        # (presentation/app/liff/sales/_strings.ts). `message` is here for
+        # the external API, whose error body (routers_ext._error_body)
+        # falls back to the CODE when a detail dict carries no human
+        # sentence — an ERP was reading `"message": "tenant_suspended"`
+        # (round 21B review I5).
+        detail={"error": "tenant_suspended",
+                "message": "The shop is suspended — reading is allowed, writing is not."},
     )
 
 

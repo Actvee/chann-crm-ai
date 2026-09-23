@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from ..models import LicenseMember, ServiceTicket, TechnicianTeam, TechnicianTeamMember
 from .locks import serialise
-from .search import like_any, page
+from .search import like_any, page, since
 from .tenant_scope import TenantScope
 
 TICKET_STATUSES = frozenset(
@@ -224,7 +224,8 @@ class ServiceTicketRepository:
     )
 
     def _narrow(self, query, scope: TenantScope, *, status: str | None, q: str | None,
-                member_id: uuid.UUID | None, contact_id: uuid.UUID | None = None):
+                member_id: uuid.UUID | None, contact_id: uuid.UUID | None = None,
+                updated_since: datetime | None = None):
         """The one place a ticket list is narrowed — page and count alike.
 
         `member_id` carries the 12.1 visibility predicate. It has to be in
@@ -253,14 +254,16 @@ class ServiceTicketRepository:
         clause = like_any(q, *self.SEARCH)
         if clause is not None:
             query = query.where(clause)
-        return query
+        return since(query, ServiceTicket, updated_since)
 
     def list_for_license(
         self, scope: TenantScope, *, status: str | None = None, q: str | None = None,
-        contact_id: uuid.UUID | None = None, limit: int = 100, offset: int | None = None,
+        contact_id: uuid.UUID | None = None, updated_since: datetime | None = None,
+        limit: int = 100, offset: int | None = None,
     ) -> list[ServiceTicket]:
         query = self._narrow(
             select(ServiceTicket), scope, status=status, q=q, member_id=None, contact_id=contact_id,
+            updated_since=updated_since,
         ).order_by(ServiceTicket.created_at.desc(), ServiceTicket.id.desc())
         return list(self._s.execute(
             page(query, limit=max(1, min(limit, 500)), offset=offset)
@@ -269,11 +272,13 @@ class ServiceTicketRepository:
     def count_for_license(
         self, scope: TenantScope, *, status: str | None = None, q: str | None = None,
         member_id: uuid.UUID | None = None, contact_id: uuid.UUID | None = None,
+        updated_since: datetime | None = None,
     ) -> int:
         """How many match — counted through the SAME visibility predicate."""
         query = self._narrow(
             select(func.count()).select_from(ServiceTicket),
             scope, status=status, q=q, member_id=member_id, contact_id=contact_id,
+            updated_since=updated_since,
         )
         return int(self._s.execute(query).scalar() or 0)
 

@@ -717,13 +717,50 @@ def permissions_overview(c: Canvas):
         x += w + 12
     c.y += 128
 
+
+def sales_api(c: Canvas):
+    """Round 21B — the owner's API page: the list, and the key shown once."""
+    c.dash_frame("API สำหรับระบบภายนอก", "เจ้าของร้านเท่านั้น")
+    d = c.d
+    for i, line in enumerate(wrap(d, "สร้าง key ให้ระบบบัญชี/ERP เรียกข้อมูลร้านนี้ได้ — key ทำงานในนามร้าน เจ้าของสร้างและเพิกถอนเท่านั้น", font(21), 800)):
+        d.text((92, c.y + 14 + i * 28), line, fill=SOFT, font=font(21), anchor="lm")
+    c.y += 72
+    d.text((92, c.y + 18), "2 key", fill=FAINT, font=font(20, True), anchor="lm")
+    bw = int(d.textlength("สร้าง key", font=font(21, True))) + 44
+    d.rounded_rectangle((910 - bw, c.y, 910, c.y + 44), radius=11, fill=c.accent)
+    d.text((910 - bw / 2, c.y + 22), "สร้าง key", fill=WHITE, font=font(21, True), anchor="mm")
+    c.y += 62
+    for name, prefix, last in (("ระบบบัญชี Express", "chann_live_ab12…", "ใช้ล่าสุด 22 ก.ย. 2569"),
+                               ("ร้านค้าออนไลน์", "chann_live_cd34…", "ยังไม่เคยใช้")):
+        d.rounded_rectangle((90, c.y, 910, c.y + 96), radius=16, fill=WHITE, outline=LINE, width=2)
+        d.text((114, c.y + 32), name, fill=INK, font=font(25, True), anchor="lm")
+        px = 114 + int(d.textlength(name, font=font(25, True))) + 16
+        d.text((px, c.y + 33), prefix, fill=SOFT, font=font(20), anchor="lm")
+        d.text((114, c.y + 68), f"สร้างเมื่อ 20 ก.ย. 2569 · {last}", fill=SOFT, font=font(20), anchor="lm")
+        rw = int(d.textlength("เพิกถอน", font=font(20, True))) + 36
+        d.rounded_rectangle((890 - rw, c.y + 28, 890, c.y + 70), radius=10, fill=WHITE, outline="#c2410c", width=2)
+        d.text((890 - rw / 2, c.y + 49), "เพิกถอน", fill="#c2410c", font=font(20, True), anchor="mm")
+        c.y += 108
+    c.y += 6
+    # The sheet after "สร้าง key": the whole key, once.
+    d.rounded_rectangle((90, c.y, 910, c.y + 236), radius=18, fill=WHITE, outline=c.accent, width=3)
+    d.text((114, c.y + 30), "สร้าง key แล้ว — ระบบบัญชี Express", fill=INK, font=font(24, True), anchor="lm")
+    d.rounded_rectangle((114, c.y + 56, 886, c.y + 112), radius=12, fill="#f6f4ef", outline=LINE, width=2)
+    d.text((134, c.y + 84), "chann_live_ab12Kq9ZtP3mWx7LcR2nVb8Yd", fill=INK, font=font(23), anchor="lm")
+    d.text((114, c.y + 138), "คัดลอกเก็บไว้ตอนนี้ — จะไม่แสดงอีก ถ้าหาย ให้สร้างใหม่แล้วเพิกถอนอันเดิม", fill=SOFT, font=font(20), anchor="lm")
+    for label, primary, right in (("ปิด", False, 886), ("คัดลอก", True, 760)):
+        w = int(d.textlength(label, font=font(21, True))) + 44
+        d.rounded_rectangle((right - w, c.y + 166, right, c.y + 212), radius=10, fill=c.accent if primary else WHITE, outline=c.accent, width=2)
+        d.text((right - w / 2, c.y + 189), label, fill=WHITE if primary else c.accent, font=font(21, True), anchor="mm")
+    c.y += 252
+
 SCENES = {
     "customer": {"customer-link": customer_link, "customer-shop": customer_shop, "customer-chat": customer_chat,
                  "customer-register": customer_register, "customer-report": customer_report, "customer-status": customer_status,
                  "customer-after": customer_after, "customer-pdpa": customer_pdpa, "customer-invoices": customer_invoices},
     "technician": {"tech-join": tech_join, "tech-take": tech_take, "tech-checkin": tech_checkin, "tech-finish": tech_finish,
                    "tech-approved": tech_approved},
-    "sales": {"sales-setup": sales_setup, "sales-members": sales_members, "sales-units": sales_units, "sales-dispatch": sales_dispatch, "sales-chats": sales_chats,
+    "sales": {"sales-setup": sales_setup, "sales-members": sales_members, "sales-api": sales_api, "sales-units": sales_units, "sales-dispatch": sales_dispatch, "sales-chats": sales_chats,
               "sales-approve": sales_approve, "sales-crm": sales_crm, "sales-ai-report": sales_ai_report, "sales-help": sales_help,
               "permissions-overview": permissions_overview},
 }

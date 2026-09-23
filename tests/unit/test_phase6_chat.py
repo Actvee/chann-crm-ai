@@ -1073,7 +1073,8 @@ class FakeDataClient:
 
     async def list_invoices_with_total(self, license_id, *, status=None, contact_id=None,
                                        customer_chann_uid=None, q=None, overdue=False,
-                                       deal_id=None, quote_id=None, limit=None, offset=None):
+                                       deal_id=None, quote_id=None, limit=None, offset=None,
+                                       updated_since=None):
         self.recorded.append(("list_invoices", license_id, status, customer_chann_uid, q, overdue))
         rows = list(getattr(self, "_invoices", []))
         if status:
@@ -1091,6 +1092,12 @@ class FakeDataClient:
             rows = [r for r in rows if str(r.get("contact_id")) in mine]
         if q:
             rows = [r for r in rows if q.lower() in str(r.get("invoice_id") or "").lower()]
+        # round 21B: accepted so the external API can pass it without a
+        # TypeError, same convention as list_customers_with_total. Rows
+        # without `updated_at` are seeded fixtures that predate the
+        # cursor, not stale rows a real query would drop, so they stay in.
+        if updated_since is not None:
+            rows = [r for r in rows if not r.get("updated_at") or str(r["updated_at"]) >= updated_since.isoformat()]
         out = [self._invoice_out(r) for r in rows]
         if overdue:
             out = [r for r in out if r["is_overdue"]]
@@ -1545,6 +1552,31 @@ class FakeDataClient:
         row["revoked_at"] = f"{local_today()}T10:00:00+00:00"
         return dict(row)
 
+    async def create_api_key(self, license_id, payload, actor_id=None):
+        self.recorded.append(("create_api_key", license_id, payload, actor_id))
+        rows = getattr(self, "_api_keys", [])
+        row = {
+            "id": f"k{len(rows) + 1}", "license_id": license_id, "name": payload["name"],
+            "key_prefix": "chann_live_ab12", "created_by_chann_uid": actor_id, "last_used_at": None,
+            "revoked_at": None, "created_at": f"{local_today()}T00:00:00+00:00",
+        }
+        self._api_keys = rows + [row]
+        return {**row, "key": "chann_live_" + "ab12" + "x" * 28}
+
+    async def list_api_keys(self, license_id):
+        self.recorded.append(("list_api_keys", license_id))
+        return list(getattr(self, "_api_keys", []))
+
+    async def revoke_api_key(self, license_id, key_id, actor_id=None):
+        self.recorded.append(("revoke_api_key", license_id, key_id, actor_id))
+        for row in getattr(self, "_api_keys", []):
+            if str(row["id"]) == str(key_id):
+                row["revoked_at"] = f"{local_today()}T01:00:00+00:00"
+                return row
+        from chann_app.data_client import DataTierError
+
+        raise DataTierError(404, "api key not found")
+
     async def list_audit_log_with_total(self, license_id, **kwargs):
         """Page and true total, delegating so `recorded` keeps its shape."""
         kwargs.pop("offset", None)
@@ -1607,7 +1639,7 @@ class FakeDataClient:
         ]
 
     async def list_customers_with_total(self, license_id, stage=None, limit=None,
-                                        *, q=None, offset=None):
+                                        *, q=None, offset=None, updated_since=None):
         """Page and true total, the way the real client reads them from the
         body and X-Total-Count. The fake caps too — one that returned
         everything while production capped is exactly the generosity that
@@ -1616,6 +1648,13 @@ class FakeDataClient:
             await self.list_customers(license_id, stage), q,
             ("customer_id", "first_name", "last_name", "phone", "email"),
         )
+        # round 21B: accepted so a caller (the external API) can pass it
+        # without a TypeError. Rows without `updated_at` are seeded fixtures
+        # that predate the cursor, not stale rows a real query would drop,
+        # so they stay in — only a row that names its own timestamp and is
+        # actually older than the cursor is filtered out.
+        if updated_since is not None:
+            rows = [r for r in rows if not r.get("updated_at") or str(r["updated_at"]) >= updated_since.isoformat()]
         total = len(rows)
         if offset:
             rows = rows[int(offset):]
@@ -1688,10 +1727,13 @@ class FakeDataClient:
         return list(self._deals)
 
     async def list_deals_with_total(self, license_id, stage=None, limit=None,
-                                    *, q=None, offset=None):
+                                    *, q=None, offset=None, updated_since=None):
         rows = self._search(
             await self.list_deals(license_id, stage), q, ("deal_id", "notes"),
         )
+        # round 21B: see list_customers_with_total's comment.
+        if updated_since is not None:
+            rows = [r for r in rows if not r.get("updated_at") or str(r["updated_at"]) >= updated_since.isoformat()]
         total = len(rows)
         if offset:
             rows = rows[int(offset):]
@@ -1727,6 +1769,15 @@ class FakeDataClient:
             license_id, status=kwargs.get("status"), visible_to=kwargs.get("visible_to"),
             limit=kwargs.get("limit"),
         )
+        # round 21B: `updated_since` is recorded (round 21B review I4 — a
+        # caller must be able to prove WHAT it forwarded, offset included,
+        # not only that the call did not blow up) and then applied the way
+        # list_customers_with_total's comment describes.
+        updated_since = kwargs.get("updated_since")
+        self.tickets_updated_since = updated_since
+        if updated_since is not None:
+            rows = [r for r in rows
+                    if not r.get("updated_at") or str(r["updated_at"]) >= updated_since.isoformat()]
         q = str(kwargs.get("q") or "").strip().lower()
         if q:
             rows = [
@@ -5378,7 +5429,12 @@ class TestUsageHelp:
         assert reply.text.startswith("วิธีใช้ LINE ทีมขาย")
         # Layered (6 Sep 2026): the menu names the topics with a button each;
         # the customer topic is one tap away and carries the commands.
-        assert "1. " in reply.text and reply.text.count("\n") <= 14
+        # The bound is "a menu, not a wall of text": one line per topic
+        # plus the header and the two closing lines. Round 21B shipped a
+        # tenth topic ("เชื่อมต่อระบบภายนอก (API)") and left this at the
+        # nine-topic number, so the whole file was red on the branch —
+        # the menu is the shipped contract, the bound follows it.
+        assert "1. " in reply.text and reply.text.count("\n") <= 15
         assert any(send == "วิธีใช้ 6" for _label, send in reply.quick_replies)
         step = await handle_chat_message(client, message="วิธีใช้ 6", ctx=_ctx())
         # One line per thing to do, the words to type at its end (20 ก.ย.

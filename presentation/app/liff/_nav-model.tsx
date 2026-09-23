@@ -30,6 +30,10 @@ export type NavEntry = {
   needs?: readonly string[];
   /** Hub pages match on equality; everything else on path prefix. */
   exact?: boolean;
+  /** Round 21B: hidden from anyone but the shop owner, regardless of
+   *  permission — an admin runs settings, not who may read the shop from
+   *  outside. */
+  ownerOnly?: boolean;
 };
 
 export type NavGroup = {
@@ -195,6 +199,14 @@ export const ICONS = {
       <path d="m12.6 12.4 6-6a1.9 1.9 0 0 0-2.7-2.7l-6 6-1 3.7z" />
     </>,
   ),
+  apiKeys: glyph(
+    <>
+      <circle cx="8" cy="12" r="3.5" />
+      <path d="M11.5 12H20" />
+      <path d="M17 12v3" />
+      <path d="M20 12v2.5" />
+    </>,
+  ),
   menu: glyph(<path d="M4 7h16M4 12h16M4 17h16" />),
   close: glyph(<path d="M6.5 6.5l11 11M17.5 6.5l-11 11" />),
   collapse: glyph(<path d="M14.5 6.5 9 12l5.5 5.5" />),
@@ -306,6 +318,9 @@ export function navGroups(t: Dictionary, audience: Audience): NavGroup[] {
         { key: "company", href: "/liff/sales/company", label: t.dashboard.companyTitle, icon: ICONS.company, needs: ["setting.manage"] },
         { key: "members", href: "/liff/sales/members", label: t.dashboard.members.title, icon: ICONS.members, needs: ["member.manage", "team.manage", "role.manage"] },
         { key: "roles", href: "/liff/sales/roles", label: t.role.title, icon: ICONS.roles, needs: ["role.manage"] },
+        // Round 21B: the owner's outside access. Owner only — an admin
+        // runs settings, not who may read the shop from outside.
+        { key: "apiKeys", href: "/liff/sales/api-keys", label: t.dashboard.apiKeys.title, icon: ICONS.apiKeys, needs: ["setting.manage"], ownerOnly: true },
         // "ดูประวัติการใช้งาน" has been a permission since Phase 2 with no
         // page behind it (audit, 17 ก.ย. 2569).
         { key: "history", href: "/liff/sales/history", label: t.dashboard.history.title, icon: ICONS.history, needs: ["audit_log.view"] },
@@ -333,6 +348,7 @@ export function guideEntry(t: Dictionary, audience: Audience): NavEntry {
  * can in fact use every page on it. The owner sees everything.
  */
 export function mayOpen(entry: NavEntry, permissions: Set<string>, isOwner: boolean): boolean {
+  if (entry.ownerOnly && !isOwner) return false;
   if (!entry.needs || entry.needs.length === 0) return true;
   if (isOwner) return true;
   if (permissions.size === 0) return true;

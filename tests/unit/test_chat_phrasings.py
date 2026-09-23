@@ -89,7 +89,11 @@ class TestLayeredHelp:
             reply, calls = await say(client, oa, phrasing)
             assert calls == 0, f"{oa} {phrasing!r} went to the model"
             assert reply.text.startswith("วิธีใช้ LINE"), f"{oa} {phrasing!r}: {reply.text[:60]}"
-            assert reply.text.count("\n") <= 14
+            # 15, not 14: round 21B shipped a tenth guide topic
+            # ("เชื่อมต่อระบบภายนอก (API)") and left both help bounds at
+            # the nine-topic number — the menu is the shipped contract
+            # (see test_phase6_chat.py::TestUsageHelp for the same note).
+            assert reply.text.count("\n") <= 15
             assert any(send == "วิธีใช้ 1" for _l, send in reply.quick_replies)
             assert all(len(label) <= 20 for label, _s in reply.quick_replies)
 

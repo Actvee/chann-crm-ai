@@ -7,6 +7,55 @@
 เจ้าของสั่ง 10 ก.ย.: *"ต่อจากนี้ให้บันทึก model first แบบนี้ในทุกๆที่ อย่าให้หลุดอีก
 เพราะการใช้กฎแบบเดิมเลย น่าจะทำให้ประสบการณ์ใช้งานแย่ลง"*
 
+**รอบ 21B (23 ก.ย. — DEV, ต่อจาก `c0a71a3`): API สำหรับระบบภายนอก — key ของเจ้าของร้าน, `/api/ext/v1`, และ `updated_since`**
+
+- **เจ้าของ:** *"ทำ API เลย"* · *"การ authori เอาแค่ให้เจ้าของร้าน generate api code ให้คนภายนอกสำหรับใช้ Api ก็พอแล้ว"* ·
+  ผู้ใช้หลัก = ระบบบัญชี/ERP ของลูกค้า · รอบนี้ไม่มี webhook ขาออก (รอบถัดไป) · spec: `docs/superpowers/specs/2026-09-23-external-api-design.md`
+- **Data:** ตาราง `api_keys` (migration 0037 — head ใหม่ `0037_api_keys`): `key_hash` SHA-256 (key สุ่ม 32 ตัว ไม่ใช่รหัสผ่าน จึงไม่ใช้ argon2),
+  `key_prefix` ไว้แสดง, `revoked_at` soft · `ApiKeyRepository` + route `POST/GET licenses/{id}/api-keys`, `POST …/{key}/revoke`
+  (**เจ้าของเท่านั้น** — ตรวจที่ Data เองจาก `X-Actor-Id` จึงเหมือนกันทั้งแชทและจอ · **ไม่มีคอลัมน์ `LicenseMember.is_owner`**:
+  `_require_owner_actor` หาแถวด้วย `MemberRepository.get(scope, actor, channel="sales")` — deterministic เพราะ uid เดียวถือได้สองแถวต่อ license
+  (คนละ channel) — แล้วตัดสินด้วย `MemberRepository.is_owner_row` ซึ่งอ่าน `CustomRole.is_owner` ตามชื่อ role), `POST api-keys/resolve`
+  = หา key + นับ `INCR api_rl:{key}:{นาที}` ใน Redis (600/นาที, Redis ล่ม = ไม่จำกัด ไม่ใช่ 500) + ประทับ `last_used_at` ในคำขอเดียว ·
+  `updated_since` บน list ของ ลูกค้า/ดีล/งานซ่อม/ใบแจ้งหนี้ (`repositories/search.py::since`)
+- **Application:** `auth/api_key.py` — `Authorization: Bearer chann_live_…` → `TenantPrincipal(audience="api", chann_uid="api:<key id>",
+  permission_keys = ชุด admin)` · `routers_ext.py` sub-app ที่ `/api/ext/v1` มี OpenAPI ของตัวเอง (`/api/ext/v1/docs`), error รูปเดียว
+  `{"error":{"code","message"}}`, list = `{"items","total"}` + `X-Total-Count`, ทรัพยากร: me, customers, deals(+stage), quotes(+pdf),
+  invoices(+payments, pdf, receipt-pdf), tickets, warranties, products — ทุก route เรียก DataClient/service ตัวเดิม
+  (`_create_invoice`, `record_payment`, `issue_invoice_document`) กฎเดิมจึงมีผลหมด · route LIFF `licenses/{id}/api-keys` (owner only, `_owner_only`)
+- **จอ:** จัดการร้าน > **API** (`ownerOnly` ใน `NavEntry`; rail ซ่อนให้) — รายการ key · "สร้าง key" → แผงแสดง key **ครั้งเดียว** + คัดลอก ·
+  เพิกถอนเป็นปุ่มแดงแยก + ยืนยัน (ui-ux-pro-max: primary-action, destructive-nav-separation, confirmation-dialogs)
+- **แชท (model-first — วัดด้วย ask-model.py ก่อน: `รายการ API key` ก่อน = `suggest` (entity=null, ไม่มี vocabulary) → หลัง = `read`/`api_key`;
+  `เพิกถอน API key ระบบบัญชี` ก่อน = `suggest` (entity=null) → หลัง = `delete`/`api_key` (`target_name="ระบบบัญชี"`); `สร้าง API key`
+  ก่อน = `suggest` (entity=null) → หลัง = `create`/`api_key`; `ขอ key ให้โปรแกรมบัญชีหน่อย` ก่อน = `read`/`setting` (`field=code` — อ่านผิดเป็น
+  ตั้งค่า) → หลัง = `create`/`api_key` (`name="โปรแกรมบัญชี"`, จับ implicit request ได้โดยไม่ต้องมีคำว่า "API key" เลย) —
+  ดูรายละเอียดเต็มใน `.superpowers/sdd/2026-09-23-external-api/task-13-report.md`):**
+  `รายการ API key` (ชื่อ · prefix · ใช้ล่าสุด — ไม่มี key เต็ม),
+  `เพิกถอน API key <ชื่อ>` ถามยืนยันด้วยปุ่มก่อน, `สร้าง API key` = ปุ่มเปิดหน้าจอ (จงใจ: secret ห้ามอยู่ใน LINE — `ACCEPTED ("api_key","create")`
+  ใน check-parity) · ACTION_PERMISSIONS read/delete/create → setting.manage + owner ในตัว handler
+- **ยังไม่มี (ตั้งใจ):** webhook ขาออก · `Idempotency-Key` · key หมดอายุ · scope ต่อ key · IP allowlist — เขียนไว้ใน `docs/API.md`
+- เทสต์: `tests/unit/test_round21b_{api_keys,ext_api,api_chat}.py`, `tests/integration/test_round21b_api_keys.py` (Postgres: ตาราง, repo,
+  route ภายใน, updated_since), boundary `TestExternalApi` (mount, OpenAPI เฉพาะ ext, ทุก route ตอบ 401 เมื่อไม่มี key, ไม่ import persistence),
+  scenario `api-keys` · คู่มือขั้น "เชื่อมต่อระบบภายนอก (API)" + รูป `sales-api` (ดูด้วยตาแล้ว)
+- **wave แก้ท้ายรอบ (fix wave 21B — review C1/C2/I1–I8):**
+  - **C2 — dispatcher (ของเดิมเขียนว่า "งานซ่อม/ลูกค้าที่สร้างผ่าน API ยังไม่แจ้งช่าง/ผู้รับผิดชอบ — แก้ในรอบเดียวกัน" · ปิดแล้วใน wave นี้):**
+    `POST /customers` และ `POST /tickets` ของ ext เรียก helper ตัวเดียวกับจอแล้ว — `sales_dispatch.route_new_customer(source="api")`
+    และ `chat._notify_new_ticket` (best-effort ทั้งคู่: ล้มแล้วต้องไม่ล้มการสร้าง) · เพิ่ม `api` เป็นค่า `customer.source` ใน prompt ของ `assignment_policy.py`
+  - **I1 — 404/405:** handler ผูกกับ `starlette.exceptions.HTTPException` (ไม่ใช่ของ FastAPI ซึ่งเป็น subclass) path ที่ไม่มีจริงกับ method ผิด
+    จึงอยู่ในรูป `{"error":{"code","message"}}` เหมือนที่อื่น · เพิ่ม `405: method_not_allowed` ใน `_CODES`
+  - **I2 — 429:** `auth/api_key.py` ประทับ `request.state.rate_limit = (limit, 0)` **ก่อน** raise คำตอบ 429 จึงมี `X-RateLimit-*` ด้วย ·
+    คำตอบ 401 **จงใจ**ไม่มี header ชุดนี้ (ยังไม่รู้ว่า key ดวงไหน) — เขียนไว้ใน `docs/API.md` ข้อ 6
+  - **I3 — `POST /products`:** ตัดสินว่า**ตอบ 409 `conflict`** เมื่อรหัสซ้ำ (เดิม `upsert_product` เป็น PUT จึงทับเงียบ ๆ แล้วตอบ 201)
+    ทาง**แก้ไขคือ `PATCH` เท่านั้น**
+  - **I4 — `updated_since`:** ตัดสินว่า**ค่าที่ไม่มี offset = UTC** (`_as_utc` ใน `routers_ext.py`) ไม่ใช่เวลาท้องถิ่นของผู้เรียก — `docs/API.md` ข้อ 5
+  - **I5:** 423 บนสายมีโค้ด `tenant_suspended` (ไม่ใช่ `read_only` อย่างที่ doc เคยเขียน) และ `refuse_if_suspended` ใส่ `message` ที่เป็นประโยคคนอ่าน
+    แล้ว โดยคง `"error": "tenant_suspended"` ไว้ให้จอแปลเหมือนเดิม
+  - **I8:** `ApiKeyOut` ไม่มี `key_hash` เป็น ACCEPTED_OMISSIONS ใน `check-fields.py` ("the hash never leaves the Data tier")
+- **รู้อยู่แล้ว ยังไม่ปิด:**
+  `GET /warranties/{id}` และ `GET /products/{id}` สแกนทั้งลิสต์ (ไม่มี query แบบดึงรายการเดียวฝั่ง Data) — ข้อจำกัดที่รู้อยู่แล้ว ไม่ใช่ scope รอบนี้
+- **หลัง deploy ต้องพิสูจน์ของจริง:** สร้าง key บนแดชบอร์ด DEV แล้ว `curl -sS -H "Authorization: Bearer <key>" <application>/api/ext/v1/me`
+  จาก Cloud Shell ต้องได้ชื่อร้าน; `…/customers?limit=1` ต้องมี `X-Total-Count`; เพิกถอนแล้วยิงซ้ำต้อง 401
+
 **รอบ 21A (22 ก.ย. — DEV, ต่อจาก `035f89f`): แยกส่วนอัปเดตสถานะออกจากปุ่มอื่น ทุกเรคอร์ดเดินไปมาหากันได้ และรูปคู่มือตรงกับหน้าจอจริง**
 
 - **เจ้าของ:** *"ปุ่มออกใบแจ้งหนี้ กับปุ่มสถานะในหน้า Quote ออกแบบจัดเรียงใหม่ ตอนนี้ปนกันมั่วไปหมด ให้แยกระหว่างส่วนอัพเดตสถานะ

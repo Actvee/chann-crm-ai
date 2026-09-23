@@ -21,7 +21,7 @@ CUSTOMER_SEARCH = (
 )
 DEAL_SEARCH = (Deal.deal_id, Deal.notes)
 from .locks import serialise
-from .search import like_any, page
+from .search import like_any, page, since
 from .tenant_scope import TenantScope
 
 # 9.6's transition table. A value of None as the destination set means "no
@@ -357,7 +357,10 @@ class CustomerRepository:
         if found is None:
             raise Phase9NotFound("member not found in this tenant")
 
-    def _narrow(self, query, scope: TenantScope, stage: str | None, q: str | None):
+    def _narrow(
+        self, query, scope: TenantScope, stage: str | None, q: str | None,
+        *, updated_since: datetime | None = None,
+    ):
         """The one place a customer list is narrowed.
 
         Both the page and its count go through here, so they can never
@@ -372,10 +375,11 @@ class CustomerRepository:
         clause = like_any(q, *CUSTOMER_SEARCH)
         if clause is not None:
             query = query.where(clause)
-        return query
+        return since(query, Customer, updated_since)
 
     def list_for_license(
         self, scope: TenantScope, *, stage: str | None = None, q: str | None = None,
+        updated_since: datetime | None = None,
         limit: int | None = None, offset: int | None = None,
     ) -> list[Customer]:
         """Customers, newest first — a page of them, matching `q`.
@@ -391,7 +395,7 @@ class CustomerRepository:
         is what the dashboard did, and it cannot find row 600 of 800 when
         the page stops at 500.
         """
-        query = self._narrow(select(Customer), scope, stage, q)
+        query = self._narrow(select(Customer), scope, stage, q, updated_since=updated_since)
         # id breaks the tie so a page boundary cannot show the same row
         # twice, or skip one, when several share a created_at.
         query = query.order_by(Customer.created_at.desc(), Customer.id.desc())
@@ -399,9 +403,13 @@ class CustomerRepository:
 
     def count_for_license(
         self, scope: TenantScope, *, stage: str | None = None, q: str | None = None,
+        updated_since: datetime | None = None,
     ) -> int:
         """How many match, so a page can say what it left out."""
-        query = self._narrow(select(func.count()).select_from(Customer), scope, stage, q)
+        query = self._narrow(
+            select(func.count()).select_from(Customer), scope, stage, q,
+            updated_since=updated_since,
+        )
         return int(self._s.execute(query).scalar() or 0)
 
     def update(self, scope: TenantScope, customer_id: uuid.UUID, fields: dict) -> Customer:
@@ -686,7 +694,10 @@ class DealRepository:
     #: The two stages that end a deal. "open" means neither of them.
     CLOSED_STAGES = ("won", "lost")
 
-    def _narrow(self, query, scope: TenantScope, stage: str | None, q: str | None):
+    def _narrow(
+        self, query, scope: TenantScope, stage: str | None, q: str | None,
+        *, updated_since: datetime | None = None,
+    ):
         """The one place a deal list is narrowed — page and count alike."""
         query = query.where(
             Deal.license_id == scope.license_id, Deal.archived_at.is_(None),
@@ -704,10 +715,11 @@ class DealRepository:
         clause = like_any(q, *DEAL_SEARCH)
         if clause is not None:
             query = query.where(clause)
-        return query
+        return since(query, Deal, updated_since)
 
     def list_for_license(
         self, scope: TenantScope, *, stage: str | None = None, q: str | None = None,
+        updated_since: datetime | None = None,
         limit: int | None = None, offset: int | None = None,
     ) -> list[Deal]:
         """Deals, newest first — a page of them, matching `q`.
@@ -716,15 +728,19 @@ class DealRepository:
         and the same rule that `q` is answered by the database rather than
         by whatever happened to be fetched.
         """
-        query = self._narrow(select(Deal), scope, stage, q)
+        query = self._narrow(select(Deal), scope, stage, q, updated_since=updated_since)
         query = query.order_by(Deal.created_at.desc(), Deal.id.desc())
         return list(self._s.execute(page(query, limit=limit, offset=offset)).scalars())
 
     def count_for_license(
         self, scope: TenantScope, *, stage: str | None = None, q: str | None = None,
+        updated_since: datetime | None = None,
     ) -> int:
         """How many match, so a page can say what it left out."""
-        query = self._narrow(select(func.count()).select_from(Deal), scope, stage, q)
+        query = self._narrow(
+            select(func.count()).select_from(Deal), scope, stage, q,
+            updated_since=updated_since,
+        )
         return int(self._s.execute(query).scalar() or 0)
 
     def list_for_contact(self, scope: TenantScope, contact_id: uuid.UUID) -> list[Deal]:

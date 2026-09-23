@@ -3345,3 +3345,13 @@ button.notif-open {
 .record-note-row .btn {
   margin-left: auto;
 }
+
+/* Round 21B — the API key, shown once. Monospace, wrapping, selectable;
+   a box a thumb can hold to copy on a phone. */
+.api-key-reveal { display: grid; gap: 12px; }
+.api-key-value {
+  display: block; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 15px;
+  padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper);
+  word-break: break-all; user-select: all; line-height: 1.5;
+}
+.api-key-once { margin: 0; color: var(--ink-soft); font-size: 14px; }

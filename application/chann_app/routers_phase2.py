@@ -2257,6 +2257,16 @@ def _staff_only(principal: TenantPrincipal) -> None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="staff only")
 
 
+def _owner_only(principal: TenantPrincipal) -> None:
+    """Round 21B: API keys are the owner's alone — an admin with
+    setting.manage runs the shop's settings, not its outside access."""
+    if not principal.is_owner:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail={
+            "error": "owner_only", "reason_code": "owner_only",
+            "message": "only the shop owner manages API keys",
+        })
+
+
 @router.get("/licenses/{license_id}/tickets/{ticket_id}/dispatch-check")
 async def ticket_dispatch_check(
     license_id: str,
@@ -5312,3 +5322,71 @@ async def tenant_revoke_invite(
     except DataTierError as exc:
         raise _propagate(exc)
     return {**row, "status": _invite_status(row, now=datetime.now(timezone.utc))}
+
+
+# ------------------------------------------------------------ round 21B: API keys
+
+
+class ApiKeyCreateBody(BaseModel):
+    name: str
+
+
+def _api_docs_url() -> str | None:
+    base = (settings.public_base_url or "").rstrip("/")
+    return f"{base}/api/ext/v1/docs" if base else None
+
+
+@router.get("/licenses/{license_id}/api-keys")
+async def list_api_keys(
+    license_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """The shop's live keys (revoked ones are kept for the audit trail
+    but not shown) and where the outside party reads the docs."""
+    _require_same_tenant(principal, license_id)
+    principal.require("setting.manage")
+    _owner_only(principal)
+    try:
+        rows = await client.list_api_keys(license_id)
+    except DataTierError as exc:
+        raise _propagate(exc)
+    return {"keys": [r for r in rows if not r.get("revoked_at")], "docs_url": _api_docs_url()}
+
+
+@router.post("/licenses/{license_id}/api-keys", status_code=201)
+async def create_api_key(
+    license_id: str,
+    payload: ApiKeyCreateBody,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """The one response that carries the key. Nothing stores it after this."""
+    _require_same_tenant(principal, license_id)
+    principal.require("setting.manage")
+    _owner_only(principal)
+    name = " ".join(payload.name.split())
+    if not name:
+        raise HTTPException(status_code=422, detail="name is required")
+    try:
+        return await client.create_api_key(
+            license_id, {"name": name, "created_by_chann_uid": principal.chann_uid}, actor_id=principal.chann_uid,
+        )
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.post("/licenses/{license_id}/api-keys/{key_id}/revoke")
+async def revoke_api_key(
+    license_id: str,
+    key_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    _require_same_tenant(principal, license_id)
+    principal.require("setting.manage")
+    _owner_only(principal)
+    try:
+        return await client.revoke_api_key(license_id, key_id, actor_id=principal.chann_uid)
+    except DataTierError as exc:
+        raise _propagate(exc)

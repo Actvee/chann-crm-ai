@@ -909,3 +909,109 @@ class TestCreatingFromWhereYouAlreadyAre:
         assert "<select" not in form, (
             "a native select survived in the create form"
         )
+
+
+class TestExternalApi:
+    """Round 21B — the outside surface is small, documented and locked."""
+
+    def _ext(self):
+        import sys
+        sys.path.insert(0, str(ROOT / "application"))
+        from chann_app.main import app
+        from chann_app.routers_ext import ext_app
+        return app, ext_app
+
+    def test_the_sub_app_is_mounted_at_the_versioned_path(self):
+        app, ext_app = self._ext()
+        mounts = [getattr(r, "path", "") for r in app.routes if r.__class__.__name__ == "Mount"]
+        assert "/api/ext/v1" in mounts
+
+    def test_its_openapi_lists_only_ext_routes_and_no_platform_or_member_paths(self):
+        _app, ext_app = self._ext()
+        paths = set(ext_app.openapi()["paths"])
+        assert "/me" in paths and "/customers" in paths and "/invoices/{invoice_id}/payments" in paths
+        assert not any(p.startswith(("/platform", "/liff", "/licenses")) for p in paths)
+        assert not any("member" in p or "role" in p or "setting" in p or "chat" in p for p in paths)
+
+    def test_every_ext_route_refuses_a_request_without_a_key(self):
+        from fastapi.testclient import TestClient
+        _app, ext_app = self._ext()
+        # `ext_app` is the module-level app the real process serves, so a
+        # unit test that overrode its dependencies and did not clear them
+        # would make this pass 200 instead of 401 (round 21B review C1 —
+        # tests/unit/test_round21b_ext_api.py now clears them in an
+        # autouse fixture). Defensive: this test must depend on nothing
+        # that ran before it.
+        ext_app.dependency_overrides.clear()
+        http = TestClient(ext_app, raise_server_exceptions=False)
+        for route in ext_app.routes:
+            path = getattr(route, "path", "")
+            methods = getattr(route, "methods", None)
+            if not methods or path in ("/docs", "/openapi.json", "/docs/oauth2-redirect"):
+                continue
+            probe = re.sub(r"\{[^}]+\}", "x", path)
+            for method in methods:
+                r = http.request(method, probe)
+                assert r.status_code == 401, (method, path, r.status_code)
+                assert r.json()["error"]["code"] == "missing_or_malformed_key"
+
+    def test_an_unknown_path_and_a_wrong_method_keep_the_documented_error_shape(self):
+        """404 and 405 are raised by STARLETTE's router, not by a route.
+
+        The handler used to be registered on fastapi.HTTPException only,
+        so these two escaped in Starlette's `{"detail": ...}` shape — the
+        one shape docs/API.md promises never happens (review I1).
+        """
+        from fastapi.testclient import TestClient
+        _app, ext_app = self._ext()
+        ext_app.dependency_overrides.clear()
+        http = TestClient(ext_app, raise_server_exceptions=False)
+
+        missing = http.get("/nope")
+        assert missing.status_code == 404, missing.text
+        assert missing.json() == {"error": {"code": "not_found", "message": "Not Found"}}
+
+        wrong = http.delete("/customers")
+        assert wrong.status_code == 405, wrong.text
+        assert wrong.json()["error"]["code"] == "method_not_allowed"
+        assert wrong.json()["error"]["message"]
+
+    def test_a_429_carries_the_window_headers_it_is_about(self):
+        """The one reply that most needs to say how big the window is was
+        the only one without X-RateLimit-* (review I2)."""
+        from fastapi.testclient import TestClient
+
+        import sys
+        sys.path.insert(0, str(ROOT / "application"))
+        from chann_app.auth import api_key as api_key_auth
+        from chann_app.routers_admin import get_data_client
+
+        _app, ext_app = self._ext()
+        ext_app.dependency_overrides.clear()
+
+        class _OverTheWindow:
+            async def resolve_api_key(self, key_hash):
+                return {"key": {"id": "k1", "license_id": "L1", "name": "ERP",
+                                "key_prefix": "chann_live_AAAA"},
+                        "license_status": "active", "permission_keys": [],
+                        "limit": 600, "remaining": -1}
+
+        async def _override():
+            yield _OverTheWindow()
+
+        ext_app.dependency_overrides[get_data_client] = _override
+        try:
+            http = TestClient(ext_app, raise_server_exceptions=False)
+            r = http.get("/me", headers={"Authorization": "Bearer chann_live_" + "A" * 32})
+            assert r.status_code == 429, r.text
+            assert r.json()["error"]["code"] == "rate_limited"
+            assert r.headers["X-RateLimit-Limit"] == "600"
+            assert r.headers["X-RateLimit-Remaining"] == "0"
+            assert r.headers["Retry-After"]
+        finally:
+            ext_app.dependency_overrides.clear()
+        assert api_key_auth  # the resolver under test is the real one
+
+    def test_the_ext_module_and_the_key_resolver_import_no_persistence(self):
+        for rel in ("application/chann_app/routers_ext.py", "application/chann_app/auth/api_key.py"):
+            assert not (_imported_roots(ROOT / rel) & PERSISTENCE_MODULES), rel

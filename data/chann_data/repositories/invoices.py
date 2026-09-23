@@ -46,7 +46,7 @@ from ..models import (
 )
 from .localtime import bangkok_today
 from .locks import serialise
-from .search import like_any, page
+from .search import like_any, page, since
 from .tenant_scope import TenantScope
 
 #: Statuses on which money is still owed (and on which "overdue" can apply).
@@ -195,6 +195,7 @@ class InvoiceRepository:
         self, query, scope: TenantScope, *, status: str | None, contact_id: uuid.UUID | None,
         customer_chann_uid: str | None, q: str | None, overdue: bool, today: date | None,
         deal_id: uuid.UUID | None = None, quote_id: uuid.UUID | None = None,
+        updated_since: datetime | None = None,
     ):
         """The one place an invoice list is narrowed — page and count alike."""
         query = query.where(Invoice.license_id == scope.license_id)
@@ -236,13 +237,14 @@ class InvoiceRepository:
                 )
             )
             query = query.where(or_(clause, by_customer))
-        return query
+        return since(query, Invoice, updated_since)
 
     def list_for_license(
         self, scope: TenantScope, *, status: str | None = None,
         contact_id: uuid.UUID | None = None, customer_chann_uid: str | None = None,
         q: str | None = None, overdue: bool = False, today: date | None = None,
         deal_id: uuid.UUID | None = None, quote_id: uuid.UUID | None = None,
+        updated_since: datetime | None = None,
         limit: int | None = None, offset: int | None = None,
     ) -> list[Invoice]:
         """Invoices, newest first, capped and counted like every other list
@@ -251,7 +253,7 @@ class InvoiceRepository:
         query = self._narrow(
             select(Invoice), scope, status=status, contact_id=contact_id,
             customer_chann_uid=customer_chann_uid, q=q, overdue=overdue, today=today,
-            deal_id=deal_id, quote_id=quote_id,
+            deal_id=deal_id, quote_id=quote_id, updated_since=updated_since,
         )
         query = query.order_by(Invoice.created_at.desc(), Invoice.id.desc())
         return list(self._s.execute(page(query, limit=limit, offset=offset)).scalars())
@@ -261,11 +263,13 @@ class InvoiceRepository:
         contact_id: uuid.UUID | None = None, customer_chann_uid: str | None = None,
         q: str | None = None, overdue: bool = False, today: date | None = None,
         deal_id: uuid.UUID | None = None, quote_id: uuid.UUID | None = None,
+        updated_since: datetime | None = None,
     ) -> int:
         return int(self._s.execute(self._narrow(
             select(func.count()).select_from(Invoice), scope, status=status,
             contact_id=contact_id, customer_chann_uid=customer_chann_uid, q=q,
             overdue=overdue, today=today, deal_id=deal_id, quote_id=quote_id,
+            updated_since=updated_since,
         )).scalar() or 0)
 
     def summary(self, scope: TenantScope, *, today: date | None = None) -> dict:

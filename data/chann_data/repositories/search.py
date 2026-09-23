@@ -39,6 +39,14 @@ def like_any(q: str | None, *columns):
     return or_(*[column.ilike(pattern, escape="\\") for column in columns])
 
 
+def since(query, model, updated_since):
+    """`updated_at >= stamp`, or the query untouched. One place, so every
+    list that offers an ERP a sync cursor means the same thing by it."""
+    if updated_since is None:
+        return query
+    return query.where(model.updated_at >= updated_since)
+
+
 def page(query, *, limit: int | None, offset: int | None):
     """The window a caller asked for, applied in the one right order.
 

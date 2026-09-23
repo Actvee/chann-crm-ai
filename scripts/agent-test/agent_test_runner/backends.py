@@ -277,6 +277,8 @@ class FakeBackend:
         self.client._role = role
         probe = AiProbe(_resolve(ai, refs) if ai else None)
         ctx = self._t._ctx(oa=oa, primary_role=role)
+        # API key and other owner-gated features check is_owner on the membership
+        ctx.memberships[0]["is_owner"] = role == "owner"
         try:
             reply = await self._t.handle_chat_message(
                 self.client, message=message, ctx=ctx, language=language,

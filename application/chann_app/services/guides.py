@@ -508,6 +508,25 @@ GUIDES: dict[str, dict] = {
                 "image": "sales-members",
                 "image_prompt": "หน้าจอแดชบอร์ดสีเขียว 'สมาชิกในร้าน' ตารางชื่อ / LINE (ทีมขาย·ช่าง) / บทบาท / สถานะ ปุ่ม เปลี่ยนบทบาท นำออก รีเซ็ต แถวเจ้าของมีป้าย 'เจ้าของ'",
             },
+            {
+                "key": "api", "title": {"th": "เชื่อมต่อระบบภายนอก (API)", "en": "Connect an outside system (API)"},
+                "body": {
+                    "th": "ให้โปรแกรมบัญชี ERP หรือระบบอื่นอ่านและเขียนข้อมูลร้านได้ผ่าน API — เจ้าของร้านสร้าง key แล้วส่งให้ผู้พัฒนาระบบนั้น key ทำงานในนามร้าน",
+                    "en": "Let an accounting program, an ERP or another system read and write the shop's data through the API — the owner makes a key and hands it to that system's developer; the key acts as the shop.",
+                },
+                "how": [
+                    {"th": "แดชบอร์ด > จัดการร้าน > API > \"สร้าง key\" ตั้งชื่อตามระบบที่จะใช้ — key แสดงครั้งเดียว คัดลอกเก็บทันที", "en": "Dashboard > Shop > API > \"Create key\", named after the system — shown once, copy it at once"},
+                    {"th": "ส่ง key และลิงก์เอกสาร API (ในหน้าเดียวกัน) ให้ผู้พัฒนาระบบภายนอก", "en": "Give the key and the API docs link (same page) to the outside developer"},
+                    {"th": "ดูว่ามี key อะไรบ้างและใช้ล่าสุดเมื่อไหร่", "en": "See which keys exist and when each was last used", "type": "รายการ API key"},
+                    {"th": "เพิกถอนเมื่อเลิกใช้หรือ key หลุด — ระบบถามยืนยันก่อน ระบบภายนอกจะเรียกไม่ได้ทันที", "en": "Revoke when no longer used or leaked — confirmed first; the outside system stops at once", "type": "เพิกถอน API key ระบบบัญชี"},
+                    {"th": "สร้าง key ทำได้บนหน้าจอเท่านั้น (ในแชทจะได้ปุ่มเปิดหน้า) — key ไม่ควรอยู่ในแชท", "en": "Keys are made on the screen only (chat hands you the button) — a key should never sit in a chat", "type": "สร้าง API key"},
+                    {"th": "เฉพาะเจ้าของร้าน · จำกัด 600 คำขอ/นาที/key · ร้านที่ถูกระงับ key อ่านได้แต่เขียนไม่ได้", "en": "Owner only · 600 requests/min/key · a suspended shop's key reads but cannot write"},
+                ],
+                "commands": ["รายการ API key", "เพิกถอน API key"],
+                "example": "รายการ API key",
+                "image": "sales-api",
+                "image_prompt": "หน้าจอ 'API สำหรับระบบภายนอก' ธีมเขียว: รายการ key สองแถว (ชื่อ · chann_live_ab12… · ใช้ล่าสุด) ปุ่ม 'สร้าง key' และแผงที่แสดง key เต็มครั้งเดียวพร้อมปุ่มคัดลอกและประโยค 'จะไม่แสดงอีก'",
+            },
         ],
     },
 }
@@ -642,7 +661,9 @@ def render_help_menu(oa: str, language: str = "th") -> str:
     lines = [guide["title"][lang], HELP_SHORT_INTRO.get(oa, HELP_SHORT_INTRO["customer"])[lang] + " · " + HELP_MENU_PROMPT[lang], ""]
     for n, step in enumerate(guide["steps"], 1):
         lines.append(f"{n}. {step['title'][lang]}")
-    lines.append("")
+    # No blank line before the foot: round 21B's tenth sales topic put the
+    # menu plus its areas line at 16 lines, one past what a LINE bubble is
+    # read at (simulate-phrasings LONG_LINES = 15). The list stays a menu.
     lines.append(HELP_MENU_FOOT[lang])
     return "\n".join(lines)
 

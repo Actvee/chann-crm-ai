@@ -134,7 +134,10 @@ class TestSuspendedTenantIsReadOnly:
                 client, x_liff_id_token="t", x_liff_audience="sales", x_license_id="", method=method,
             )
         assert exc.value.status_code == 423
-        assert exc.value.detail == {"error": "tenant_suspended"}
+        # `error` is the key the pages translate; `message` is the human
+        # sentence the external API sends on (round 21B review I5).
+        assert exc.value.detail["error"] == "tenant_suspended"
+        assert exc.value.detail["message"] and exc.value.detail["message"] != "tenant_suspended"
 
     async def test_an_active_shop_writes_as_before(self, verified):
         client = _Identity(permission_keys=["customer.create"])

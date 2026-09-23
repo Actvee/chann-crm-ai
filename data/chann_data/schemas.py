@@ -1512,3 +1512,36 @@ class ReportResultOut(BaseModel):
 # ------------------------------------------------ user review fixes (4 Sep 2026)
 class ArchiveInactiveLeadsIn(BaseModel):
     days: int = Field(ge=1, le=3650)
+
+
+class ApiKeyCreateIn(BaseModel):
+    name: str
+    created_by_chann_uid: str | None = None
+
+
+class ApiKeyOut(BaseModel):
+    id: uuid.UUID
+    license_id: uuid.UUID
+    name: str
+    key_prefix: str
+    created_by_chann_uid: str | None
+    last_used_at: datetime | None
+    revoked_at: datetime | None
+    created_at: datetime
+
+
+class ApiKeyCreatedOut(ApiKeyOut):
+    """The one response that carries the plaintext key."""
+    key: str
+
+
+class ApiKeyResolveIn(BaseModel):
+    key_hash: str
+
+
+class ApiKeyResolveOut(BaseModel):
+    key: ApiKeyOut
+    license_status: str
+    permission_keys: list[str]
+    limit: int
+    remaining: int

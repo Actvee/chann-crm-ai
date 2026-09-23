@@ -24,6 +24,7 @@
     "sales-ai-report": "/api/v1/guide/images/sales-ai-report.png",
     "sales-help": "/api/v1/guide/images/sales-help.png",
     "sales-members": "/api/v1/guide/images/sales-members.png",
+    "sales-api": "/api/v1/guide/images/sales-api.png",
     "permissions-overview": "/api/v1/guide/images/permissions-overview.png"
   }
 }

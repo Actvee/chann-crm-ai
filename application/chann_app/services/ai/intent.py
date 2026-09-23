@@ -433,6 +433,18 @@ does not exist anywhere else the model can check against):
     wanted. fields may include invite_code. Examples: "ยกเลิกรหัสเชิญ
     QK4P2RSTUV", "รหัสเชิญหลุด ยกเลิกให้หน่อย", "revoke invite QK4P2RSTUV".
 
+- entity="api_key" — a key the OWNER hands to an outside system (an
+  accounting program, an ERP, a web shop) so it can read and write this
+  shop's data through the API. Not an invite (that is a person joining),
+  not a role.
+  action="read": which keys exist. Examples: "รายการ API key", "มี API key
+    อะไรบ้าง", "api keys".
+  action="delete": revoke one. fields.target_name = the key's name as the
+    person said it. Examples: "เพิกถอน API key ระบบบัญชี" (target_name
+    "ระบบบัญชี"), "ยกเลิก key ของโปรแกรมบัญชี", "revoke the ERP key".
+  action="create": a new key. fields.name if given. Examples: "สร้าง API
+    key", "ขอ key ให้โปรแกรมบัญชีหน่อย" (name "โปรแกรมบัญชี").
+
 - entity="survey" — what customers answered after a repair: the
   satisfaction score (1–3) and their comment. A question about how
   satisfied customers are, or how a technician is rated, is this — never

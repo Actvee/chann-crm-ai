@@ -8,6 +8,7 @@ executable rather than aspirational.
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 
 import httpx
 from urllib.parse import quote
@@ -1191,6 +1192,39 @@ class DataClient:
         )
         return self._unwrap(resp)
 
+    # ------------------------------------------------------------ round 21B: API keys
+
+    async def create_api_key(self, license_id: str, payload: dict, actor_id: str | None = None) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/api-keys",
+            headers=self._headers_for(actor_id), json=payload,
+        )
+        return self._unwrap(resp)
+
+    async def list_api_keys(self, license_id: str) -> list[dict]:
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/api-keys", headers=self._headers,
+        )
+        return self._unwrap(resp)
+
+    async def revoke_api_key(self, license_id: str, key_id: str, actor_id: str | None = None) -> dict:
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/licenses/{license_id}/api-keys/{key_id}/revoke",
+            headers=self._headers_for(actor_id),
+        )
+        return self._unwrap(resp)
+
+    async def resolve_api_key(self, key_hash: str) -> dict | None:
+        """The key row, the shop's status, the staff permission set and the
+        minute window — or None for an unknown/revoked key (the Data tier
+        answers 404 for both, on purpose)."""
+        resp = await self._client.post(
+            f"{self._base}/internal/v1/api-keys/resolve", headers=self._headers, json={"key_hash": key_hash},
+        )
+        if resp.status_code == 404:
+            return None
+        return self._unwrap(resp)
+
     async def redeem_invite(
         self, *, invite_code: str, chann_uid: str, display_name: str | None = None,
         oa: str | None = None,
@@ -1275,7 +1309,7 @@ class DataClient:
     async def list_tickets_with_total(
         self, license_id: str, *, status: str | None = None, visible_to: str | None = None,
         q: str | None = None, contact_id: str | None = None,
-        limit: int | None = None, offset: int | None = None,
+        limit: int | None = None, offset: int | None = None, updated_since: datetime | None = None,
     ) -> tuple[list[dict], int]:
         """A page of jobs, and how many match.
 
@@ -1296,6 +1330,8 @@ class DataClient:
             params["limit"] = limit
         if offset:
             params["offset"] = offset
+        if updated_since:
+            params["updated_since"] = updated_since.isoformat()
         resp = await self._client.get(
             f"{self._base}/internal/v1/licenses/{license_id}/tickets",
             headers=self._headers, params=params or None,
@@ -1847,7 +1883,7 @@ class DataClient:
 
     async def list_customers_with_total(
         self, license_id: str, stage: str | None = None, limit: int | None = None,
-        *, q: str | None = None, offset: int | None = None,
+        *, q: str | None = None, offset: int | None = None, updated_since: datetime | None = None,
     ) -> tuple[list[dict], int]:
         """A page of customers, and how many there really are.
 
@@ -1869,6 +1905,8 @@ class DataClient:
             params["q"] = q
         if offset:
             params["offset"] = offset
+        if updated_since:
+            params["updated_since"] = updated_since.isoformat()
         resp = await self._client.get(
             f"{self._base}/internal/v1/licenses/{license_id}/customers",
             headers=self._headers, params=params or None,
@@ -1878,7 +1916,7 @@ class DataClient:
 
     async def list_deals_with_total(
         self, license_id: str, stage: str | None = None, limit: int | None = None,
-        *, q: str | None = None, offset: int | None = None,
+        *, q: str | None = None, offset: int | None = None, updated_since: datetime | None = None,
     ) -> tuple[list[dict], int]:
         """A page of deals, and how many there really are."""
         params: dict = {}
@@ -1890,6 +1928,8 @@ class DataClient:
             params["q"] = q
         if offset:
             params["offset"] = offset
+        if updated_since:
+            params["updated_since"] = updated_since.isoformat()
         resp = await self._client.get(
             f"{self._base}/internal/v1/licenses/{license_id}/deals",
             headers=self._headers, params=params or None,
@@ -2514,7 +2554,7 @@ class DataClient:
         self, license_id: str, *, status: str | None = None, contact_id: str | None = None,
         customer_chann_uid: str | None = None, q: str | None = None, overdue: bool = False,
         deal_id: str | None = None, quote_id: str | None = None,
-        limit: int | None = None, offset: int | None = None,
+        limit: int | None = None, offset: int | None = None, updated_since: datetime | None = None,
     ) -> tuple[list[dict], int]:
         """A page of invoices and how many match — the round 20N shape."""
         params: dict = {}
@@ -2536,6 +2576,8 @@ class DataClient:
             params["limit"] = limit
         if offset:
             params["offset"] = offset
+        if updated_since:
+            params["updated_since"] = updated_since.isoformat()
         resp = await self._client.get(
             f"{self._base}/internal/v1/licenses/{license_id}/invoices",
             headers=self._headers, params=params or None,

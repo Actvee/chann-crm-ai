@@ -113,6 +113,10 @@ from ..repositories.invoices import (
     InvoiceRepository,
     is_overdue,
 )
+from ..repositories.api_keys import (
+    RATE_LIMIT_PER_MINUTE, ApiKeyConflict, ApiKeyNotFound, ApiKeyRepository, rate_window_remaining,
+)
+from ..permissions import DEFAULT_ROLE_TEMPLATES
 from ..repositories.profile import (
     ProfileConflict,
     ProfileNotFound,
@@ -132,6 +136,11 @@ from ..repositories.phase6 import (
     Phase6NotFound,
 )
 from ..schemas import (
+    ApiKeyCreateIn,
+    ApiKeyCreatedOut,
+    ApiKeyOut,
+    ApiKeyResolveIn,
+    ApiKeyResolveOut,
     ArchiveInactiveLeadsIn,
     LicenseExpiredOut,
     PlatformMemberMoveIn,
@@ -2738,7 +2747,8 @@ def get_customer(
 @router.get("/licenses/{license_id}/customers", response_model=list[CustomerOut])
 def list_customers(
     license_id: uuid.UUID, stage: str | None = None, customer_chann_uid: str | None = None,
-    q: str | None = None, limit: int = 500, offset: int = 0,
+    q: str | None = None, updated_since: datetime | None = None,
+    limit: int = 500, offset: int = 0,
     response: Response = None,  # type: ignore[assignment]
     session: Session = Depends(get_session),
 ):
@@ -2766,9 +2776,10 @@ def list_customers(
     else:
         capped = max(1, min(int(limit), 2000))
         rows = repo.list_for_license(
-            scope, stage=stage, q=q, limit=capped, offset=max(0, int(offset)),
+            scope, stage=stage, q=q, updated_since=updated_since,
+            limit=capped, offset=max(0, int(offset)),
         )
-        total = repo.count_for_license(scope, stage=stage, q=q)
+        total = repo.count_for_license(scope, stage=stage, q=q, updated_since=updated_since)
     if response is not None:
         response.headers["X-Total-Count"] = str(total)
     return [CustomerOut.model_validate(r, from_attributes=True) for r in rows]
@@ -2912,7 +2923,8 @@ def get_deal(
 @router.get("/licenses/{license_id}/deals", response_model=list[DealOut])
 def list_deals(
     license_id: uuid.UUID, stage: str | None = None, contact_id: uuid.UUID | None = None,
-    q: str | None = None, limit: int = 500, offset: int = 0,
+    q: str | None = None, updated_since: datetime | None = None,
+    limit: int = 500, offset: int = 0,
     response: Response = None,  # type: ignore[assignment]
     session: Session = Depends(get_session),
 ):
@@ -2930,9 +2942,10 @@ def list_deals(
     else:
         capped = max(1, min(int(limit), 2000))
         rows = repo.list_for_license(
-            scope, stage=stage, q=q, limit=capped, offset=max(0, int(offset)),
+            scope, stage=stage, q=q, updated_since=updated_since,
+            limit=capped, offset=max(0, int(offset)),
         )
-        total = repo.count_for_license(scope, stage=stage, q=q)
+        total = repo.count_for_license(scope, stage=stage, q=q, updated_since=updated_since)
     if response is not None:
         response.headers["X-Total-Count"] = str(total)
     # One query for every deal's lines. Asking per deal made this route
@@ -3553,6 +3566,7 @@ def list_invoices(
     license_id: uuid.UUID, status_: str | None = None, contact_id: uuid.UUID | None = None,
     customer_chann_uid: str | None = None, q: str | None = None, overdue: bool = False,
     deal_id: uuid.UUID | None = None, quote_id: uuid.UUID | None = None,
+    updated_since: datetime | None = None,
     limit: int = 500, offset: int = 0,
     response: Response = None,  # type: ignore[assignment]
     session: Session = Depends(get_session),
@@ -3565,7 +3579,7 @@ def list_invoices(
     capped = max(1, min(int(limit), 2000))
     narrow = dict(
         status=status_, contact_id=contact_id, customer_chann_uid=customer_chann_uid,
-        q=q, overdue=overdue, deal_id=deal_id, quote_id=quote_id,
+        q=q, overdue=overdue, deal_id=deal_id, quote_id=quote_id, updated_since=updated_since,
     )
     rows = repo.list_for_license(scope, limit=capped, offset=max(0, int(offset)), **narrow)
     if response is not None:
@@ -4386,6 +4400,7 @@ def list_tickets(
     visible_to: uuid.UUID | None = None,
     q: str | None = None,
     contact_id: uuid.UUID | None = None,
+    updated_since: datetime | None = None,
     limit: int = 100,
     offset: int = 0,
     response: Response = None,  # type: ignore[assignment]
@@ -4419,10 +4434,12 @@ def list_tickets(
         )
     else:
         rows = repo.list_for_license(
-            scope, status=status, q=q, contact_id=contact_id,
+            scope, status=status, q=q, contact_id=contact_id, updated_since=updated_since,
             limit=limit, offset=max(0, int(offset)),
         )
-        total = repo.count_for_license(scope, status=status, q=q, contact_id=contact_id)
+        total = repo.count_for_license(
+            scope, status=status, q=q, contact_id=contact_id, updated_since=updated_since,
+        )
     if response is not None:
         response.headers["X-Total-Count"] = str(total)
     return rows
@@ -6515,3 +6532,116 @@ def archive_inactive_leads(
     except Exception as exc:
         session.rollback()
         raise _phase9_http_error(exc)
+
+
+# ------------------------------------------------------------ round 21B: API keys
+
+
+def _api_key_http_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, ApiKeyNotFound):
+        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    if isinstance(exc, ApiKeyConflict):
+        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    if isinstance(exc, HTTPException):
+        return exc
+    log.exception("unhandled data-tier error: %s", exc)
+    return HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="internal error")
+
+
+def _require_owner_actor(session: Session, license_id: uuid.UUID, actor_id: str) -> None:
+    """Keys are the owner's to make and to take away — the one rule the
+    spec keeps. Checked here so chat and the dashboard cannot disagree.
+
+    `LicenseMember` has no `is_owner` column of its own (that lives on
+    `CustomRole`, keyed by role name) — ownership is decided the same
+    way the rest of the tenant scope does it, through
+    `MemberRepository.is_owner_row`.
+
+    A `chann_uid` can hold two rows on one license — one per OA channel
+    (`UniqueConstraint("license_id", "chann_uid", "channel")`) — so an
+    unordered, channel-blind `.first()` is not deterministic: an owner
+    who also holds a non-owner row on the other channel could be 403'd
+    depending on physical row order. `MemberRepository.get` is the
+    deterministic lookup every other membership check in this file uses
+    (sales channel by default), so it is used here too.
+    """
+    scope = TenantScope(license_id=license_id)
+    row = MemberRepository(session).get(scope, actor_id, channel="sales")
+    if row is None or str(row.status or "") != "active" or not MemberRepository(session).is_owner_row(scope, row):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="owner_only")
+
+
+def _api_key_out(row) -> ApiKeyOut:
+    return ApiKeyOut.model_validate(row, from_attributes=True)
+
+
+@router.post("/licenses/{license_id}/api-keys", response_model=ApiKeyCreatedOut, status_code=201)
+def create_api_key(
+    license_id: uuid.UUID, payload: ApiKeyCreateIn,
+    session: Session = Depends(get_session), x_actor_id: str = Header(default=""),
+):
+    _require_owner_actor(session, license_id, x_actor_id)
+    scope = TenantScope(license_id=license_id)
+    try:
+        row, raw = ApiKeyRepository(session).create(
+            scope, name=payload.name, created_by_chann_uid=payload.created_by_chann_uid or x_actor_id,
+        )
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="api_key", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="create",
+            field_changes=diff_fields({}, {"name": row.name, "key_prefix": row.key_prefix}),
+        )
+        session.commit()
+        out = ApiKeyCreatedOut.model_validate({**_api_key_out(row).model_dump(), "key": raw})
+        return out
+    except Exception as exc:
+        session.rollback()
+        raise _api_key_http_error(exc)
+
+
+@router.get("/licenses/{license_id}/api-keys", response_model=list[ApiKeyOut])
+def list_api_keys(license_id: uuid.UUID, session: Session = Depends(get_session)):
+    rows = ApiKeyRepository(session).list_for_license(TenantScope(license_id=license_id))
+    return [_api_key_out(r) for r in rows]
+
+
+@router.post("/licenses/{license_id}/api-keys/{key_id}/revoke", response_model=ApiKeyOut)
+def revoke_api_key(
+    license_id: uuid.UUID, key_id: uuid.UUID,
+    session: Session = Depends(get_session), x_actor_id: str = Header(default=""),
+):
+    _require_owner_actor(session, license_id, x_actor_id)
+    try:
+        row = ApiKeyRepository(session).revoke(TenantScope(license_id=license_id), key_id)
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="api_key", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="delete",
+            field_changes=diff_fields({"revoked_at": None}, {"revoked_at": str(row.revoked_at)}),
+        )
+        session.commit()
+        return _api_key_out(row)
+    except Exception as exc:
+        session.rollback()
+        raise _api_key_http_error(exc)
+
+
+@router.post("/api-keys/resolve", response_model=ApiKeyResolveOut)
+def resolve_api_key(payload: ApiKeyResolveIn, session: Session = Depends(get_session)):
+    """One call per outside request: find the key, count it against its
+    minute, stamp last_used_at. 404 for unknown and revoked alike — the
+    caller cannot tell them apart, on purpose."""
+    repo = ApiKeyRepository(session)
+    row = repo.find_live_by_hash(payload.key_hash)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="api key not found")
+    now = datetime.now(timezone.utc)
+    remaining = rate_window_remaining(cache.client, str(row.id), now=now)
+    license_row = session.get(License, row.license_id)
+    repo.touch(row, now)
+    session.commit()
+    return ApiKeyResolveOut(
+        key=_api_key_out(row),
+        license_status=str(getattr(license_row, "status", None) or "active"),
+        permission_keys=sorted(DEFAULT_ROLE_TEMPLATES["admin"] or ()),
+        limit=RATE_LIMIT_PER_MINUTE, remaining=remaining,
+    )

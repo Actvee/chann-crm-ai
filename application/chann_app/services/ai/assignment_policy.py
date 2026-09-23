@@ -45,7 +45,8 @@ field is a dotted path into the record being assigned. Use only:
   for sales rules: customer.stage, customer.source
 customer.stage is "lead" for a new lead; customer.source is one of
   line (the customer linked the shop on LINE themselves), staff (a
-  staff member typed them in), csv (imported), dashboard.
+  staff member typed them in), csv (imported), dashboard, api (an
+  outside system through the public API).
 A policy that names no condition ("แจกงานให้ทีม X สลับกัน") has an
 empty match_criteria and assign_to_team is carried on a single entry
 with field "customer.stage", operator "not_equals", value "".

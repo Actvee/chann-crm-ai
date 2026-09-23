@@ -121,6 +121,10 @@ ACCEPTED = {
         "dashboard uploads the file; in chat the technician sends the image itself, "
         "which store_ticket_photo attaches to the job in view"
     ),
+    ("api_key", "create"): (
+        "dashboard only — the key is a secret shown once; chat's \"สร้าง API key\" answers with the "
+        "button that opens the API page rather than putting a credential in a LINE thread (round 21B)"
+    ),
 }
 
 # Real gaps, planned rather than accepted. Listed separately so the
@@ -154,6 +158,8 @@ NO_HANDLER_YET = {
 # URL fragment -> entity. Longest match wins, so "quotes/X/products"
 # resolves to line_item rather than quote.
 URL_ENTITIES = [
+    # Round 21B: the owner's API keys for outside systems.
+    ("api-keys", "api_key"),
     ("approval-workflows", "approval"),
     # Round 20V: its own entity, so the company page's GET/PUT/DELETE on
     # assignment-rules are read as the rule and not as the generic

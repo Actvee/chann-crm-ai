@@ -485,6 +485,31 @@ class LicenseInvite(TimestampMixin, Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class ApiKey(TimestampMixin, Base):
+    """Round 21B — a key the shop owner hands to an outside system so it
+    can call /api/ext/v1 in the shop's name.
+
+    The plaintext exists only in the create response. `key_hash` (SHA-256
+    of the whole key) is the lookup; `key_prefix` is what the owner sees
+    in a list to tell keys apart. Revoking sets `revoked_at` and leaves the
+    row, so the audit trail and "last used" survive the revocation.
+    """
+
+    __tablename__ = "api_keys"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    license_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("licenses.id", ondelete="RESTRICT"),
+        nullable=False, index=True,
+    )
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    key_prefix: Mapped[str] = mapped_column(String(16), nullable=False)
+    key_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    created_by_chann_uid: Mapped[str | None] = mapped_column(String(32))
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class CustomerLicenseLink(Base):
     """Phase 6.5 — an end customer remembering which shop they deal with.
 

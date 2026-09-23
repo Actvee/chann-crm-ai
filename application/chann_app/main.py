@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from .config import settings
 from .data_client import DataClient
 from .line import webhook
-from . import routers_admin, routers_phase2, routers_phase6
+from . import routers_admin, routers_phase2, routers_phase6, routers_ext
 
 logging.basicConfig(level=logging.INFO)
 
@@ -20,6 +20,9 @@ app.include_router(webhook.router)
 app.include_router(routers_admin.router)
 app.include_router(routers_phase2.router)
 app.include_router(routers_phase6.router)
+
+# Round 21B: the outside surface, with its own OpenAPI at /api/ext/v1/docs.
+app.mount("/api/ext/v1", routers_ext.ext_app)
 
 
 @app.get("/health")

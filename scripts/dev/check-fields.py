@@ -37,6 +37,7 @@ from pydantic import BaseModel  # noqa: E402
 
 # (schema, column) the schema leaves out on purpose.
 ACCEPTED_OMISSIONS: dict[tuple[str, str], str] = {
+    ("ApiKeyOut", "key_hash"): "the hash never leaves the Data tier",
     ("DealProductOut", "position"): "ordering key; the router returns lines already in order",
     ("LicenseOut", "auto_accept_new_customers"): "a license setting, read through /settings",
     ("LicenseOut", "legal_name"): "company profile: CompanyProfileOut sends it",
