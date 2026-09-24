@@ -24,6 +24,7 @@ sys.path.insert(0, str(ROOT / "application"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from chann_app.services import chat  # noqa: E402
+from conftest import line_got  # noqa: E402
 from test_phase6_chat import FakeDataClient, LICENSE_ID, _ctx  # noqa: E402
 
 
@@ -235,6 +236,9 @@ def _seeded(permission_keys=("invoice.read", "invoice.update", "quote.update", "
         {"id": "CUST-2", "customer_id": "C-2026-0002", "first_name": "สมหญิง",
          "last_name": "ร่ำรวย", "customer_chann_uid": None, "stage": "customer"},
     ]
+    # A linked customer has a LINE user behind the uid (round 21E: a uid
+    # with no LINE target is refused as not linked, never "sent").
+    client._line_targets = {"CHN-CUST-1": "U-somchai"}
     client._invoices = [{
         "id": "INV-1", "license_id": str(LICENSE_ID), "invoice_id": "INV-2026-0001",
         "quote_id": None, "deal_id": "DEAL-1", "contact_id": "CUST-1", "status": "issued",
@@ -346,7 +350,7 @@ class TestCorrectingABill:
 
 class TestHandingTheDocumentOver:
     @pytest.mark.asyncio
-    async def test_a_linked_customer_is_told_the_bill_was_sent(self):
+    async def test_a_linked_customer_is_told_the_bill_was_sent(self, line_accepts):
         client = _seeded()
         reply = await chat._handle_document_send(
             client, ctx=_ctx(oa="sales"), license_id=LICENSE_ID, entity="invoice",
@@ -355,6 +359,7 @@ class TestHandingTheDocumentOver:
         assert "สมชาย" in reply.text and "ไลน์" in reply.text
         assert "ส่งซ้ำ" not in reply.text
         assert reply.intent == {"action": "send", "entity": "invoice"}
+        line_got(line_accepts, "U-somchai", "INV-2026-0001", "ใบแจ้งหนี้")
 
     @pytest.mark.asyncio
     async def test_a_customer_with_no_line_is_refused_by_name(self):
@@ -377,7 +382,7 @@ class TestHandingTheDocumentOver:
         assert "ออกเอกสาร" in reply.text
 
     @pytest.mark.asyncio
-    async def test_a_receipt_is_sent_as_the_receipt_not_the_bill(self):
+    async def test_a_receipt_is_sent_as_the_receipt_not_the_bill(self, line_accepts):
         client = _seeded()
         client._invoices[0]["receipt_document_id"] = "GD-R"
         reply = await chat._handle_document_send(
@@ -385,9 +390,10 @@ class TestHandingTheDocumentOver:
             fields={"code": "INV-2026-0001", "kind": "receipt"},
             permission_keys=["invoice.update"], language="th")
         assert "ใบเสร็จ" in reply.text
+        line_got(line_accepts, "U-somchai", "INV-2026-0001", "ใบเสร็จรับเงิน", "ชำระครบแล้ว")
 
     @pytest.mark.asyncio
-    async def test_the_models_kind_wins_over_a_word_in_the_sentence(self):
+    async def test_the_models_kind_wins_over_a_word_in_the_sentence(self, line_accepts):
         """Review finding 4: the word was OR-ed over the field, so a
         sentence that MENTIONS ใบเสร็จ while asking for the invoice was
         refused — and the mirror case sends the customer the wrong
@@ -401,9 +407,11 @@ class TestHandingTheDocumentOver:
             message="ส่งใบแจ้งหนี้ INV-2026-0001 ให้ลูกค้า ไม่ใช่ใบเสร็จนะ")
         assert "ยังไม่มีอะไรให้ส่ง" not in reply.text
         assert "ใบแจ้งหนี้" in reply.text and "สมชาย" in reply.text
+        text = line_got(line_accepts, "U-somchai", "INV-2026-0001", "ใบแจ้งหนี้")
+        assert "ชำระครบแล้ว" not in text
 
     @pytest.mark.asyncio
-    async def test_the_mirror_case_does_not_send_the_wrong_document(self):
+    async def test_the_mirror_case_does_not_send_the_wrong_document(self, line_accepts):
         client = _seeded()
         client._invoices[0]["receipt_document_id"] = "GD-R"
         await chat._handle_document_send(
@@ -411,11 +419,10 @@ class TestHandingTheDocumentOver:
             fields={"code": "INV-2026-0001", "kind": "receipt"},
             permission_keys=["invoice.update"], language="th",
             message="ส่งใบเสร็จ INV-2026-0001 ให้ลูกค้า")
-        pushed = [r for r in client.recorded if r[0] == "create_notification"]
-        assert pushed and pushed[-1][3] == "receipt_issued"
+        line_got(line_accepts, "U-somchai", "INV-2026-0001", "ใบเสร็จรับเงิน", "ชำระครบแล้ว")
 
     @pytest.mark.asyncio
-    async def test_the_word_is_read_only_when_the_model_named_no_kind(self):
+    async def test_the_word_is_read_only_when_the_model_named_no_kind(self, line_accepts):
         client = _seeded()
         client._invoices[0]["receipt_document_id"] = "GD-R"
         reply = await chat._handle_document_send(
@@ -424,6 +431,7 @@ class TestHandingTheDocumentOver:
             permission_keys=["invoice.update"], language="th",
             message="ส่งใบเสร็จให้ลูกค้า INV-2026-0001")
         assert "ใบเสร็จ" in reply.text
+        line_got(line_accepts, "U-somchai", "INV-2026-0001", "ใบเสร็จรับเงิน")
 
     @pytest.mark.asyncio
     async def test_a_receipt_that_is_not_made_yet_names_the_right_road(self):
@@ -440,14 +448,15 @@ class TestHandingTheDocumentOver:
         assert 'ออกเอกสาร' not in reply.text
 
     @pytest.mark.asyncio
-    async def test_without_the_permission_nothing_is_pushed(self):
+    async def test_without_the_permission_nothing_is_pushed(self, line_accepts):
         client = _seeded()
         reply = await chat._handle_document_send(
             client, ctx=_ctx(oa="sales"), license_id=LICENSE_ID, entity="invoice",
             fields={"code": "INV-2026-0001"},
             permission_keys=["invoice.read"], language="th")
         assert reply.text == chat._t(chat.SUGGEST_NO_PERMISSION_LEAD, "th")
-        assert not [r for r in client.recorded if r[0] == "create_notification"]
+        # A refusal pushes nothing: LINE (which would accept) received nothing.
+        assert not line_accepts, line_accepts
 
 
 class TestHandingTheQuotationOver:
@@ -469,7 +478,7 @@ class TestHandingTheQuotationOver:
         return client
 
     @pytest.mark.asyncio
-    async def test_an_issued_quotation_goes_to_a_linked_customer(self):
+    async def test_an_issued_quotation_goes_to_a_linked_customer(self, line_accepts):
         client = self._with_quote()
         reply = await chat._handle_quote_intent(
             client, intent={"action": "send", "entity": "quote",
@@ -481,11 +490,10 @@ class TestHandingTheQuotationOver:
         assert "Q-2026-0001" in reply.text
         assert "สมชาย" in reply.text and "ไลน์" in reply.text
         assert reply.intent == {"action": "send", "entity": "quote"}
-        pushed = [r for r in client.recorded if r[0] == "create_notification"]
-        assert pushed and pushed[-1][3] == "document_sent"
+        line_got(line_accepts, "U-somchai", "Q-2026-0001", "ใบเสนอราคา")
 
     @pytest.mark.asyncio
-    async def test_a_customer_with_no_line_is_refused_by_name(self):
+    async def test_a_customer_with_no_line_is_refused_by_name(self, line_accepts):
         client = self._with_quote(contact="CUST-2")
         reply = await chat._handle_quote_intent(
             client, intent={"action": "send", "entity": "quote",
@@ -494,10 +502,11 @@ class TestHandingTheQuotationOver:
             permission_keys=["quote.read", "quote.update"],
             message="ส่งใบเสนอราคา Q-2026-0001 ให้ลูกค้า")
         assert "สมหญิง ร่ำรวย" in reply.text and "ยังไม่ได้ผูกไลน์" in reply.text
-        assert not [r for r in client.recorded if r[0] == "create_notification"]
+        # A refusal pushes nothing: LINE (which would accept) received nothing.
+        assert not line_accepts, line_accepts
 
     @pytest.mark.asyncio
-    async def test_a_quotation_with_no_pdf_says_to_issue_it_first(self):
+    async def test_a_quotation_with_no_pdf_says_to_issue_it_first(self, line_accepts):
         client = self._with_quote(document=None)
         reply = await chat._handle_quote_intent(
             client, intent={"action": "send", "entity": "quote",
@@ -506,10 +515,11 @@ class TestHandingTheQuotationOver:
             permission_keys=["quote.read", "quote.update"],
             message="ส่งใบเสนอราคา Q-2026-0001 ให้ลูกค้า")
         assert "ออกเอกสาร" in reply.text
-        assert not [r for r in client.recorded if r[0] == "create_notification"]
+        # A refusal pushes nothing: LINE (which would accept) received nothing.
+        assert not line_accepts, line_accepts
 
     @pytest.mark.asyncio
-    async def test_a_quotation_nobody_has_is_not_found_not_an_error(self):
+    async def test_a_quotation_nobody_has_is_not_found_not_an_error(self, line_accepts):
         client = self._with_quote()
         reply = await chat._handle_quote_intent(
             client, intent={"action": "send", "entity": "quote",
@@ -518,10 +528,11 @@ class TestHandingTheQuotationOver:
             permission_keys=["quote.read", "quote.update"],
             message="ส่งใบเสนอราคา Q-2026-9999 ให้ลูกค้า")
         assert "Q-2026-9999" in reply.text
-        assert not [r for r in client.recorded if r[0] == "create_notification"]
+        # A refusal pushes nothing: LINE (which would accept) received nothing.
+        assert not line_accepts, line_accepts
 
     @pytest.mark.asyncio
-    async def test_quote_update_is_the_permission_that_is_checked(self):
+    async def test_quote_update_is_the_permission_that_is_checked(self, line_accepts):
         client = self._with_quote()
         reply = await chat._handle_quote_intent(
             client, intent={"action": "send", "entity": "quote",
@@ -530,7 +541,8 @@ class TestHandingTheQuotationOver:
             permission_keys=["quote.read"],          # can look, cannot hand over
             message="ส่งใบเสนอราคา Q-2026-0001 ให้ลูกค้า")
         assert reply.text == chat._t(chat.SUGGEST_NO_PERMISSION_LEAD, "th")
-        assert not [r for r in client.recorded if r[0] == "create_notification"]
+        # A refusal pushes nothing: LINE (which would accept) received nothing.
+        assert not line_accepts, line_accepts
 
     @pytest.mark.asyncio
     async def test_the_quotes_own_parties_are_reached_through_its_deal(self):
@@ -1053,7 +1065,7 @@ class TestTheModelsReadingReachesTheRightHandler:
         assert not [r for r in client.recorded if r[0] == "set_invoice_receipt_document"]
 
     @pytest.mark.asyncio
-    async def test_send_on_an_invoice_reaches_the_send_handler(self):
+    async def test_send_on_an_invoice_reaches_the_send_handler(self, line_accepts):
         client = _seeded()
         reply = await chat._handle_invoice_intent(
             client, intent={"action": "send", "entity": "invoice",
@@ -1062,6 +1074,7 @@ class TestTheModelsReadingReachesTheRightHandler:
             permission_keys=["invoice.read", "invoice.update"],
             message="ส่งใบแจ้งหนี้ INV-2026-0001 ให้ลูกค้า")
         assert "สมชาย" in reply.text and "ไลน์" in reply.text
+        line_got(line_accepts, "U-somchai", "INV-2026-0001")
 
 
 # ------------------------------------------ final review C1 (23 ก.ย. 2569)
@@ -1071,8 +1084,14 @@ class TestAStaleOrCancelledDocumentIsNotHandedOver:
     """Chat answers the same refusals as the dashboard: a void bill, a bill
     corrected after its PDF was made, a rejected or expired quotation."""
 
+    @pytest.fixture(autouse=True)
+    def _line(self, line_accepts):
+        # LINE that would accept: a refusal must leave it with nothing
+        # (21E re-review 2, N-2 — counting rows could no longer fail).
+        self._line_took = line_accepts
+
     def _pushed(self, client):
-        return [r for r in client.recorded if r[0] == "create_notification"]
+        return list(self._line_took)
 
     @pytest.mark.asyncio
     async def test_a_void_bill_is_not_sent(self):

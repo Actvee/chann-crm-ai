@@ -17,6 +17,14 @@ in-process dictionary. Without it `get_document_store()` returns the null
 store, every document feature answers "storage is not configured", and a
 scenario covering one would be asserting on the wrong branch. Nothing reaches
 GCS — the stand-in is a dict that lives and dies with the run.
+
+LINE is stood in too (round 21E). A push to the customer used to fail
+here — no channel token — and be swallowed, so a scenario "proved" a send
+that never went. Sending a document now refuses to call a failed push a
+send, so the run needs a LINE that takes pushes: `MemoryLine` records them.
+A LINE user id beginning with `U-line-down` is refused the way LINE refuses
+(a `LineReplyError`), so a scenario can seed a customer whose push fails and
+assert the reply says so.
 """
 from __future__ import annotations
 
@@ -42,6 +50,7 @@ def prepare() -> Path:
     settings.openrouter_model = "agent-test-model"
 
     _install_memory_document_store()
+    _install_memory_line()
     return REPO_ROOT
 
 
@@ -86,3 +95,46 @@ def _install_memory_document_store() -> MemoryDocumentStore:
     storage_base._agent_test_store = store
     storage_base.get_document_store = lambda *a, **k: store
     return store
+
+
+class MemoryLine:
+    """LINE's push endpoint as a list. Only the push is stood in; replies
+    to a webhook never reach this runner."""
+
+    DOWN_PREFIX = "U-line-down"
+
+    def __init__(self):
+        self.pushed: list[tuple[str, str, list]] = []
+
+    def _take(self, oa: str, to: str, messages: list) -> list[str]:
+        from chann_app.line.client import LineReplyError
+
+        if not to:
+            raise LineReplyError("push requires a target LINE user id")
+        # CHANN_TEST_LINE_REFUSES=1: LINE refuses everything — the proof that
+        # every scenario claiming a send fails when nothing is delivered.
+        import os
+        if str(to).startswith(self.DOWN_PREFIX) or os.environ.get("CHANN_TEST_LINE_REFUSES") == "1":
+            raise LineReplyError("LINE push failed: 500 (agent-test stand-in)")
+        self.pushed.append((oa, to, messages))
+        return [f"agent-test-msg-{len(self.pushed)}"]
+
+    async def push_text(self, oa, to_line_user_id, text, client=None, quick_reply=None):
+        return self._take(oa, to_line_user_id, [text])
+
+    async def push_messages(self, oa, to_line_user_id, messages, client=None):
+        return self._take(oa, to_line_user_id, list(messages))
+
+
+def _install_memory_line() -> MemoryLine:
+    """Point the notification road's push at the list, once."""
+    from chann_app.services import notify
+
+    existing = getattr(notify, "_agent_test_line", None)
+    if existing is not None:
+        return existing
+    line = MemoryLine()
+    notify._agent_test_line = line
+    notify.push_text = line.push_text
+    notify.push_messages = line.push_messages
+    return line

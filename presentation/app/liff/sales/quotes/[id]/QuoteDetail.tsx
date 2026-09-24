@@ -13,6 +13,7 @@ import { ProductLineForm } from "../../../_product-line-form";
 import { readFailure, useFailureText, useFormatters } from "../../_format";
 import { RecordActions, RecordHead, RelatedHeading, RelatedLinks, StatusSection } from "../../_record";
 import { RelatedActivity } from "../../_related";
+import { CreateInvoiceButton } from "../../invoices/_create-button";
 import { openExternal, proxyHeaders } from "../../_lib";
 import { useSalesSession } from "../../_session";
 import { SalesShell } from "../../_shell";
@@ -59,6 +60,9 @@ type Detail = {
     // a customer who links after the quote was made, not a frozen guess.
     customer_chann_uid?: string | null;
   } | null;
+  /** Linked on LINE, as the send route decides it. */
+  /** null: the server could not ask LINE — unknown, so sending stays open. */
+  customer_has_line?: boolean | null;
 };
 
 // The quote state machine, as phase10.py's _QUOTE_ALLOWED_TRANSITIONS
@@ -206,12 +210,12 @@ export default function QuoteDetail({
   async function createInvoice() {
     if (!detail) return;
     const ok = await ask({
-      action: t.dashboard.invoices.fromQuote,
+      action: t.dashboard.invoices.create,
       target: t.dashboard.quotes.quoteWord,
       code: quoteId,
       affects: [t.dashboard.invoices.fromQuoteAffects],
       reversible: t.dashboard.invoices.fromQuoteKeeps,
-      confirmLabel: t.dashboard.invoices.fromQuote,
+      confirmLabel: t.dashboard.invoices.create,
     });
     if (!ok) return;
     setBusy(true);
@@ -306,6 +310,19 @@ export default function QuoteDetail({
           say(t.dashboard.invoices.sendNoLine, "error");
         } else if (failure.code === "not_issued") {
           say(t.dashboard.invoices.sendNotIssued, "error");
+        } else if (failure.code === "push_failed") {
+          // LINE did not take it (round 21E): a failure, never "sent", and
+          // said as its cause — LINE's raw answer stays in the server log.
+          say(
+            failure.reason === "not_configured"
+              ? t.dashboard.invoices.sendPushNotConfigured
+              : failure.reason === "blocked"
+                ? t.dashboard.invoices.sendPushBlocked
+                : failure.reason === "channel_refused"
+                  ? t.dashboard.invoices.sendPushChannel
+                  : t.dashboard.invoices.sendPushFailed,
+            "error",
+          );
         } else if (failure.code === "quote_closed") {
           say(t.dashboard.invoices.sendQuoteClosed, "error");
         } else {
@@ -510,11 +527,20 @@ export default function QuoteDetail({
   // Round 21C: whether this quote's customer can be reached on LINE at
   // all — read from the customer the page already loaded, not fetched
   // again for this one question.
-  const customerHasLine = Boolean(detail?.customer?.customer_chann_uid);
+  // Read off the response, answered by the same predicate the push uses (a
+  // uid AND a LINE user behind it — round 21E review, Important 1). It was
+  // derived here from the uid alone, so the button was enabled for a
+  // customer the send then refused.
+  // Only a known "no" blocks: null means the server could not ask LINE
+  // (21E re-review 2, I-2), and the send route asks again anyway.
+  const customerHasLine = detail?.customer_has_line !== false;
   // A rejected or expired quotation is an offer that no longer stands:
   // the server refuses to send it (`document_send.why_not_sendable`,
   // final review C1), so the button says so before it is pressed.
   const quoteClosed = quoteStatus === "rejected" || quoteStatus === "expired";
+  // A bill can be raised from a sent or accepted quote, by someone who may
+  // create one (services/invoices.py says why).
+  const billable = can("invoice.create") && (quoteStatus === "sent" || quoteStatus === "accepted");
   const subtotal = items.reduce(
     (sum, p) => sum + Number(p.qty ?? 0) * Number(p.quoted_unit_price ?? 0),
     0,
@@ -609,6 +635,37 @@ export default function QuoteDetail({
           {(issuable || detail.quote.generated_document_id || can("invoice.create") || invoices.length > 0) && (
             <RecordActions
               title={t.dashboard.record.documentsTitle}
+              // One primary, the next honest step: issue the PDF while there
+              // is none, then raise the bill while there is none (round
+              // 21E; ui-ux-pro-max primary-action). Every other button is
+              // secondary, in the row below it.
+              primary={
+                issuable && !detail.quote.generated_document_id ? (
+                  <button
+                    type="button"
+                    className="btn"
+                    data-variant="primary"
+                    onClick={() => void issue()}
+                    disabled={busy}
+                  >
+                    {t.dashboard.quotes.issue}
+                  </button>
+                ) : billable && invoices.length === 0 && detail.quote.generated_document_id ? (
+                  <CreateInvoiceButton onClick={() => void createInvoice()} disabled={busy} />
+                ) : undefined
+              }
+              notice={
+                invoices.length > 0 ? (
+                  <div className="record-note-row">
+                    <span>
+                      {t.dashboard.invoices.alreadyRaised.replace("{code}", invoices[0].invoice_id)}
+                    </span>
+                    <Link className="btn" href={`/liff/sales/invoices?invoice_id=${invoices[0].id}`}>
+                      {t.dashboard.invoices.openInvoice}
+                    </Link>
+                  </div>
+                ) : undefined
+              }
               note={
                 quoteStatus === "draft" && canUpdate && !detail.quote.generated_document_id
                   ? s.quotes.issueBeforeSend
@@ -624,27 +681,9 @@ export default function QuoteDetail({
                       : undefined
               }
             >
-              {invoices.length > 0 && (
-                <div className="record-note-row" style={{ width: "100%" }}>
-                  <span>
-                    {t.dashboard.invoices.alreadyRaised.replace("{code}", invoices[0].invoice_id)}
-                  </span>
-                  <Link className="btn" href={`/liff/sales/invoices?invoice_id=${invoices[0].id}`}>
-                    {t.dashboard.invoices.openInvoice}
-                  </Link>
-                </div>
-              )}
-              {issuable && (
-                <button
-                  type="button"
-                  className="btn"
-                  data-variant={detail.quote.generated_document_id ? undefined : "primary"}
-                  onClick={() => void issue()}
-                  disabled={busy}
-                >
-                  {detail.quote.generated_document_id
-                    ? t.dashboard.quotes.reissue
-                    : t.dashboard.quotes.issue}
+              {issuable && detail.quote.generated_document_id && (
+                <button type="button" className="btn" onClick={() => void issue()} disabled={busy}>
+                  {t.dashboard.quotes.reissue}
                 </button>
               )}
               {detail.quote.generated_document_id && (
@@ -668,22 +707,16 @@ export default function QuoteDetail({
               {/* Round 20V: the bill after the quotation. Only a sent or
                   accepted quote can be billed (services/invoices.py says
                   why), and only with invoice.create — the same call chat
-                  makes for "ออกใบแจ้งหนี้ Q-…". Once one exists this is no
-                  longer the primary thing to press. */}
-              {can("invoice.create") && (quoteStatus === "sent" || quoteStatus === "accepted") && (
-                <button
-                  type="button"
-                  className="btn"
-                  data-variant={
-                    invoices.length === 0 && detail.quote.generated_document_id ? "primary" : undefined
-                  }
+                  makes for "ออกใบแจ้งหนี้ Q-…". Secondary once a bill
+                  exists (then it reads "ออกใบแจ้งหนี้อีกใบ") or while there
+                  is no PDF to bill from yet. */}
+              {billable && !(invoices.length === 0 && detail.quote.generated_document_id) && (
+                <CreateInvoiceButton
+                  primary={false}
+                  again={invoices.length > 0}
                   onClick={() => void createInvoice()}
                   disabled={busy}
-                >
-                  {invoices.length > 0
-                    ? t.dashboard.invoices.fromQuoteAgain
-                    : t.dashboard.invoices.fromQuote}
-                </button>
+                />
               )}
             </RecordActions>
           )}

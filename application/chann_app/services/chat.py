@@ -1151,8 +1151,8 @@ SHOP_CARD_UNTIL_SOON = {"th": " (ถึง {until} · เหลือ {days} ว
 SHOP_CARD_EXPIRED = {"th": "หมดอายุแล้ว (ตั้งแต่ {until})", "en": "expired (since {until})"}
 SHOP_CARD_NO_EXPIRY = {"th": " (ไม่กำหนดวันหมดอายุ)", "en": " (no expiry set)"}
 SHOP_CARD_RENEW = {
-    "th": "ต่ออายุ/เปลี่ยนวันหมดอายุ: ผู้ดูแลระบบ Chann ตั้งให้ได้ที่ Admin > บริษัท > แก้ไข (แจ้งรหัสร้าน {code})",
-    "en": "Renewal / expiry changes: the Chann administrator sets them under Admin > Company > Edit (quote shop code {code}).",
+    "th": "ต่ออายุ/เปลี่ยนวันหมดอายุ: ผู้ดูแลระบบ Chann1 ตั้งให้ได้ที่ Admin > บริษัท > แก้ไข (แจ้งรหัสร้าน {code})",
+    "en": "Renewal / expiry changes: the Chann1 administrator sets them under Admin > Company > Edit (quote shop code {code}).",
 }
 SHOP_CARD_FOOT = {
     # The trailing comma in the English value used to make it a one-tuple,
@@ -12100,7 +12100,7 @@ def document_download_url(license_id: str, document_id: str) -> str | None:
 
 async def _handle_quote_issue(
     client: DataClient, *, license_id, code: str, permission_keys: list[str],
-    language: str, actor_id: str, allow_reissue: bool,
+    language: str, actor_id: str, allow_reissue: bool, ctx: ResolvedContext | None = None,
 ) -> ChatReply:
     from .documents.snapshot import QuoteNotRenderable
     from .pdf.base import RendererUnavailable
@@ -12161,6 +12161,14 @@ async def _handle_quote_issue(
         return ChatReply(text=_t(QUOTE_ISSUE_FAILED, language).format(detail=str(exc)[:160]))
 
     sha = str(document.get("sha256") or "")[:16]
+    # The quotation just issued is the one the conversation is now on, and
+    # the next thing a salesperson does with it is hand it over: "ส่งให้
+    # ลูกค้า" typed next means THIS one (owner on DEV, 24 ก.ย. 2569), and a
+    # tap says so in full, code included, so it cannot mean another.
+    if ctx is not None:
+        await _remember_entity(client, ctx, entity_type="quote",
+                               entity_id=str(quote.get("id") or ""), code=str(quote.get("quote_id") or ""))
+    send_it = ("ส่งให้ลูกค้า", f"ส่งใบเสนอราคา {quote.get('quote_id')} ให้ลูกค้า")
     # A link served by this application, not a GCS signed URL. Signing one
     # needs iam.serviceAccounts.signBlob on the signing service account,
     # which roles/editor does not grant and this project does not add — in
@@ -12174,6 +12182,7 @@ async def _handle_quote_issue(
                 quote_id=quote.get("quote_id"), sha=sha
             ),
             entity_type="quote", entity_id=str(quote.get("id") or ""),
+            quick_replies=[send_it],
         )
 
     return ChatReply(
@@ -12182,7 +12191,7 @@ async def _handle_quote_issue(
         ),
         entity_type="quote",
         entity_id=str(quote.get("id") or ""),
-        quick_replies=[("รายการใบเสนอราคา", "รายการใบเสนอราคา")],
+        quick_replies=[send_it, ("รายการใบเสนอราคา", "รายการใบเสนอราคา")],
     )
 
 
@@ -14903,6 +14912,12 @@ DOCUMENT_SEND_REFUSED = {
         "th": "ส่งให้ลูกค้าไม่ได้ — ใบเสนอราคา {code} ถูกปฏิเสธหรือหมดอายุแล้ว",
         "en": "Cannot send — quotation {code} was rejected or has expired.",
     },
+}
+#: LINE did not take the push (round 21E): never "ทางไลน์แล้ว", and a
+#: button that sends the same sentence again.
+DOCUMENT_SEND_PUSH_FAILED = {
+    "th": "ส่ง{what} {code} ไม่สำเร็จ ({why}) — ลองใหม่อีกครั้ง",
+    "en": "Could not send {what} {code} ({why}) — please try again.",
 }
 DOCUMENT_SEND_FAILED = {
     "th": "ส่ง {code} ให้ลูกค้าไม่สำเร็จ: {detail} — ลองอีกครั้งได้เลย",
@@ -20326,6 +20341,7 @@ GROUP_LABELS: dict[str, dict[str, str]] = {
     "assignment_rule": {"th": "กฎการมอบหมายงาน", "en": "Assignment rules"},
     "ticket": {"th": "ใบงาน", "en": "Tickets"},
     "quote": {"th": "ใบเสนอราคา", "en": "Quotes"},
+    "invoice": {"th": "ใบแจ้งหนี้", "en": "Invoices"},
     "service_report": {"th": "รายงานบริการ", "en": "Service reports"},
     "approval": {"th": "การอนุมัติ", "en": "Approvals"},
     "chat_session": {"th": "ห้องแชท", "en": "Chat sessions"},
@@ -20370,8 +20386,8 @@ PDPA_ERASE_PHRASES = (
 PDPA_ERASE_CONFIRM_PHRASES = ("ยืนยันลบข้อมูล", "confirm delete my data", "confirm erase my data")
 
 TENANT_SUSPENDED = {
-    "th": "ร้าน {company} ถูกระงับการใช้งานชั่วคราวโดยผู้ดูแลระบบ ยังดูข้อมูลเดิมได้จากหน้าจอ แต่ทำรายการใหม่ไม่ได้ ติดต่อ Chann CRM AI เพื่อเปิดใช้งานอีกครั้ง",
-    "en": "{company} is suspended by the platform operator. Existing records stay readable on the dashboard, but nothing new can be done. Contact Chann CRM AI to reopen.",
+    "th": "ร้าน {company} ถูกระงับการใช้งานชั่วคราวโดยผู้ดูแลระบบ ยังดูข้อมูลเดิมได้จากหน้าจอ แต่ทำรายการใหม่ไม่ได้ ติดต่อ Chann1 CRM AI เพื่อเปิดใช้งานอีกครั้ง",
+    "en": "{company} is suspended by the platform operator. Existing records stay readable on the dashboard, but nothing new can be done. Contact Chann1 CRM AI to reopen.",
 }
 
 
@@ -23552,6 +23568,22 @@ INVOICE_PAYMENT_OVER = {
     "th": "ยอด {amount} บาท เกินยอดค้าง {outstanding} บาทของ {code} — ยังไม่ได้บันทึก พิมพ์จำนวนที่ถูกต้องหรือ \"ครบ\"",
     "en": "{amount} baht is more than the {outstanding} outstanding on {code} — nothing was recorded. Send the right amount or \"ครบ\".",
 }
+INVOICE_ALREADY_PAID = {
+    "th": "ใบแจ้งหนี้ {code} ชำระครบแล้วครับ (ไม่ได้บันทึกซ้ำ)",
+    "en": "Invoice {code} is already paid in full (nothing recorded twice).",
+}
+INVOICE_PAY_CONFIRM_FROM_MEMORY = {
+    "th": "รับชำระ {code} เต็ม {amount} บาท ใช่ไหมครับ",
+    "en": "Record the full {amount} baht on {code}?",
+}
+INVOICE_PAY_CONFIRM_AMOUNT_FROM_MEMORY = {
+    "th": "รับชำระ {code} {amount} บาท ใช่ไหมครับ",
+    "en": "Record {amount} baht on {code}?",
+}
+INVOICE_PAY_WHICH = {
+    "th": "รับชำระใบแจ้งหนี้ใบไหนครับ\nยอดค้าง: {lines}",
+    "en": "Which invoice was paid?\nOutstanding: {lines}",
+}
 INVOICE_NOT_OPEN = {
     "th": "ใบแจ้งหนี้ {code} สถานะ {status} รับชำระไม่ได้ครับ",
     "en": "Invoice {code} is {status}; it cannot take a payment.",
@@ -23664,8 +23696,9 @@ def _payment_amount_in(fields: dict | None, message: str) -> tuple[Decimal | Non
     """(amount, full) from the model's fields, else from the words: a number
     that is not the invoice code, or "ครบ"/"ทั้งหมด"/"เต็ม"/"balance"."""
     fields = fields or {}
-    if fields.get("full") in (True, "true", "yes", 1):
-        return None, True
+    # A stated amount beats "full": the model sometimes adds full:true to
+    # "ลูกค้าจ่ายเงินมาแล้ว 32,100 บาท" (measured, round 21E fix round 4),
+    # and the baht the person typed is what was received.
     for key in ("amount", "payment_amount", "deposit_amount", "paid_amount", "price", "total"):
         raw = fields.get(key)
         if raw in (None, "", False):
@@ -23676,6 +23709,10 @@ def _payment_amount_in(fields: dict | None, message: str) -> tuple[Decimal | Non
             continue
         if value > 0:
             return value.quantize(Decimal("0.01")), False
+    # "เปลี่ยนสถานะเป็นชำระแล้ว" comes back update {status:"paid"}: the
+    # model's own field, the same as full (controller ruling b).
+    if fields.get("full") in (True, "true", "yes", 1) or str(fields.get("status") or "").lower() == "paid":
+        return None, True
     text = INVOICE_CODE_RE.sub(" ", message or "")
     text = re.sub(r"(?<![A-Za-z0-9])(?:SR|[CDQT])-\d{4}-\d{4}(?![0-9])", " ", text, flags=re.I)
     lowered = text.lower()
@@ -24209,6 +24246,36 @@ def _closed_deal_of(payment_reply: dict) -> dict | None:
     return None
 
 
+async def _which_invoice_to_pay(
+    client: DataClient, *, license_id, message: str, amount, language: str,
+) -> ChatReply:
+    """No bill named, none in view: the three newest unpaid ones as buttons
+    — the one whose balance equals a stated amount first, never written on
+    that match alone. Each button repeats the sentence with its code."""
+    from . import invoices as invoice_service
+
+    try:
+        rows = await client.list_invoices(str(license_id))
+    except Exception:  # noqa: BLE001
+        log.exception("invoice list failed while asking which to pay")
+        rows = []
+    open_rows = [r for r in rows if str(r.get("status") or "") in ("issued", "partially_paid")]
+    open_rows.sort(key=lambda r: (str(r.get("created_at") or ""), str(r.get("invoice_id") or "")), reverse=True)
+    open_rows = open_rows[:3]
+    if amount is not None:
+        open_rows.sort(key=lambda r: 0 if invoice_service.outstanding_of(r) == amount else 1)
+    if not open_rows:
+        return ChatReply(text=_t(INVOICE_NONE_OUTSTANDING, language))
+    said = (message or "").strip() or "รับชำระ"
+    lines = " · ".join(f"{r.get('invoice_id')} {_baht(invoice_service.outstanding_of(r))}" for r in open_rows)
+    buttons = [
+        (str(r.get("invoice_id") or ""), f"{said} {r.get('invoice_id')}")
+        for r in open_rows
+    ]
+    return ChatReply(text=_t(INVOICE_PAY_WHICH, language).format(lines=lines),
+                     quick_replies=buttons + [("ยอดค้างชำระ", "ยอดค้างชำระ")])
+
+
 async def _handle_invoice_payment(
     client: DataClient, *, ctx: ResolvedContext, license_id, fields: dict, message: str,
     permission_keys: list[str], language: str,
@@ -24221,15 +24288,21 @@ async def _handle_invoice_payment(
     if "invoice.update" not in set(permission_keys):
         return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
     code = _invoice_code_in(fields, message)
+    # Which bill (controller ruling c). A code the sentence or the model
+    # gave — the model fills it from the recent turns — is recorded at
+    # once. One known only from the hour-long last-viewed memory is asked
+    # once before money is written against it; with no bill at all the
+    # person picks from the unpaid ones.
+    amount, full = _payment_amount_in(fields, message)
+    from_memory = False
     if not code:
         ref = await _last_entity_ref(client, ctx)
         if ref and str(ref.get("entity_type") or "") == "invoice" and ref.get("code"):
             code = str(ref["code"]).upper()
+            from_memory = True
     if not code:
-        return ChatReply(
-            text=_t(INVOICE_WHICH_INV, language).format(example="รับชำระ"),
-            quick_replies=[("ยอดค้างชำระ", "ยอดค้างชำระ")],
-        )
+        return await _which_invoice_to_pay(
+            client, license_id=license_id, message=message, amount=amount, language=language)
     invoice = await _invoice_by_code(client, license_id, code)
     if invoice is None:
         return ChatReply(text=_t(NOT_FOUND_BY_CODE, language).format(what=_entity_noun("invoice", language), code=code))
@@ -24239,10 +24312,27 @@ async def _handle_invoice_payment(
                 text=_t(INVOICE_NOT_ISSUED_YET, language).format(code=code),
                 quick_replies=[("ออกใบแจ้งหนี้", f"ออกใบแจ้งหนี้ {code}")],
             )
+        if str(invoice.get("status") or "") == "paid":
+            # A second "จ่ายแล้ว": already settled, nothing is written twice.
+            buttons = [("ดูใบแจ้งหนี้", f"ใบแจ้งหนี้ {code}")]
+            if not invoice.get("receipt_document_id"):
+                buttons.insert(0, ("ออกใบเสร็จ", f"ออกใบเสร็จ {code}"))
+            return ChatReply(text=_t(INVOICE_ALREADY_PAID, language).format(code=code),
+                             entity_type="invoice", entity_id=str(invoice.get("id") or ""),
+                             quick_replies=buttons)
         return ChatReply(text=_t(INVOICE_NOT_OPEN, language).format(
             code=code, status=_label(INVOICE_STATUS_LABELS, invoice.get("status"), language),
         ))
-    amount, full = _payment_amount_in(fields, message)
+    if from_memory and (amount is not None or full):
+        # Asked once; the "ใช่" button is the direct sentence, code included.
+        stated = _baht(amount) if amount is not None else _baht(invoice_service.outstanding_of(invoice))
+        said = f"รับชำระ {code} {amount}" if amount is not None else f"รับชำระ {code} ครบ"
+        return ChatReply(
+            text=_t(INVOICE_PAY_CONFIRM_FROM_MEMORY if amount is None else INVOICE_PAY_CONFIRM_AMOUNT_FROM_MEMORY,
+                    language).format(code=code, amount=stated),
+            entity_type="invoice", entity_id=str(invoice.get("id") or ""),
+            quick_replies=[("ใช่", said), ("ใบอื่น", "ยอดค้างชำระ")],
+        )
     method = _payment_method_in(fields, message)
     reference = str(fields.get("reference") or "").strip() or None
     if amount is None and not full:
@@ -24264,35 +24354,97 @@ async def _handle_invoice_payment(
     )
 
 
+_PLAIN_AMOUNT_RE = re.compile(r"^\s*(\d[\d,]*(?:\.\d{1,2})?)\s*(?:บาท|฿|baht)?\s*$", re.I)
+#: The question's own button ("ครบ"): a tap the system wrote, the direct road.
+_PAY_FULL_BUTTON = "ครบ"
+
+
 async def _resolve_invoice_pay_amount(
     client: DataClient, *, ctx: ResolvedContext, license_id, message: str, pending: dict,
-    permission_keys: list[str], language: str,
+    permission_keys: list[str], language: str, ai_client=None,
 ) -> ChatReply:
-    """The amount typed after "รับชำระ INV-…" asked for one. A number, or
-    "ครบ"; "ยกเลิก" drops the question. Read by hand — never the model."""
+    """The answer to "รับชำระ INV-… เท่าไหร่ครับ" (round 20V; model-first in
+    round 21E fix round 4 — the owner: "ไม่มีความยืดหยุ่น").
+
+    In this order, by controller ruling (a):
+      1. a cancel phrase only DECLINES — checked before the model, which
+         reads "ยกเลิก" here as voiding the bill (measured);
+      2. a plain number, or the question's own "ครบ" button, is taken as it
+         is — the typed amount and the system's own tap;
+      3. anything else is READ BY THE MODEL with the pending context:
+         "จ่ายแล้ว", "ลูกค้าโอนมาหมดแล้ว", "เต็ม" come back pay full on this
+         bill and record the balance; a question is answered with the card
+         and the question stays open; any other reading writes nothing.
+    """
     held = pending.get("fields") or {}
     code = str(held.get("code") or "")
     if _matches_any(message, DUPLICATE_CANCEL_PHRASES):
         await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
         return ChatReply(text=_t(INVOICE_PAYMENT_CANCELLED, language).format(code=code))
-    amount, full = _payment_amount_in({}, message)
+    if "invoice.update" not in set(permission_keys):
+        await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+
+    amount, full, method = None, False, None
+    plain = _PLAIN_AMOUNT_RE.match(message or "")
+    if plain:
+        try:
+            value = Decimal(plain.group(1).replace(",", ""))
+            if value > 0:
+                amount = value.quantize(Decimal("0.01"))
+        except (InvalidOperation, ValueError):
+            amount = None
+    elif (message or "").strip() == _PAY_FULL_BUTTON:
+        full = True
+    else:
+        reading = await _read_pay_answer(ctx=ctx, license_id=license_id, message=message, code=code,
+                                         permission_keys=permission_keys, language=language,
+                                         ai_client=ai_client, client=client)
+        action = str((reading or {}).get("action") or "")
+        entity = str((reading or {}).get("entity") or "")
+        fields = (reading or {}).get("fields") or {}
+        said_code = _invoice_code_in(fields, "")
+        if action == "pay" and entity == "invoice" and said_code in ("", code):
+            amount, full = _payment_amount_in(fields, "")
+            method = _payment_method_in(fields, "")
+        elif action in READ_ACTIONS and entity == "invoice" and said_code == code:
+            # "ค้างเท่าไหร่นะ": answered with the card; the question stays.
+            return await _handle_invoice_detail(
+                client, ctx=ctx, license_id=license_id, code=code,
+                permission_keys=permission_keys, language=language,
+            )
     if amount is None and not full:
         return ChatReply(
             text=_t(INVOICE_PAYMENT_AMOUNT_INVALID, language),
             quick_replies=[("ครบ", "ครบ"), ("ยกเลิก", "ยกเลิก")],
         )
-    if "invoice.update" not in set(permission_keys):
-        await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
     await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
     invoice = await _invoice_by_code(client, license_id, code)
     if invoice is None:
         return ChatReply(text=_t(NOT_FOUND_BY_CODE, language).format(what=_entity_noun("invoice", language), code=code))
-    method = _payment_method_in({}, message) or (str(held.get("method") or "") or None)
+    method = method or _payment_method_in({}, message) or (str(held.get("method") or "") or None)
     return await _record_invoice_payment_and_reply(
         client, ctx=ctx, license_id=license_id, invoice=invoice, amount=amount, full=full,
         method=method, reference=None, language=language,
     )
+
+
+async def _read_pay_answer(*, ctx, license_id, message, code, permission_keys, language, ai_client, client):
+    """The model's reading of an answer to the amount question, told what
+    was asked. None when the model could not be asked — then nothing is
+    written and the question is asked again."""
+    try:
+        return await parse_intent(
+            message=message, chann_uid=ctx.chann_uid, role=ctx.primary_role or "",
+            license_id=str(license_id),
+            permission_keys=_keys_this_oa_can_use(permission_keys, ctx.oa),
+            language=language, client=ai_client,
+            pending={"action": "pay", "entity": "invoice", "fields": {"code": code}, "missing": ["amount"]},
+            recent=await _recent_turns(client, ctx), oa=ctx.oa,
+        )
+    except (AINotConfigured, AIUnavailable) as exc:
+        log.warning("pay answer not read by the model: %s", exc)
+        return None
 
 
 async def _handle_invoice_receipt(
@@ -24906,6 +25058,155 @@ async def _quote_parties(client: DataClient, license_id, quote: dict) -> tuple[d
     return customer, company
 
 
+#: "ล่าสุด" as the model writes it into a code field (measured 24 ก.ย. 2569:
+#: "ส่งใบเสนอราคาล่าสุดให้ลูกค้า" -> {"code": "latest"}).
+_LATEST_WORDS = frozenset({"latest", "last", "newest", "ล่าสุด", "อันล่าสุด", "ใบล่าสุด"})
+#: Words the model sometimes puts where a person's name goes, meaning only
+#: "the customer" — not somebody to look up.
+_NOBODY_IN_PARTICULAR = frozenset({"ลูกค้า", "customer", "the customer"})
+
+DOCUMENT_SEND_WHICH = {
+    "th": "ส่ง{what}ใบไหนให้ลูกค้าครับ — กดเลือกด้านล่าง หรือพิมพ์ \"ส่ง{what} {example} ให้ลูกค้า\"",
+    "en": "Which {what} should go to the customer? Tap one below, or send \"send {what} {example} to the customer\".",
+}
+DOCUMENT_SEND_NONE_ISSUED = {
+    "th": "ยังไม่มี{what}ที่ออกเอกสารแล้วให้ส่งครับ — ออกเอกสารก่อน แล้วค่อยส่งให้ลูกค้า",
+    "en": "There is no issued {what} to send yet — issue one first, then send it.",
+}
+DOCUMENT_SEND_NO_QUOTE_FOR = {
+    "th": "{name} ยังไม่มีใบเสนอราคาครับ",
+    "en": "{name} has no quotation yet.",
+}
+
+
+def _newest_first(rows: list[dict], code_key: str) -> list[dict]:
+    """Newest first, by when it was made and then by its running number —
+    the Data tier lists newest first, a fake need not, and the code's
+    number only ever grows."""
+    return sorted(rows or [], key=lambda r: (str(r.get("created_at") or ""), str(r.get(code_key) or "")), reverse=True)
+
+
+async def _which_document_to_send(client: DataClient, *, license_id, entity: str, language: str) -> ChatReply:
+    """Nothing points at a document: ask which, with the newest issued ones
+    as buttons (a button, and the same sentence typed, both work)."""
+    what = _entity_noun(entity, language)
+    code_key = "quote_id" if entity == "quote" else "invoice_id"
+    try:
+        rows = await (client.list_quotes(str(license_id)) if entity == "quote"
+                      else client.list_invoices(str(license_id)))
+    except Exception:  # noqa: BLE001
+        log.exception("%s list failed while asking which to send", entity)
+        rows = []
+    ready = [r for r in _newest_first(rows, code_key)
+             if r.get("generated_document_id") and str(r.get("status") or "") not in ("void", "rejected", "expired", "draft")]
+    if not ready:
+        return ChatReply(text=_t(DOCUMENT_SEND_NONE_ISSUED, language).format(what=what))
+    codes = [str(r.get(code_key) or "") for r in ready[:3]]
+    noun_th = "ใบเสนอราคา" if entity == "quote" else "ใบแจ้งหนี้"
+    return ChatReply(
+        text=_t(DOCUMENT_SEND_WHICH, language).format(what=what, example=codes[0]),
+        quick_replies=[(f"ส่ง {c}", f"ส่ง{noun_th} {c} ให้ลูกค้า") for c in codes],
+    )
+
+
+async def _quote_to_send(
+    client: DataClient, *, ctx: ResolvedContext, license_id, fields: dict, message: str, language: str,
+) -> tuple[dict | None, str, ChatReply | None]:
+    """(quotation, its code, None) — or (None, "", the reply) when there is
+    no one quotation to hand over.
+
+    The sentence names it in one of five ways, all measured against the
+    deployed model on 24 ก.ย. 2569: its Q- code; "ล่าสุด" (code="latest");
+    a customer ("ให้คุณสมหญิง" -> target_name); its deal ("ของดีล D-…" ->
+    code="D-…"); or nothing at all, which is the quotation the conversation
+    is on — "ส่งให้ลูกค้า" right after "ออกเอกสาร Q-…". Only when none of
+    those points anywhere is the person asked, with buttons.
+    """
+    fields = fields or {}
+    said = str(fields.get("code") or fields.get("quote_code") or "").strip()
+    found = QUOTE_CODE_RE.search(said) or QUOTE_CODE_RE.search(message or "")
+    if found:
+        code = found.group(1).upper()
+        record = await _quote_by_code(client, license_id, code)
+        if record is None:
+            return None, code, ChatReply(text=_t(NOT_FOUND_BY_CODE, language).format(
+                what=_entity_noun("quote", language), code=code))
+        return record, code, None
+
+    try:
+        quotes = _newest_first(await client.list_quotes(str(license_id)), "quote_id")
+    except Exception:  # noqa: BLE001
+        log.exception("quote list failed while finding one to send")
+        return None, "", ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    def pick(rows: list[dict]) -> tuple[dict | None, str, ChatReply | None]:
+        chosen = rows[0] if rows else None
+        return chosen, str((chosen or {}).get("quote_id") or "").upper(), None
+
+    deal_said = DEAL_ID_RE.search(said) or DEAL_ID_RE.search(str(fields.get("deal_code") or "")) \
+        or DEAL_ID_RE.search(message or "")
+    if deal_said:
+        deal_code = deal_said.group(0).upper()
+        try:
+            deals = await client.list_deals(str(license_id))
+        except Exception:  # noqa: BLE001
+            deals = []
+        deal = next((d for d in deals if str(d.get("deal_id") or "").upper() == deal_code), None)
+        theirs = [q for q in quotes if deal is not None and str(q.get("deal_id")) == str(deal.get("id"))]
+        if not theirs:
+            return None, "", ChatReply(text=_t(NOT_FOUND_BY_CODE, language).format(
+                what=_entity_noun("quote", language), code=deal_code))
+        return pick(theirs)
+
+    # A person the MODEL named is the person served — in `target_name`, in
+    # `customer`, or in `code` when that code is neither a quotation, a deal
+    # nor "latest" (a C- code or a name). The quote in view must never win
+    # over them: with Q-0001 of สมชาย in view, {code: "C-2026-0002"} sent
+    # สมชาย's quotation, which cannot be recalled (21E review, Important 2).
+    # The conversation is asked only when the model named nobody.
+    said_is_a_person = bool(said) and said.lower() not in _LATEST_WORDS
+    raw_name = str(fields.get("target_name") or fields.get("customer")
+                   or (said if said_is_a_person else "")).strip()
+    named = _strip_polite_tail(_strip_honorific(raw_name))
+    if named and not _is_pronoun_target(named) and named.lower() not in _NOBODY_IN_PARTICULAR:
+        person, asked = await _find_one_customer_by_name(
+            client, str(license_id), named, language, ctx=ctx,
+            resume_entity="quote", resume_action="send", resume_fields=fields,
+        )
+        if person is None:
+            return None, "", asked
+        try:
+            deals = await client.list_deals(str(license_id))
+        except Exception:  # noqa: BLE001
+            deals = []
+        their_deals = {str(d.get("id")) for d in deals if str(d.get("contact_id") or "") == str(person.get("id"))}
+        theirs = [q for q in quotes if str(q.get("deal_id")) in their_deals]
+        if not theirs:
+            return None, "", ChatReply(text=_t(DOCUMENT_SEND_NO_QUOTE_FOR, language).format(
+                name=_display_name(person)))
+        return pick(theirs)
+
+    if said.lower() in _LATEST_WORDS:
+        if not quotes:
+            return None, "", await _which_document_to_send(
+                client, license_id=license_id, entity="quote", language=language)
+        return pick(quotes)
+
+    ref = await _last_entity_ref(client, ctx)
+    kind = str((ref or {}).get("entity_type") or "")
+    if kind == "quote" and (ref or {}).get("code"):
+        code = str(ref["code"]).upper()
+        record = next((q for q in quotes if str(q.get("quote_id") or "").upper() == code), None)
+        if record is not None:
+            return record, code, None
+    if kind == "deal" and (ref or {}).get("entity_id"):
+        theirs = [q for q in quotes if str(q.get("deal_id")) == str(ref.get("entity_id"))]
+        if theirs:
+            return pick(theirs)
+    return None, "", await _which_document_to_send(
+        client, license_id=license_id, entity="quote", language=language)
+
+
 async def _handle_document_send(
     client: DataClient, *, ctx: ResolvedContext, license_id, entity: str, fields: dict,
     permission_keys: list[str], language: str, message: str = "",
@@ -24939,14 +25240,10 @@ async def _handle_document_send(
     kind = "receipt" if (entity == "invoice" and wants_receipt) else ("quote" if entity == "quote" else "invoice")
 
     if entity == "quote":
-        code = str(fields.get("code") or fields.get("quote_code") or "").strip().upper()
-        if not code:
-            found = QUOTE_CODE_RE.search(message or "")
-            code = found.group(1).upper() if found else ""
-        record = await _quote_by_code(client, license_id, code) if code else None
-        if record is None:
-            return ChatReply(text=_t(NOT_FOUND_BY_CODE, language).format(
-                what=_entity_noun("quote", language), code=code))
+        record, code, asked = await _quote_to_send(
+            client, ctx=ctx, license_id=license_id, fields=fields, message=message, language=language)
+        if asked is not None:
+            return asked
         document_id = str(record.get("generated_document_id") or "") or None
         customer, company = await _quote_parties(client, license_id, record)
     else:
@@ -24955,7 +25252,11 @@ async def _handle_document_send(
             ref = await _last_entity_ref(client, ctx)
             if ref and str(ref.get("entity_type") or "") == "invoice" and ref.get("code"):
                 code = str(ref["code"]).upper()
-        record = await _invoice_by_code(client, license_id, code) if code else None
+        if not code:
+            # Nothing said and nothing in view: ask, never "ไม่พบใบแจ้งหนี้
+            # รหัส " with an empty code (round 21E).
+            return await _which_document_to_send(client, license_id=license_id, entity="invoice", language=language)
+        record = await _invoice_by_code(client, license_id, code)
         if record is None:
             return ChatReply(text=_t(NOT_FOUND_BY_CODE, language).format(
                 what=_entity_noun("invoice", language), code=code))
@@ -24996,6 +25297,15 @@ async def _handle_document_send(
                          quick_replies=[
                              ("ออกใบเสร็จ", f"ออกใบเสร็จ {code}") if kind == "receipt"
                              else ("ออกเอกสาร", f"ออกเอกสาร {code}")])
+    except document_send.DocumentSendFailed as exc:
+        noun_th = {"quote": "ใบเสนอราคา", "receipt": "ใบเสร็จ"}.get(kind, "ใบแจ้งหนี้")
+        return ChatReply(
+            text=_t(DOCUMENT_SEND_PUSH_FAILED, language).format(
+                what=document_send.KIND_WORDS[kind]["en" if language == "en" else "th"],
+                code=code,
+                why=document_send.SEND_FAILURE_WORDS[exc.reason]["en" if language == "en" else "th"]),
+            entity_type=entity, entity_id=str(record.get("id") or ""),
+            quick_replies=[("ลองส่งอีกครั้ง", f"ส่ง{noun_th} {code} ให้ลูกค้า")])
     except DataTierError as exc:
         # Not INVOICE_ISSUE_FAILED: nothing was being issued, and for a
         # quote that wording names the wrong document entirely.
@@ -27093,6 +27403,7 @@ async def _route_chat_message(
         early_intent = await _read_for_router(
             message=message, ctx=ctx, license_id=license_id, permission_keys=permission_keys,
             language=language, ai_client=ai_client, member=member, context=context,
+            recent=await _recent_turns(client, ctx),
         )
         if early_intent is not None and str(early_intent.get("action") or "") == "suggest":
             _note_road(road="suggest→rule")
@@ -27337,6 +27648,7 @@ async def _route_chat_message(
                 client, license_id=license_id, code=quote_code.group(1).upper() if quote_code else "",
                 permission_keys=permission_keys, language=language,
                 actor_id=ctx.chann_uid, allow_reissue="ใหม่" in (message or "") or "again" in (message or "").lower(),
+                ctx=ctx,
             )
         if any(t in (message or "").lower() for t in REPORT_PDF_TRIGGERS):
             # With no code in the sentence this handler picks the person's
@@ -27729,6 +28041,7 @@ async def _route_chat_message(
             reading = await _read_for_router(
                 message=message, ctx=ctx, license_id=license_id, permission_keys=permission_keys,
                 language=language, ai_client=ai_client, member=member, context=context,
+                recent=await _recent_turns(client, ctx),
             )
             if reading is not None and str(reading.get("action") or "") == "suggest":
                 _note_road(road="suggest→rule")
@@ -28554,7 +28867,11 @@ async def _route_chat_message(
             )
         if _matches_phrase(message, SALES_PRODUCT_LIST_PHRASES) or _is_bare_word(message, BARE_PRODUCT_WORDS) or (
             # "ราคาแอร์เท่าไหร่" on the staff OA: the catalogue with prices.
-            _asks_price(message) and _looks_like_a_question(message)
+            # Not while "รับชำระ INV-… เท่าไหร่ครับ" is open: "ค้างเท่าไหร่นะ"
+            # is about that bill and belongs to its own answer road (round
+            # 21E fix round 4), not to the product price list.
+            not (early_pending and str(early_pending.get("entity") or "") == "invoice_pay_amount")
+            and _asks_price(message) and _looks_like_a_question(message)
             and not re.search(r"(?<![A-Za-z0-9])(?:SR|[CDQT])-\d{4}-\d{4}", message or "", re.I)
             and not any(w in _canonical(message) for w in ("ดีล", "ใบเสนอ", "ส่วนลด", "quote", "deal", "ค่าแรง", "ค่าบริการ"))
             and not re.search(r"\d{3,}", message or "") and len(_normalise(message)) <= 30
@@ -28633,7 +28950,7 @@ async def _route_chat_message(
             return await _handle_quote_issue(
                 client, license_id=license_id, code=reissue_code,
                 permission_keys=permission_keys, language=language,
-                actor_id=ctx.chann_uid, allow_reissue=True,
+                actor_id=ctx.chann_uid, allow_reissue=True, ctx=ctx,
             )
         issue_code = _parse_after_trigger(message, QUOTE_ISSUE_TRIGGERS)
         if issue_code == "" and not SERVICE_REPORT_CODE_RE.search(message or ""):
@@ -28648,7 +28965,7 @@ async def _route_chat_message(
             return await _handle_quote_issue(
                 client, license_id=license_id, code=issue_code,
                 permission_keys=permission_keys, language=language,
-                actor_id=ctx.chann_uid, allow_reissue=False,
+                actor_id=ctx.chann_uid, allow_reissue=False, ctx=ctx,
             )
 
         deal_code = _parse_after_trigger(message, DEAL_DETAIL_TRIGGERS)
@@ -28850,7 +29167,7 @@ async def _route_chat_message(
             # read by hand like the price of a new line (round 20V).
             return await _resolve_invoice_pay_amount(
                 client, ctx=ctx, license_id=license_id, message=message, pending=pending_intent,
-                permission_keys=permission_keys, language=language,
+                permission_keys=permission_keys, language=language, ai_client=ai_client,
             )
         if kind == "product_archive_confirm":
             return await _resolve_product_archive_confirm(
@@ -28970,11 +29287,21 @@ ROUTER_READ_BUDGET_S = 4.0
 async def _read_for_router(
     *, message: str, ctx: ResolvedContext, license_id, permission_keys: list[str],
     language: str, ai_client, member: dict, context: dict,
+    recent: list[dict] | None = None,
 ) -> dict | None:
     """parse_intent for the early call: the reading, or None when the model
     could not be asked. None means "let the tables decide", which is what
     the router did for every sentence before 11 ก.ย. 2569 — an outage must
-    not make the sales OA fall silent."""
+    not make the sales OA fall silent.
+
+    `recent` is what was said just before, the same block the tail read has
+    carried since 11 ก.ย. 2569. This read was added later that day and
+    never received it, so every sentence that leans on the one before —
+    "ส่งให้ลูกค้า" right after "ออกเอกสาร Q-…" — reached the model with
+    nothing before it, came back "suggest", and was answered "ยังไม่แน่ใจ"
+    (owner on DEV, 24 ก.ย. 2569). Measured: shown the turn before, the
+    deployed model reads that sentence as a send of the quotation it names.
+    """
     try:
         return await parse_intent(
             message=message,
@@ -28989,6 +29316,7 @@ async def _read_for_router(
             timeout_s=ROUTER_READ_BUDGET_S,
             attempts=1,
             reply_to=_REPLY_TO.get(),
+            recent=recent,
         )
     except (AINotConfigured, AIUnavailable) as exc:
         log.warning("model-first read skipped: %s", exc)
@@ -31336,11 +31664,11 @@ CHART_QUOTA_SPENT = {
     "th": ("ใช้กราฟแบบสร้างเองครบ {allowance} ครั้งของเดือนนี้แล้ว "
            "เริ่มนับใหม่ {when} · ตัวเลขด้านบนเป็นข้อมูลจริงล่าสุด "
            "และกราฟสำเร็จรูป (เช่น \"ขอกราฟยอดขาย\") ยังใช้ได้ไม่จำกัด "
-           "· ต้องการเพิ่มโควตา แจ้งผู้ดูแล Chann\n"
+           "· ต้องการเพิ่มโควตา แจ้งผู้ดูแล Chann1\n"
            "(กราฟแบบสร้างเองสั่งได้ด้วย \"สร้างรายงานด้วย AI: …\")"),
     "en": ("This month's {allowance} made-to-order charts are used up; the count "
            "restarts on {when}. The numbers above are current, and the ready-made "
-           "charts (\"sales chart\") stay unlimited. Ask the Chann administrator "
+           "charts (\"sales chart\") stay unlimited. Ask the Chann1 administrator "
            "to raise the allowance.\n(Made-to-order charts: \"AI report: …\")"),
 }
 

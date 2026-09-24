@@ -18,6 +18,7 @@ by type.
 from __future__ import annotations
 
 import logging
+import re
 
 from ..data_client import DataClient
 
@@ -60,6 +61,49 @@ class CustomerNotLinked(RuntimeError):
     def __init__(self, customer_name: str):
         super().__init__(f"{customer_name} is not linked on LINE")
         self.customer_name = customer_name
+
+
+class DocumentSendFailed(RuntimeError):
+    """The customer is linked and the document is ready, and LINE did not
+    take the push (an API error, a timeout, a token not configured).
+    Never answered as "sent" (round 21E, controller ruling on concern 3).
+
+    `reason` is what a person is told (`SEND_FAILURE_WORDS`); `detail` is
+    LINE's raw answer and goes to the log only — never to a salesperson,
+    who must not read an env-var name (owner rule 4, review Minor 2)."""
+
+    def __init__(self, detail: str = ""):
+        super().__init__(detail or "LINE push failed")
+        self.detail = detail
+        self.reason = failure_reason(detail)
+
+
+#: Why a push failed, in words a salesperson can act on.
+SEND_FAILURE_WORDS = {
+    "not_configured": {"th": "โทเค็น LINE ของร้านยังไม่ตั้งค่า แจ้งผู้ดูแลระบบ",
+                       "en": "the shop's LINE token is not set up — tell the administrator"},
+    "blocked": {"th": "LINE ส่งไม่ถึงลูกค้า — ลูกค้าอาจบล็อก OA หรือยังไม่ได้เพิ่มเพื่อน",
+                "en": "LINE could not reach the customer — they may have blocked the OA"},
+    "channel_refused": {"th": "โทเค็น/สิทธิ์ของ OA ไม่ผ่าน — ตรวจการตั้งค่า LINE",
+                        "en": "the OA's token or permission was refused (check the LINE settings)"},
+    "line_refused": {"th": "LINE ไม่รับข้อความ", "en": "LINE did not accept the message"},
+}
+
+
+def failure_reason(detail: str) -> str:
+    """LINE's raw error -> one of SEND_FAILURE_WORDS' keys."""
+    text = str(detail or "")
+    if "NOT_CONFIGURED" in text or "ACCESS_TOKEN" in text:
+        return "not_configured"
+    # LINE's documented answers: 403 is the CHANNEL (token, plan, API not
+    # allowed) — the shop's side, never the customer. Only 400 "Failed to
+    # send messages" is the undeliverable-recipient case; any other 400 is
+    # a malformed request, said neutrally (21E re-review 2, N-1).
+    if re.search(r"failed: 403\b", text):
+        return "channel_refused"
+    if re.search(r"failed: 400\b", text) and "Failed to send messages" in text:
+        return "blocked"
+    return "line_refused"
 
 
 class DocumentNotIssued(RuntimeError):
@@ -108,13 +152,41 @@ def why_not_sendable(kind: str, record: dict) -> str | None:
     return None
 
 
-def customer_is_linked(customer: dict) -> bool:
-    """Is there a LINE identity to push to? One predicate, because the
-    dashboard's send button and the push itself must answer the same
-    question: a button that is enabled and a send that refuses is worse
-    than either failure on its own.
+async def customer_has_line(client, customer: dict) -> bool:
+    """Is there a LINE user to push to? A uid AND a LINE target behind it.
+
+    One predicate, because the dashboard's send button and the push itself
+    must answer the same question: a button that is enabled and a send that
+    refuses is worse than either failure on its own. Round 21E review,
+    Important 1: it used to be the uid alone, while the push also required
+    `line_target_of` — so the button was enabled for a customer the push
+    refused.
     """
-    return bool((customer or {}).get("customer_chann_uid"))
+    return bool(await line_target_for(client, customer))
+
+
+async def customer_line_status(client, customer: dict) -> bool | None:
+    """`customer_has_line` for a screen: True / False, or None when the
+    Data tier could not be asked (21E re-review 2, I-2). The ONE place a
+    lookup error is caught: logged, and "unknown" — never read as "not
+    linked" (which sent the salesperson to fix the wrong thing) and never
+    allowed to fail a page that has nothing to do with sending. The push
+    itself does not come here: it stays fail-closed."""
+    try:
+        return await customer_has_line(client, customer)
+    except Exception as exc:  # noqa: BLE001 — DataTierError, httpx errors
+        log.warning("could not ask whether customer %s has a LINE user: %s",
+                    (customer or {}).get("customer_chann_uid"), exc)
+        return None
+
+
+async def line_target_for(client, customer: dict) -> str | None:
+    """The LINE user id behind the customer's uid, or None. Both the push
+    and `customer_has_line` read it here, so they cannot disagree."""
+    uid = str((customer or {}).get("customer_chann_uid") or "")
+    if not uid:
+        return None
+    return await client.line_target_of(uid) or None
 
 
 def customer_name(customer: dict) -> str:
@@ -170,7 +242,7 @@ async def send_document_to_customer(
     `CustomerNotLinked`; otherwise returns what happened."""
     from .chat import document_download_url
     from .invoices import baht
-    from .notify import send_notification
+    from .notify import NotificationNotDelivered, send_notification
 
     if kind not in KIND_WORDS:
         raise ValueError(f"unknown document kind: {kind!r}")
@@ -182,9 +254,16 @@ async def send_document_to_customer(
     if not document_id:
         raise DocumentNotIssued(f"{kind} {record_code(kind, record)} has no document yet")
     name = customer_name(customer)
-    if not customer_is_linked(customer):
-        raise CustomerNotLinked(name)
     uid = str(customer.get("customer_chann_uid") or "")
+    line_uid = await line_target_for(client, customer)
+    if not line_uid:
+        # A customer record that carries a uid whose identity has no LINE
+        # user behind it. The shared road would record the row, log, skip
+        # the push — and the caller would say "ทางไลน์แล้ว". Refused by
+        # name instead, the same as a customer with no uid at all.
+        log.warning("%s %s not sent: customer %s (%s) has no LINE target",
+                    kind, record_code(kind, record), uid, name)
+        raise CustomerNotLinked(name)
     resent = await already_sent(client, license_id=license_id, kind=kind,
                                 record=record, document_id=document_id, chann_uid=uid)
     url = document_download_url(str(license_id), str(document_id))
@@ -204,7 +283,26 @@ async def send_document_to_customer(
         # wrong.
         values["total"] = baht(record.get("total"))
     values_en = {**values, "what": KIND_WORDS[kind]["en"]}
-    line_uid = await client.line_target_of(uid)
+    try:
+        await _push(
+            send_notification, client, license_id=license_id, uid=uid, line_uid=line_uid,
+            kind=kind, table=table, values=values, values_en=values_en, record=record,
+            language=language,
+        )
+    except NotificationNotDelivered as exc:
+        log.warning("%s %s not sent to %s: LINE push failed: %s", kind, values["code"], uid, exc.detail or exc.reason)
+        raise DocumentSendFailed(exc.detail or exc.reason) from exc
+    # Who handed it over: the notification row is written by the system, so
+    # this line is the only trace of the person who pressed send.
+    log.info("%s %s sent to %s by %s%s", kind, values["code"], uid, actor_id or "system",
+             " (again)" if resent else "")
+    return {"sent": True, "resent": resent, "url": url, "customer_name": name}
+
+
+async def _push(send_notification, client, *, license_id, uid, line_uid, kind, table, values,
+                values_en, record, language) -> None:
+    """The strict push: raises `NotificationNotDelivered` rather than
+    swallowing, because here the push IS the business action."""
     await send_notification(
         client, license_id=str(license_id), target_chann_uid=uid, target_line_user_id=line_uid,
         type=NOTIFICATION_TYPE[kind], message=table["th"].format(**values),
@@ -214,9 +312,5 @@ async def send_document_to_customer(
         # dashboard bell for them (the same choice notify_customer_receipt
         # made).
         delivery_dashboard=False, oa="customer", language=language,
+        raise_on_failure=True, ref=f"{kind} {values['code']}",
     )
-    # Who handed it over: the notification row is written by the system, so
-    # this line is the only trace of the person who pressed send.
-    log.info("%s %s sent to %s by %s%s", kind, values["code"], uid, actor_id or "system",
-             " (again)" if resent else "")
-    return {"sent": True, "resent": resent, "url": url, "customer_name": name}

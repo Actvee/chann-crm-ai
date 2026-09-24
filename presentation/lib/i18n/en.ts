@@ -629,7 +629,7 @@ export const en: Dictionary = {
     },
     suspended: {
       title: "{shop} is suspended",
-      body: "Existing records stay readable, but nothing new can be done in chat or here. Contact Chann CRM AI to reopen.",
+      body: "Existing records stay readable, but nothing new can be done in chat or here. Contact Chann1 CRM AI to reopen.",
     },
     satisfaction: {
       title: "Satisfaction",
@@ -1203,7 +1203,6 @@ A service report uses this set instead:
       save: "Save",
       cancel: "Cancel",
       needsUpdate: "Issuing, recording payments and receipts need the invoice permission",
-      fromQuote: "Issue invoice",
       alreadyRaised: "Invoice {code} was raised from this quote",
       openInvoice: "Open invoice",
       fromQuoteAgain: "Raise another invoice",
@@ -1212,8 +1211,8 @@ A service report uses this set instead:
       created: "Invoice {code} issued",
       note: "A receipt is issued once paid in full · only an invoice with no payments can be voided",
       // Round 20X — the create form (see th.ts for the owner's words).
-      create: "New invoice",
-      createTitle: "New invoice",
+      create: "Issue invoice",
+      createTitle: "Issue invoice",
       customer: "Customer",
       customerSearchHint: "Type a name or phone number",
       customerNoMatch: "No customer found",
@@ -1242,8 +1241,6 @@ A service report uses this set instead:
       createdNotIssued: "Invoice {code} created, but the document was not issued: {reason}",
       pickCustomerFirst: "Choose a customer first",
       pickDealFirst: "Choose a deal first",
-      forThisDeal: "Issue invoice",
-      forThisCustomer: "Issue invoice",
       related: "Invoices",
       relatedOutstanding: "Outstanding {total} baht",
       relatedNone: "No invoices for this customer yet",
@@ -1265,6 +1262,10 @@ A service report uses this set instead:
       dealClosed: "Deal {deal} closed as won · value {amount} (before VAT)",
       sendVoid: "This invoice is void, so it cannot be sent to the customer.",
       sendNeedsReissue: "This invoice was changed — issue it again before sending it to the customer.",
+      sendPushNotConfigured: "Not sent — the shop's LINE token is not set up. Tell the administrator.",
+      sendPushBlocked: "Not sent — LINE could not reach the customer. They may have blocked the OA.",
+      sendPushChannel: "Not sent — the OA's token or permission was refused. Check the LINE settings.",
+      sendPushFailed: "Not sent — LINE did not accept the message. Please try again.",
       sendQuoteClosed: "This quotation was rejected or has expired, so it cannot be sent.",
       // Round 21C, review round 1, finding 1 — a bill must keep at least
       // one line.
@@ -1327,7 +1328,7 @@ A service report uses this set instead:
       subscriptionDaysLeft: "{date} ({days} days left)",
       subscriptionSoon: "⚠️ expiring soon",
       subscriptionExpired: "Expired (since {date})",
-      subscriptionRenewHint: "Renewal or a new expiry date: the Chann administrator sets it under Admin > Company > Edit (quote shop code {code}) · LINE reminders go out 3 days and 1 day before expiry",
+      subscriptionRenewHint: "Renewal or a new expiry date: the Chann1 administrator sets it under Admin > Company > Edit (quote shop code {code}) · LINE reminders go out 3 days and 1 day before expiry",
     },
   },
   quote: {

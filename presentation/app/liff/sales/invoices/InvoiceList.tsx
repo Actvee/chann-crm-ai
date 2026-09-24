@@ -18,6 +18,7 @@ import { readFailure, useFailureText, useFormatters } from "../_format";
 import { openExternal, proxyHeaders } from "../_lib";
 import { useSalesSession } from "../_session";
 import { SalesShell } from "../_shell";
+import { CreateInvoiceButton } from "./_create-button";
 import { InvoiceCreateSheet, type CreatedInvoice } from "./_create-sheet";
 
 /**
@@ -500,6 +501,19 @@ export default function InvoiceList({ liffId }: { liffId: string }) {
           say(t.dashboard.invoices.sendNoLine, "error");
         } else if (failure.code === "not_issued") {
           say(t.dashboard.invoices.sendNotIssued, "error");
+        } else if (failure.code === "push_failed") {
+          // LINE did not take it (round 21E): a failure, never "sent", and
+          // said as its cause — LINE's raw answer stays in the server log.
+          say(
+            failure.reason === "not_configured"
+              ? t.dashboard.invoices.sendPushNotConfigured
+              : failure.reason === "blocked"
+                ? t.dashboard.invoices.sendPushBlocked
+                : failure.reason === "channel_refused"
+                  ? t.dashboard.invoices.sendPushChannel
+                  : t.dashboard.invoices.sendPushFailed,
+            "error",
+          );
         } else if (failure.code === "void") {
           say(t.dashboard.invoices.sendVoid, "error");
         } else if (failure.code === "needs_reissue") {
@@ -612,6 +626,13 @@ export default function InvoiceList({ liffId }: { liffId: string }) {
   const visible = controls.visible;
   const customerName = (row: Invoice) => row.data_snapshot?.customer?.name || "—";
   const isOpen = (row: Invoice) => row.status === "issued" || row.status === "partially_paid";
+  /** The one thing to press next on this bill, or null. */
+  const sheetPrimary = (row: Invoice): "issue" | "pay" | "receipt" | null => {
+    if (row.status !== "void" && row.status !== "paid" && !row.generated_document_id) return "issue";
+    if (isOpen(row) && !paying) return "pay";
+    if (row.status === "paid" && !row.receipt_document_id) return "receipt";
+    return null;
+  };
   // Round 21C: `lines` is now state (set whenever the sheet opens or the
   // invoice is re-read), so a correction can be edited in place without
   // waiting on the invoice object it will eventually replace.
@@ -658,6 +679,17 @@ export default function InvoiceList({ liffId }: { liffId: string }) {
         </label>
       </ListFilters>
 
+      {/* Round 21E (owner, 24 ก.ย. 2569: "ปุ่มสร้างใบแจ้งหนี้ก็ไม่เหมือนใน
+          ใบเสนอราคา"). The quote page's button, the same component: the same
+          label, a primary full width on a phone, in its own row above the
+          list where the customer and deal lists put their create button.
+          It used to be a compact "สร้างใบแจ้งหนี้" in the count line. */}
+      {canCreate && (
+        <div className="actions record-create">
+          <CreateInvoiceButton onClick={() => setCreating(true)} />
+        </div>
+      )}
+
       <div className="list-head">
         {/* A list narrowed by a URL the person cannot see is a puzzle
             (the filter bar's own rule): the narrowing is named, by the
@@ -671,16 +703,11 @@ export default function InvoiceList({ liffId }: { liffId: string }) {
         ) : (
           <Count shown={visible.length} total={list.total ?? invoices.length} />
         )}
-        {(canCreate || contactFilter || dealFilter) && (
+        {(contactFilter || dealFilter) && (
           <div className="list-tools">
             {(contactFilter || dealFilter) && (
               <button type="button" className="btn" data-variant="quiet" onClick={clearFilters}>
                 {t.dashboard.invoices.clearFilter}
-              </button>
-            )}
-            {canCreate && (
-              <button type="button" className="btn" data-variant="primary" onClick={() => setCreating(true)}>
-                {t.dashboard.invoices.create}
               </button>
             )}
           </div>
@@ -800,7 +827,31 @@ export default function InvoiceList({ liffId }: { liffId: string }) {
               </FieldRow>
             </dl>
 
-            <div className="actions">
+            {/* One primary, the next step for this bill: issue it while it
+                has no PDF, take the payment while money is owed, give the
+                receipt once it is paid (round 21E; ui-ux-pro-max
+                primary-action). It had two at once for an unissued bill. */}
+            {canUpdate && sheetPrimary(open) && (
+              <div className="actions record-primary">
+                {sheetPrimary(open) === "issue" && (
+                  <button type="button" className="btn" data-variant="primary" disabled={busy} onClick={() => void issue(open)}>
+                    {t.dashboard.invoices.issue}
+                  </button>
+                )}
+                {sheetPrimary(open) === "pay" && (
+                  <button type="button" className="btn" data-variant="primary" disabled={busy} onClick={() => setPaying(true)}>
+                    {t.dashboard.invoices.recordPayment}
+                  </button>
+                )}
+                {sheetPrimary(open) === "receipt" && (
+                  <button type="button" className="btn" data-variant="primary" disabled={busy} onClick={() => void issueReceipt(open)}>
+                    {t.dashboard.invoices.issueReceipt}
+                  </button>
+                )}
+              </div>
+            )}
+
+            <div className="actions record-secondary">
               {open.generated_document_id && (
                 <button
                   type="button"
@@ -821,42 +872,37 @@ export default function InvoiceList({ liffId }: { liffId: string }) {
                   {t.dashboard.invoices.openReceipt}
                 </button>
               )}
-              {canUpdate && open.status !== "void" && open.status !== "paid" && (
-                <button
-                  type="button"
-                  className="btn"
-                  data-variant={open.generated_document_id ? undefined : "primary"}
-                  disabled={busy}
-                  onClick={() => void issue(open)}
-                >
+              {canUpdate && open.status !== "void" && open.status !== "paid" && sheetPrimary(open) !== "issue" && (
+                <button type="button" className="btn" disabled={busy} onClick={() => void issue(open)}>
                   {open.generated_document_id ? t.dashboard.invoices.reissue : t.dashboard.invoices.issue}
                 </button>
               )}
-              {canUpdate && isOpen(open) && !paying && (
-                <button
-                  type="button"
-                  className="btn"
-                  data-variant="primary"
-                  disabled={busy}
-                  onClick={() => setPaying(true)}
-                >
+              {canUpdate && isOpen(open) && !paying && sheetPrimary(open) !== "pay" && (
+                <button type="button" className="btn" disabled={busy} onClick={() => setPaying(true)}>
                   {t.dashboard.invoices.recordPayment}
                 </button>
               )}
-              {canUpdate && open.status === "paid" && (
-                <button type="button" className="btn" data-variant="primary" disabled={busy} onClick={() => void issueReceipt(open)}>
+              {canUpdate && open.status === "paid" && sheetPrimary(open) !== "receipt" && (
+                <button type="button" className="btn" disabled={busy} onClick={() => void issueReceipt(open)}>
                   {open.receipt_document_id ? t.dashboard.invoices.reissueReceipt : t.dashboard.invoices.issueReceipt}
                 </button>
               )}
               {/* Handing the document over is not the primary action here —
                   issuing and recording payment already own that role — so
-                  this is a plain button beside them, never styled primary
+                  this is a plain button, never styled primary
                   (ui-ux-pro-max: primary-action). */}
               {canUpdate && (
                 <button
                   type="button"
                   className="btn"
-                  disabled={busy || !open.customer_has_line || sendBlocked(open) !== null}
+                  // undefined: the full invoice is still loading. null: the
+                  // server could not ask LINE (21E re-review 2, I-2) —
+                  // unknown, so the button stays pressable and the send
+                  // route gives the true answer. Only a known "no" blocks.
+                  disabled={
+                    busy || open.customer_has_line === undefined || open.customer_has_line === false
+                    || sendBlocked(open) !== null
+                  }
                   onClick={() => void sendToCustomer(open.receipt_document_id ? "receipt" : "invoice")}
                 >
                   {open.receipt_document_id ? t.dashboard.invoices.sendReceipt : t.dashboard.invoices.send}

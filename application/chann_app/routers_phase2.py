@@ -2640,7 +2640,7 @@ async def _invoice_or_404(client: DataClient, principal: TenantPrincipal, licens
     return invoice
 
 
-async def _invoice_customer_has_line(client: DataClient, license_id: str, invoice: dict) -> bool:
+async def _invoice_customer_has_line(client: DataClient, license_id: str, invoice: dict) -> bool | None:
     """Round 21C, ruling 18: the same question `services/document_send.py`'s
     `send_document_to_customer` answers before it pushes a document (a
     customer that is not linked raises `CustomerNotLinked`) — answered
@@ -2648,20 +2648,23 @@ async def _invoice_customer_has_line(client: DataClient, license_id: str, invoic
     reads it straight off the invoice instead of asking again with a
     second request that can race, be skipped, or answer a stale invoice.
 
-    The predicate itself is `document_send.customer_is_linked`, the one
+    The predicate itself is `document_send.customer_has_line`, the one
     the push uses: this fetches the customer, it does not decide what
     "linked" means.
     """
-    from .services.document_send import customer_is_linked
+    from .services.document_send import customer_line_status
 
     contact_id = invoice.get("contact_id")
     if not contact_id:
         return False
     try:
         customer = await client.get_customer(license_id, str(contact_id))
-    except DataTierError:
-        return False
-    return customer_is_linked(customer or {})
+    except DataTierError as exc:
+        # Unknown, not "not linked" (21E re-review 2, I-2): the send route
+        # asks again and gives the true answer.
+        log.warning("could not read the customer of invoice %s: %s", invoice.get("invoice_id"), exc)
+        return None
+    return await customer_line_status(client, customer or {})
 
 
 def _invoice_document_error(exc: Exception, *, code: str) -> HTTPException:
@@ -2987,7 +2990,17 @@ def _document_send_error(exc: Exception) -> HTTPException:
     """The refusals of `services/document_send.py` as the dashboard reads
     them. Both are refusals with a cure — add the customer's LINE, or issue
     the document — so neither is a 500."""
-    from .services.document_send import CustomerNotLinked, DocumentNotIssued, DocumentNotSendable
+    from .services.document_send import (
+        CustomerNotLinked, DocumentNotIssued, DocumentNotSendable, DocumentSendFailed,
+    )
+
+    if isinstance(exc, DocumentSendFailed):
+        # LINE did not take the push. Not a refusal the shop can cure, and
+        # never a "sent": a 502 with what LINE said, so the screen can say
+        # "ส่งไม่สำเร็จ ลองใหม่อีกครั้ง" (round 21E).
+        # The reason as a code; LINE's raw answer stays in the log.
+        return HTTPException(status_code=status.HTTP_502_BAD_GATEWAY,
+                             detail={"error": "push_failed", "reason": exc.reason})
 
     if isinstance(exc, DocumentNotSendable):
         # The same shape as "not issued" — the cure is again "fix the
@@ -3029,7 +3042,8 @@ async def send_invoice_to_customer(
             client, license_id=license_id, kind=kind, record=invoice,
             document_id=str(document_id) if document_id else None,
             customer=customer, company=company, actor_id=principal.chann_uid)
-    except (document_send.CustomerNotLinked, document_send.DocumentNotIssued) as exc:
+    except (document_send.CustomerNotLinked, document_send.DocumentNotIssued,
+            document_send.DocumentSendFailed) as exc:
         raise _document_send_error(exc)
     except DataTierError as exc:
         raise _propagate(exc)
@@ -3059,7 +3073,8 @@ async def send_quote_to_customer(
             client, license_id=license_id, kind="quote", record=quote,
             document_id=str(quote.get("generated_document_id") or "") or None,
             customer=customer, company=company, actor_id=principal.chann_uid)
-    except (document_send.CustomerNotLinked, document_send.DocumentNotIssued) as exc:
+    except (document_send.CustomerNotLinked, document_send.DocumentNotIssued,
+            document_send.DocumentSendFailed) as exc:
         raise _document_send_error(exc)
     except DataTierError as exc:
         raise _propagate(exc)
@@ -3161,7 +3176,13 @@ async def get_quote_detail(
         customer = None
         if deal and deal.get("contact_id"):
             customer = await client.get_customer(license_id, str(deal["contact_id"]))
-        return {"quote": quote, "deal": deal, "customer": customer}
+        # The send button's question, answered the way the push answers it
+        # (a uid AND a LINE user behind it — round 21E review, Important 1),
+        # so the page stops deriving it from the uid alone.
+        # None when it could not be asked — the page still opens (I-2).
+        from .services.document_send import customer_line_status
+        has_line = await customer_line_status(client, customer or {})
+        return {"quote": quote, "deal": deal, "customer": customer, "customer_has_line": has_line}
     except DataTierError as exc:
         raise _propagate(exc)
 

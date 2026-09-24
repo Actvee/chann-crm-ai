@@ -8,7 +8,7 @@ export const ADMIN = {
     keepIt: "ไม่ทำ",
     cannotUndo: "ทำแล้วย้อนกลับไม่ได้",
   },
-  brand: "Chann CRM AI",
+  brand: "Chann1 CRM AI",
   brandSub: "Platform Admin",
   nav: {
     label: "เมนูหลัก",
@@ -32,7 +32,7 @@ export const ADMIN = {
   } as Record<string, string>,
   login: {
     title: "Platform Admin",
-    intro: "คอนโซลผู้ดูแลแพลตฟอร์ม Chann CRM AI",
+    intro: "คอนโซลผู้ดูแลแพลตฟอร์ม Chann1 CRM AI",
     username: "ชื่อผู้ใช้",
     password: "รหัสผ่าน",
     submit: "เข้าสู่ระบบ",
@@ -119,7 +119,7 @@ export const ADMIN = {
     },
     membersTitle: "สมาชิก",
     membersEmpty: "ยังไม่มีสมาชิก",
-    memberColumns: { name: "ชื่อ", uid: "Chann UID", channel: "ช่องทาง", role: "บทบาท", status: "สถานะ", joined: "เข้าร่วม", actions: "จัดการ" },
+    memberColumns: { name: "ชื่อ", uid: "Chann1 UID", channel: "ช่องทาง", role: "บทบาท", status: "สถานะ", joined: "เข้าร่วม", actions: "จัดการ" },
     ownerTag: "(owner)",
     members: {
       channel: { sales: "Sales OA", technician: "ช่าง OA" } as Record<string, string>,
@@ -265,12 +265,12 @@ export const ADMIN = {
     filter: "กรอง",
     types: { erasure: "ลบข้อมูล", export: "สำเนาข้อมูล", consent_withdraw: "ถอนความยินยอม" } as Record<string, string>,
     createTitle: "สร้างคำขอแทนผู้ใช้ (ติดต่อมาทางอื่น)",
-    uid: "Chann UID",
+    uid: "Chann1 UID",
     type: "ประเภท",
     create: "สร้างคำขอ",
     creating: "กำลังสร้าง…",
     created: "สร้างคำขอแล้ว กด \"ดำเนินการ\" เมื่อยืนยันตัวตนของผู้ขอแล้ว",
-    createFailed: "สร้างคำขอไม่สำเร็จ ตรวจ Chann UID",
+    createFailed: "สร้างคำขอไม่สำเร็จ ตรวจ Chann1 UID",
     rejectReason: "เหตุผลที่ปฏิเสธ (จะบันทึกไว้กับคำขอ)",
     eraseAction: "ลบข้อมูลส่วนบุคคลถาวร",
     eraseAffects: [

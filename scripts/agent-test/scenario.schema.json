@@ -226,6 +226,14 @@
           "$ref": "#/$defs/stringOrStrings",
           "description": "Matches a quick-reply button's label or the text it sends."
         },
+        "line_pushed": {
+          "description": "What the stand-in LINE received during this step (agent-test MemoryLine): false for nothing, or {to, contains}. A reply that says 'sent' is not proof; this is.",
+          "oneOf": [
+            {"type": "boolean", "const": false},
+            {"type": "object", "additionalProperties": false,
+             "properties": {"to": {"type": "string"}, "contains": {"$ref": "#/$defs/stringOrStrings"}}}
+          ]
+        },
         "actions_include": {
           "$ref": "#/$defs/stringOrStrings",
           "description": "Matches message actions in quick replies or list-card rows; does not prove LINE rendering."

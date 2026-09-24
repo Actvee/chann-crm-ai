@@ -11,6 +11,8 @@ from pathlib import Path
 import pytest
 from fastapi import HTTPException
 
+from conftest import line_got
+
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "application"))
 
@@ -36,16 +38,35 @@ class FakeClient:
     async def list_notifications(self, license_id, **kwargs):
         return self.notifications
 
+    # The real notification road runs (round 21E fix round 3): these are
+    # what it asks of the client around the push.
+    async def get_display_preferences(self, chann_uid):
+        return {}
 
-@pytest.fixture
-def sent(monkeypatch):
-    calls = []
-
-    async def fake_send_notification(client, **kwargs):
-        calls.append(kwargs)
+    async def create_notification(self, license_id, **kwargs):
         return {"id": "n1", **kwargs}
 
-    monkeypatch.setattr("chann_app.services.notify.send_notification", fake_send_notification)
+    async def record_message_entity(self, *args, **kwargs):
+        return None
+
+
+@pytest.fixture
+def sent(monkeypatch, line_accepts):
+    """What `send_document_to_customer` asked the notification road for —
+    recorded, then passed THROUGH to the real road and the stand-in LINE.
+    It used to stub the road whole, so these tests stayed green with LINE
+    refusing every push (21E re-review 2, finding 4). A test that claims a
+    send also asserts on `line_accepts` (what LINE received)."""
+    from chann_app.services import notify
+
+    calls = []
+    real = notify.send_notification
+
+    async def recording_send_notification(client, **kwargs):
+        calls.append(kwargs)
+        return await real(client, **kwargs)
+
+    monkeypatch.setattr("chann_app.services.notify.send_notification", recording_send_notification)
     monkeypatch.setattr("chann_app.services.chat.document_download_url",
                         lambda license_id, document_id: f"https://x/d/{document_id}")
     return calls
@@ -53,7 +74,7 @@ def sent(monkeypatch):
 
 class TestSending:
     @pytest.mark.asyncio
-    async def test_a_linked_customer_gets_the_document(self, sent):
+    async def test_a_linked_customer_gets_the_document(self, sent, line_accepts):
         out = await document_send.send_document_to_customer(
             FakeClient(), license_id="L1", kind="invoice", record=INVOICE,
             document_id="d1", customer=LINKED, company=COMPANY)
@@ -62,6 +83,7 @@ class TestSending:
         assert sent and sent[0]["oa"] == "customer"
         assert "INV-2026-0003" in sent[0]["message"]
         assert "https://x/d/d1" in sent[0]["message"]
+        line_got(line_accepts, "U-CHN-CUST-1", "INV-2026-0003", "https://x/d/d1")
 
     @pytest.mark.asyncio
     async def test_a_customer_without_line_is_refused_by_name(self, sent):
@@ -82,7 +104,7 @@ class TestSending:
         assert sent == []
 
     @pytest.mark.asyncio
-    async def test_sending_the_same_version_twice_says_so(self, sent):
+    async def test_sending_the_same_version_twice_says_so(self, sent, line_accepts):
         client = FakeClient()
         client.notifications = [{"type": "document_sent", "entity_type": "invoice",
                                  "entity_id": "i1", "message": "…d1…",
@@ -91,6 +113,7 @@ class TestSending:
             client, license_id="L1", kind="invoice", record=INVOICE,
             document_id="d1", customer=LINKED, company=COMPANY)
         assert out["sent"] is True and out["resent"] is True
+        line_got(line_accepts, "U-CHN-CUST-1", "INV-2026-0003")
 
 
 class FakeRouteClient(FakeClient):
@@ -132,20 +155,22 @@ CUSTOMER = TenantPrincipal(
 
 class TestTheSendRoutes:
     @pytest.mark.asyncio
-    async def test_the_invoice_route_hands_over_the_invoice(self, sent):
+    async def test_the_invoice_route_hands_over_the_invoice(self, sent, line_accepts):
         out = await routers_phase2.send_invoice_to_customer(
             license_id="L1", invoice_id="i1", payload=None, principal=STAFF,
             client=FakeRouteClient())
         assert out["sent"] is True and out["customer_name"] == "สมชาย ใจดี"
         assert "https://x/d/d1" in sent[0]["message"] and "INV-2026-0003" in sent[0]["message"]
+        line_got(line_accepts, "U-CHN-CUST-1", "INV-2026-0003", "https://x/d/d1")
 
     @pytest.mark.asyncio
-    async def test_the_invoice_route_can_hand_over_the_receipt_instead(self, sent):
+    async def test_the_invoice_route_can_hand_over_the_receipt_instead(self, sent, line_accepts):
         await routers_phase2.send_invoice_to_customer(
             license_id="L1", invoice_id="i1",
             payload=routers_phase2.DocumentSendBody(kind="receipt"),
             principal=STAFF, client=FakeRouteClient())
         assert "https://x/d/r1" in sent[0]["message"] and sent[0]["type"] == "receipt_issued"
+        line_got(line_accepts, "U-CHN-CUST-1", "https://x/d/r1", "ชำระครบแล้ว")
 
     @pytest.mark.asyncio
     async def test_a_customer_without_line_is_a_409_that_names_them(self, sent):
@@ -169,12 +194,13 @@ class TestTheSendRoutes:
         assert sent == []
 
     @pytest.mark.asyncio
-    async def test_the_quote_route_hands_over_the_quote(self, sent):
+    async def test_the_quote_route_hands_over_the_quote(self, sent, line_accepts):
         out = await routers_phase2.send_quote_to_customer(
             license_id="L1", quote_id="q1", principal=STAFF, client=FakeRouteClient())
         assert out["sent"] is True and out["resent"] is False
         assert "Q-2026-0009" in sent[0]["message"] and "https://x/d/gd1" in sent[0]["message"]
         assert sent[0]["entity_type"] == "quote" and sent[0]["type"] == "document_sent"
+        line_got(line_accepts, "U-CHN-CUST-1", "Q-2026-0009", "https://x/d/gd1")
 
     @pytest.mark.asyncio
     async def test_a_quote_that_is_gone_is_a_404(self, sent):
@@ -219,20 +245,22 @@ class TestOnlyTheReceiptSaysTheAmount:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("kind", ["invoice", "quote"])
-    async def test_a_quote_or_invoice_never_formats_the_amount(self, sent, baht_that_breaks, kind):
+    async def test_a_quote_or_invoice_never_formats_the_amount(self, sent, line_accepts, baht_that_breaks, kind):
         out = await document_send.send_document_to_customer(
             FakeClient(), license_id="L1", kind=kind, record=INVOICE,
             document_id="d1", customer=LINKED, company=COMPANY)
         assert out["sent"] is True
+        assert line_accepts and line_accepts[-1][1] == "U-CHN-CUST-1"
         assert baht_that_breaks == []
 
     @pytest.mark.asyncio
-    async def test_the_receipt_still_says_the_amount_in_both_languages(self, sent):
+    async def test_the_receipt_still_says_the_amount_in_both_languages(self, sent, line_accepts):
         await document_send.send_document_to_customer(
             FakeClient(), license_id="L1", kind="receipt", record=INVOICE,
             document_id="r1", customer=LINKED, company=COMPANY)
         assert "32,100" in sent[0]["message"]
         assert "32,100" in sent[0]["message_en"]
+        line_got(line_accepts, "U-CHN-CUST-1", "32,100")
 
 
 class TestTheSendErrorOnlyTranslatesItsTwoRefusals:
@@ -251,17 +279,22 @@ class TestOnePredicateForLinked:
     """The send button (GET invoice → `customer_has_line`) and the push
     (`CustomerNotLinked`) must answer from the same function."""
 
-    def test_the_predicate(self):
-        assert document_send.customer_is_linked(LINKED) is True
-        assert document_send.customer_is_linked(WALK_IN) is False
-        assert document_send.customer_is_linked({}) is False
-        assert document_send.customer_is_linked(None) is False
+    @pytest.mark.asyncio
+    async def test_the_predicate(self):
+        # Round 21E review, Important 1: a uid AND a LINE user behind it.
+        client = FakeClient()
+        assert await document_send.customer_has_line(client, LINKED) is True
+        assert await document_send.customer_has_line(client, WALK_IN) is False
+        assert await document_send.customer_has_line(client, {}) is False
+        assert await document_send.customer_has_line(client, None) is False
 
     @pytest.mark.asyncio
     async def test_the_button_and_the_push_both_follow_it(self, sent, monkeypatch):
-        # A customer who LOOKS linked, and a predicate that says no: if
-        # either road still reads `customer_chann_uid` itself, it disagrees.
-        monkeypatch.setattr(document_send, "customer_is_linked", lambda customer: False)
+        # A customer who LOOKS linked, and a lookup that finds no LINE user:
+        # if either road still reads `customer_chann_uid` itself, it disagrees.
+        async def nobody(client, customer):
+            return None
+        monkeypatch.setattr(document_send, "line_target_for", nobody)
         client = FakeRouteClient()
         shown = await routers_phase2.get_invoice(
             license_id="L1", invoice_id="i1", principal=TenantPrincipal(
@@ -304,7 +337,7 @@ class TestAStaleOrCancelledDocumentIsNeverSent:
         assert sent == []
 
     @pytest.mark.asyncio
-    async def test_a_paid_bills_receipt_is_not_held_back_by_an_old_reissue_flag(self, sent):
+    async def test_a_paid_bills_receipt_is_not_held_back_by_an_old_reissue_flag(self, sent, line_accepts):
         # The receipt is its own document; the invoice PDF's staleness is
         # not the receipt's.
         out = await document_send.send_document_to_customer(
@@ -312,14 +345,16 @@ class TestAStaleOrCancelledDocumentIsNeverSent:
             record={**INVOICE, "status": "paid", "needs_reissue": True},
             document_id="r1", customer=LINKED, company=COMPANY)
         assert out["sent"] is True
+        assert line_accepts and line_accepts[-1][1] == "U-CHN-CUST-1"
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("status", ["draft", "sent", "accepted"])
-    async def test_an_open_quote_still_goes(self, sent, status):
+    async def test_an_open_quote_still_goes(self, sent, line_accepts, status):
         out = await document_send.send_document_to_customer(
             FakeClient(), license_id="L1", kind="quote", record={**INVOICE, "status": status},
             document_id="d1", customer=LINKED, company=COMPANY)
         assert out["sent"] is True
+        assert line_accepts and line_accepts[-1][1] == "U-CHN-CUST-1"
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("invoice,code", [

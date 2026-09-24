@@ -66,6 +66,48 @@ steps:
     contains: ['ใบเสนอราคา', 'Q-2026-0001', 'สมชาย', 'ไลน์']
     not_contains: ['ส่งซ้ำ']
     is_not: [generic_error, not_sure, permission, not_found, not_a_feature]
+    line_pushed: {to: U-somchai, contains: Q-2026-0001}
+
+# Round 21E - the owner on DEV (449819e): "ออกเอกสาร Q-2026-0010" then
+# "ส่งให้ลูกค้า" was answered "ยังไม่แน่ใจ". The model reads that sentence
+# as a send of the quotation named the turn before - but only when the
+# router's first read is SHOWN the turn before, which it was not. The
+# reading below is the deployed model's with the issue turn in its recent
+# block (withrecent probe, 24 ก.ย. 2569); the router test that the block is
+# passed is tests/unit/test_round21e_quote_send.py.
+- send:
+    message: ส่งให้ลูกค้า
+    ai: {action: send, entity: quote, fields: {code: Q-2026-0001}, missing: []}
+  expect:
+    contains: ['Q-2026-0001', 'สมชาย', 'ไลน์']
+    is_not: [generic_error, not_sure, permission, not_found, not_a_feature]
+    line_pushed: {to: U-somchai, contains: Q-2026-0001}
+# "ล่าสุด" comes back as code="latest" and was "ไม่พบใบเสนอราคารหัส LATEST".
+- send:
+    message: ส่งใบเสนอราคาล่าสุดให้ลูกค้า
+    ai: {action: send, entity: quote, fields: {code: latest}, missing: []}
+  expect:
+    contains: ['Q-2026-0001', 'สมชาย', 'ไลน์']
+    not_contains: ['LATEST']
+    is_not: [generic_error, not_sure, permission, not_found, not_a_feature]
+    line_pushed: {to: U-somchai, contains: Q-2026-0001}
+# A customer named and no code: "ไม่พบใบเสนอราคารหัส " with nothing after it.
+- send:
+    message: ส่งใบเสนอราคาให้คุณสมชาย
+    ai: {action: send, entity: quote, fields: {target_name: คุณสมชาย}, missing: []}
+  expect:
+    contains: ['Q-2026-0001', 'สมชาย', 'ไลน์']
+    is_not: [generic_error, not_sure, permission, not_found, not_a_feature]
+    line_pushed: {to: U-somchai, contains: Q-2026-0001}
+# A customer with no quotation at all is told so by name, never "ไม่พบ … รหัส ".
+# (สมหญิง has a deal and no quote in this seed.)
+- send:
+    message: ส่งใบเสนอราคาให้คุณสมหญิง
+    ai: {action: send, entity: quote, fields: {target_name: คุณสมหญิง}, missing: []}
+  expect:
+    contains: ['สมหญิง', 'ยังไม่มีใบเสนอราคา']
+    is_not: [generic_error, not_sure, permission, not_found, not_a_feature]
+    line_pushed: false
 
 # ---------------------------------------------------------------- the bill
 - send:
@@ -201,6 +243,7 @@ steps:
     quick_replies_include: ['ออกเอกสาร']
     not_contains: ['ทางไลน์แล้ว']
     is_not: [generic_error, not_sure, permission, not_found, not_a_feature]
+    line_pushed: false
 # Re-issued (the render needs SmartBrowz, so the new document is linked by a
 # seed call, as above) — now it goes.
 - seed:
@@ -214,6 +257,7 @@ steps:
     contains: ['สมชาย', 'ไลน์']
     not_contains: ['ส่งซ้ำ']
     is_not: [generic_error, not_sure, permission, not_found, not_a_feature]
+    line_pushed: {to: U-somchai, contains: INV-2026-0001}
 
 # --------------------------------------- the customer with no LINE is named
 - send:
@@ -232,6 +276,7 @@ steps:
   expect:
     contains: ['สมหญิง ร่ำรวย', 'ยังไม่ได้ผูกไลน์']
     is_not: [generic_error, not_sure, permission, not_found, not_a_feature]
+    line_pushed: false
 
 # ----------------------------------------------- paying it closes the deal
 # 4 x 15,000 = 60,000 + 7% VAT = 64,200.00 (2 -> set 3 -> +2 -> -1). The deal

@@ -222,6 +222,22 @@ INVOICE_UPDATE = Capability(
     required=(), optional=("code", "amount", "method", "status"),
     never_needed=("code", "amount", "payment_amount", "method", "status"),
 )
+#: Handing an issued document over (round 21C). The handler finds WHICH
+#: document itself — the code said, the one in view, "ล่าสุด", the named
+#: customer's, the deal's — and asks with buttons when nothing points at
+#: one. The generic slot-fill asked "กรุณาระบุรหัสรายการ" instead, and the
+#: code typed into it opened the quotation rather than sending it (owner,
+#: DEV, 24 ก.ย. 2569; converse, round 21E).
+QUOTE_SEND = Capability(
+    action="send", entity="quote",
+    required=(), optional=("code", "quote_code", "deal_code", "target_name"),
+    never_needed=("code", "quote_code", "deal_code", "target_name", "customer"),
+)
+INVOICE_SEND = Capability(
+    action="send", entity="invoice",
+    required=(), optional=("code", "kind", "target_name"),
+    never_needed=("code", "kind", "document", "target_name", "customer"),
+)
 PHOTO_UPDATE = Capability(
     action="update", entity="photo", required=("index", "caption"), optional=("code",),
     never_needed=("code",),
@@ -236,6 +252,7 @@ REGISTRY: dict[tuple[str, str], Capability] = {
         SERVICE_REPORT_CREATE,
         PHOTO_READ, PHOTO_DELETE, PHOTO_UPDATE,
         INVOICE_CREATE, INVOICE_PAY, INVOICE_UPDATE,
+        QUOTE_SEND, INVOICE_SEND,
     )
 }
 

@@ -3,7 +3,7 @@ import "./globals.css";
 import { LanguageProvider } from "@/lib/i18n/LanguageProvider";
 
 export const metadata = {
-  title: "Chann CRM AI",
+  title: "Chann1 CRM AI",
   description: "Multi-tenant CRM and field service platform on LINE",
 };
 

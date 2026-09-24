@@ -633,7 +633,7 @@ export const th = {
     },
     suspended: {
       title: "ร้าน {shop} ถูกระงับการใช้งานชั่วคราว",
-      body: "ดูข้อมูลเดิมได้ แต่ทำรายการใหม่ไม่ได้ทั้งในแชทและหน้าจอ ติดต่อ Chann CRM AI เพื่อเปิดใช้งานอีกครั้ง",
+      body: "ดูข้อมูลเดิมได้ แต่ทำรายการใหม่ไม่ได้ทั้งในแชทและหน้าจอ ติดต่อ Chann1 CRM AI เพื่อเปิดใช้งานอีกครั้ง",
     },
     satisfaction: {
       title: "ความพึงพอใจ",
@@ -1207,7 +1207,6 @@ export const th = {
       save: "บันทึก",
       cancel: "ยกเลิก",
       needsUpdate: "ต้องมีสิทธิ์ออกใบแจ้งหนี้จึงจะออกเอกสาร รับชำระ หรือออกใบเสร็จได้",
-      fromQuote: "ออกใบแจ้งหนี้",
       alreadyRaised: "ออกใบแจ้งหนี้ {code} จากใบเสนอราคานี้แล้ว",
       openInvoice: "เปิดใบแจ้งหนี้",
       fromQuoteAgain: "ออกใบแจ้งหนี้อีกใบ",
@@ -1220,8 +1219,8 @@ export const th = {
       // ไม่ผูกกับลูกค้าโดยตรง อย่างน้อยจะมีดีลเกิดขึ้น" — so the form starts
       // from the customer, always lands on one of their deals, and takes
       // the deal's quotation when there is one.
-      create: "สร้างใบแจ้งหนี้",
-      createTitle: "สร้างใบแจ้งหนี้",
+      create: "ออกใบแจ้งหนี้",
+      createTitle: "ออกใบแจ้งหนี้",
       customer: "ลูกค้า",
       customerSearchHint: "พิมพ์ชื่อหรือเบอร์โทร",
       customerNoMatch: "ไม่พบลูกค้า",
@@ -1250,8 +1249,6 @@ export const th = {
       createdNotIssued: "สร้างใบแจ้งหนี้ {code} แล้ว แต่ยังไม่ได้ออกเอกสาร: {reason}",
       pickCustomerFirst: "เลือกลูกค้าก่อน",
       pickDealFirst: "เลือกดีลก่อน",
-      forThisDeal: "ออกใบแจ้งหนี้",
-      forThisCustomer: "ออกใบแจ้งหนี้",
       related: "ใบแจ้งหนี้",
       relatedOutstanding: "ค้างชำระรวม {total} บาท",
       relatedNone: "ยังไม่มีใบแจ้งหนี้ของลูกค้ารายนี้",
@@ -1273,6 +1270,10 @@ export const th = {
       dealClosed: "ปิดดีล {deal} แล้ว · มูลค่า {amount} (ก่อน VAT)",
       sendVoid: "ใบนี้ยกเลิกแล้ว จึงส่งให้ลูกค้าไม่ได้",
       sendNeedsReissue: "ใบนี้แก้ไขแล้ว ต้องออกเอกสารใหม่ก่อน จึงจะส่งให้ลูกค้าได้",
+      sendPushNotConfigured: "ส่งไม่สำเร็จ — โทเค็น LINE ของร้านยังไม่ตั้งค่า แจ้งผู้ดูแลระบบ",
+      sendPushBlocked: "ส่งไม่สำเร็จ — LINE ส่งไม่ถึงลูกค้า ลูกค้าอาจบล็อก OA หรือยังไม่ได้เพิ่มเพื่อน",
+      sendPushChannel: "ส่งไม่สำเร็จ — โทเค็น/สิทธิ์ของ OA ไม่ผ่าน ตรวจการตั้งค่า LINE",
+      sendPushFailed: "ส่งไม่สำเร็จ — LINE ไม่รับข้อความ ลองใหม่อีกครั้ง",
       sendQuoteClosed: "ใบเสนอราคานี้ถูกปฏิเสธหรือหมดอายุแล้ว จึงส่งให้ลูกค้าไม่ได้",
       // Round 21C, review round 1, finding 1 — a bill must keep at least
       // one line.
@@ -1335,7 +1336,7 @@ export const th = {
       subscriptionDaysLeft: "{date} (เหลือ {days} วัน)",
       subscriptionSoon: "⚠️ ใกล้หมดอายุ",
       subscriptionExpired: "หมดอายุแล้ว (ตั้งแต่ {date})",
-      subscriptionRenewHint: "ต่ออายุหรือเปลี่ยนวันหมดอายุ: ผู้ดูแลระบบ Chann ตั้งให้ได้ที่ Admin > บริษัท > แก้ไข (แจ้งรหัสร้าน {code}) · ระบบจะเตือนทาง LINE ก่อนหมดอายุ 3 วันและ 1 วัน",
+      subscriptionRenewHint: "ต่ออายุหรือเปลี่ยนวันหมดอายุ: ผู้ดูแลระบบ Chann1 ตั้งให้ได้ที่ Admin > บริษัท > แก้ไข (แจ้งรหัสร้าน {code}) · ระบบจะเตือนทาง LINE ก่อนหมดอายุ 3 วันและ 1 วัน",
     },
   },
   quote: {

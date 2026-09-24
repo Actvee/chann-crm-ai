@@ -13,6 +13,7 @@ import { OwnerControl, memberLabel, useSalesMembers, type SalesMember } from "..
 import { proxyHeaders } from "../../_lib";
 import { FieldSection, RecordHead, RelatedHeading, StatusSection } from "../../_record";
 import { RelatedActivity } from "../../_related";
+import { CreateInvoiceButton } from "../../invoices/_create-button";
 import { useSalesSession } from "../../_session";
 import { SalesShell } from "../../_shell";
 import { useSalesText } from "../../_strings";
@@ -376,9 +377,7 @@ export default function CustomerDetail({
                   that is missing for a reason nobody can see. */}
               {can("invoice.create") && (
                 <div className="actions" style={{ margin: "0 0 12px" }}>
-                  <Link className="btn" data-variant="primary" href={`/liff/sales/invoices?contact_id=${customerId}&create=1`}>
-                    {t.dashboard.invoices.forThisCustomer}
-                  </Link>
+                  <CreateInvoiceButton href={`/liff/sales/invoices?contact_id=${customerId}&create=1`} />
                 </div>
               )}
               {invoices.length === 0 ? (

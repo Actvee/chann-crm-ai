@@ -1,7 +1,7 @@
 export default function Home() {
   return (
     <main style={{ padding: 32 }}>
-      <h1>Chann CRM AI</h1>
+      <h1>Chann1 CRM AI</h1>
       <p>Phase 1 — Architecture &amp; Security Foundation</p>
       <ul>
         <li>Presentation Tier: this shell</li>

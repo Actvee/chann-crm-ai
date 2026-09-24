@@ -83,13 +83,13 @@ def as_shop_code_when_asked(text: str) -> str:
 
 WELCOME = {
     "th": (
-        "ยินดีต้อนรับสู่ Chann CRM\n"
+        "ยินดีต้อนรับสู่ Chann1 CRM\n"
         "คุณยังไม่ได้ผูกกับบริษัทใด เลือกได้ 2 ทาง:\n\n"
         "1) พิมพ์ \"เปิดบริษัทใหม่ <ชื่อบริษัท>\" เพื่อสร้างบริษัทของคุณเอง\n"
         "2) ถ้ามีรหัสเชิญจากเพื่อนร่วมงาน พิมพ์รหัสนั้นได้เลย"
     ),
     "en": (
-        "Welcome to Chann CRM\n"
+        "Welcome to Chann1 CRM\n"
         "This account is not linked to a company yet. Two options:\n\n"
         '1) Type "create company <name>" to start your own\n'
         "2) If a colleague gave you an invite code, just type the code"

@@ -224,14 +224,14 @@ _- The customer already heard at check-out that the job was finished and what wa
 
 **ใบแจ้งหนี้และใบเสร็จ**
 - ออกใบแจ้งหนี้จากใบเสนอราคาที่ส่งแล้ว (หรือจากดีล) — ได้เลขที่ INV ยอดรวม กำหนดชำระ 30 วัน และลิงก์ PDF ในคำตอบเดียว → พิมพ์ "ออกใบแจ้งหนี้ Q-2026-0001 · สร้างใบแจ้งหนี้ให้ดีล D-2026-0001"
-- บอกแค่ชื่อลูกค้าก็ได้ — ระบบออกจากดีลของเขา (หลายดีลมีปุ่มให้เลือก ไม่มีดีลบอกให้สร้างก่อน เพราะใบแจ้งหนี้ผูกกับดีลเสมอ) · บนจอ: "สร้างใบแจ้งหนี้" ในหน้าใบแจ้งหนี้ (ลูกค้า → ดีล → ใบเสนอราคา) หรือ "ออกใบแจ้งหนี้" ในหน้าดีล/ลูกค้า → พิมพ์ "ออกใบแจ้งหนี้ให้ สมชาย"
+- บอกแค่ชื่อลูกค้าก็ได้ — ระบบออกจากดีลของเขา (หลายดีลมีปุ่มให้เลือก ไม่มีดีลบอกให้สร้างก่อน เพราะใบแจ้งหนี้ผูกกับดีลเสมอ) · บนจอ: ปุ่ม "ออกใบแจ้งหนี้" ปุ่มเดียวกันทุกหน้า — หน้าใบแจ้งหนี้ (ลูกค้า → ดีล → ใบเสนอราคา) หน้าใบเสนอราคา ดีล และลูกค้า → พิมพ์ "ออกใบแจ้งหนี้ให้ สมชาย"
 - ดูใบแจ้งหนี้ / รายการ / ยอดค้างชำระ → พิมพ์ "ใบแจ้งหนี้ INV-2026-0001 · รายการใบแจ้งหนี้ · ยอดค้างชำระ"
 - บันทึกรับชำระ: จำนวนเงินกับช่องทาง (เงินสด/โอน/พร้อมเพย์/บัตร) มัดจำก็ได้ ไม่บอกจำนวนระบบถาม ตอบ "5000" หรือ "ครบ" ได้เลย → พิมพ์ "รับชำระ INV-2026-0001 5000 โอน · มัดจำ INV-2026-0001 2000 เงินสด · รับชำระ INV-2026-0001 ครบ"
 - ออกใบเสร็จเมื่อชำระครบ — ระบบส่งลิงก์ให้ลูกค้าทาง LINE ให้ด้วย → พิมพ์ "ออกใบเสร็จ INV-2026-0001"
 - ยกเลิกใบแจ้งหนี้ (ถามยืนยันก่อน ยกเลิกได้เฉพาะใบที่ยังไม่มีการรับชำระ) → พิมพ์ "ยกเลิกใบแจ้งหนี้ INV-2026-0001"
 - แก้ใบแจ้งหนี้ได้จนกว่าจะมีการรับชำระ — จำนวน ราคา กำหนดชำระ ยอดรวมและ VAT คิดใหม่ให้ · แก้จำนวน/ราคาระบบโชว์ยอดใหม่ให้กด "ยืนยันแก้" ก่อน · ออกเอกสารไปแล้วต้องออกใหม่ก่อนส่งลูกค้า → พิมพ์ "เปลี่ยนจำนวนแอร์ในใบแจ้งหนี้ INV-2026-0001 เป็น 3 ตัว · ใบแจ้งหนี้ INV-2026-0001 เปลี่ยนกำหนดชำระเป็นสิ้นเดือน"
 - เพิ่ม/ตัดรายการทำในแผงใบแจ้งหนี้บนจอ · รับชำระครบแล้วดีลปิดสำเร็จ รายการเป็นตามใบนี้ มูลค่าดีลเป็นยอดหลังส่วนลดก่อน VAT → พิมพ์ "รับชำระ INV-2026-0001 ครบ"
-- ส่งใบเสนอราคา/ใบแจ้งหนี้/ใบเสร็จให้ลูกค้าทางไลน์ (ลูกค้าต้องผูกไลน์แล้ว ไม่งั้นระบบบอกเหตุผล) · บนจอ: ปุ่ม "ส่งให้ลูกค้าทางไลน์" ในหน้าใบเสนอราคาและแผงใบแจ้งหนี้ → พิมพ์ "ส่งใบแจ้งหนี้ INV-2026-0001 ให้ลูกค้า · ส่งใบเสนอราคา Q-2026-0001 ให้ลูกค้า"
+- ส่งใบเสนอราคา/ใบแจ้งหนี้/ใบเสร็จให้ลูกค้าทางไลน์ (ลูกค้าต้องผูกไลน์แล้ว ไม่งั้นระบบบอกเหตุผล) · บนจอ: ปุ่ม "ส่งให้ลูกค้าทางไลน์" ในหน้าใบเสนอราคาและแผงใบแจ้งหนี้ → พิมพ์ "ส่งใบแจ้งหนี้ INV-2026-0001 ให้ลูกค้า · ส่งใบเสนอราคา Q-2026-0001 ให้ลูกค้า · ส่งให้ลูกค้า (ต่อจากออกเอกสาร)"
 
 **นัดหมายและบันทึก**
 - ดูสิ่งที่ต้องทำวันนี้ → พิมพ์ "งานวันนี้"
@@ -283,14 +283,14 @@ _- Search the catalogue → type "ค้นหาสินค้า พัดล
 
 **Invoices and receipts**
 _- Invoice a sent quote (or a deal) — the INV number, total, 30-day due date and PDF link come back in one reply → type "ออกใบแจ้งหนี้ Q-2026-0001 · สร้างใบแจ้งหนี้ให้ดีล D-2026-0001"_
-_- The customer's name is enough — the bill comes from their deal (several: buttons to choose; none: create one first, an invoice always belongs to a deal) · on screen: "สร้างใบแจ้งหนี้" on the invoices page (customer → deal → quote) or "ออกใบแจ้งหนี้" on the deal/customer page → type "ออกใบแจ้งหนี้ให้ สมชาย"_
+_- The customer's name is enough — the bill comes from their deal (several: buttons to choose; none: create one first, an invoice always belongs to a deal) · on screen: the same "ออกใบแจ้งหนี้" button on every page — invoices (customer → deal → quote), quote, deal and customer → type "ออกใบแจ้งหนี้ให้ สมชาย"_
 _- One invoice, the list, what is owed → type "ใบแจ้งหนี้ INV-2026-0001 · รายการใบแจ้งหนี้ · ยอดค้างชำระ"_
 _- Record a payment: amount and method (cash/transfer/PromptPay/card), a deposit is fine; with no amount it asks — answer "5000" or "ครบ" → type "รับชำระ INV-2026-0001 5000 โอน · มัดจำ INV-2026-0001 2000 เงินสด · รับชำระ INV-2026-0001 ครบ"_
 _- Issue the receipt once paid in full — the customer gets the link on LINE → type "ออกใบเสร็จ INV-2026-0001"_
 _- Void an invoice (asks first; only one with no payments) → type "ยกเลิกใบแจ้งหนี้ INV-2026-0001"_
 _- Correct an invoice until paid — quantity, price, due date; totals and VAT recalculated · a quantity/price change shows the new total and waits for "ยืนยันแก้" · re-issue an issued one before sending → type "เปลี่ยนจำนวนแอร์ในใบแจ้งหนี้ INV-2026-0001 เป็น 3 ตัว · ใบแจ้งหนี้ INV-2026-0001 เปลี่ยนกำหนดชำระเป็นสิ้นเดือน"_
 _- Add or cut lines on the invoice sheet on screen · once paid in full the deal is won with this invoice's lines, valued after discount and before VAT → type "รับชำระ INV-2026-0001 ครบ"_
-_- Send a quote, invoice or receipt to the customer on LINE (they must be linked; otherwise the reason is said) · on screen: the "Send to customer on LINE" button on the quote page and the invoice sheet → type "ส่งใบแจ้งหนี้ INV-2026-0001 ให้ลูกค้า · ส่งใบเสนอราคา Q-2026-0001 ให้ลูกค้า"_
+_- Send a quote, invoice or receipt to the customer on LINE (they must be linked; otherwise the reason is said) · on screen: the "Send to customer on LINE" button on the quote page and the invoice sheet → type "ส่งใบแจ้งหนี้ INV-2026-0001 ให้ลูกค้า · ส่งใบเสนอราคา Q-2026-0001 ให้ลูกค้า · ส่งให้ลูกค้า (ต่อจากออกเอกสาร)"_
 
 **Appointments and notes**
 _- Today's list → type "งานวันนี้"_

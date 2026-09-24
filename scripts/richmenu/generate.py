@@ -472,7 +472,7 @@ def draw_header(canvas: Image.Image, draw: ImageDraw.ImageDraw, theme, page: str
     canvas.alpha_composite(logo, (48, 74))
 
     role_big, role_small = (theme["role"], theme["role_en"]) if lang == "th" else (theme["role_en"].title(), theme["role"])
-    draw.text((230, 82), "Chann CRM", font=_font(FONT_BOLD, 86), fill="#102A43", anchor="la")
+    _draw_brand(draw, (230, 82), _font(FONT_BOLD, 86), "#102A43")
     draw.text((234, 180), role_big, font=_font(FONT_BOLD, 46), fill=theme["accent"], anchor="la")
     draw.text((234, 250), role_small, font=_font(FONT_BOLD, 23), fill="#6B7C93", anchor="la")
 
@@ -494,6 +494,30 @@ def draw_header(canvas: Image.Image, draw: ImageDraw.ImageDraw, theme, page: str
             color = theme["deep"]
         draw.text((x + tab_w // 2, tab_y + tab_h // 2 + 2), label,
                   font=_font(FONT_BOLD, 48), fill=color, anchor="mm")
+
+
+#: Garuda sets its digits on a wide, tabular advance: the "1" carries about
+#: 14px of empty side-bearing at 86px, so the name read as two words (a
+#: 20px gap where the letters sit 7-12px apart). The "1" is pulled in by
+#: this fraction of the font size, which brings that gap to the letters'
+#: own spacing, so the name reads as one word.
+_BRAND_DIGIT_KERN = 0.13
+
+
+BRAND = "Chann1 CRM"
+
+
+def _draw_brand(draw: ImageDraw.ImageDraw, xy, font: ImageFont.FreeTypeFont, fill: str) -> None:
+    """BRAND as one name: the letters, the digit kerned in, then " CRM"."""
+    name, rest = BRAND.split(" ", 1)
+    letters, digit = name[:-1], name[-1]
+    x, y = xy
+    kern = round(font.size * _BRAND_DIGIT_KERN)
+    draw.text((x, y), letters, font=font, fill=fill, anchor="la")
+    x += font.getlength(letters) - kern
+    draw.text((x, y), digit, font=font, fill=fill, anchor="la")
+    x += font.getlength(digit) - kern
+    draw.text((x, y), " " + rest, font=font, fill=fill, anchor="la")
 
 
 def draw_primary(canvas, draw, box, tile, theme, lang: str):

@@ -13,6 +13,7 @@ import { useFailureText, useFormatters } from "../../_format";
 import { dealValue, hasDealValue } from "../../_deal-value";
 import { proxyHeaders } from "../../_lib";
 import { ProductLineForm } from "../../../_product-line-form";
+import { CreateInvoiceButton } from "../../invoices/_create-button";
 import { FieldSection, RecordActions, RecordHead, RelatedHeading, RelatedLinks, StatusSection } from "../../_record";
 import { RelatedActivity } from "../../_related";
 import { useSalesSession } from "../../_session";
@@ -559,26 +560,38 @@ export default function DealDetail({
               then is offering a button that fails. quote.create is the
               key the route checks (review C7), not deal.update. */}
           {(can("quote.create") || can("invoice.create")) && items.length > 0 && (
-            <RecordActions title={t.dashboard.record.documentsTitle}>
-              {can("quote.create") && (
-                <button
-                  type="button"
-                  className="btn"
-                  data-variant="primary"
-                  onClick={() => void createQuote()}
-                  disabled={busy}
-                >
-                  {busy ? t.dashboard.saving : t.dashboard.quotes.addForThisDeal}
-                </button>
-              )}
+            <RecordActions
+              title={t.dashboard.record.documentsTitle}
+              // The quotation is the deal's next step, so it is the one
+              // primary; the bill is secondary beside the others (round
+              // 21E; ui-ux-pro-max primary-action).
+              primary={
+                can("quote.create") ? (
+                  <button
+                    type="button"
+                    className="btn"
+                    data-variant="primary"
+                    onClick={() => void createQuote()}
+                    disabled={busy}
+                  >
+                    {busy ? t.dashboard.saving : t.dashboard.quotes.addForThisDeal}
+                  </button>
+                ) : can("invoice.create") && deal.stage !== "lost" ? (
+                  <CreateInvoiceButton href={`/liff/sales/invoices?deal_id=${deal.id}&create=1`} />
+                ) : undefined
+              }
+            >
               {/* Round 20X: the bill, from the deal it belongs to (owner,
                   22 ก.ย. 2569: an invoice always hangs off a deal). Opens
                   the invoices page's form with this deal chosen; a lost
-                  deal is not billed — its lines are what was not bought. */}
-              {can("invoice.create") && deal.stage !== "lost" && (
-                <Link className="btn" href={`/liff/sales/invoices?deal_id=${deal.id}&create=1`}>
-                  {t.dashboard.invoices.forThisDeal}
-                </Link>
+                  deal is not billed — its lines are what was not bought.
+                  The same button as the quote page's (round 21E); it takes
+                  the primary row only when there is no quotation to make here. */}
+              {can("quote.create") && can("invoice.create") && deal.stage !== "lost" && (
+                <CreateInvoiceButton
+                  primary={false}
+                  href={`/liff/sales/invoices?deal_id=${deal.id}&create=1`}
+                />
               )}
             </RecordActions>
           )}

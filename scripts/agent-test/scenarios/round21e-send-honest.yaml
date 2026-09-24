@@ -1,0 +1,114 @@
+name: round21e-send-honest
+description: a document handed to the customer on LINE is only ever reported sent when LINE took
+  it. A customer whose uid has no LINE user behind it is refused by name, and a push LINE
+  refuses reads as a failure with a button to try again, never "ทางไลน์แล้ว" (round 21E, the
+  controller's ruling on concern 3). The runner's MemoryLine refuses any LINE user id that
+  begins with "U-line-down", the way LINE refuses a push. Readings are the deployed model's
+  own (scripts/dev/ask-model.py, 24 ก.ย. 2569).
+backend: fake
+actor:
+  oa: sales
+  role: sales
+  language: th
+  permissions: sales
+steps:
+- seed:
+    raw:
+      company_profile:
+        legal_name: บริษัท ทดสอบ จำกัด
+        company_name: ร้านทดสอบ
+        tax_id: '0105558123456'
+        company_address: 99/1
+        company_phone: '021234567'
+        company_email: a@b.com
+        open_hours: null
+        vat_rate: '0.07'
+      line_targets:
+        CHN-CUST-1: U-somchai
+        CHN-CUST-3: U-line-down-somsak
+    customers:
+    - ref: somchai
+      first_name: สมชาย
+      last_name: ใจดี
+      phone: '0812345678'
+      customer_chann_uid: CHN-CUST-1
+    - ref: somsri
+      first_name: สมศรี
+      last_name: มีสุข
+      phone: '0822222222'
+      customer_chann_uid: CHN-CUST-2
+    - ref: somsak
+      first_name: สมศักดิ์
+      last_name: ทองดี
+      phone: '0833333333'
+      customer_chann_uid: CHN-CUST-3
+    deals:
+    - ref: deal1
+      contact_id: $somchai
+    - ref: deal2
+      contact_id: $somsri
+    - ref: deal3
+      contact_id: $somsak
+    quotes:
+    - ref: quote1
+      deal_id: $deal1.id
+    - ref: quote2
+      deal_id: $deal2.id
+    - ref: quote3
+      deal_id: $deal3.id
+    call:
+    - method: set_quote_status
+      args: {quote_id: $quote1.id, status: sent}
+    - method: link_quote_document
+      args: {quote_id: $quote1.id, document_id: GD-Q1}
+    - method: set_quote_status
+      args: {quote_id: $quote2.id, status: sent}
+    - method: link_quote_document
+      args: {quote_id: $quote2.id, document_id: GD-Q2}
+    - method: set_quote_status
+      args: {quote_id: $quote3.id, status: sent}
+    - method: link_quote_document
+      args: {quote_id: $quote3.id, document_id: GD-Q3}
+
+# LINE takes it: sent.
+- send:
+    message: ส่งใบเสนอราคา Q-2026-0001 ให้ลูกค้า
+    ai: {action: send, entity: quote, fields: {code: Q-2026-0001}, missing: []}
+  expect:
+    contains: ['Q-2026-0001', 'สมชาย', 'ทางไลน์แล้ว']
+    is_not: [generic_error, not_sure, permission, not_found, not_a_feature]
+    line_pushed: {to: U-somchai, contains: Q-2026-0001}
+
+# A uid with no LINE user behind it: refused by name, never "sent".
+- send:
+    message: ส่งใบเสนอราคา Q-2026-0002 ให้ลูกค้า
+    ai: {action: send, entity: quote, fields: {code: Q-2026-0002}, missing: []}
+  expect:
+    contains: ['สมศรี', 'ยังไม่ได้ผูกไลน์']
+    not_contains: ['ทางไลน์แล้ว']
+    is_not: [generic_error, not_sure, permission, not_found, not_a_feature]
+    line_pushed: false
+
+# LINE refuses the push: a failure with a way to try again.
+- send:
+    message: ส่งใบเสนอราคา Q-2026-0003 ให้ลูกค้า
+    ai: {action: send, entity: quote, fields: {code: Q-2026-0003}, missing: []}
+  expect:
+    contains: ['Q-2026-0003', 'ไม่สำเร็จ', 'ลองใหม่อีกครั้ง', 'LINE ไม่รับข้อความ']
+    not_contains: ['ทางไลน์แล้ว', 'agent-test stand-in', '500']
+    quick_replies_include: ['ลองส่งอีกครั้ง']
+    is_not: [generic_error, not_sure, permission, not_found, not_a_feature]
+    line_pushed: false
+
+# The customer the model NAMED is served, not the quotation in view (21E
+# review, Important 2). Q-2026-0001 of สมชาย was the last one sent above;
+# a name read into `customer` must reach สมศรี's own quotation - refused
+# here only because she is not linked, never สมชาย's sent again.
+- send:
+    message: ส่งใบเสนอราคาให้คุณสมศรี
+    ai: {action: send, entity: quote, fields: {customer: คุณสมศรี}, missing: []}
+  expect:
+    contains: ['สมศรี', 'ยังไม่ได้ผูกไลน์']
+    not_contains: ['สมชาย', 'Q-2026-0001']
+    is_not: [generic_error, not_sure, permission, not_found, not_a_feature]
+    line_pushed: false

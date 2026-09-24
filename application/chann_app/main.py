@@ -15,7 +15,7 @@ from . import routers_admin, routers_phase2, routers_phase6, routers_ext
 
 logging.basicConfig(level=logging.INFO)
 
-app = FastAPI(title="Chann CRM AI — Application Tier", version=settings.platform_version)
+app = FastAPI(title="Chann1 CRM AI — Application Tier", version=settings.platform_version)
 app.include_router(webhook.router)
 app.include_router(routers_admin.router)
 app.include_router(routers_phase2.router)

@@ -25,6 +25,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from conftest import line_got
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -249,7 +250,7 @@ class TestIssueAndTheLedger:
         full = await inv.record_payment(client, license_id="L1", invoice=part, amount=None, full=True)
         assert full["status"] == "paid" and full["paid_amount"] == "34240.00"
 
-    async def test_the_receipt_prints_the_ledger_and_tells_the_customer(self, engine):
+    async def test_the_receipt_prints_the_ledger_and_tells_the_customer(self, engine, line_accepts):
         store, renderer = engine
         client, customer, deal, quote = await _shop()
         draft = await inv.create_from_quote(
@@ -266,6 +267,7 @@ class TestIssueAndTheLedger:
         assert store.puts[-1].startswith("documents/L1/receipts/")
         pushed = await inv.notify_customer_receipt(client, license_id="L1", invoice=done, document=document)
         assert pushed is True
+        line_got(line_accepts, "Uline1", "INV-2026-0001", "https://app.example/api/v1/documents/", "ชำระครบแล้ว")
         note = next(r for r in client.recorded if r[0] == "create_notification")
         assert note[3] == "receipt_issued" and "INV-2026-0001" in note[4] and "https://app.example/api/v1/documents/" in note[4]
         assert note[6] is False, "no dashboard row for a customer without a dashboard"
@@ -406,7 +408,7 @@ class TestSalesChat:
         owed = await _say(client, "ยอดค้างชำระ", {"action": "read", "entity": "invoice", "fields": {"scope": "outstanding"}, "missing": []})
         assert owed.text.startswith("ยอดค้างชำระรวม 34,240.00 บาท (1 ใบ)")
 
-    async def test_a_deposit_then_the_balance_then_the_receipt(self, engine):
+    async def test_a_deposit_then_the_balance_then_the_receipt(self, engine, line_accepts):
         client = await self._issued(engine)
         deposit = await _say(client, "มัดจำ INV-2026-0001 2000 เงินสด",
                              {"action": "pay", "entity": "invoice", "fields": {"code": "INV-2026-0001", "amount": 2000, "method": "cash"}, "missing": []})
@@ -423,6 +425,7 @@ class TestSalesChat:
         assert "ออกใบเสร็จของ INV-2026-0001 แล้ว และส่งให้ลูกค้าทาง LINE แล้ว" in receipt.text
         assert "https://app.example/api/v1/documents/" in receipt.text
         assert next(r for r in client.recorded if r[0] == "create_notification")[3] == "receipt_issued"
+        line_got(line_accepts, "Uline1", "INV-2026-0001", "ชำระครบแล้ว")
         voided = await _say(client, "ยกเลิกใบแจ้งหนี้ INV-2026-0001",
                             {"action": "void", "entity": "invoice", "fields": {"code": "INV-2026-0001"}, "missing": []})
         assert "ยกเลิก INV-2026-0001 ไม่ได้" in voided.text and client._invoices[0]["status"] == "paid"
@@ -442,7 +445,12 @@ class TestSalesChat:
         assert client._pending["entity"] == "invoice_pay_amount"
         nonsense = await _say(client, "เยอะ", {"action": "suggest", "suggestions": []})
         assert "อ่านจำนวนเงินไม่ออก" in nonsense.text and client._pending is not None
-        paid = await _say(client, "5000 โอน", {"action": "suggest", "suggestions": []})
+        # Round 21E fix round 4 (controller ruling a): an answer that is not a
+        # plain number is read by the MODEL with the pending context. This
+        # is its measured reading of "5000 โอน" after the question (24 ก.ย.
+        # 2569); it used to be stubbed as a shrug and read by hand.
+        paid = await _say(client, "5000 โอน", {"action": "pay", "entity": "invoice",
+                                              "fields": {"code": "INV-2026-0001", "amount": 5000, "method": "transfer"}})
         assert "บันทึกรับชำระ INV-2026-0001 5,000.00 บาท (โอนเงิน)" in paid.text
         assert client._pending is None and client._invoices[0]["paid_amount"] == "5000.00"
 
@@ -579,7 +587,7 @@ class TestRoutes:
         client.get_company_profile = company_profile
         return client, quote
 
-    async def test_the_quote_button_then_the_sheets_four_actions(self, engine):
+    async def test_the_quote_button_then_the_sheets_four_actions(self, engine, line_accepts):
         client, quote = await self._bill(engine)
         http = _harness(_sales(), client)
         base = f"/api/v1/licenses/{LICENSE_ID}"
@@ -611,6 +619,7 @@ class TestRoutes:
         receipt = http.post(f"{base}/invoices/{invoice['id']}/receipt")
         assert receipt.status_code == 200, receipt.text
         assert receipt.json()["receipt_document_id"] and receipt.json()["customer_notified"] is True
+        line_got(line_accepts, "Uline1", "INV-2026-0001", "ชำระครบแล้ว")
         detail = http.get(f"{base}/invoices/{invoice['id']}")
         assert detail.json()["receipt_document_id"] == receipt.json()["receipt_document_id"]
         # Paid: void is refused by the ledger, said as a 409 the page translates.

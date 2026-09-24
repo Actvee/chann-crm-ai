@@ -33,6 +33,10 @@ class Outcome:
     used_ai: bool = False
     status: int | None = None
     body: Any = None
+    #: What the stand-in LINE (bootstrap.MemoryLine) received during this
+    #: step, as (oa, LINE user id, text). A reply that SAYS it sent is not
+    #: proof; this is (round 21E review, Important 4).
+    line_pushes: list[tuple[str, str, str]] = field(default_factory=list)
 
 
 def classify(text: str) -> str:
@@ -168,6 +172,22 @@ def check(expect: dict, outcome: Outcome) -> list[str]:
             f"expected used_ai={expect['used_ai']}, the model was "
             f"{'called' if outcome.used_ai else 'not called'}"
         )
+
+    if "line_pushed" in expect:
+        wanted = expect["line_pushed"]
+        pushes = outcome.line_pushes
+        if wanted is False or wanted is None:
+            if pushes:
+                problems.append(f"LINE received {len(pushes)} push(es) and should have received none: {pushes}")
+        else:
+            to = str(wanted.get("to") or "")
+            hits = [p for p in pushes if not to or p[1] == to]
+            if not hits:
+                problems.append(f"LINE received no push to {to or 'anyone'}; got {pushes or '(nothing)'}")
+            else:
+                for needle in _as_list(wanted.get("contains")):
+                    if str(needle) not in hits[-1][2]:
+                        problems.append(f"the push to {hits[-1][1]} does not contain {needle!r}: {_excerpt(hits[-1][2])}")
 
     if "status" in expect and outcome.status != expect["status"]:
         problems.append(

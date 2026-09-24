@@ -31,6 +31,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
 
 import requests
 import zcatalyst_sdk
@@ -197,6 +198,81 @@ def _get_or_init_app():
     )
 
 
+# ------------------------------------------------ the access token's real age
+#
+# DEV, 24 ก.ย. 2569 07:30Z: receipts failed with INVALID_TOKEN (401) while
+# the same revision rendered at 05:17Z/05:33Z. zcatalyst-sdk 1.4.0's
+# `RefreshTokenCredential.token()` stores `expires_in = now + expires_in *
+# 1000` — seconds times 1000, compared against `time()` in seconds — so a
+# token Zoho kills after one hour is believed for ~41 days, and the app
+# (with its credential) is cached for the process. The SDK is not patched;
+# our own clock decides instead: a token we have held for 50 minutes is
+# dropped before the call, and an INVALID_TOKEN answer drops it and retries
+# the call once.
+
+_TOKEN_MAX_AGE_S = 50 * 60
+_monotonic = time.monotonic
+#: id(credential) -> (access token, when WE first saw it).
+_TOKEN_BORN: dict[int, tuple[str, float]] = {}
+
+
+def _credential_of(app):
+    return getattr(app, "credential", None)
+
+
+def _cached_access_token(credential) -> str | None:
+    cached = getattr(credential, "_cached_token", None) or {}
+    return cached.get("access_token") if isinstance(cached, dict) else None
+
+
+def _drop_token(app, why: str) -> None:
+    credential = _credential_of(app)
+    if credential is None or not hasattr(credential, "_cached_token"):
+        return
+    credential._cached_token = None
+    _TOKEN_BORN.pop(id(credential), None)
+    log.info("smartbrowz: access token refreshed (%s)", why)
+
+
+def _expire_if_old(app) -> None:
+    credential = _credential_of(app)
+    token = _cached_access_token(credential)
+    if not token:
+        return
+    seen = _TOKEN_BORN.get(id(credential))
+    if seen is None or seen[0] != token:
+        _TOKEN_BORN[id(credential)] = (token, _monotonic())
+        return
+    if _monotonic() - seen[1] >= _TOKEN_MAX_AGE_S:
+        _drop_token(app, "older than 50 minutes")
+
+
+def _note_token(app) -> None:
+    credential = _credential_of(app)
+    token = _cached_access_token(credential)
+    if token and (_TOKEN_BORN.get(id(credential)) or ("",))[0] != token:
+        _TOKEN_BORN[id(credential)] = (token, _monotonic())
+
+
+def _is_invalid_token(exc: Exception) -> bool:
+    return str(getattr(exc, "code", "") or "") == "INVALID_TOKEN" or "invalid oauth token" in str(exc).lower()
+
+
+async def _call_with_fresh_token(app, fn, *args):
+    """One SmartBrowz call with a token our clock trusts; an INVALID_TOKEN
+    answer drops the token and retries ONCE — a second one is raised."""
+    _expire_if_old(app)
+    try:
+        result = await asyncio.to_thread(fn, *args)
+    except CatalystError as exc:
+        if not _is_invalid_token(exc):
+            raise
+        _drop_token(app, "INVALID_TOKEN from Zoho")
+        result = await asyncio.to_thread(fn, *args)
+    _note_token(app)
+    return result
+
+
 def _to_sdk_pdf_options(options: PdfOptions) -> dict:
     sdk_options = {
         "format": options.page_format,
@@ -231,8 +307,8 @@ class SmartBrowzPdfRenderer:
         last: Exception | None = None
         for attempt in range(1, _RENDER_ATTEMPTS + 1):
             try:
-                result = await asyncio.to_thread(
-                    smart_browz.convert_to_pdf, html, _to_sdk_pdf_options(options),
+                result = await _call_with_fresh_token(
+                    app, smart_browz.convert_to_pdf, html, _to_sdk_pdf_options(options),
                 )
                 break
             except CatalystError as exc:
@@ -256,7 +332,7 @@ class SmartBrowzPdfRenderer:
         app = _get_or_init_app()
         smart_browz = app.smart_browz()
         try:
-            result = await asyncio.to_thread(smart_browz.take_screenshot, html)
+            result = await _call_with_fresh_token(app, smart_browz.take_screenshot, html)
         except CatalystError as exc:
             raise SmartBrowzRenderError(f"SmartBrowz/Zoho rejected the preview: {exc}") from exc
         except Exception as exc:  # noqa: BLE001

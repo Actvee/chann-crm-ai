@@ -276,6 +276,7 @@ class FakeBackend:
         self.client._permission_keys = permission_set(permissions, oa)
         self.client._role = role
         probe = AiProbe(_resolve(ai, refs) if ai else None)
+        line_before = _line_mark()
         ctx = self._t._ctx(oa=oa, primary_role=role)
         # API key and other owner-gated features check is_owner on the membership
         ctx.memberships[0]["is_owner"] = role == "owner"
@@ -293,6 +294,7 @@ class FakeBackend:
             images=list(reply.images or []),
             intent=reply.intent,
             used_ai=probe.calls > 0,
+            line_pushes=_line_since(line_before),
         ), []
 
     async def seed(self, spec: dict, refs: dict) -> list[str]:
@@ -527,6 +529,7 @@ class DbBackend:
             self.client, oa, self._line_user_id(oa, None), "Agent Test",
         )
         probe = AiProbe(_resolve(ai, refs) if ai else None)
+        line_before = _line_mark()
         try:
             reply = await self._t_handle(message, ctx, language, probe)
         finally:
@@ -538,6 +541,7 @@ class DbBackend:
             images=list(reply.images or []),
             intent=reply.intent,
             used_ai=probe.calls > 0,
+            line_pushes=_line_since(line_before),
         ), notes
 
     async def _t_handle(self, message, ctx, language, probe):
@@ -717,3 +721,22 @@ def make_backend(name: str) -> FakeBackend | DbBackend:
         backend.start()
         return backend
     raise BackendError(f"unknown backend {name!r} — use fake or db")
+
+
+def _line_mark() -> int:
+    """How many pushes the stand-in LINE has taken so far."""
+    from chann_app.services import notify
+
+    line = getattr(notify, "_agent_test_line", None)
+    return len(line.pushed) if line is not None else 0
+
+
+def _line_since(mark: int) -> list[tuple[str, str, str]]:
+    """The pushes taken after `mark`, as (oa, LINE user id, text)."""
+    from chann_app.services import notify
+
+    line = getattr(notify, "_agent_test_line", None)
+    if line is None:
+        return []
+    return [(oa, to, " ".join(m if isinstance(m, str) else json.dumps(m, ensure_ascii=False) for m in msgs))
+            for oa, to, msgs in line.pushed[mark:]]

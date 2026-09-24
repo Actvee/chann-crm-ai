@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ReactNode, useEffect, useState } from "react";
+import { Children, ReactNode, useEffect, useState } from "react";
 
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
@@ -257,26 +257,45 @@ export function StatusSection({
         <h2>{title}</h2>
         <span className="record-status-now">{current}</span>
       </div>
-      {moves && <div className="actions record-status-moves">{moves}</div>}
-      {note && <p className="card-meta record-status-note">{note}</p>}
-      {children}
+      {(moves || note || children) && (
+        <div className="section-body">
+          {moves && <div className="actions record-status-moves">{moves}</div>}
+          {note && <p className="card-meta record-status-note">{note}</p>}
+          {children}
+        </div>
+      )}
     </section>
   );
 }
 
 /**
  * What this record lets you DO: issue the document, bill it, open what
- * came of it. One primary among them; anything that undoes a record
- * sits in `danger`, on its own line under a rule.
+ * came of it.
+ *
+ * Round 21E (owner, 24 ก.ย. 2569: "ปุ่มก็ชิดขอบออกแบบไม่ดี"). The rows sat
+ * straight in the section, which has no padding of its own, so every
+ * button touched the box's edge. They now sit in a `.section-body` with
+ * the head's 16px gutter. The one primary action has a row of its own,
+ * full width on a phone. The page names it, and no other button decides
+ * for itself that it is primary. The secondary actions share the row
+ * below it, and anything that undoes the record sits under a rule
+ * (ui-ux-pro-max: primary-action, touch-spacing, destructive-emphasis,
+ * spacing-scale).
  */
 export function RecordActions({
   title,
+  primary,
+  notice,
   children,
   danger,
   note,
 }: {
   title: string;
-  children: ReactNode;
+  /** The one thing to press next, if there is one. */
+  primary?: ReactNode;
+  /** A line that states a fact first, e.g. "ออกใบแจ้งหนี้ INV-… แล้ว". */
+  notice?: ReactNode;
+  children?: ReactNode;
   danger?: ReactNode;
   note?: ReactNode;
 }) {
@@ -285,9 +304,15 @@ export function RecordActions({
       <div className="section-head">
         <h2>{title}</h2>
       </div>
-      <div className="actions">{children}</div>
-      {note && <p className="card-meta record-status-note">{note}</p>}
-      {danger && <div className="actions record-danger">{danger}</div>}
+      <div className="section-body">
+        {notice}
+        {primary && <div className="actions record-primary">{primary}</div>}
+        {Children.toArray(children).length > 0 && (
+          <div className="actions record-secondary">{children}</div>
+        )}
+        {note && <p className="card-meta record-status-note">{note}</p>}
+        {danger && <div className="actions record-danger">{danger}</div>}
+      </div>
     </section>
   );
 }

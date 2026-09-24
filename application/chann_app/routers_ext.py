@@ -30,7 +30,7 @@ from .routers_phase2 import _propagate
 from .services.authorization import TenantPrincipal
 
 DESCRIPTION = """
-API สำหรับระบบภายนอก (บัญชี / ERP) ของร้านที่ใช้ Chann CRM AI
+API สำหรับระบบภายนอก (บัญชี / ERP) ของร้านที่ใช้ Chann1 CRM AI
 
 * ขอ key จากเจ้าของร้าน: แดชบอร์ด > จัดการร้าน > API
 * ส่ง `Authorization: Bearer chann_live_…` ทุกคำขอ
@@ -42,7 +42,7 @@ Errors are always `{"error": {"code": "...", "message": "..."}}`.
 """
 
 ext_app = FastAPI(
-    title="Chann CRM AI — Public API", version="1.0", description=DESCRIPTION,
+    title="Chann1 CRM AI — Public API", version="1.0", description=DESCRIPTION,
     docs_url="/docs", redoc_url=None, openapi_url="/openapi.json",
 )
 log = logging.getLogger(__name__)

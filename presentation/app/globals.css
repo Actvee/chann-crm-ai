@@ -3353,12 +3353,64 @@ button.notif-open {
   margin: 6px 0 0;
 }
 
+/* Round 21E (owner, 24 ก.ย. 2569: "ปุ่มก็ชิดขอบ"). `.section` has no padding
+   of its own, and its head and `.fields` carry 16px each. The status and
+   documents boxes put their button rows straight in the section, so the
+   buttons touched the box's left edge and bottom. A box body now has the
+   head's gutter, and the rows inside it are spaced by the body, not by
+   `.actions`' own 14px (ui-ux-pro-max spacing-scale: 4/8 steps). */
+.section-body {
+  padding: 12px 16px 16px;
+}
+
+.section-body > * + * {
+  margin-top: 12px;
+}
+
+.section-body > .actions {
+  margin-top: 0;
+}
+
+.section-body > * + .actions {
+  margin-top: 12px;
+}
+
+.section-body > .record-note-row {
+  margin: 0;
+}
+
+/* Secondary actions share a phone's row evenly and wrap two to a line,
+   44px tall with 8px between them (touch-target-size, touch-spacing).
+   The primary has a row of its own above them (primary-action). */
+.record-secondary .btn {
+  flex: 1 1 140px;
+}
+
+@media (min-width: 420px) {
+  .record-secondary .btn {
+    flex: 0 1 auto;
+  }
+}
+
+/* A move that ends the record badly ("ปฏิเสธ", "แพ้") closes the row
+   instead of sitting between the other moves (destructive-emphasis). */
+.record-status-moves .btn[data-variant="danger"] {
+  order: 1;
+}
+
 /* The undo of a record: under a rule, never shoulder to shoulder with
    the button that moves it forward. */
 .record-danger {
   margin-top: 10px;
   padding-top: 10px;
   border-top: 1px solid var(--line);
+}
+
+/* The one way to start a bill on the invoices page: a primary row of its
+   own above the list, the same place the customer and deal lists put
+   theirs. */
+.record-create {
+  margin: 0 0 14px;
 }
 
 .record-links {

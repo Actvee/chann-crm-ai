@@ -9,7 +9,7 @@ import { ADMIN_COOKIE, type AdminProfile } from "./_server";
 import { AdminNav } from "./_nav";
 import { AdminRailToggle } from "./_rail-toggle";
 
-export const metadata = { title: "Chann Platform Admin" };
+export const metadata = { title: "Chann1 Platform Admin" };
 
 /** Phase 18 — the operator's console. Signed out (no cookie, or a dead
  *  session) renders the bare page so /admin/login stands on its own. */

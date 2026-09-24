@@ -126,6 +126,10 @@ class TestGetInvoiceCarriesCustomerHasLine:
         async def get_customer(self, license_id, customer_id):
             return self._customer
 
+        async def line_target_of(self, chann_uid):
+            # A linked customer has a LINE user behind the uid (round 21E).
+            return {"CHN-C-1": "U-C-1"}.get(chann_uid)
+
     @pytest.mark.asyncio
     async def test_true_when_the_customer_has_linked_line(self):
         client = self._FakeClient(self.INVOICE_ROW, {"id": "c1", "customer_chann_uid": "CHN-C-1"})

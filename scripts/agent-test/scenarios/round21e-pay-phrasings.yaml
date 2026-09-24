@@ -1,0 +1,129 @@
+name: round21e-pay-phrasings
+description: the owner on DEV, 24 ก.ย. 2569 - "คำสั่งชำระเงินแล้วของ invoice ไม่มีความยืดหยุ่น".
+  A paid statement records the balance; the answer to "เท่าไหร่ครับ" is read by the model
+  (cancel words decline first, a plain number and the question's own button need no model);
+  a bill known only from the last-viewed memory is asked once; a bill already paid says so and
+  records nothing twice; a question stays a read. Every ai reading is the deployed model's own
+  (paymeasure, 24 ก.ย. 2569 - report, Fix round 4).
+backend: fake
+actor:
+  oa: sales
+  role: sales
+  language: th
+  permissions: sales
+steps:
+- seed:
+    raw:
+      company_profile:
+        legal_name: บริษัท ทดสอบ จำกัด
+        company_name: ร้านทดสอบ
+        tax_id: '0105558123456'
+        company_address: 99/1
+        company_phone: '021234567'
+        company_email: a@b.com
+        open_hours: null
+        vat_rate: '0.07'
+    customers:
+    - ref: somchai
+      first_name: สมชาย
+      last_name: ใจดี
+      phone: '0812345678'
+    deals:
+    - ref: deal1
+      contact_id: $somchai
+    call:
+    - method: add_deal_product
+      args: {deal_id: $deal1.id, payload: {product_name: แอร์ 12000 BTU, qty: 2, quoted_unit_price: '15000.00'}}
+    quotes:
+    - ref: quote1
+      deal_id: $deal1.id
+- seed:
+    call:
+    - method: set_quote_status
+      args: {quote_id: $quote1.id, status: sent}
+- send:
+    message: ออกใบแจ้งหนี้ Q-2026-0001
+    ai: {action: create, entity: invoice, fields: {quote_code: Q-2026-0001}, missing: []}
+  expect:
+    contains: INV-2026-0001
+    is_not: [generic_error, not_sure, permission, not_found]
+- seed:
+    call:
+    - method: issue_invoice
+      args: {invoice_id: INV-1}
+
+# No bill named and none in view: which one - the unpaid bills as buttons, the one
+# whose balance equals the stated amount first. Measured (no context):
+# {amount: 32100, full: true}, no code. Nothing is written.
+- send:
+    message: ลูกค้าจ่ายเงินมาแล้ว 32,100 บาท
+    ai: {action: pay, entity: invoice, fields: {amount: 32100, full: true}, missing: []}
+  expect:
+    contains: ใบไหน
+    not_contains: ['บันทึกรับชำระ']
+    quick_replies_include: ['ลูกค้าจ่ายเงินมาแล้ว 32,100 บาท INV-2026-0001']
+    is_not: [generic_error, not_sure, permission]
+
+# Viewed, and later a statement the model could not tie to it (the recent turns had
+# expired): known only from the last-viewed memory, so asked once, nothing written.
+- send:
+    message: ใบแจ้งหนี้ INV-2026-0001
+    ai: {action: read, entity: invoice, fields: {code: INV-2026-0001}, missing: []}
+  expect:
+    contains: INV-2026-0001
+- send:
+    message: จ่ายแล้ว
+    ai: {action: pay, entity: invoice, fields: {full: true}, missing: []}
+  expect:
+    contains: ['รับชำระ INV-2026-0001 เต็ม 32,100.00 บาท ใช่ไหม']
+    not_contains: ['บันทึกรับชำระ']
+    quick_replies_include: ['รับชำระ INV-2026-0001 ครบ']
+    is_not: [generic_error, not_sure, permission, not_found]
+
+# The amount question, then a cancel word: declined before the model is asked
+# (the model reads "ยกเลิก" here as voiding the bill).
+- send:
+    message: รับชำระ INV-2026-0001
+    ai: {action: pay, entity: invoice, fields: {code: INV-2026-0001}, missing: []}
+  expect:
+    contains: เท่าไหร่ครับ
+    is_not: [generic_error, not_sure, permission, not_found]
+- send: ยกเลิก
+  expect:
+    used_ai: false
+    contains: ยังไม่ได้บันทึกรับชำระ
+    not_contains: ['ยกเลิกใบแจ้งหนี้']
+
+# Asked again, answered in words: read by the model with the question in view.
+- send:
+    message: รับชำระ INV-2026-0001
+    ai: {action: pay, entity: invoice, fields: {code: INV-2026-0001}, missing: []}
+  expect:
+    contains: เท่าไหร่ครับ
+    is_not: [generic_error, not_sure, permission, not_found]
+- send:
+    message: ลูกค้าโอนมาหมดแล้ว
+    ai: {action: pay, entity: invoice, fields: {code: INV-2026-0001, full: true}, missing: []}
+  expect:
+    contains: ['บันทึกรับชำระ INV-2026-0001', 'ชำระครบ']
+    not_contains: ['อ่านจำนวนเงินไม่ออก']
+    quick_replies_include: ['ออกใบเสร็จ INV-2026-0001']
+    is_not: [generic_error, not_sure, permission, not_found]
+
+# A second "จ่ายแล้ว" (measured with the card in view: pay {code, full}).
+- send:
+    message: จ่ายแล้ว
+    ai: {action: pay, entity: invoice, fields: {code: INV-2026-0001, full: true}, missing: []}
+  expect:
+    contains: ['INV-2026-0001 ชำระครบแล้วครับ', 'ไม่ได้บันทึกซ้ำ']
+    not_contains: ['รับชำระไม่ได้']
+    quick_replies_include: ['ออกใบเสร็จ INV-2026-0001']
+
+# A question stays a read (measured: read {code}).
+- send:
+    message: ชำระแล้วยัง
+    ai: {action: read, entity: invoice, fields: {code: INV-2026-0001}, missing: []}
+  expect:
+    contains: INV-2026-0001
+    not_contains: ['บันทึกรับชำระ', 'ไม่ได้บันทึกซ้ำ']
+    is_not: [generic_error, not_sure, permission, not_found]

@@ -52,6 +52,8 @@ export type ApiFailure = {
   /** Dispatch gate (Thai labels) or company profile (field names). */
   missing: string[];
   existingCode: string;
+  /** A structured body's `reason`, e.g. push_failed's "not_configured". */
+  reason: string;
 };
 
 export async function readFailure(response: Response): Promise<ApiFailure> {
@@ -70,6 +72,7 @@ export async function readFailure(response: Response): Promise<ApiFailure> {
       missingFields: Array.isArray(body.missing_fields) ? body.missing_fields.map(String) : [],
       missing: Array.isArray(body.missing) ? body.missing.map(String) : [],
       existingCode: String(body.existing_code ?? ""),
+      reason: String(body.reason ?? ""),
     };
   }
   return {
@@ -79,6 +82,7 @@ export async function readFailure(response: Response): Promise<ApiFailure> {
     missingFields: [],
     missing: [],
     existingCode: "",
+    reason: "",
   };
 }
 

@@ -74,6 +74,19 @@ def _entity_uuid(entity_id: str | None, *, type: str, entity_type: str | None) -
         return None
 
 
+class NotificationNotDelivered(RuntimeError):
+    """The strict road's failure: the row may exist, the push did not go.
+
+    Only a caller whose business action IS the push asks for it
+    (`raise_on_failure=True` — handing a document to the customer, round
+    21E). Everything else keeps the swallow-and-log behaviour below."""
+
+    def __init__(self, reason: str, detail: str = ""):
+        super().__init__(f"{reason}: {detail}" if detail else reason)
+        self.reason = reason
+        self.detail = detail
+
+
 async def send_notification(
     client: DataClient,
     *,
@@ -91,6 +104,8 @@ async def send_notification(
     oa: str | None = None,
     quick_reply: list | None = None,
     images: list[str] | None = None,
+    raise_on_failure: bool = False,
+    ref: str | None = None,
 ) -> dict:
     """Record, then push. Returns the stored notification either way.
 
@@ -116,17 +131,52 @@ async def send_notification(
             language = str(prefs.get("language") or language or "th")
         except Exception:  # noqa: BLE001
             pass
-    row = await client.create_notification(
-        license_id,
-        target_chann_uid=target_chann_uid,
-        type=type,
-        message=message,
-        message_en=message_en,
-        entity_type=entity_type,
-        entity_id=_entity_uuid(entity_id, type=type, entity_type=entity_type),
-        delivery_line=delivery_line,
-        delivery_dashboard=delivery_dashboard,
-    )
+    async def record() -> dict:
+        return await client.create_notification(
+            license_id,
+            target_chann_uid=target_chann_uid,
+            type=type,
+            message=message,
+            message_en=message_en,
+            entity_type=entity_type,
+            entity_id=_entity_uuid(entity_id, type=type, entity_type=entity_type),
+            delivery_line=delivery_line,
+            delivery_dashboard=delivery_dashboard,
+        )
+
+    # `ref` names the record in the log (e.g. "quote Q-2026-0010"), so the
+    # owner can find a push that did not go by the code he typed (21E).
+    about = f" ({ref})" if ref else ""
+
+    # The strict road (round 21E review, Important 3): the push IS the
+    # business action, so LINE goes first and the row is written only once
+    # LINE accepted. A refused push leaves no record of a send that never
+    # happened — and a retry is never mistaken for a repeat.
+    if raise_on_failure:
+        if not delivery_line or not target_line_user_id:
+            log.warning("notification%s has no target_line_user_id; nothing sent", about)
+            raise NotificationNotDelivered("no_line_target")
+        try:
+            sent_ids = await _push(
+                oa or TYPE_TO_OA.get(type, DEFAULT_OA), target_line_user_id,
+                message_en if (language == "en" and message_en) else message, images, quick_reply,
+            )
+        except LineReplyError as exc:
+            log.error("LINE push failed%s: %s", about, exc)
+            raise NotificationNotDelivered("push_failed", str(exc)) from exc
+        # LINE accepted: the customer HAS it. A row that cannot be written
+        # now must not turn that into "ส่งไม่สำเร็จ — ลองอีกครั้ง", which
+        # would push it a second time (21E re-review 2, I-1). Logged loud
+        # instead; the send stands.
+        try:
+            row = await record()
+        except Exception:  # noqa: BLE001 — the push is the fact that matters
+            log.exception("LINE accepted%s but the notification row could not be written", about)
+            row = {"id": None, "row_missing": True}
+        await _map_pushed(client, license_id, sent_ids, entity_type, entity_id)
+        return row
+
+    row = await record()
 
     if not delivery_line:
         return row
@@ -136,39 +186,41 @@ async def send_notification(
         # means an identity was created without a LINE user ID, which should
         # not happen through the normal webhook path.
         log.warning(
-            "notification %s has no target_line_user_id; dashboard only", row.get("id")
+            "notification %s%s has no target_line_user_id; dashboard only", row.get("id"), about
         )
         return row
 
     text = message_en if (language == "en" and message_en) else message
     try:
-        pictures = [image_message(u) for u in (images or [])[:4] if str(u).startswith("https://")]
-        if pictures:
-            sent_ids = await push_messages(
-                oa or TYPE_TO_OA.get(type, DEFAULT_OA), target_line_user_id,
-                [*pictures, text_message(text, quick_reply=quick_reply)],
-            )
-        else:
-            sent_ids = await push_text(
-                oa or TYPE_TO_OA.get(type, DEFAULT_OA), target_line_user_id, text,
-                quick_reply=quick_reply,
-            )
+        sent_ids = await _push(oa or TYPE_TO_OA.get(type, DEFAULT_OA), target_line_user_id, text, images, quick_reply)
     except LineReplyError as exc:
         # Deliberately swallowed: the notification is already durable, and
         # raising here would fail whatever business action triggered it —
         # a LINE hiccup must not roll back an approval or a ticket assignment.
-        log.error("LINE push failed for notification %s: %s", row.get("id"), exc)
+        log.error("LINE push failed for notification %s%s: %s", row.get("id"), about, exc)
         return row
 
-    # The pushed message is now something a person can reply to: map its
-    # id to the record, exactly as the webhook does for bot replies, so
-    # "reply to this and type อนุมัติ" resolves the report it names.
-    if entity_type and entity_id:
-        for message_id in sent_ids or []:
-            try:
-                await client.record_message_entity(
-                    license_id, str(message_id), entity_type, str(entity_id),
-                )
-            except Exception:  # noqa: BLE001
-                log.exception("could not map pushed message %s to %s", message_id, entity_type)
+    await _map_pushed(client, license_id, sent_ids, entity_type, entity_id)
     return row
+
+
+async def _push(oa: str, to: str, text: str, images, quick_reply) -> list:
+    pictures = [image_message(u) for u in (images or [])[:4] if str(u).startswith("https://")]
+    if pictures:
+        return await push_messages(oa, to, [*pictures, text_message(text, quick_reply=quick_reply)])
+    return await push_text(oa, to, text, quick_reply=quick_reply)
+
+
+async def _map_pushed(client, license_id, sent_ids, entity_type, entity_id) -> None:
+    """The pushed message is now something a person can reply to: map its
+    id to the record, exactly as the webhook does for bot replies, so
+    "reply to this and type อนุมัติ" resolves the report it names."""
+    if not (entity_type and entity_id):
+        return
+    for message_id in sent_ids or []:
+        try:
+            await client.record_message_entity(
+                license_id, str(message_id), entity_type, str(entity_id),
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("could not map pushed message %s to %s", message_id, entity_type)

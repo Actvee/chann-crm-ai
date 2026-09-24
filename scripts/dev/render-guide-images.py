@@ -32,7 +32,7 @@ W, H = 1000, 1000
 INK, SOFT, FAINT, LINE, PAPER, WHITE = "#1a2030", "#5a6478", "#8b93a3", "#e5e0d8", "#faf7f2", "#ffffff"
 OA = {"customer": "#e8731a", "technician": "#1f6fd6", "sales": "#178a50"}
 OA_SOFT = {"customer": "#fdeee2", "technician": "#e6f0fc", "sales": "#e7f6ee"}
-OA_NAME = {"customer": "Chann · ลูกค้า", "technician": "Chann · ช่าง", "sales": "Chann · ทีมขาย / CS"}
+OA_NAME = {"customer": "Chann1 · ลูกค้า", "technician": "Chann1 · ช่าง", "sales": "Chann1 · ทีมขาย / CS"}
 
 
 def font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
