@@ -59,12 +59,13 @@ class TestSchemasSendWhatTheRouterAssigns:
             contact_id=uuid.uuid4(), stage="lost", owner_member_id=None, notes=None,
             archived_at=None, created_at=now, updated_at=now,
             expected_close_date=date(2026, 9, 30), amount=Decimal("12500.00"),
-            currency="THB", lost_reason="ราคาแพงกว่าคู่แข่ง",
+            currency="THB", lost_reason="ราคาแพงกว่าคู่แข่ง", closed_at=now,
         )
         out = _deal_out(deal, []).model_dump()
         assert out["amount"] == Decimal("12500.00")
         assert out["expected_close_date"] == date(2026, 9, 30)
         assert out["lost_reason"] == "ราคาแพงกว่าคู่แข่ง"
+        assert out["closed_at"] == now
 
     def test_transfer_out_names_both_people(self):
         for field in ("from_chann_uid", "to_chann_uid"):

@@ -230,6 +230,9 @@ does not exist anywhere else the model can check against):
     A quotation's CONTENTS cannot be changed once issued — for a price or
     a line that is wrong, the answer is a new quotation from the deal, not
     an edit of this one.
+  action="send": give an ISSUED quotation to the customer on LINE — giving
+    it, not making it. fields={{"code": "Q-2026-0001"}}. Examples: "ส่ง
+    ใบเสนอราคา Q-2026-0001 ให้ลูกค้า", "ส่งใบเสนอราคาให้ลูกค้าทางไลน์".
 
 - entity="invoice" — the BILL made after a quotation is accepted (or
   straight from a deal), and the money received against it. Its own code
@@ -258,9 +261,31 @@ does not exist anywhere else the model can check against):
     method transfer), "มัดจำ INV-2026-0001 2000 เงินสด" (amount 2000, method
     cash), "รับชำระ INV-2026-0001 ครบ" (full true), "ลูกค้าจ่าย INV-2026-0001
     แล้ว" (full true).
-  action="receipt": issue the RECEIPT for an invoice that is paid in full.
+  action="receipt": MAKE the RECEIPT for an invoice that is paid in full.
     fields={{"code": "INV-2026-0001"}}. Examples: "ออกใบเสร็จ INV-2026-0001",
-    "ส่งใบเสร็จให้ลูกค้า INV-2026-0001".
+    "ออกใบเสร็จให้ INV-2026-0001". Handing an existing receipt to the
+    customer is action="send", not this.
+  action="update": CORRECT a bill that is not paid yet — one of its lines,
+    its note, or when it is due. fields: code, and only what the sentence
+    changes: target_name + qty (or unit_price) for a line, line_no when the
+    sentence numbers it, due_date (ISO), note. A CHANGE to a quantity is
+    qty_change, signed, not qty — exactly as on a line_item: "เพิ่มแอร์อีก
+    2 ตัวในใบแจ้งหนี้ INV-2026-0001" -> {{"target_name": "แอร์",
+    "qty_change": 2}}; "ลดแอร์ลง 1 ตัว" -> {{"qty_change": -1}}. Only
+    "เป็น N" SETS: "แอร์เป็น 3 ตัว" -> {{"qty": 3}}. Examples: "แก้รายการใน
+    ใบแจ้งหนี้ INV-2026-0001", "เปลี่ยนจำนวนแอร์ในใบแจ้งหนี้ INV-2026-0001
+    เป็น 3 ตัว" (target_name "แอร์", qty 3), "ใบแจ้งหนี้ INV-2026-0001
+    เปลี่ยนกำหนดชำระเป็นสิ้นเดือน" (due_date). A sentence that asks to
+    correct the bill without saying WHAT to change is still this, with
+    only the code — the system asks. Money ARRIVING is action="pay",
+    never this.
+  action="send": hand an EXISTING document to the customer on LINE — the
+    shop is not making anything, it is giving it to them.
+    fields={{"code": "INV-2026-0001", "kind": "invoice"}}, kind "receipt"
+    when the sentence says ใบเสร็จ. Examples: "ส่งใบแจ้งหนี้ INV-2026-0001
+    ให้ลูกค้า", "ส่งบิลให้ลูกค้าทางไลน์", "ส่งใบเสร็จให้ลูกค้า
+    INV-2026-0001". "ออกใบเสร็จ" is action="receipt" (make it); "ส่ง
+    ใบเสร็จ" is this (give it).
   action="void": cancel an invoice. fields={{"code": "INV-2026-0001"}}.
     Examples: "ยกเลิกใบแจ้งหนี้ INV-2026-0001", "ใบแจ้งหนี้นี้ไม่เอาแล้ว".
   action="read": one invoice by code ("ใบแจ้งหนี้ INV-2026-0001"), the list

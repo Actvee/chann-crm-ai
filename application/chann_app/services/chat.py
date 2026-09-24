@@ -176,6 +176,14 @@ ACTION_PERMISSIONS: dict[tuple[str, str], str] = {
     ("pay", "invoice"): "invoice.update",
     ("receipt", "invoice"): "invoice.update",
     ("void", "invoice"): "invoice.void",
+    # Round 21C — handing an ISSUED document to the customer on LINE.
+    # Giving a document away is not making one: it changes no money, so it
+    # sits under the record's own update key rather than a key of its own.
+    # Registered in the same commit as `_handle_document_send`, because
+    # measure-capabilities (and test_round20i_last_gaps.py) require a
+    # handler behind every registered pair.
+    ("send", "invoice"): "invoice.update",
+    ("send", "quote"): "quote.update",
     ("read", "service_report"): "service_report.read",
     ("create", "service_report"): "service_report.create",
     ("update", "service_report"): "service_report.update",
@@ -12953,9 +12961,24 @@ _GUARD_ACTIONS: dict[str, dict[str, str]] = {
         "th_eg": "รับชำระ {code} 5000 โอน", "en_eg": "record payment {code} 5000 transfer",
         "code": "INV-2026-0001",
     },
+    # Round 21C — correcting the bill itself. Its example is an edit,
+    # because that is the half of ("invoice", "update") a person types in
+    # words; a negated payment read as `update` is still refused, just
+    # under the wider noun.
+    "invoice_edit": {
+        "th": "แก้ใบแจ้งหนี้", "en": "change the invoice",
+        "th_eg": "เปลี่ยนจำนวนแอร์ใน {code} เป็น 3 ตัว", "en_eg": "set the air-con on {code} to 3",
+        "code": "INV-2026-0001",
+    },
     "receipt_issue": {
         "th": "ออกใบเสร็จ", "en": "issue the receipt",
         "th_eg": "ออกใบเสร็จ {code}", "en_eg": "issue the receipt for {code}",
+        "code": "INV-2026-0001",
+    },
+    # Round 21C — giving the document to the customer, not making it.
+    "document_send": {
+        "th": "ส่งเอกสารให้ลูกค้า", "en": "send the document to the customer",
+        "th_eg": "ส่งใบแจ้งหนี้ {code} ให้ลูกค้า", "en_eg": "send invoice {code} to the customer",
         "code": "INV-2026-0001",
     },
     "template_publish": {
@@ -13114,9 +13137,16 @@ _AI_GUARDED: dict[tuple[str, str], str] = {
     ("invoice", "create"): "invoice_create",
     ("invoice", "issue"): "invoice_create",
     ("invoice", "pay"): "invoice_payment",
-    ("invoice", "update"): "invoice_payment",
+    # Round 21C — `update` on a bill is a correction OR a payment, and the
+    # guard runs before the split, so it names the wider of the two.
+    ("invoice", "update"): "invoice_edit",
     ("invoice", "receipt"): "receipt_issue",
     ("invoice", "void"): "record_delete",
+    # Round 21C — "ยังไม่ต้องส่งให้ลูกค้านะ" must not push the document.
+    # The document goes to the CUSTOMER, so a send the person did not ask
+    # for cannot be taken back.
+    ("invoice", "send"): "document_send",
+    ("quote", "send"): "document_send",
 }
 
 
@@ -13485,6 +13515,15 @@ def _is_a_button_press(message: str, oa: str) -> bool:
     labels = frozenset(t.replace(" ", "").lower() for t in RICH_MENU_TILE_TEXTS.get(oa, ())) | frozenset(
         t.replace(" ", "").lower() for t in _MENU_COMMAND_TEXTS
     )
+    if oa == "sales" and _basic_report_key(message) is not None:
+        # Round 21C: "รายงาน: pipeline_value" is what one of the five
+        # reports' own buttons sends. The action and the record are already
+        # named, so it keeps the direct path — and sending it to the model
+        # to be told what it plainly is would be the waste this gate exists
+        # to stop. Sales only: the five are the sales OA's reports and only
+        # its call sites route them, so on another OA the sentence must
+        # stay the model's (review, minor 4).
+        return True
     return compact in labels or bool(_HELP_STEP_RE.match(message or ""))
 
 
@@ -14354,7 +14393,7 @@ async def _customer_activity(
         sections.append((
             _t(CUSTOMER_CARD_DEALS, language).format(n=len(open_deals)),
             [f"  • {d.get('deal_id') or '-'} · "
-             f"{_label(DEAL_STAGE_LABELS, d.get('stage'), language)}{_amount_tail(d.get('amount'))}"
+             f"{_label(DEAL_STAGE_LABELS, d.get('stage'), language)}{_deal_value_tail(d)}"
              for d in open_deals[:limit]],
             len(open_deals), "ดีล" if language != "en" else "deals",
         ))
@@ -14390,6 +14429,34 @@ def _appointment_line(follow_up: dict) -> str:
     at = str(follow_up.get("due_time") or "")[:5]
     about = str(follow_up.get("notes") or "").strip()[:50]
     return f"{when}{' ' + at if at else ''}{' · ' + about if about else ''}"
+
+
+def _deal_value_tail(deal: dict) -> str:
+    """" · 30,000" — what the deal is worth by the one rule
+    (`deal_value.deal_value`: typed amount first, else the lines), or
+    nothing when the deal has neither. `amount` alone showed nothing for a
+    deal valued by its lines (final review I4)."""
+    from .deal_value import deal_value
+
+    if deal.get("amount") in (None, "") and not (deal.get("products") or []):
+        return ""
+    return _amount_tail(deal_value(deal))
+
+
+def _deal_value_line(deal: dict, *, subtotal: Decimal, language: str) -> str:
+    """The deal card's value line, only when it differs from the lines'
+    sum right above it: a typed amount (or an invoice's after-discount
+    value, ruling 23) is what every total on the platform counts, so the
+    card must not show only the lines and leave that number unsaid."""
+    from .deal_value import deal_value
+
+    if deal.get("amount") in (None, ""):
+        return ""
+    value = deal_value(deal)
+    if value == subtotal:
+        return ""
+    return (f"Deal value: {value:,.2f} THB" if language == "en"
+            else f"มูลค่าดีล: {value:,.2f} บาท")
 
 
 def _amount_tail(amount) -> str:
@@ -14544,6 +14611,20 @@ def _whole_qty(text: str | None) -> int | None:
     caller says so rather than rounding it into something plausible."""
     value = _qty_number(text)
     if value is None or value < 0 or not value.is_integer():
+        return None
+    return int(value)
+
+
+def _qty_delta(text: str | None) -> int | None:
+    """A signed CHANGE to a quantity: "เพิ่มอีก 2" is +2, "ลดลง 1" is -1.
+
+    Its own reader because `_whole_qty` refuses a negative on purpose — a
+    quantity cannot be below zero, but a change can, and reading the delta
+    through the quantity rule silently dropped every "ลด…ลง N" (review
+    finding 2). Zero is no change, which is not an instruction.
+    """
+    value = _qty_number(text)
+    if value is None or not value.is_integer() or int(value) == 0:
         return None
     return int(value)
 
@@ -14710,6 +14791,128 @@ LINE_NEEDS_TARGET = {
 LINE_QUOTE_LOCKED = {
     "th": "ใบเสนอราคา {code} ออกเอกสารแล้ว แก้ไม่ได้ ถ้าต้องแก้ให้ยกเลิกแล้วสร้างใบใหม่",
     "en": "Quote {code} has been issued and cannot be changed.",
+}
+
+# ---------------------------------------------------------------- round 21C
+#
+# A bill is not a quotation: it stays editable until money touches it
+# (spec §3.3), and the two refusals are different facts about it, so they
+# are two sentences. "ยกเลิกแล้ว แก้ไม่ได้" for a void bill was said as
+# "มีการรับชำระแล้ว" before this — a refusal that names the wrong reason
+# sends the person looking for a payment that was never made.
+LINE_INVOICE_LOCKED = {
+    "th": "ใบแจ้งหนี้ {code} มีการรับชำระแล้ว จึงแก้รายการไม่ได้ — ถ้าต้องแก้จริง ให้ยกเลิกใบนี้แล้วออกใบใหม่",
+    "en": "Invoice {code} already has a payment recorded, so it can no longer be edited — void it and raise a new one.",
+}
+LINE_INVOICE_VOID = {
+    "th": "ใบแจ้งหนี้ {code} ยกเลิกแล้ว แก้ไม่ได้ — ถ้าต้องวางบิลใหม่ ให้ออกใบแจ้งหนี้ใหม่จากดีลเดิม",
+    "en": "Invoice {code} is void and cannot be edited — raise a new invoice from the same deal.",
+}
+INVOICE_NEEDS_REISSUE = {
+    "th": "\n\nใบนี้ออกเอกสารไปแล้ว เอกสารเดิมจึงไม่ตรงกับที่แก้ — พิมพ์ \"ออกเอกสาร {code} ใหม่\" เพื่อออกใหม่ด้วยเลขเดิม",
+    "en": "\n\nThis invoice already had a PDF, so it no longer matches — say \"issue {code} again\" to re-issue it under the same number.",
+}
+INVOICE_EDITED = {
+    "th": "แก้ใบแจ้งหนี้ {code} แล้ว\n{lines}\nรวม {total} บาท{due}",
+    "en": "Updated invoice {code}.\n{lines}\nTotal {total}{due}",
+}
+INVOICE_EDITED_DUE = {
+    "th": " · กำหนดชำระ {due}",
+    "en": " · due {due}",
+}
+#: Adding or removing a LINE on a bill that already exists. The edit road
+#: changes what is there; it does not yet add or cut rows, and the honest
+#: answer names both what CAN be done and the road that does the rest.
+INVOICE_LINE_NOT_EDITABLE = {
+    "th": "ใบแจ้งหนี้ {code} ออกไปแล้ว จะเพิ่มหรือตัดรายการ \"{name}\" ในแชทยังไม่ได้ครับ — แก้จำนวนหรือราคาของรายการที่มีอยู่ได้ (เช่น \"เปลี่ยนจำนวน{name}เป็น 3 ตัว\") ถ้าต้องเพิ่ม/ตัดรายการจริง ให้ยกเลิกใบนี้แล้วออกใบใหม่จากดีลเดิม",
+    "en": "Invoice {code} has been raised, so adding or removing the \"{name}\" line is not something chat can do yet — the quantity and the price of a line that is already there can be changed (e.g. \"set {name} to 3\"). To add or cut a line, void this invoice and raise a new one from the same deal.",
+}
+#: The same request on a DRAFT. "ออกไปแล้ว … ยกเลิกแล้วออกใหม่" would be
+#: false advice about a bill nobody has been given: a draft's lines came
+#: from the deal, so the deal is where they are added or cut.
+INVOICE_DRAFT_LINE_NOT_EDITABLE = {
+    "th": "ใบแจ้งหนี้ {code} ยังเป็นฉบับร่าง และรายการมาจากดีล — จะเพิ่มหรือตัด \"{name}\" ให้แก้ที่ดีลแล้วออกใบแจ้งหนี้ใหม่ครับ (แก้จำนวนหรือราคาของรายการที่มีอยู่ทำได้เลย)",
+    "en": "Invoice {code} is still a draft and its lines come from the deal — add or remove \"{name}\" on the deal and raise the invoice again. (Changing the quantity or price of a line that is already there works now.)",
+}
+INVOICE_EDIT_CONFIRM = {
+    "th": "แก้ใบแจ้งหนี้ {code} เป็นแบบนี้ใช่ไหมครับ\n{lines}\nยอดใหม่ {total} บาท (เดิม {before} บาท){due}",
+    "en": "Change invoice {code} to this?\n{lines}\nNew total {total} baht (was {before}){due}",
+}
+INVOICE_EDIT_KEPT = {"th": "ไม่ได้แก้ใบแจ้งหนี้ {code} — ยังเหมือนเดิมครับ", "en": "Invoice {code} is unchanged."}
+INVOICE_EDIT_CHOICE_INVALID = {
+    "th": "พิมพ์ \"ยืนยันแก้\" เพื่อบันทึก หรือ \"ไม่แก้\" เพื่อคงใบเดิม",
+    "en": "Reply \"ยืนยันแก้\" to save the change, or \"ไม่แก้\" to keep the invoice as it is.",
+}
+#: Matched WHOLE, and only inside `_resolve_invoice_edit_confirm` — the
+#: answer to the card's own question, not a trigger anywhere else.
+INVOICE_EDIT_CONFIRM_WORDS = ("ยืนยันแก้", "ยืนยัน", "confirm", "yes", "ใช่")
+INVOICE_EDIT_KEEP_WORDS = ("ไม่แก้", "ไม่", "คงเดิม", "no", "keep")
+INVOICE_EDIT_MOVED = {
+    "th": "ใบแจ้งหนี้ {code} เปลี่ยนไปแล้วระหว่างนี้ จึงยังไม่ได้แก้ — ดูใบล่าสุดแล้วบอกอีกครั้งได้เลย",
+    "en": "Invoice {code} changed in the meantime, so nothing was saved — look at it again and say the change once more.",
+}
+#: Final review I6: "ลดราคา 1000 ใน INV-…" reads as an amount OFF. The road
+#: changes a line's quantity or its price TO a number; it has no bill-wide
+#: discount. Asked, never guessed.
+INVOICE_EDIT_DISCOUNT_UNCLEAR = {
+    "th": ("ลดราคาใน {code} แบบไหนครับ — ถ้าจะเปลี่ยนราคาต่อหน่วยของรายการ บอกชื่อสินค้าและราคาใหม่ "
+           "เช่น \"เปลี่ยนราคาแอร์ใน {code} เป็น 14000\" · ส่วนลดทั้งใบแก้ในใบแจ้งหนี้ไม่ได้ "
+           "ให้ยกเลิกใบนี้แล้วออกใหม่จากใบเสนอราคาที่ใส่ส่วนลดแล้ว"),
+    "en": ("How should {code} be reduced? To change a line's unit price, name the item and the new "
+           "price, e.g. \"set the air-con on {code} to 14000\". A discount on the whole invoice "
+           "cannot be edited here: void it and raise a new one from a quote with the discount."),
+}
+INVOICE_EDIT_NOTHING_TO_DO = {
+    "th": "ยังไม่รู้ว่าจะแก้อะไรในใบแจ้งหนี้ {code} ครับ บอกได้เลย เช่น \"เปลี่ยนจำนวนแอร์เป็น 3 ตัว\" หรือ \"เปลี่ยนกำหนดชำระเป็นสิ้นเดือน\"",
+    "en": "What should change on invoice {code}? For example \"set the air-con to 3\" or \"move the due date to the end of the month\".",
+}
+#: The write-back, said out loud. A deal that changes by itself is a
+#: number nobody can check (spec §3.4).
+INVOICE_SETTLED_DEAL = {
+    "th": "\n\nชำระครบแล้ว · ปิดดีล {deal} เป็น \"ปิดสำเร็จ\" และอัปเดตรายการ/มูลค่าดีลเป็น {amount} บาท (ก่อน VAT) ตามใบแจ้งหนี้นี้",
+    "en": "\n\nPaid in full — deal {deal} is now won, and its lines and value ({amount}, before VAT) come from this invoice.",
+}
+# Handing a document over. Nothing here says "ส่งซ้ำ": `send_document_to_customer`
+# reports `resent`, but a Data-tier filter hides the rows it is read from,
+# so it is always False today — a reply that promised to know would be
+# promising something nobody measured (ruling 15, 23 ก.ย. 2569).
+DOCUMENT_SENT = {
+    "th": "ส่ง{what} {code} ให้ {name} ทางไลน์แล้ว (ลิงก์ใช้ได้ 7 วัน)",
+    "en": "Sent {what} {code} to {name} on LINE (the link is valid 7 days).",
+}
+DOCUMENT_SEND_NO_LINE = {
+    "th": "ส่งให้ไม่ได้ — {name} ยังไม่ได้ผูกไลน์กับร้าน ให้ลูกค้าเพิ่มเพื่อน OA ลูกค้าแล้วลงทะเบียน หรือคัดลอกลิงก์ส่งเอง",
+    "en": "Cannot send — {name} is not linked on LINE. Ask them to add the customer OA and register, or copy the link and send it yourself.",
+}
+DOCUMENT_SEND_NOT_ISSUED = {
+    "th": "ยังไม่ได้ออกเอกสารของ {code} จึงยังไม่มีอะไรให้ส่ง — พิมพ์ \"ออกเอกสาร {code}\" ก่อน",
+    "en": "{code} has no document yet — issue it first.",
+}
+#: A document that exists and must not go (final review C1). Keyed by
+#: `document_send.DocumentNotSendable.reason`.
+DOCUMENT_SEND_REFUSED = {
+    "void": {
+        "th": "ส่งให้ลูกค้าไม่ได้ — {code} ใบนี้ยกเลิกแล้ว",
+        "en": "Cannot send — {code} is void.",
+    },
+    "needs_reissue": {
+        "th": "ส่งให้ลูกค้าไม่ได้ — {code} แก้ไขแล้ว ต้องออกเอกสารใหม่ก่อน พิมพ์ \"ออกเอกสาร {code}\" แล้วค่อยส่ง",
+        "en": "Cannot send — {code} was changed after its PDF was made. Issue it again first (\"issue {code}\"), then send.",
+    },
+    "quote_closed": {
+        "th": "ส่งให้ลูกค้าไม่ได้ — ใบเสนอราคา {code} ถูกปฏิเสธหรือหมดอายุแล้ว",
+        "en": "Cannot send — quotation {code} was rejected or has expired.",
+    },
+}
+DOCUMENT_SEND_FAILED = {
+    "th": "ส่ง {code} ให้ลูกค้าไม่สำเร็จ: {detail} — ลองอีกครั้งได้เลย",
+    "en": "Could not send {code} to the customer: {detail} — please try again.",
+}
+#: The receipt is made by its own verb. Sending someone to "ออกเอกสาร"
+#: re-issues the INVOICE and leaves the send failing the same way.
+DOCUMENT_SEND_NO_RECEIPT_YET = {
+    "th": "ยังไม่ได้ออกใบเสร็จของ {code} จึงยังไม่มีอะไรให้ส่ง — พิมพ์ \"ออกใบเสร็จ {code}\" ก่อน (ต้องชำระครบแล้ว)",
+    "en": "{code} has no receipt yet — issue it first with \"receipt {code}\" (it must be paid in full).",
 }
 
 _NEW_PRICE_RE = re.compile(r"(?:เหลือ|เป็น|as|to)\s*([\d,]+(?:\.\d{1,2})?)\s*(?:บาท|฿|baht)?", re.I)
@@ -15940,6 +16143,25 @@ async def _handle_report_intent(
             client, license_id=license_id, permission_keys=permission_keys,
             language=language, kind=deal_kind,
         )
+    # Round 21C — the five fixed reports, in front of the four kinds this
+    # function has sorted report reads into since 11 ก.ย. The model read
+    # the sentence as a report; whether it is one of the five is a second
+    # question only the model can answer, and the answer is a key, never a
+    # number (spec §5). The five are the sales OA's own reports, a picture
+    # is the metered Phase 17 road, and the fixed sales summary keeps its
+    # phrases — those three stay where they were.
+    if ctx.oa == "sales" and not _wants_a_picture(message) \
+            and not _says_the_summarys_own_words(message):
+        from . import basic_reports
+
+        fixed = await basic_reports.choose_report(
+            message, client=ai_client, language=language)
+        if fixed is not None:
+            _note_road(road="basic_report")
+            return await _handle_basic_report(
+                client, ctx=ctx, license_id=license_id, key=fixed,
+                permission_keys=permission_keys, language=language,
+            )
     if _any(_REPORT_JOB_WORDS, kind) or (
         _any(_REPORT_JOB_WORDS, said) and not _any(_REPORT_SALES_WORDS, said)
     ):
@@ -18823,21 +19045,12 @@ _DEAL_VALUE_RE = re.compile(
 
 
 def _deal_value(deal: dict) -> Decimal:
-    """What a deal is worth for a query: its line items when it has any,
-    else the value the salesperson stated ("มูลค่า 15,000") — a deal with a
-    stated value and no lines was worth 0 to "ดีลเกิน 1 หมื่น" and
-    "ดีลใหญ่สุด" (audit, 15 ก.ย. 2569)."""
-    lines = sum(
-        (Decimal(str(p.get("quoted_unit_price") or 0)) * int(p.get("qty") or 0)
-         for p in (deal.get("products") or [])),
-        Decimal("0"),
-    )
-    if lines > 0 or deal.get("products"):
-        return lines
-    try:
-        return Decimal(str(deal.get("amount") or 0))
-    except (InvalidOperation, ValueError):
-        return Decimal("0")
+    """What a deal is worth for a query ("ดีลเกิน 1 หมื่น", "ดีลใหญ่สุด").
+    Round 21C: the one definition, shared with the pipeline card and the
+    AI report (`services/deal_value.py`)."""
+    from .deal_value import deal_value as _shared
+
+    return _shared(deal)
 
 
 # Setting the two fields a deal has that nothing in chat could touch.
@@ -19248,6 +19461,9 @@ async def _handle_deal_detail(
         rows.append(
             f"Total: {subtotal:,.2f} THB (before tax)" if language == "en" else f"รวม: {subtotal:,.2f} บาท (ยังไม่รวมภาษี)"
         )
+        stated_value = _deal_value_line(deal, subtotal=subtotal, language=language)
+        if stated_value:
+            rows.append(stated_value)
     else:
         rows.append("No line items on this deal yet" if language == "en" else "ยังไม่มีรายการสินค้าในดีลนี้")
         stated = _deal_value(deal)
@@ -22503,11 +22719,16 @@ async def _handle_deal_archive(
         contact = _display_name(row) if row else ""
     except Exception:  # noqa: BLE001 — a name is a courtesy, not a precondition
         contact = ""
-    amount = deal.get("amount")
+    # The one rule (final review I4): a deal valued by its lines has a
+    # value too, and the person about to delete it should see it.
+    from .deal_value import deal_value
+
+    amount = (deal_value(deal) if deal.get("amount") not in (None, "") or deal.get("products")
+              else None)
     return ChatReply(
         text=_t(DEAL_ARCHIVE_CONFIRM, language).format(
             code=deal.get("deal_id") or code, name=contact or "-",
-            amount=f" · {format_amount(amount, deal.get('currency') or 'THB')}" if amount else "",
+            amount=f" · {format_amount(amount, deal.get('currency') or 'THB')}" if amount is not None else "",
         ),
         entity_type="deal", entity_id=str(deal["id"]),
         quick_replies=[("ยืนยันลบ", "ยืนยันลบ"), ("ยกเลิก", "ยกเลิก")],
@@ -23945,17 +24166,47 @@ async def _record_invoice_payment_and_reply(
     buttons = [("ดูใบแจ้งหนี้", f"ใบแจ้งหนี้ {code}")]
     if str(updated.get("status") or "") == "paid":
         buttons.insert(0, ("ออกใบเสร็จ", f"ออกใบเสร็จ {code}"))
+    text = _t(INVOICE_PAYMENT_RECORDED, language).format(
+        code=code, amount=_baht(paid_now),
+        method=_t(PAYMENT_METHOD_LABELS.get(chosen, PAYMENT_METHOD_LABELS["other"]), language),
+        paid=_baht(updated.get("paid_amount")), total=_baht(updated.get("total")),
+        outstanding=_baht(updated.get("outstanding")),
+        status=_label(INVOICE_STATUS_LABELS, updated.get("status"), language),
+    )
+    # Round 21C — the bill settling CLOSES its deal and replaces the deal's
+    # lines and value with the invoice's (Task 7, inside the payment's own
+    # transaction). A deal that changes by itself is a number nobody can
+    # check, so the reply says it happened.
+    closed = _closed_deal_of(updated)
+    if closed:
+        text += _t(INVOICE_SETTLED_DEAL, language).format(
+            deal=closed.get("deal_id") or "", amount=invoice_service.baht(closed.get("amount")))
     return ChatReply(
-        text=_t(INVOICE_PAYMENT_RECORDED, language).format(
-            code=code, amount=_baht(paid_now),
-            method=_t(PAYMENT_METHOD_LABELS.get(chosen, PAYMENT_METHOD_LABELS["other"]), language),
-            paid=_baht(updated.get("paid_amount")), total=_baht(updated.get("total")),
-            outstanding=_baht(updated.get("outstanding")),
-            status=_label(INVOICE_STATUS_LABELS, updated.get("status"), language),
-        ),
+        text=text,
         entity_type="invoice", entity_id=str(updated.get("id") or ""),
         quick_replies=buttons,
     )
+
+
+def _closed_deal_of(payment_reply: dict) -> dict | None:
+    """The deal THIS payment closed, as the transaction itself reported it.
+
+    One source, and it is the only one that can answer: `closed_deal` is
+    filled by `internal.py::add_invoice_payment` from the deal that
+    `InvoiceRepository.add_payment` returned, which is non-None only when
+    that same call moved the deal to won.
+
+    This used to read the deal back and accept any deal that was `won` with
+    a `closed_at` — which cannot tell "this payment closed it" from "it was
+    closed last week". A second bill on an already-won deal is paid in full
+    and closes nothing, and the reply announced a close that never happened
+    with the value of the wrong bill (review finding 1). Inference is the
+    bug; do not reintroduce it.
+    """
+    told = (payment_reply or {}).get("closed_deal") or None
+    if isinstance(told, dict) and told.get("deal_id"):
+        return told
+    return None
 
 
 async def _handle_invoice_payment(
@@ -24172,9 +24423,606 @@ async def _resolve_invoice_void_confirm(
     )
 
 
+
+# ---------------------------------------------------------------- round 21C
+#
+# Correcting a bill, and handing a document to the customer. Both are the
+# chat side of roads that already exist: `invoices.edit_lines/edit_details`
+# (round 21C, Task 6) and `document_send.send_document_to_customer`
+# (Task 8). Neither handler computes money or composes a customer-facing
+# message — that arithmetic and those words live in one place each, and a
+# second copy here is how two surfaces start to disagree.
+
+
+def _invoice_lines_after(invoice: dict, fields: dict, message: str) -> list[dict] | None:
+    """The bill's full line list WITH the one change the sentence made, or
+    None when the sentence changed only a detail.
+
+    The whole list, because `invoices.edit_lines` replaces the lines and
+    recomputes every money column from them in one pass (round 20K) — a
+    partial list here would silently delete the rest of the bill.
+
+    None is also the honest answer when the sentence names a product the
+    bill does not carry: inventing a line out of a typo would bill the
+    customer for something nobody agreed to.
+    """
+    lines = [dict(line) for line in ((invoice.get("data_snapshot") or {}).get("line_items") or [])]
+    if not lines:
+        return None
+    fields = fields or {}
+
+    # A CHANGE and a QUANTITY are different requests, and reading one as
+    # the other is the defect this module's header already records for the
+    # deal road: "เพิ่มพัดลมอีก 3 ตัว" SET the quantity to 3 (owner's live
+    # test, 8 ก.ย.). On a bill it cut a five-unit line to two and answered
+    # success (review finding 2). The delta is the more specific reading —
+    # the model only produces it when the sentence said "อีก"/"ลง" — so it
+    # wins when both arrive.
+    delta = _qty_delta(fields.get("qty_change"))
+    qty = _whole_qty(fields.get("qty")) if fields.get("qty") not in (None, "") else None
+    price = fields.get("unit_price") or fields.get("quoted_unit_price") or fields.get("price")
+    if delta is None and qty is None and price in (None, ""):
+        return None
+
+    chosen = None
+    # The line number the model read, when it read one: "แก้รายการที่ 2".
+    raw_no = fields.get("line_no") or fields.get("line") or fields.get("index")
+    if raw_no not in (None, ""):
+        try:
+            chosen = next(l for l in lines if int(l.get("line_no") or 0) == int(str(raw_no).strip()))
+        except (StopIteration, ValueError, TypeError):
+            chosen = None
+    if chosen is None:
+        # The product the sentence names. `_product_clauses` is what the
+        # deal and quote roads use to pull a name out of the words, so a
+        # name understood on a quote is understood on the bill.
+        named = str(fields.get("target_name") or fields.get("product_name") or "").strip()
+        if not named:
+            clauses = _product_clauses(_strip_polite_tail(INVOICE_CODE_RE.sub(" ", message or "")))
+            if len(clauses) == 1:
+                named, _qty, _price = _line_parts_of_clause(clauses[0])
+        if named and not _is_generic_product_word(named):
+            matches = _match_lines_loosely(lines, named)
+            if len(matches) != 1:
+                return None
+            chosen = matches[0]
+        elif len(lines) == 1:
+            # One line on the bill is unambiguous without a name — the
+            # same rule the line-item prompt states.
+            chosen = lines[0]
+    if chosen is None:
+        return None
+
+    wanted = qty
+    if delta is not None:
+        wanted = int(chosen.get("qty") or 0) + delta
+    if wanted is not None:
+        if wanted <= 0:
+            # Taking the last one off a line is a REMOVAL, which is its own
+            # verb; a quantity of zero is a misread number or a request
+            # this road does not carry, never a silent delete.
+            return None
+        chosen["qty"] = wanted
+    if price not in (None, ""):
+        # Checked here, like the quantity above: a negative or unreadable
+        # price reached `edit_lines` and surfaced as the generic
+        # "บันทึกไม่สำเร็จ", which tells the shop nothing about why.
+        try:
+            asked = Decimal(str(price).replace(",", "").strip())
+        except (InvalidOperation, ValueError, TypeError):
+            return None
+        # NaN and Infinity are legal Decimals: `Decimal("nan") < 0` raises
+        # InvalidOperation — outside the try above, and outside
+        # `_handle_invoice_edit`'s try as well, so it escaped the handler —
+        # and Infinity passes the comparison and lands on the bill.
+        if not asked.is_finite() or asked < 0:
+            return None
+        chosen["unit_price"] = str(asked)
+    return lines
+
+
+async def _invoice_line_sentence_reply(
+    client: DataClient, license_id, intent: dict, language: str,
+    # Accepted and deliberately NOT read: callers have it, and a test
+    # passes a contradictory sentence to prove the answer does not move.
+    message: str = "",
+    # Where a bill this guard FOUND is left for the handler that runs next
+    # on the same intent, keyed by its code, so one sentence costs one
+    # lookup. Only a found bill: a failed lookup is asked again.
+    seen: dict | None = None,
+) -> "ChatReply | None":
+    """The honest answer when a sentence is about one LINE of a bill that
+    the edit road cannot carry — or None when the ordinary roads should
+    have it.
+
+    Keyed on WHAT THE MODEL NAMED, not on its verb (ruling 19). Round 1
+    keyed on `create/delete/add/remove`, and the deployed model does not
+    use those verbs for the sentences people type: measured 23 ก.ย. 2569,
+    "เอาแอร์ออกจากใบแจ้งหนี้ INV-…" comes back `update` with a
+    `target_name` and nothing else, and "ยกเลิกแอร์ใน INV-…" comes back
+    `update` with `qty: 0`. Both fell through the verb list and were
+    answered "ยังไม่รู้ว่าจะแก้อะไร … เช่น เปลี่ยนจำนวนแอร์เป็น 3 ตัว" —
+    a question about setting a quantity, in answer to a request to take
+    the line off.
+
+    Any verb is caught, `void` included. `("void","invoice")` is registered
+    and passes the permission gate, so a verb-keyed guard leaves the
+    cancel-the-whole-bill card one reading away from a sentence about one
+    line — the harm this guard exists to prevent, through a different word.
+
+    What is NOT caught is the request the edit road really carries: a
+    change to a line that is on the bill. That test is `_invoice_lines_after`
+    itself, so there is one definition of what the road can do and no
+    second copy to drift from it.
+
+    Reads the model's fields only — never `message`, which is accepted
+    solely so callers can pass what they have. It can return a refusal and
+    nothing else: it writes nothing and calls no service. A word may
+    decline; it may not act.
+    """
+    fields = intent.get("fields") or {}
+    # `line_item` is accepted beside `invoice` rather than relying on
+    # `_entity_by_code` having normalised it: that rewrite runs in
+    # `_model_road`, one level up, and a guard that only works when its
+    # caller ran first is not a guard. The INV- code below is what makes
+    # either reading about a bill.
+    if str(intent.get("entity") or "").strip().lower() not in ("invoice", "line_item"):
+        return None
+    if not _line_name_in(fields) and not any(
+        fields.get(key) not in (None, "") for key in _LINE_SHAPE_FIELDS
+    ):
+        return None
+    # A discount-shaped reading is the edit handler's to ASK about ("which
+    # did you mean?"), not this guard's to refuse as a line change.
+    if any(fields.get(key) not in (None, "", 0) for key in _INVOICE_DISCOUNT_FIELDS):
+        return None
+    # The code the MODEL filed. A message-wide search would hand a deal's
+    # line edit this refusal, and "ออกใบแจ้งหนี้ให้ สมชาย" has a
+    # target_name that is a PERSON, not a line — it carries no INV- code,
+    # which is what tells the two apart.
+    code = ""
+    for key in ("code", "invoice_code", "invoice_id", "entity_code"):
+        found = INVOICE_CODE_RE.search(str(fields.get(key) or ""))
+        if found:
+            code = found.group(1).upper()
+            break
+    if not code:
+        return None
+    invoice = await _invoice_by_code(client, license_id, code)
+    if invoice is None:
+        # Not this guard's business: the ordinary road says "ไม่พบ".
+        return None
+    if seen is not None:
+        seen[code] = invoice
+    # The one question that decides it: can the edit road do this? It can
+    # when the model named a change to a line the bill actually carries.
+    if _invoice_lines_after(invoice, fields, "") is not None:
+        return None
+    draft = str(invoice.get("status") or "") == "draft"
+    return ChatReply(
+        text=_t(INVOICE_DRAFT_LINE_NOT_EDITABLE if draft else INVOICE_LINE_NOT_EDITABLE,
+                language).format(code=code, name=_line_name_in(fields) or "รายการนี้"),
+        entity_type="invoice", entity_id=str(invoice.get("id") or ""),
+        quick_replies=[("ดูใบแจ้งหนี้", f"ใบแจ้งหนี้ {code}")],
+    )
+
+
+#: The field names that make a reading about a LINE rather than the bill.
+#: Whatever the prompt teaches for a line belongs here.
+_LINE_SHAPE_FIELDS = ("product_name", "product", "line", "line_no", "index",
+                      "qty", "qty_change", "unit_price", "quoted_unit_price", "price")
+
+
+def _line_name_in(fields: dict) -> str:
+    """The product a sentence named, as the model filed it."""
+    return str((fields or {}).get("target_name") or (fields or {}).get("product_name") or "").strip()
+
+
+def _due_date_field(value) -> date | None:
+    """The due date the model read, as a date.
+
+    Only the FIELD is read, never the whole sentence: the prompt asks for
+    an ISO date and the model gives one, and turning "ใบแจ้งหนี้
+    INV-2026-0001" loose on a date parser is how a bill acquires a due
+    date nobody typed. An unreadable value is no date, and the handler
+    then asks.
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        return date.fromisoformat(raw[:10])
+    except ValueError:
+        return parse_thai_date(raw, local_today())
+
+
+# The fields that mean "correct the bill" and the fields that mean "money
+# arrived". Kept beside each other so the difference is one thing to read.
+_INVOICE_EDIT_FIELDS = (
+    "note", "due_date", "due", "line_no", "line", "qty", "qty_change",
+    "unit_price", "quoted_unit_price", "product_name", "target_name",
+    # Measured 24 ก.ย. 2569 (ask-model.py): "ลดราคา 1000 ในใบแจ้งหนี้ INV-…"
+    # → unit_price_change: -1000; "ลดราคาให้ 1000 บาท INV-…" →
+    # discount_amount: 1000. Both are corrections, never money arriving —
+    # and neither is something the edit road can carry (see
+    # _INVOICE_DISCOUNT_FIELDS), so the edit handler ASKS.
+    "unit_price_change", "price_change", "discount_amount", "discount_percent", "discount",
+)
+#: Readings that change money by an amount OFF something rather than TO a
+#: price. The road has no bill-wide discount, and "ลดราคา 1000" on a
+#: one-line bill must not become that line's unit price — so these are
+#: asked about, never guessed (final review I6).
+_INVOICE_DISCOUNT_FIELDS = ("unit_price_change", "price_change", "discount_amount",
+                            "discount_percent", "discount")
+_INVOICE_PAY_FIELDS = (
+    "amount", "payment_amount", "deposit_amount", "paid_amount", "full",
+    "method", "payment_method", "reference",
+)
+# Only used when the model named NO field at all — "แก้รายการในใบแจ้งหนี้
+# INV-…" can come back as a bare code. A word here may decide WHICH of two
+# writes the model already authorised runs; it may not authorise one.
+_INVOICE_EDIT_WORDS = ("แก้", "เปลี่ยน", "ปรับ", "แก้ไข", "correct", "change", "edit", "update")
+_INVOICE_PAY_WORDS = ("รับชำระ", "ชำระ", "มัดจำ", "จ่าย", "โอน", "paid", "payment", "pay", "deposit")
+
+
+def _is_an_invoice_correction(fields: dict, message: str) -> bool:
+    """Is this `update` a correction to the bill, or money arriving?"""
+    fields = fields or {}
+    if any(fields.get(key) not in (None, "", False) for key in _INVOICE_PAY_FIELDS):
+        return False
+    if any(fields.get(key) not in (None, "", False) for key in _INVOICE_EDIT_FIELDS):
+        return True
+    lowered = (message or "").lower()
+    if any(word in lowered for word in _INVOICE_PAY_WORDS):
+        return False
+    return any(word in lowered for word in _INVOICE_EDIT_WORDS)
+
+
+async def _handle_invoice_edit(
+    client: DataClient, *, ctx: ResolvedContext, license_id, fields: dict, message: str,
+    permission_keys: list[str], language: str, invoices_seen: dict | None = None,
+) -> ChatReply:
+    """Correct a bill: its lines, its note, or when it is due.
+
+    The lock is the service's, not this handler's — `edit_lines` and
+    `edit_details` both refuse an invoice that money has touched, so the
+    two surfaces cannot disagree about when a bill is closed. This handler
+    resolves the code, asks, and says the refusal in words.
+    """
+    from . import invoices as invoice_service
+
+    fields = fields or {}
+    if "invoice.update" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    code = _invoice_code_in(fields, message)
+    if not code:
+        ref = await _last_entity_ref(client, ctx)
+        if ref and str(ref.get("entity_type") or "") == "invoice" and ref.get("code"):
+            code = str(ref["code"]).upper()
+    if not code:
+        return ChatReply(text=_t(INVOICE_WHICH_INV, language).format(example="แก้"))
+    # The pre-gate line guard already found this bill for this sentence
+    # (`_invoice_line_sentence_reply(seen=…)`); nothing has written since.
+    invoice = (invoices_seen or {}).get(code) or await _invoice_by_code(client, license_id, code)
+    if invoice is None:
+        return ChatReply(text=_t(NOT_FOUND_BY_CODE, language).format(
+            what=_entity_noun("invoice", language), code=code))
+    # A void bill and a paid one both refuse, for different reasons. The
+    # service raises InvoiceLocked only for the paid case (a void invoice
+    # has no payment on it), so the cancelled one is named here rather
+    # than told it was paid.
+    if str(invoice.get("status") or "") == "void":
+        return ChatReply(text=_t(LINE_INVOICE_VOID, language).format(code=code),
+                         entity_type="invoice", entity_id=str(invoice.get("id") or ""))
+
+    if any(fields.get(key) not in (None, "", 0) for key in _INVOICE_DISCOUNT_FIELDS):
+        # "ลดราคา 1000" — off the bill, or off one line's price, or the
+        # price TO 1000? The model read an amount off; the road has no
+        # bill-wide discount, and guessing a unit price would rewrite what
+        # the customer pays. Ask, and write nothing (final review I6).
+        return ChatReply(text=_t(INVOICE_EDIT_DISCOUNT_UNCLEAR, language).format(code=code),
+                         entity_type="invoice", entity_id=str(invoice.get("id") or ""),
+                         quick_replies=[("ดูใบแจ้งหนี้", f"ใบแจ้งหนี้ {code}")],
+        )
+
+    lines = _invoice_lines_after(invoice, fields, message)
+    due_date = _due_date_field(fields.get("due_date") or fields.get("due"))
+    note = fields.get("note")
+    note = str(note).strip() if note not in (None, "") else None
+    if lines is None and due_date is None and note is None:
+        return ChatReply(text=_t(INVOICE_EDIT_NOTHING_TO_DO, language).format(code=code),
+                         entity_type="invoice", entity_id=str(invoice.get("id") or ""))
+    if lines is not None:
+        # A change to what the customer pays is asked first, the way void
+        # is (final review I6): the model's reading writes nothing until a
+        # person has seen the new lines and the new total. The numbers on
+        # the card are `preview_lines` — the arithmetic the save runs.
+        if invoice_service.money(invoice.get("paid_amount") or 0) > 0:
+            return ChatReply(text=_t(LINE_INVOICE_LOCKED, language).format(code=code),
+                             entity_type="invoice", entity_id=str(invoice.get("id") or ""),
+                             quick_replies=[("ยกเลิกใบแจ้งหนี้", f"ยกเลิกใบแจ้งหนี้ {code}")],
+            )
+        try:
+            company = await client.get_company_profile(str(license_id))
+            items, totals = invoice_service.preview_lines(
+                invoice=invoice, lines=lines, company=company)
+        except Exception:  # noqa: BLE001
+            log.exception("invoice edit preview failed")
+            return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+        await client.set_pending_intent(
+            ctx.chann_uid, ctx.oa, action="resolve", entity="invoice_edit_confirm",
+            fields={"code": code, "invoice_id": str(invoice.get("id") or ""),
+                    "lines": lines, "due_date": due_date.isoformat() if due_date else None,
+                    "note": note, "total_before": str(invoice.get("total") or ""),
+                    "updated_at": str(invoice.get("updated_at") or "")},
+            missing=[], ttl_seconds=DUPLICATE_TTL_S,
+        )
+        return ChatReply(
+            text=_t(INVOICE_EDIT_CONFIRM, language).format(
+                code=code,
+                lines="\n".join(
+                    f"• {l.get('product_name') or '-'} {l.get('qty')} × {_baht(l.get('unit_price'))}"
+                    f" = {_baht(l.get('line_total'))}" for l in items[:LIST_LIMIT]) or "-",
+                total=_baht(totals.get("grand_total")), before=_baht(invoice.get("total")),
+                due=_t(INVOICE_EDITED_DUE, language).format(
+                    due=_iso_to_thai_date(due_date.isoformat())) if due_date else "",
+            ),
+            entity_type="invoice", entity_id=str(invoice.get("id") or ""),
+            quick_replies=[("ยืนยันแก้", "ยืนยันแก้"), ("ไม่แก้", "ไม่แก้")],
+        )
+    return await _apply_invoice_edit(
+        client, ctx=ctx, license_id=license_id, invoice=invoice, code=code,
+        lines=None, due_date=due_date, note=note, language=language)
+
+
+async def _resolve_invoice_edit_confirm(
+    client: DataClient, *, ctx: ResolvedContext, license_id, message: str, pending: dict,
+    permission_keys: list[str], language: str,
+) -> ChatReply:
+    """"ยืนยันแก้" / "ไม่แก้" after the card above — a word, never the
+    model, like the void confirmation. The held change is applied only to
+    the bill as it was shown: if it moved in between (another edit, a
+    payment), nothing is written and the person is asked again."""
+    held = pending.get("fields") or {}
+    code = str(held.get("code") or "")
+    if _matches_any(message, INVOICE_EDIT_KEEP_WORDS) or _matches_any(message, DUPLICATE_CANCEL_PHRASES):
+        await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
+        return ChatReply(text=_t(INVOICE_EDIT_KEPT, language).format(code=code))
+    if not _matches_any(message, INVOICE_EDIT_CONFIRM_WORDS):
+        return ChatReply(
+            text=_t(INVOICE_EDIT_CHOICE_INVALID, language),
+            quick_replies=[("ยืนยันแก้", "ยืนยันแก้"), ("ไม่แก้", "ไม่แก้")],
+        )
+    await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
+    if "invoice.update" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    invoice = await _invoice_by_code(client, license_id, code)
+    if invoice is None:
+        return ChatReply(text=_t(NOT_FOUND_BY_CODE, language).format(
+            what=_entity_noun("invoice", language), code=code))
+    if (str(invoice.get("total") or "") != str(held.get("total_before") or "")
+            or str(invoice.get("updated_at") or "") != str(held.get("updated_at") or "")):
+        return ChatReply(text=_t(INVOICE_EDIT_MOVED, language).format(code=code),
+                         entity_type="invoice", entity_id=str(invoice.get("id") or ""),
+                         quick_replies=[("ดูใบแจ้งหนี้", f"ใบแจ้งหนี้ {code}")],
+        )
+    return await _apply_invoice_edit(
+        client, ctx=ctx, license_id=license_id, invoice=invoice, code=code,
+        lines=list(held.get("lines") or []) or None,
+        due_date=_due_date_field(held.get("due_date")), note=held.get("note"),
+        language=language)
+
+
+async def _apply_invoice_edit(
+    client: DataClient, *, ctx: ResolvedContext, license_id, invoice: dict, code: str,
+    lines: list[dict] | None, due_date, note, language: str,
+) -> ChatReply:
+    """Write the correction and say what the bill now is."""
+    from . import invoices as invoice_service
+
+    try:
+        updated = invoice
+        if lines is not None:
+            company = await client.get_company_profile(str(license_id))
+            updated = await invoice_service.edit_lines(
+                client, license_id=str(license_id), invoice=invoice, lines=lines,
+                company=company, actor_id=ctx.chann_uid)
+        # Both, when the sentence changed both — two calls because the two
+        # are two routes, but one reply, and nothing said is left undone.
+        # Doing only the lines and still answering "แก้ใบแจ้งหนี้แล้ว"
+        # would report a due date that never moved.
+        if due_date is not None or note is not None:
+            updated = await invoice_service.edit_details(
+                client, license_id=str(license_id), invoice=updated,
+                note=note, due_date=due_date, actor_id=ctx.chann_uid)
+    except invoice_service.InvoiceLocked:
+        return ChatReply(text=_t(LINE_INVOICE_LOCKED, language).format(code=code),
+                         entity_type="invoice", entity_id=str(invoice.get("id") or ""),
+                         quick_replies=[("ยกเลิกใบแจ้งหนี้", f"ยกเลิกใบแจ้งหนี้ {code}")])
+    except invoice_service.InvoiceLinesEmpty:
+        return ChatReply(text=_t(INVOICE_EDIT_NOTHING_TO_DO, language).format(code=code))
+    except DataTierError as exc:
+        if _is_not_found(exc):
+            return ChatReply(text=_t(NOT_FOUND_BY_CODE, language).format(
+                what=_entity_noun("invoice", language), code=code))
+        log.exception("invoice edit failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+    except Exception:  # noqa: BLE001
+        log.exception("invoice edit failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    await _remember_entity(client, ctx, entity_type="invoice",
+                           entity_id=str(updated.get("id") or ""), code=code)
+    shown = (updated.get("data_snapshot") or {}).get("line_items") or []
+    due_shown = _iso_to_thai_date(updated.get("due_date")) if updated.get("due_date") else ""
+    text = _t(INVOICE_EDITED, language).format(
+        code=code,
+        lines="\n".join(
+            f"• {l.get('product_name') or '-'} {l.get('qty')} × {_baht(l.get('unit_price'))}"
+            f" = {_baht(l.get('line_total'))}" for l in shown[:LIST_LIMIT]) or "-",
+        total=_baht(updated.get("total")),
+        due=_t(INVOICE_EDITED_DUE, language).format(due=due_shown) if due_shown else "",
+    )
+    # The PDF that was made before the edit no longer matches the bill.
+    # Saying so is the whole point: a document already sent to a customer
+    # is the number they will pay.
+    if updated.get("needs_reissue") or (updated.get("data_snapshot") or {}).get("needs_reissue_at"):
+        text += _t(INVOICE_NEEDS_REISSUE, language).format(code=code)
+    return ChatReply(
+        text=text, entity_type="invoice", entity_id=str(updated.get("id") or ""),
+        intent={"action": "update", "entity": "invoice"},
+        quick_replies=[("ดูใบแจ้งหนี้", f"ใบแจ้งหนี้ {code}")],
+    )
+
+
+async def _quote_by_code(client: DataClient, license_id, code: str) -> dict | None:
+    """The quotation named by its Q- code, or None. The same list the
+    detail handler reads, so the two cannot find different rows."""
+    wanted = (code or "").strip().upper()
+    if not wanted:
+        return None
+    try:
+        quotes = await client.list_quotes(str(license_id))
+    except Exception:  # noqa: BLE001
+        log.exception("quote lookup failed")
+        return None
+    return next((q for q in quotes if str(q.get("quote_id") or "").upper() == wanted), None)
+
+
+async def _quote_parties(client: DataClient, license_id, quote: dict) -> tuple[dict, dict]:
+    """(customer, company) for a quotation — reached through its deal,
+    because a quote holds no contact of its own."""
+    customer: dict = {}
+    try:
+        deal = await client.get_deal(str(license_id), str(quote.get("deal_id") or "")) or {}
+        if deal.get("contact_id"):
+            customer = await client.get_customer(str(license_id), str(deal["contact_id"])) or {}
+    except Exception:  # noqa: BLE001
+        customer = {}
+    try:
+        company = await client.get_company_profile(str(license_id)) or {}
+    except Exception:  # noqa: BLE001
+        company = {}
+    return customer, company
+
+
+async def _handle_document_send(
+    client: DataClient, *, ctx: ResolvedContext, license_id, entity: str, fields: dict,
+    permission_keys: list[str], language: str, message: str = "",
+) -> ChatReply:
+    """Give an issued document to the customer on LINE (owner, 23 ก.ย. 2569).
+
+    "ส่ง" is not "ออก": nothing is made here. The push itself, the signed
+    link and the notification row are `document_send`'s, shared with the
+    dashboard's two send routes, so the customer receives one wording
+    however the shop asked for it.
+    """
+    from . import document_send, invoices as invoice_service
+
+    fields = fields or {}
+    needed = "quote.update" if entity == "quote" else "invoice.update"
+    if needed not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+
+    # Which document. The model's `kind` WINS; the sentence is read only
+    # when the model named none — the same shape `_is_an_invoice_correction`
+    # uses. It was an `or` before, so a word anywhere in the sentence beat
+    # the field: "ส่งใบแจ้งหนี้ INV-… ให้ลูกค้า ไม่ใช่ใบเสร็จนะ" was refused
+    # for having no receipt, and in the mirror case the WRONG document goes
+    # to the customer and cannot be recalled (review finding 4).
+    told = str(fields.get("kind") or fields.get("document") or "").strip().lower()
+    if told in ("receipt", "invoice", "quote"):
+        wants_receipt = told == "receipt"
+    else:
+        lowered = (message or "").lower()
+        wants_receipt = "ใบเสร็จ" in lowered or "receipt" in lowered
+    kind = "receipt" if (entity == "invoice" and wants_receipt) else ("quote" if entity == "quote" else "invoice")
+
+    if entity == "quote":
+        code = str(fields.get("code") or fields.get("quote_code") or "").strip().upper()
+        if not code:
+            found = QUOTE_CODE_RE.search(message or "")
+            code = found.group(1).upper() if found else ""
+        record = await _quote_by_code(client, license_id, code) if code else None
+        if record is None:
+            return ChatReply(text=_t(NOT_FOUND_BY_CODE, language).format(
+                what=_entity_noun("quote", language), code=code))
+        document_id = str(record.get("generated_document_id") or "") or None
+        customer, company = await _quote_parties(client, license_id, record)
+    else:
+        code = _invoice_code_in(fields, message)
+        if not code:
+            ref = await _last_entity_ref(client, ctx)
+            if ref and str(ref.get("entity_type") or "") == "invoice" and ref.get("code"):
+                code = str(ref["code"]).upper()
+        record = await _invoice_by_code(client, license_id, code) if code else None
+        if record is None:
+            return ChatReply(text=_t(NOT_FOUND_BY_CODE, language).format(
+                what=_entity_noun("invoice", language), code=code))
+        document_id = str(record.get(
+            "receipt_document_id" if kind == "receipt" else "generated_document_id") or "") or None
+        customer, company = await invoice_service.invoice_parties(client, str(license_id), record)
+
+    try:
+        out = await document_send.send_document_to_customer(
+            client, license_id=str(license_id), kind=kind, record=record,
+            document_id=document_id, customer=customer, company=company,
+            language=language, actor_id=ctx.chann_uid)
+    except document_send.CustomerNotLinked as exc:
+        # Refused, with the link so the salesperson can still hand it over
+        # themselves — the refusal that leaves no road out is the one the
+        # owner complained about.
+        url = document_download_url(str(license_id), document_id or "") if document_id else None
+        return ChatReply(
+            text=_t(DOCUMENT_SEND_NO_LINE, language).format(name=exc.customer_name)
+                 + (f"\n{url}" if url else ""),
+            entity_type=entity, entity_id=str(record.get("id") or ""))
+    except document_send.DocumentNotSendable as exc:
+        # There is a PDF, and it must not go: the bill was cancelled, the
+        # bill was corrected after the PDF was made, or the quotation is
+        # closed (final review C1). Only the stale bill has a road out.
+        table = DOCUMENT_SEND_REFUSED.get(exc.reason, DOCUMENT_SEND_REFUSED["void"])
+        quick = [("ออกเอกสาร", f"ออกเอกสาร {code}")] if exc.reason == "needs_reissue" else None
+        return ChatReply(text=_t(table, language).format(code=code),
+                         entity_type=entity, entity_id=str(record.get("id") or ""),
+                         quick_replies=quick)
+    except document_send.DocumentNotIssued:
+        # The road named has to be the road that makes THIS document:
+        # "ออกเอกสาร INV-…" re-issues the INVOICE PDF and leaves a receipt
+        # send failing in exactly the same way.
+        table = DOCUMENT_SEND_NO_RECEIPT_YET if kind == "receipt" else DOCUMENT_SEND_NOT_ISSUED
+        return ChatReply(text=_t(table, language).format(code=code),
+                         entity_type=entity, entity_id=str(record.get("id") or ""),
+                         quick_replies=[
+                             ("ออกใบเสร็จ", f"ออกใบเสร็จ {code}") if kind == "receipt"
+                             else ("ออกเอกสาร", f"ออกเอกสาร {code}")])
+    except DataTierError as exc:
+        # Not INVOICE_ISSUE_FAILED: nothing was being issued, and for a
+        # quote that wording names the wrong document entirely.
+        log.exception("document send failed")
+        return ChatReply(text=_t(DOCUMENT_SEND_FAILED, language).format(
+            code=code, detail=str(exc.detail or "")[:160]))
+    except Exception:  # noqa: BLE001
+        log.exception("document send failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
+
+    await _remember_entity(client, ctx, entity_type=entity,
+                           entity_id=str(record.get("id") or ""), code=code)
+    # `out["resent"]` is deliberately not read: it cannot be trusted yet
+    # (ruling 15), and a reply is not the place to guess.
+    return ChatReply(
+        text=_t(DOCUMENT_SENT, language).format(
+            what=document_send.KIND_WORDS[kind]["en" if language == "en" else "th"],
+            code=document_send.record_code(kind, record), name=out["customer_name"]),
+        entity_type=entity, entity_id=str(record.get("id") or ""),
+        intent={"action": "send", "entity": entity},
+    )
+
+
 async def _handle_invoice_intent(
     client: DataClient, *, intent: dict, ctx: ResolvedContext, license_id, language: str,
     permission_keys: list[str] | None = None, message: str = "",
+    invoices_seen: dict | None = None,
 ) -> ChatReply:
     """The model's reading of an invoice sentence, dispatched to the
     handler that does it. `pay` and `receipt` are verbs of their own in
@@ -24185,6 +25033,13 @@ async def _handle_invoice_intent(
     held = list(permission_keys or [])
     code = _invoice_code_in(fields, message)
     lowered = (message or "").lower()
+
+    # Round 21C, review finding 3: a sentence about ONE LINE of a bill that
+    # already exists must never reach the bill's own create or void road.
+    # `("delete", "invoice")` is VOID — "เอาแอร์ออกจากใบแจ้งหนี้ INV-…"
+    # arriving there offered to cancel the customer's whole 32,100-baht
+    # bill, with a one-tap confirm button. `("create", "invoice")` raises a
+    # SECOND bill. Both are answered here instead, by name.
 
     if action in READ_ACTIONS:
         if ctx.oa == "customer":
@@ -24228,11 +25083,27 @@ async def _handle_invoice_intent(
             client, ctx=ctx, license_id=license_id, code=code, message=message,
             permission_keys=held, language=language,
         )
+    if action == "send":
+        return await _handle_document_send(
+            client, ctx=ctx, license_id=license_id, entity="invoice", fields=fields,
+            permission_keys=held, language=language, message=message,
+        )
     if action in ("pay", "update"):
         if action == "update" and str(fields.get("status") or "").lower() == "void":
             return await _handle_invoice_void(
                 client, ctx=ctx, license_id=license_id, code=code, message=message,
                 permission_keys=held, language=language,
+            )
+        # Round 21C — `update` on a bill is now two different jobs. Money
+        # arriving stays a payment ("มัดจำ INV-… 2000" came back as update
+        # with deposit_amount, 21 ก.ย. 2569); a correction to what the bill
+        # SAYS is the edit road. The split reads the model's own fields
+        # first, and only falls back to the sentence when it named none:
+        # a verb the model already authorised is being routed, not decided.
+        if action == "update" and _is_an_invoice_correction(fields, message):
+            return await _handle_invoice_edit(
+                client, ctx=ctx, license_id=license_id, fields=fields, message=message,
+                permission_keys=held, language=language, invoices_seen=invoices_seen,
             )
         return await _handle_invoice_payment(
             client, ctx=ctx, license_id=license_id, fields=fields, message=message,
@@ -24346,6 +25217,14 @@ async def _handle_quote_intent(
                 target=status, permission_keys=held, language=language,
             )
         return _no_handler_reply(intent, language, ctx.oa)
+
+    if action == "send":
+        # Round 21C — "ส่งใบเสนอราคา Q-… ให้ลูกค้า": handing the quotation
+        # over, which is not the same verb as creating or issuing it.
+        return await _handle_document_send(
+            client, ctx=ctx, license_id=license_id, entity="quote", fields=fields,
+            permission_keys=held, language=language, message=message,
+        )
 
     if action in READ_ACTIONS:
         # "ขอดูใบเสนอราคา Q-2026-0001" / "ขอดูใบเสนอราคาล่าสุด": the same
@@ -26539,7 +27418,14 @@ async def _route_chat_message(
                 client, ctx=ctx, license_id=license_id, request=chart_request,
                 permission_keys=permission_keys, language=language,
             )
-        if ctx.oa == "sales" and _is_ai_report_request(message):
+        # `_basic_report_key` as well as the trigger table: a button this
+        # system wrote must reach its handler even if "รายงาน" ever leaves
+        # AI_REPORT_TRIGGERS. The other three call sites of
+        # `_is_ai_report_request` do not need it — a postback carries no
+        # "และ", no chart word, and never answers a pending question —
+        # and four copies of the same disjunction was noise (review, minor 2).
+        if ctx.oa == "sales" and (
+                _is_ai_report_request(message) or _basic_report_key(message) is not None):
             # A picture asked for is a picture delivered. Round 20c sent a
             # made-to-order request down this branch by setting
             # chart_request to None above, and this one did not pass
@@ -27934,6 +28820,9 @@ async def _route_chat_message(
         # after "รับชำระ" — a word or a number, never the model.
         "assignment_rule_close", "transfer_all_confirm",
         "invoice_void_confirm", "invoice_pay_amount",
+        # Round 21C, final review I6: "ยืนยันแก้" / "ไม่แก้" after a money
+        # correction to a bill.
+        "invoice_edit_confirm",
     ):
         kind = pending_intent.get("entity")
         if kind == "assignment_rule_close":
@@ -27943,6 +28832,11 @@ async def _route_chat_message(
             )
         if kind == "transfer_all_confirm":
             return await _resolve_transfer_all_confirm(
+                client, ctx=ctx, license_id=license_id, message=message, pending=pending_intent,
+                permission_keys=permission_keys, language=language,
+            )
+        if kind == "invoice_edit_confirm":
+            return await _resolve_invoice_edit_confirm(
                 client, ctx=ctx, license_id=license_id, message=message, pending=pending_intent,
                 permission_keys=permission_keys, language=language,
             )
@@ -28212,6 +29106,24 @@ def _entity_by_code(intent: dict) -> dict:
         fields["code"] = target.upper()
         intent = {**intent, "fields": fields}
     entity = str(intent.get("entity") or "")
+    # Round 21C, measured 23 ก.ย. 2569: "เปลี่ยนจำนวนแอร์ในใบแจ้งหนี้
+    # INV-2026-0003 เป็น 3 ตัว" comes back entity="line_item" with an INV-
+    # code. That IS a line — of an invoice — but the line-item road resolves
+    # only D- and Q- targets, so the sentence fell off the end of the
+    # handler. The prefix is the system's own and cannot be misread.
+    if entity == "line_item":
+        for key in ("code", "invoice_code", "invoice_id"):
+            said = str(fields.get(key) or "").strip().upper()
+            if re.fullmatch(r"INV-\d{4}-\d{4}", said):
+                # The ENTITY only. Rewriting the ACTION to "update" as well
+                # turned "ใส่พัดลม 2 ตัวใน INV-…" into a set and
+                # "เอาแอร์ออกจาก INV-…" into a question — the model said
+                # create and delete, and its verb is not the prefix's to
+                # overrule (review finding 3). `_handle_invoice_intent`
+                # answers honestly for the verbs the edit road does not
+                # carry; what it must never do is reach the VOID road with
+                # a sentence about one line.
+                return {**intent, "entity": "invoice", "fields": {**fields, "code": said}}
     if entity not in ("deal", "quote", "invoice"):
         # A D- code on entity="ticket" is left for _execute_intent's field
         # check, which answers "D-2026-0001 is a deal, not a job" — a
@@ -29242,6 +30154,24 @@ async def _execute_intent(
         # The sentence's own word validates the entity, before the gate,
         # so the key checked is view_reports and not the report's.
         intent = _as_a_survey_question(intent, message)
+
+    # Round 21C — a sentence about one LINE of a bill, answered BEFORE the
+    # gate, like `setting` and `profile` above and for the same kind of
+    # reason: the pair the model produced is not one ACTION_PERMISSIONS can
+    # express. `("delete","invoice")` is registered nowhere, so the gate
+    # would answer "ระบบยังไม่มีฟังก์ชันนี้" — true, but naming neither the
+    # product nor the road; `("create","invoice")` raises a SECOND bill;
+    # and `("void","invoice")` IS registered, so it passes the gate onto
+    # the cancel-the-whole-bill card. This is the only copy: the one that
+    # used to sit inside `_handle_invoice_intent` was dead, because that
+    # function has a single caller — the dispatch below — and this runs
+    # first on the same intent (re-review, ruling 19.3).
+    invoices_seen: dict = {}
+    line_of_a_bill = await _invoice_line_sentence_reply(
+        client, license_id, intent, language, message=message, seen=invoices_seen)
+    if line_of_a_bill is not None:
+        return line_of_a_bill
+
     req_action = intent.get("action", "")
     req_entity = intent.get("entity")
     needed = required_permission(req_action, req_entity)
@@ -29363,7 +30293,7 @@ async def _execute_intent(
     if intent.get("entity") == "invoice":
         return await _handle_invoice_intent(
             client, intent=intent, ctx=ctx, license_id=license_id, language=language,
-            permission_keys=permission_keys, message=message,
+            permission_keys=permission_keys, message=message, invoices_seen=invoices_seen,
         )
     if intent.get("entity") == "report":
         return await _handle_report_intent(
@@ -29996,6 +30926,202 @@ async def handle_reply(
     return reply
 
 
+# ---------------------------------------------------------------- round 21C
+#: The postback a button sends. A button names the action and the record,
+#: so it keeps the direct path (docs/MODEL_FIRST.md) — but it is still a
+#: sentence, so a person can type it too.
+BASIC_REPORT_PREFIX = "รายงาน:"
+BASIC_REPORT_PICTURE = {"th": "ดูเป็นรูป", "en": "As a picture"}
+#: What that button SAYS. The picture is the one metered road (spec §5), so
+#: the button hands the question to the Phase 17 engine in the sentence that
+#: engine is already reached by — rather than a second free report that
+#: would have to draw its own picture. It also reads as itself in the chat
+#: history: a person scrolling back sees what was asked for.
+BASIC_REPORT_PICTURE_SAYS = {
+    "th": "สร้างรายงานด้วย AI: {title} เป็นกราฟ",
+    "en": "AI report: {title} as a chart",
+}
+#: LINE cuts a quick-reply label at 20 characters (`line/client.py::_fit_label`)
+#: and two of the five titles are longer than that: "งานซ่อมค้างแยกตามช่าง" (21)
+#: rendered as "งานซ่อมค้างแยกตามช่…" and "คะแนนความพึงพอใจเฉลี่ย" (22) as
+#: "คะแนนความพึงพอใจเฉล…". The BUTTON says the short name; the reply it opens
+#: still carries the report's own full title, so nothing is lost.
+BASIC_REPORT_SHORT = {
+    "open_jobs_by_tech": {"th": "งานค้างตามช่าง", "en": "Open jobs by tech"},
+    "satisfaction_avg": {"th": "คะแนนพึงพอใจ", "en": "Satisfaction"},
+}
+
+
+def _basic_report_key(message: str) -> str | None:
+    """Which of the five a button (or a typed sentence) names, or None."""
+    from . import basic_reports
+
+    text = (message or "").strip()
+    if not text.startswith(BASIC_REPORT_PREFIX):
+        return None
+    key = text[len(BASIC_REPORT_PREFIX):].strip()
+    return key if key in basic_reports.REPORT_KEYS else None
+
+
+def _basic_report_picture_key(message: str) -> str | None:
+    """Which of the five a "ดูเป็นรูป" button asks to see drawn, or None.
+
+    The button's own sentence, matched WHOLE and in either language — the
+    button names the report, so this is a button road, not a keyword
+    deciding anything (docs/MODEL_FIRST.md). Any other picture request,
+    "…แยกตามลูกค้า เป็นกราฟ" included, is not this sentence and stays with
+    the made-to-order engine.
+    """
+    from . import basic_reports
+
+    text = " ".join((message or "").split()).lower()
+    if not text:
+        return None
+    for key in basic_reports.REPORT_KEYS:
+        for said in ("th", "en"):
+            sentence = BASIC_REPORT_PICTURE_SAYS[said].format(
+                title=basic_reports.TITLES[key][said])
+            if text == " ".join(sentence.split()).lower():
+                return key
+    return None
+
+
+async def _handle_basic_report_picture(
+    client: DataClient, *, ctx: ResolvedContext, license_id, key: str, language: str,
+    ai_client=None, company_name: str = "",
+) -> ChatReply:
+    """One of the five, drawn — from the SAME numbers the free answer
+    showed, by `chart_plan.publish_for_basic_report`. Before this had a
+    caller, the button went to the Phase 17 engine, which asked the model
+    for a new spec and drew whatever that computed: a picture that could
+    disagree with the words right above it.
+
+    The picture is the metered part (spec §5): one credit, spent once a
+    picture exists — the same order `_handle_ai_report` keeps. Over the
+    allowance the numbers still come back and the picture is withheld,
+    said with the number and the date it resets.
+    """
+    from . import basic_reports, chart_plan, chart_quota, reports_ai
+
+    try:
+        report = await basic_reports.fetch(client, license_id=str(license_id), key=key)
+    except DataTierError:
+        log.exception("basic report %s failed for %s", key, ctx.chann_uid)
+        return ChatReply(text=_t(AI_REPORT_UNAVAILABLE, language))
+    text = basic_reports.as_text(report, language)
+    url = None
+    try:
+        url, _plottable = await chart_plan.publish_for_basic_report(
+            client, report=report, license_id=str(license_id), language=language,
+            ai_client=ai_client, company_name=company_name)
+    except Exception:  # noqa: BLE001 — a picture is never worth the answer
+        log.exception("basic report picture %s failed", key)
+    images: list[str] = []
+    buttons: list[tuple[str, str]] = []
+    if url:
+        quota = await chart_quota.spend_one(client, license_id=str(license_id))
+        if quota.get("allowed"):
+            images = [url]
+            text += _t(CHART_ALSO_AS_A_LINK, language).format(url=url)
+            if not quota.get("unknown"):
+                text += _t(CHART_MADE_BY_AI, language).format(
+                    used=int(quota.get("used") or 0),
+                    allowance=int(quota.get("allowance") or 0))
+        else:
+            text += "\n\n" + _t(CHART_QUOTA_SPENT, language).format(
+                allowance=int(quota.get("allowance") or 0), when=_first_of_next_month())
+            buttons.append(("กราฟยอดขาย", "ขอกราฟยอดขาย"))
+    else:
+        # The ad-hoc road's own sentence, so both roads say it in the same words.
+        text += _t(reports_ai.CHART_UNAVAILABLE, language)
+    return ChatReply(text=text, images=images, quick_replies=buttons,
+                     intent={"action": "report", "entity": key})
+
+
+async def _handle_basic_report(
+    client: DataClient, *, ctx: ResolvedContext, license_id, key: str,
+    permission_keys: list[str], language: str,
+) -> ChatReply:
+    """One of the five. Code computes it; the model has already done its
+    only job, which was choosing which one. Never metered (spec §5): this
+    function does not call chart_quota, and cannot, because it never draws.
+
+    There is deliberately no `with_chart` here. The brief's signature had
+    one, but the picture of one of the five is the METERED road (controller
+    resolution 1) and it is drawn by `chart_plan.publish_for_basic_report`
+    in `_handle_basic_report_picture`, which is where the "ดูเป็นรูป"
+    button's own sentence goes. A parameter no caller passes, guarding an import that
+    might not exist, was speculative code in a 33k-line file (review,
+    minor 3).
+    """
+    from . import basic_reports
+
+    if "view_reports" not in set(permission_keys):
+        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+    try:
+        report = await basic_reports.fetch(client, license_id=str(license_id), key=key)
+    except DataTierError:
+        log.exception("basic report %s failed for %s", key, ctx.chann_uid)
+        return ChatReply(text=_t(AI_REPORT_UNAVAILABLE, language))
+    text = basic_reports.as_text(report, language)
+    said = "th" if language != "en" else "en"
+    buttons: list[tuple[str, str]] = [(
+        _t(BASIC_REPORT_PICTURE, language),
+        _t(BASIC_REPORT_PICTURE_SAYS, language).format(
+            title=basic_reports.TITLES[key][said]),
+    )]
+    # The other four, every time: the question a person asks next is
+    # usually one of them, and a button is cheaper than a sentence they
+    # have to phrase (spec §5 — "the other four reports, and ดูเป็นรูป").
+    buttons += [
+        (_t(BASIC_REPORT_SHORT.get(other) or basic_reports.TITLES[other], language),
+         f"{BASIC_REPORT_PREFIX} {other}")
+        for other in basic_reports.REPORT_KEYS if other != key
+    ]
+    return ChatReply(text=text, quick_replies=buttons,
+                     intent={"action": "report", "entity": key})
+
+
+#: The summary's vocabulary MINUS the two phrases round 21C's own chooser
+#: claims. `basic_reports.CHOOSE_PROMPT` lists "ปิดได้เท่าไหร่" under
+#: won_this_month, and "ปิดได้กี่ดีล" is the same question counted rather
+#: than summed — both are better answered by "this month vs last month"
+#: than by the whole-pipeline summary. Neither phrase is named by any test
+#: or scenario (grepped), so nothing shipped moves.
+_SUMMARY_WORDS_THE_FIVE_LEAVE_ALONE = tuple(
+    phrase for phrase in SALES_SUMMARY_PHRASES
+    if phrase not in ("ปิดได้เท่าไหร่", "ปิดได้กี่ดีล")
+)
+
+
+def _says_the_summarys_own_words(message: str) -> bool:
+    """The sentence says one of the fixed summary's phrases, anywhere.
+
+    The WIDE half of the standing rule (docs/MODEL_FIRST.md: guard on the
+    wide vocabulary, dispatch on the narrow test). Round 21C needs it
+    because on the model road the summary is the DEFAULT answer: asking a
+    second model question — "is this one of the five?" — about a sentence
+    that plainly says "ยอดขาย" costs a call nobody needs and puts an
+    answer the shop has had since round 17 at risk (the call is counted by
+    tests/unit/test_chat_phrasings.py). It never decides to write
+    anything; it only declines to ask.
+    """
+    text = (message or "").strip().lower()
+    return bool(text) and any(p in text for p in _SUMMARY_WORDS_THE_FIVE_LEAVE_ALONE)
+
+
+def _is_the_fixed_sales_summary(message: str) -> bool:
+    """The typed sales summary, which stays deterministic — the NARROW
+    test: the phrase itself, or a short sentence built around one."""
+    text = (message or "").strip().lower()
+    if not text:
+        return False
+    return bool(_matches_phrase(message, SALES_SUMMARY_PHRASES) or (
+        len(text) <= 14 and any(p in text for p in SALES_SUMMARY_PHRASES)
+        and not text.startswith(("รายงาน", "report"))
+    ))
+
+
 def _is_ai_report_request(message: str) -> bool:
     text = (message or "").strip().lower()
     if not text or len(text) < 4:
@@ -30003,10 +31129,7 @@ def _is_ai_report_request(message: str) -> bool:
     if _matches_phrase(message, REPORT_LIST_PHRASES) or any(t in text for t in REPORT_PDF_TRIGGERS):
         return False
     # The fixed sales summary ("ยอดขาย", "สรุปยอด", "สรุปยอดขาย" …) stays deterministic.
-    if _matches_phrase(message, SALES_SUMMARY_PHRASES) or (
-        len(text) <= 14 and any(p in text for p in SALES_SUMMARY_PHRASES)
-        and not text.startswith(("รายงาน", "report"))
-    ):
+    if _is_the_fixed_sales_summary(message):
         return False
     if ai_report_asked_outright(message):
         return True
@@ -30041,11 +31164,34 @@ async def _handle_ai_report(
     # An explicit "สร้างรายงานด้วย AI: …" is stripped to what was actually
     # asked for, and noted in the log so an AI-drawn chart can be told from
     # a ready-made one without reading code (owner, 17 ก.ย. 2569).
+    # The "ดูเป็นรูป" button under one of the five: drawn from that report's
+    # own numbers, not re-asked of the engine (final fix, item 8).
+    picture_of = _basic_report_picture_key(message) if clarified is None else None
+    if picture_of is not None:
+        _note_road(road="basic_report")
+        return await _handle_basic_report_picture(
+            client, ctx=ctx, license_id=license_id, key=picture_of, language=language,
+            ai_client=ai_client, company_name=company,
+        )
     asked_outright = ai_report_asked_outright(message) if clarified is None else None
     if asked_outright:
         log.info("chat.ai_report explicit=1 oa=%s chars=%d", ctx.oa, len(asked_outright))
         message = asked_outright
         with_chart = True
+    # Round 21C: five questions are answered by code, not by a spec. The
+    # model still READS the sentence — it just answers with a key instead
+    # of arithmetic — so this is model-first, and it is free. A picture is
+    # the metered road and keeps Phase 17 (spec §5), and an answer to the
+    # engine's own clarifying question belongs to the question that asked
+    # it, so neither is taken away here.
+    if not with_chart and clarified is None:
+        fixed = await basic_report_asked_for(message, ai_client=ai_client, language=language)
+        if fixed is not None:
+            _note_road(road="basic_report")
+            return await _handle_basic_report(
+                client, ctx=ctx, license_id=license_id, key=fixed,
+                permission_keys=permission_keys, language=language,
+            )
     quota = None
     try:
         out = await reports_ai.handle_report_request(
@@ -30084,12 +31230,22 @@ async def _handle_ai_report(
     # (owner, 18 ก.ย. 2569). Nothing is lost by moving it: an over-quota
     # shop already reached the model under the old order too, because the
     # report itself was still produced — the cap was always on the image.
-    if with_chart and out.get("chart"):
-        from . import chart_quota
+    from . import chart_quota
 
+    if with_chart and out.get("chart"):
         quota = await chart_quota.spend_one(client, license_id=str(license_id))
         if not quota.get("allowed"):
             out["chart"] = None
+        # The picture's receipt, so the question charge below steps aside:
+        # one request, one credit.
+        out["quota"] = chart_quota.receipt(quota, charged_for="picture")
+    # Round 21C: the question itself costs a credit when it was answered
+    # and no picture already paid for it — the dashboard's rule, from the
+    # one helper both roads call. Nothing is withheld over the allowance:
+    # the words were already computed; the credit only counts them. The
+    # clarify and refusal returns above never reach here, and nor do the
+    # five fixed reports.
+    await chart_quota.charge_for_the_question(client, license_id=str(license_id), out=out)
     text = out["text"]
     files_line = reports_ai.files_line(out.get("files") or {}, language)
     if files_line:
@@ -30134,6 +31290,15 @@ async def _handle_ai_report(
             used=int(quota.get("used") or 0),
             allowance=int(quota.get("allowance") or 0),
         )
+    elif quota is None:
+        # A words-only answer spent the question's credit (final review
+        # I2): said in the same credit line the picture reply carries, and
+        # never as "กราฟนี้…" — there is no picture.
+        spent = out.get("quota") or {}
+        if spent.get("allowed") and not spent.get("unknown"):
+            text += "\n\n(" + _t(AI_CREDIT_USED, language).format(
+                used=int(spent.get("used") or 0),
+                allowance=int(spent.get("allowance") or 0)) + ")"
     return ChatReply(
         text=text, images=images, quick_replies=buttons,
         intent={"action": "report", "entity": out["spec"]["entity"]},
@@ -30147,10 +31312,17 @@ CHART_AI_HINT = {
     "th": "\n\nอยากได้กราฟแบบอื่น พิมพ์ \"สร้างรายงานด้วย AI: <สิ่งที่ต้องการ>\" เช่น \"สร้างรายงานด้วย AI: ยอดขายแยกตามช่าง 3 เดือน\"",
     "en": "\n\nFor a different picture: \"AI report: <what you want>\", e.g. \"AI report: sales by technician, 3 months\".",
 }
+#: The one credit line (final review I2): the month's AI report credits,
+#: said the same way after a picture and after a words-only answer. It is
+#: the credit, not "charts": a question answered in words spends one too.
+AI_CREDIT_USED = {
+    "th": "ใช้เครดิตรายงาน AI ไป {used}/{allowance} ครั้งของเดือนนี้",
+    "en": "AI report credits: {used}/{allowance} used this month",
+}
 #: On a picture the AI drew: which one it was out of the month's allowance.
 CHART_MADE_BY_AI = {
-    "th": "\n\n(กราฟนี้สร้างด้วย AI · ใช้ไป {used}/{allowance} ครั้งของเดือนนี้ · สั่งได้ด้วย \"สร้างรายงานด้วย AI: …\")",
-    "en": "\n\n(Drawn by AI · {used}/{allowance} used this month · ask with \"AI report: …\")",
+    "th": "\n\n(กราฟนี้สร้างด้วย AI · " + AI_CREDIT_USED["th"] + " · สั่งได้ด้วย \"สร้างรายงานด้วย AI: …\")",
+    "en": "\n\n(Drawn by AI · " + AI_CREDIT_USED["en"] + " · ask with \"AI report: …\")",
 }
 CHART_AI_BUTTON = {"th": "กราฟด้วย AI", "en": "AI chart"}
 #: A complete sentence, not the bare prefix: a button that sends
@@ -30231,6 +31403,25 @@ def ai_report_asked_outright(message: str) -> str:
             rest = text[len(prefix):].lstrip(" :：-–—")
             return rest or text
     return ""
+
+
+async def basic_report_asked_for(message: str, *, ai_client=None,
+                                 language: str = "th") -> str | None:
+    """Which of the five a sentence asks for, or None — the ONE chooser
+    behind both surfaces (final review I3), in chat's order: a picture
+    (any chart word, or "สร้างรายงานด้วย AI: …" asked outright) is the
+    metered road and never meets the chooser; a button this system wrote
+    names its report; anything else the model reads. The dashboard's
+    question box and LINE therefore answer the same sentence the same way,
+    free on both."""
+    from . import basic_reports
+
+    if ai_report_asked_outright(message) or _wants_a_picture(message):
+        return None
+    fixed = _basic_report_key(message)
+    if fixed is None:
+        fixed = await basic_reports.choose_report(message, client=ai_client, language=language)
+    return fixed
 
 
 def _wants_a_picture(message: str) -> bool:

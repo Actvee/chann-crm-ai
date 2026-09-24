@@ -18,6 +18,7 @@ import {
 } from "../../_list-controls";
 
 import { useFailureText, useFormatters } from "../_format";
+import { dealValue } from "../_deal-value";
 import { proxyHeaders } from "../_lib";
 import { useSalesSession } from "../_session";
 import { SalesShell } from "../_shell";
@@ -36,13 +37,8 @@ type Deal = {
   contact_id?: string | null;
 };
 
-/** The deal's own amount when the salesperson gave one; otherwise the line items. */
-function dealValue(deal: Deal): number {
-  if (deal.amount != null && deal.amount !== "" && Number(deal.amount) > 0) return Number(deal.amount);
-  return (deal.products ?? []).reduce(
-    (sum, p) => sum + Number(p.qty ?? 0) * Number(p.quoted_unit_price ?? 0), 0,
-  );
-}
+// What a deal is worth: `dealValue` from ../_deal-value — the one copy the
+// deal page and the chat side panel read too (final review I4).
 
 // Only the moves the Phase 9 state machine actually permits. Offering "won"
 // on an already-won deal would put a button in front of someone whose only

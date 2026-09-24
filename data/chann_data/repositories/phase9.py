@@ -20,6 +20,7 @@ CUSTOMER_SEARCH = (
     Customer.phone, Customer.email,
 )
 DEAL_SEARCH = (Deal.deal_id, Deal.notes)
+from .deal_value import deal_value_subquery
 from .locks import serialise
 from .search import like_any, page, since
 from .tenant_scope import TenantScope
@@ -888,21 +889,14 @@ class DealRepository:
         )
 
         rows = self._s.execute(
-            select(
-                Deal.id, Deal.stage, Deal.expected_close_date,
-                # Line items when there are any; otherwise the amount the
-                # salesperson stated (0024) — a 250,000 deal with no lines
-                # yet counted as 0 on the pipeline card (review, 6 Sep).
-                func.coalesce(
-                    func.sum(DealProduct.quoted_unit_price * DealProduct.qty), Deal.amount, 0,
-                ).label("value"),
-            )
-            .outerjoin(DealProduct, DealProduct.deal_id == Deal.id)
+            # Round 21C: one definition of a deal's value, shared with the
+            # AI report (`repositories/deal_value.py`). The typed amount
+            # wins; the lines are the fallback.
+            deal_value_subquery(Deal.stage, Deal.expected_close_date)
             .where(
                 Deal.license_id == scope.license_id,
                 Deal.archived_at.is_(None),
             )
-            .group_by(Deal.id, Deal.stage, Deal.expected_close_date, Deal.amount)
         ).all()
 
         by_stage: dict[str, dict] = {
@@ -1014,6 +1008,64 @@ class DealRepository:
             deal.lost_reason = None
 
         deal.stage = to_stage
+        # Round 21C: the close date, kept where the stage changes so the two
+        # can never disagree. A reopen clears it for the same reason the
+        # lost_reason above is cleared — it describes something that no
+        # longer happened.
+        deal.closed_at = datetime.now(timezone.utc) if to_stage in ("won", "lost") else None
+        self._s.flush()
+        return deal
+
+    def close_won_from_invoice(
+        self, scope: TenantScope, deal_id: uuid.UUID, *,
+        lines: list[dict], amount, closed_at: datetime,
+    ) -> "Deal | None":
+        """The bill was paid in full, so the deal is won and holds what it
+        was paid for. Returns the deal, or None when it must not be touched.
+
+        Deliberately NOT `transition_stage`: that state machine has no
+        `new → won` because a PERSON may not click a deal from "new"
+        straight to "won" without a quote. Money arriving is not a person
+        clicking — it is the proof the machine exists to demand — so this
+        path sets the stage itself and says why, and the human table at the
+        top of this module is left exactly as it is.
+
+        Three refusals, each one paid for by something that has gone wrong
+        before: a lost deal is not resurrected by a payment; an archived
+        deal is not edited at all; and a deal that is ALREADY closed keeps
+        the contents of the bill that closed it, because the second invoice
+        on a deal is a follow-up, not a correction.
+
+        `amount` is the bill's subtotal AFTER discount and BEFORE VAT
+        (ruling 23, final review I4): every other deal value on the
+        platform — quoted_unit_price × qty — is pre-VAT, and a pipeline
+        that adds VAT-inclusive won deals to VAT-exclusive open ones is a
+        total nobody can check. The VAT-inclusive total is kept on the
+        audit row, not in the deal.
+        """
+        deal = self.get(scope, deal_id)
+        if deal is None or deal.archived_at is not None:
+            return None
+        if deal.stage == "lost":
+            return None
+        if deal.stage == "won" and deal.closed_at is not None:
+            return None
+        for row in self.products_of(deal_id):
+            self._s.delete(row)
+        self._s.flush()
+        for position, line in enumerate(lines):
+            self._s.add(DealProduct(
+                id=uuid.uuid4(), deal_id=deal_id,
+                product_id=line.get("product_id"),
+                product_name=str(line.get("product_name") or "-")[:255],
+                quoted_unit_price=_decimal(line.get("unit_price") or line.get("quoted_unit_price")),
+                qty=int(line.get("qty") or 1), notes=line.get("notes"),
+                position=position,
+            ))
+        deal.amount = _decimal(amount)
+        deal.lost_reason = None
+        deal.stage = "won"
+        deal.closed_at = closed_at
         self._s.flush()
         return deal
 

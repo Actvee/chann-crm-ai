@@ -374,11 +374,14 @@ class TestTheNumbersBehindThePictures:
     """The four builders read only what the tier already fetches, and read
     it the way the rest of the system does."""
 
-    def test_a_deal_is_worth_its_line_items_then_its_stated_amount(self):
-        lines = {"products": [{"product_name": "แอร์", "quoted_unit_price": "15900.00", "qty": 2}], "amount": "1.00"}
+    def test_a_deal_is_worth_its_stated_amount_then_its_line_items(self):
+        # Round 21C: the typed amount wins over the lines — the same
+        # precedence DealRepository.pipeline_summary and the AI report use.
+        both = {"products": [{"product_name": "แอร์", "quoted_unit_price": "15900.00", "qty": 2}], "amount": "1.00"}
+        assert sales_charts.deal_value(both) == 1
+        # A deal with no typed amount is worth the sum of its lines.
+        lines = {"products": [{"product_name": "แอร์", "quoted_unit_price": "15900.00", "qty": 2}], "amount": None}
         assert sales_charts.deal_value(lines) == 31800
-        # 0024: a deal with no lines is worth the amount the salesperson
-        # stated — the same fallback DealRepository.pipeline_summary uses.
         assert sales_charts.deal_value({"products": [], "amount": "250000"}) == 250000
         assert sales_charts.deal_value({}) == 0
 

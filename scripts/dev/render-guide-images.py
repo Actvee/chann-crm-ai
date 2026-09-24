@@ -604,20 +604,107 @@ def sales_crm(c: Canvas):
     c.y = 910
 
 def sales_ai_report(c: Canvas):
-    c.phone_frame()
-    c.bubble("สรุปงานค้างแยกตามช่าง", "user")
-    c.bubble("จำนวนงานซ่อม · status=open · แยกตามช่าง\n• สมศักดิ์: 5\n• วิชัย: 2\n• ยังไม่มอบหมาย: 3\nรวม 10\nไฟล์ (ใช้ได้ 7 วัน): CSV · หน้าเว็บ", "bot", bold_first=True)
-    c.y += 6
+    """Round 21C — the dashboard page "รายงาน AI" as it now is: the five
+    fixed reports as cards (AiReports.tsx, `.basic-grid`, three across on a
+    wide screen) above the question box. Words and number formats are the
+    page's own (th.ts `aiReports.basic`, `money(v, 2)`, a count with none,
+    the value right-aligned); one card is drawn opened ("ย่อ") and one
+    closed ("ดูทั้งหมด (4)") so the toggle is seen in both states. The LINE
+    thread this picture used to show is no longer where a shop starts."""
+    c.dash_frame("รายงาน AI", "ร้านเย็นสบาย")
     d = c.d
-    d.rounded_rectangle((160, c.y, 840, c.y + 152), radius=18, fill=WHITE, outline=LINE, width=2)
-    for i, (name, v) in enumerate((("สมศักดิ์", 5), ("วิชัย", 2), ("ยังไม่มอบหมาย", 3))):
-        y = c.y + 24 + i * 42
-        d.text((184, y + 10), name, fill=INK, font=font(21), anchor="lm")
-        d.rounded_rectangle((380, y, 380 + int(370 * v / 5), y + 20), radius=10, fill=c.accent)
-        d.text((800, y + 10), str(v), fill=INK, font=font(21, True), anchor="rm")
-    c.y += 166
-    c.bubble("ถามแบบเดียวกันได้ที่เมนู \"รายงาน AI\" บนหน้าจอ", "bot")
-    c.caption("AI แปลงคำถามเป็นรายการที่ระบบอนุญาต แล้วนับจากข้อมูลร้านคุณเท่านั้น")
+    d.text((92, c.y + 10), "รายงานที่ใช้บ่อย", fill=INK, font=font(26, True), anchor="lm")
+    d.text((92, c.y + 42), "ห้ารายงานนี้ระบบคำนวณให้เอง ไม่ใช้เครดิต AI และตอบเหมือนกันทุกครั้ง",
+           fill=SOFT, font=font(18), anchor="lm")
+    top = c.y + 64
+    gap, cols, pad = 12, 3, 14
+    cw = (820 - gap * (cols - 1)) // cols
+    inner = cw - 2 * pad
+
+    # (title, blurb, headline, rows shown, toggle, note) — rows/notes as
+    # data/chann_data/repositories/basic_reports.py writes them.
+    cards = [
+        ("มูลค่าดีลทั้งหมด", "ทุกดีลที่ยังไม่ถูกลบ แยกตามขั้น", "1,250,000.00",
+         [("ใหม่", "320,000.00"), ("เสนอราคาแล้ว", "530,000.00"), ("ปิดสำเร็จ", "400,000.00")],
+         "ดูทั้งหมด (4)", "ยังเปิดอยู่ 850,000.00 บาท · คาดว่าจะปิดเดือนนี้ 200,000.00 บาท"),
+        ("ยอดปิดสำเร็จเดือนนี้", "เทียบเดือนที่แล้ว ตามวันที่ปิดจริง", "180,000.00",
+         [("เดือนนี้", "180,000.00"), ("เดือนที่แล้ว", "150,000.00")],
+         None, "มากกว่าเดือนที่แล้ว 30,000.00 บาท (20%)"),
+        ("งานซ่อมค้างแยกตามช่าง", "เปิดอยู่ · มอบหมายแล้ว · กำลังทำ", "10",
+         [("สมศักดิ์", "5"), ("วิชัย", "2"), ("ทีมภาคเหนือ", "1"), ("ยังไม่มอบหมาย", "2")],
+         "ย่อ", "นับสถานะ เปิดอยู่ · มอบหมายแล้ว · กำลังทำ"),
+        ("ยอดค้างชำระ", "ออกแล้ว/ชำระบางส่วน แยกเลยกำหนด", "96,300.00",
+         [("เลยกำหนด", "32,100.00"), ("ยังไม่ถึงกำหนด", "64,200.00")],
+         None, None),
+        ("คะแนนความพึงพอใจเฉลี่ย", "เฉพาะใบที่ลูกค้าตอบแล้ว", "2.67",
+         [("เดือนนี้", "2.67"), ("เดือนที่แล้ว", "2.50")],
+         None, "จากใบที่ตอบแล้ว 6 ใบเดือนนี้ (เต็ม 3)"),
+    ]
+    f_title, f_blurb, f_value = font(21, True), font(16), font(32, True)
+    f_row, f_row_b, f_toggle, f_note = font(18), font(18, True), font(18, True), font(15)
+
+    def height(card) -> int:
+        title, blurb, _v, rows, toggle, note = card
+        h = pad + 28 * len(wrap(d, title, f_title, inner)) + 22 * len(wrap(d, blurb, f_blurb, inner))
+        h += 6 + 40 + 6 + 26 * len(rows)
+        if toggle:
+            h += 34
+        if note:
+            h += 6 + 20 * len(wrap(d, note, f_note, inner))
+        return h + pad
+
+    def draw(card, x: int, y: int, h: int) -> None:
+        title, blurb, value, rows, toggle, note = card
+        d.rounded_rectangle((x, y, x + cw, y + h), radius=16, fill=WHITE, outline=LINE, width=2)
+        yy = y + pad
+        for line in wrap(d, title, f_title, inner):
+            d.text((x + pad, yy + 14), line, fill=INK, font=f_title, anchor="lm")
+            yy += 28
+        for line in wrap(d, blurb, f_blurb, inner):
+            d.text((x + pad, yy + 11), line, fill=SOFT, font=f_blurb, anchor="lm")
+            yy += 22
+        yy += 6
+        d.text((x + cw - pad, yy + 20), value, fill=INK, font=f_value, anchor="rm")
+        yy += 40 + 6
+        for label, v in rows:
+            d.text((x + pad, yy + 13), label, fill=INK, font=f_row, anchor="lm")
+            d.text((x + cw - pad, yy + 13), v, fill=INK, font=f_row_b, anchor="rm")
+            yy += 26
+        if toggle:
+            d.text((x + pad, yy + 18), toggle, fill=c.accent, font=f_toggle, anchor="lm")
+            yy += 34
+        if note:
+            yy += 6
+            for line in wrap(d, note, f_note, inner):
+                d.text((x + pad, yy + 10), line, fill=SOFT, font=f_note, anchor="lm")
+                yy += 20
+
+    y = top
+    for r in range(0, len(cards), cols):
+        row = cards[r:r + cols]
+        h = max(height(card) for card in row)  # a grid row stretches to its tallest card
+        for i, card in enumerate(row):
+            draw(card, 90 + i * (cw + gap), y, h)
+        y += h + gap
+
+    # The question box beneath the five — the ad-hoc road, one credit.
+    y += 8
+    d.text((92, y + 12), "อยากดูรายงานอะไร", fill=INK, font=font(20, True), anchor="lm")
+    y += 28
+    bw = int(d.textlength("สร้างรายงาน", font=font(20, True))) + 44
+    d.rounded_rectangle((90, y, 910 - bw - 12, y + 52), radius=12, fill=WHITE, outline=LINE, width=2)
+    d.text((110, y + 26), "เช่น สรุปงานค้างแยกตามช่าง", fill=FAINT, font=font(19), anchor="lm")
+    d.rounded_rectangle((910 - bw, y + 2, 910, y + 50), radius=12, fill=c.accent)
+    d.text((910 - bw / 2, y + 26), "สร้างรายงาน", fill=WHITE, font=font(20, True), anchor="mm")
+    y += 64
+    x = 90
+    for chip in ("ยอดดีลปิดสำเร็จ 3 เดือนล่าสุด", "ลูกค้าใหม่เดือนนี้แยกตามผู้ดูแล"):
+        w = int(d.textlength(chip, font=font(17))) + 32
+        d.rounded_rectangle((x, y, x + w, y + 36), radius=18, fill=WHITE, outline=c.accent, width=2)
+        d.text((x + w / 2, y + 18), chip, fill=c.accent, font=font(17), anchor="mm")
+        x += w + 10
+    c.y = y + 36
+    assert c.y <= 925, f"sales-ai-report runs off its frame: {c.y}"
 
 
 def sales_help(c: Canvas):

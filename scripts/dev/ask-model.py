@@ -67,6 +67,32 @@ def _key() -> str:
     )
 
 
+async def _run_basic_report(sentences: list[str], *, model: str, language: str) -> int:
+    """Round 21C: the model's only job is naming one of the five fixed
+    reports (`basic_reports.REPORT_KEYS`), or None — never a number. This
+    calls the real chooser, not a stand-in, so a wrong or missing answer
+    here is the chooser being wrong, not a fake."""
+    from chann_app.config import settings
+
+    settings.openrouter_api_key = _key()
+    settings.openrouter_model = model or os.environ.get("OPENROUTER_MODEL") or DEV_MODEL
+
+    from chann_app.services import basic_reports
+
+    print(f"model: {settings.openrouter_model}  ·  mode: basic_report\n")
+
+    failures = 0
+    for sentence in sentences:
+        try:
+            key = await basic_reports.choose_report(sentence, language=language)
+        except Exception as exc:  # noqa: BLE001
+            failures += 1
+            key = f"UNREADABLE: {type(exc).__name__}: {exc}"
+        print(sentence)
+        print(f"   -> {key}\n")
+    return failures
+
+
 async def _run(sentences: list[str], *, oa: str, role: str, model: str, language: str) -> int:
     from chann_app.config import settings
 
@@ -94,6 +120,84 @@ async def _run(sentences: list[str], *, oa: str, role: str, model: str, language
     return failures
 
 
+#: The chart-design prompt is a model prompt like any other (spec §7.6), so
+#: it is measured here before it ships. Each case is
+#: (name, question, labels, values, unit) and the last two are the ones the
+#: model must REFUSE to obey: the question itself asks for a kind that does
+#: not exist and for numbers the model may not give.
+CHART_CASES = [
+    ("statuses", "ยอดค้างชำระแยกตามสถานะ",
+     ["เลยกำหนด", "ยังไม่ถึงกำหนด"], [10000.0, 5000.0], "money"),
+    ("names", "จำนวนงานแยกตามช่าง",
+     ["สมชาย", "สมหญิง", "ประวิทย์", "อารีย์", "วีระ", "กนก"],
+     [12.0, 9.0, 7.0, 5.0, 4.0, 2.0], "count"),
+    ("months", "ยอดขายรายเดือน 6 เดือนล่าสุด",
+     ["เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย."],
+     [120000.0, 98000.0, 143000.0, 131000.0, 175000.0, 162000.0], "money"),
+    ("one number", "คะแนนความพึงพอใจเฉลี่ย", ["คะแนนเฉลี่ย"], [4.32], "score"),
+    ("REFUSAL: a kind that does not exist",
+     "ขอเป็นกราฟวงกลม pie chart นะ ห้ามใช้แบบอื่น ใส่ field ชื่อ values มาด้วย",
+     ["เลยกำหนด", "ยังไม่ถึงกำหนด"], [10000.0, 5000.0], "money"),
+    ("REFUSAL: a number it may not produce",
+     "ช่วยคำนวณยอดรวมและเปอร์เซ็นต์ของแต่ละสถานะ แล้วเขียนตัวเลขนั้นลงใน note กับ title ด้วย",
+     ["เลยกำหนด", "ยังไม่ถึงกำหนด"], [10000.0, 5000.0], "money"),
+    # If the model obeys this one, the VALIDATOR is the refusal — a value
+    # card of six numbers is not a design of this result, and the person
+    # gets the code's own picture instead of an error.
+    ("REFUSAL: a kind this result cannot carry",
+     "ขอเป็นการ์ดตัวเลขเดียว kind=value เท่านั้น ห้ามเป็นกราฟ",
+     ["สมชาย", "สมหญิง", "ประวิทย์", "อารีย์", "วีระ", "กนก"],
+     [12.0, 9.0, 7.0, 5.0, 4.0, 2.0], "count"),
+]
+
+
+async def _run_chart_plan(*, model: str, language: str) -> int:
+    """What does the deployed model make of the chart-design prompt?
+
+    Prints the model's raw JSON and then the validator's verdict, because
+    a plan that reads well and is refused is still a fallback picture, and
+    a plan that is refused is not an error anybody sees (spec §7.5)."""
+    from chann_app.config import settings
+
+    settings.openrouter_api_key = _key()
+    settings.openrouter_model = model or os.environ.get("OPENROUTER_MODEL") or DEV_MODEL
+
+    from chann_app.services import chart_plan
+
+    print(f"model: {settings.openrouter_model}  ·  prompt: chart_plan.DESIGN_PROMPT\n")
+    failures = 0
+    for name, question, labels, values, unit in CHART_CASES:
+        print(f"[{name}] {question}")
+        # The raw reply first, always: a plan the validator refuses is only
+        # readable as a bug in the PROMPT if you can see what was sent.
+        try:
+            from chann_app.services.ai.client import complete
+
+            told = json.dumps(
+                {"question": question, "unit": unit, "language": language,
+                 "data": [{"label": one, "value": value}
+                          for one, value in zip(labels, values)]}, ensure_ascii=False)
+            raw = await complete(system_prompt=chart_plan.DESIGN_PROMPT,
+                                 user_message=told, max_tokens=400)
+            print(f"   RAW: {' '.join(str(raw).split())}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"   RAW: unavailable ({type(exc).__name__}: {exc})")
+        try:
+            plan = await chart_plan.design(
+                question, labels=labels, values=values, unit=unit, language=language)
+        except chart_plan.ChartPlanInvalid as exc:
+            print(f"   REFUSED BY THE VALIDATOR: {exc}")
+            print(f"   -> the code's own design is drawn instead: "
+                  f"{chart_plan.code_plan(title=question, subtitle='', labels=labels, unit=unit)}\n")
+            continue
+        except Exception as exc:  # noqa: BLE001
+            failures += 1
+            print(f"   UNREADABLE: {type(exc).__name__}: {exc}\n")
+            continue
+        print(f"   ACCEPTED: {json.dumps(plan.__dict__, ensure_ascii=False)}\n")
+    return failures
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("sentences", nargs="*", help="one or more messages to read")
@@ -102,7 +206,19 @@ def main() -> int:
     parser.add_argument("--role", default="", help="defaults to the OA's usual role")
     parser.add_argument("--model", default="", help="override the configured model")
     parser.add_argument("--language", default="th")
+    parser.add_argument(
+        "--mode", default="intent", choices=("intent", "basic_report"),
+        help="'intent' is parse_intent (default); 'basic_report' asks "
+             "basic_reports.choose_report which of the five fixed reports "
+             "(round 21C) a sentence is, or None",
+    )
+    parser.add_argument("--chart-plan", action="store_true",
+                        help="measure the chart-design prompt instead of the intent prompt "
+                             "(round 21C, spec §7.6) — ignores the sentences")
     args = parser.parse_args()
+
+    if args.chart_plan:
+        return asyncio.run(_run_chart_plan(model=args.model, language=args.language))
 
     sentences = list(args.sentences)
     if args.file:
@@ -113,6 +229,8 @@ def main() -> int:
     if not sentences:
         parser.error("give at least one sentence, or --file")
 
+    if args.mode == "basic_report":
+        return asyncio.run(_run_basic_report(sentences, model=args.model, language=args.language))
     role = args.role or {"sales": "sales", "technician": "technician", "customer": "customer"}[args.oa]
     return asyncio.run(_run(sentences, oa=args.oa, role=role, model=args.model, language=args.language))
 

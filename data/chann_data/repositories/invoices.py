@@ -191,6 +191,95 @@ class InvoiceRepository:
             )
         ).scalars().first()
 
+    def _editable(self, scope: TenantScope, invoice_id: uuid.UUID) -> Invoice:
+        """An invoice is editable until money has touched it.
+
+        A quote uses the same shape with a stricter threshold —
+        `phase10._editable` refuses anything that is not `draft` — because
+        a sent quote can be superseded for nothing, while an invoice
+        carries a number the shop's books depend on. Here the line is
+        drawn at the first payment: after that the road is void + re-raise
+        (owner, 23 ก.ย. 2569, and spec §3.3).
+        """
+        row = self.get(scope, invoice_id)
+        if row is None:
+            raise InvoiceNotFound("invoice not found in this tenant")
+        if row.status == "void":
+            raise InvoiceConflict(f"invoice {row.invoice_id} is void and cannot be edited")
+        if row.status == "paid":
+            # Usually reached via `paid_amount > 0` below, but a zero-total
+            # invoice is marked paid at issue time (`issue()`) while
+            # `paid_amount` stays 0 — status is the settled fact, so it is
+            # checked on its own rather than trusted to imply the amount.
+            raise InvoiceConflict(f"invoice {row.invoice_id} is paid and cannot be edited")
+        if Decimal(str(row.paid_amount)) > 0:
+            raise InvoiceConflict(
+                f"invoice {row.invoice_id} has a payment recorded and can no longer be edited"
+            )
+        return row
+
+    def _mark_needing_reissue(self, row: Invoice) -> None:
+        """An edit after the invoice left `draft`. Once issued, whatever the
+        customer holds (or is about to be sent) no longer matches the row,
+        so the invoice says so until it is re-issued under the same number.
+        A still-draft invoice was never sent anywhere, so an edit to it
+        needs no flag. Kept inside the snapshot — the one document of
+        record — rather than in a column of its own."""
+        if row.status == "draft":
+            return
+        snapshot = dict(row.data_snapshot or {})
+        snapshot["needs_reissue_at"] = datetime.now(timezone.utc).isoformat()
+        row.data_snapshot = snapshot
+
+    def _clear_needing_reissue(self, row: Invoice) -> None:
+        """A re-issue is what the flag asks for — `issue()` and
+        `link_document()` both call this once the new document is in
+        place, so `needs_reissue` never outlives the document it warned
+        about."""
+        if not (row.data_snapshot or {}).get("needs_reissue_at"):
+            return
+        snapshot = dict(row.data_snapshot)
+        snapshot.pop("needs_reissue_at", None)
+        row.data_snapshot = snapshot
+
+    def update_lines(
+        self, scope: TenantScope, invoice_id: uuid.UUID, *, data_snapshot: dict,
+        subtotal, discount_amount=0, vat_rate=None, vat_amount=0, total,
+    ) -> Invoice:
+        """New lines and the totals computed from them, in one write.
+
+        The Application tier recomputes with the same `compute_totals` the
+        quote and this invoice were built with; this method never derives
+        money from the snapshot itself, so there is exactly one piece of
+        arithmetic and it is not here (round 20K).
+        """
+        row = self._editable(scope, invoice_id)
+        if not (data_snapshot or {}).get("line_items"):
+            raise InvoiceConflict("an invoice needs at least one line")
+        row.data_snapshot = dict(data_snapshot)
+        row.subtotal = _money(subtotal)
+        row.discount_amount = _money(discount_amount)
+        row.vat_rate = None if vat_rate is None else Decimal(str(vat_rate))
+        row.vat_amount = _money(vat_amount)
+        row.total = _money(total)
+        self._mark_needing_reissue(row)
+        self._s.flush()
+        return row
+
+    def update_details(
+        self, scope: TenantScope, invoice_id: uuid.UUID, *,
+        note: str | None = None, due_date: date | None = None,
+    ) -> Invoice:
+        """The details that are not money: the note and when it is due."""
+        row = self._editable(scope, invoice_id)
+        if note is not None:
+            row.note = note.strip() or None
+        if due_date is not None:
+            row.due_date = due_date
+        self._mark_needing_reissue(row)
+        self._s.flush()
+        return row
+
     def _narrow(
         self, query, scope: TenantScope, *, status: str | None, contact_id: uuid.UUID | None,
         customer_chann_uid: str | None, q: str | None, overdue: bool, today: date | None,
@@ -336,6 +425,7 @@ class InvoiceRepository:
             raise InvoiceConflict("a due date cannot come before the issue date")
         # An invoice for nothing is settled the moment it exists.
         row.status = "paid" if row.total <= 0 else "issued"
+        self._clear_needing_reissue(row)
         self._s.flush()
         return row
 
@@ -346,6 +436,7 @@ class InvoiceRepository:
         if row is None:
             raise InvoiceNotFound("invoice not found in this tenant")
         row.generated_document_id = self._document_of_tenant(scope, document_id).id
+        self._clear_needing_reissue(row)
         self._s.flush()
         return row
 
@@ -353,7 +444,7 @@ class InvoiceRepository:
         self, scope: TenantScope, invoice_id: uuid.UUID, *, amount, method: str = "transfer",
         paid_at: datetime | None = None, reference: str | None = None, note: str | None = None,
         recorded_by: str | None = None,
-    ) -> tuple[Invoice, InvoicePayment]:
+    ) -> tuple[Invoice, InvoicePayment, "Deal | None"]:
         row = self.get(scope, invoice_id)
         if row is None:
             raise InvoiceNotFound("invoice not found in this tenant")
@@ -390,8 +481,25 @@ class InvoiceRepository:
             )
         ).scalar())
         row.status = "paid" if row.paid_amount >= row.total else "partially_paid"
+        closed: "Deal | None" = None
+        if row.status == "paid" and row.deal_id:
+            # Round 21C, the owner's words: "ใบแจ้งหนี้จะอัพเดตไปที่ดีลตอน
+            # ชำระเงินแล้ว". Inside this transaction, so a payment that is
+            # recorded and a deal that is not closed cannot both be true.
+            # `add_payment` refuses a paid invoice, so this runs once per
+            # invoice by construction.
+            from .phase9 import DealRepository
+
+            closed = DealRepository(self._s).close_won_from_invoice(
+                scope, row.deal_id,
+                lines=list((row.data_snapshot or {}).get("line_items") or []),
+                # Pre-VAT, after discount (ruling 23): the basis every
+                # other deal value on the platform is on.
+                amount=_money(row.subtotal - (row.discount_amount or 0)),
+                closed_at=payment.paid_at,
+            )
         self._s.flush()
-        return row, payment
+        return row, payment, closed
 
     def void(self, scope: TenantScope, invoice_id: uuid.UUID) -> Invoice:
         row = self.get(scope, invoice_id)

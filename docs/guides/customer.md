@@ -86,10 +86,10 @@ _EN: Your personal data (PDPA) — The first time, consent is asked before linki
 
 ## 9. ใบแจ้งหนี้และใบเสร็จ
 
-พิมพ์ "ใบแจ้งหนี้ของฉัน" หรือ "ยอดค้าง" เพื่อดูใบแจ้งหนี้ของคุณกับร้านนี้ ยอดที่ค้าง และวันครบกำหนด · พิมพ์ "ขอใบเสร็จ" — ถ้าชำระครบแล้วจะได้ลิงก์ใบเสร็จ ถ้ายังค้างระบบบอกยอดค้างและทางร้านจะติดต่อเรื่องช่องทางชำระ · เมื่อร้านออกใบเสร็จ ระบบส่งลิงก์มาให้ในแชทนี้เอง · บนหน้าจอลูกค้ามีส่วน "ใบแจ้งหนี้และใบเสร็จ" พร้อมปุ่มเปิด PDF
+พิมพ์ "ใบแจ้งหนี้ของฉัน" หรือ "ยอดค้าง" เพื่อดูใบแจ้งหนี้ของคุณกับร้านนี้ ยอดที่ค้าง และวันครบกำหนด · พิมพ์ "ขอใบเสร็จ" — ถ้าชำระครบแล้วจะได้ลิงก์ใบเสร็จ ถ้ายังค้างระบบบอกยอดค้างและทางร้านจะติดต่อเรื่องช่องทางชำระ · เมื่อร้านออกใบเสร็จ ระบบส่งลิงก์มาให้ในแชทนี้เอง · บนหน้าจอลูกค้ามีส่วน "ใบแจ้งหนี้และใบเสร็จ" พร้อมปุ่มเปิด PDF · ร้านส่งใบเสนอราคาและใบแจ้งหนี้มาให้ในแชทนี้ได้ พร้อมลิงก์เปิด PDF · ถ้าร้านแก้ใบแจ้งหนี้ก่อนคุณชำระ ยอดที่แชทบอกเป็นยอดล่าสุดเสมอ และร้านจะส่ง PDF ใบใหม่ให้หลังออกเอกสารใหม่
 
 พิมพ์: `ขอใบเสร็จ`
 
 [IMAGE: customer-invoices — หน้าจอแชท: ลูกค้าพิมพ์ 'ขอใบเสร็จ' บอทตอบ 'ใบเสร็จของ INV-2026-0001 (ยอด 32,100.00 บาท):' พร้อมลิงก์ ไอคอนใบเสร็จสีส้ม]
 
-_EN: Invoices and receipts — Type "my invoices" or "outstanding" to see your invoices with this shop, what is owed and when it is due. "receipt": the receipt link once paid in full; otherwise what is outstanding, and the shop will contact you about how to pay. When the shop issues a receipt the link arrives in this chat. The home screen has the same list with PDF buttons._
+_EN: Invoices and receipts — Type "my invoices" or "outstanding" to see your invoices with this shop, what is owed and when it is due. "receipt": the receipt link once paid in full; otherwise what is outstanding, and the shop will contact you about how to pay. When the shop issues a receipt the link arrives in this chat. The home screen has the same list with PDF buttons. The shop can send you a quote or an invoice in this chat with a PDF link; if the shop corrects an invoice before you pay, the amount this chat tells you is always the latest, and the shop sends the new PDF once it is issued again._

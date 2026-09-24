@@ -10,7 +10,7 @@ import { Badge } from "../../_components";
 import { FieldRow } from "../../../_field-row";
 import { shortDate } from "../../../_list-controls";
 import { ProductLineForm } from "../../../_product-line-form";
-import { useFailureText, useFormatters } from "../../_format";
+import { readFailure, useFailureText, useFormatters } from "../../_format";
 import { RecordActions, RecordHead, RelatedHeading, RelatedLinks, StatusSection } from "../../_record";
 import { RelatedActivity } from "../../_related";
 import { openExternal, proxyHeaders } from "../../_lib";
@@ -54,6 +54,10 @@ type Detail = {
     customer_id: string;
     first_name?: string | null;
     last_name?: string | null;
+    // Round 21C — the Application tier already returns the full customer
+    // row here; reading it live means "can this be sent on LINE" answers
+    // a customer who links after the quote was made, not a frozen guess.
+    customer_chann_uid?: string | null;
   } | null;
 };
 
@@ -280,6 +284,44 @@ export default function QuoteDetail({
     }
   }
 
+  /** Hand the quotation to the customer on LINE — the same action and the
+   *  same words as the invoice sheet's send button (round 21C). `resent`
+   *  is always false today (ruling 15), so this never claims a re-send. */
+  async function sendQuote() {
+    if (!detail) return;
+    setBusy(true);
+    say(t.dashboard.working);
+    try {
+      const response = await fetch(
+        `/api/phase2/licenses/${licenseId}/quotes/${quoteId}/send`,
+        { method: "POST", headers: proxyHeaders(token, licenseId), body: JSON.stringify({}) },
+      );
+      if (!response.ok) {
+        // Match on the exact codes `_document_send_error` returns
+        // (customer_not_linked / not_issued) — anything else is a real,
+        // different failure and must say so, not be folded into "not
+        // issued yet" (review round 1, finding 4).
+        const failure = await readFailure(response);
+        if (failure.code === "customer_not_linked") {
+          say(t.dashboard.invoices.sendNoLine, "error");
+        } else if (failure.code === "not_issued") {
+          say(t.dashboard.invoices.sendNotIssued, "error");
+        } else if (failure.code === "quote_closed") {
+          say(t.dashboard.invoices.sendQuoteClosed, "error");
+        } else {
+          say(await failureText(response), "error");
+        }
+        return;
+      }
+      const data = (await response.json()) as { customer_name?: string };
+      say(t.dashboard.invoices.sendDone.replace("{name}", data.customer_name ?? ""), "ok");
+    } catch (error) {
+      say(error instanceof Error ? error.message : t.common.error, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function setQuoteStatus(next: string) {
     const label = statusLabel(next);
     const ok = await ask({
@@ -465,6 +507,14 @@ export default function QuoteDetail({
   const editable = canUpdate && quoteStatus === "draft";
   const moves = canUpdate ? NEXT_STATUSES[quoteStatus] ?? [] : [];
   const issuable = canUpdate && (quoteStatus === "draft" || quoteStatus === "sent");
+  // Round 21C: whether this quote's customer can be reached on LINE at
+  // all — read from the customer the page already loaded, not fetched
+  // again for this one question.
+  const customerHasLine = Boolean(detail?.customer?.customer_chann_uid);
+  // A rejected or expired quotation is an offer that no longer stands:
+  // the server refuses to send it (`document_send.why_not_sendable`,
+  // final review C1), so the button says so before it is pressed.
+  const quoteClosed = quoteStatus === "rejected" || quoteStatus === "expired";
   const subtotal = items.reduce(
     (sum, p) => sum + Number(p.qty ?? 0) * Number(p.quoted_unit_price ?? 0),
     0,
@@ -562,7 +612,16 @@ export default function QuoteDetail({
               note={
                 quoteStatus === "draft" && canUpdate && !detail.quote.generated_document_id
                   ? s.quotes.issueBeforeSend
-                  : undefined
+                  // A disabled "ส่งให้ลูกค้า" says why in visible text, not
+                  // only title= — a phone has no tooltip (ui-ux-pro-max:
+                  // disabled-needs-a-reason). Only one reason at a time.
+                  : canUpdate && quoteClosed
+                    ? t.dashboard.invoices.sendQuoteClosed
+                  : canUpdate && !customerHasLine
+                    ? t.dashboard.invoices.sendNoLine
+                    : canUpdate && customerHasLine && !detail.quote.generated_document_id
+                      ? t.dashboard.invoices.sendNotIssued
+                      : undefined
               }
             >
               {invoices.length > 0 && (
@@ -591,6 +650,19 @@ export default function QuoteDetail({
               {detail.quote.generated_document_id && (
                 <button type="button" className="btn" onClick={() => void openDocument()} disabled={busy}>
                   {busy ? t.dashboard.working : t.dashboard.quotes.view}
+                </button>
+              )}
+              {/* Handing the document over — not the primary action here,
+                  so a plain button, never a bare icon (ui-ux-pro-max:
+                  primary-action). */}
+              {canUpdate && (
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => void sendQuote()}
+                  disabled={busy || quoteClosed || !customerHasLine || !detail.quote.generated_document_id}
+                >
+                  {t.dashboard.invoices.send}
                 </button>
               )}
               {/* Round 20V: the bill after the quotation. Only a sent or

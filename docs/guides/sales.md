@@ -229,6 +229,9 @@ _- The customer already heard at check-out that the job was finished and what wa
 - บันทึกรับชำระ: จำนวนเงินกับช่องทาง (เงินสด/โอน/พร้อมเพย์/บัตร) มัดจำก็ได้ ไม่บอกจำนวนระบบถาม ตอบ "5000" หรือ "ครบ" ได้เลย → พิมพ์ "รับชำระ INV-2026-0001 5000 โอน · มัดจำ INV-2026-0001 2000 เงินสด · รับชำระ INV-2026-0001 ครบ"
 - ออกใบเสร็จเมื่อชำระครบ — ระบบส่งลิงก์ให้ลูกค้าทาง LINE ให้ด้วย → พิมพ์ "ออกใบเสร็จ INV-2026-0001"
 - ยกเลิกใบแจ้งหนี้ (ถามยืนยันก่อน ยกเลิกได้เฉพาะใบที่ยังไม่มีการรับชำระ) → พิมพ์ "ยกเลิกใบแจ้งหนี้ INV-2026-0001"
+- แก้ใบแจ้งหนี้ได้จนกว่าจะมีการรับชำระ — จำนวน ราคา กำหนดชำระ ยอดรวมและ VAT คิดใหม่ให้ · แก้จำนวน/ราคาระบบโชว์ยอดใหม่ให้กด "ยืนยันแก้" ก่อน · ออกเอกสารไปแล้วต้องออกใหม่ก่อนส่งลูกค้า → พิมพ์ "เปลี่ยนจำนวนแอร์ในใบแจ้งหนี้ INV-2026-0001 เป็น 3 ตัว · ใบแจ้งหนี้ INV-2026-0001 เปลี่ยนกำหนดชำระเป็นสิ้นเดือน"
+- เพิ่ม/ตัดรายการทำในแผงใบแจ้งหนี้บนจอ · รับชำระครบแล้วดีลปิดสำเร็จ รายการเป็นตามใบนี้ มูลค่าดีลเป็นยอดหลังส่วนลดก่อน VAT → พิมพ์ "รับชำระ INV-2026-0001 ครบ"
+- ส่งใบเสนอราคา/ใบแจ้งหนี้/ใบเสร็จให้ลูกค้าทางไลน์ (ลูกค้าต้องผูกไลน์แล้ว ไม่งั้นระบบบอกเหตุผล) · บนจอ: ปุ่ม "ส่งให้ลูกค้าทางไลน์" ในหน้าใบเสนอราคาและแผงใบแจ้งหนี้ → พิมพ์ "ส่งใบแจ้งหนี้ INV-2026-0001 ให้ลูกค้า · ส่งใบเสนอราคา Q-2026-0001 ให้ลูกค้า"
 
 **นัดหมายและบันทึก**
 - ดูสิ่งที่ต้องทำวันนี้ → พิมพ์ "งานวันนี้"
@@ -285,6 +288,9 @@ _- One invoice, the list, what is owed → type "ใบแจ้งหนี้ 
 _- Record a payment: amount and method (cash/transfer/PromptPay/card), a deposit is fine; with no amount it asks — answer "5000" or "ครบ" → type "รับชำระ INV-2026-0001 5000 โอน · มัดจำ INV-2026-0001 2000 เงินสด · รับชำระ INV-2026-0001 ครบ"_
 _- Issue the receipt once paid in full — the customer gets the link on LINE → type "ออกใบเสร็จ INV-2026-0001"_
 _- Void an invoice (asks first; only one with no payments) → type "ยกเลิกใบแจ้งหนี้ INV-2026-0001"_
+_- Correct an invoice until paid — quantity, price, due date; totals and VAT recalculated · a quantity/price change shows the new total and waits for "ยืนยันแก้" · re-issue an issued one before sending → type "เปลี่ยนจำนวนแอร์ในใบแจ้งหนี้ INV-2026-0001 เป็น 3 ตัว · ใบแจ้งหนี้ INV-2026-0001 เปลี่ยนกำหนดชำระเป็นสิ้นเดือน"_
+_- Add or cut lines on the invoice sheet on screen · once paid in full the deal is won with this invoice's lines, valued after discount and before VAT → type "รับชำระ INV-2026-0001 ครบ"_
+_- Send a quote, invoice or receipt to the customer on LINE (they must be linked; otherwise the reason is said) · on screen: the "Send to customer on LINE" button on the quote page and the invoice sheet → type "ส่งใบแจ้งหนี้ INV-2026-0001 ให้ลูกค้า · ส่งใบเสนอราคา Q-2026-0001 ให้ลูกค้า"_
 
 **Appointments and notes**
 _- Today's list → type "งานวันนี้"_
@@ -300,43 +306,63 @@ _- Everyone one person holds, to another — listed, then confirmed · on screen
 
 ## 7. ถามรายงานด้วย AI
 
-พิมพ์สิ่งที่อยากรู้เป็นภาษาคน ระบบสรุปเป็นตัวเลขทันที อยากเห็นเป็นรูปก็ขอได้
+ห้ารายงานที่ใช้บ่อยกดได้เลย ระบบคำนวณเอง ไม่ใช้เครดิต · อยากรู้อย่างอื่นก็พิมพ์เป็นภาษาคน
 
-- ถามเป็นประโยค → พิมพ์ "ยอดดีลปิดสำเร็จ 3 เดือนล่าสุด / สรุปงานค้างแยกตามช่าง"
+
+**ห้ารายงานที่ถูกเสมอ**
+- มูลค่าดีลทั้งหมด — ทุกดีลที่ยังไม่ถูกลบ แยกตามขั้น → พิมพ์ "ยอดมูลค่าดีลทั้งหมด"
+- ยอดปิดสำเร็จเดือนนี้ เทียบเดือนที่แล้ว (ตามวันที่ปิดจริง) → พิมพ์ "เดือนนี้ปิดได้เท่าไหร่"
+- งานซ่อมค้างแยกตามช่าง — เปิดอยู่ มอบหมายแล้ว กำลังทำ → พิมพ์ "งานซ่อมค้างแยกตามช่าง"
+- ยอดค้างชำระ แยกเลยกำหนดกับยังไม่ถึงกำหนด → พิมพ์ "ยอดค้างชำระ"
+- คะแนนความพึงพอใจเฉลี่ย เฉพาะใบที่ลูกค้าตอบแล้ว → พิมพ์ "คะแนนความพึงพอใจเฉลี่ย"
+- ห้าอันนี้ไม่ใช้เครดิต AI และตอบเหมือนกันทุกครั้ง · กดปุ่มใต้คำตอบเพื่อดูอันอื่นหรือ "ดูเป็นรูป"
+
+**ถามอย่างอื่น**
+- ถามเป็นประโยค → พิมพ์ "ยอดดีลปิดสำเร็จ 3 เดือนล่าสุด / ลูกค้าใหม่เดือนนี้แยกตามผู้ดูแล"
+- คำถามอื่นที่ AI ตอบ หรือรูปที่ AI ออกแบบ ใช้เครดิตรายงาน AI ของร้านครั้งละ 1 (ค่าเริ่มต้น 30 ครั้งต่อเดือน) · ใช้ครบแล้วยังได้คำตอบเป็นตัวเลขตามปกติ แค่ไม่มีรูป · ถามตรงกับห้ารายงานข้างบนฟรีเสมอ ทั้งในไลน์และบนแดชบอร์ด
 - ระบบถามกลับเมื่อคำถามกว้าง (เช่น "เทียบตามเจ้าของ หรือ แยกตามช่วงเวลา") ตอบสั้น ๆ ได้เลย ระบบจำคำถามเดิมไว้
 
 **กราฟ**
 - ห้ากราฟสำเร็จรูป ใช้ได้ไม่จำกัด (หรือกดปุ่ม "ดูเป็นกราฟ" ใต้คำตอบยอดขาย) → พิมพ์ "ขอกราฟยอดขาย · กราฟยอดขายรายเดือน · กราฟสินค้าขายดี · กราฟยอดขายรายคน · กราฟดีลแต่ละสถานะ"
 - กราฟแบบสั่งเอง — ระบบส่งรูปมาในแชทพร้อมสรุปสั้น ๆ → พิมพ์ "สร้างรายงานด้วย AI: ยอดขายแยกตามช่าง 3 เดือน"
-- กราฟสั่งเองมีโควตาต่อเดือนของแต่ละร้าน (ค่าเริ่มต้น 30 ครั้ง ผู้ดูแล Chann ปรับให้ได้) นับเฉพาะครั้งที่ได้รูปจริง ทั้งในแชทและบนหน้าจอ
 - รายงานที่ออกมาเป็นตัวเลขเดียวก็ได้รูป เป็นการ์ดตัวเลขใหญ่
 - ใช้ครบแล้ว ตัวเลข ตาราง และไฟล์ยังโหลดได้ตามปกติ หายแค่รูป
 
 **บนหน้าจอ**
-- เมนู "รายงาน AI" มีตารางพร้อมกราฟแท่งและปุ่มดาวน์โหลด CSV/PDF
+- เมนู "รายงาน AI" มีการ์ดห้ารายงานอยู่บนสุด (รายการยาวกด "ดูทั้งหมด") ใต้การ์ดเป็นกล่องถาม คำตอบเป็นตารางพร้อมกราฟแท่งและปุ่มดาวน์โหลด CSV/PDF
 - ใต้ตารางมีปุ่ม "ปรับรายงานนี้" เปลี่ยนช่วงเวลา/การแยกกลุ่ม/ตัวเลข แล้วกด "ดูใหม่ตามที่ปรับ" ไม่ต้องพิมพ์ใหม่
 - ต้องมีสิทธิ์ "ดูรายงาน" (Sale มีตั้งแต่ต้น CS ต้องให้เจ้าของเปิด) กราฟยอดขายตามสถานะดีลใช้สิทธิ์ "ดูดีล"
 - AI ไม่แตะฐานข้อมูลเอง — มันแปลคำถามเป็นรายการที่ระบบอนุญาต แล้วนับจากข้อมูลของร้านคุณเท่านั้น
 - คะแนนที่ลูกค้าให้หลังงานซ่อม — เฉลี่ย จำนวนที่ตอบ แยกตามช่าง (เมนู "ความพึงพอใจ" บนหน้าจอ) → พิมพ์ "คะแนนความพึงพอใจ · ความพึงพอใจของช่าง สมศักดิ์"
 
-พิมพ์: `สรุปงานค้างแยกตามช่าง`
+พิมพ์: `ยอดมูลค่าดีลทั้งหมด`
 
-[IMAGE: sales-ai-report — แชท LINE ข้อความ 'สรุปงานค้างแยกตามช่าง' ตอบกลับเป็นรายการชื่อช่างกับตัวเลขและลิงก์ไฟล์ ถัดมาเป็นกราฟแท่งสีเขียวของจำนวนงานต่อช่าง]
+[IMAGE: sales-ai-report — หน้าแดชบอร์ด 'รายงาน AI' ธีมเขียว: หัวข้อ 'รายงานที่ใช้บ่อย' กับการ์ดห้าใบเรียงสามคอลัมน์ — มูลค่าดีลทั้งหมด (สามแถวแรกแยกตามขั้น กับปุ่ม 'ดูทั้งหมด (4)'), ยอดปิดสำเร็จเดือนนี้ (เทียบเดือนที่แล้ว), งานซ่อมค้างแยกตามช่าง (กางครบทุกคน มีแถว 'ยังไม่มอบหมาย' และปุ่ม 'ย่อ'), ยอดค้างชำระ (เลยกำหนด/ยังไม่ถึงกำหนด), คะแนนความพึงพอใจเฉลี่ย — แต่ละใบมีชื่อ คำอธิบายสั้น ตัวเลขใหญ่ชิดขวา แถวแยกย่อย และหมายเหตุตัวเล็ก ใต้การ์ดเป็นกล่อง 'อยากดูรายงานอะไร' กับปุ่มเขียว 'สร้างรายงาน' และตัวอย่างคำถาม]
 
-_EN: Ask for a report — Type what you want to know in plain words and get the numbers at once; ask for a picture when you want one._
+_EN: Ask for a report — Five everyday reports are one tap away and cost nothing; type anything else in plain words._
 
-_- Ask in a sentence → type "ยอดดีลปิดสำเร็จ 3 เดือนล่าสุด / สรุปงานค้างแยกตามช่าง"_
+
+**The five fixed reports**
+_- Pipeline value — every live deal, by stage → type "ยอดมูลค่าดีลทั้งหมด"_
+_- Won this month against last month, by real close date → type "เดือนนี้ปิดได้เท่าไหร่"_
+_- Open jobs by technician — open, assigned, in progress → type "งานซ่อมค้างแยกตามช่าง"_
+_- Outstanding invoices, overdue split out → type "ยอดค้างชำระ"_
+_- Average satisfaction, answered forms only → type "คะแนนความพึงพอใจเฉลี่ย"_
+_- These five cost no AI credit and answer the same every time; the buttons under the answer reach the others, or a picture_
+
+**Anything else**
+_- Ask in a sentence → type "ยอดดีลปิดสำเร็จ 3 เดือนล่าสุด / ลูกค้าใหม่เดือนนี้แยกตามผู้ดูแล"_
+_- Other questions the AI answers, or a picture it designs, use one of the shop's monthly AI report credits (30 by default); when they run out the answer still comes in numbers, just without a picture. A question that is one of the five above is always free, in LINE and on the dashboard_
 _- A broad question is asked back ("by owner, or by period?") — answer in a word; the original request is remembered_
 
 **Charts**
 _- Five ready-made charts, unlimited (or the "View as chart" button under a sales summary) → type "ขอกราฟยอดขาย · กราฟยอดขายรายเดือน · กราฟสินค้าขายดี · กราฟยอดขายรายคน · กราฟดีลแต่ละสถานะ"_
 _- A made-to-order chart — the picture comes back in the chat with a one-line summary → type "สร้างรายงานด้วย AI: ยอดขายแยกตามช่าง 3 เดือน"_
-_- Made-to-order charts have a monthly allowance per shop (30 by default, adjustable by Chann) — counted only when a picture is made, in chat and on the dashboard alike_
 _- A single-number report gets a picture too, as a big-number card_
 _- Past the allowance the numbers, table and files still come; only the picture does not_
 
 **On the dashboard**
-_- "AI reports" adds a table with bars and CSV/PDF downloads_
+_- "AI reports" shows the five as cards at the top (a long list opens with "View all"); the question box sits beneath, and answers come as a table with bars and CSV/PDF downloads_
 _- "Adjust this report" under the table changes the period/grouping/measure without retyping_
 _- Needs the "View reports" permission (Sales has it; the owner grants it to CS); the pipeline chart uses "View deals"_
 _- The AI never touches the database — it turns the question into an allowed query, counted over your shop's data only_

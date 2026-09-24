@@ -50,6 +50,8 @@ TYPE_TO_OA = {
     # Round 20V: the receipt goes to the customer who paid, on their OA,
     # with the link — the one push a bill makes to the person who owes it.
     "receipt_issued": "customer",
+    # Round 21C: the quotation or the bill itself, handed over on request.
+    "document_sent": "customer",
 }
 DEFAULT_OA = "sales"
 

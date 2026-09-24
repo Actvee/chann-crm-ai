@@ -916,6 +916,14 @@ class DataClient:
         )
         return self._unwrap(resp)
 
+    async def basic_report(self, license_id: str, key: str) -> dict:
+        """One of the five fixed reports (round 21C) — no spec, no model."""
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/reports/basic/{key}",
+            headers=self._headers,
+        )
+        return self._unwrap(resp)
+
     async def platform_tenants(self, *, q: str | None = None, status: str | None = None) -> list[dict]:
         params = {k: v for k, v in (("q", q), ("status", status)) if v}
         resp = await self._client.get(
@@ -2631,6 +2639,24 @@ class DataClient:
         resp = await self._client.post(
             f"{self._base}/internal/v1/licenses/{license_id}/invoices/{invoice_id}/payments",
             headers=self._headers_for(actor_id), json=payload,
+        )
+        return self._unwrap(resp)
+
+    async def update_invoice_lines(
+        self, license_id: str, invoice_id: str, payload: dict, actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.patch(
+            f"{self._base}/internal/v1/licenses/{license_id}/invoices/{invoice_id}/lines",
+            json=payload, headers=self._headers_for(actor_id),
+        )
+        return self._unwrap(resp)
+
+    async def update_invoice_details(
+        self, license_id: str, invoice_id: str, payload: dict, actor_id: str | None = None,
+    ) -> dict:
+        resp = await self._client.patch(
+            f"{self._base}/internal/v1/licenses/{license_id}/invoices/{invoice_id}",
+            json=payload, headers=self._headers_for(actor_id),
         )
         return self._unwrap(resp)
 

@@ -105,6 +105,15 @@ class PaymentInvalid(ValueError):
     """The amount or the method is not something the ledger takes."""
 
 
+class InvoiceLocked(RuntimeError):
+    """Money has been received, so the bill can no longer be corrected —
+    the road from here is void + a fresh invoice."""
+
+
+class InvoiceLinesEmpty(ValueError):
+    """An invoice with no lines is not an invoice."""
+
+
 def money(value) -> Decimal:
     if isinstance(value, Decimal):
         raw = value
@@ -455,6 +464,87 @@ async def record_payment(
     )
 
 
+def _as_priced_products(lines: list[dict]) -> list[dict]:
+    """`build_line_items` reads a deal/quote product's `quoted_unit_price`;
+    the invoice edit wire shape calls the same number `unit_price` (it is
+    no longer a quote, it is what the customer is being billed). Renaming
+    it here is the only adaptation — the arithmetic itself stays in
+    `build_line_items`/`compute_totals`, never duplicated."""
+    return [
+        {**line, "quoted_unit_price": line.get("unit_price")}
+        for line in lines
+    ]
+
+
+async def edit_lines(
+    client: DataClient, *, license_id: str, invoice: dict, lines: list[dict],
+    company: dict | None = None, actor_id: str | None = None,
+) -> dict:
+    """Replace an invoice's lines and recompute every money column.
+
+    The same two functions the bill was built with do the arithmetic —
+    `build_line_items` and `compute_totals` — so a corrected invoice and a
+    fresh one cannot disagree about VAT or rounding. Nothing here adds up
+    a number that has been through JSON (round 20K).
+    """
+    if money(invoice.get("paid_amount") or 0) > 0:
+        raise InvoiceLocked(f"invoice {invoice.get('invoice_id')} already has a payment")
+    if not lines:
+        raise InvoiceLinesEmpty("an invoice needs at least one line")
+    line_items, totals = preview_lines(invoice=invoice, lines=lines, company=company)
+    snapshot = dict(invoice.get("data_snapshot") or {})
+    snapshot["line_items"] = line_items
+    snapshot["totals"] = totals
+    return await client.update_invoice_lines(
+        str(license_id), str(invoice["id"]),
+        {
+            "data_snapshot": snapshot,
+            "subtotal": totals["subtotal"],
+            "discount_amount": totals.get("discount_amount") or "0",
+            "vat_rate": totals.get("vat_rate"),
+            "vat_amount": totals.get("vat_amount") or "0",
+            "total": totals["grand_total"],
+        },
+        actor_id=actor_id,
+    )
+
+
+def preview_lines(*, invoice: dict, lines: list[dict],
+                  company: dict | None = None) -> tuple[list[dict], dict]:
+    """(line_items, totals) the bill WOULD have with these lines — the
+    arithmetic `edit_lines` saves, and the only copy of it: chat's
+    confirmation card (final review I6) shows these numbers before
+    anything is written, so what the person agrees to is what is saved."""
+    from .documents.snapshot import build_line_items, compute_totals
+
+    line_items = build_line_items(_as_priced_products(lines))
+    vat_rate = (company or {}).get("vat_rate", invoice.get("vat_rate"))
+    return line_items, compute_totals(line_items, vat_rate, _snapshot_discount(invoice))
+
+
+def _snapshot_discount(invoice: dict) -> Decimal | None:
+    """The discount already on the bill, kept across an edit. None, not 0,
+    when there was none — `compute_totals` treats the two differently."""
+    current = ((invoice.get("data_snapshot") or {}).get("totals") or {}).get("discount_amount")
+    if current in (None, "", "0", "0.00"):
+        return None
+    return money(current)
+
+
+async def edit_details(
+    client: DataClient, *, license_id: str, invoice: dict,
+    note: str | None = None, due_date: date | None = None, actor_id: str | None = None,
+) -> dict:
+    """The note and the due date — the details a quote's `set_terms` covers."""
+    if money(invoice.get("paid_amount") or 0) > 0:
+        raise InvoiceLocked(f"invoice {invoice.get('invoice_id')} already has a payment")
+    return await client.update_invoice_details(
+        str(license_id), str(invoice["id"]),
+        {"note": note, "due_date": due_date.isoformat() if due_date else None},
+        actor_id=actor_id,
+    )
+
+
 async def issue_receipt_document(
     client: DataClient, *, license_id: str, invoice: dict, company: dict, language: str = "th",
     actor_id: str | None = None, allow_reissue: bool = False,
@@ -520,16 +610,6 @@ def _bangkok_today() -> date:
     return datetime.now(timezone(timedelta(hours=7))).date()
 
 
-RECEIPT_PUSH = {
-    "th": "ใบเสร็จรับเงินของใบแจ้งหนี้ {invoice_id} ({company}) ยอด {total} บาท ชำระครบแล้ว ขอบคุณครับ\nเปิดใบเสร็จ (ลิงก์ใช้ได้ 7 วัน):\n{url}",
-    "en": "Your receipt for invoice {invoice_id} ({company}), {total} baht, paid in full — thank you.\nOpen the receipt (link valid 7 days):\n{url}",
-}
-RECEIPT_PUSH_NO_LINK = {
-    "th": "ใบเสร็จรับเงินของใบแจ้งหนี้ {invoice_id} ({company}) ยอด {total} บาท ชำระครบแล้ว ขอบคุณครับ — เปิดดูได้จากหน้าลูกค้า",
-    "en": "Your receipt for invoice {invoice_id} ({company}), {total} baht, paid in full — thank you. It is on your customer page.",
-}
-
-
 def baht(value) -> str:
     return f"{money(value):,.2f}"
 
@@ -537,35 +617,25 @@ def baht(value) -> str:
 async def notify_customer_receipt(
     client: DataClient, *, license_id: str, invoice: dict, document: dict,
 ) -> bool:
-    """One LINE line to the customer who paid, with the receipt link, on
-    the customer OA — recorded as a notification row like the job
-    completion push, so it can be counted and never raises. Returns
-    whether a push was attempted (a walk-in customer has no LINE)."""
-    from .chat import document_download_url
-    from .notify import send_notification
+    """One LINE line to the customer who paid, with the receipt link.
+
+    Round 21C: the same road every other document now takes
+    (`services/document_send.py`), which is where the receipt's words and
+    its `receipt_issued` row now live. It is called after the receipt has
+    been issued and stored, so it must never raise: the two refusals are
+    caught here and reported as False, exactly as before.
+    """
+    from .document_send import CustomerNotLinked, DocumentNotIssued, send_document_to_customer
 
     customer, company = await invoice_parties(client, license_id, invoice)
-    uid = str(customer.get("customer_chann_uid") or "")
-    if not uid:
-        return False
-    url = document_download_url(str(license_id), str(document.get("id") or ""))
-    table = RECEIPT_PUSH if url else RECEIPT_PUSH_NO_LINK
-    values = {
-        "invoice_id": invoice.get("invoice_id") or "", "company": company.get("company_name") or company.get("legal_name") or "",
-        "total": baht(invoice.get("total")), "url": url or "",
-    }
     try:
-        line_uid = await client.line_target_of(uid)
-        await send_notification(
-            client, license_id=str(license_id), target_chann_uid=uid, target_line_user_id=line_uid,
-            type="receipt_issued", message=table["th"].format(**values), message_en=table["en"].format(**values),
-            entity_type="invoice", entity_id=str(invoice.get("id") or ""),
-            # The customer reads it in LINE and on their home page's invoice
-            # list, which shows the receipt link itself; no bell row on a
-            # dashboard the customer does not have (live_chat's choice).
-            delivery_dashboard=False, oa="customer",
+        out = await send_document_to_customer(
+            client, license_id=str(license_id), kind="receipt", record=invoice,
+            document_id=str(document.get("id") or "") or None, customer=customer, company=company,
         )
-        return True
+        return bool(out["sent"])
+    except (CustomerNotLinked, DocumentNotIssued):
+        return False
     except Exception:  # noqa: BLE001
         log.exception("could not tell the customer about the receipt of %s", invoice.get("invoice_id"))
         return False

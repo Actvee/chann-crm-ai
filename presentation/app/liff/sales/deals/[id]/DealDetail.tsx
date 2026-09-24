@@ -10,6 +10,7 @@ import { Badge } from "../../_components";
 import { FieldRow } from "../../../_field-row";
 import { shortDate } from "../../../_list-controls";
 import { useFailureText, useFormatters } from "../../_format";
+import { dealValue, hasDealValue } from "../../_deal-value";
 import { proxyHeaders } from "../../_lib";
 import { ProductLineForm } from "../../../_product-line-form";
 import { FieldSection, RecordActions, RecordHead, RelatedHeading, RelatedLinks, StatusSection } from "../../_record";
@@ -488,13 +489,15 @@ export default function DealDetail({
             onSave={saveFields}
             fields={[
               { name: "deal_id", label: t.dashboard.fields.code },
-              // The total, computed from the lines. A deal page with no
-              // value on it is a deal page nobody can read at a glance,
-              // and it is the number the pipeline forecast is built from.
+              // What the deal is worth by the one rule every total on the
+              // platform uses (`dealValue`: the typed amount, else the
+              // lines) — the number the pipeline forecast is built from.
+              // It showed the lines alone, so a typed or invoice-set value
+              // disagreed with the deal list (final review I4).
               {
                 name: "value",
                 label: t.dashboard.deals.value,
-                display: () => (items.length ? money(subtotal) : "—"),
+                display: () => (deal && hasDealValue(deal) ? money(dealValue(deal)) : "—"),
               },
               {
                 name: "amount",

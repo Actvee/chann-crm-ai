@@ -1,0 +1,253 @@
+name: round21c-invoice-edit
+description: a bill can be corrected until money touches it, paying it in full closes the deal
+  with the lines it was paid for, and an issued document can be handed to the customer on LINE -
+  or refused by name when they have no LINE. Every reading is the deployed model's own
+  (scripts/dev/ask-model.py, 23 ก.ย. 2569). The fake has no PDF engine, so the document is
+  linked by a seed call; the numbers and the refusals are the real ones. The re-issue the
+  edit reply advises is proved in tests/unit/test_round21c_invoice_chat.py instead - it
+  reaches the right handler here too, but the render needs SmartBrowz.
+backend: fake
+actor:
+  oa: sales
+  role: sales
+  language: th
+  permissions: sales
+steps:
+- seed:
+    raw:
+      company_profile:
+        legal_name: บริษัท ทดสอบ จำกัด
+        company_name: ร้านทดสอบ
+        tax_id: '0105558123456'
+        company_address: 99/1
+        company_phone: '021234567'
+        company_email: a@b.com
+        open_hours: null
+        vat_rate: '0.07'
+      line_targets:
+        CHN-CUST-1: U-somchai
+    customers:
+    - ref: somchai
+      first_name: สมชาย
+      last_name: ใจดี
+      phone: '0812345678'
+      customer_chann_uid: CHN-CUST-1
+    - ref: somying
+      first_name: สมหญิง
+      last_name: ร่ำรวย
+      phone: '0899999999'
+    deals:
+    - ref: deal1
+      contact_id: $somchai
+    - ref: deal2
+      contact_id: $somying
+    call:
+    - method: add_deal_product
+      args: {deal_id: $deal1.id, payload: {product_name: แอร์ 12000 BTU, qty: 2, quoted_unit_price: '15000.00'}}
+    - method: add_deal_product
+      args: {deal_id: $deal2.id, payload: {product_name: พัดลมไอเย็น, qty: 1, quoted_unit_price: '4000.00'}}
+    quotes:
+    - ref: quote1
+      deal_id: $deal1.id
+
+# ------------------------------------------- the quotation is handed over too
+# The same verb on the other record. Registered as ("send","quote") and
+# parity-accepted, it had no test and no scenario until review finding 5.
+- seed:
+    call:
+    - method: set_quote_status
+      args: {quote_id: $quote1.id, status: sent}
+    - method: link_quote_document
+      args: {quote_id: $quote1.id, document_id: GD-Q1}
+- send:
+    message: ส่งใบเสนอราคา Q-2026-0001 ให้ลูกค้าทางไลน์
+    ai: {action: send, entity: quote, fields: {code: Q-2026-0001}, missing: []}
+  expect:
+    contains: ['ใบเสนอราคา', 'Q-2026-0001', 'สมชาย', 'ไลน์']
+    not_contains: ['ส่งซ้ำ']
+    is_not: [generic_error, not_sure, permission, not_found, not_a_feature]
+
+# ---------------------------------------------------------------- the bill
+- send:
+    message: ออกใบแจ้งหนี้ให้ดีล D-2026-0001
+    ai: {action: create, entity: invoice, fields: {deal_code: D-2026-0001}, missing: []}
+  expect:
+    contains: INV-2026-0001
+    is_not: [generic_error, not_sure, permission, not_found, not_a_feature]
+- seed:
+    call:
+    - method: issue_invoice
+      args: {invoice_id: INV-1, document_id: GD-INV1}
+
+# ------------------------------------------------- correcting it, and the money
+# 3 x 15,000 = 45,000 + 7% VAT = 48,150.00, recomputed by invoices.edit_lines
+# (build_line_items/compute_totals) - never added up here.
+- send:
+    message: เปลี่ยนจำนวนแอร์ในใบแจ้งหนี้ INV-2026-0001 เป็น 3 ตัว
+    ai: {action: update, entity: invoice, fields: {code: INV-2026-0001, target_name: แอร์, qty: 3}, missing: []}
+  expect:
+    contains: ['48,150.00']
+    quick_replies_include: ['ยืนยันแก้']
+    is_not: [generic_error, not_sure, permission, not_found, not_a_feature]
+# A change to what the customer pays is asked first, like void (final
+# review I6); the tap is a word, never the model.
+- send: ยืนยันแก้
+  expect:
+    used_ai: false
+    contains: ['48,150.00', 'ออกเอกสาร']
+    is_not: [generic_error, not_sure, permission, not_found, not_a_feature]
+
+# A CHANGE is not a QUANTITY (review finding 2): 3 on the bill + 2 more = 5,
+# 5 x 15,000 = 75,000 + 7% VAT = 80,250.00. Reading the delta as a set would
+# have cut the bill back to 2 and answered success.
+- send:
+    message: เพิ่มแอร์อีก 2 ตัวในใบแจ้งหนี้ INV-2026-0001
+    ai: {action: update, entity: invoice, fields: {code: INV-2026-0001, target_name: แอร์, qty_change: 2}, missing: []}
+  expect:
+    contains: ['80,250.00']
+    quick_replies_include: ['ยืนยันแก้']
+    is_not: [generic_error, not_sure, permission, not_found, not_a_feature]
+- send: ยืนยันแก้
+  expect:
+    used_ai: false
+    contains: ['80,250.00']
+    is_not: [generic_error, not_sure, permission, not_found, not_a_feature]
+- send:
+    message: ลดแอร์ในใบแจ้งหนี้ INV-2026-0001 ลง 1 ตัว
+    ai: {action: update, entity: invoice, fields: {code: INV-2026-0001, target_name: แอร์, qty_change: -1}, missing: []}
+  expect:
+    contains: ['64,200.00']
+    quick_replies_include: ['ยืนยันแก้']
+    is_not: [generic_error, not_sure, permission, not_found, not_a_feature]
+- send: ยืนยันแก้
+  expect:
+    used_ai: false
+    contains: ['64,200.00']
+    is_not: [generic_error, not_sure, permission, not_found, not_a_feature]
+
+# "ลดราคา 1000" — measured 24 ก.ย. 2569 as an amount OFF (unit_price_change:
+# -1000). The road has no bill-wide discount and must not turn it into a
+# unit price: it asks, and nothing is written (final review I6).
+- send:
+    message: ลดราคา 1000 ในใบแจ้งหนี้ INV-2026-0001
+    ai: {action: update, entity: invoice, fields: {code: INV-2026-0001, unit_price_change: -1000}, missing: []}
+  expect:
+    contains: ['แบบไหน', 'เปลี่ยนราคาแอร์']
+    not_contains: ['ยืนยันแก้', 'รับชำระ']
+    is_not: [generic_error, permission, not_found]
+
+# A sentence about ONE LINE must never reach the bill's own void road, and
+# must not be answered with a question about setting a quantity. All three
+# readings below are the deployed model's own (ask-model.py, 23 ก.ย. 2569):
+# the first two come back as `update`, which is why round 1's verb-keyed
+# guard missed them; the third is the one phrasing that does say `delete`.
+- send:
+    message: เอาแอร์ออกจากใบแจ้งหนี้ INV-2026-0001
+    ai: {action: update, entity: invoice, fields: {code: INV-2026-0001, target_name: แอร์}, missing: []}
+  expect:
+    contains: ['แอร์', 'INV-2026-0001', 'ยกเลิกใบนี้แล้วออกใบใหม่']
+    not_contains: ['ยืนยันยกเลิก', 'ยังไม่รู้ว่าจะแก้อะไร']
+    is_not: [generic_error, not_sure, permission, not_found]
+- send:
+    message: ยกเลิกแอร์ในใบแจ้งหนี้ INV-2026-0001
+    ai: {action: update, entity: invoice, fields: {code: INV-2026-0001, target_name: แอร์, qty: 0}, missing: []}
+  expect:
+    contains: ['แอร์', 'ยกเลิกใบนี้แล้วออกใบใหม่']
+    not_contains: ['ยืนยันยกเลิก']
+    is_not: [generic_error, not_sure, permission, not_found]
+- send:
+    message: ยกเลิกรายการแอร์ใน INV-2026-0001
+    ai: {action: delete, entity: line_item, fields: {code: INV-2026-0001, target_name: แอร์}, missing: []}
+  expect:
+    contains: ['แอร์', 'ยกเลิกใบนี้แล้วออกใบใหม่']
+    not_contains: ['ยืนยันยกเลิก']
+    is_not: [generic_error, not_sure, permission, not_found]
+
+# A product the bill does not carry cannot be added to it either.
+- send:
+    message: ใส่พัดลม 2 ตัวในใบแจ้งหนี้ INV-2026-0001
+    ai: {action: update, entity: invoice, fields: {code: INV-2026-0001, target_name: พัดลม, qty: 2}, missing: []}
+  expect:
+    contains: ['พัดลม']
+    not_contains: ['ยืนยันยกเลิก']
+    is_not: [generic_error, not_sure, permission, not_found]
+
+# The real void still reaches the confirm card — the guard narrows on what
+# the model NAMED, and this reading names no product. It only ASKS, so the
+# bill is untouched by this step.
+- send:
+    message: ยกเลิกใบแจ้งหนี้ INV-2026-0001
+    ai: {action: void, entity: invoice, fields: {code: INV-2026-0001}, missing: []}
+  expect:
+    contains: ['INV-2026-0001']
+    quick_replies_include: ['ยืนยันยกเลิก']
+    is_not: [generic_error, not_sure, permission, not_found]
+# …and declining leaves the bill exactly where it was, so the rest of this
+# conversation still has an invoice to work with.
+- send: ไม่ยกเลิก
+  expect:
+    used_ai: false
+    is_not: [generic_error, permission]
+
+# --------------------------------------------------------- handing it over
+# The bill was corrected after its PDF was made, so the PDF still carries the
+# old total: it is NOT sent (final review C1 — a link to a stale bill cannot
+# be recalled). The refusal names the road out.
+- send:
+    message: ส่งใบแจ้งหนี้ INV-2026-0001 ให้ลูกค้า
+    ai: {action: send, entity: invoice, fields: {code: INV-2026-0001, kind: invoice}, missing: []}
+  expect:
+    contains: ['แก้ไขแล้ว ต้องออกเอกสารใหม่ก่อน']
+    quick_replies_include: ['ออกเอกสาร']
+    not_contains: ['ทางไลน์แล้ว']
+    is_not: [generic_error, not_sure, permission, not_found, not_a_feature]
+# Re-issued (the render needs SmartBrowz, so the new document is linked by a
+# seed call, as above) — now it goes.
+- seed:
+    call:
+    - method: link_invoice_document
+      args: {invoice_id: INV-1, document_id: GD-INV1-R}
+- send:
+    message: ส่งใบแจ้งหนี้ INV-2026-0001 ให้ลูกค้า
+    ai: {action: send, entity: invoice, fields: {code: INV-2026-0001, kind: invoice}, missing: []}
+  expect:
+    contains: ['สมชาย', 'ไลน์']
+    not_contains: ['ส่งซ้ำ']
+    is_not: [generic_error, not_sure, permission, not_found, not_a_feature]
+
+# --------------------------------------- the customer with no LINE is named
+- send:
+    message: ออกใบแจ้งหนี้ให้ดีล D-2026-0002
+    ai: {action: create, entity: invoice, fields: {deal_code: D-2026-0002}, missing: []}
+  expect:
+    contains: INV-2026-0002
+    is_not: [generic_error, not_sure, permission, not_found, not_a_feature]
+- seed:
+    call:
+    - method: issue_invoice
+      args: {invoice_id: INV-2, document_id: GD-INV2}
+- send:
+    message: ส่งใบแจ้งหนี้ INV-2026-0002 ให้ลูกค้า
+    ai: {action: send, entity: invoice, fields: {code: INV-2026-0002, kind: invoice}, missing: []}
+  expect:
+    contains: ['สมหญิง ร่ำรวย', 'ยังไม่ได้ผูกไลน์']
+    is_not: [generic_error, not_sure, permission, not_found, not_a_feature]
+
+# ----------------------------------------------- paying it closes the deal
+# 4 x 15,000 = 60,000 + 7% VAT = 64,200.00 (2 -> set 3 -> +2 -> -1). The deal
+# takes the PRE-VAT value, 60,000.00 (ruling 23), because the Data tier said
+# it closed it.
+- send:
+    message: รับชำระ INV-2026-0001 ครบ
+    ai: {action: pay, entity: invoice, fields: {code: INV-2026-0001, full: true}, missing: []}
+  expect:
+    contains: ['ชำระครบ', 'ปิดสำเร็จ', 'D-2026-0001', '60,000.00', 'ก่อน VAT']
+    is_not: [generic_error, not_sure, permission, not_found, not_a_feature]
+
+# ------------------------------------- and after that the bill is closed to edits
+- send:
+    message: แก้ใบแจ้งหนี้ INV-2026-0001 เปลี่ยนกำหนดชำระเป็นสิ้นเดือน
+    ai: {action: update, entity: invoice, fields: {code: INV-2026-0001, due_date: '2026-09-30'}, missing: []}
+  expect:
+    contains: ['แก้รายการไม่ได้', 'ยกเลิก']
+    is_not: [generic_error, not_sure, permission, not_found, not_a_feature]

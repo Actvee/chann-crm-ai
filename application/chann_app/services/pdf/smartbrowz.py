@@ -34,6 +34,7 @@ import re
 
 import requests
 import zcatalyst_sdk
+from zcatalyst_sdk import _constants as sdk_constants
 from zcatalyst_sdk import credentials
 from zcatalyst_sdk.exceptions import CatalystAppError, CatalystError
 from zcatalyst_sdk.types import ICatalystOptions
@@ -87,16 +88,31 @@ def _collapse_duplicate_path_slashes(url: str) -> str:
 #: one retry (render() below) recover that case in well under the time the
 #: SDK's single attempt spent failing, which matters inside a LINE webhook.
 ZOHO_TIMEOUT = (10, 20)
-_ZOHO_HOSTS = ("zoho.com", "zohoapis.com", "catalyst.zoho.com")
+
+
+def _host_of(url: str) -> str:
+    match = re.match(r"^https?://([^/:]+)", url or "")
+    return (match.group(1) if match else "").lower()
+
+
+#: Where the SDK refreshes its token (`credentials.py` builds its client on
+#: `_constants.ACCOUNTS_URL`). Its default is `accounts.localzoho.com`,
+#: which is not under "zoho.com", and the env override can name anything —
+#: so the host is read from the SDK itself rather than guessed, and a
+#: misconfigured accounts URL is bounded like every other Zoho call
+#: instead of running on the SDK's own (60, 30).
+SDK_ACCOUNTS_HOST = _host_of(getattr(sdk_constants, "ACCOUNTS_URL", "")) or "accounts.localzoho.com"
+_ZOHO_HOSTS = tuple(dict.fromkeys((
+    "zoho.com", "zohoapis.com", "catalyst.zoho.com", "localzoho.com", SDK_ACCOUNTS_HOST,
+)))
 #: Between the two attempts. Patched to 0 in tests.
 _RETRY_PAUSE_S = 1.0
 _RENDER_ATTEMPTS = 2
 
 
 def _is_zoho(url: str) -> bool:
-    match = re.match(r"^https?://([^/]+)", url or "")
-    host = (match.group(1) if match else "").lower()
-    return any(host == h or host.endswith("." + h) for h in _ZOHO_HOSTS)
+    host = _host_of(url)
+    return bool(host) and any(host == h or host.endswith("." + h) for h in _ZOHO_HOSTS)
 
 
 def _patched_session_request(self, method, url, *args, **kwargs):

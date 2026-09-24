@@ -663,6 +663,133 @@ class FakeDataClient:
             "generated_at": "2026-09-17T00:00:00+00:00",
         }
 
+    async def basic_report(self, license_id, key):
+        """One of round 21C's five, computed from this fake's own rows.
+
+        Mirrors `chann_data.repositories.basic_reports` in shape AND in
+        wording — a fake with labels of its own would let a chat reply pass
+        here and read differently on DEV (the tier-seam rule, CLAUDE.md
+        §-1). The numbers themselves are pinned against real Postgres in
+        tests/integration/test_round21c_basic_reports.py; this exists so a
+        conversation can be walked end to end.
+        """
+        from decimal import Decimal as _D
+
+        self.recorded.append(("basic_report", license_id, key))
+
+        def _row(row_key, th, en, value, count=None):
+            row = {"key": row_key, "label_th": th, "label_en": en, "value": float(value or 0)}
+            if count is not None:
+                row["count"] = int(count)
+            return row
+
+        def _envelope(title_th, title_en, unit, headline, rows, notes_th=None, notes_en=None):
+            return {
+                "key": key, "title_th": title_th, "title_en": title_en, "unit": unit,
+                "headline": headline, "rows": rows,
+                "notes_th": notes_th or [], "notes_en": notes_en or [],
+                "generated_at": "2026-09-23T04:00:00+00:00",
+            }
+
+        def _headline(th, en, value):
+            return {"label_th": th, "label_en": en, "value": float(value or 0)}
+
+        if key == "pipeline_value":
+            card = await self.pipeline_summary(license_id)
+            words = {"new": ("ใหม่", "New"), "proposed": ("เสนอราคาแล้ว", "Proposed"),
+                     "won": ("ปิดสำเร็จ", "Won"), "lost": ("ไม่สำเร็จ", "Lost")}
+            rows = [
+                _row(stage, *words[stage],
+                     value=_D(str((card["by_stage"].get(stage) or {}).get("value") or 0)),
+                     count=int((card["by_stage"].get(stage) or {}).get("count") or 0))
+                for stage in ("new", "proposed", "won", "lost")
+            ]
+            total = sum((_D(str(b["value"])) for b in card["by_stage"].values()), _D("0"))
+            return _envelope(
+                "มูลค่าดีลทั้งหมด", "Pipeline value", "money",
+                _headline("มูลค่ารวมทุกดีล", "All deals", total), rows,
+                notes_th=[f"ยังเปิดอยู่ {card['open_value']} บาท · คาดว่าจะปิดเดือนนี้ {card['closing_this_month']} บาท"],
+                notes_en=[f"Open {card['open_value']} · forecast to close this month {card['closing_this_month']}"],
+            )
+        if key == "won_this_month":
+            def _value(deal):
+                return sum(
+                    (_D(str(pr.get("quoted_unit_price") or 0)) * int(pr.get("qty") or 0)
+                     for pr in (deal.get("products") or [])), _D("0"),
+                ) or _D(str(deal.get("amount") or 0))
+            won = [d for d in self._deals if d.get("stage") == "won"]
+            this_month = [d for d in won if str(d.get("closed_at") or "")[:7] != "2026-08"]
+            last_month = [d for d in won if str(d.get("closed_at") or "")[:7] == "2026-08"]
+            rows = [
+                _row("this_month", "เดือนนี้", "This month",
+                     sum((_value(d) for d in this_month), _D("0")), len(this_month)),
+                _row("last_month", "เดือนที่แล้ว", "Last month",
+                     sum((_value(d) for d in last_month), _D("0")), len(last_month)),
+            ]
+            now, before = _D(str(rows[0]["value"])), _D(str(rows[1]["value"]))
+            difference = now - before
+            moved = f"{'มากกว่า' if difference >= 0 else 'น้อยกว่า'}เดือนที่แล้ว {abs(difference):,.2f} บาท"
+            return _envelope(
+                "ยอดปิดสำเร็จเดือนนี้", "Won this month", "money",
+                _headline("ปิดได้เดือนนี้", "Won this month", now), rows,
+                notes_th=[moved], notes_en=["By the real close date."],
+            )
+        if key == "open_jobs_by_tech":
+            names = {str(m.get("id")): (m.get("display_name") or m.get("chann_uid") or "")
+                     for m in getattr(self, "_members", [])}
+            counted = {}
+            for row in getattr(self, "_tickets", []):
+                if row.get("status") not in ("open", "assigned", "in_progress"):
+                    continue
+                ref = str(row.get("assigned_to_ref") or "") or None
+                counted[ref] = counted.get(ref, 0) + 1
+            rows = []
+            for ref, n in sorted(counted.items(), key=lambda kv: -kv[1]):
+                if ref is None:
+                    th, en = "ยังไม่มอบหมาย", "Unassigned"
+                else:
+                    th = en = names.get(ref) or ref[:8]
+                rows.append(_row(ref or "unassigned", th, en, n, n))
+            return _envelope(
+                "งานซ่อมค้างแยกตามช่าง", "Open jobs by technician", "count",
+                _headline("งานค้างทั้งหมด", "Open jobs", sum(counted.values())), rows,
+                notes_th=["นับสถานะ เปิดอยู่ · มอบหมายแล้ว · กำลังทำ"],
+                notes_en=["Counting open, assigned and in progress."],
+            )
+        if key == "outstanding_invoices":
+            live = [self._invoice_out(r) for r in getattr(self, "_invoices", [])
+                    if r.get("status") in ("issued", "partially_paid")]
+            overdue = [r for r in live if r["is_overdue"]]
+            not_due = [r for r in live if not r["is_overdue"]]
+            rows = [
+                _row("overdue", "เลยกำหนด", "Overdue",
+                     sum((_D(r["outstanding"]) for r in overdue), _D("0")), len(overdue)),
+                _row("not_due", "ยังไม่ถึงกำหนด", "Not yet due",
+                     sum((_D(r["outstanding"]) for r in not_due), _D("0")), len(not_due)),
+            ]
+            total = sum((_D(str(r["value"])) for r in rows), _D("0"))
+            return _envelope(
+                "ยอดค้างชำระ", "Outstanding invoices", "money",
+                _headline("ค้างชำระรวม", "Outstanding", total), rows,
+                notes_th=["นับใบที่ออกแล้วและชำระบางส่วน · เลยกำหนดคิดจากวันครบกำหนดตามเวลาไทย"],
+                notes_en=["Issued and partially paid bills."],
+            )
+        if key == "satisfaction_avg":
+            answered = [v for v in getattr(self, "_surveys", [])
+                        if v.get("submitted_at") and v.get("score") is not None]
+            average = round(sum(int(v["score"]) for v in answered) / len(answered), 2) if answered else 0
+            rows = [
+                _row("this_month", "เดือนนี้", "This month", average, len(answered)),
+                _row("last_month", "เดือนที่แล้ว", "Last month", 0, 0),
+            ]
+            return _envelope(
+                "คะแนนความพึงพอใจเฉลี่ย", "Average satisfaction", "score",
+                _headline("เฉลี่ยเดือนนี้", "This month", average), rows,
+                notes_th=[f"จากใบที่ตอบแล้ว {len(answered)} ใบเดือนนี้ (เต็ม 3)"],
+                notes_en=[f"From {len(answered)} answered forms this month (out of 3)."],
+            )
+        raise ValueError(f"unknown report: {key!r}")
+
     async def consume_ai_chart_quota(self, license_id, month):
         """Mirrors the Data tier: the count is per month, the allowance is
         whatever ai_chart_quota says (default 30), and spending past it is
@@ -1136,6 +1263,14 @@ class FakeDataClient:
         self.recorded.append(("link_invoice_document", license_id, invoice_id, document_id))
         row = self._invoice_row(invoice_id)
         row["generated_document_id"] = document_id
+        # The Data tier clears the warning with the document it warned
+        # about (repositories/invoices.py: `needs_reissue` never outlives
+        # the PDF it was about) — a re-issue is what makes a corrected
+        # bill sendable again (final review C1).
+        snapshot = dict(row.get("data_snapshot") or {})
+        snapshot.pop("needs_reissue_at", None)
+        row["data_snapshot"] = snapshot
+        row["needs_reissue"] = False
         return self._invoice_out(row)
 
     async def add_invoice_payment(self, license_id, invoice_id, payload, actor_id=None):
@@ -1155,8 +1290,86 @@ class FakeDataClient:
             "reference": payload.get("reference"), "note": payload.get("note"), "recorded_by": payload.get("recorded_by"),
             "created_at": "2026-09-21T03:00:00+00:00",
         }]
+        settled_before = row["status"] == "paid"
         row["paid_amount"] = str(Decimal(row["paid_amount"]) + amount)
         row["status"] = "paid" if Decimal(row["paid_amount"]) >= Decimal(row["total"]) else "partially_paid"
+        closed = None
+        # Round 21C — the same write the repository makes inside the same
+        # transaction (repositories/invoices.py::add_payment, and
+        # phase9.py::close_won_from_invoice): the deal is won and holds
+        # what it was paid for. Its three refusals are mirrored too, so a
+        # chat test cannot be greener than the running system.
+        if row["status"] == "paid" and not settled_before and row.get("deal_id"):
+            deal = next((d for d in getattr(self, "_deals", [])
+                         if str(d.get("id")) == str(row["deal_id"])), None)
+            if deal is not None and not deal.get("archived_at") and deal.get("stage") != "lost" \
+                    and not (deal.get("stage") == "won" and deal.get("closed_at")):
+                deal["products"] = [
+                    {"id": f"dp-r{i}", "deal_id": deal["id"],
+                     "product_id": line.get("product_id"),
+                     "product_name": line.get("product_name") or "-",
+                     "quoted_unit_price": str(line.get("unit_price") or line.get("quoted_unit_price") or "0"),
+                     "qty": int(line.get("qty") or 1), "notes": line.get("notes"), "position": i}
+                    for i, line in enumerate((row.get("data_snapshot") or {}).get("line_items") or [])
+                ]
+                # Ruling 23: pre-VAT, after discount — the repository's
+                # `_money(subtotal - discount_amount)`.
+                deal["amount"] = str(Decimal(str(row.get("subtotal") or "0"))
+                                     - Decimal(str(row.get("discount_amount") or "0")))
+                deal["lost_reason"] = None
+                deal["stage"] = "won"
+                deal["closed_at"] = payload.get("paid_at") or "2026-09-21T03:00:00+00:00"
+                closed = deal
+        # Round 21C, review finding 1: the route returns the deal THIS
+        # payment closed, and None otherwise (internal.py::add_invoice_payment
+        # -> _invoice_out(..., closed_deal=...)). A fake that derived it from
+        # `status == "paid"` would hide the very defect the field exists to
+        # remove. `_suppress_closed_deal` lets a test prove chat stays silent
+        # when the tier says nothing.
+        out = self._invoice_out(row)
+        if closed is not None and not getattr(self, "_suppress_closed_deal", False):
+            out["closed_deal"] = dict(closed)
+        return out
+
+    # ------------------------------------------------------------ Round 21C
+    # Correcting a bill. The Application tier does the arithmetic (it is
+    # `invoices.edit_lines` that calls build_line_items/compute_totals);
+    # the Data tier stores what it is given and remembers that the PDF no
+    # longer matches — which is what these two mirror.
+
+    async def update_invoice_lines(self, license_id, invoice_id, payload, actor_id=None):
+        from decimal import Decimal
+        from chann_app.data_client import DataTierError
+        self.recorded.append(("update_invoice_lines", license_id, invoice_id, dict(payload), actor_id))
+        row = self._invoice_row(invoice_id)
+        if row["status"] == "void":
+            raise DataTierError(409, f"invoice {row['invoice_id']} is void")
+        if Decimal(row["paid_amount"]) > 0:
+            raise DataTierError(409, f"invoice {row['invoice_id']} has payments recorded")
+        snapshot = dict(payload.get("data_snapshot") or {})
+        if row.get("generated_document_id"):
+            snapshot["needs_reissue_at"] = "2026-09-23T00:00:00+00:00"
+        row["data_snapshot"] = snapshot
+        for key in ("subtotal", "discount_amount", "vat_rate", "vat_amount", "total"):
+            if key in payload:
+                row[key] = payload[key] if payload[key] is None else str(payload[key])
+        row["needs_reissue"] = bool(snapshot.get("needs_reissue_at"))
+        return self._invoice_out(row)
+
+    async def update_invoice_details(self, license_id, invoice_id, payload, actor_id=None):
+        from decimal import Decimal
+        from chann_app.data_client import DataTierError
+        self.recorded.append(("update_invoice_details", license_id, invoice_id, dict(payload), actor_id))
+        row = self._invoice_row(invoice_id)
+        if row["status"] == "void":
+            raise DataTierError(409, f"invoice {row['invoice_id']} is void")
+        if Decimal(row["paid_amount"]) > 0:
+            raise DataTierError(409, f"invoice {row['invoice_id']} has payments recorded")
+        # None means "not said", not "clear it" — the same rule the PATCH
+        # route follows.
+        for key in ("note", "due_date"):
+            if payload.get(key) is not None:
+                row[key] = payload[key]
         return self._invoice_out(row)
 
     async def void_invoice(self, license_id, invoice_id, actor_id=None):
@@ -1605,7 +1818,12 @@ class FakeDataClient:
             # no such column at all — so the tests were green and the
             # button in production sent the literal string "None".
             "customer_id": f"C-2026-{len(self._customers) + 1:04d}",
-            "customer_chann_uid": None, "stage": "lead", "owner_member_id": None,
+            # CustomerIn carries it (schemas.py), and round 21C needs a
+            # seeded customer who is actually linked on LINE — a fake that
+            # dropped the field made "ส่งให้ลูกค้า" untestable rather than
+            # tested.
+            "customer_chann_uid": payload.get("customer_chann_uid"),
+            "stage": "lead", "owner_member_id": None,
             "first_name": payload.get("first_name"), "last_name": payload.get("last_name"),
             "phone": _digits_phone(payload.get("phone")), "email": payload.get("email"),
             "address": payload.get("address"), "notes": payload.get("notes"),

@@ -2640,6 +2640,30 @@ async def _invoice_or_404(client: DataClient, principal: TenantPrincipal, licens
     return invoice
 
 
+async def _invoice_customer_has_line(client: DataClient, license_id: str, invoice: dict) -> bool:
+    """Round 21C, ruling 18: the same question `services/document_send.py`'s
+    `send_document_to_customer` answers before it pushes a document (a
+    customer that is not linked raises `CustomerNotLinked`) — answered
+    once here, on the invoice's own GET, so the dashboard's send button
+    reads it straight off the invoice instead of asking again with a
+    second request that can race, be skipped, or answer a stale invoice.
+
+    The predicate itself is `document_send.customer_is_linked`, the one
+    the push uses: this fetches the customer, it does not decide what
+    "linked" means.
+    """
+    from .services.document_send import customer_is_linked
+
+    contact_id = invoice.get("contact_id")
+    if not contact_id:
+        return False
+    try:
+        customer = await client.get_customer(license_id, str(contact_id))
+    except DataTierError:
+        return False
+    return customer_is_linked(customer or {})
+
+
 def _invoice_document_error(exc: Exception, *, code: str) -> HTTPException:
     """The quote's error taxonomy, for the invoice and the receipt: the
     dashboard already translates these statuses (409 company_incomplete /
@@ -2752,7 +2776,8 @@ async def get_invoice(
 ):
     _require_same_tenant(principal, license_id)
     principal.require("invoice.read")
-    return await _invoice_or_404(client, principal, license_id, invoice_id)
+    invoice = await _invoice_or_404(client, principal, license_id, invoice_id)
+    return {**invoice, "customer_has_line": await _invoice_customer_has_line(client, license_id, invoice)}
 
 
 async def _create_invoice(
@@ -2952,6 +2977,162 @@ async def void_invoice(
         return await client.void_invoice(license_id, invoice_id, actor_id=principal.chann_uid)
     except DataTierError as exc:
         raise _with_reason(exc)
+
+
+class DocumentSendBody(BaseModel):
+    kind: str = "invoice"   # "invoice" | "receipt"; the quote route ignores it
+
+
+def _document_send_error(exc: Exception) -> HTTPException:
+    """The refusals of `services/document_send.py` as the dashboard reads
+    them. Both are refusals with a cure — add the customer's LINE, or issue
+    the document — so neither is a 500."""
+    from .services.document_send import CustomerNotLinked, DocumentNotIssued, DocumentNotSendable
+
+    if isinstance(exc, DocumentNotSendable):
+        # The same shape as "not issued" — the cure is again "fix the
+        # document first" — with the reason as the code, so the screen can
+        # say which: void / needs_reissue / quote_closed (final review C1).
+        return HTTPException(status_code=422, detail={"error": exc.reason})
+    if isinstance(exc, CustomerNotLinked):
+        return HTTPException(status_code=status.HTTP_409_CONFLICT,
+                             detail={"error": "customer_not_linked", "customer": exc.customer_name})
+    if isinstance(exc, DocumentNotIssued):
+        return HTTPException(status_code=422, detail={"error": "not_issued"})
+    # Nothing else can arrive: both call sites catch exactly those two. A
+    # third exception here is a bug in the caller, and a bug dressed as a
+    # 500 body reads like a refusal the shop could act on.
+    raise exc
+
+
+@router.post("/licenses/{license_id}/invoices/{invoice_id}/send")
+async def send_invoice_to_customer(
+    license_id: str, invoice_id: str, payload: DocumentSendBody | None = None,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Hand the bill (or its receipt) to the customer on LINE."""
+    from .services import document_send, invoices as invoice_service
+
+    _require_same_tenant(principal, license_id)
+    principal.require("invoice.update")
+    if principal.is_customer:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="staff only")
+    invoice = await _invoice_or_404(client, principal, license_id, invoice_id)
+    kind = (payload.kind if payload else "invoice") or "invoice"
+    if kind not in ("invoice", "receipt"):
+        raise HTTPException(status_code=422, detail="kind must be invoice or receipt")
+    document_id = invoice.get("receipt_document_id") if kind == "receipt" else invoice.get("generated_document_id")
+    try:
+        customer, company = await invoice_service.invoice_parties(client, license_id, invoice)
+        return await document_send.send_document_to_customer(
+            client, license_id=license_id, kind=kind, record=invoice,
+            document_id=str(document_id) if document_id else None,
+            customer=customer, company=company, actor_id=principal.chann_uid)
+    except (document_send.CustomerNotLinked, document_send.DocumentNotIssued) as exc:
+        raise _document_send_error(exc)
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.post("/licenses/{license_id}/quotes/{quote_id}/send")
+async def send_quote_to_customer(
+    license_id: str, quote_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Hand the quotation to the customer on LINE."""
+    from .services import document_send
+
+    _require_same_tenant(principal, license_id)
+    principal.require("quote.update")
+    if principal.is_customer:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="staff only")
+    try:
+        quote = await client.get_quote(license_id, quote_id)
+        if quote is None:
+            raise HTTPException(status_code=404, detail="quote not found")
+        deal = await client.get_deal(license_id, str(quote.get("deal_id") or ""))
+        customer = await client.get_customer(license_id, str((deal or {}).get("contact_id") or "")) or {}
+        company = await client.get_company_profile(license_id)
+        return await document_send.send_document_to_customer(
+            client, license_id=license_id, kind="quote", record=quote,
+            document_id=str(quote.get("generated_document_id") or "") or None,
+            customer=customer, company=company, actor_id=principal.chann_uid)
+    except (document_send.CustomerNotLinked, document_send.DocumentNotIssued) as exc:
+        raise _document_send_error(exc)
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+class InvoiceLineIn(BaseModel):
+    product_name: str
+    qty: int = 1
+    unit_price: str | float
+    notes: str | None = None
+
+
+class InvoiceLinesBody(BaseModel):
+    lines: list[InvoiceLineIn]
+
+
+class InvoiceDetailsBody(BaseModel):
+    note: str | None = None
+    due_date: date | None = None
+
+
+@router.patch("/licenses/{license_id}/invoices/{invoice_id}/lines")
+async def update_invoice_lines(
+    license_id: str, invoice_id: str, payload: InvoiceLinesBody,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Correct what is on the bill. Editable until money has touched it —
+    the invoice's answer to the quote's "draft only" (round 21C)."""
+    from .services import invoices as invoice_service
+
+    _require_same_tenant(principal, license_id)
+    principal.require("invoice.update")
+    if principal.is_customer:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="staff only")
+    invoice = await _invoice_or_404(client, principal, license_id, invoice_id)
+    try:
+        company = await client.get_company_profile(license_id)
+        return await invoice_service.edit_lines(
+            client, license_id=license_id, invoice=invoice,
+            lines=[line.model_dump(mode="json") for line in payload.lines],
+            company=company, actor_id=principal.chann_uid,
+        )
+    except invoice_service.InvoiceLocked as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    except invoice_service.InvoiceLinesEmpty as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except DataTierError as exc:
+        raise _propagate(exc)
+
+
+@router.patch("/licenses/{license_id}/invoices/{invoice_id}")
+async def update_invoice_details(
+    license_id: str, invoice_id: str, payload: InvoiceDetailsBody,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    from .services import invoices as invoice_service
+
+    _require_same_tenant(principal, license_id)
+    principal.require("invoice.update")
+    if principal.is_customer:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="staff only")
+    invoice = await _invoice_or_404(client, principal, license_id, invoice_id)
+    try:
+        return await invoice_service.edit_details(
+            client, license_id=license_id, invoice=invoice,
+            note=payload.note, due_date=payload.due_date, actor_id=principal.chann_uid,
+        )
+    except invoice_service.InvoiceLocked as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    except DataTierError as exc:
+        raise _propagate(exc)
 
 
 # -------------------------------------------------------------------- quotes
@@ -5099,15 +5280,29 @@ async def ai_report_ask(
     client: DataClient = Depends(get_data_client),
 ):
     """Plain language in, a spec + result + files out (or a clarifying
-    question). The model only ever produces the spec."""
-    from .services import reports_ai
+    question). The model only ever produces the spec.
+
+    Final review I3: the five come FIRST, by the same helper and in the
+    same order as chat (`chat.basic_report_asked_for`), so a sentence that
+    is one of them is answered free here exactly as it is on LINE —
+    `{"basic": report, "text": …, "free": True}`, no picture, no credit.
+    None keeps the AI road below."""
+    from .services import basic_reports, reports_ai
     from .services.ai.client import AINotConfigured, AIUnavailable
+    from .services.chat import basic_report_asked_for
 
     _require_same_tenant(principal, license_id)
     principal.require("view_reports")
     language = body.language or "th"
     if not body.message.strip():
         raise HTTPException(status_code=422, detail="message is required")
+    key = await basic_report_asked_for(body.message, language=language)
+    if key is not None:
+        try:
+            report = await basic_reports.fetch(client, license_id=license_id, key=key)
+        except DataTierError as exc:
+            raise _propagate(exc)
+        return {"basic": report, "text": basic_reports.as_text(report, language), "free": True}
     try:
         out = await reports_ai.handle_report_request(
             client, license_id=license_id, message=body.message, language=language,
@@ -5122,7 +5317,8 @@ async def ai_report_ask(
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="AI is not available right now")
     except DataTierError as exc:
         raise _propagate(exc)
-    return await _charge_for_the_picture(client, license_id, out)
+    return await _charge_for_the_question(
+        client, license_id, await _charge_for_the_picture(client, license_id, out))
 
 
 async def _charge_for_the_picture(client, license_id: str, out: dict) -> dict:
@@ -5145,15 +5341,20 @@ async def _charge_for_the_picture(client, license_id: str, out: dict) -> dict:
     if not out.get("chart"):
         return out
     quota = await chart_quota.spend_one(client, license_id=license_id)
-    out["quota"] = {
-        "allowed": bool(quota.get("allowed")),
-        "used": int(quota.get("used") or 0),
-        "allowance": int(quota.get("allowance") or 0),
-        "unknown": bool(quota.get("unknown")),
-    }
+    out["quota"] = chart_quota.receipt(quota, charged_for="picture")
     if not quota.get("allowed"):
         out["chart"] = None
     return out
+
+
+async def _charge_for_the_question(client, license_id: str, out: dict) -> dict:
+    """Round 21C: an ad-hoc question costs a credit. The rule lives in
+    `chart_quota.charge_for_the_question`, shared with the LINE road, so
+    the dashboard and the chat cannot charge the same question differently.
+    """
+    from .services import chart_quota
+
+    return await chart_quota.charge_for_the_question(client, license_id=license_id, out=out)
 
 
 @router.get("/licenses/{license_id}/reports/ai/options")
@@ -5178,7 +5379,14 @@ async def ai_report_run(
     principal: TenantPrincipal = Depends(get_tenant_principal),
     client: DataClient = Depends(get_data_client),
 ):
-    """Run an edited spec straight from the dashboard — still whitelisted."""
+    """Run an edited spec straight from the dashboard — still whitelisted.
+
+    Final review I2: the spec editor asks the model nothing about the
+    question, so the question credit is never spent here. The one model
+    call this route can make is the picture's design, which only the
+    designed road takes (a result with rows → `chart_plan`); that picture
+    is charged as a picture, as it was before round 21C. A single-number
+    card is drawn by code and costs nothing."""
     from .services import reports_ai
 
     _require_same_tenant(principal, license_id)
@@ -5194,15 +5402,35 @@ async def ai_report_run(
     text = reports_ai.report_text(spec, result, language)
     files = await reports_ai.publish_files(spec, result, language, license_id=license_id, company_name=_company_name_of(principal))
     chart, plottable = await reports_ai.publish_chart_for(spec, result, language, license_id=license_id)
-    return await _charge_for_the_picture(
-        client, license_id,
-        {"spec": spec, "result": result, "text": text, "files": files,
-         "chart": chart, "plottable": plottable},
-    )
+    out = {"spec": spec, "result": result, "text": text, "files": files,
+           "chart": chart, "plottable": plottable}
+    if not result.get("rows"):
+        return out
+    return await _charge_for_the_picture(client, license_id, out)
 
 
 def _company_name_of(principal: TenantPrincipal) -> str:
     return str(getattr(principal, "company_name", "") or "")
+
+
+@router.get("/licenses/{license_id}/reports/basic/{key}")
+async def basic_report(
+    license_id: str, key: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """One of the five fixed reports. No model call, and — deliberately —
+    no `_charge_for_the_picture`: these never cost a credit (spec §5)."""
+    from .services import basic_reports
+
+    _require_same_tenant(principal, license_id)
+    principal.require("view_reports")
+    try:
+        return await basic_reports.fetch(client, license_id=license_id, key=key)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except DataTierError as exc:
+        raise _propagate(exc)
 
 
 # ==================================================================== audit (3.4/3.5)

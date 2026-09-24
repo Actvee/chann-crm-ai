@@ -1,0 +1,146 @@
+name: round21c-reports
+description: the five everyday reports, answered by code and reached before Phase 17 (owner,
+  23 ก.ย. 2569 - "ยอดมูลค่าดีลทั้งหมดขึ้น 0"). A question becomes one of the five, the other
+  four are a tap away, and "ดูเป็นรูป" draws that same report on the metered picture road.
+  Every reading here is the deployed model's own (scripts/dev/ask-model.py, 23 ก.ย. 2569) -
+  the intent line is what --oa sales returned, and the `report` key in the same object is what
+  --mode basic_report returned for that sentence, because the probe answers every model call
+  in a step with one object. The fake has no document store, so the picture itself cannot be
+  delivered here and the reply says so - that the picture road is the METERED one is pinned in
+  tests/unit/test_round21c_reports_chat.py, which can give the shop a store.
+backend: fake
+actor:
+  oa: sales
+  role: sales
+  language: th
+  permissions: sales
+steps:
+- seed:
+    raw:
+      company_profile:
+        legal_name: บริษัท ทดสอบ จำกัด
+        company_name: ร้านทดสอบ
+        tax_id: '0105558123456'
+        company_address: 99/1
+        company_phone: '021234567'
+        company_email: a@b.com
+        open_hours: null
+        vat_rate: '0.07'
+    customers:
+    - ref: somchai
+      first_name: สมชาย
+      last_name: ใจดี
+      phone: '0812345678'
+    members:
+    - ref: somsak
+      chann_uid: CHN-T-000001
+      display_name: สมศักดิ์
+      role: technician
+    deals:
+    - ref: deal1
+      contact_id: $somchai
+    - ref: deal2
+      contact_id: $somchai
+    call:
+    - method: add_deal_product
+      args: {deal_id: $deal1.id, payload: {product_name: แอร์ 12000 BTU, qty: 2, quoted_unit_price: '15000.00'}}
+    - method: add_deal_product
+      args: {deal_id: $deal2.id, payload: {product_name: พัดลมไอเย็น, qty: 1, quoted_unit_price: '4000.00'}}
+    - method: update_deal
+      args: {deal_id: $deal2.id, fields: {stage: won}}
+# The jobs come in a step of their own: members are seeded after every
+# other collection, so a ticket in the SAME step could not name the
+# technician it belongs to.
+- seed:
+    tickets:
+    - ref: job1
+      title: แอร์ไม่เย็น
+      contact_id: $somchai
+      assigned_to_ref: $somsak.id
+      status: assigned
+    - ref: job2
+      title: ล้างแอร์
+      contact_id: $somchai
+      status: open
+    call:
+    - method: create_invoice
+      ref: bill1
+      args: {payload: {deal_id: $deal1.id, contact_id: $somchai, due_date: 2026-09-01,
+                      subtotal: '30000.00', vat_rate: '0.07', vat_amount: '2100.00', total: '32100.00'}}
+    - method: issue_invoice
+      args: {invoice_id: INV-1, due_date: 2026-09-01}
+
+# ---------------------------------------------------- the owner's own sentence
+# "ยอดมูลค่าดีลทั้งหมด" used to be answered 0 by the Phase 17 engine. It is now
+# one of the five: the model still reads it (read/report, and pipeline_value),
+# and code does every number.
+- send:
+    message: ยอดมูลค่าดีลทั้งหมด
+    ai: {action: read, entity: report, fields: {type: sales}, missing: [], report: pipeline_value}
+  expect:
+    contains: ['มูลค่าดีลทั้งหมด', 'มูลค่ารวมทุกดีล', '34,000.00']
+    quick_replies_include: ['ยอดค้างชำระ', 'ดูเป็นรูป']
+    intent: {action: report, entity: pipeline_value}
+    is_not: [generic_error, not_sure, permission, not_found, not_a_feature]
+
+# ------------------------------------------------- tapping one of the others
+# A button names the report outright, so it needs no model call at all.
+- send: 'รายงาน: outstanding_invoices'
+  expect:
+    contains: ['ยอดค้างชำระ', 'ค้างชำระรวม: 32,100.00 บาท', 'เลยกำหนด', 'ยังไม่ถึงกำหนด']
+    quick_replies_include: ['มูลค่าดีลทั้งหมด', 'ดูเป็นรูป']
+    used_ai: false
+    is_not: [generic_error, not_sure, permission, not_found, not_a_feature]
+
+# --------------------------------------------- the jobs one, asked in words
+- send:
+    message: งานซ่อมค้างแยกตามช่าง
+    ai: {action: read, entity: report, fields: {type: jobs}, missing: [], report: open_jobs_by_tech}
+  expect:
+    contains: ['งานซ่อมค้างแยกตามช่าง', 'งานค้างทั้งหมด', 'สมศักดิ์', 'ยังไม่มอบหมาย']
+    quick_replies_include: ['ดูเป็นรูป']
+    is_not: [generic_error, not_sure, permission, not_found, not_a_feature]
+
+# ------------------------------------ a question that wants the jobs themselves
+# Ruling 22 (review finding 1): "มีงานซ่อมค้างไหม" has answered with the LIST
+# since 11 ก.ย. 2569, and it still does — the chooser answers null for it
+# (measured before and after the CHOOSE_PROMPT change, 23 ก.ย. 2569), which is
+# why this step's model answer carries no `report` key while the breakdown
+# question above does.
+- send:
+    message: มีงานซ่อมค้างไหม
+    ai: {action: read, entity: report, fields: {type: jobs}, missing: []}
+  expect:
+    contains: ['T-2026-0001']
+    not_contains: ['งานค้างทั้งหมด']
+    is_not: [generic_error, not_sure, permission, not_found, not_a_feature]
+
+# ------------------------------------ "ดูเป็นรูป" -> the report's own picture
+# The button's own sentence, verbatim from the reply above. Final fix, item 8
+# (23 ก.ย. 2569): it used to hand the question to the Phase 17 engine, which
+# asked the model for a NEW spec and drew whatever that computed — a picture
+# that could disagree with the free numbers above it. It now draws THIS
+# report, from the same numbers, through chart_plan.publish_for_basic_report,
+# and the picture is the metered part (one credit, spent only when a picture
+# exists — pinned in tests/unit/test_round21c_reports_chat.py, which can give
+# the shop a store). The fake has no document store, so no picture reaches
+# the person here and the reply says so in the ad-hoc road's own words;
+# the numbers it stands on are the report's, not a model spec's.
+- send:
+    message: 'สร้างรายงานด้วย AI: ยอดค้างชำระ เป็นกราฟ'
+    ai: {entity: invoices, metric: sum, field: total, filters: {status: issued}, group_by: status}
+  expect:
+    contains: ['ค้างชำระรวม: 32,100.00 บาท', 'ยังส่งรูปกราฟไม่ได้ตอนนี้']
+    has_image: false
+    intent: {action: report, entity: outstanding_invoices}
+    is_not: [generic_error, permission, not_found, not_a_feature]
+
+# ------------------------------------- a question none of the five answers
+# The old road, unchanged: the model names no key, so Phase 17 answers it.
+- send:
+    message: สรุปจำนวนดีลแยกตามสถานะ
+    ai: {entity: deals, metric: count, filters: {}, group_by: stage}
+  expect:
+    not_contains: ['มูลค่ารวมทุกดีล']
+    used_ai: true
+    is_not: [generic_error, permission, not_found, not_a_feature]

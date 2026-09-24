@@ -123,6 +123,11 @@ COMPOSED_FIELDS = {
     # behind the ticket's serial. product_name/warranty_number/warranty_end
     # come from the same place and already exist as WarrantyOut fields.
     "warranty_status",
+    # Round 21C, ruling 18: GET .../invoices/{id} (routers_phase2.get_invoice)
+    # adds it — computed from a live read of the invoice's customer, the
+    # same check services/document_send.py's CustomerNotLinked makes — so
+    # the send button's dashboard reads it straight off the invoice.
+    "customer_has_line",
 }
 
 problems: list[str] = []

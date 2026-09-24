@@ -81,6 +81,7 @@ from ..repositories.phase15 import (
 from ..repositories.phase165 import PdpaConflict, PdpaNotFound, PdpaRepository
 from ..repositories.phase18 import PlatformConflict, PlatformNotFound, PlatformRepository
 from ..repositories.phase17 import ReportQueryRepository, ReportSpecInvalid
+from ..repositories.basic_reports import BasicReportRepository
 from ..repositories.phase16 import (
     DisplayPreferenceRepository,
     WarrantyConflict,
@@ -142,6 +143,7 @@ from ..schemas import (
     ApiKeyResolveIn,
     ApiKeyResolveOut,
     ArchiveInactiveLeadsIn,
+    BasicReportOut,
     LicenseExpiredOut,
     PlatformMemberMoveIn,
     PlatformMemberRoleIn,
@@ -182,9 +184,11 @@ from ..schemas import (
     DocumentTemplateVersionOut,
     GeneratedDocumentIn,
     GeneratedDocumentOut,
+    InvoiceDetailsIn,
     InvoiceDocumentIn,
     InvoiceIn,
     InvoiceIssueIn,
+    InvoiceLinesIn,
     InvoiceOut,
     InvoicePaymentIn,
     InvoicePaymentOut,
@@ -2669,6 +2673,7 @@ def _deal_out(deal, products) -> DealOut:
         expected_close_date=deal.expected_close_date, amount=deal.amount,
         currency=getattr(deal, "currency", None) or "THB",
         lost_reason=deal.lost_reason,
+        closed_at=deal.closed_at,
         products=[
             DealProductOut(
                 id=p.id, deal_id=p.deal_id, product_id=p.product_id,
@@ -3501,10 +3506,19 @@ def _invoice_http_error(exc: Exception) -> HTTPException:
     )
 
 
-def _invoice_out(row, payments: list | None = None) -> InvoiceOut:
+def _invoice_out(row, payments: list | None = None, closed_deal=None,
+                 closed_products: list | None = None) -> InvoiceOut:
     """The row plus what is derived from it. `outstanding` and `is_overdue`
     are computed here, from the one rule in the repository, so the list and
-    the detail can never disagree about what is owed."""
+    the detail can never disagree about what is owed.
+
+    `closed_deal` is NOT derived — it is passed in, and only
+    `add_invoice_payment` passes it, from the deal that `add_payment`
+    returned. That is what makes it trustworthy: non-None means "this
+    request closed that deal". Deriving it from `status == "paid"` is the
+    defect this parameter exists to remove (review finding 1) — a second
+    bill on an already-won deal is paid in full and closes nothing.
+    """
     outstanding = Decimal(str(row.total)) - Decimal(str(row.paid_amount))
     if row.status in ("void", "paid"):
         outstanding = Decimal("0")
@@ -3519,6 +3533,9 @@ def _invoice_out(row, payments: list | None = None) -> InvoiceOut:
         receipt_document_id=row.receipt_document_id, created_by=row.created_by,
         archived_at=row.archived_at, created_at=row.created_at, updated_at=row.updated_at,
         outstanding=outstanding.quantize(Decimal("0.01")), is_overdue=is_overdue(row),
+        needs_reissue=bool((row.data_snapshot or {}).get("needs_reissue_at")),
+        closed_deal=(_deal_out(closed_deal, closed_products or [])
+                     if closed_deal is not None else None),
         payments=[InvoicePaymentOut.model_validate(p, from_attributes=True) for p in (payments or [])],
     )
 
@@ -3673,7 +3690,19 @@ def add_invoice_payment(
         before = repo.get(scope, invoice_id)
         before_status = before.status if before else None
         before_paid = before.paid_amount if before else None
-        row, payment = repo.add_payment(
+        # The deal's stage BEFORE the payment, read while it is still true.
+        # The audit row used to record a placeholder "open", which is a
+        # sentence about the deal that was never checked — a deal at
+        # "proposed" was audited as having come from "open".
+        stage_before = None
+        amount_before = None
+        if before is not None and before.deal_id:
+            deal_before = DealRepository(session).get(scope, before.deal_id)
+            stage_before = deal_before.stage if deal_before is not None else None
+            # The real prior value, for the `update` row: it used to diff
+            # against `{}`, so amount.old was None even for a typed value.
+            amount_before = deal_before.amount if deal_before is not None else None
+        row, payment, closed_deal = repo.add_payment(
             scope, invoice_id, amount=payload.amount, method=payload.method,
             paid_at=payload.paid_at, reference=payload.reference, note=payload.note,
             recorded_by=payload.recorded_by or (x_actor_id or None),
@@ -3695,8 +3724,41 @@ def add_invoice_payment(
                 {"status": row.status, "paid_amount": row.paid_amount},
             ),
         )
+        if closed_deal is not None:
+            # Two rows, because two different things happened to the deal:
+            # it closed, and its contents were replaced. Both verbs are on
+            # the CHECK constraint's list (audit_actions.AUDIT_ACTIONS) —
+            # inventing one here would roll the payment back with it.
+            audit.write(
+                license_id=license_id, entity_type="deal", entity_id=closed_deal.id,
+                actor_type="user", actor_id=x_actor_id or None, action="status",
+                field_changes=diff_fields(
+                    {"stage": stage_before},
+                    {"stage": closed_deal.stage, "closed_by_invoice": row.invoice_id}),
+            )
+            audit.write(
+                license_id=license_id, entity_type="deal", entity_id=closed_deal.id,
+                actor_type="user", actor_id=x_actor_id or None, action="update",
+                # The deal holds the pre-VAT value (ruling 23); the
+                # VAT-inclusive total the customer paid is recorded here.
+                field_changes=diff_fields(
+                    {"amount": amount_before},
+                    {"amount": closed_deal.amount, "from_invoice": row.invoice_id,
+                     "invoice_total": row.total}),
+            )
         session.commit()
-        return _invoice_out(row, repo.list_payments(scope, row.id))
+        # The deal travels with the invoice. Without this the Application
+        # tier had to read the deal back and guess whether THIS payment was
+        # what closed it — and it guessed wrong for a second bill on a deal
+        # that was already won (review finding 1, round 21C).
+        #
+        # Its products are loaded rather than left empty: they were just
+        # replaced with this invoice's lines, and `products: []` would read
+        # as "this deal has nothing on it" — the same not-loaded/empty
+        # ambiguity that made MemberOut drop `id` (CLAUDE.md).
+        closed_products = DealRepository(session).products_of(closed_deal.id) if closed_deal else []
+        return _invoice_out(row, repo.list_payments(scope, row.id),
+                            closed_deal=closed_deal, closed_products=closed_products)
     except Exception as exc:
         session.rollback()
         raise _invoice_http_error(exc)
@@ -3744,6 +3806,63 @@ def set_invoice_receipt_document(
             field_changes=diff_fields(
                 {"receipt_document_id": was}, {"receipt_document_id": row.receipt_document_id},
             ),
+        )
+        session.commit()
+        return _invoice_out(row, repo.list_payments(scope, row.id))
+    except Exception as exc:
+        session.rollback()
+        raise _invoice_http_error(exc)
+
+
+@router.patch("/licenses/{license_id}/invoices/{invoice_id}/lines", response_model=InvoiceOut)
+def update_invoice_lines(
+    license_id: uuid.UUID, invoice_id: uuid.UUID, payload: InvoiceLinesIn,
+    session: Session = Depends(get_session), x_actor_id: str = Header(default=""),
+):
+    """Replace an invoice's lines and the totals computed from them."""
+    scope = TenantScope(license_id=license_id)
+    try:
+        repo = InvoiceRepository(session)
+        before = repo.get(scope, invoice_id)
+        before_money = {
+            "subtotal": before.subtotal, "discount_amount": before.discount_amount,
+            "vat_amount": before.vat_amount, "total": before.total,
+        } if before else {}
+        row = repo.update_lines(
+            scope, invoice_id, data_snapshot=payload.data_snapshot,
+            subtotal=payload.subtotal, discount_amount=payload.discount_amount,
+            vat_rate=payload.vat_rate, vat_amount=payload.vat_amount, total=payload.total,
+        )
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="invoice", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="update",
+            field_changes=diff_fields(before_money, {
+                "subtotal": row.subtotal, "discount_amount": row.discount_amount,
+                "vat_amount": row.vat_amount, "total": row.total,
+            }),
+        )
+        session.commit()
+        return _invoice_out(row, repo.list_payments(scope, row.id))
+    except Exception as exc:
+        session.rollback()
+        raise _invoice_http_error(exc)
+
+
+@router.patch("/licenses/{license_id}/invoices/{invoice_id}", response_model=InvoiceOut)
+def update_invoice_details(
+    license_id: uuid.UUID, invoice_id: uuid.UUID, payload: InvoiceDetailsIn,
+    session: Session = Depends(get_session), x_actor_id: str = Header(default=""),
+):
+    scope = TenantScope(license_id=license_id)
+    try:
+        repo = InvoiceRepository(session)
+        before = repo.get(scope, invoice_id)
+        before_fields = {"note": before.note, "due_date": before.due_date} if before else {}
+        row = repo.update_details(scope, invoice_id, note=payload.note, due_date=payload.due_date)
+        AuditRepository(session).write(
+            license_id=license_id, entity_type="invoice", entity_id=row.id,
+            actor_type="user", actor_id=x_actor_id or None, action="update",
+            field_changes=diff_fields(before_fields, {"note": row.note, "due_date": row.due_date}),
         )
         session.commit()
         return _invoice_out(row, repo.list_payments(scope, row.id))
@@ -6506,6 +6625,18 @@ def run_report_query(
         raise HTTPException(status_code=422, detail={"error": "report_spec_invalid", "message": str(exc)})
     return ReportResultOut(**result)
 
+
+@router.get("/licenses/{license_id}/reports/basic/{key}", response_model=BasicReportOut)
+def run_basic_report(
+    license_id: uuid.UUID, key: str, session: Session = Depends(get_session),
+):
+    """One of the five fixed reports. No spec, no model — the whole point
+    (round 21C)."""
+    scope = TenantScope(license_id=license_id)
+    try:
+        return BasicReportOut(**BasicReportRepository(session).run(scope, key))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail={"error": "unknown_report", "message": str(exc)})
 
 
 # ------------------------------------------------ user review fixes (4 Sep 2026)

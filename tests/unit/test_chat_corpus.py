@@ -328,6 +328,18 @@ SPEC = {
     "s.undo": [A(h=["_handle_reminder_cancel"], partial=True), A(ai=True, partial=True)],
     "s.offtopic": [A(ai=True), A(h=["_help_reply"], partial=True)],
     "s.report_ai": [A(h=["_handle_ai_report"]), A(ai=True, partial=True)],
+    # Round 21C: the five fixed reports. The model reads the sentence and
+    # answers with a KEY (the `report` field in the crafted answer below —
+    # the probe replies with one object per utterance, so an entry that
+    # carries both the intent and the key is one model answering both
+    # questions, which is what the deployed one does). Without that field
+    # `choose_report` returns None and this whole road is invisible here,
+    # which is exactly what the review found.
+    "s.basic_report": [A(h=["_handle_basic_report"])],
+    # …and one of the five whose sentence the model does NOT read as a
+    # report: it keeps the survey answer it has shipped with, and this pins
+    # that it does.
+    "s.survey_summary": [A(h=["_handle_survey_summary"])],
     # Nothing behind this pair yet — the reply must SAY so and name the
     # dashboard page, never pretend and never come back a permission list.
     "s.no_handler": [A(ai=True, h=["_pending_execution_reply"], text=["ในแดชบอร์ด", "in the dashboard"])],

@@ -124,18 +124,13 @@ def _decimal(value) -> Decimal:
 
 
 def deal_value(deal: dict) -> Decimal:
-    """What one deal is worth — the line items when it has any, otherwise
-    the stated amount. Exactly what DealRepository.pipeline_summary does;
-    a chart that valued deals differently from the card on the dashboard
-    would be a second, quieter source of truth."""
-    lines = deal.get("products") or []
-    if lines:
-        total = Decimal("0")
-        for row in lines:
-            total += _decimal(row.get("quoted_unit_price")) * int(row.get("qty") or 0)
-        if total:
-            return total
-    return _decimal(deal.get("amount"))
+    """What one deal is worth. Round 21C: one definition, in
+    `services/deal_value.py`, matching the Data tier's SQL — a chart that
+    valued deals differently from the card on the dashboard would be a
+    second, quieter source of truth, and for a year it was."""
+    from .deal_value import deal_value as _shared
+
+    return _shared(deal)
 
 
 def _as_date(value) -> date | None:
@@ -164,12 +159,15 @@ def _as_date(value) -> date | None:
 
 
 def deal_closed_on(deal: dict) -> date | None:
-    """When a won deal counts towards a month. The expected close date is
-    the shop's own answer to that question and is what the pipeline
-    forecast already uses; created_at is the fallback for the deals nobody
-    dated (a shop that never fills the date would otherwise have an empty
-    chart forever)."""
-    return _as_date(deal.get("expected_close_date")) or _as_date(deal.get("created_at"))
+    """When a deal closed. Round 21C: the real date when the row has one;
+    the forecast only for deals closed before `closed_at` existed, which
+    the migration backfilled from `updated_at` anyway — so this falls
+    through only for a deal that is not closed at all."""
+    return (
+        _as_date(deal.get("closed_at"))
+        or _as_date(deal.get("expected_close_date"))
+        or _as_date(deal.get("created_at"))
+    )
 
 
 def month_labels(today: date, months: int, language: str) -> list[tuple[tuple[int, int], str]]:

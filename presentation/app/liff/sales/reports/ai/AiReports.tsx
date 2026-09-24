@@ -7,6 +7,7 @@ import { useLanguage } from "@/lib/i18n/LanguageProvider";
 import { useSalesSession } from "../../_session";
 import { SalesShell } from "../../_shell";
 import { openExternal, proxyHeaders } from "../../_lib";
+import { useFormatters } from "../../_format";
 
 type Row = { key: string; label: string; value: number };
 type Result = {
@@ -54,14 +55,52 @@ type Answer = {
   /** Present when a picture was drawn: how many of the month's AI charts
    *  this shop has used. `allowed: false` means the month is spent and the
    *  image was withheld — the numbers and the files are unaffected. */
-  quota?: { allowed: boolean; used: number; allowance: number; unknown: boolean };
+  quota?: {
+    allowed: boolean;
+    used: number;
+    allowance: number;
+    unknown: boolean;
+    /** What the one credit paid for (final review I2): a words-only answer
+     *  is never labelled as a chart. */
+    charged_for?: "picture" | "question";
+  };
+  /** Final review I3: the question was one of the five, answered free by
+   *  that report — the same sentence is free on LINE too. */
+  basic?: BasicReport;
+  free?: boolean;
 };
+
+/** Round 21C — the five basic reports (`/reports/basic/{key}`, Task 12).
+ *  Credit-free and computed by code: every number here is server work, not
+ *  browser arithmetic. */
+type BasicRow = { key: string; label_th: string; label_en: string; value: number; count?: number };
+type BasicReport = {
+  key: string;
+  title_th: string;
+  title_en: string;
+  unit: "money" | "count" | "score";
+  headline: { label_th: string; label_en: string; value: number };
+  rows: BasicRow[];
+  notes_th: string[];
+  notes_en: string[];
+};
+
+const BASIC_KEYS = [
+  "pipeline_value", "won_this_month", "open_jobs_by_tech",
+  "outstanding_invoices", "satisfaction_avg",
+] as const;
 
 /** Phase 17 — the report viewer. One question box, the model turns it
  *  into a whitelisted spec, the numbers come back as a table with bars. */
 export default function AiReports({ liffId }: { liffId: string }) {
   const { t, locale } = useLanguage();
   const copy = t.dashboard.aiReports;
+  // Fix round 1: reuse the file's own money formatter (locale mapped to
+  // "th-TH"/"en-US" by `intlLocale`, the fix for review C11's Buddhist-year
+  // bug) instead of a second `Intl.NumberFormat` on the raw two-letter tag.
+  const { money } = useFormatters();
+  const formatBasicValue = (value: number, unit: BasicReport["unit"]) =>
+    money(value, unit === "count" ? 0 : 2);
   const [token, setToken] = useState("");
   const [licenseId, setLicenseId] = useState("");
   const [allowed, setAllowed] = useState<boolean | null>(null);
@@ -77,6 +116,14 @@ export default function AiReports({ liffId }: { liffId: string }) {
   const [options, setOptions] = useState<Options | null>(null);
   const [draft, setDraft] = useState<Spec | null>(null);
   const [tuning, setTuning] = useState(false);
+  // Round 21C — the five basic report cards. `null` = still loading (or not
+  // yet fetched); `basicFailed[key]` names a card whose fetch failed so it
+  // shows an error, not an eternal skeleton and never a 0.
+  const [basic, setBasic] = useState<Record<string, BasicReport | null>>({});
+  const [basicFailed, setBasicFailed] = useState<Record<string, boolean>>({});
+  // Fix round 1 — "rows on demand": the top 3 rows show at rest; a report
+  // with more opens the rest in place instead of hiding them for good.
+  const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({});
 
   const say = useCallback((text: string, next?: "ok" | "error") => {
     setStatus(text);
@@ -116,6 +163,44 @@ export default function AiReports({ liffId }: { liffId: string }) {
       live = false;
     };
   }, [token, licenseId, allowed, locale]);
+
+  // Round 21C — five reports the owner recognises, computed by code, never
+  // spending an AI credit. `null` still means "loading"; a failed key is
+  // recorded separately so its card can say so instead of loading forever.
+  //
+  // Fix round 1: the five requests are independent of each other, so they
+  // are fired together (`Promise.allSettled`, not a `for`-await loop) —
+  // a slow first card must not hold the other four in their skeleton
+  // state on the LINE in-app browser's mobile network. Each key still has
+  // its own try/catch, so one failure still leaves the other four alone.
+  useEffect(() => {
+    if (!token || !licenseId || allowed === false) return;
+    let live = true;
+    const load = async (key: (typeof BASIC_KEYS)[number]) => {
+      try {
+        const response = await fetch(
+          `/api/phase2/licenses/${licenseId}/reports/basic/${key}`,
+          { headers: proxyHeaders(token, licenseId) },
+        );
+        if (!response.ok) {
+          if (live) setBasicFailed((current) => ({ ...current, [key]: true }));
+          return;
+        }
+        const data = (await response.json()) as BasicReport;
+        if (live) {
+          setBasic((current) => ({ ...current, [key]: data }));
+          setBasicFailed((current) => ({ ...current, [key]: false }));
+        }
+      } catch {
+        // One card that cannot load leaves the other four alone.
+        if (live) setBasicFailed((current) => ({ ...current, [key]: true }));
+      }
+    };
+    void Promise.allSettled(BASIC_KEYS.map((key) => load(key)));
+    return () => {
+      live = false;
+    };
+  }, [token, licenseId, allowed]);
 
   async function ask(text: string) {
     const message = text.trim();
@@ -214,6 +299,69 @@ export default function AiReports({ liffId }: { liffId: string }) {
       {allowed === false && <p className="callout">{copy.noPermission}</p>}
 
       {allowed !== false && (
+        <section className="basic-reports">
+          <h2>{copy.basic.heading}</h2>
+          <p className="basic-intro">{copy.basic.intro}</p>
+          <div className="basic-grid">
+            {BASIC_KEYS.map((key) => {
+              const report = basic[key];
+              const failed = basicFailed[key];
+              const words = copy.basic[key];
+              const expanded = !!expandedRows[key];
+              const rows = report ? (expanded ? report.rows : report.rows.slice(0, 3)) : [];
+              const hasMore = (report?.rows.length ?? 0) > 3;
+              return (
+                <article key={key} className="basic-card" aria-busy={!report && !failed}>
+                  <h3>{words.title}</h3>
+                  <p className="basic-blurb">{words.blurb}</p>
+                  {report ? (
+                    <>
+                      <p className="basic-value">
+                        {formatBasicValue(report.headline.value, report.unit)}
+                      </p>
+                      <ul className="basic-rows">
+                        {rows.map((row) => (
+                          <li key={row.key}>
+                            <span>{locale === "en" ? row.label_en : row.label_th}</span>
+                            <b>{formatBasicValue(row.value, report.unit)}</b>
+                          </li>
+                        ))}
+                      </ul>
+                      {hasMore ? (
+                        <button
+                          type="button"
+                          className="basic-toggle"
+                          aria-expanded={expanded}
+                          onClick={() =>
+                            setExpandedRows((current) => ({ ...current, [key]: !current[key] }))
+                          }
+                        >
+                          {expanded
+                            ? copy.basic.showLess
+                            : copy.basic.showAll.replace("{count}", String(report.rows.length))}
+                        </button>
+                      ) : null}
+                      {(locale === "en" ? report.notes_en : report.notes_th)[0] ? (
+                        <p className="basic-note">
+                          {(locale === "en" ? report.notes_en : report.notes_th)[0]}
+                        </p>
+                      ) : null}
+                    </>
+                  ) : failed ? (
+                    <p className="basic-error" role="alert">
+                      {copy.basic.loadError.replace("{title}", words.title)}
+                    </p>
+                  ) : (
+                    <p className="basic-value skeleton" aria-hidden="true">&nbsp;</p>
+                  )}
+                </article>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      {allowed !== false && (
         <form
           className="fields"
           onSubmit={(event) => {
@@ -259,6 +407,35 @@ export default function AiReports({ liffId }: { liffId: string }) {
         <section className="card">
           <h2 className="card-title">{copy.clarify}</h2>
           <p>{answer.clarify}</p>
+        </section>
+      )}
+
+      {/* One of the five, asked in the question box: the report itself,
+          free, and it says so (final review I3 — the same sentence is
+          free on LINE). A plain footnote, not a toast: it is part of the
+          answer, not a passing event (ui-ux-pro-max: success-feedback). */}
+      {answer?.basic && (
+        <section className="card report-card" aria-live="polite">
+          <h2 className="card-title">
+            {locale === "en" ? answer.basic.title_en : answer.basic.title_th}
+          </h2>
+          <p className="report-big">
+            {formatBasicValue(answer.basic.headline.value, answer.basic.unit)}
+          </p>
+          <ul className="basic-rows">
+            {answer.basic.rows.map((row) => (
+              <li key={row.key}>
+                <span>{locale === "en" ? row.label_en : row.label_th}</span>
+                <b>{formatBasicValue(row.value, answer.basic!.unit)}</b>
+              </li>
+            ))}
+          </ul>
+          {(locale === "en" ? answer.basic.notes_en : answer.basic.notes_th)[0] ? (
+            <p className="basic-note">
+              {(locale === "en" ? answer.basic.notes_en : answer.basic.notes_th)[0]}
+            </p>
+          ) : null}
+          <p className="footnote">{copy.basic.answeredFree}</p>
         </section>
       )}
 
@@ -324,14 +501,18 @@ export default function AiReports({ liffId }: { liffId: string }) {
               )}
             </div>
           )}
+          {/* The credit, said as what it paid for: a picture, or a
+              words-only answer that has no chart to call "drawn by AI"
+              (final review I2). */}
           {answer.quota && !answer.quota.allowed && (
             <p className="footnote">
-              {copy.quotaSpent.replace("{allowance}", String(answer.quota.allowance))}
+              {(answer.quota.charged_for === "picture" ? copy.quotaSpent : copy.quotaSpentWords)
+                .replace("{allowance}", String(answer.quota.allowance))}
             </p>
           )}
           {answer.quota?.allowed && !answer.quota.unknown && (
             <p className="footnote">
-              {copy.quotaUsed
+              {(answer.quota.charged_for === "picture" ? copy.quotaUsed : copy.quotaUsedWords)
                 .replace("{used}", String(answer.quota.used))
                 .replace("{allowance}", String(answer.quota.allowance))}
             </p>

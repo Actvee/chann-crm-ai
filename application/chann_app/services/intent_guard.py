@@ -152,6 +152,27 @@ ACTION_WORDS: dict[str, tuple[str, ...]] = {
         "payment", "paid", "deposit", "transfer",
     ),
     "receipt_issue": ("ออกใบเสร็จ", "ใบเสร็จ", "receipt"),
+    # Round 21C — the model's `update` on a bill is now TWO writes: a
+    # correction to what the bill says, and money arriving ("มัดจำ INV-…
+    # 2000" comes back as update, 21 ก.ย. 2569). The guard runs before the
+    # dispatcher splits them, so it carries BOTH vocabularies: guard on the
+    # wide words, dispatch on the narrow test. Before this, "ยังไม่ต้อง
+    # แก้ใบแจ้งหนี้ INV-… นะ" had nothing here to bind to, so the guard had
+    # nothing to negate and the edit went through.
+    "invoice_edit": (
+        "แก้ใบแจ้งหนี้", "แก้รายการ", "แก้บิล", "เปลี่ยนจำนวน", "เปลี่ยนกำหนดชำระ",
+        "เปลี่ยนราคา", "แก้กำหนดชำระ", "แก้", "เปลี่ยน", "ปรับ",
+        "รับชำระ", "บันทึกรับชำระ", "รับเงิน", "มัดจำ", "ชำระ", "จ่ายแล้ว", "โอนแล้ว",
+        "จ่าย", "โอน", "payment", "paid", "deposit", "transfer", "change", "edit", "update",
+    ),
+    # Round 21C — handing a document to the CUSTOMER. Wide on purpose: the
+    # document leaves the shop, so "ยังไม่ต้องส่งให้ลูกค้านะ" and "ส่งให้
+    # ลูกค้ายังไง" must both be caught here, and the narrow decision about
+    # WHICH document is made afterwards, in the handler (`_handle_document_send`).
+    "document_send": (
+        "ส่งให้ลูกค้า", "ส่งใบแจ้งหนี้", "ส่งใบเสนอราคา", "ส่งใบเสร็จ", "ส่งบิล",
+        "ส่งเอกสาร", "ส่งไลน์", "ส่งทางไลน์", "ส่ง", "send",
+    ),
     # Retiring a product from the catalogue. Its own entry because the
     # catch-all above could not bind to the sentence people actually type:
     # "ไม่ต้องเอาพัดลมไอเย็นออกจากรายการสินค้า" has "เอา" and "ออก" with the

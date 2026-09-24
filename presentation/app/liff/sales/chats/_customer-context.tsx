@@ -10,6 +10,7 @@ import { fullDateTime } from "../../_list-controls";
 import { Badge } from "../_components";
 import { RelatedHeading } from "../_record";
 import { useFormatters } from "../_format";
+import { dealValue, hasDealValue } from "../_deal-value";
 import { proxyHeaders } from "../_lib";
 
 type CustomerRow = {
@@ -21,7 +22,14 @@ type CustomerRow = {
   email?: string | null;
   stage?: string;
 };
-type DealRow = { id: string; deal_id: string; stage: string; amount?: number | string | null; currency?: string | null };
+type DealRow = {
+  id: string;
+  deal_id: string;
+  stage: string;
+  amount?: number | string | null;
+  currency?: string | null;
+  products?: { qty?: number; quoted_unit_price?: string | number }[];
+};
 type TicketRow = { id: string; ticket_number: string; status: string; issue?: string | null; product_name?: string | null };
 type NoteRow = { id: string; body?: string | null; created_at?: string | null; author_display_name?: string | null };
 
@@ -187,9 +195,11 @@ function ContextBody({
                         <span className="code">{deal.deal_id}</span>
                         <Badge stage={deal.stage} label={stageLabel(deal.stage)} />
                       </span>
-                      {Number(deal.amount) > 0 && (
+                      {/* The one rule (final review I4): a deal valued by
+                          its lines has a value too. */}
+                      {hasDealValue(deal) && (
                         <span className="card-meta">
-                          {money(Number(deal.amount), 0)} {deal.currency ?? "THB"}
+                          {money(dealValue(deal), 0)} {deal.currency ?? "THB"}
                         </span>
                       )}
                     </span>

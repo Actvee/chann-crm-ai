@@ -12,8 +12,9 @@ import { ListControls, byNewest, byOldest, useListControls } from "../../_list-c
 import { Sheet } from "../../_sheet";
 import { FieldRow } from "../../_field-row";
 import { ConfirmDialog, useConfirm } from "../../_confirm";
+import { ProductLineForm } from "../../_product-line-form";
 
-import { useFailureText, useFormatters } from "../_format";
+import { readFailure, useFailureText, useFormatters } from "../_format";
 import { openExternal, proxyHeaders } from "../_lib";
 import { useSalesSession } from "../_session";
 import { SalesShell } from "../_shell";
@@ -77,6 +78,15 @@ type Invoice = {
   note?: string | null;
   generated_document_id?: string | null;
   receipt_document_id?: string | null;
+  // Round 21C — set by the Application tier when the lines have been
+  // corrected since the last PDF: the file on record no longer matches
+  // this bill.
+  needs_reissue?: boolean | null;
+  // Round 21C, ruling 18 — read straight from the Application tier's
+  // `get_invoice` (computed the same way `document_send.py` decides
+  // `CustomerNotLinked`): the sheet's send button reads this field
+  // directly, never a client-side lookup of its own.
+  customer_has_line?: boolean | null;
   data_snapshot?: {
     customer?: { name?: string };
     quote?: { quote_id?: string };
@@ -106,6 +116,12 @@ export default function InvoiceList({ liffId }: { liffId: string }) {
   const [open, setOpen] = useState<Invoice | null>(null);
   const [paying, setPaying] = useState(false);
   const [form, setForm] = useState({ amount: "", method: "transfer", paid_at: "", reference: "" });
+  // Round 21C — correcting a bill before anyone has paid it (the lines),
+  // and handing the document to the customer on LINE (the send button).
+  const [editingLines, setEditingLines] = useState(false);
+  const [lines, setLines] = useState<Line[]>([]);
+  const [editingLineIndex, setEditingLineIndex] = useState(-1);
+  const [addingLine, setAddingLine] = useState(false);
   // Round 20X: the create form and the URL's filters.
   const [creating, setCreating] = useState(false);
   const [contactFilter, setContactFilter] = useState("");
@@ -218,8 +234,11 @@ export default function InvoiceList({ liffId }: { liffId: string }) {
           headers: proxyHeaders(token, licenseId),
         });
         if (!cancelled && response.ok) {
-          setOpen((await response.json()) as Invoice);
+          const row = (await response.json()) as Invoice;
+          setOpen(row);
           setPaying(false);
+          setEditingLines(false);
+          setLines((row.data_snapshot?.line_items ?? []) as Line[]);
         }
       } catch {
         /* the list is still there to find it in */
@@ -241,12 +260,18 @@ export default function InvoiceList({ liffId }: { liffId: string }) {
   async function openInvoice(row: Invoice) {
     setOpen(row);
     setPaying(false);
+    setEditingLines(false);
     setForm({ amount: "", method: "transfer", paid_at: "", reference: "" });
+    setLines((row.data_snapshot?.line_items ?? []) as Line[]);
     try {
       const response = await fetch(`/api/phase2/licenses/${licenseId}/invoices/${row.id}`, {
         headers: proxyHeaders(token, licenseId),
       });
-      if (response.ok) setOpen((await response.json()) as Invoice);
+      if (response.ok) {
+        const full = (await response.json()) as Invoice;
+        setOpen(full);
+        setLines((full.data_snapshot?.line_items ?? []) as Line[]);
+      }
     } catch {
       // The row already on screen is a complete answer; the ledger is extra.
     }
@@ -257,7 +282,11 @@ export default function InvoiceList({ liffId }: { liffId: string }) {
     const response = await fetch(`/api/phase2/licenses/${licenseId}/invoices/${id}`, {
       headers: proxyHeaders(token, licenseId),
     });
-    if (response.ok) setOpen((await response.json()) as Invoice);
+    if (response.ok) {
+      const full = (await response.json()) as Invoice;
+      setOpen(full);
+      setLines((full.data_snapshot?.line_items ?? []) as Line[]);
+    }
   }
 
   async function openDocument(documentId: string) {
@@ -334,7 +363,20 @@ export default function InvoiceList({ liffId }: { liffId: string }) {
         say(await failureText(response), "error");
         return;
       }
-      say(`${row.invoice_id} — ${t.dashboard.invoices.paymentSaved}`, "ok");
+      // A payment that settles the bill closes its deal (round 21C) — said
+      // here as chat says it, from the `closed_deal` THIS payment returned,
+      // never inferred from status; nothing when it is null (final review
+      // I5; ui-ux-pro-max: success-feedback — the change is confirmed, not
+      // left for the person to discover on the deal page).
+      const saved = (await response.json().catch(() => ({}))) as {
+        closed_deal?: { deal_id?: string; amount?: string | number | null } | null;
+      };
+      const closedLine = saved.closed_deal ?
+        ` · ${t.dashboard.invoices.dealClosed
+          .replace("{deal}", String(saved.closed_deal.deal_id ?? ""))
+          .replace("{amount}", money(saved.closed_deal.amount ?? 0))}`
+        : "";
+      say(`${row.invoice_id} — ${t.dashboard.invoices.paymentSaved}${closedLine}`, "ok");
       setPaying(false);
       setForm({ amount: "", method: "transfer", paid_at: "", reference: "" });
       await refreshOpen(row.id);
@@ -343,6 +385,154 @@ export default function InvoiceList({ liffId }: { liffId: string }) {
     } finally {
       setBusy(false);
     }
+  }
+
+  /** Replace the whole line list — the Application tier recomputes every
+   *  money column and hands back the saved invoice, which is the only
+   *  copy of the totals this screen ever displays (round 20K: a total the
+   *  browser adds up itself is a second source of truth). A 409 means
+   *  money has been recorded since the sheet opened. */
+  async function saveLines(next: Line[]) {
+    if (!open) return;
+    // A bill must keep at least one line — the delete control is already
+    // disabled on the last one, and this is the same rule enforced
+    // regardless of how `next` was built (review round 1, finding 1).
+    if (next.length === 0) {
+      say(t.dashboard.invoices.oneLineRequired, "error");
+      return;
+    }
+    setBusy(true);
+    say(t.dashboard.working);
+    try {
+      const response = await fetch(
+        `/api/phase2/licenses/${licenseId}/invoices/${open.id}/lines`,
+        {
+          method: "PATCH",
+          headers: proxyHeaders(token, licenseId),
+          body: JSON.stringify({
+            lines: next.map((line) => ({
+              product_name: line.product_name,
+              qty: Number(line.qty ?? 1),
+              unit_price: String(line.unit_price ?? "0"),
+            })),
+          }),
+        },
+      );
+      if (!response.ok) {
+        say(response.status === 409 ? t.dashboard.invoices.editLocked : await failureText(response), "error");
+        return;
+      }
+      const saved = (await response.json()) as Invoice;
+      // The lines PATCH doesn't answer "does the customer have LINE" —
+      // only `get_invoice` does (ruling 18) — and editing lines can't
+      // change that, so the previously-known answer carries forward
+      // rather than reading as unknown/false until the next full fetch.
+      setOpen({ ...saved, customer_has_line: open.customer_has_line });
+      setLines((saved.data_snapshot?.line_items ?? []) as Line[]);
+      say(t.dashboard.saved, "ok");
+    } catch (error) {
+      say(error instanceof Error ? error.message : t.common.error, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveLine(index: number, line: { name: string; qty: number; price: string }) {
+    setEditingLineIndex(-1);
+    await saveLines(
+      lines.map((existing, i) =>
+        i === index
+          ? { ...existing, product_name: line.name, qty: line.qty, unit_price: line.price }
+          : existing,
+      ),
+    );
+  }
+
+  async function addNewLine(line: { name: string; qty: number; price: string }) {
+    setAddingLine(false);
+    await saveLines([
+      ...lines,
+      { line_no: lines.length + 1, product_name: line.name, qty: line.qty, unit_price: line.price, line_total: "0" },
+    ]);
+  }
+
+  async function removeLine(index: number) {
+    // The delete control is disabled on the last line already; this is
+    // the same rule enforced again so nothing but a disabled button ever
+    // stands between a person and this action (review round 1, finding 1).
+    if (lines.length <= 1) {
+      say(t.dashboard.invoices.oneLineRequired, "error");
+      return;
+    }
+    const target = lines[index];
+    const ok = await ask({
+      action: t.common.delete,
+      target: target.product_name,
+      permanent: true,
+      confirmLabel: t.common.delete,
+    });
+    if (!ok) return;
+    await saveLines(lines.filter((_, i) => i !== index));
+  }
+
+  /** Hand the document to the customer on LINE — the invoice PDF, or its
+   *  receipt once the bill is paid. `resent` from the response is always
+   *  false today (round 21C ruling 15), so this never claims a re-send:
+   *  the toast is the same sentence every time, and the time itself is
+   *  not shown because the server does not give one. */
+  async function sendToCustomer(kind: "invoice" | "receipt") {
+    if (!open) return;
+    setBusy(true);
+    say(t.dashboard.working);
+    try {
+      const response = await fetch(`/api/phase2/licenses/${licenseId}/invoices/${open.id}/send`, {
+        method: "POST",
+        headers: proxyHeaders(token, licenseId),
+        body: JSON.stringify({ kind }),
+      });
+      if (!response.ok) {
+        // Match on the exact codes `_document_send_error` returns
+        // (customer_not_linked / not_issued) — anything else (a 500, a
+        // rate limit, …) is a real, different failure and must say so,
+        // not be folded into "not issued yet" (review round 1, finding 4).
+        const failure = await readFailure(response);
+        if (failure.code === "customer_not_linked") {
+          say(t.dashboard.invoices.sendNoLine, "error");
+        } else if (failure.code === "not_issued") {
+          say(t.dashboard.invoices.sendNotIssued, "error");
+        } else if (failure.code === "void") {
+          say(t.dashboard.invoices.sendVoid, "error");
+        } else if (failure.code === "needs_reissue") {
+          say(t.dashboard.invoices.sendNeedsReissue, "error");
+        } else {
+          say(await failureText(response), "error");
+        }
+        return;
+      }
+      const data = (await response.json()) as { customer_name?: string };
+      say(t.dashboard.invoices.sendDone.replace("{name}", data.customer_name ?? ""), "ok");
+    } catch (error) {
+      say(error instanceof Error ? error.message : t.common.error, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Why "ส่งให้ลูกค้า" cannot be pressed on this bill, or null when it
+   *  can. One reason at a time, in the order the server refuses them
+   *  (`document_send.why_not_sendable`, then no PDF, then no LINE): a
+   *  void bill or a bill corrected since its PDF was made must never
+   *  reach the customer — the link cannot be recalled (final review C1).
+   *  The receipt is its own document, so a stale INVOICE PDF does not
+   *  hold it back. `customer_has_line` is undefined while the full
+   *  invoice loads: unknown, so disabled without claiming a reason. */
+  function sendBlocked(row: Invoice): string | null {
+    const kind = row.receipt_document_id ? "receipt" : "invoice";
+    if (row.status === "void") return t.dashboard.invoices.sendVoid;
+    if (kind === "invoice" && row.needs_reissue) return t.dashboard.invoices.sendNeedsReissue;
+    if (row.customer_has_line === false) return t.dashboard.invoices.sendNoLine;
+    if (!row.generated_document_id) return t.dashboard.invoices.sendNotIssued;
+    return null;
   }
 
   async function issueReceipt(row: Invoice) {
@@ -422,8 +612,16 @@ export default function InvoiceList({ liffId }: { liffId: string }) {
   const visible = controls.visible;
   const customerName = (row: Invoice) => row.data_snapshot?.customer?.name || "—";
   const isOpen = (row: Invoice) => row.status === "issued" || row.status === "partially_paid";
-  const lines = open?.data_snapshot?.line_items ?? [];
+  // Round 21C: `lines` is now state (set whenever the sheet opens or the
+  // invoice is re-read), so a correction can be edited in place without
+  // waiting on the invoice object it will eventually replace.
   const totals = open?.data_snapshot?.totals;
+  // Editable only until money has touched the bill — the invoice's answer
+  // to the quote's "draft only" rule, and the same test `invoices.py`'s
+  // `edit_lines` makes server-side (a void invoice's paid_amount is also
+  // zero, so `status !== "void"` is this screen's own extra guard).
+  const editable =
+    canUpdate && Number(open?.paid_amount ?? 0) === 0 && open?.status !== "void";
 
   return (
     <SalesShell
@@ -650,7 +848,29 @@ export default function InvoiceList({ liffId }: { liffId: string }) {
                   {open.receipt_document_id ? t.dashboard.invoices.reissueReceipt : t.dashboard.invoices.issueReceipt}
                 </button>
               )}
+              {/* Handing the document over is not the primary action here —
+                  issuing and recording payment already own that role — so
+                  this is a plain button beside them, never styled primary
+                  (ui-ux-pro-max: primary-action). */}
+              {canUpdate && (
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={busy || !open.customer_has_line || sendBlocked(open) !== null}
+                  onClick={() => void sendToCustomer(open.receipt_document_id ? "receipt" : "invoice")}
+                >
+                  {open.receipt_document_id ? t.dashboard.invoices.sendReceipt : t.dashboard.invoices.send}
+                </button>
+              )}
             </div>
+            {/* A disabled send button says why in text a phone can read —
+                never only a title= tooltip (ui-ux-pro-max: disabled-needs-
+                a-reason). Only one reason applies at a time. Read straight
+                off the invoice (ruling 18) — never a client-side lookup
+                that could flash a stale answer while switching invoices. */}
+            {canUpdate && sendBlocked(open) && (
+              <p className="card-meta record-status-note">{sendBlocked(open)}</p>
+            )}
 
             {/* Undoing a bill is not one of the things you do WITH it: its
                 own row, under a rule, in the danger colour — and the word
@@ -735,9 +955,30 @@ export default function InvoiceList({ liffId }: { liffId: string }) {
             <section className="section">
               <div className="section-head">
                 <h2>{t.dashboard.invoices.lines} ({lines.length})</h2>
+                {/* "แก้ไขรายการ" turns the read-only list below into an
+                    editable one, in place — it is not a second primary
+                    action beside issue/record-payment above
+                    (ui-ux-pro-max: primary-action). */}
+                {editable && (
+                  <button
+                    type="button"
+                    className="btn"
+                    data-variant="quiet"
+                    disabled={busy}
+                    onClick={() => setEditingLines((value) => !value)}
+                  >
+                    {editingLines ? t.dashboard.invoices.editLinesDone : t.dashboard.invoices.editLines}
+                  </button>
+                )}
               </div>
+              {!editable && (
+                <p className="card-meta" style={{ marginBottom: 14 }}>{t.dashboard.invoices.editLocked}</p>
+              )}
+              {open.needs_reissue ? (
+                <p className="callout" data-tone="warn" role="status">{t.dashboard.invoices.needsReissue}</p>
+              ) : null}
               <ul className="list">
-                {lines.map((line) => (
+                {lines.map((line, index) => (
                   <li key={line.line_no} className="card">
                     <div className="card-title">{line.product_name}</div>
                     <div className="card-meta">
@@ -746,9 +987,77 @@ export default function InvoiceList({ liffId }: { liffId: string }) {
                       <span className="money-line">{money(line.line_total)}</span>
                       {line.notes ? ` · ${line.notes}` : ""}
                     </div>
+                    {editable && editingLines && editingLineIndex !== index && (
+                      <div className="card-actions">
+                        <button
+                          type="button"
+                          className="btn"
+                          data-variant="quiet"
+                          onClick={() => setEditingLineIndex(index)}
+                          disabled={busy}
+                        >
+                          {t.common.edit}
+                        </button>
+                        {/* Deleting a line is its own per-line danger
+                            action, under the list it changes — never
+                            beside "ส่งให้ลูกค้า" above (ui-ux-pro-max:
+                            destructive-nav-separation). Disabled on the
+                            last remaining line — a bill must keep at
+                            least one (review round 1, finding 1) — and
+                            says why underneath, not only in a tooltip
+                            (ui-ux-pro-max: disabled-needs-a-reason). */}
+                        <button
+                          type="button"
+                          className="btn"
+                          data-variant="quiet"
+                          onClick={() => void removeLine(index)}
+                          disabled={busy || lines.length <= 1}
+                        >
+                          {t.common.delete}
+                        </button>
+                      </div>
+                    )}
+                    {editable && editingLines && editingLineIndex !== index && lines.length <= 1 && (
+                      <p className="card-meta record-status-note">{t.dashboard.invoices.oneLineRequired}</p>
+                    )}
+                    {editable && editingLines && editingLineIndex === index && (
+                      <ProductLineForm
+                        licenseId={licenseId}
+                        token={token}
+                        busy={busy}
+                        initial={{
+                          name: String(line.product_name ?? ""),
+                          qty: Number(line.qty ?? 1),
+                          price: String(line.unit_price ?? ""),
+                        }}
+                        onCancel={() => setEditingLineIndex(-1)}
+                        onSubmit={(next) => saveLine(index, next)}
+                      />
+                    )}
                   </li>
                 ))}
               </ul>
+              {editable && editingLines && (
+                addingLine ? (
+                  <ProductLineForm
+                    licenseId={licenseId}
+                    token={token}
+                    busy={busy}
+                    onCancel={() => setAddingLine(false)}
+                    onSubmit={addNewLine}
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    className="btn"
+                    data-variant="quiet"
+                    disabled={busy}
+                    onClick={() => setAddingLine(true)}
+                  >
+                    {t.dashboard.deals.addProduct}
+                  </button>
+                )
+              )}
               {totals && (
                 <div className="totals">
                   <span>{t.dashboard.invoices.total}</span>

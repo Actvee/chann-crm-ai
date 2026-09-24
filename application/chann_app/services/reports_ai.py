@@ -8,6 +8,8 @@ table page and the files. The model never sees SQL and never sees data.
 """
 from __future__ import annotations
 
+import asyncio
+
 import csv
 import html
 import io
@@ -36,8 +38,9 @@ CHART_LINK_SECONDS = 3600
 # Kept here too so a bad spec is refused before a network call — and so the
 # prompt below is generated from one source of truth.
 ALLOWED_ENTITIES: dict[str, dict] = {
-    "deals": {"fields": ("stage", "owner_member_id", "created_at", "expected_close_date"),
-              "enums": {"stage": ("new", "proposed", "won", "lost")}, "date_fields": ("created_at", "expected_close_date")},
+    "deals": {"fields": ("stage", "owner_member_id", "created_at", "expected_close_date", "closed_at"),
+              "enums": {"stage": ("new", "proposed", "won", "lost")},
+              "date_fields": ("created_at", "expected_close_date", "closed_at")},
     "customers": {"fields": ("stage", "owner_member_id", "created_at"), "enums": {}, "date_fields": ("created_at",)},
     "tickets": {"fields": ("status", "assigned_to", "created_at", "scheduled_date"),
                 "enums": {"status": ("open", "assigned", "in_progress", "completed", "cancelled")},
@@ -86,6 +89,7 @@ GROUP_LABEL = {
 FIELD_LABEL = {
     "created_at": {"th": "วันที่สร้าง", "en": "created"},
     "expected_close_date": {"th": "วันที่คาดว่าจะปิด", "en": "expected close"},
+    "closed_at": {"th": "วันที่ปิดจริง", "en": "closed"},
     "scheduled_date": {"th": "วันนัดหมาย", "en": "scheduled"},
     "valid_until": {"th": "วันหมดอายุ", "en": "valid until"},
     "warranty_end": {"th": "วันสิ้นสุดประกัน", "en": "warranty end"},
@@ -135,11 +139,19 @@ VALUE_LABEL = {
 }
 
 
-def _filter_words(key: str, value: str, language: str) -> str:
-    """"สถานะ ปิดสำเร็จ", never "stage=won"."""
+def _filter_words(key: str, value, language: str) -> str:
+    """"สถานะ ออกแล้ว รอชำระ · ชำระบางส่วน", never "status=issued".
+
+    Round 21C: a filter may hold several values, and the header says which
+    ones were counted — "ยอดค้างชำระ" that quietly means only `issued` is
+    exactly the bug this round is fixing."""
     name = _t(GROUP_LABEL.get(key) or FIELD_LABEL.get(key) or {"th": key}, language)
-    words = VALUE_LABEL.get(key, {}).get(value)
-    return f"{name} {_t(words, language) if words else value}"
+    values = value if isinstance(value, list) else [value]
+    said = []
+    for one in values:
+        words = VALUE_LABEL.get(key, {}).get(one)
+        said.append(_t(words, language) if words else str(one))
+    return f"{name} {' · '.join(said)}"
 
 
 NO_DATA = {"th": "ไม่มีข้อมูลในช่วงที่ขอ", "en": "No data in that range"}
@@ -197,22 +209,35 @@ def validate_query_spec(spec: dict) -> dict:
     filters_in = spec.get("filter") or spec.get("filters") or {}
     if not isinstance(filters_in, dict):
         raise ReportSpecInvalid("filter must be an object")
-    filters: dict[str, str] = {}
+    filters: dict[str, str | list[str]] = {}
     for key, value in filters_in.items():
         if key not in table["fields"] or key in table["date_fields"]:
             raise ReportSpecInvalid(f"field '{key}' cannot be filtered on {entity}")
-        value = str(value).strip()
-        if key in table["enums"]:
-            if value not in table["enums"][key]:
-                raise ReportSpecInvalid(f"'{value}' is not a valid {key}")
-        elif key in ID_FIELDS:
-            try:
-                value = str(uuid.UUID(value))
-            except ValueError:
-                raise ReportSpecInvalid(f"{key} must be an id")
-        elif not _VALUE_RE.match(value):
-            raise ReportSpecInvalid(f"'{value}' is not an acceptable value for {key}")
-        filters[key] = value
+        # Round 21C: a filter may name several values ("งานค้าง" is open OR
+        # assigned OR in_progress). A single value stays a single value, so
+        # every statement built before this change is built the same way.
+        many = isinstance(value, (list, tuple))
+        values = list(value) if many else [value]
+        if not values:
+            raise ReportSpecInvalid(f"filter '{key}' needs at least one value")
+        if len(values) > 10:
+            raise ReportSpecInvalid(f"filter '{key}' may name at most 10 values")
+        cleaned: list[str] = []
+        for one in values:
+            one = str(one).strip()
+            if key in table["enums"]:
+                if one not in table["enums"][key]:
+                    raise ReportSpecInvalid(f"'{one}' is not a valid {key}")
+            elif key in ID_FIELDS:
+                try:
+                    one = str(uuid.UUID(one))
+                except ValueError:
+                    raise ReportSpecInvalid(f"{key} must be an id")
+            elif not _VALUE_RE.match(one):
+                raise ReportSpecInvalid(f"'{one}' is not an acceptable value for {key}")
+            if one not in cleaned:
+                cleaned.append(one)
+        filters[key] = cleaned if many else cleaned[0]
     group_by = spec.get("group_by") or spec.get("groupBy")
     if group_by is not None and (group_by not in ALLOWED_GROUP_BY or group_by not in table["fields"]):
         raise ReportSpecInvalid(f"cannot group {entity} by '{group_by}'")
@@ -279,14 +304,18 @@ def build_system_prompt() -> str:
         f"group_by: one of {list(ALLOWED_GROUP_BY)} that exists on the entity, or null\n"
         f"date_range: one of {list(ALLOWED_DATE_RANGES)} or null\n"
         "date_field: which date field the range applies to (default created_at)\n\n"
-        "Thai hints: ดีล/ยอดขาย = deals; ยอดขายรวม/มูลค่ารวม = metric sum of field amount on deals; ปิดสำเร็จ/ชนะ = stage won; แพ้ = lost; ลูกค้า = customers; "
-        "ความพึงพอใจ/คะแนนลูกค้า = surveys (metric avg of field score, date_field submitted_at); งาน/ใบงาน/ticket = tickets; งานค้าง = status open or assigned or in_progress (pick 'open' if they say ค้าง and no other clue, "
-        "or omit the status filter and group by status); ช่าง = assigned_to; ใบเสนอราคา = quotes; รับประกัน = warranties; "
-        "ใบแจ้งหนี้/ยอดค้างชำระ = invoices (ยอดค้าง = sum of outstanding with filter status issued or partially_paid; "
+        "Thai hints: ดีล/ยอดขาย = deals; ยอดขายรวม/มูลค่ารวม = metric sum of field amount on deals; ปิดสำเร็จ/ชนะ = stage won; แพ้ = lost; "
+        "ปิดเมื่อไหร่/ปิดได้เดือนนี้ = date_field closed_at (วันที่ปิดจริง ไม่ใช่วันคาดว่าจะปิด); "
+        "ลูกค้า = customers; "
+        "ความพึงพอใจ/คะแนนลูกค้า = surveys (metric avg of field score, date_field submitted_at); งาน/ใบงาน/ticket = tickets; "
+        "งานค้าง = filter status [\"open\",\"assigned\",\"in_progress\"] (ส่งเป็นลิสต์ ไม่ต้องเลือกค่าเดียว); "
+        "ช่าง = assigned_to; ใบเสนอราคา = quotes; รับประกัน = warranties; "
+        "ใบแจ้งหนี้/ยอดค้างชำระ = invoices (ยอดค้าง = sum of outstanding with filter status [\"issued\",\"partially_paid\"]; "
         "ยอดที่เก็บได้ = sum of paid_amount; date_field issue_date); "
         "เดือนนี้ = this_month; 3 เดือน = last_3_months; ปีนี้ = this_year; แยกตาม = group_by.\n\n"
         "Reply with JSON only, no prose:\n"
         '{"entity": "...", "metric": "count", "field": null, "filter": {}, "group_by": null, "date_range": null, "date_field": null}\n'
+        'filter รับได้ทั้งค่าเดียวและลิสต์: {"status": ["issued","partially_paid"]} · ค่าต้องอยู่ในรายการข้างบนเท่านั้น สูงสุด 10 ค่า\n'
         'If the request is not a report about these entities, or is too vague to pick an entity, reply {"clarify": "<one short question in the user\'s language>"}.\n'
         "A request that compares TWO of these entities (customers against deals, tickets against warranties) cannot be one spec: "
         "ask which one to report first, naming both as concrete options in the question. "
@@ -351,7 +380,7 @@ def describe(spec: dict, language: str) -> str:
     metric = _t(METRIC_LABEL[spec["metric"]], language)
     parts = [f"{metric}{entity}" if language != "en" else f"{metric} of {entity}"]
     for key, value in (spec.get("filter") or {}).items():
-        parts.append(_filter_words(key, str(value), language))
+        parts.append(_filter_words(key, value, language))
     if spec.get("date_range"):
         parts.append(_t(RANGE_LABEL[spec["date_range"]], language))
     if spec.get("group_by"):
@@ -428,7 +457,7 @@ def report_csv(
     filters = spec.get("filter") or {}
     writer.writerow([
         head("filters"),
-        " · ".join(_filter_words(k, str(v), language) for k, v in filters.items()) if filters else head("none"),
+        " · ".join(_filter_words(k, v, language) for k, v in filters.items()) if filters else head("none"),
     ])
     writer.writerow([
         head("at"),
@@ -487,6 +516,11 @@ def chart_for(spec: dict, result: dict, language: str) -> charts.Chart | None:
     plot. A report with no group_by is one number; a bar chart of one bar
     tells the reader strictly less than the sentence does, so it is not
     drawn and the caller says why."""
+    # The unit from what was measured (final review I1): a satisfaction
+    # average is a score, never money. Imported here — chart_plan imports
+    # this module at its top.
+    from .chart_plan import spec_unit
+    money = spec_unit(spec) == "money"
     if not spec.get("group_by"):
         # One number IS drawable — as a value card, not as a bar chart.
         # Until 18 ก.ย. 2569 this returned None and the person who had
@@ -498,12 +532,11 @@ def chart_for(spec: dict, result: dict, language: str) -> charts.Chart | None:
             points=[(_t(METRIC_LABEL[spec["metric"]], language)
                      + _t(ENTITY_LABEL[spec["entity"]], language), float(total or 0))],
             kind="value",
-            money=spec.get("metric") != "count",
+            money=money,
             language=language,
             footer=_t(CHART_FOOTNOTE, language),
         )
     rows = result.get("rows") or []
-    money = spec.get("metric") != "count"
     total = result.get("total")
     footer = ""
     if total is not None:
@@ -551,7 +584,16 @@ async def publish_chart_for(
     spec: dict, result: dict, language: str, *, license_id: str, store=None,
 ) -> tuple[str | None, bool]:
     """(link, plottable). `plottable` is False when the result is a single
-    number, which is a different sentence from "the picture failed"."""
+    number, which is a different sentence from "the picture failed".
+
+    Round 21C: the model designs the picture and the server computes it
+    (`services/chart_plan.py`). A single number still goes down the old
+    road — a value card has nothing to design."""
+    if result.get("rows"):
+        from . import chart_plan
+
+        return await chart_plan.publish_for_spec(
+            spec, result, language, license_id=license_id, store=store)
     chart = chart_for(spec, result, language)
     if chart is None:
         return None, False
@@ -582,15 +624,35 @@ async def publish_files(spec: dict, result: dict, language: str, *, license_id: 
     except Exception:  # noqa: BLE001
         log.exception("could not store report files")
         return files
-    try:
-        from .pdf import PdfOptions, get_renderer
+    from .chart_plan import SHOT_TIMEOUT_S
+    from .pdf import PdfOptions, get_renderer
+    from .pdf import RendererUnavailable
+    from .pdf.smartbrowz import SmartBrowzNotConfigured, SmartBrowzRenderError
 
-        rendered = await get_renderer("smartbrowz").render(page, PdfOptions(), idempotency_key=f"report:{license_id}:{stamp}")
+    try:
+        # Bounded by the chart half's own constant: this is the other
+        # SmartBrowz call inside the same LINE webhook, and the renderer's
+        # retry alone can hold the reply for ~45 s. On timeout the person
+        # gets the report and its CSV/page without the PDF.
+        rendered = await asyncio.wait_for(
+            get_renderer("smartbrowz").render(
+                page, PdfOptions(), idempotency_key=f"report:{license_id}:{stamp}"),
+            SHOT_TIMEOUT_S)
         if rendered.content:
             stored = await store.put(key=f"reports/{license_id}/{stamp}.pdf", content=rendered.content, content_type="application/pdf")
             files["pdf"] = asset_link(stored.path, content_type="application/pdf", ttl_seconds=FILE_LINK_SECONDS, filename="report.pdf")
-    except Exception:  # noqa: BLE001
-        log.info("report PDF skipped (renderer not available)")
+    except asyncio.TimeoutError:
+        log.warning("report PDF skipped: SmartBrowz did not answer within %.0f s", SHOT_TIMEOUT_S)
+    except (SmartBrowzNotConfigured, SmartBrowzRenderError, RendererUnavailable,
+            NotImplementedError) as exc:
+        # Narrowed twice. `except Exception` swallowed an ImportError for
+        # weeks and every AI report came back without its PDF (Task 15);
+        # `except RuntimeError` still read any RuntimeError bug of ours as
+        # "renderer not available". These four are the renderer's own
+        # refusals — not configured, rejected, unavailable (SmartBrowzUnavailable
+        # is both of the middle two), and the null renderer — and nothing
+        # else is skipped silently.
+        log.info("report PDF skipped (renderer not available: %s)", type(exc).__name__)
     return files
 
 

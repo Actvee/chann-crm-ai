@@ -1151,6 +1151,40 @@ SALES = [
        ai={"action": "read", "entity": "report", "fields": {"type": "sales", "period": "last_month"}, "missing": []}),
     _e("ใครเป็นลูกค้าที่ซื้อเยอะสุด", "s.report_ai", "question",
        ai={"action": "read", "entity": "report", "fields": {"type": "top_customer"}, "missing": []}),
+    # ---- round 21C: the five fixed reports -------------------------------------
+    # Every `ai` below is the deployed model's own answer, measured with
+    # scripts/dev/ask-model.py on 23 ก.ย. 2569 — `action/entity/fields` from
+    # `--oa sales`, `report` from `--mode basic_report`. The sibling job
+    # questions a few lines up ("มีงานซ่อมค้างไหม" and the rest) carry NO
+    # `report` key because the model answers null for them: they ask for the
+    # LIST, and they keep it.
+    _e("ยอดมูลค่าดีลทั้งหมด", "s.basic_report", "question",
+       ai={"action": "read", "entity": "report", "fields": {"type": "sales"}, "missing": [],
+           "report": "pipeline_value"}),
+    # Both halves measured (final fix, 23 ก.ย. 2569, google/gemini-3.1-flash-lite):
+    # `ask-model.py --oa sales` read/report {type: sales}, missing [] — three
+    # runs, identical; `--mode basic_report` → pipeline_value.
+    _e("ยอดในท่อตอนนี้", "s.basic_report", "colloquial",
+       ai={"action": "read", "entity": "report", "fields": {"type": "sales"}, "missing": [],
+           "report": "pipeline_value"}),
+    _e("ยอดปิดสำเร็จเดือนนี้", "s.basic_report", "period",
+       ai={"action": "read", "entity": "report", "fields": {"type": "sales", "period": "month"}, "missing": [],
+           "report": "won_this_month"}),
+    _e("งานซ่อมค้างแยกตามช่าง", "s.basic_report", "breakdown",
+       ai={"action": "read", "entity": "report", "fields": {"type": "jobs"}, "missing": [],
+           "report": "open_jobs_by_tech"}),
+    # The button one of the five writes: no model call at all.
+    _e("รายงาน: outstanding_invoices", "s.basic_report", "postback"),
+    # One of the five the model reads as something else entirely — measured,
+    # not assumed: the survey summary stays, and the key rides along so a
+    # future widening of the road cannot happen here unnoticed. ("ยอดค้างชำระ"
+    # is the same case on the invoice road, but this corpus persona holds no
+    # invoice.read, so here it can only measure a permission reply; it is
+    # pinned by tests/unit/test_round20v_invoices.py:406 and
+    # scripts/agent-test/scenarios/round20v-invoices.yaml instead.)
+    _e("คะแนนความพึงพอใจเฉลี่ย", "s.survey_summary", "question",
+       ai={"action": "read", "entity": "survey", "fields": {}, "missing": [],
+           "report": "satisfaction_avg"}),
     _e("ช่วยเขียนข้อความหาลูกค้าหน่อย", "s.offtopic", "offtopic polite_prefix"),
     _e("จะปิดดีลได้กี่ดีลเดือนนี้", "s.deal_query", "question",
        ai={"action": "read", "entity": "report", "fields": {"period": "month"}, "missing": []}),

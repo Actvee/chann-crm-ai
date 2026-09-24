@@ -1032,6 +1032,14 @@ class Deal(TimestampMixin, Base):
     # nobody learns anything from it.
     lost_reason: Mapped[str | None] = mapped_column(Text)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Round 21C — WHEN the deal closed. Until this column existed, "ปิดสำเร็จ
+    # เดือนนี้" was answered from expected_close_date, which is a forecast:
+    # a deal closed in September with a July forecast counted as July.
+    # Stamped by transition_stage (won/lost) and by the invoice that
+    # settles the deal; cleared when the deal is reopened, because a deal
+    # sitting in "new" that still says when it closed is a lie the reports
+    # would believe.
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class DealProduct(Base):

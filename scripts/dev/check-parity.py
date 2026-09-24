@@ -213,6 +213,10 @@ VERB_SEGMENTS = {
     # Round 20V: POST invoices/X/payments records a receipt of money,
     # POST invoices/X/receipt issues the receipt PDF.
     "payments": "pay", "receipt": "receipt",
+    # Round 21C: POST .../invoices/X/send and .../quotes/X/send hand the
+    # document to the customer on LINE — giving it, not making it, so it
+    # is its own verb and not a "create".
+    "send": "send",
     "check-out": "check_out", "link": "read", "preview": "read",
     "publish": "update", "reopen": "update", "revoke": "delete",
     # Phase 14: acting on an approval step; answering a survey is the

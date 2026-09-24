@@ -3473,7 +3473,9 @@ class TestADealsStatedValueCounts:
     def test_a_deal_without_lines_is_worth_its_amount(self):
         from decimal import Decimal
         assert chat._deal_value({"amount": "15000", "products": []}) == Decimal("15000")
-        assert chat._deal_value({"amount": "15000", "products": [{"quoted_unit_price": "1200", "qty": 2}]}) == Decimal("2400")
+        # Round 21C: the typed amount wins over the lines, even when both are present.
+        assert chat._deal_value({"amount": "15000", "products": [{"quoted_unit_price": "1200", "qty": 2}]}) == Decimal("15000")
+        assert chat._deal_value({"amount": None, "products": [{"quoted_unit_price": "1200", "qty": 2}]}) == Decimal("2400")
         assert chat._deal_value({"products": []}) == Decimal("0")
 
     @pytest.mark.asyncio

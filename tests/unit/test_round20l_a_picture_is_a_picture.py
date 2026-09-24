@@ -100,19 +100,36 @@ class TestTheDashboardPaysToo:
         assert 'out["result"] = None' not in body
 
 
+def _body_of(name: str) -> str:
+    """One function's source. Round 21C (final fix, item 8) added a second
+    picture road — `_handle_basic_report_picture` — earlier in chat.py, so
+    a whole-file search found ITS spend first; each road is read on its own."""
+    src = (ROOT / "application" / "chann_app" / "services" / "chat.py").read_text()
+    start = src.index(f"async def {name}(")
+    end = src.find("\nasync def ", start + 1)
+    return src[start:end if end != -1 else None]
+
+
 class TestTheChatChargesAfterItKnows:
     def test_the_spend_happens_once_a_chart_exists(self):
-        src = (ROOT / "application" / "chann_app" / "services" / "chat.py").read_text()
+        src = _body_of("_handle_ai_report")
         spend = src.index("quota = await chart_quota.spend_one(")
         guard = src.rindex('if with_chart and out.get("chart"):', 0, spend)
         # Nothing between the guard and the spend but the import.
         assert "handle_report_request" not in src[guard:spend]
 
     def test_it_is_no_longer_spent_before_the_report_is_made(self):
-        src = (ROOT / "application" / "chann_app" / "services" / "chat.py").read_text()
+        src = _body_of("_handle_ai_report")
         spend = src.index("quota = await chart_quota.spend_one(")
         call = src.index("out = await reports_ai.handle_report_request(")
         assert spend > call, "the allowance is being spent before the report exists"
+
+    def test_the_basic_report_picture_is_charged_the_same_way(self):
+        src = _body_of("_handle_basic_report_picture")
+        spend = src.index("quota = await chart_quota.spend_one(")
+        drawn = src.index("await chart_plan.publish_for_basic_report(")
+        guard = src.rindex("if url:", 0, spend)
+        assert drawn < guard < spend, "the picture credit is spent before a picture exists"
 
 
 # --------------------------------------------------------------- the redraw

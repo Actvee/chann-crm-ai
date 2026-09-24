@@ -1023,6 +1023,7 @@ class DealOut(BaseModel):
     amount: Decimal | None = None
     currency: str | None = None
     lost_reason: str | None = None
+    closed_at: datetime | None = None
     products: list[DealProductOut] = []
 
 
@@ -1143,6 +1144,22 @@ class InvoiceIn(BaseModel):
     created_by: str | None = None
 
 
+class InvoiceLinesIn(BaseModel):
+    """Round 21C — the whole line set, with the totals the Application tier
+    computed from it. Sent together because they must never disagree."""
+    data_snapshot: dict
+    subtotal: Decimal
+    discount_amount: Decimal = Decimal("0")
+    vat_rate: Decimal | None = None
+    vat_amount: Decimal = Decimal("0")
+    total: Decimal
+
+
+class InvoiceDetailsIn(BaseModel):
+    note: str | None = None
+    due_date: date | None = None
+
+
 class InvoiceIssueIn(BaseModel):
     document_id: uuid.UUID | None = None
     issue_date: date | None = None
@@ -1202,6 +1219,20 @@ class InvoiceOut(BaseModel):
     # Derived, never stored (see repositories/invoices.py).
     outstanding: Decimal
     is_overdue: bool
+    # Round 21C: an edit after the PDF was made — read from data_snapshot,
+    # cleared on re-issue (repositories/invoices.py).
+    needs_reissue: bool = False
+    # Round 21C: the deal THIS request closed, or None.
+    #
+    # Only `add_invoice_payment` ever fills it, and only from the deal
+    # `InvoiceRepository.add_payment` returns — which is non-None only when
+    # that call itself moved the deal to won. Every other route leaves it
+    # None, and the field is deliberately NOT derived from the invoice's
+    # status: "paid in full" does not mean "this payment closed the deal"
+    # (close_won_from_invoice refuses a lost, archived or already-closed
+    # deal), and a reader that inferred it reported a close that never
+    # happened, with the value of the wrong bill (review finding 1).
+    closed_deal: DealOut | None = None
     # The ledger travels with the detail; the list leaves it empty so two
     # hundred rows do not carry two hundred payment sets.
     payments: list[InvoicePaymentOut] = []
@@ -1484,7 +1515,7 @@ class ReportQueryIn(BaseModel):
     entity: str
     metric: str = "count"
     field: str | None = None
-    filter: dict[str, str] = {}
+    filter: dict[str, str | list[str]] = {}
     group_by: str | None = None
     date_range: str | None = None
     date_field: str | None = None
@@ -1506,6 +1537,35 @@ class ReportResultOut(BaseModel):
     date_field: str
     rows: list[ReportRowOut]
     total: float | int | None
+    generated_at: str
+
+
+# ------------------------------------------------------------ round 21C
+class BasicReportHeadlineOut(BaseModel):
+    label_th: str
+    label_en: str
+    value: float
+
+
+class BasicReportRowOut(BaseModel):
+    key: str
+    label_th: str
+    label_en: str
+    value: float
+    count: int | None = None
+
+
+class BasicReportOut(BaseModel):
+    """Round 21C — one envelope for all five, so the chat reply and the
+    dashboard card render the same numbers from the same payload."""
+    key: str
+    title_th: str
+    title_en: str
+    unit: str
+    headline: BasicReportHeadlineOut
+    rows: list[BasicReportRowOut]
+    notes_th: list[str] = []
+    notes_en: list[str] = []
     generated_at: str
 
 

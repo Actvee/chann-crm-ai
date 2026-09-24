@@ -6,12 +6,15 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 
 import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from chann_data.models import ChannIdentity, Deal, LicenseMember
+from chann_data.repositories.invoices import InvoiceRepository
+from chann_data.repositories.phase10 import QuoteRepository
 from chann_data.repositories.phase17 import ReportQueryRepository, ReportSpecInvalid, date_window
 from chann_data.repositories.phase65 import RegistrationRepository
 from chann_data.repositories.phase9 import CustomerRepository, DealRepository
@@ -119,3 +122,87 @@ class TestResults:
         assert end.astimezone(timezone(timedelta(hours=7))).date() == date(2026, 9, 1)
         start, _ = date_window("last_3_months", today=date(2026, 9, 4))
         assert start.astimezone(timezone(timedelta(hours=7))).date() == date(2026, 7, 1)
+
+
+@pytest.fixture
+def in_filter_world(migrated_db):
+    """Round 21C — a real tenant whose "งานค้าง" tickets and "ยอดค้างชำระ"
+    invoices are spread across several statuses, so an `IN` filter is the
+    only way to count/sum them correctly (diagnosis §1, "two more
+    defects"). Every status the prompt now names is represented, plus one
+    that must NOT be counted, so a filter that was silently too wide would
+    also be caught here.
+    """
+    tag = uuid.uuid4().hex[:6]
+    uid = f"CHN-P17IN-{tag}"
+    with Session(migrated_db) as s:
+        s.add(ChannIdentity(chann_uid=uid, line_user_id=f"line-{uid}", primary_role="sales", display_name="ช่างเอ"))
+        s.commit()
+    with Session(migrated_db) as s:
+        lic = RegistrationRepository(s).create_license(company_name=f"IN Filter {tag}", created_by_chann_uid=uid)
+        license_id = lic.id
+        s.commit()
+    scope = TenantScope(license_id=license_id)
+    with Session(migrated_db) as s:
+        customer = CustomerRepository(s).create(scope, first_name="ลูกค้า", last_name=tag, phone="0899999999")
+        s.flush()
+        # Tickets: one of each status. "งานค้าง" = open, assigned, in_progress.
+        # completed and cancelled must NOT be swept in by too-wide a filter.
+        for status in ("open", "assigned", "in_progress", "completed", "cancelled"):
+            ticket = ServiceTicketRepository(s).create(scope, issue_description="งาน", contact_id=customer.id)
+            s.flush()
+            ticket.status = status
+        # Invoices: one issued, one partially paid, one paid in full.
+        # "ยอดค้างชำระ" = issued + partially_paid; paid must be excluded.
+        totals = {"issued": Decimal("10000.00"), "partially_paid": Decimal("20000.00"), "paid": Decimal("5000.00")}
+        paid_amounts = {"issued": Decimal("0"), "partially_paid": Decimal("8000.00"), "paid": Decimal("5000.00")}
+        for status, total in totals.items():
+            deal = DealRepository(s).create(scope, contact_id=customer.id)
+            s.flush()
+            DealRepository(s).add_product(
+                scope, deal.id, product_id=None, product_name="สินค้า",
+                quoted_unit_price=str(total), qty=1,
+            )
+            quote = QuoteRepository(s).create(scope, deal_id=deal.id)
+            s.flush()
+            invoice = InvoiceRepository(s).create(
+                scope, quote_id=quote.id, subtotal=str(total), discount_amount="0",
+                vat_rate=None, vat_amount="0", total=str(total),
+                data_snapshot={"line_items": [], "totals": {}}, created_by=uid,
+            )
+            s.flush()
+            invoice.status = status
+            invoice.paid_amount = paid_amounts[status]
+            deal.stage = "won"  # closes the deal so the next one for this contact may open
+            s.flush()
+        s.commit()
+    return migrated_db, scope
+
+
+class TestFiltersThatHoldSeveralValues:
+    """Round 21C, proven against real Postgres, not just the validator."""
+
+    def test_open_tickets_counts_open_assigned_and_in_progress_only(self, in_filter_world):
+        engine, scope = in_filter_world
+        with Session(engine) as s:
+            repo = ReportQueryRepository(s)
+            wide = repo.run(scope, {"entity": "tickets", "filter": {"status": ["open", "assigned", "in_progress"]}})
+            assert wide["total"] == 3  # not 5 (completed/cancelled excluded) and not 1 (old single-value bug)
+            narrow = repo.run(scope, {"entity": "tickets", "filter": {"status": "open"}})
+            assert narrow["total"] == 1  # a single value still behaves exactly as before
+
+    def test_outstanding_invoices_sums_issued_and_partially_paid_only(self, in_filter_world):
+        engine, scope = in_filter_world
+        with Session(engine) as s:
+            repo = ReportQueryRepository(s)
+            wide = repo.run(scope, {
+                "entity": "invoices", "metric": "sum", "field": "outstanding",
+                "filter": {"status": ["issued", "partially_paid"]},
+            })
+            # outstanding = total - paid_amount: issued 10000-0=10000, partially_paid 20000-8000=12000
+            assert wide["total"] == 22000
+            issued_only = repo.run(scope, {
+                "entity": "invoices", "metric": "sum", "field": "outstanding",
+                "filter": {"status": "issued"},
+            })
+            assert issued_only["total"] == 10000  # the old, single-value behaviour is unchanged

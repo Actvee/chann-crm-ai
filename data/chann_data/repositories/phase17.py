@@ -19,6 +19,7 @@ from ..models import (
     INVOICE_STATUSES, ChannIdentity, Customer, Deal, Invoice, LicenseMember, Product, Quote,
     SatisfactionSurvey, ServiceTicket, Warranty,
 )
+from .deal_value import deal_value_subquery
 from .phase9 import DEAL_STAGES
 from .phase10 import QUOTE_STATUSES
 from .phase12 import TICKET_STATUSES
@@ -34,9 +35,13 @@ ENTITIES: dict[str, dict] = {
         "fields": {
             "stage": Deal.stage, "owner_member_id": Deal.owner_member_id,
             "created_at": Deal.created_at, "expected_close_date": Deal.expected_close_date,
+            # Round 21C: the real close date. A date field, never a filter
+            # value — validate_spec refuses a filter on anything in
+            # date_fields.
+            "closed_at": Deal.closed_at,
         },
         "enums": {"stage": DEAL_STAGES},
-        "date_fields": ("created_at", "expected_close_date"),
+        "date_fields": ("created_at", "expected_close_date", "closed_at"),
     },
     "customers": {
         "model": Customer,
@@ -101,6 +106,10 @@ ENTITIES: dict[str, dict] = {
 # Numeric columns a sum/avg/min/max may target. Small on purpose: every
 # entry here is a number the whole tenant may see through a report.
 NUMERIC_FIELDS: dict[str, dict] = {
+    # Round 21C: `amount` is the NAME the spec uses for "a deal's value",
+    # not the column it sums. The column alone is NULL for every deal
+    # whose value is in its line items, which is why this report answered
+    # 0. `_deal_value_statement` below builds the real expression.
     "deals": {"amount": Deal.amount},
     "quotes": {"discount_amount": Quote.discount_amount},
     "surveys": {"score": SatisfactionSurvey.score},
@@ -173,22 +182,35 @@ def validate_spec(spec: dict) -> dict:
     filters_in = spec.get("filter") or {}
     if not isinstance(filters_in, dict):
         raise ReportSpecInvalid("filter must be an object")
-    filters: dict[str, str] = {}
+    filters: dict[str, str | list[str]] = {}
     for key, value in filters_in.items():
         if key not in table["fields"] or key in table["date_fields"]:
             raise ReportSpecInvalid(f"field '{key}' cannot be filtered on {entity}")
-        value = str(value).strip()
-        if key in table["enums"]:
-            if value not in table["enums"][key]:
-                raise ReportSpecInvalid(f"'{value}' is not a valid {key}")
-        elif key in ID_FIELDS:
-            try:
-                value = str(uuid.UUID(value))
-            except ValueError:
-                raise ReportSpecInvalid(f"{key} must be an id")
-        elif not _VALUE_RE.match(value):
-            raise ReportSpecInvalid(f"'{value}' is not an acceptable value for {key}")
-        filters[key] = value
+        # Round 21C: a filter may name several values ("งานค้าง" is open OR
+        # assigned OR in_progress). A single value stays a single value, so
+        # every statement built before this change is built the same way.
+        many = isinstance(value, (list, tuple))
+        values = list(value) if many else [value]
+        if not values:
+            raise ReportSpecInvalid(f"filter '{key}' needs at least one value")
+        if len(values) > 10:
+            raise ReportSpecInvalid(f"filter '{key}' may name at most 10 values")
+        cleaned: list[str] = []
+        for one in values:
+            one = str(one).strip()
+            if key in table["enums"]:
+                if one not in table["enums"][key]:
+                    raise ReportSpecInvalid(f"'{one}' is not a valid {key}")
+            elif key in ID_FIELDS:
+                try:
+                    one = str(uuid.UUID(one))
+                except ValueError:
+                    raise ReportSpecInvalid(f"{key} must be an id")
+            elif not _VALUE_RE.match(one):
+                raise ReportSpecInvalid(f"'{one}' is not an acceptable value for {key}")
+            if one not in cleaned:
+                cleaned.append(one)
+        filters[key] = cleaned if many else cleaned[0]
     group_by = spec.get("group_by") or spec.get("groupBy")
     if group_by is not None:
         if group_by not in GROUP_BY or group_by not in table["fields"]:
@@ -215,22 +237,52 @@ class ReportQueryRepository:
         spec = validate_spec(spec)
         table = ENTITIES[spec["entity"]]
         model = table["model"]
+        group_col = table["fields"][spec["group_by"]] if spec["group_by"] else None
+        if spec["entity"] == "deals" and spec["metric"] != "count":
+            return self._deal_value_statement(scope, spec, table, group_col, today=today), spec
         if spec["metric"] == "count":
             measure = func.count()
         else:
             column = NUMERIC_FIELDS[spec["entity"]][spec["field"]]
             measure = getattr(func, spec["metric"])(column)
         stmt = select(measure.label("value"))
-        group_col = table["fields"][spec["group_by"]] if spec["group_by"] else None
         if group_col is not None:
             stmt = select(group_col.label("key"), measure.label("value")).group_by(group_col).order_by(measure.desc())
-        stmt = stmt.select_from(model).where(model.license_id == scope.license_id)
+        stmt = stmt.select_from(model)
+        return self._apply_scope_and_filters(stmt, model, table, scope, spec, today=today), spec
+
+    def _deal_value_statement(self, scope: TenantScope, spec: dict, table: dict, group_col, *, today=None):
+        """sum/avg/min/max of a DEAL'S VALUE, which is not a column.
+
+        One row per deal first (`deal_value_subquery`), then the aggregate.
+        Aggregating the joined rows would multiply a deal by its number of
+        line items; `count` never comes here for the same reason.
+        """
+        inner = deal_value_subquery(*([group_col] if group_col is not None else []))
+        inner = self._apply_scope_and_filters(inner, Deal, table, scope, spec, today=today)
+        sub = inner.subquery()
+        measure = getattr(func, spec["metric"])(sub.c.value)
+        if group_col is None:
+            return select(measure.label("value")).select_from(sub)
+        key = sub.c[group_col.key]
+        return (
+            select(key.label("key"), measure.label("value"))
+            .select_from(sub).group_by(key).order_by(measure.desc())
+        )
+
+    def _apply_scope_and_filters(self, stmt, model, table: dict, scope: TenantScope, spec: dict, *, today=None):
+        """The three rules every report obeys: this tenant only, no
+        archived rows, and the spec's own filters and date window."""
+        stmt = stmt.where(model.license_id == scope.license_id)
         if hasattr(model, "archived_at"):
             # Archived leads and deals are not in any list; they were still
             # counted in "ลูกค้าใหม่เดือนนี้" (review, 6 Sep 2026).
             stmt = stmt.where(model.archived_at.is_(None))
         for key, value in spec["filter"].items():
-            stmt = stmt.where(table["fields"][key] == value)
+            column = table["fields"][key]
+            # A list becomes IN; a single value stays `==`, so no statement
+            # that worked before this round is rewritten as a one-element IN.
+            stmt = stmt.where(column.in_(value) if isinstance(value, list) else column == value)
         if spec["date_range"]:
             start, end = date_window(spec["date_range"], today=today)
             column = table["fields"][spec["date_field"]]
@@ -238,7 +290,7 @@ class ReportQueryRepository:
                 stmt = stmt.where(column >= start.astimezone(BANGKOK).date(), column < end.astimezone(BANGKOK).date())
             else:
                 stmt = stmt.where(column >= start, column < end)
-        return stmt, spec
+        return stmt
 
     def run(self, scope: TenantScope, spec: dict, *, today: date | None = None) -> dict:
         stmt, spec = self.build_statement(scope, spec, today=today)

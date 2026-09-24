@@ -155,3 +155,54 @@ class TestDegradation:
         # The caller's form of the same call answers None, so a report with
         # no picture still answers with its numbers.
         assert charts.render_or_none(charts.Chart(title="x", points=BY_STAGE)) is None
+
+
+class TestANegativeNeverVanishes:
+    """Final fix, item 11: `max(value, 0)` drew a negative as a 3-pixel
+    sliver on the baseline — the same mark as a value of one. A refund
+    month, a loss, a negative balance must be seen on the picture, not
+    only in the words above it."""
+
+    WITH_A_LOSS = [("ก.ค. 69", 120000), ("ส.ค. 69", -45000), ("ก.ย. 69", 80000)]
+
+    @staticmethod
+    def _negative_pixels(png: bytes) -> list[tuple[int, int]]:
+        im = _image(png).convert("RGB")
+        want = Image.new("RGB", (1, 1), charts.NEGATIVE).getpixel((0, 0))
+        width, height = im.size
+        return [(x, y) for y in range(0, height, 2) for x in range(0, width, 2)
+                if im.getpixel((x, y)) == want]
+
+    def test_a_negative_bar_hangs_below_the_zero_line(self):
+        png = charts.render(charts.Chart(title="กำไรรายเดือน", points=self.WITH_A_LOSS,
+                                         kind="bar", money=True))
+        drawn = self._negative_pixels(png)
+        low, high, _step = charts._signed_axis(-45000, 120000, integer=True)
+        top, base = 168, 620
+        zero_y = base - (base - top) * (0 - low) / (high - low)
+        below = [y for _, y in drawn if y > zero_y]
+        above = [y for _, y in drawn if y < zero_y]
+        # A real bar, not a sliver: 45,000 on this scale is ~90 px tall,
+        # hanging DOWN from zero …
+        assert len(below) > 200, len(below)
+        assert max(below) > zero_y + 40
+        # … and the only NEGATIVE ink above zero is its own number.
+        assert above and min(above) > zero_y - 40
+
+    def test_the_axis_covers_both_ends_and_crosses_zero_on_a_gridline(self):
+        low, high, step = charts._signed_axis(-45000, 120000, integer=True)
+        assert low <= -45000 and high >= 120000
+        assert (0 - low) % step == 0 and (high - low) % step == 0
+        assert 3 <= (high - low) / step <= 6
+
+    @pytest.mark.parametrize("kind", ["hbar", "line"])
+    def test_the_other_kinds_mark_it_where_they_cannot_draw_it(self, kind):
+        png = charts.render(charts.Chart(title="กำไร", points=self.WITH_A_LOSS,
+                                         kind=kind, money=True))
+        assert len(self._negative_pixels(png)) > 20
+
+    @pytest.mark.parametrize("kind,points", [("bar", BY_STAGE), ("hbar", BY_STAGE),
+                                             ("line", BY_MONTH)])
+    def test_a_chart_with_no_negative_is_unchanged(self, kind, points):
+        png = charts.render(charts.Chart(title="ยอดขาย", points=points, kind=kind))
+        assert self._negative_pixels(png) == []

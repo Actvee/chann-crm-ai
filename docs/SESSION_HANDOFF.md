@@ -7,6 +7,180 @@
 เจ้าของสั่ง 10 ก.ย.: *"ต่อจากนี้ให้บันทึก model first แบบนี้ในทุกๆที่ อย่าให้หลุดอีก
 เพราะการใช้กฎแบบเดิมเลย น่าจะทำให้ประสบการณ์ใช้งานแย่ลง"*
 
+**รอบ 21C (23 ก.ย. — DEV `__21C_SHA__`, ต่อจาก `28b6e5b`): รายงานที่ถูก — นิยามมูลค่าดีลเดียว, ห้ารายงานพื้นฐาน, ใบแจ้งหนี้ปิดดีล, และรูปที่ AI ออกแบบ**
+
+- **เจ้าของ:** *"ยอดมูลค่าดีลทั้งหมดขึ้น 0 ในรูปแบบใหม่"* → วินิจฉัยที่ `docs/superpowers/specs/2026-09-23-ai-reports-diagnosis.md`
+  แล้วสั่ง 8 ข้อ: มูลค่าดีล = `amount` ที่พิมพ์ชนะ ไม่งั้นรวมรายการ · *"ใบแจ้งหนี้จะอัพเดตไปที่ดีลตอนชำระเงินแล้ว"* ·
+  *"invoice ต้องแก้ไขรายการสินค้าหรือข้อมูลต่างๆได้เหมือน quote ด้วย"* · เพิ่ม `closed_at` · รูป AI ออกแบบได้แต่ห้ามคำนวณ ·
+  รายงานพื้นฐานห้ามกินเครดิต · ห้ารายงานตายตัว · *"ถ้าข้อมูลลูกค้ามีการผูก line ไว้อยู่แล้ว … ส่งไปให้ลูกค้าผ่านไลน์ได้เลย"*
+  · spec: `docs/superpowers/specs/2026-09-23-ai-reports-design.md` · ledger: `.superpowers/sdd/2026-09-23-ai-reports/progress.md`
+- **ของเดิมพังตรงไหน:** `phase17.py:104` รวม `deals.amount` อย่างเดียว ซึ่งเป็น NULL ทุกใบที่มูลค่าอยู่ในรายการสินค้า →
+  ตอบ 0 · มีนิยาม "มูลค่าดีล" อยู่ 4 ที่ และ 2 ที่ไม่ตรงกัน · filter เป็น `==` ค่าเดียว งานค้าง/ยอดค้างชำระจึงนับขาดเงียบ ๆ ·
+  ไม่มี `closed_at` เลย "ปิดเดือนนี้" จึงใช้วันคาดว่าจะปิด
+- **Data:** `repositories/deal_value.py` นิพจน์เดียว (`coalesce(amount, sum(qty*price), 0)`) ใช้ร่วมกันทั้ง `pipeline_summary`
+  และ phase17 · filter รับลิสต์ → `IN` (สูงสุด 10 ค่า) · migration **0038_deal_closed_at** (+index, backfill จาก `updated_at`) ·
+  `basic_reports.py` ห้ารายงาน · `InvoiceRepository._editable/update_lines/update_details` · `add_payment` คืนดีลที่ปิด และ
+  `DealRepository.close_won_from_invoice` เขียนรายการ/มูลค่า/สถานะ/`closed_at` ในทรานแซกชันเดียว
+- **Application:** `services/deal_value.py` · `services/basic_reports.py` (โมเดลเลือกว่าอันไหน ไม่คิดเลข) ·
+  `services/chart_plan.py` (แผนกราฟที่ validate แล้ว → HTML/SVG ธีม OA → SmartBrowz `preview_image` → PNG เดิม;
+  Pillow เป็น fallback) · `services/document_send.py` ส่งเอกสารให้ลูกค้าทางไลน์ · `pdf/__init__.py` ที่ว่างเปล่ามาตลอด
+  ทำให้ PDF ของรายงาน AI ไม่เคยออกเลย — แก้แล้ว
+- **แชท (model-first — วัดด้วย ask-model.py ก่อน/หลัง ทีละประโยค, `google/gemini-3.1-flash-lite`, OR_KEY จาก `~/.or_key` ไม่เคยพิมพ์):**
+  ผลจริงคัดลอกจากรายงานของแต่ละ task ไม่ได้แต่งเพิ่ม
+  - **Task 9 — ใบแจ้งหนี้: ส่ง/แก้ (หกประโยค ก่อน → หลังแก้ prompt):**
+    ```
+    ส่งใบแจ้งหนี้ INV-2026-0003 ให้ลูกค้า
+       ก่อน {"action": "issue", "entity": "invoice", "fields": {"code": "INV-2026-0003"}, "missing": []}
+       หลัง {"action": "send", "entity": "invoice", "fields": {"code": "INV-2026-0003", "kind": "invoice"}, "missing": []}
+    ส่งใบเสนอราคา Q-2026-0001 ให้ลูกค้าทางไลน์
+       ก่อน {"action": "suggest", "suggestions": ["ส่งใบเสนอราคาผ่านอีเมล", "ดาวน์โหลดใบเสนอราคาเพื่อส่งต่อ"], "entity": null, "fields": {}, "missing": []}
+       หลัง {"action": "send", "entity": "quote", "fields": {"code": "Q-2026-0001"}, "missing": []}
+    ส่งใบเสร็จให้ลูกค้า INV-2026-0003
+       ก่อน {"action": "receipt", "entity": "invoice", "fields": {"code": "INV-2026-0003"}, "missing": []}
+       หลัง {"action": "send", "entity": "invoice", "fields": {"code": "INV-2026-0003", "kind": "receipt"}, "missing": []}
+    แก้รายการในใบแจ้งหนี้ INV-2026-0003
+       ก่อน {"action": "suggest", "suggestions": ["สร้างใบแจ้งหนี้ใหม่จากดีลเดิม", "ยกเลิกใบแจ้งหนี้ INV-2026-0003 แล้วออกใบใหม่"], "entity": null, "fields": {}, "missing": []}
+       หลัง {"action": "update", "entity": "invoice", "fields": {"code": "INV-2026-0003"}, "missing": []}
+    เปลี่ยนจำนวนแอร์ในใบแจ้งหนี้ INV-2026-0003 เป็น 3 ตัว
+       ก่อน {"action": "update", "entity": "line_item", "fields": {"code": "INV-2026-0003", "target_name": "แอร์", "qty": 3}, "missing": []}
+       หลัง {"action": "update", "entity": "invoice", "fields": {"code": "INV-2026-0003", "target_name": "แอร์", "qty": 3}, "missing": []}
+    ใบแจ้งหนี้ INV-2026-0003 เปลี่ยนกำหนดชำระเป็นสิ้นเดือน
+       ก่อน = หลัง {"action": "update", "entity": "invoice", "fields": {"code": "INV-2026-0003", "due_date": "2026-09-30"}, "missing": []}
+    ```
+    สามประโยคที่วัดไว้ใช้ทำ scenario/ข้อความตอบ (ไม่เปลี่ยน):
+    ```
+    ออกใบแจ้งหนี้ให้ดีล D-2026-0001  -> {"action": "create", "entity": "invoice", "fields": {"deal_code": "D-2026-0001"}}
+    รับชำระ INV-2026-0001 ครบ        -> {"action": "pay",    "entity": "invoice", "fields": {"code": "INV-2026-0001", "full": true}}
+    ออกเอกสาร INV-2026-0001 ใหม่     -> {"action": "issue",  "entity": "invoice", "fields": {"code": "INV-2026-0001"}}
+    ```
+    สามประโยค "ยกเลิก" (fix round 2 — ค่าที่อ่านได้**เหมือนเดิมทุกไบต์ทั้งก่อนและหลัง** โมเดลถูกอยู่แล้ว guard ฟังผิดคำ จึงแก้ที่ guard ให้ดูสิ่งที่โมเดลระบุ):
+    ```
+    ยกเลิกแอร์ในใบแจ้งหนี้ INV-2026-0003
+       {"action": "update", "entity": "invoice", "fields": {"code": "INV-2026-0003", "target_name": "แอร์", "qty": 0}, "missing": []}
+    ยกเลิกใบแจ้งหนี้ INV-2026-0003
+       {"action": "void", "entity": "invoice", "fields": {"code": "INV-2026-0003"}, "missing": []}
+    ยกเลิกรายการแอร์ใน INV-2026-0003
+       {"action": "delete", "entity": "line_item", "fields": {"code": "INV-2026-0003", "target_name": "แอร์"}, "missing": []}
+    ```
+    → "ยกเลิกแอร์ใน…" ได้คำปฏิเสธเรื่องรายการ (ไม่ใช่การ์ดยกเลิกใบ) · "ยกเลิกใบแจ้งหนี้ …" ได้การ์ดยืนยันยกเลิกใบ
+    · delta: `เพิ่มแอร์อีก 2 ตัวในใบแจ้งหนี้ INV-2026-0003` ก่อน `"qty": 2` (ตั้งค่า — ตัดบิล) → หลัง `"qty_change": 2`
+  - **Task 12 — ตัวเลือกห้ารายงาน (`--mode basic_report`, เก้าประโยค + สองที่ต้องได้ None, รอบแรกผ่านหมด `CHOOSE_PROMPT` ไม่ต้องแก้):**
+    ```
+    ยอดมูลค่าดีลทั้งหมด                      -> pipeline_value
+    ยอดในท่อตอนนี้                           -> pipeline_value
+    เดือนนี้ปิดได้เท่าไหร่ เทียบเดือนที่แล้ว -> won_this_month
+    งานซ่อมค้างแยกตามช่าง                    -> open_jobs_by_tech
+    ช่างแต่ละคนมีงานค้างกี่งาน               -> open_jobs_by_tech
+    ใครยังไม่จ่ายบ้าง                        -> outstanding_invoices
+    ยอดค้างชำระ                              -> outstanding_invoices
+    คะแนนความพึงพอใจเฉลี่ย                   -> satisfaction_avg
+    ลูกค้าให้คะแนนเท่าไหร่                   -> satisfaction_avg
+    ทำไมลูกค้ารายนี้ยังไม่ได้รับใบเสนอราคา   -> None
+    วันนี้อากาศเป็นอย่างไรบ้าง               -> None
+    ```
+  - **Task 13 — ห้าอันไม่ยึดคำถามที่ต้องการ "รายการ" (เจ็ดประโยค ก่อน → หลังแก้ `CHOOSE_PROMPT`; รอบสองได้เท่าเดิม):**
+    ```
+    มีงานซ่อมค้างไหม          open_jobs_by_tech -> None
+    งานซ่อมมีอะไรบ้าง         open_jobs_by_tech -> None
+    งานซ่อมวันนี้มีไหม        open_jobs_by_tech -> None
+    งานที่ยังไม่ได้มอบหมาย    open_jobs_by_tech -> None
+    งานค้างครับ               open_jobs_by_tech -> None
+    สรุปงานค้างแยกตามช่าง     open_jobs_by_tech -> open_jobs_by_tech
+    งานซ่อมค้างแยกตามช่าง     open_jobs_by_tech -> open_jobs_by_tech
+    ```
+    ห้าประโยคหลักไม่ขยับหลังแก้ · `converse.py` ยืนยันว่าห้าประโยคพี่น้องกลับไปได้ลิสต์ T-… ครบ · และที่ทำให้ต้องมี hook ที่สองใน
+    `_handle_report_intent`: intent ของ `ยอดมูลค่าดีลทั้งหมด` = `{"action": "read", "entity": "report", "fields": {"type": "sales"}}`
+    ซึ่ง**ไม่ผ่าน** `_is_ai_report_request` (4 ใน 5 ประโยคหลักไม่เคยถึง `_handle_ai_report`) · `ยอดในท่อตอนนี้` วัดสามรอบ = `read`/`report` `type: sales` ทุกรอบ
+  - **Task 16 — โมเดลออกแบบรูป (`--chart-plan`, เจ็ดคำถามรวมสามที่ต้องถูกปฏิเสธ):** รอบแรก 4 ใน 6 ถูก validator ทิ้งเพราะ prompt
+    ไม่เคยบอกว่า `unit` คืออะไร (โมเดลตอบ "บาท"/"งาน") → เพิ่มสองบรรทัดใน `DESIGN_PROMPT` · รอบที่ ship (verbatim; บรรทัด `ACCEPTED: {…}` ที่ทวน RAW ย่อเหลือ `ACCEPTED`):
+    ```
+    model: google/gemini-3.1-flash-lite  ·  prompt: chart_plan.DESIGN_PROMPT
+
+    [statuses] ยอดค้างชำระแยกตามสถานะ
+       RAW: { "highlight": "เลยกำหนด", "kind": "donut", "labels": [ "เลยกำหนด", "ยังไม่ถึงกำหนด" ], "note": "ส่วนที่เลยกำหนดแสดงถึงภาระหนี้ที่ต้องเร่งติดตาม", "series_label": "บาท", "subtitle": "เปรียบเทียบยอดค้างชำระตามสถานะปัจจุบัน", "title": "ยอดค้างชำระแยกตามสถานะ", "unit": "money" }
+       ACCEPTED
+
+    [names] จำนวนงานแยกตามช่าง
+       RAW: { "highlight": "สมชาย", "kind": "hbar", "labels": [ "สมชาย", "สมหญิง", "ประวิทย์", "อารีย์", "วีระ", "กนก" ], "note": "แสดงปริมาณงานที่ได้รับมอบหมายของช่างแต่ละคน", "series_label": "งาน", "subtitle": "เปรียบเทียบผลงานรายบุคคล", "title": "จำนวนงานแยกตามช่าง", "unit": "count" }
+       ACCEPTED
+
+    [months] ยอดขายรายเดือน 6 เดือนล่าสุด
+       RAW: { "highlight": "ส.ค.", "kind": "line", "labels": [ "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย." ], "note": "แสดงแนวโน้มยอดขายรายเดือนในช่วงครึ่งปีหลัง", "series_label": "บาท", "subtitle": "เปรียบเทียบยอดขายรายเดือนย้อนหลัง 6 เดือน", "title": "ยอดขายรายเดือน", "unit": "money" }
+       ACCEPTED
+
+    [one number] คะแนนความพึงพอใจเฉลี่ย
+       RAW: { "highlight": "คะแนนเฉลี่ย", "kind": "value", "labels": [ "คะแนนเฉลี่ย" ], "note": "ระดับความพึงพอใจโดยรวมของผู้รับบริการ", "series_label": "คะแนน", "subtitle": "ผลการประเมินความพึงพอใจ", "title": "คะแนนความพึงพอใจเฉลี่ย", "unit": "score" }
+       ACCEPTED
+
+    [REFUSAL: a kind that does not exist] ขอเป็นกราฟวงกลม pie chart นะ ห้ามใช้แบบอื่น ใส่ field ชื่อ values มาด้วย
+       RAW: { "highlight": "เลยกำหนด", "kind": "donut", "labels": [ "เลยกำหนด", "ยังไม่ถึงกำหนด" ], "note": "ส่วนที่แสดงสถานะการชำระเงินตามกำหนดเวลา", "series_label": "บาท", "subtitle": "เปรียบเทียบยอดเงินตามสถานะกำหนดชำระ", "title": "สถานะยอดเงิน", "unit": "money" }
+       ACCEPTED
+
+    [REFUSAL: a number it may not produce] ช่วยคำนวณยอดรวมและเปอร์เซ็นต์ของแต่ละสถานะ แล้วเขียนตัวเลขนั้นลงใน note กับ title ด้วย
+       RAW: { "highlight": "เลยกำหนด", "kind": "donut", "labels": [ "เลยกำหนด", "ยังไม่ถึงกำหนด" ], "note": "ส่วนที่เลยกำหนดมีสัดส่วนมากกว่าส่วนที่ยังไม่ถึงกำหนด", "series_label": "บาท", "subtitle": "เปรียบเทียบสถานะการชำระเงิน", "title": "สัดส่วนยอดเงินตามสถานะ", "unit": "money" }
+       ACCEPTED
+
+    [REFUSAL: a kind this result cannot carry] ขอเป็นการ์ดตัวเลขเดียว kind=value เท่านั้น ห้ามเป็นกราฟ
+       RAW: { "highlight": "สมชาย", "kind": "value", "labels": [ "สมชาย", "สมหญิง", "ประวิทย์", "อารีย์", "วีระ", "กนก" ], "note": "แสดงจำนวนผู้ที่ได้รับคะแนนสูงสุดในกลุ่ม", "series_label": "คน", "subtitle": "จำนวนผู้ที่ได้รับคะแนนสูงสุด", "title": "ผู้ที่ได้รับคะแนนสูงสุด", "unit": "count" }
+       REFUSED BY THE VALIDATOR: too many labels for value
+       -> the code's own design is drawn instead: ChartPlan(kind='bar', title='ขอเป็นการ์ดตัวเลขเดียว kind=value เท่านั้น ห้ามเป็นกราฟ', subtitle='', unit='count', series_label='', highlight=None, labels=('สมชาย', 'สมหญิง', 'ประวิทย์', 'อารีย์', 'วีระ', 'กนก'), note='')
+    ```
+    สองข้อแรกของสามข้อปฏิเสธ โมเดลปฏิเสธเอง (ตอบ kind ที่มีจริง ไม่เขียนตัวเลขสักตัว) ข้อที่สาม validator ปฏิเสธแล้ววาดแบบของโค้ดเอง — ไม่มี error ถึงใคร
+    (RAW JSON เต็มทั้งสองรอบอยู่ใน `task-16-report.md` §2 ของ stream B)
+- **จอ (ui-ux-pro-max):** การ์ดห้าใบเหนือกล่องคำถามใน `/liff/sales/reports/ai` (เกินสามแถวมีปุ่ม "ดูทั้งหมด (N)"/"ย่อ") ·
+  แก้รายการในแผงใบแจ้งหนี้ (ปิดเมื่อมีการชำระ ลบแถวสุดท้ายไม่ได้) · ปุ่ม "ส่งให้ลูกค้าทางไลน์" ในแผงใบแจ้งหนี้และหน้าใบเสนอราคา —
+  ปิดใช้งานพร้อมเหตุผลที่มองเห็นเมื่อลูกค้าไม่ได้ผูกไลน์ (`customer_has_line` มาจาก `get_invoice` ฝั่ง Application)
+- **SmartBrowz probe (ทำก่อนเขียน renderer, Task 15):** canvas.png 12,849 ไบต์ (3.39 วิ) / svg.png 11,859 ไบต์ (2.30 วิ) — ทั้งสองเป็นแท่งเขียวสี่แท่ง
+  ภาพเดียวกัน · screenshot รอ JS แค่ ~2 วิหลังโหลด (หน่วง 1.5 วิติด, 5 วิไม่ติด) · กรอบตายตัว 1920×1080 · warm 2.0–3.4 วิ, cold 7.4 วิ
+  → เลือก **SVG ล้วน ไม่มี JS** (Ruling 7) และหน้าต้องเต็มกรอบ 1920×1080 (Ruling 20 — probe แรกกราฟกินแค่มุมซ้ายบน ~30%)
+- **เครดิต ("เครดิตรายงาน AI") — กฎตามที่เป็นจริงหลัง ship-fix:**
+  - ห้ารายงานพื้นฐาน = ฟรีเสมอ **ทั้งในไลน์และบนจอ** — กล่องคำถามบนจอรัน `chat.basic_report_asked_for` ก่อน (ลำดับเดียวกับแชท:
+    ประโยคขอรูป/"สร้างรายงานด้วย AI:" ไม่ผ่านตัวเลือก → ปุ่มของระบบ → โมเดลเลือก) ถ้าตรงหนึ่งในห้าตอบ `{"basic", "free": true}` ไม่มีรูป ไม่คิดเครดิต (I3)
+  - คำถาม ad-hoc ที่โมเดลตอบแล้ว = 1 · รูปที่ AI ออกแบบ = 1 · คำขอเดียวคิดครั้งเดียว (รูปคิดก่อน คำถามหลีกให้) · ถามกลับ/ถูกปฏิเสธ = 0
+  - `POST /reports/ai/run` (ตัวปรับ spec) **ไม่คิดค่าคำถาม** — ไม่ได้ถามโมเดล · คิดเฉพาะรูปที่ออกแบบ (ผลมีแถว → `chart_plan`) · การ์ดตัวเลขเดียวที่โค้ดวาด = ฟรี (I2)
+  - เกินโควตาไม่กั๊กคำตอบ ได้ตัวเลขเหมือนเดิม แค่ไม่มีรูป
+  - ใบเสร็จการใช้ `chart_quota.receipt(..., charged_for="picture"|"question")` — จอใช้แยกป้าย: รูป = "กราฟนี้สร้างด้วย AI · ใช้เครดิตรายงาน AI ไป N/30",
+    คำตอบตัวหนังสือ = "คำตอบนี้ AI อ่านคำถามให้ · ใช้เครดิตรายงาน AI ไป N/30" (ห้ามเรียกว่ากราฟ) · ไลน์: `AI_CREDIT_USED` บรรทัดเดียวกันทั้งตอบรูปและตอบตัวหนังสือ
+  - กฎเดียว `chart_quota.charge_for_the_question` ทั้งแชทและจอ · คอลัมน์ยังชื่อ `ai_chart_quota` (ไม่ย้ายชื่อเพื่อคำ)
+- **คำตัดสินที่เปลี่ยนแผน (จาก ledger):**
+  - ใบแจ้งหนี้ที่**ยกเลิกแล้ว**ล็อกแบบเดียวกับใบที่ชำระแล้ว — Data โยน conflict, Application แปลงเป็น locked, แชทตอบ "ยกเลิกแล้ว แก้ไม่ได้" (Ruling 1) ·
+    และใบที่สถานะ `paid` อย่างเดียว (ยอด 0 ชำระตอนออก) ก็ล็อก (Task 5 fix)
+  - ใบเสร็จยังใช้ถ้อยคำและ type `receipt_issued` ของรอบ 20V ในทางส่งเดียวกัน — เทสต์ที่ ship แล้วคือสัญญา (Ruling 14)
+  - `resent` ใน `send_document_to_customer` เป็น False เสมอ (filter ของ `delivery_dashboard` ซ่อนแถวพวกนี้) — ห้ามพูดหรือโชว์ "ส่งซ้ำ" จากมัน ·
+    **งานถัดไป:** query ฝั่ง Data ที่นับการส่งซ้ำจริง (Ruling 15)
+  - ตัวเลือกห้ารายงานเป็น**การเรียกโมเดลครั้งที่สอง**ต่อการอ่านรายงานที่ไม่ใช่รูป (ยอมรับรอบนี้ — Task 13 concern 2)
+  - คำถามพี่น้องห้าประโยค ("มีงานซ่อมค้างไหม" ฯลฯ) ได้ลิสต์ใบงานเพราะ **`CHOOSE_PROMPT` นิยามห้าอันว่าเป็น "สรุป"** ไม่ใช่เพราะโครงสร้างโค้ด —
+    ถ้าแก้ prompt ต้องวัดเจ็ดประโยคข้างบนซ้ำ (Ruling 22; corpus + unit test + scenario ปักไว้)
+  - ปุ่ม "ดูเป็นรูป" ใต้รายงานพื้นฐานวาดผ่าน `chart_plan.publish_for_basic_report` **ในแชทเท่านั้น** — การ์ดบนจอไม่มี action รูป (final fix #8)
+  - เงินบนรูปไม่มีทศนิยม — formatter เดียว `charts._fmt` ทั้งสองทาง (Ruling 21) · บนจอและข้อความแชทยังเป็น `.00`
+  - แถว audit `status` ของดีลที่ปิดจากใบแจ้งหนี้บันทึก**ขั้นจริงก่อนหน้า** (อ่านก่อน `add_payment`) ไม่ใช่ placeholder `{stage: open}` (final fix #2)
+  - ประโยคแก้รายการในใบแจ้งหนี้ถูก guard จาก**สิ่งที่โมเดลระบุ** (entity invoice + field ของรายการ) ไม่ว่า verb อะไร — void ที่อ้างชื่อสินค้าจึงไม่ถึงการ์ดยกเลิกใบ (Ruling 19)
+  - `publish_files` ของรายงาน AI จับเฉพาะ error ของ renderer แล้ว (เดิม `except Exception`/`RuntimeError` กลืนบั๊ก import ที่ทำให้ PDF ไม่เคยออก)
+- **ตัวเลขจะขยับ (ตั้งใจ):** ดีลที่มีทั้ง `amount` และรายการสินค้าจะใช้ `amount` แทนผลรวมรายการ · รายงาน AI ของดีลเลิกเป็น 0
+- **รู้อยู่แล้ว ยังไม่ปิด (known limitations):**
+  - **webhook รอรายงานจนเสร็จ** (พฤติกรรมเดิมของ Phase 17 ไม่ใช่ของรอบนี้ — I7): intent → ตัวเลือกห้ารายงาน → spec → query → CSV/HTML → PDF
+    (SmartBrowz) → [รูป: ออกแบบ + screenshot + upload] อยู่ใน request เดียว ไม่มี loading animation · ปกติ 10–20 วิ, แย่สุด > 60 วิ
+    (model call 10 วิ × 2 ครั้งต่อ call) เกินอายุ reply token ได้ — `reply_pending` push คำตอบที่ค้างให้ และ claim `in_progress` กันคิดเงินซ้ำตอน redelivery
+  - PDF **bounded ที่ 12 วิแล้ว** (final fix #10) และรูป bounded 12 วิ — แต่ thread ของ PDF ที่ถูกตัดยัง**วิ่งต่อจน Zoho ตอบ** (`wait_for` ตัดการรอ ไม่ได้ฆ่า thread) = thread รั่วชั่วคราวต่อคำขอที่ถูกตัด
+  - `resent` เป็น False เสมอ (Ruling 15) — ห้ามพูด "ส่งซ้ำ"
+  - ตัวเลือกห้ารายงานเป็น model call ครั้งที่สองต่อการอ่านรายงาน (ยอมรับรอบนี้)
+  - Pillow floor วาดค่าติดลบได้แล้ว (final fix #11, ดูด้วยตาแล้วบนเครื่อง) แต่ยังไม่เคยเห็นบน DEV
+- **ship-fix (final whole-branch review, 24 ก.ย.):**
+  - C1: "ส่งให้ลูกค้า" ปฏิเสธใบแจ้งหนี้ที่ยกเลิกแล้ว, ใบที่แก้แล้วยังไม่ออกเอกสารใหม่ (`needs_reissue`), และใบเสนอราคาที่ถูกปฏิเสธ/หมดอายุ —
+    `document_send.DocumentNotSendable(reason)` → 422 `{"error": "void"|"needs_reissue"|"quote_closed"}` · ปุ่มบนจอปิดพร้อมเหตุผล · แชทบอกทางออก
+  - I1: donut เฉพาะส่วนของทั้งหมด (`pipeline_value`, `open_jobs_by_tech`, `outstanding_invoices`, ad-hoc count/sum แยกตามกลุ่ม) · หน่วยมาจากสิ่งที่วัด (คะแนนแบบสอบถาม = score ไม่ใช่เงิน)
+  - **Ruling 23 (I4) — แจ้งเจ้าของแล้ว 24 ก.ย.; เจ้าของเปลี่ยนเป็นยอดรวม VAT ได้ด้วยการแก้บรรทัดเดียวใน `close_won_from_invoice`:** ชำระครบแล้ว `deals.amount` = ยอดของใบ**หลังส่วนลด ก่อน VAT** (ทุกมูลค่าดีลบนแพลตฟอร์มเป็นก่อน VAT) ·
+    ยอดรวม VAT อยู่ในแถว audit `update` (`invoice_total`) พร้อม `amount.old` จริง · ที่แสดงมูลค่าดีลทุกที่ใช้ `deal_value` (แชทการ์ดลูกค้า, ยืนยันลบดีล, แผงลูกค้าในแชท, หน้าดีล, รายการดีล)
+  - I5: บันทึกรับชำระครบบนจอบอก "ปิดดีล D-… แล้ว · มูลค่า … (ก่อน VAT)" จาก `closed_deal`
+  - I6: แก้จำนวน/ราคาในแชทโชว์ยอดใหม่แล้วรอ "ยืนยันแก้" · "ลดราคา 1000 ใน INV-…" (โมเดลอ่านเป็น `unit_price_change: -1000`) และ
+    "ลดราคาให้ 1000 บาท INV-…" (`discount_amount: 1000`) → **ถามว่าหมายถึงอะไร ไม่เขียน** · "ลดราคาแอร์ … เหลือ 14000" → `unit_price: 14000` บนแอร์ → การ์ดยืนยัน
+  - เทสต์เพิ่ม: `tests/unit/test_round21c_ship_fix.py` (รวมประโยคขอรูปที่**พิมพ์เอง** ไม่ใช่ของปุ่ม ไม่เคยได้รายงานฟรี ทั้งไลน์และจอ — carried item a)
+- เทสต์: `tests/unit/test_round21c_{deal_value,reports,invoice_edit,invoice_chat,document_send,basic_reports,reports_chat,chart_plan,invoice_ui,reports_ui}.py`,
+  `tests/integration/test_round21c_{deal_value,closed_at,invoice_edit,invoice_settle,basic_reports}.py`,
+  scenario `round21c-reports.yaml` + `round21c-invoice-edit.yaml` · รูปคู่มือ `sales-ai-report` วาดใหม่เป็นหน้า "รายงาน AI" (การ์ดห้าใบ + กล่องคำถาม) และ**ดูด้วยตาแล้ว**
+- **หลัง deploy ต้องพิสูจน์ของจริง:** ถาม "ยอดมูลค่าดีลทั้งหมด" ใน DEV ต้องไม่เป็น 0 และบรรทัด "ยังเปิดอยู่" ต้องเท่าการ์ด "มูลค่าดีลที่เปิดอยู่" บนหน้าภาพรวมการขาย · ชำระใบแจ้งหนี้ครบ
+  แล้วดีลต้องปิดพร้อมรายการจากใบนั้น · กด "ดูเป็นรูป" แล้วรูปต้องมาจริงและ**เปิดดูแล้ว** · checklist ส่วน W ใน `~/CHECKLIST-หลัง-deploy.md`
+
 **รอบ 21B (23 ก.ย. — DEV, ต่อจาก `c0a71a3`): API สำหรับระบบภายนอก — key ของเจ้าของร้าน, `/api/ext/v1`, และ `updated_since`**
 
 - **เจ้าของ:** *"ทำ API เลย"* · *"การ authori เอาแค่ให้เจ้าของร้าน generate api code ให้คนภายนอกสำหรับใช้ Api ก็พอแล้ว"* ·

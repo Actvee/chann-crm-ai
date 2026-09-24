@@ -160,9 +160,10 @@ class TestTheLedger:
             assert row.status == "issued" and row.issue_date is not None
             assert row.due_date == row.issue_date + timedelta(days=30)
 
-            row, deposit = repo.add_payment(
+            row, deposit, closed = repo.add_payment(
                 t["scope"], row_id, amount="10000", method="cash", reference="มัดจำ",
             )
+            assert closed is None
             session.commit()
             assert deposit.amount == Decimal("10000.00") and deposit.method == "cash"
             assert row.status == "partially_paid" and row.paid_amount == Decimal("10000.00")
@@ -177,7 +178,7 @@ class TestTheLedger:
                 repo.add_payment(t["scope"], row_id, amount="1", method="bitcoin")
             session.rollback()
 
-            row, _ = repo.add_payment(t["scope"], row_id, amount="24240.00", method="transfer")
+            row, _, _ = repo.add_payment(t["scope"], row_id, amount="24240.00", method="transfer")
             session.commit()
             assert row.status == "paid" and row.paid_amount == Decimal("34240.00")
             assert [p.amount for p in repo.list_payments(t["scope"], row_id)] == [
