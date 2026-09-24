@@ -158,6 +158,7 @@ NO_HANDLER_YET = {
 # URL fragment -> entity. Longest match wins, so "quotes/X/products"
 # resolves to line_item rather than quote.
 URL_ENTITIES = [
+    ("plan", "plan"),  # Round 21D: GET licenses/X/plan is the plan card (Task 12 draws it)
     # Round 21B: the owner's API keys for outside systems.
     ("api-keys", "api_key"),
     ("approval-workflows", "approval"),
@@ -332,6 +333,46 @@ print(f"{len(NO_HANDLER_YET)} registered with no handler (chat says so honestly)
 for (entity, action), why in sorted(NO_HANDLER_YET.items()):
     print(f"  {entity + '.' + action:<22} — {why}")
 
+# ---------------------------------------------------------------- the plan (round 21D)
+# The failure this catches: a Starter shop refused in LINE and served on the
+# screen, or the other way round (spec §10). For every capability chat
+# routes, the feature its (action, entity) resolves to must be the feature
+# the dashboard page for that entity declares in _nav-model.tsx.
+from chann_app.services.entitlements import feature_for_intent  # noqa: E402
+
+#: nav entry key → the entity its page is about.
+NAV_ENTITY = {
+    "chats": "chat_session", "tickets": "ticket", "teams": "team", "reports": "service_report",
+    "satisfaction": "survey", "approvals": "approval", "warranties": "warranty", "apiKeys": "api_key",
+    "roles": "role", "invoices": "invoice", "quotes": "quote",
+}
+#: Deliberately different on the two surfaces — each with the reason.
+ACCEPTED_PLAN = {
+    ("role", "create"): "the roles page stays (standard roles on every plan); its create/edit controls lock with rolesLocked",
+    ("role", "update"): "same page, same reason",
+    ("api_key", "read"): "the API page stays readable under the lock (lockMode notice); listing and revoking are open on both surfaces",
+    ("api_key", "delete"): "revoking is open on both surfaces — a downgraded owner must be able to cut an outside system off",
+    ("invoice", "send"): "the invoice page stays; its send button is disabled with sendLineLocked",
+    ("quote", "send"): "the quote page stays; its send button is disabled with sendLineLocked",
+}
+nav_text = Path("presentation/app/liff/_nav-model.tsx").read_text()
+nav_feature = dict(re.findall(r'key: "(\w+)", href: "/liff/sales/[^"]*"[^\n]*?feature: "([a-z_.]+)"', nav_text))
+page_of = {entity: key for key, entity in NAV_ENTITY.items()}
+plan_gaps = []
+for (action, entity), key in sorted(ACTION_PERMISSIONS.items(), key=lambda p: (p[0][1], p[0][0])):
+    page = page_of.get(entity)
+    if page is None or (entity, action) in ACCEPTED_PLAN:
+        continue
+    in_chat, on_screen = feature_for_intent(action, entity, key), nav_feature.get(page)
+    if in_chat != on_screen:
+        plan_gaps.append(f"PLAN  {entity}/{action}: chat={in_chat or '—'}  dashboard={on_screen or '—'}")
+print(f"{len(ACCEPTED_PLAN)} plan differences accepted on purpose")
+if plan_gaps:
+    print("\n".join(plan_gaps))
+    print("Either gate both surfaces on the same feature or add it to ACCEPTED_PLAN with a reason.")
+else:
+    print("every plan-gated capability is gated the same on both surfaces")
+
 if chat_only or dash_only:
     if chat_only:
         print("\nIN CHAT BUT NOT IN THE DASHBOARD:")
@@ -344,3 +385,8 @@ if chat_only or dash_only:
     print("\nEither build the missing side or add it to ACCEPTED with a reason.")
 else:
     print("every capability is reachable from both surfaces")
+
+# A gap on either check fails the run (a clean run exits normally, so the
+# last line above stays the one the deploy script greps).
+if plan_gaps or chat_only or dash_only:
+    raise SystemExit(1)

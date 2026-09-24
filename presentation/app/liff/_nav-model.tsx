@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 
 import type { Dictionary } from "@/lib/i18n";
 
+import { planHas, type PlanInfo } from "./_plan";
 import type { Audience } from "./_shared";
 
 /**
@@ -34,6 +35,18 @@ export type NavEntry = {
    *  permission — an admin runs settings, not who may read the shop from
    *  outside. */
   ownerOnly?: boolean;
+  /** Round 21D: the plan feature this page is (spec §5.4). A locked entry
+   *  is drawn with a lock and its reason for whoever HOLDS the permission
+   *  that would open it (ruling R-C), and hidden from everyone else. */
+  feature?: string;
+  /** "page" (default): the locked page replaces it. "notice": the page
+   *  stays readable under the lock panel (templates, API keys — the data
+   *  is the shop's and nothing is deleted, spec §3.4). "part": only a
+   *  part of the page is the feature and the page itself locks that part
+   *  (teams: technician teams are service, sales groups are on every
+   *  plan — ruling 25), so the entry stays open to whoever can use the
+   *  rest. */
+  lockMode?: "page" | "notice" | "part";
 };
 
 export type NavGroup = {
@@ -263,7 +276,7 @@ export function navGroups(t: Dictionary, audience: Audience): NavGroup[] {
       key: "selling",
       label: nav.groups.selling,
       entries: [
-        { key: "chats", href: "/liff/sales/chats", label: t.dashboard.chats.title, icon: ICONS.chats, needs: ["chat_session.view"] },
+        { key: "chats", href: "/liff/sales/chats", label: t.dashboard.chats.title, icon: ICONS.chats, needs: ["chat_session.view"], feature: "feature.live_chat" },
         { key: "customers", href: "/liff/sales/customers", label: t.customer.title, icon: ICONS.customers, needs: ["customer.read"] },
         { key: "deals", href: "/liff/sales/deals", label: t.deal.title, icon: ICONS.deals, needs: ["deal.read"] },
         { key: "quotes", href: "/liff/sales/quotes", label: t.quote.title, icon: ICONS.quotes, needs: ["quote.read"] },
@@ -284,9 +297,12 @@ export function navGroups(t: Dictionary, audience: Audience): NavGroup[] {
       key: "service",
       label: nav.groups.service,
       entries: [
-        { key: "tickets", href: "/liff/sales/tickets", label: t.dashboard.tickets.title, icon: ICONS.tickets, needs: ["ticket.read"] },
-        { key: "warranties", href: "/liff/sales/warranties", label: t.dashboard.warranties.title, icon: ICONS.warranties, needs: ["warranty.read"] },
-        { key: "teams", href: "/liff/sales/teams", label: t.dashboard.teams.title, icon: ICONS.teams, needs: ["ticket.read"] },
+        { key: "tickets", href: "/liff/sales/tickets", label: t.dashboard.tickets.title, icon: ICONS.tickets, needs: ["ticket.read"], feature: "feature.service" },
+        { key: "warranties", href: "/liff/sales/warranties", label: t.dashboard.warranties.title, icon: ICONS.warranties, needs: ["warranty.read"], feature: "feature.warranty" },
+        // Round 21D (ruling 25): technician teams are the service feature,
+        // sales groups are on every plan — so team.manage opens the page
+        // too, and on a plan without service only its technician part locks.
+        { key: "teams", href: "/liff/sales/teams", label: t.dashboard.teams.title, icon: ICONS.teams, needs: ["ticket.read", "team.manage"], feature: "feature.service", lockMode: "part" },
       ],
     },
     {
@@ -295,13 +311,13 @@ export function navGroups(t: Dictionary, audience: Audience): NavGroup[] {
       entries: [
         // Ordered before /liff/sales/reports so the AI view is matched by
         // the longer prefix first when both would light up.
-        { key: "reports", href: "/liff/sales/reports", label: t.dashboard.reports.title, icon: ICONS.reports, needs: ["ticket.read"] },
+        { key: "reports", href: "/liff/sales/reports", label: t.dashboard.reports.title, icon: ICONS.reports, needs: ["ticket.read"], feature: "feature.service" },
         { key: "aiReports", href: "/liff/sales/reports/ai", label: t.dashboard.aiReports.title, icon: ICONS.aiReports, needs: ["view_reports"] },
         // Round 20V: the survey answers, collected since Phase 14 and
         // never shown. Beside the AI reports, behind the same key.
-        { key: "satisfaction", href: "/liff/sales/reports/satisfaction", label: t.dashboard.satisfaction.title, icon: ICONS.satisfaction, needs: ["view_reports"] },
-        { key: "approvals", href: "/liff/sales/approvals", label: t.dashboard.approvals.title, icon: ICONS.approvals, needs: ["approval.view"] },
-        { key: "templates", href: "/liff/sales/templates", label: t.dashboard.templates.title, icon: ICONS.templates, needs: ["setting.manage"] },
+        { key: "satisfaction", href: "/liff/sales/reports/satisfaction", label: t.dashboard.satisfaction.title, icon: ICONS.satisfaction, needs: ["view_reports"], feature: "feature.service" },
+        { key: "approvals", href: "/liff/sales/approvals", label: t.dashboard.approvals.title, icon: ICONS.approvals, needs: ["approval.view"], feature: "feature.service" },
+        { key: "templates", href: "/liff/sales/templates", label: t.dashboard.templates.title, icon: ICONS.templates, needs: ["setting.manage"], feature: "feature.custom_documents", lockMode: "notice" },
         // The page has existed and been deployed all along with no way in:
         // the technician and customer rails carry it, the sales one never
         // did, so a CS who approves a service report signs it with a blank
@@ -320,7 +336,7 @@ export function navGroups(t: Dictionary, audience: Audience): NavGroup[] {
         { key: "roles", href: "/liff/sales/roles", label: t.role.title, icon: ICONS.roles, needs: ["role.manage"] },
         // Round 21B: the owner's outside access. Owner only — an admin
         // runs settings, not who may read the shop from outside.
-        { key: "apiKeys", href: "/liff/sales/api-keys", label: t.dashboard.apiKeys.title, icon: ICONS.apiKeys, needs: ["setting.manage"], ownerOnly: true },
+        { key: "apiKeys", href: "/liff/sales/api-keys", label: t.dashboard.apiKeys.title, icon: ICONS.apiKeys, needs: ["setting.manage"], ownerOnly: true, feature: "feature.external_api", lockMode: "notice" },
         // "ดูประวัติการใช้งาน" has been a permission since Phase 2 with no
         // page behind it (audit, 17 ก.ย. 2569).
         { key: "history", href: "/liff/sales/history", label: t.dashboard.history.title, icon: ICONS.history, needs: ["audit_log.view"] },
@@ -347,16 +363,70 @@ export function guideEntry(t: Dictionary, audience: Audience): NavEntry {
  * documents: an unanswered /me must not empty the menu of a person who
  * can in fact use every page on it. The owner sees everything.
  */
-export function mayOpen(entry: NavEntry, permissions: Set<string>, isOwner: boolean): boolean {
+export function mayOpen(
+  entry: NavEntry, permissions: Set<string>, isOwner: boolean, answered = false,
+): boolean {
   if (entry.ownerOnly && !isOwner) return false;
   if (!entry.needs || entry.needs.length === 0) return true;
   if (isOwner) return true;
-  if (permissions.size === 0) return true;
+  // Round 21D (review I1): once /me has ANSWERED, an empty set is an
+  // answer — every key this person holds may be plan-locked (service staff
+  // on Starter) — and it opens nothing. The fail-open is for an unanswered
+  // or failed /me only.
+  if (permissions.size === 0) return !answered;
   return entry.needs.some((key) => permissions.has(key));
 }
 
-/** Start with the work this member can do; service staff share this OA. */
-export function homeEntries(t: Dictionary, permissions: Set<string>, isOwner: boolean): NavEntry[] {
+/** The feature that locks this entry on this plan, or null. */
+export function lockedBy(entry: NavEntry, plan: PlanInfo | null | undefined): string | null {
+  if (!entry.feature) return null;
+  return planHas(plan, entry.feature) ? null : entry.feature;
+}
+
+/** What the nav knows about the person, from /me (round 21D adds the
+ *  last three; a surface that passes none of them behaves as before). */
+export type NavAccess = {
+  /** The EFFECTIVE keys (`permission_keys`: the plan-locked ones removed). */
+  permissions: Set<string>;
+  isOwner: boolean;
+  /** `held_keys`: the role's keys before the plan. Absent → the effective
+   *  set (nothing plan-locked). */
+  held?: Set<string>;
+  plan?: PlanInfo | null;
+  /** /me answered (200). Until then entries are drawn as they always were
+   *  (fail-open, no locks), so the rail keeps its shape from the first
+   *  paint and a lock is only ADDED in place when the answer arrives
+   *  (review I3, ui-ux-pro-max content-jumping / nav-state-active). */
+  answered?: boolean;
+};
+
+export type NavState = "open" | "locked" | "hidden";
+
+/**
+ * Round 21D, ruling R-C (spec §5.4, §8.1) — one decision per entry:
+ *   · "open"   the person may use the page on this plan;
+ *   · "locked" the plan locks it, but the person HOLDS the permission that
+ *              would open it (`held_keys`) — drawn with a lock and "Pro
+ *              ขึ้นไป", and a tap opens the locked page;
+ *   · "hidden" no permission at all (as before this round).
+ * `mayOpen` is asked twice — effective keys, then held. The rail draws
+ * exactly this value, the lock included; there is no second rule.
+ */
+export function navState(entry: NavEntry, access: NavAccess): NavState {
+  const { permissions, isOwner } = access;
+  const answered = Boolean(access.answered);
+  const lock = lockedBy(entry, access.plan);
+  if (!lock) return mayOpen(entry, permissions, isOwner, answered) ? "open" : "hidden";
+  // "part": the rest of the page is still usable with the effective keys.
+  if (entry.lockMode === "part" && mayOpen(entry, permissions, isOwner, answered)) return "open";
+  return mayOpen(entry, access.held ?? permissions, isOwner, answered) ? "locked" : "hidden";
+}
+
+/** Start with the work this member can do; service staff share this OA.
+ *  Only pages this person can use on this plan are shortcuts — a locked
+ *  one stays in the rail, where its reason is. */
+export function homeEntries(t: Dictionary, access: NavAccess): NavEntry[] {
+  const { permissions, isOwner } = access;
   const serviceFirst = !isOwner && !permissions.has("deal.read") &&
     (permissions.has("ticket.read") || permissions.has("approval.view"));
   const priority = serviceFirst
@@ -365,7 +435,7 @@ export function homeEntries(t: Dictionary, permissions: Set<string>, isOwner: bo
   const entries = navGroups(t, "sales")
     .filter((group) => group.key !== "start")
     .flatMap((group) => group.entries)
-    .filter((entry) => mayOpen(entry, permissions, isOwner));
+    .filter((entry) => navState(entry, access) === "open");
   const preferred = priority.flatMap((key) => entries.filter((entry) => entry.key === key));
   return [...preferred, ...entries.filter((entry) => !priority.includes(entry.key))].slice(0, 4);
 }

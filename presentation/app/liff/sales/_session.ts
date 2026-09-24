@@ -4,6 +4,7 @@ import { useCallback, useRef, useState } from "react";
 
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
+import type { PlanInfo, SalesContact } from "../_plan";
 import { Membership, initLiffSession, proxyHeaders } from "../_shared";
 
 /**
@@ -23,7 +24,21 @@ export type SalesSession = {
   memberships: Membership[];
   /** The active shop — memberships[0] once the server has been asked. */
   licenseId: string;
+  /** The EFFECTIVE keys: the role's keys minus what the plan locks (round
+   *  21D) — so every existing `permissions.has(...)` is plan-aware. */
   permissions: Set<string>;
+  /** Round 21D (ruling R-C): the role's keys BEFORE the plan. The nav
+   *  tells "no permission" (hidden) from "plan-locked" (shown locked)
+   *  with this; held = permissions ∪ plan-locked. */
+  heldKeys: Set<string>;
+  /** Round 21D: the shop's plan (null until /me answers — then nothing is
+   *  drawn as locked; the server refuses anyway). */
+  plan: PlanInfo | null;
+  /** The upgrade contact, for whoever can act on it (null otherwise). */
+  salesContact: SalesContact;
+  /** /me answered 200. Only then is an empty key set an answer ("nothing")
+   *  rather than "unknown" (review I1). */
+  meAnswered: boolean;
   isOwner: boolean;
   channUid: string;
   /** Phase 18: a suspended shop is read-only; every write is refused with 423. */
@@ -44,6 +59,10 @@ const EMPTY: SalesSession = {
   memberships: [],
   licenseId: "",
   permissions: new Set(),
+  heldKeys: new Set(),
+  plan: null,
+  salesContact: null,
+  meAnswered: false,
   isOwner: false,
   channUid: "",
   suspended: false,
@@ -55,28 +74,44 @@ const EMPTY: SalesSession = {
 
 type Say = (message: string, kind?: "ok" | "error") => void;
 
-async function fetchMe(token: string, licenseId: string): Promise<{
-  keys: string[]; isOwner: boolean; channUid: string; licenseStatus: string;
-}> {
+type Me = {
+  keys: string[]; heldKeys: string[]; isOwner: boolean; channUid: string; licenseStatus: string;
+  plan: PlanInfo | null; salesContact: SalesContact; answered: boolean;
+};
+
+const NO_ME: Me = {
+  keys: [], heldKeys: [], isOwner: false, channUid: "", licenseStatus: "active",
+  plan: null, salesContact: null, answered: false,
+};
+
+async function fetchMe(token: string, licenseId: string): Promise<Me> {
   try {
     const response = await fetch(
       `/api/phase2/licenses/${licenseId}/me/permissions`,
       { headers: proxyHeaders(token, licenseId) },
     );
-    if (!response.ok) return { keys: [], isOwner: false, channUid: "", licenseStatus: "active" };
+    if (!response.ok) return NO_ME;
     const body = (await response.json()) as {
-      permission_keys?: string[]; is_owner?: boolean; chann_uid?: string; license_status?: string;
+      permission_keys?: string[]; held_keys?: string[]; is_owner?: boolean; chann_uid?: string;
+      license_status?: string; plan?: PlanInfo | null; sales_contact?: SalesContact;
     };
+    const keys = body.permission_keys ?? [];
     return {
-      keys: body.permission_keys ?? [],
+      keys,
+      // An Application image older than round 21D sends no held_keys:
+      // nothing is plan-locked there, so held == effective.
+      heldKeys: body.held_keys ?? keys,
       isOwner: Boolean(body.is_owner),
       channUid: body.chann_uid ?? "",
       licenseStatus: body.license_status ?? "active",
+      plan: body.plan ?? null,
+      salesContact: body.sales_contact ?? null,
+      answered: true,
     };
   } catch {
     // An empty set means "show everything read-only", which is the safe
     // direction to fail in: nothing is offered that would then be refused.
-    return { keys: [], isOwner: false, channUid: "", licenseStatus: "active" };
+    return NO_ME;
   }
 }
 
@@ -121,6 +156,10 @@ export function useSalesSession(liffId: string, say: Say) {
         memberships: started.memberships,
         licenseId,
         permissions: new Set(me.keys),
+        heldKeys: new Set(me.heldKeys),
+        plan: me.plan,
+        salesContact: me.salesContact,
+        meAnswered: me.answered,
         isOwner: me.isOwner,
         channUid: me.channUid,
         suspended,

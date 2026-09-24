@@ -7,6 +7,8 @@ import { useLanguage } from "@/lib/i18n/LanguageProvider";
 import { useSalesSession } from "../../_session";
 import { SalesShell } from "../../_shell";
 import { FieldRow } from "../../../_field-row";
+import { PlanReason, planHas } from "../../../_plan";
+import { useFailureText } from "../../_format";
 import { proxyHeaders } from "../../../_shared";
 
 type Workflow = {
@@ -60,6 +62,10 @@ export default function ApprovalSettings({ liffId }: { liffId: string }) {
   // The shared session (review C4/C5): the shop, its permissions and the
   // suspended notice come from one place, and a switch starts over.
   const session = useSalesSession(liffId, say);
+  const failureText = useFailureText();
+  // Round 21D: more than one approval step is Enterprise. Taken as "on"
+  // until /me answers, so no reason line appears and then vanishes.
+  const multiLevelOn = !session.ready || planHas(session.plan, "feature.multi_level_approval");
   useEffect(() => {
     if (!session.ready) return;
     setToken(session.token);
@@ -86,7 +92,7 @@ export default function ApprovalSettings({ liffId }: { liffId: string }) {
         },
       );
       if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as
+        const body = (await response.clone().json().catch(() => null)) as
           | { detail?: { problems?: string[] } | string }
           | null;
         const problems =
@@ -96,9 +102,10 @@ export default function ApprovalSettings({ liffId }: { liffId: string }) {
         say(
           problems
             ? t.dashboard.approvals.notUnderstood.replace("{problems}", problems)
-            : response.status === 403
-              ? t.dashboard.noPermission
-              : `${t.common.error} (${response.status})`,
+            // A plan refusal (plan_required, e.g. a second step on Pro) or
+            // any other refusal in words, not a bare "no permission"
+            // (review M4) — the same sentence every other page gives.
+            : await failureText(response),
           "error",
         );
         return;
@@ -135,6 +142,14 @@ export default function ApprovalSettings({ liffId }: { liffId: string }) {
         {workflow && (
           <pre className="flow-summary">{workflow.summary ?? ""}</pre>
         )}
+        {/* Round 21D (spec §8.5): a longer chain saved on a bigger plan
+            stays on record; only its first step runs — said here, under
+            the flow it applies to. */}
+        {!multiLevelOn && (workflow?.rules_json?.steps?.length ?? 0) > 1 && (
+          <PlanReason>
+            {t.dashboard.plan.approvalFirstOnly.replace("{plan}", session.plan?.label ?? "")}
+          </PlanReason>
+        )}
       </section>
 
       <section className="section">
@@ -157,6 +172,9 @@ export default function ApprovalSettings({ liffId }: { liffId: string }) {
                   <span id={`${id}-hint`} className="hint">
                     {t.dashboard.approvals.policyHint}
                   </span>
+                  {/* Round 21D (spec §8.5): "เพิ่มขั้น" is Enterprise — the
+                      reason sits under the box a second step is typed in. */}
+                  {!multiLevelOn && <PlanReason>{t.dashboard.plan.approvalLocked}</PlanReason>}
                 </>
               )}
             </FieldRow>

@@ -1,0 +1,173 @@
+# Round 21D — the same sentences on Pro reach their handlers (the invite
+# is made, the template is drafted), and only an Enterprise feature is
+# refused. Readings from scripts/dev/ask-model.py, 24 ก.ย. 2569, as in
+# round21d-plan.yaml.
+name: round21d-plan-pro
+description: On Pro the technician invite and the template design go through; making an API key names Enterprise
+backend: fake
+actor:
+  oa: sales
+  role: owner
+  language: th
+  permissions: all
+  plan: pro
+
+steps:
+  - send:
+      message: "ขอรหัสเชิญช่าง"
+      ai: {action: read, entity: invite, fields: {}, missing: []}
+    expect:
+      not_contains: ["🔒"]
+      used_ai: false
+      is_not: [not_sure, generic_error, permission]
+
+  - send:
+      message: "ออกแบบเอกสาร"
+      ai: {action: suggest, suggestions: ["สร้างใบเสนอราคา", "สร้างใบแจ้งหนี้", "ออกใบเสร็จ"], entity: null, fields: {}, missing: []}
+    expect:
+      contains: ["ใบรายงานการซ่อม"]
+      not_contains: ["🔒"]
+
+  - send:
+      message: "สร้าง API key"
+      ai: {action: create, entity: api_key, fields: {}, missing: []}
+    expect:
+      contains: ["🔒 «เชื่อมต่อ API ภายนอก» อยู่ในแพ็กเกจ Enterprise ขึ้นไป — ร้านนี้ใช้แพ็กเกจ Pro"]
+      max_lines: 5
+
+  # Task 10, spec §6.1 — the three questions the plan card answers, each
+  # read by the model as read/plan (ask-model.py after the entity="plan"
+  # block, 24 ก.ย. 2569, plan-readings-after.txt). Before the block they
+  # read setting{field: license} / report{type: ai_credit} / invite.
+  # Placed before the Technician/Customer OA steps: the fake keeps the
+  # customer's "แอร์ไม่เย็น" pending under the same person, and a held
+  # pending sends the next sales sentence past the model (road=pending).
+  - send:
+      message: "ร้านใช้แพ็กเกจอะไร"
+      ai: {action: read, entity: plan, fields: {}, missing: []}
+    expect:
+      contains: ["แพ็กเกจของร้าน: Pro", "มีในแพ็กเกจ: ", "เครดิตรายงาน AI เดือนนี้ ", "/30"]
+      not_contains: ["🔒"]
+      intent: {action: read, entity: plan}
+      used_ai: true
+      max_lines: 15
+      max_chars: 700
+      is_not: [generic_error, not_sure, permission, not_found, not_a_feature]
+
+  - send:
+      message: "เหลือเครดิตรายงาน AI เท่าไหร่"
+      ai: {action: read, entity: plan, fields: {}, missing: []}
+    expect:
+      contains: ["เครดิตรายงาน AI เดือนนี้ "]
+      intent: {action: read, entity: plan}
+      used_ai: true
+      is_not: [generic_error, not_sure, permission, not_found, not_a_feature]
+
+  - send:
+      message: "เชิญได้อีกกี่คน"
+      ai: {action: read, entity: plan, fields: {}, missing: []}
+    expect:
+      contains: ["/15 คน"]
+      not_contains: ["รหัสเชิญ"]
+      intent: {action: read, entity: plan}
+      used_ai: true
+      is_not: [generic_error, not_sure, permission, not_found, not_a_feature]
+
+  # Final fix (Task 10 review) — a pending held on the SAME OA: a form
+  # waiting for a phone, then the credit question. The model reads it
+  # (read/plan, final-fix-task10-readings-after.txt, with the pending in
+  # view) and the plan answers; before, road=pending skipped the model and
+  # the price arm ("เท่าไหร่") answered with the product list.
+  - send:
+      message: "มีลูกค้าใหม่ชื่อ สมหญิง รักดี แต่ยังไม่รู้เบอร์"
+      ai: {action: create, entity: customer, fields: {first_name: สมหญิง, last_name: รักดี}, missing: [phone]}
+    expect:
+      contains: ["เบอร์"]
+      is_not: [generic_error, not_sure, permission, not_a_feature]
+
+  - send:
+      message: "เหลือเครดิตรายงาน AI เท่าไหร่"
+      ai: {action: read, entity: plan, fields: {}, missing: []}
+    expect:
+      contains: ["เครดิตรายงาน AI เดือนนี้ "]
+      not_contains: ["ยังไม่มีสินค้า"]
+      intent: {action: read, entity: plan}
+      used_ai: true
+      is_not: [generic_error, not_sure, permission, not_found, not_a_feature]
+
+  - send:
+      message: "ยกเลิก"
+    expect:
+      is_not: [generic_error, not_a_feature]
+
+  # Task 8, spec §7.2 — on Pro the Technician OA gate never fires: a
+  # technician still sees their own work, not the plan notice.
+  - send:
+      oa: technician
+      role: technician
+      permissions: technician
+      message: "งานของฉัน"
+    expect:
+      not_contains: ["ปิดงานบริการและทีมช่างไว้ชั่วคราว"]
+      is_not: [generic_error, not_a_feature]
+
+  # Task 8, spec §7.3 — on Pro the Customer OA gate never fires: a fault
+  # is taken in, not turned away with the plan notice.
+  - send:
+      oa: customer
+      role: customer
+      permissions: customer
+      message: "แอร์ไม่เย็น"
+    expect:
+      not_contains: ["ยังไม่เปิดให้บริการลูกค้าทาง LINE"]
+      is_not: [generic_error, not_a_feature]
+
+  # Task 9 — on Pro both service basic reports and the ad-hoc AI road work.
+  - send:
+      message: "งานซ่อมค้างแยกตามช่าง"
+      ai: {action: read, entity: report, fields: {type: jobs}, missing: [], report: open_jobs_by_tech}
+    expect:
+      contains: ["งานซ่อมค้างแยกตามช่าง"]
+      quick_replies_include: ["ดูเป็นรูป"]
+      not_contains: ["🔒"]
+      is_not: [generic_error, not_sure, permission, not_found, not_a_feature]
+
+  - send:
+      message: "สร้างรายงานด้วย AI: ยอดขายแยกตามเดือน"
+      ai: {entity: deals, metric: sum, field: value, group_by: month}
+    expect:
+      not_contains: ["🔒"]
+      used_ai: true
+      is_not: [generic_error, not_sure, permission, not_found, not_a_feature]
+
+  # Fix round 1 (task 9 review) — Pro unchanged: a basic-report button
+  # (any of the five) still answers on Pro.
+  - send: "รายงาน: satisfaction_avg"
+    expect:
+      contains: ["คะแนนความพึงพอใจเฉลี่ย"]
+      not_contains: ["🔒"]
+      used_ai: false
+      is_not: [generic_error, not_sure, permission, not_found, not_a_feature]
+
+  # Task 15 — every shop that exists today is Pro after migration 0039, so
+  # the Starter scenario's sentences must do on Pro what they did before
+  # 21D: nothing here may say "🔒". Kept last — the repair job may hold a
+  # follow-up pending for the rest of the run.
+  - send:
+      message: "ยอดมูลค่าดีลทั้งหมด"
+      ai: {action: read, entity: report, fields: {type: sales}, missing: [], report: pipeline_value}
+    expect:
+      contains: ["มูลค่าดีลทั้งหมด"]
+      quick_replies_include: ["ดูเป็นรูป"]
+      not_contains: ["🔒"]
+      is_not: [generic_error, not_sure, permission, not_found, not_a_feature]
+
+  - send:
+      message: "เปิดงานซ่อมให้คุณสมชาย แอร์ไม่เย็น"
+      ai: {action: create, entity: ticket, fields: {target_name: "คุณสมชาย", issue_description: "แอร์ไม่เย็น"}, missing: []}
+    expect:
+      # The fake shop has no สมชาย: the ticket handler itself answers
+      # (customer not found), which is the proof the plan gate let it by.
+      contains: ["สมชาย"]
+      not_contains: ["🔒", "อยู่ในแพ็กเกจ"]
+      is_not: [permission, generic_error, not_a_feature]

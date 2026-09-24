@@ -65,6 +65,10 @@ LOCAL_TYPES: set[tuple[str, str]] = {
     ("_nav-model.tsx", "NavGroup"),  # a labelled group of those links
     ("_nav.tsx", "NavContextValue"),  # the rail's open/collapsed state, shared with the top bar's menu button
     ("DocumentTemplates.tsx", "Preview"),  # the open template preview: which version, its filled HTML and its blank list — page state, discarded on close
+    # Round 21D: what the rail and the sales menu are drawn from — Sets and
+    # flags derived from GET me/permissions in the page, never a wire shape.
+    ("_nav-model.tsx", "NavAccess"),
+    ("SalesMenu.tsx", "MenuAccess"),
 }
 
 # (file, TS type) whose fields the Application tier composes rather than
@@ -94,6 +98,11 @@ ACCEPTED_TS: dict[tuple[str, str], str] = {
     ("CompanyProfile.tsx", "RuleCriterion"): "one entry of rules_json.match_criteria (assignment_engine.py)",
     ("CompanyProfile.tsx", "RuleJson"): "the rules_json JSON column, keyed as assignment_engine.py reads it",
     ("CompanyProfile.tsx", "RuleCapacity"): "rules_json.capacity_constraint",
+    # Round 21D — the plan is a payload the Data tier resolves from the
+    # chann_data/plans.py literal (no *Out schema), and the usage is
+    # PlanRepository.usage's dict; the Application passes both through.
+    ("_plan.tsx", "PlanInfo"): "GET me/permissions `plan` and GET licenses/{id}/plan `plan`: entitlements.PlanView.as_payload()",
+    ("_plan.tsx", "PlanUsage"): "GET licenses/{id}/plan `usage`: PlanRepository.usage (members, members_limit, ai_reports_*)",
 }
 
 # Application-composed fields any TS type may declare (added by routers_phase2).

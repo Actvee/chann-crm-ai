@@ -7,6 +7,7 @@ import { useLanguage } from "@/lib/i18n/LanguageProvider";
 import { ConfirmDialog, useConfirm } from "../../_confirm";
 import { Sheet } from "../../_sheet";
 import { shortDate } from "../../_list-controls";
+import { PlanReason, planHas } from "../../_plan";
 import { Empty } from "../_components";
 import { useFailureText } from "../_format";
 import { proxyHeaders } from "../_lib";
@@ -167,11 +168,18 @@ export default function ApiKeys({ liffId }: { liffId: string }) {
           <div className="list-head">
             <span className="count">{keys.length}</span>
             <div className="list-tools">
-              <button type="button" className="btn" data-variant="primary" onClick={() => setCreating(true)} disabled={busy}>
+              <button type="button" className="btn" data-variant="primary" onClick={() => setCreating(true)}
+                      disabled={busy || !session.ready || !planHas(session.plan, "feature.external_api")}>
                 {c.create}
               </button>
             </div>
           </div>
+          {/* Round 21D (ruling R-D): making a key is Enterprise; the keys
+              already out stay listed and revocable on every plan. The
+              disabled button's reason, as text under it. */}
+          {session.ready && !planHas(session.plan, "feature.external_api") && (
+            <PlanReason>{t.dashboard.plan.apiKeyLocked}</PlanReason>
+          )}
           {keys.length === 0 ? (
             <Empty message={c.empty} />
           ) : (

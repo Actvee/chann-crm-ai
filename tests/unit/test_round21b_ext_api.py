@@ -60,6 +60,7 @@ class TestTheClient:
 
 
 from chann_app.auth import api_key as api_key_auth  # noqa: E402
+from plan_fixtures import plan_payload  # noqa: E402
 
 
 class _ResolvingFake(FakeDataClient):
@@ -81,6 +82,9 @@ RESOLVED = {
             "last_used_at": None, "revoked_at": None, "created_at": "2026-09-23T00:00:00+00:00"},
     "license_status": "active", "permission_keys": ["customer.read", "invoice.create"],
     "limit": 600, "remaining": 599,
+    # Round 21D: the resolver's answer carries the shop's plan; a key only
+    # works on Enterprise and up (spec §5.5).
+    "plan": plan_payload("enterprise"),
 }
 
 
@@ -158,7 +162,8 @@ class TestTheResolver:
 
 
 from chann_app import routers_ext  # noqa: E402
-from chann_app.services.authorization import TenantPrincipal  # noqa: E402
+from chann_app.services.authorization import TenantPrincipal, build_principal  # noqa: E402
+from plan_fixtures import plan_payload  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -617,8 +622,10 @@ def _liff(is_owner=True, keys=("setting.manage",)):
         yield client
 
     async def override_principal():
-        return TenantPrincipal(license_id=LICENSE_ID, chann_uid="CHN-OWNER", role="owner",
-                               is_owner=is_owner, permission_keys=frozenset(keys), audience="sales")
+        # round 21D: making a key is Enterprise
+        return build_principal(license_id=LICENSE_ID, chann_uid="CHN-OWNER", role="owner",
+                               is_owner=is_owner, role_keys=keys, audience="sales",
+                               license_status="active", plan_payload=plan_payload("enterprise"))
 
     app = FastAPI()
     app.include_router(routers_phase2.router)

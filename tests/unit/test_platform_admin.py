@@ -55,7 +55,7 @@ class _FakeClient:
     async def delete_platform_admin_session(self, session_id):
         self.sessions.pop(session_id, None)
 
-    async def platform_tenants(self, *, q=None, status=None):
+    async def platform_tenants(self, *, q=None, status=None, plan=None):  # plan: DataClient since round 21D
         self.calls.append(("platform_tenants", q, status))
         rows = [dict(TENANT, status=self.status)]
         if status and status != self.status:

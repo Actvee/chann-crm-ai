@@ -5,6 +5,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
+import { PlanReason, planHas } from "../../_plan";
 import { useFailureText } from "../_format";
 import { proxyHeaders } from "../_lib";
 import { useSalesSession } from "../_session";
@@ -236,6 +237,9 @@ export default function RoleManagement({ liffId }: { liffId: string }) {
   // The keys the routes check (review C7): roles are role.manage,
   // settings are setting.manage. A suspended shop edits neither.
   const canManageRoles = !session.suspended && permissions.has("role.manage");
+  // Round 21D (spec §5.4, owner decision Q7): the standard roles work on
+  // every plan; making or editing one is custom roles.
+  const rolesOn = planHas(session.plan, "feature.custom_roles");
   const canManageSettings = !session.suspended && permissions.has("setting.manage");
 
   const rowSummary = (role: Role) => {
@@ -277,11 +281,15 @@ export default function RoleManagement({ liffId }: { liffId: string }) {
       <div className="list-head">
         <span className="count">{t.role.rolesCount.replace("{count}", String(roles.length))}</span>
         {canManageRoles && (
-          <button type="button" className="btn" data-variant="primary" onClick={openCreate} disabled={busy}>
+          <button type="button" className="btn" data-variant="primary" onClick={openCreate}
+                  disabled={busy || !rolesOn}>
             {t.role.createCustomRole}
           </button>
         )}
       </div>
+      {/* The disabled button's reason, as text under it (ui-ux-pro-max
+          disabled-states) — it also says why "แก้ไข" is not offered. */}
+      {canManageRoles && !rolesOn && <PlanReason>{t.dashboard.plan.rolesLocked}</PlanReason>}
 
       <ul className="role-list">
         {roles.map((role) => (
@@ -305,7 +313,7 @@ export default function RoleManagement({ liffId }: { liffId: string }) {
               <button type="button" className="btn" data-variant="quiet" onClick={() => setViewing(role)}>
                 {t.role.detail}
               </button>
-              {!role.is_owner && canManageRoles && (
+              {!role.is_owner && canManageRoles && rolesOn && (
                 <button type="button" className="btn" data-variant="quiet" onClick={() => openEdit(role)} disabled={busy}>
                   {t.role.editRole}
                 </button>

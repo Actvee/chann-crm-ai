@@ -19,6 +19,7 @@ import { useSalesSession } from "../../_session";
 import { SalesShell } from "../../_shell";
 import { useSalesText } from "../../_strings";
 import { ConfirmDialog, useConfirm } from "../../../_confirm";
+import { planHas } from "../../../_plan";
 
 type Product = {
   id: string;
@@ -320,7 +321,9 @@ export default function QuoteDetail({
                 ? t.dashboard.invoices.sendPushBlocked
                 : failure.reason === "channel_refused"
                   ? t.dashboard.invoices.sendPushChannel
-                  : t.dashboard.invoices.sendPushFailed,
+                  : failure.reason === "plan_locked"
+                    ? t.dashboard.invoices.sendPushPlanLocked
+                    : t.dashboard.invoices.sendPushFailed,
             "error",
           );
         } else if (failure.code === "quote_closed") {
@@ -517,6 +520,8 @@ export default function QuoteDetail({
   // Every write on this page — terms, lines, status, issuing — is behind
   // quote.update, which the page never asked for (review C7).
   const canUpdate = can("quote.update");
+  // Round 21D (spec §8.5): sending on LINE is the Customer LINE link feature.
+  const lineOn = planHas(session.plan, "feature.customer_line_link");
   const quoteStatus = detail?.quote.status ?? "";
   // Only a draft. An issued quote is a document the customer is holding,
   // and the Data Tier refuses to change one — offering the buttons anyway
@@ -667,7 +672,9 @@ export default function QuoteDetail({
                 ) : undefined
               }
               note={
-                quoteStatus === "draft" && canUpdate && !detail.quote.generated_document_id
+                canUpdate && !lineOn
+                  ? t.dashboard.plan.sendLineLocked
+                  : quoteStatus === "draft" && canUpdate && !detail.quote.generated_document_id
                   ? s.quotes.issueBeforeSend
                   // A disabled "ส่งให้ลูกค้า" says why in visible text, not
                   // only title= — a phone has no tooltip (ui-ux-pro-max:
@@ -699,7 +706,7 @@ export default function QuoteDetail({
                   type="button"
                   className="btn"
                   onClick={() => void sendQuote()}
-                  disabled={busy || quoteClosed || !customerHasLine || !detail.quote.generated_document_id}
+                  disabled={busy || !lineOn || quoteClosed || !customerHasLine || !detail.quote.generated_document_id}
                 >
                   {t.dashboard.invoices.send}
                 </button>

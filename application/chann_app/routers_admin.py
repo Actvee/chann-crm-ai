@@ -18,6 +18,7 @@ from .config import settings
 log = logging.getLogger(__name__)
 from .data_client import DataClient, DataTierError
 from .services.identity import OA_TO_ROLE, apply_active_tenant
+from .services import entitlements
 from .services import pdpa as pdpa_service
 
 router = APIRouter(prefix="/api/v1", tags=["auth"])
@@ -836,12 +837,16 @@ TENANT_STATUSES = ("trial", "active", "suspended", "deleted")
 async def platform_tenants(
     q: str | None = None,
     status_filter: str | None = None,
+    plan: str | None = None,
     admin: dict = Depends(require_admin),
     client: DataClient = Depends(get_data_client),
 ):
     if status_filter and status_filter not in TENANT_STATUSES:
         raise HTTPException(status_code=422, detail="unknown status")
-    return await client.platform_tenants(q=q, status=status_filter)
+    # Round 21D — the console's plan filter.
+    if plan and plan not in entitlements.PLAN_ORDER:
+        raise HTTPException(status_code=422, detail={"error": "unknown_plan"})
+    return await client.platform_tenants(q=q, status=status_filter, plan=plan)
 
 
 @router.get("/platform/tenants/{license_id}")
@@ -871,6 +876,13 @@ async def platform_tenant(
                 row["ai_chart_month"] = usage.get("month") or ""
     except Exception:  # noqa: BLE001
         log.exception("could not read the chart allowance of %s", license_id)
+    # Round 21D — what each other plan would lock (and whether it would be
+    # refused), so the console can say so before the operator saves.
+    try:
+        row["plan_preview"] = await client.platform_plan_preview(license_id)
+    except Exception:  # noqa: BLE001 — the page still opens without it
+        log.exception("could not read the plan preview of %s", license_id)
+        row["plan_preview"] = None
     return row
 
 
@@ -935,41 +947,109 @@ async def platform_tenant_update(
         else:
             changes["expires_at"] = deadline.isoformat()
     actor = str(admin.get("sub") or "")
-    # How many made-to-order charts this company may have in a month. A
-    # licence setting rather than a tenant column: it is a per-tenant
-    # allowance like every other setting, and only this route — the Chann
-    # administrator's — writes it (owner's rule, 17 ก.ย. 2569).
-    quota_written = False
+    # Round 21D — the shop's plan. The Data tier decides: an unknown code
+    # is 422 `unknown_plan`, a downgrade that would leave more active
+    # members than the target allows is 409 `plan_member_limit` (owner
+    # decision Q2 — refused, never forced), and it writes the audit row.
+    if "plan_code" in body:
+        changes["plan_code"] = str(body.get("plan_code") or "").strip()
+    # How many AI reports this company may have in a month, over its plan's
+    # own number (Pro and up). A licence setting rather than a tenant
+    # column, and only this route — the Chann administrator's — writes it
+    # (owner's rule, 17 ก.ย. 2569). Empty = back to the plan's number
+    # (round 21D); 0 is a value — AI reports off for this shop.
+    quota: int | None = None
+    clear_quota = False
     if "ai_chart_quota" in body:
         raw = body.get("ai_chart_quota")
-        try:
-            quota = max(0, int(str(raw).strip()))
-        except (TypeError, ValueError):
+        if raw is None or str(raw).strip() == "":
+            clear_quota = True
+        else:
+            try:
+                quota = max(0, int(str(raw).strip()))
+            except (TypeError, ValueError):
+                raise HTTPException(
+                    status_code=422, detail={"error": "ai_chart_quota_must_be_a_number"},
+                ) from None
+    if new_status and changes:
+        changes["status"] = new_status
+    if not changes and not new_status and "ai_chart_quota" not in body:
+        raise HTTPException(status_code=422, detail={"error": "nothing_to_update"})
+    # The plan before the write, to tell the owner what changed.
+    before = await client.platform_tenant(license_id) if "plan_code" in changes else None
+    # Ruling 28: a top-up (0 included) only on a plan that honours one —
+    # judged on the plan the shop will be on after this request. Refused
+    # whole, before anything is written: a stored override on Starter is
+    # inert today and would come back to life after a later upgrade.
+    # Clearing one stays allowed.
+    if quota is not None:
+        target = changes.get("plan_code")
+        if target is None:
+            current = await client.platform_tenant(license_id)
+            if current is None:
+                raise HTTPException(status_code=404, detail="tenant not found")
+            target = str(current.get("plan_code") or "pro")
+        if target in entitlements.PLAN_ORDER and target not in entitlements.QUOTA_TOP_UP_PLANS:
             raise HTTPException(
-                status_code=422, detail={"error": "ai_chart_quota_must_be_a_number"},
-            ) from None
-        try:
-            await client.put_license_setting(license_id, "ai_chart_quota", quota, actor_id=actor)
-            quota_written = True
-        except DataTierError as exc:
-            code = exc.status_code if 400 <= exc.status_code < 500 else 502
-            raise HTTPException(
-                status_code=code,
-                detail={"error": "tenant_update_failed", "reason": exc.detail},
-            ) from exc
+                status_code=422,
+                detail=entitlements.ai_quota_refusal(target, whole="plan_code" in changes),
+            )
+    saved: dict | None = None
     try:
-        if not changes:
-            if not new_status:
-                if quota_written:
-                    return await client.platform_tenant(license_id)
-                raise HTTPException(status_code=422, detail={"error": "nothing_to_update"})
-            return await client.set_license_status(license_id, new_status, actor_id=actor)
-        if new_status:
-            changes["status"] = new_status
-        return await client.update_tenant(license_id, changes, actor_id=actor)
+        # The tenant first: a refused plan change writes nothing, the
+        # top-up in the same save included.
+        if changes:
+            saved = await client.update_tenant(license_id, changes, actor_id=actor)
+        elif new_status:
+            saved = await client.set_license_status(license_id, new_status, actor_id=actor)
     except DataTierError as exc:
+        refusal = exc.structured or {}
+        if entitlements.is_plan_refusal(exc) or refusal.get("error") == "unknown_plan":
+            # Unchanged: the console shows its `message` by the plan field.
+            raise HTTPException(status_code=exc.status_code, detail=refusal) from exc
         code = exc.status_code if 400 <= exc.status_code < 500 else 502
         raise HTTPException(status_code=code, detail={"error": "tenant_update_failed", "reason": exc.detail}) from exc
+    if "ai_chart_quota" in body:
+        try:
+            if clear_quota:
+                await client.delete_license_setting(license_id, "ai_chart_quota", actor_id=actor)
+            else:
+                await client.put_license_setting(license_id, "ai_chart_quota", quota, actor_id=actor)
+        except DataTierError as exc:
+            # P27: clearing an override that is not there is already done.
+            if not (clear_quota and exc.status_code == 404):
+                if saved is None:
+                    # Nothing else was written: a failure is the honest answer.
+                    code = exc.status_code if 400 <= exc.status_code < 500 else 502
+                    raise HTTPException(
+                        status_code=code,
+                        detail={"error": "tenant_update_failed", "reason": exc.detail},
+                    ) from exc
+                # The tenant (maybe its plan) is already saved: say that,
+                # and say the top-up was not — never "nothing changed".
+                saved = dict(saved)
+                saved["quota_error"] = exc.detail
+                saved["plan_changed"] = before is not None and str(before.get("plan_code")) != str(saved.get("plan_code"))
+        if saved is None:
+            saved = await client.platform_tenant(license_id)
+            if saved is None:
+                raise HTTPException(status_code=404, detail="tenant not found")
+    if before is not None and saved is not None and str(before.get("plan_code")) != str(saved.get("plan_code")):
+        await _tell_owner_plan_changed(client, license_id, before, saved)
+    return saved
+
+
+async def _tell_owner_plan_changed(client: DataClient, license_id: str, before: dict, after: dict) -> None:
+    """Spec §3.4: the shop's owner hears it on the Sales OA — the new plan,
+    what it opened, what it locked. Task 8's one owner notice (R6), so it is
+    best effort: the admin's save stands whatever the push does."""
+    owner = str(after.get("owner_chann_uid") or before.get("owner_chann_uid") or "")
+    company = str(after.get("company_name") or before.get("company_name") or "")
+    await entitlements.owner_notice(
+        client, license_id=license_id, owner_chann_uid=owner, kind="plan_changed",
+        message=entitlements.plan_change_text(before.get("plan"), after.get("plan"), company, "th"),
+        message_en=entitlements.plan_change_text(before.get("plan"), after.get("plan"), company, "en"),
+    )
 
 
 def _platform_refusal(exc: DataTierError, error: str) -> HTTPException:

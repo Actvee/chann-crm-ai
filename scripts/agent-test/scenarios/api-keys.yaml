@@ -9,6 +9,7 @@ actor:
   role: owner
   language: th
   permissions: all
+  plan: enterprise  # round 21D: making a key is an Enterprise feature
 
 steps:
   - seed:

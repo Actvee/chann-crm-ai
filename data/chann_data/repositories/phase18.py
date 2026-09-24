@@ -21,7 +21,8 @@ from .phase65 import LICENSE_STATUSES
 from .tenant_scope import MemberConflict, MemberNotFound, MemberRepository, TenantScope
 
 from ..models import (
-    AuditLog, Base, ChannIdentity, Customer, CustomRole, Deal, License, LicenseMember, ServiceTicket,
+    AuditLog, Base, ChannIdentity, Customer, CustomRole, Deal, License, LicenseMember, LicenseSetting,
+    ServiceTicket,
 )
 
 OPEN_TICKET_STATUSES = ("open", "assigned", "in_progress")
@@ -49,6 +50,8 @@ class PlatformRepository:
         return int(self._s.execute(select(func.count()).select_from(model).where(*where)).scalar_one() or 0)
 
     def _counts(self, license_id: uuid.UUID) -> dict:
+        from .plan_repo import PlanRepository
+
         last_ticket = self._s.execute(
             select(func.max(ServiceTicket.created_at)).where(ServiceTicket.license_id == license_id)
         ).scalar_one()
@@ -57,7 +60,10 @@ class PlatformRepository:
         ).scalar_one()
         candidates = [t for t in (last_ticket, last_deal) if isinstance(t, datetime)]
         return {
-            "members": self._count(LicenseMember, LicenseMember.license_id == license_id, LicenseMember.status == "active"),
+            # Round 21D: active PEOPLE (one person on both OAs is one
+            # user), the same number `usage.members` and the plan's user
+            # limit count — not active rows.
+            "members": PlanRepository(self._s).active_people(license_id),
             "customers": self._count(Customer, Customer.license_id == license_id),
             "tickets": self._count(ServiceTicket, ServiceTicket.license_id == license_id),
             "open_tickets": self._count(
@@ -84,19 +90,41 @@ class PlatformRepository:
         identity = self._s.get(ChannIdentity, member.chann_uid)
         return member.chann_uid, (identity.display_name if identity is not None else None)
 
-    def _summary(self, row: License) -> dict:
+    def _summary(self, row: License, *, plan_payload: dict | None = None) -> dict:
         owner_uid, owner_name = self._owner(row.id)
+        if plan_payload is None:
+            from .plan_repo import PlanRepository
+
+            plan_payload = PlanRepository(self._s).payload(row.id)
         return {
             "id": row.id, "license_code": row.license_code, "company_name": row.company_name,
             "company_code": row.company_code, "status": row.status,
             "expires_at": row.expires_at, "deleted_at": row.deleted_at, "created_at": row.created_at,
             "owner_chann_uid": owner_uid, "owner_name": owner_name,
+            # Round 21D — the plan, resolved (with the shop's AI override).
+            "plan_code": row.plan_code, "plan": plan_payload,
             **self._counts(row.id),
         }
 
+    def _plan_payloads(self, rows: list[License]) -> dict:
+        """Round 21D — every listed licence's resolved plan from ONE query
+        for the AI overrides, not two queries per row (pre-flight C3)."""
+        from ..plans import resolve
+        from .plan_repo import QUOTA_KEY
+
+        ids = [row.id for row in rows]
+        overrides = dict(self._s.execute(
+            select(LicenseSetting.license_id, LicenseSetting.setting_value).where(
+                LicenseSetting.license_id.in_(ids), LicenseSetting.setting_key == QUOTA_KEY,
+            )
+        ).all()) if ids else {}
+        return {row.id: resolve(row.plan_code, ai_override=overrides.get(row.id)) for row in rows}
+
     # ------------------------------------------------------------ reads
 
-    def tenants(self, *, q: str | None = None, status: str | None = None, limit: int = 200) -> list[dict]:
+    def tenants(
+        self, *, q: str | None = None, status: str | None = None, plan: str | None = None, limit: int = 200,
+    ) -> list[dict]:
         """Every tenant but the soft-deleted ones; ask for status="deleted"
         to see those (round 18)."""
         query = select(License)
@@ -104,6 +132,8 @@ class PlatformRepository:
             query = query.where(License.status == status)
         else:
             query = query.where(License.status != "deleted")
+        if plan:
+            query = query.where(License.plan_code == plan)
         if q:
             needle = f"%{q.strip()}%"
             query = query.where(
@@ -112,9 +142,14 @@ class PlatformRepository:
                 | License.company_code.ilike(needle)
             )
         query = query.order_by(License.created_at.desc()).limit(max(1, min(limit, 500)))
-        return [self._summary(row) for row in self._s.execute(query).scalars()]
+        rows = list(self._s.execute(query).scalars())
+        payloads = self._plan_payloads(rows)
+        return [self._summary(row, plan_payload=payloads[row.id]) for row in rows]
 
     def tenant(self, license_id: uuid.UUID) -> dict:
+        from .localtime import bangkok_today
+        from .plan_repo import PlanRepository
+
         row = self._s.get(License, license_id)
         if row is None:
             raise PlatformNotFound("license not found")
@@ -139,6 +174,10 @@ class PlatformRepository:
             # validation, so the admin console's tenant page was a 500 for
             # every tenant (owner, 7 Sep 2026: "กดเข้าไปข้อมูลแต่ละบริษัทไม่ได้").
             "tax_id": row.tax_id, "admin_notes": row.admin_notes, "members_detail": members,
+            # Round 21D — members and AI reports against the plan, this
+            # Bangkok month (the clock consume_ai_chart's callers use).
+            "usage": PlanRepository(self._s).usage(
+                license_id, month=bangkok_today().strftime("%Y-%m")),
         }
 
     # ------------------------------------------------------------ writes
@@ -148,6 +187,8 @@ class PlatformRepository:
         "company_phone", "company_email", "company_address", "tax_id",
         # Round 18: the operator's own notes, never shown to the tenant.
         "admin_notes",
+        # Round 21D: the sales plan — only this admin route writes it.
+        "plan_code",
     )
 
     def update(self, license_id: uuid.UUID, changes: dict) -> tuple[dict, License]:
@@ -162,6 +203,13 @@ class PlatformRepository:
         unknown = set(changes) - set(self.EDITABLE)
         if unknown:
             raise ValueError(f"not editable: {sorted(unknown)}")
+        if "plan_code" in changes:
+            # Round 21D (owner, 24 ก.ย. 2569): unknown code → UnknownPlan
+            # (422); a downgrade over the target's user limit →
+            # PlanDowngradeRefused (409). The licence row is locked first.
+            from .plan_repo import PlanRepository
+
+            PlanRepository(self._s).check_change(license_id, str(changes["plan_code"] or ""))
         if "status" in changes and changes["status"] not in LICENSE_STATUSES:
             raise ValueError(f"unknown license status '{changes['status']}'")
         if "company_name" in changes and not str(changes["company_name"] or "").strip():
@@ -351,6 +399,16 @@ class PlatformRepository:
         ).scalar_one_or_none()
         if existing is not None and existing.status == "active":
             raise PlatformConflict("already a member of the target company")
+        from .plan_repo import PlanRepository
+
+        plan_repo = PlanRepository(self._s)
+        if source.channel == "technician":
+            # Pre-flight S21 (spec §7.2): moving a technician into a shop
+            # without feature.service is refused before the source
+            # membership is touched — gated by the channel, not the role.
+            plan_repo.require_feature(target_license_id, "feature.service")
+        # Round 21D: arriving at the target takes a seat there.
+        plan_repo.require_seat(target_license_id, chann_uid)
 
         source_before = source.status
         source, unassigned = members.set_status(

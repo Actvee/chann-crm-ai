@@ -470,6 +470,14 @@ does not exist anywhere else the model can check against):
   action="create": a new key. fields.name if given. Examples: "สร้าง API
     key", "ขอ key ให้โปรแกรมบัญชีหน่อย" (name "โปรแกรมบัญชี").
 
+- entity="plan" — the shop's sales plan with Chann1 (Starter, Pro,
+  Enterprise, Enterprise Plus): which plan it is on, what the plan
+  includes, how many AI report credits are left this month, how many more
+  people can join. Not the shop's details (entity="setting"), not an
+  invite code (entity="invite"), not a report.
+  action="read". Examples: "ร้านใช้แพ็กเกจอะไร", "แพ็กเกจของร้าน",
+    "เหลือเครดิตรายงาน AI เท่าไหร่", "เชิญได้อีกกี่คน", "what plan are we on".
+
 - entity="survey" — what customers answered after a repair: the
   satisfaction score (1–3) and their comment. A question about how
   satisfied customers are, or how a technician is rated, is this — never

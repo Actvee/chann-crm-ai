@@ -32,3 +32,12 @@ if missing:
         print(f"  {url}   ({where})")
 else:
     print("every dashboard call maps to an Application Tier route")
+
+# Round 21D (spec §10): every ext route is behind api_principal, and
+# api_principal itself must refuse on plan — one line that a refactor could
+# silently drop and no single route test would notice.
+api_key_src = Path("application/chann_app/auth/api_key.py").read_text()
+if 'require_feature("feature.external_api")' not in api_key_src:
+    print('\nauth/api_key.py: api_principal no longer calls require_feature("feature.external_api")')
+    raise SystemExit(1)
+print("api_principal refuses on plan")

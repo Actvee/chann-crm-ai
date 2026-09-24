@@ -208,11 +208,21 @@ class RegistrationRepository:
         expires_in_days: int | None = 7,
         created_by_member_id: uuid.UUID | None = None,
     ) -> LicenseInvite:
+        # Round 21D: a technician is feature.service; a role the shop made
+        # itself is feature.custom_roles (standard roles stay on every plan).
+        from ..permissions import DEFAULT_ROLE_TEMPLATES, channel_for_role
+        from .plan_repo import PlanRepository
+
+        plan_checks = PlanRepository(self._s)
+        if channel_for_role(role) == "technician":
+            plan_checks.require_feature(license_id, "feature.service")
+        if role not in DEFAULT_ROLE_TEMPLATES:
+            plan_checks.require_feature(license_id, "feature.custom_roles")
+
         if max_uses < 1:
             raise RegistrationConflict("max_uses must be at least 1")
 
         from ..models import CustomRole, RolePermission
-        from ..permissions import DEFAULT_ROLE_TEMPLATES
 
         known = self._s.execute(
             select(CustomRole).where(
@@ -316,6 +326,7 @@ class RegistrationRepository:
         that says which OA to use.
         """
         from ..permissions import channel_for_role
+        from .plan_repo import PlanRepository
         invite = self._s.execute(
             select(LicenseInvite)
             .where(LicenseInvite.invite_code == (invite_code or "").strip().upper())
@@ -335,6 +346,15 @@ class RegistrationRepository:
                 f"invite is for the {channel} OA, not the {oa} OA"
             )
 
+        if channel == "technician":
+            # Spec §7.2: a code made before a downgrade is refused, not
+            # consumed — it works again after an upgrade until it expires.
+            shop = self._s.get(License, invite.license_id)
+            PlanRepository(self._s).require_feature(
+                invite.license_id, "feature.service",
+                company_name=shop.company_name if shop is not None else "",
+            )
+
         existing = self._s.execute(
             select(LicenseMember).where(
                 LicenseMember.license_id == invite.license_id,
@@ -348,6 +368,8 @@ class RegistrationRepository:
             # silently exhaust a multi-use invite meant for other people.
             # A removed member re-joins with the invite's role.
             if existing.status != "active":
+                # Reactivating is a join (round 21D): it takes a seat.
+                PlanRepository(self._s).require_seat(invite.license_id, chann_uid)
                 existing.status = "active"
                 existing.role = invite.role
                 invite.used_count += 1
@@ -357,6 +379,7 @@ class RegistrationRepository:
         if invite.used_count >= invite.max_uses:
             raise RegistrationConflict("invite code has no uses left")
 
+        PlanRepository(self._s).require_seat(invite.license_id, chann_uid)
         member = LicenseMember(
             id=uuid.uuid4(),
             license_id=invite.license_id,
@@ -427,6 +450,15 @@ class RegistrationRepository:
             raise RegistrationNotFound("company code not found")
         if license_row.status in INACTIVE_STATUSES:
             raise RegistrationConflict("this company is not accepting customers")
+
+        # Spec §7.3: the Customer OA is feature.customer_line_link. No link
+        # row is written; the refusal carries what the customer is told.
+        from .plan_repo import PlanRepository
+
+        PlanRepository(self._s).require_feature(
+            license_row.id, "feature.customer_line_link",
+            company_name=license_row.company_name, company_phone=license_row.company_phone or "",
+        )
 
         existing = self._s.execute(
             select(CustomerLicenseLink).where(

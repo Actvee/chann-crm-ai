@@ -8,6 +8,7 @@ import { useSalesSession } from "../../_session";
 import { SalesShell } from "../../_shell";
 import { openExternal, proxyHeaders } from "../../_lib";
 import { useFormatters } from "../../_format";
+import { PlanReason, planHas } from "../../../_plan";
 
 type Row = { key: string; label: string; value: number };
 type Result = {
@@ -90,6 +91,11 @@ const BASIC_KEYS = [
   "outstanding_invoices", "satisfaction_avg",
 ] as const;
 
+/** Round 21D (owner decision Q4): the two basic reports that are service
+ *  work — entitlements.SERVICE_BASIC_REPORTS. A plan without service shows
+ *  the other three; the API refuses these two there anyway. */
+const SERVICE_KEYS: readonly string[] = ["open_jobs_by_tech", "satisfaction_avg"];
+
 /** Phase 17 — the report viewer. One question box, the model turns it
  *  into a whitelisted spec, the numbers come back as a table with bars. */
 export default function AiReports({ liffId }: { liffId: string }) {
@@ -141,6 +147,13 @@ export default function AiReports({ liffId }: { liffId: string }) {
     say("");
   }, [session.ready, session.token, session.licenseId, session.permissions, say]);
 
+  // Round 21D (spec §5.6, §8.5): the question box is the AI credit road —
+  // on a plan without it the box says so instead of spending; the basic
+  // reports stay free on every plan. `serviceOn` hides Q4's two cards.
+  const aiOn = planHas(session.plan, "quota.ai_reports_per_month");
+  const serviceOn = planHas(session.plan, "feature.service");
+  const shownKeys = BASIC_KEYS.filter((key) => !SERVICE_KEYS.includes(key) || serviceOn);
+
   // The editor'schoices must be the validator's whitelist, so it is fetched
   // rather than restated here.
   useEffect(() => {
@@ -177,6 +190,7 @@ export default function AiReports({ liffId }: { liffId: string }) {
     if (!token || !licenseId || allowed === false) return;
     let live = true;
     const load = async (key: (typeof BASIC_KEYS)[number]) => {
+      if (SERVICE_KEYS.includes(key) && !serviceOn) return;
       try {
         const response = await fetch(
           `/api/phase2/licenses/${licenseId}/reports/basic/${key}`,
@@ -200,7 +214,7 @@ export default function AiReports({ liffId }: { liffId: string }) {
     return () => {
       live = false;
     };
-  }, [token, licenseId, allowed]);
+  }, [token, licenseId, allowed, serviceOn]);
 
   async function ask(text: string) {
     const message = text.trim();
@@ -303,7 +317,7 @@ export default function AiReports({ liffId }: { liffId: string }) {
           <h2>{copy.basic.heading}</h2>
           <p className="basic-intro">{copy.basic.intro}</p>
           <div className="basic-grid">
-            {BASIC_KEYS.map((key) => {
+            {shownKeys.map((key) => {
               const report = basic[key];
               const failed = basicFailed[key];
               const words = copy.basic[key];
@@ -376,30 +390,41 @@ export default function AiReports({ liffId }: { liffId: string }) {
               onChange={(event) => setQuestion(event.target.value)}
               placeholder={copy.placeholder}
               rows={2}
-              disabled={busy || !token}
+              disabled={busy || !token || !aiOn}
+              aria-describedby={!aiOn ? "ai-locked-reason" : undefined}
             />
           </label>
+          {/* The reason, as text under the box it disables (ui-ux-pro-max
+              disabled-states) — never only a tooltip. */}
+          {!aiOn && (
+            <div id="ai-locked-reason">
+              <PlanReason>{t.dashboard.plan.aiLocked}</PlanReason>
+            </div>
+          )}
           <div className="actions">
-            <button type="submit" className="btn" disabled={busy || !token || !question.trim()}>
+            <button type="submit" className="btn" disabled={busy || !token || !question.trim() || !aiOn}>
               {busy ? copy.working : copy.ask}
             </button>
           </div>
-          <div className="chat-row-chips" aria-label={copy.examplesLabel}>
-            {copy.examples.map((example) => (
-              <button
-                key={example}
-                type="button"
-                className="chip"
-                disabled={busy || !token}
-                onClick={() => {
-                  setQuestion(example);
-                  void ask(example);
-                }}
-              >
-                {example}
-              </button>
-            ))}
-          </div>
+          {/* Examples would spend a credit the plan does not have. */}
+          {aiOn && (
+            <div className="chat-row-chips" aria-label={copy.examplesLabel}>
+              {copy.examples.map((example) => (
+                <button
+                  key={example}
+                  type="button"
+                  className="chip"
+                  disabled={busy || !token}
+                  onClick={() => {
+                    setQuestion(example);
+                    void ask(example);
+                  }}
+                >
+                  {example}
+                </button>
+              ))}
+            </div>
+          )}
         </form>
       )}
 

@@ -269,7 +269,7 @@ class FakeBackend:
         self.license_id = self._t.LICENSE_ID
 
     async def send(self, *, message, oa, role, language, permissions, ai,
-                   refs) -> tuple[Outcome, list[str]]:
+                   refs, plan=None) -> tuple[Outcome, list[str]]:
         # The fake carries the permission set and the role as plain state, so
         # a step can change persona mid-scenario — which is exactly what a
         # "now try it without the permission" test case needs.
@@ -280,6 +280,13 @@ class FakeBackend:
         ctx = self._t._ctx(oa=oa, primary_role=role)
         # API key and other owner-gated features check is_owner on the membership
         ctx.memberships[0]["is_owner"] = role == "owner"
+        if plan:
+            # Round 21D: the shop's plan rides on the membership row, as the
+            # Data tier sends it; the fake's /plan read returns the same one.
+            from plan_fixtures import plan_payload
+
+            ctx.memberships[0]["plan"] = plan_payload(plan)
+            self.client._plan = ctx.memberships[0]["plan"]
         try:
             reply = await self._t.handle_chat_message(
                 self.client, message=message, ctx=ctx, language=language,
@@ -478,6 +485,7 @@ class DbBackend:
         if getattr(self, "_cache", None) is not None:
             self._cache._client = _MemoryRedis()
         self._warned_about_permissions = False
+        self._warned_about_plan = False
 
         tag = uuid.uuid4().hex[:8]
         owner_uid = f"CHN-AT-{tag}"
@@ -512,7 +520,7 @@ class DbBackend:
     # ------------------------------------------------------------ steps
 
     async def send(self, *, message, oa, role, language, permissions, ai,
-                   refs) -> tuple[Outcome, list[str]]:
+                   refs, plan=None) -> tuple[Outcome, list[str]]:
         from chann_app.services.identity import resolve_context
 
         notes: list[str] = []
@@ -525,6 +533,9 @@ class DbBackend:
                 "role in license_members decides, which is the point of "
                 "running against the real tier"
             )
+        if plan and not getattr(self, "_warned_about_plan", False):
+            self._warned_about_plan = True
+            notes.append("actor.plan is fake-backend only; the db shop is Pro")
         ctx = await resolve_context(
             self.client, oa, self._line_user_id(oa, None), "Agent Test",
         )

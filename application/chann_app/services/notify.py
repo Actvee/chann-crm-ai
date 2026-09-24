@@ -52,6 +52,9 @@ TYPE_TO_OA = {
     "receipt_issued": "customer",
     # Round 21C: the quotation or the bill itself, handed over on request.
     "document_sent": "customer",
+    # Round 21D: the owner hears a turned-away join and a plan change.
+    "member_limit_reached": "sales",
+    "plan_changed": "sales",
 }
 DEFAULT_OA = "sales"
 
@@ -148,17 +151,34 @@ async def send_notification(
     # owner can find a push that did not go by the code he typed (21E).
     about = f" ({ref})" if ref else ""
 
+    target_oa = oa or TYPE_TO_OA.get(type, DEFAULT_OA)
+    plan_locked = False
+    if target_oa == "customer" and delivery_line and license_id:
+        # Round 21D (spec §3.4, R5): a shop without the Customer LINE link
+        # does not push to customers. The row is still written — it is the
+        # record of what the shop did — just not delivered over LINE.
+        from . import entitlements
+
+        if not await entitlements.feature_allowed(client, license_id, "feature.customer_line_link"):
+            delivery_line = False
+            plan_locked = True
+
     # The strict road (round 21E review, Important 3): the push IS the
     # business action, so LINE goes first and the row is written only once
     # LINE accepted. A refused push leaves no record of a send that never
     # happened — and a retry is never mistaken for a repeat.
     if raise_on_failure:
+        if plan_locked:
+            # Its own reason (final fix, Task 11): the plan switched the
+            # push off — not a customer without a LINE target.
+            log.info("notification%s not pushed: the plan has no Customer LINE link", about)
+            raise NotificationNotDelivered("plan_locked")
         if not delivery_line or not target_line_user_id:
             log.warning("notification%s has no target_line_user_id; nothing sent", about)
             raise NotificationNotDelivered("no_line_target")
         try:
             sent_ids = await _push(
-                oa or TYPE_TO_OA.get(type, DEFAULT_OA), target_line_user_id,
+                target_oa, target_line_user_id,
                 message_en if (language == "en" and message_en) else message, images, quick_reply,
             )
         except LineReplyError as exc:
@@ -192,7 +212,7 @@ async def send_notification(
 
     text = message_en if (language == "en" and message_en) else message
     try:
-        sent_ids = await _push(oa or TYPE_TO_OA.get(type, DEFAULT_OA), target_line_user_id, text, images, quick_reply)
+        sent_ids = await _push(target_oa, target_line_user_id, text, images, quick_reply)
     except LineReplyError as exc:
         # Deliberately swallowed: the notification is already durable, and
         # raising here would fail whatever business action triggered it —

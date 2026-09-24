@@ -54,6 +54,10 @@
         "line_user_id": {
           "type": "string",
           "description": "db backend only. Omit unless a scenario needs a SECOND person: the default is one LINE account shared by every OA, which is what migration 0026 is about."
+        },
+        "plan": {
+          "enum": ["starter", "pro", "enterprise", "enterprise_plus"],
+          "description": "fake backend only: the shop's sales plan (round 21D). Omitted = what an older Data tier sends, which the Application treats as Pro."
         }
       }
     },

@@ -319,7 +319,8 @@ _- Everyone one person holds, to another — listed, then confirmed · on screen
 
 **ถามอย่างอื่น**
 - ถามเป็นประโยค → พิมพ์ "ยอดดีลปิดสำเร็จ 3 เดือนล่าสุด / ลูกค้าใหม่เดือนนี้แยกตามผู้ดูแล"
-- คำถามอื่นที่ AI ตอบ หรือรูปที่ AI ออกแบบ ใช้เครดิตรายงาน AI ของร้านครั้งละ 1 (ค่าเริ่มต้น 30 ครั้งต่อเดือน) · ใช้ครบแล้วยังได้คำตอบเป็นตัวเลขตามปกติ แค่ไม่มีรูป · ถามตรงกับห้ารายงานข้างบนฟรีเสมอ ทั้งในไลน์และบนแดชบอร์ด
+- คำถามอื่นที่ AI ตอบ หรือรูปที่ AI ออกแบบ ใช้เครดิตรายงาน AI ของร้านครั้งละ 1 (ตามแพ็กเกจ: Pro 30 · Enterprise 100 ครั้งต่อเดือน) · ใช้ครบแล้วยังได้คำตอบเป็นตัวเลขตามปกติ แค่ไม่มีรูป · ถามตรงกับห้ารายงานข้างบนฟรีเสมอ ทั้งในไลน์และบนแดชบอร์ด
+- แพ็กเกจ Starter ถามได้เฉพาะรายงานพื้นฐาน (มูลค่าดีลทั้งหมด · ยอดปิดเดือนนี้ · ยอดค้างชำระ) — ฟรีเสมอ
 - ระบบถามกลับเมื่อคำถามกว้าง (เช่น "เทียบตามเจ้าของ หรือ แยกตามช่วงเวลา") ตอบสั้น ๆ ได้เลย ระบบจำคำถามเดิมไว้
 
 **กราฟ**
@@ -352,7 +353,8 @@ _- These five cost no AI credit and answer the same every time; the buttons unde
 
 **Anything else**
 _- Ask in a sentence → type "ยอดดีลปิดสำเร็จ 3 เดือนล่าสุด / ลูกค้าใหม่เดือนนี้แยกตามผู้ดูแล"_
-_- Other questions the AI answers, or a picture it designs, use one of the shop's monthly AI report credits (30 by default); when they run out the answer still comes in numbers, just without a picture. A question that is one of the five above is always free, in LINE and on the dashboard_
+_- Other questions the AI answers, or a picture it designs, use one of the shop's monthly AI report credits (by plan: Pro 30 · Enterprise 100 a month); when they run out the answer still comes in numbers, just without a picture. A question that is one of the five above is always free, in LINE and on the dashboard_
+_- On the Starter plan only the basic reports are asked (pipeline value · won this month · outstanding) — always free_
 _- A broad question is asked back ("by owner, or by period?") — answer in a word; the original request is remembered_
 
 **Charts**
@@ -407,6 +409,11 @@ _- Switch language → type "เปลี่ยนภาษาเป็นอั
 - รหัสหลุด ยกเลิกได้ (หรือปุ่มบนหน้าสมาชิก) → พิมพ์ "ยกเลิกรหัสเชิญ <รหัส>"
 - แต่ละ LINE ลงทะเบียนแยกกัน ใช้ร่วมกันเฉพาะข้อมูลส่วนตัว
 
+**แพ็กเกจของร้าน**
+- หน้าจอ > ข้อมูลบริษัท: การ์ดแพ็กเกจ — ผู้ใช้ n/สูงสุด · เครดิตรายงาน AI เดือนนี้ · ฟีเจอร์ที่มี/ยังไม่มี → พิมพ์ "ร้านใช้แพ็กเกจอะไร"
+- ผู้ใช้ครบตามแพ็กเกจแล้ว รหัสเชิญใหม่จะไม่ออก — นำคนที่ไม่ได้ใช้ออกก่อน หรือติดต่อทีม Chann1 เพื่ออัปเกรด
+- ฟีเจอร์ที่ไม่อยู่ในแพ็กเกจขึ้นรูปกุญแจพร้อมบอกว่ามีในแพ็กเกจไหน — ข้อมูลเดิมไม่หาย
+
 **จากแชท**
 - เปลี่ยนบทบาท → พิมพ์ "เปลี่ยนบทบาทสมชายเป็นแอดมิน"
 - เอาคนออก / รับกลับ → พิมพ์ "เอาสมศักดิ์ออกจากร้าน · ให้สมศักดิ์กลับมาใช้งานได้"
@@ -418,7 +425,7 @@ _- Switch language → type "เปลี่ยนภาษาเป็นอั
 
 พิมพ์: `หน้าจอ > สมาชิกในร้าน`
 
-[IMAGE: sales-members — หน้าจอแดชบอร์ดสีเขียว 'สมาชิกในร้าน' ตารางชื่อ / LINE (ทีมขาย·ช่าง) / บทบาท / สถานะ ปุ่ม เปลี่ยนบทบาท นำออก รีเซ็ต แถวเจ้าของมีป้าย 'เจ้าของ']
+[IMAGE: sales-members — หน้าจอแดชบอร์ดสีเขียว 'สมาชิกในร้าน' ตารางชื่อ / LINE (ทีมขาย·ช่าง) / บทบาท / สถานะ ปุ่ม เปลี่ยนบทบาท นำออก รีเซ็ต แถวเจ้าของมีป้าย 'เจ้าของ' ใต้ตารางเป็นวิธีเพิ่มสมาชิกและบรรทัด 'ผู้ใช้ 9/15 คน' (การ์ดแพ็กเกจเต็มอยู่ที่หน้าข้อมูลบริษัท)]
 
 _EN: Members — Home > Members (next to roles): who is linked to the company on which LINE — one person can be on both LINEs with different roles._
 
@@ -434,6 +441,11 @@ _- An invite code, technician or sales — typed in the matching LINE → type "
 _- Codes still valid → type "ดูรหัสเชิญ"_
 _- Cancel one that leaked (or the button on the members page) → type "ยกเลิกรหัสเชิญ <รหัส>"_
 _- Each LINE is a separate registration; only personal details are shared_
+
+**The shop's plan**
+_- Home > Company: the plan card — users n/limit · AI credits this month · what the plan includes → type "ร้านใช้แพ็กเกจอะไร"_
+_- At the plan's user limit no new invite is issued — remove someone who no longer uses it, or contact Chann1 to upgrade_
+_- A feature outside the plan shows a lock and which plan has it — nothing already recorded is lost_
 
 **From chat**
 _- Change a role → type "เปลี่ยนบทบาทสมชายเป็นแอดมิน"_
@@ -454,6 +466,7 @@ _- The log, or ask directly ("who deleted this customer") — all of it under Ho
 - เพิกถอนเมื่อเลิกใช้หรือ key หลุด — ระบบถามยืนยันก่อน ระบบภายนอกจะเรียกไม่ได้ทันที → พิมพ์ "เพิกถอน API key ระบบบัญชี"
 - สร้าง key ทำได้บนหน้าจอเท่านั้น (ในแชทจะได้ปุ่มเปิดหน้า) — key ไม่ควรอยู่ในแชท → พิมพ์ "สร้าง API key"
 - เฉพาะเจ้าของร้าน · จำกัด 600 คำขอ/นาที/key · ร้านที่ถูกระงับ key อ่านได้แต่เขียนไม่ได้
+- มีในแพ็กเกจ Enterprise ขึ้นไป · ร้านที่ลดแพ็กเกจ key ยังอยู่ ดูและเพิกถอนได้ ใช้งานได้อีกเมื่ออัปเกรด
 
 พิมพ์: `รายการ API key`
 
@@ -467,3 +480,4 @@ _- See which keys exist and when each was last used → type "รายการ
 _- Revoke when no longer used or leaked — confirmed first; the outside system stops at once → type "เพิกถอน API key ระบบบัญชี"_
 _- Keys are made on the screen only (chat hands you the button) — a key should never sit in a chat → type "สร้าง API key"_
 _- Owner only · 600 requests/min/key · a suspended shop's key reads but cannot write_
+_- Included from the Enterprise plan · after a downgrade the keys stay, can be listed and revoked, and work again on upgrade_

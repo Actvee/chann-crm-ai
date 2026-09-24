@@ -403,6 +403,13 @@ def sales_setup(c: Canvas):
 
 
 def sales_members(c: Canvas):
+    """The members page as it stands after round 21D (Ruling 33: the picture
+    shows the real screen). The full plan card lives on ข้อมูลบริษัท; this
+    page carries only the seat line under the invite hint, below the list
+    (MemberManagement.tsx `inviteHint` + `seatLine`, wording from
+    th.ts `plan.users`). Drawn at 9/15, not at the limit: at 15/15 the
+    removed member's "กลับมาใช้งาน" below would be refused (reactivation
+    takes a seat), so the at-limit rule is taught by the note instead."""
     c.dash_frame("สมาชิกในร้าน", "ข้างบทบาท")
     c.table(["ชื่อ", "LINE", "บทบาท", "สถานะ"],
             [["สมชาย ใจดี", "ทีมขาย", "เจ้าของ", "ใช้งาน"],
@@ -410,9 +417,15 @@ def sales_members(c: Canvas):
              ["สมหญิง ดีใจ", "ทีมขาย", "cs", "ใช้งาน"],
              ["สมศักดิ์ ขยัน", "ช่าง", "technician", "นำออกแล้ว"]],
             [270, 160, 200, 190])
+    d = c.d
+    hint = "เพิ่มสมาชิกใหม่: ให้เขาเพิ่มเพื่อน LINE ของร้านแล้วพิมพ์รหัสเชิญ — ออกรหัสเชิญช่างได้โดยพิมพ์ \"ขอรหัสเชิญช่าง\" ในแชท LINE ร้าน"
+    lines = wrap(d, hint, font(21), 800) + ["ผู้ใช้ 9/15 คน"]
+    for i, line in enumerate(lines):
+        d.text((92, c.y + i * 30), line, fill=SOFT, font=font(21))
+    c.y += 30 * len(lines) + 16
     c.card("สมศักดิ์ ขยัน · LINE ช่าง", ["ถอดจากทีมแล้ว งานที่ค้างกลับเข้าคิวรอมอบหมาย"],
            [("กลับมาใช้งาน", True), ("เปลี่ยนบทบาท", False), ("รีเซ็ตการลงทะเบียน", False)], badge="นำออกแล้ว")
-    c.note("คนเดียวกันอยู่ได้ทั้ง LINE ทีมขาย และ LINE ช่าง คนละบทบาท · แต่ละ LINE ลงทะเบียนแยกกัน · เพิ่มช่าง: พิมพ์ \"ขอรหัสเชิญช่าง\" ในแชท · เจ้าของร้านนำออกไม่ได้")
+    c.note("เพิ่มช่าง: \"ขอรหัสเชิญช่าง\" · ผู้ใช้ครบตามแพ็กเกจ รหัสใหม่จะไม่ออก · เจ้าของร้านนำออกไม่ได้")
 
 
 def sales_units(c: Canvas):

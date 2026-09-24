@@ -20,7 +20,7 @@ from .data_client import DataClient, DataTierError
 from .routers_admin import get_data_client, require_admin
 from .services import approval as approval_service
 from .services import storefront as storefront_service
-from .services import csv_import, live_chat
+from .services import csv_import, entitlements, live_chat
 from .services.chat_images import with_image_links
 from .services.authorization import TenantPrincipal, resolve_tenant_principal
 from .services.documents.selection import TEMPLATE_DOCUMENT_TYPES
@@ -175,6 +175,10 @@ def _propagate(exc: DataTierError) -> HTTPException:
     # so a UI can offer to open it, and the dispatch gate names the fields
     # still missing. exc.detail is the str() of those, which arrives as
     # "{'error': 'duplicate', ...}" and forces the caller to parse a repr.
+    if exc.status_code == 403 and entitlements.is_plan_refusal(exc):
+        # Round 21D: the Data tier's plan refusal is the caller's answer —
+        # every other 403 from the Data tier stays a 502, as before.
+        code = 403
     return HTTPException(status_code=code, detail=exc.structured or exc.detail)
 
 
@@ -186,6 +190,7 @@ async def compile_role_policy(
 ):
     _require_same_tenant(principal, license_id)
     principal.require("role.manage")
+    principal.require_feature("feature.custom_roles")
     keys = sorted(set(PERMISSION_KEY_PATTERN.findall(payload.policy_prompt.lower())))
     if not keys:
         raise HTTPException(
@@ -226,6 +231,7 @@ async def create_role(
 ):
     _require_same_tenant(principal, license_id)
     principal.require("role.manage")
+    principal.require_feature("feature.custom_roles")
     try:
         return await client.create_role(license_id, payload.model_dump(mode="json"), actor_id=principal.chann_uid)
     except DataTierError as exc:
@@ -242,6 +248,7 @@ async def update_role(
 ):
     _require_same_tenant(principal, license_id)
     principal.require("role.manage")
+    principal.require_feature("feature.custom_roles")
     try:
         return await client.update_role(license_id, role_name, payload.model_dump(mode="json"), actor_id=principal.chann_uid)
     except DataTierError as exc:
@@ -399,6 +406,11 @@ async def put_setting(
 ):
     _require_same_tenant(principal, license_id)
     principal.require("setting.manage")
+    # Ruling 29: the live-chat minutes are feature.live_chat (403
+    # plan_required); every other key stays setting.manage only.
+    setting_feature = entitlements.SETTING_KEY_FEATURE.get(setting_key)
+    if setting_feature:
+        principal.require_feature(setting_feature)
     try:
         return await client.put_license_setting(license_id, setting_key, payload.setting_value, actor_id=principal.chann_uid)
     except DataTierError as exc:
@@ -1430,9 +1442,43 @@ async def my_permissions(
     return {
         "chann_uid": principal.chann_uid,
         "is_owner": principal.is_owner,
+        # Round 21D: the keys the person may USE — role grants minus what
+        # the shop's plan locks. Every existing page check reads this and
+        # is plan-aware without being edited.
         "permission_keys": sorted(principal.permission_keys),
         "license_status": principal.license_status,
+        # Round 21D (pre-flight ruling R-C): what the role grants before the
+        # plan is applied, and which of those the plan locks. The nav shows
+        # a plan-locked entry to anyone holding the permission that would
+        # open it (spec §5.4) — `held_keys` tells "no permission" from
+        # "plan-locked"; held_keys == permission_keys ∪ plan_locked_keys.
+        "held_keys": sorted(principal.permission_keys | principal.plan_locked_keys),
+        "plan": principal.plan.as_payload(),
+        "plan_locked_keys": sorted(principal.plan_locked_keys),
+        # The upgrade contact, for whoever can act on it (the owner, or a
+        # holder of setting.manage — spec §8.3).
+        "sales_contact": entitlements.sales_contact()
+        if (principal.is_owner or "setting.manage" in principal.permission_keys) else None,
     }
+
+
+@router.get("/licenses/{license_id}/plan")
+async def license_plan(
+    license_id: str,
+    principal: TenantPrincipal = Depends(get_tenant_principal),
+    client: DataClient = Depends(get_data_client),
+):
+    """Round 21D — the plan card (company page) and the members page's
+    "ผู้ใช้ n/limit": the plan and how much of it is used. Chat's twin is
+    ("read", "plan")."""
+    _require_same_tenant(principal, license_id)
+    principal.require_any("setting.manage", "member.manage")
+    try:
+        out = await client.license_plan(license_id)
+    except DataTierError as exc:
+        raise _propagate(exc)
+    return {"plan": entitlements.PlanView.from_payload(out.get("plan")).as_payload(),
+            "usage": out.get("usage") or {}}
 
 
 # ------------------------------------------------------------ products (write)
@@ -2069,6 +2115,12 @@ async def put_assignment_rule(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={"error": "policy_or_rules_required"},
         )
+    # Ruling 26 (round 21D task 11): a technician-scope rule belongs to
+    # feature.service — setting.manage is always on, so the plan is the
+    # gate here, not the permission key.
+    scope_feature = entitlements.ASSIGNMENT_RULE_SCOPE_FEATURE.get(str(rule.get("scope") or "technician"))
+    if scope_feature:
+        principal.require_feature(scope_feature)
     try:
         saved = await client.upsert_assignment_rule(
             license_id, scope=str(rule.get("scope") or "technician"), rules_json=rule,
@@ -2111,6 +2163,7 @@ async def survey_summary(
     like the AI reports beside it."""
     _require_same_tenant(principal, license_id)
     principal.require("view_reports")
+    principal.require_feature("feature.service")
     if days not in (30, 90, 365):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"error": "days_invalid"})
     try:
@@ -3029,6 +3082,7 @@ async def send_invoice_to_customer(
 
     _require_same_tenant(principal, license_id)
     principal.require("invoice.update")
+    principal.require_feature("feature.customer_line_link")
     if principal.is_customer:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="staff only")
     invoice = await _invoice_or_404(client, principal, license_id, invoice_id)
@@ -3060,6 +3114,7 @@ async def send_quote_to_customer(
 
     _require_same_tenant(principal, license_id)
     principal.require("quote.update")
+    principal.require_feature("feature.customer_line_link")
     if principal.is_customer:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="staff only")
     try:
@@ -3600,6 +3655,10 @@ async def list_technician_teams(
 ):
     _require_same_tenant(principal, license_id)
     _staff_only(principal)
+    # ticket.read is itself feature.service (entitlements.PERMISSION_FEATURE):
+    # on a plan without service it is plan-locked, and require() answers
+    # plan_required. No separate require_feature here — past this line the
+    # plan has service by construction, so one would never fire.
     principal.require("ticket.read")
     try:
         return await client.list_technician_teams(license_id)
@@ -3632,6 +3691,7 @@ async def create_technician_team(
 ):
     _require_same_tenant(principal, license_id)
     principal.require("team.manage")
+    principal.require_feature("feature.service")
     try:
         return await client.create_technician_team(license_id, payload.team_name.strip())
     except DataTierError as exc:
@@ -3647,6 +3707,7 @@ async def delete_technician_team(
 ):
     _require_same_tenant(principal, license_id)
     principal.require("team.manage")
+    principal.require_feature("feature.service")
     try:
         await client.delete_technician_team(license_id, team_id)
     except DataTierError as exc:
@@ -3661,6 +3722,7 @@ async def list_technician_team_members(
     client: DataClient = Depends(get_data_client),
 ):
     _require_same_tenant(principal, license_id)
+    # ticket.read carries the plan check (see list_technician_teams).
     principal.require("ticket.read")
     _staff_only(principal)
     try:
@@ -3733,6 +3795,7 @@ async def add_technician_team_member(
 ):
     _require_same_tenant(principal, license_id)
     principal.require("team.manage")
+    principal.require_feature("feature.service")
     try:
         return await client.add_team_member(
             license_id, team_id, payload.member_id, is_lead=payload.is_lead,
@@ -3753,6 +3816,7 @@ async def remove_technician_team_member(
 ):
     _require_same_tenant(principal, license_id)
     principal.require("team.manage")
+    principal.require_feature("feature.service")
     try:
         await client.remove_team_member(license_id, team_id, member_id)
     except DataTierError as exc:
@@ -4240,6 +4304,7 @@ async def upload_document_template(
 
     _require_same_tenant(principal, license_id)
     principal.require("setting.manage")
+    principal.require_feature("feature.custom_documents")
 
     if payload.document_type not in TEMPLATE_DOCUMENT_TYPES:
         raise HTTPException(
@@ -4448,6 +4513,7 @@ async def publish_document_template(
     """
     _require_same_tenant(principal, license_id)
     principal.require("setting.manage")
+    principal.require_feature("feature.custom_documents")
     try:
         # The Data tier addresses a version by its own id — the template
         # is not in the path. Passing template_id here made this route
@@ -4593,6 +4659,7 @@ async def set_document_template_active(
     """
     _require_same_tenant(principal, license_id)
     principal.require("setting.manage")
+    principal.require_feature("feature.custom_documents")
     try:
         return await client.set_document_template_active(
             license_id, template_id, is_active=payload.is_active,
@@ -5319,11 +5386,17 @@ async def ai_report_ask(
         raise HTTPException(status_code=422, detail="message is required")
     key = await basic_report_asked_for(body.message, language=language)
     if key is not None:
+        if key in entitlements.SERVICE_BASIC_REPORTS:
+            # Owner decision Q4: Starter sees three basic reports.
+            principal.require_feature("feature.service")
         try:
             report = await basic_reports.fetch(client, license_id=license_id, key=key)
         except DataTierError as exc:
             raise _propagate(exc)
         return {"basic": report, "text": basic_reports.as_text(report, language), "free": True}
+    # Round 21D: every other question is the AI road — locked on Starter,
+    # before the model is asked anything (spec §5.6).
+    principal.require_feature(entitlements.AI_REPORTS)
     try:
         out = await reports_ai.handle_report_request(
             client, license_id=license_id, message=body.message, language=language,
@@ -5412,6 +5485,7 @@ async def ai_report_run(
 
     _require_same_tenant(principal, license_id)
     principal.require("view_reports")
+    principal.require_feature(entitlements.AI_REPORTS)
     language = body.language or "th"
     try:
         spec = reports_ai.validate_query_spec(body.spec)
@@ -5446,6 +5520,8 @@ async def basic_report(
 
     _require_same_tenant(principal, license_id)
     principal.require("view_reports")
+    if key in entitlements.SERVICE_BASIC_REPORTS:
+        principal.require_feature("feature.service")
     try:
         return await basic_reports.fetch(client, license_id=license_id, key=key)
     except ValueError as exc:
@@ -5613,7 +5689,13 @@ async def create_api_key(
     """The one response that carries the key. Nothing stores it after this."""
     _require_same_tenant(principal, license_id)
     principal.require("setting.manage")
+    # Owner-only first: a non-owner is refused for who they are on every
+    # plan, never pointed at an upgrade they could not act on.
     _owner_only(principal)
+    # Round 21D (ruling R-D): MAKING a key is the External API feature;
+    # listing and revoking stay open on every plan, so a downgraded
+    # owner can still see and revoke what an outside system holds.
+    principal.require_feature("feature.external_api")
     name = " ".join(payload.name.split())
     if not name:
         raise HTTPException(status_code=422, detail="name is required")

@@ -5,6 +5,7 @@ import { FormEvent, useCallback, useEffect, useState } from "react";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { FieldRow } from "../../_field-row";
+import { PlanCard, PlanReason, planHas } from "../../_plan";
 import { PickerOption, SearchablePicker } from "../../_searchable-picker";
 import { useFailureText } from "../_format";
 import { proxyHeaders } from "../_lib";
@@ -108,6 +109,10 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
     setTone(kind);
   }, []);
   const session = useSalesSession(liffId, say);
+  // Ruling 29 (21D final fix round 1): the two chat minutes are live
+  // chat's; PUT settings/{key} refuses them on a plan without it. Until
+  // /me answers, drawn as always (the server still refuses).
+  const liveChatOn = !session.ready || planHas(session.plan, "feature.live_chat");
   const { token, licenseId, permissions } = session;
 
   const applyProfile = useCallback((data: Profile) => {
@@ -327,7 +332,7 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
     const sla = Number(chatSla);
     const quiet = Number(chatTimeout);
     const cleanup = Number(leadCleanupDays || 0);
-    if (!Number.isInteger(sla) || sla < 1 || sla > 1440 || !Number.isInteger(quiet) || quiet < 1 || quiet > 1440) {
+    if (liveChatOn && (!Number.isInteger(sla) || sla < 1 || sla > 1440 || !Number.isInteger(quiet) || quiet < 1 || quiet > 1440)) {
       say(c.chatPolicyInvalid, "error");
       return;
     }
@@ -337,7 +342,12 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
     }
     setPolicySaving(true);
     try {
-      for (const [key, value] of [["chat_sla_minutes", sla], ["chat_timeout_minutes", quiet], ["lead_auto_archive_days", cleanup]] as const) {
+      // A plan without live chat saves only the lead clean-up: the two chat
+      // minutes would be refused (403) and stop the loop before it.
+      const writes: ReadonlyArray<readonly [string, number]> = liveChatOn
+        ? [["chat_sla_minutes", sla], ["chat_timeout_minutes", quiet], ["lead_auto_archive_days", cleanup]]
+        : [["lead_auto_archive_days", cleanup]];
+      for (const [key, value] of writes) {
         const response = await fetch(`/api/phase2/licenses/${licenseId}/settings/${key}`, {
           method: "PUT",
           headers: proxyHeaders(token, licenseId),
@@ -532,6 +542,14 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
         <p className="card-meta" style={{ marginBottom: 12 }}>{s.company.readOnly}</p>
       )}
 
+      {/* Round 21D — the plan card (spec §8.4); setting.manage opens this
+          page. Read-only; the contact button sits in the card. */}
+      {session.ready && (
+        <PlanCard token={session.token} licenseId={session.licenseId}
+                  canUpgrade={session.isOwner || session.permissions.has("setting.manage")}
+                  contact={session.salesContact} />
+      )}
+
       <section className="section" style={{ marginBottom: 16 }}>
         <div className="section-head">
           <h2>{c.subscriptionTitle}</h2>
@@ -694,7 +712,8 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
                 max={1440}
                 value={chatSla}
                 onChange={(e) => setChatSla(e.target.value)}
-                aria-describedby="chat-sla-hint"
+                disabled={!liveChatOn}
+                aria-describedby={liveChatOn ? "chat-sla-hint" : "chat-sla-hint chat-policy-locked"}
               />
               <span id="chat-sla-hint" className="hint">{c.chatSlaHint}</span>
             </div>
@@ -708,9 +727,13 @@ export default function CompanyProfile({ liffId }: { liffId: string }) {
                 max={1440}
                 value={chatTimeout}
                 onChange={(e) => setChatTimeout(e.target.value)}
-                aria-describedby="chat-timeout-hint"
+                disabled={!liveChatOn}
+                aria-describedby={liveChatOn ? "chat-timeout-hint" : "chat-timeout-hint chat-policy-locked"}
               />
               <span id="chat-timeout-hint" className="hint">{c.chatTimeoutHint}</span>
+              {!liveChatOn && (
+                <div id="chat-policy-locked"><PlanReason>{t.dashboard.plan.chatPolicyLocked}</PlanReason></div>
+              )}
             </div>
             <div className="field">
               <label htmlFor="lead-cleanup-days">{c.leadCleanup}</label>

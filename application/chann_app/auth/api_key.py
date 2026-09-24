@@ -16,7 +16,7 @@ from fastapi import Depends, Header, HTTPException, Request, status
 
 from ..data_client import DataClient
 from ..routers_admin import get_data_client
-from ..services.authorization import TenantPrincipal, refuse_if_suspended
+from ..services.authorization import TenantPrincipal, build_principal, refuse_if_suspended
 
 KEY_PREFIX = "chann_live_"
 BEARER = "Bearer "
@@ -67,12 +67,12 @@ async def api_principal(
     # own id, the label the owner gave it, and its prefix) — not just the
     # id that was already inside chann_uid.
     request.state.api_key = {"id": key["id"], "name": key.get("name"), "key_prefix": key.get("key_prefix")}
-    return TenantPrincipal(
-        license_id=str(key["license_id"]),
-        chann_uid=f"api:{key['id']}",
-        role="api",
-        is_owner=False,
-        permission_keys=frozenset(found.get("permission_keys") or ()),
-        audience="api",
-        license_status=license_status,
+    principal = build_principal(
+        license_id=str(key["license_id"]), chann_uid=f"api:{key['id']}", role="api", is_owner=False,
+        role_keys=found.get("permission_keys") or (), audience="api",
+        license_status=license_status, plan_payload=found.get("plan"),
     )
+    # Round 21D (spec §5.5): the external API is an Enterprise feature.
+    # AFTER the key checks — a bad key is 401 whatever the plan.
+    principal.require_feature("feature.external_api")
+    return principal

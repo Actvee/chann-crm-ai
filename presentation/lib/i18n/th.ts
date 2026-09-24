@@ -123,6 +123,44 @@ export const th = {
     addNew: "เพิ่มลูกค้าใหม่",
   },
   dashboard: {
+    // Round 21D — the shop's sales plan (spec §8). Plan names are product
+    // names and are never translated. The brand is "Chann1" (check-brand).
+    plan: {
+      cardTitle: "แพ็กเกจ {plan}",
+      users: "ผู้ใช้ {n}/{limit} คน",
+      usersUnlimited: "{n} คน · ไม่จำกัด",
+      aiCredits: "เครดิตรายงาน AI เดือนนี้ {used}/{allowance}",
+      fromPlan: "{plan} ขึ้นไป",
+      lockedTitle: "ฟีเจอร์นี้อยู่ในแพ็กเกจ {min_plan} ขึ้นไป",
+      lockedShop: "ร้านของคุณใช้แพ็กเกจ {plan} · ข้อมูลเดิมยังอยู่ครบ ไม่มีอะไรถูกลบ",
+      contactButton: "ติดต่อทีม Chann1 เพื่ออัปเกรด",
+      contactNone: "ติดต่อทีม Chann1 CRM AI ที่ดูแลร้านของคุณ",
+      askOwner: "ถ้าต้องการใช้ แจ้งเจ้าของร้านได้เลย",
+      inviteAtLimit: "ผู้ใช้ครบ {limit} คนตามแพ็กเกจ {plan} แล้ว",
+      aiLocked: "ถามรายงานด้วย AI มีในแพ็กเกจ Pro ขึ้นไป · รายงานพื้นฐานด้านบนใช้ได้ฟรีเสมอ",
+      approvalLocked: "อนุมัติหลายระดับมีในแพ็กเกจ Enterprise ขึ้นไป",
+      approvalFirstOnly: "ใช้เฉพาะขั้นแรกตามแพ็กเกจ {plan}",
+      rolesLocked: "สร้างบทบาทเองมีในแพ็กเกจ Pro ขึ้นไป · ใช้บทบาทมาตรฐานได้ตามปกติ",
+      sendLineLocked: "ส่งทางไลน์มีในแพ็กเกจ Pro ขึ้นไป",
+      // Ruling 29 (21D final fix round 1): the two chat minutes are live chat's.
+      chatPolicyLocked: "เวลาตอบแชทและการปิดแชทเมื่อเงียบมีในแพ็กเกจ Pro ขึ้นไป (แชทกับลูกค้า) · การลบ Lead อัตโนมัติด้านล่างตั้งได้ตามปกติ",
+      apiKeyLocked: "สร้างคีย์ใหม่มีในแพ็กเกจ Enterprise ขึ้นไป · คีย์เดิมยังดูและยกเลิกได้ตามปกติ",
+      planRequired: "«{feature}» อยู่ในแพ็กเกจ {min_plan} ขึ้นไป — ร้านนี้ใช้แพ็กเกจ {plan}",
+      memberLimit: "ร้านมีผู้ใช้ครบ {limit} คนตามแพ็กเกจ {plan} แล้ว",
+      included: "มีในแพ็กเกจ",
+      notIncluded: "ยังไม่มี",
+      features: {
+        "feature.customer_line_link": { label: "ผูก LINE ลูกค้ากับร้าน", desc: "ลูกค้าผูก LINE กับร้าน รับเอกสารและสถานะงานทาง LINE" },
+        "feature.live_chat": { label: "แชทกับลูกค้า", desc: "แชทกับลูกค้า (Live Chat + รูป) และตั้งค่า SLA การตอบแชท" },
+        "feature.service": { label: "งานบริการ / งานซ่อม และทีมช่าง", desc: "LINE ช่าง · รับงาน เช็คอิน ส่งรูปหน้างาน · รายงานการซ่อม PDF + ลายเซ็น · แบบประเมินหลังงานเสร็จ" },
+        "feature.warranty": { label: "ทะเบียนเครื่อง / ประกัน", desc: "บันทึก Serial Number รุ่นที่ซื้อ-ระยะประกัน · Import CSV · ตรวจสถานะประกันจากงานซ่อม" },
+        "feature.custom_documents": { label: "แบบฟอร์มเอกสารของร้านเอง", desc: "AI ร่างแบบฟอร์ม / อัปโหลด Word Template" },
+        "feature.custom_roles": { label: "สร้างและแก้บทบาทเอง", desc: "บทบาทมาตรฐานใช้ได้ทุกแพ็กเกจ · กำหนดบทบาทเองได้" },
+        "feature.multi_level_approval": { label: "ขั้นตอนอนุมัติหลายระดับ", desc: "อนุมัติรายงานการซ่อมมากกว่าหนึ่งขั้น" },
+        "feature.external_api": { label: "เชื่อมต่อ API ภายนอก", desc: "ให้ระบบบัญชี / ERP อ่านและเขียนข้อมูลร้านผ่าน API" },
+        "quota.ai_reports_per_month": { label: "ถามรายงานด้วย AI", desc: "ถามรายงานเป็นประโยค ได้ตาราง/กราฟ" },
+      },
+    },
     companyTitle: "ข้อมูลบริษัท",
     menuTitle: "เมนูทีมขาย",
     menuIntro: "ทุกอย่างในนี้สั่งผ่านแชทได้เช่นกัน หน้านี้เหมาะกับงานที่ต้องกรอกหลายช่องหรือดูรายการยาว ๆ",
@@ -1274,6 +1312,8 @@ export const th = {
       sendPushBlocked: "ส่งไม่สำเร็จ — LINE ส่งไม่ถึงลูกค้า ลูกค้าอาจบล็อก OA หรือยังไม่ได้เพิ่มเพื่อน",
       sendPushChannel: "ส่งไม่สำเร็จ — โทเค็น/สิทธิ์ของ OA ไม่ผ่าน ตรวจการตั้งค่า LINE",
       sendPushFailed: "ส่งไม่สำเร็จ — LINE ไม่รับข้อความ ลองใหม่อีกครั้ง",
+      // notify's strict road refused on plan (21D final fix round 1).
+      sendPushPlanLocked: "ส่งไม่สำเร็จ — «ผูก LINE ลูกค้ากับร้าน» อยู่ในแพ็กเกจ Pro ขึ้นไป ร้านนี้จึงส่งทางไลน์ไม่ได้ · เจ้าของร้านติดต่อทีม Chann1 เพื่ออัปเกรดได้",
       sendQuoteClosed: "ใบเสนอราคานี้ถูกปฏิเสธหรือหมดอายุแล้ว จึงส่งให้ลูกค้าไม่ได้",
       // Round 21C, review round 1, finding 1 — a bill must keep at least
       // one line.

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
+import { PlanReason, type PlanUsage } from "../../_plan";
 import { Badge, Empty } from "../_components";
 import { describeFailure, readFailure, useFormatters } from "../_format";
 import { proxyHeaders } from "../_lib";
@@ -82,6 +83,8 @@ export default function MemberManagement({ liffId }: { liffId: string }) {
   const [showRemoved, setShowRemoved] = useState(false);
   const [query, setQuery] = useState("");
   const [invites, setInvites] = useState<Invite[]>([]);
+  // Round 21D: how many people the plan counts, for "ผู้ใช้ n/limit".
+  const [planUsage, setPlanUsage] = useState<PlanUsage | null>(null);
 
   const say = useCallback((message: string, kind?: "ok" | "error") => {
     setStatus(message);
@@ -137,6 +140,20 @@ export default function MemberManagement({ liffId }: { liffId: string }) {
       }
     } catch {
       // A missing list hides the section; it never blocks the page.
+    }
+
+    // Round 21D (spec §8.5): the seats the plan counts, so an owner at the
+    // limit reads why a new invite would be refused before making one.
+    try {
+      const planResponse = await fetch(`/api/phase2/licenses/${licenseId}/plan`, {
+        headers: headers(),
+      });
+      if (planResponse.ok) {
+        const body = (await planResponse.json()) as { usage?: PlanUsage };
+        setPlanUsage(body.usage ?? null);
+      }
+    } catch {
+      // No seat line is the right outcome for a failed lookup.
     }
 
     // The role names for the dropdown. A missing list leaves the select
@@ -385,6 +402,27 @@ export default function MemberManagement({ liffId }: { liffId: string }) {
 
   const shownCount = visible.length;
   const inviteHint = m.howToAdd.replace("{command}", m.inviteCommand);
+  // Round 21D: "ผู้ใช้ n/limit คน" beside how to invite, and the reason a
+  // new invite would be refused when the plan's seats are all taken —
+  // visible text, not a tooltip (ui-ux-pro-max disabled-states).
+  const seatLimit = session.plan ? session.plan.limits.members : undefined;
+  const seats = planUsage?.members;
+  const seatLine = session.plan && seats != null ? (
+    <>
+      <p className="card-meta">
+        {seatLimit == null
+          ? t.dashboard.plan.usersUnlimited.replace("{n}", String(seats))
+          : t.dashboard.plan.users.replace("{n}", String(seats)).replace("{limit}", String(seatLimit))}
+      </p>
+      {seatLimit != null && seats >= seatLimit && (
+        <PlanReason>
+          {t.dashboard.plan.inviteAtLimit
+            .replace("{limit}", String(seatLimit))
+            .replace("{plan}", session.plan.label)}
+        </PlanReason>
+      )}
+    </>
+  ) : null;
 
   return (
     <SalesShell
@@ -439,7 +477,7 @@ export default function MemberManagement({ liffId }: { liffId: string }) {
           </div>
 
           {people.length === 0 ? (
-            <Empty message={m.empty} action={<p className="card-meta">{inviteHint}</p>} />
+            <Empty message={m.empty} action={<><p className="card-meta">{inviteHint}</p>{seatLine}</>} />
           ) : visible.length === 0 ? (
             <Empty message={m.noMatch} />
           ) : (
@@ -547,6 +585,7 @@ export default function MemberManagement({ liffId }: { liffId: string }) {
                 ))}
               </div>
               <p className="card-meta" style={{ marginTop: 16 }}>{inviteHint}</p>
+              {seatLine}
             </>
           )}
 

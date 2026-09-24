@@ -17,7 +17,8 @@ import {
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 import { applyNavCollapsed, readNavCollapsed, writeNavCollapsed } from "@/lib/nav-state";
 
-import { ICONS, currentKey, guideEntry, mayOpen, navGroups, type NavEntry } from "./_nav-model";
+import { ICONS, currentKey, guideEntry, navGroups, navState, type NavEntry, type NavState } from "./_nav-model";
+import { LOCK_ICON, minPlanLabel, type PlanInfo } from "./_plan";
 import type { Audience } from "./_shared";
 
 /**
@@ -79,12 +80,24 @@ export function NavFrame({
   audience,
   permissions,
   isOwner = false,
+  heldKeys,
+  plan,
+  meAnswered = false,
   enabled = true,
   children,
 }: {
   audience: Audience;
   permissions?: Set<string>;
   isOwner?: boolean;
+  /** Round 21D (ruling R-C): the role's keys before the plan — a
+   *  plan-locked entry is drawn, locked, for whoever holds its key. */
+  heldKeys?: Set<string>;
+  /** The shop's plan from /me; undefined on a surface with no plan
+   *  (technician, customer), which then locks nothing. */
+  plan?: PlanInfo | null;
+  /** /me answered: an empty key set then opens nothing (review I1). Until
+   *  then the rail is drawn as before and locks are added in place later. */
+  meAnswered?: boolean;
   enabled?: boolean;
   children: ReactNode;
 }) {
@@ -179,19 +192,31 @@ export function NavFrame({
   }, [open, closeDrawer]);
 
   const groups = useMemo(() => {
-    const perms = permissions ?? new Set<string>();
+    const access = {
+      permissions: permissions ?? new Set<string>(),
+      isOwner,
+      held: heldKeys,
+      plan,
+      answered: meAnswered,
+    };
     return navGroups(t, audience)
       .map((group) => ({
         ...group,
-        entries: group.entries.filter((entry) => mayOpen(entry, perms, isOwner)),
+        // Round 21D: a plan-locked entry is drawn, with its reason, for
+        // whoever holds the permission that would open it; hidden from
+        // everyone else (spec §5.4, ruling R-C). One decision — navState —
+        // both filters the entry and decides its lock (review I2).
+        entries: group.entries
+          .map((entry) => ({ entry, state: navState(entry, access) }))
+          .filter(({ state }) => state !== "hidden"),
       }))
       .filter((group) => group.entries.length > 0);
-  }, [t, audience, permissions, isOwner]);
+  }, [t, audience, permissions, isOwner, heldKeys, plan, meAnswered]);
 
   const guide = useMemo(() => guideEntry(t, audience), [t, audience]);
 
   const active = useMemo(
-    () => currentKey([...groups.flatMap((group) => group.entries), guide], pathname),
+    () => currentKey([...groups.flatMap((group) => group.entries.map(({ entry }) => entry)), guide], pathname),
     [groups, guide, pathname],
   );
 
@@ -205,6 +230,11 @@ export function NavFrame({
   }
 
   const nav = t.dashboard.nav;
+  // The rail draws exactly what navState decided: "locked" → the reason.
+  const lockLine = (state: NavState, entry: NavEntry): string | undefined =>
+    state === "locked" && entry.feature
+      ? t.dashboard.plan.fromPlan.replace("{plan}", minPlanLabel(plan, entry.feature))
+      : undefined;
 
   return (
     <NavContext.Provider value={context}>
@@ -256,9 +286,14 @@ export function NavFrame({
                 </p>
               )}
               <ul>
-                {group.entries.map((entry) => (
+                {group.entries.map(({ entry, state }) => (
                   <li key={entry.key}>
-                    <RailLink entry={entry} active={active === entry.key} onNavigate={() => closeDrawer(false)} />
+                    <RailLink
+                      entry={entry}
+                      active={active === entry.key}
+                      onNavigate={() => closeDrawer(false)}
+                      lockedLabel={lockLine(state, entry)}
+                    />
                   </li>
                 ))}
               </ul>
@@ -279,11 +314,20 @@ function RailLink({
   entry,
   active,
   onNavigate,
+  lockedLabel,
 }: {
   entry: NavEntry;
   active: boolean;
   onNavigate: () => void;
+  /** Round 21D: "Pro ขึ้นไป" — the plan locks this page. Drawn as a second
+   *  line under the label (visible text, not a tooltip — ui-ux-pro-max
+   *  disabled-states / color-not-only); collapsed, the lock glyph stays and
+   *  the reason reaches a screen reader through aria-describedby (the name
+   *  stays the label). Tapping still navigates — to the locked page, not
+   *  nothing (spec §8.1). */
+  lockedLabel?: string;
 }) {
+  const reasonId = useId();
   return (
     <Link
       // next/link, not a plain anchor: a LIFF session lives in the document
@@ -295,11 +339,22 @@ function RailLink({
       // The label is the accessible name whether or not it is on screen:
       // collapsed, the text is hidden and this is all a screen reader has.
       aria-label={entry.label}
+      aria-describedby={lockedLabel ? reasonId : undefined}
       title={entry.label}
+      data-locked={lockedLabel ? "true" : undefined}
       onClick={onNavigate}
     >
-      <span className="rail-icon">{entry.icon}</span>
-      <span className="rail-label">{entry.label}</span>
+      {/* The entry's own icon stays (collapsed, eight padlocks would be
+          indistinguishable — ui-ux-pro-max nav-label-icon); a small lock
+          badge on its corner marks the state (color-not-only). */}
+      <span className="rail-icon">
+        {entry.icon}
+        {lockedLabel && <span className="rail-lock-badge">{LOCK_ICON}</span>}
+      </span>
+      <span className="rail-label">
+        {entry.label}
+        {lockedLabel && <span id={reasonId} className="rail-lock-reason">{lockedLabel}</span>}
+      </span>
     </Link>
   );
 }

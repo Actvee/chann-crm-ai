@@ -12,6 +12,7 @@ import { ListControls, byNewest, byOldest, useListControls } from "../../_list-c
 import { Sheet } from "../../_sheet";
 import { FieldRow } from "../../_field-row";
 import { ConfirmDialog, useConfirm } from "../../_confirm";
+import { planHas } from "../../_plan";
 import { ProductLineForm } from "../../_product-line-form";
 
 import { readFailure, useFailureText, useFormatters } from "../_format";
@@ -511,7 +512,9 @@ export default function InvoiceList({ liffId }: { liffId: string }) {
                 ? t.dashboard.invoices.sendPushBlocked
                 : failure.reason === "channel_refused"
                   ? t.dashboard.invoices.sendPushChannel
-                  : t.dashboard.invoices.sendPushFailed,
+                  : failure.reason === "plan_locked"
+                    ? t.dashboard.invoices.sendPushPlanLocked
+                    : t.dashboard.invoices.sendPushFailed,
             "error",
           );
         } else if (failure.code === "void") {
@@ -541,6 +544,9 @@ export default function InvoiceList({ liffId }: { liffId: string }) {
    *  hold it back. `customer_has_line` is undefined while the full
    *  invoice loads: unknown, so disabled without claiming a reason. */
   function sendBlocked(row: Invoice): string | null {
+    // Round 21D (spec §8.5): sending on LINE is the Customer LINE link
+    // feature — the first reason, since nothing else on the bill fixes it.
+    if (!planHas(session.plan, "feature.customer_line_link")) return t.dashboard.plan.sendLineLocked;
     const kind = row.receipt_document_id ? "receipt" : "invoice";
     if (row.status === "void") return t.dashboard.invoices.sendVoid;
     if (kind === "invoice" && row.needs_reissue) return t.dashboard.invoices.sendNeedsReissue;

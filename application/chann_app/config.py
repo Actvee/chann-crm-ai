@@ -77,6 +77,10 @@ class Settings(BaseSettings):
     # an unrelated reason; the "Environment Settings" help page confirms
     # ZAID/API Key/Application URL are simply displayed there directly).
     catalyst_zaid: str = ""
+    # Round 21D (owner decision Q5): the Chann team's contact behind every
+    # "ติดต่อเพื่ออัปเกรด" — "label|https-url", e.g. "LINE @channcrm|https://line.me/R/ti/p/@channcrm".
+    # Not a secret. Empty = the button is not drawn.
+    chann_sales_contact: str = ""
 
     # SmartBrowz OAuth (Master Spec 10.6) — a separate accounts-domain
     # token exchange from the api-domain calls above. accounts_url is

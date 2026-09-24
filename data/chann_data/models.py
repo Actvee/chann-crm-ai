@@ -148,6 +148,12 @@ class License(TimestampMixin, Base):
     # licenses always get one.
     company_code: Mapped[str | None] = mapped_column(String(8), unique=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="trial")
+    # Round 21D — the sales plan (chann_data/plans.py). A constrained string,
+    # not a FK: the four plans are code, and a `subscription_plans` billing
+    # table (Master Spec 17.5, not built) would join on this same value.
+    plan_code: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="pro", server_default="pro",
+    )
     # When the subscription (trial or paid) ends. Round 18 renamed it from
     # `trial_expires_at`: the product is sold as a subscription, so an
     # "active" tenant has a deadline too and the same sweep suspends both.

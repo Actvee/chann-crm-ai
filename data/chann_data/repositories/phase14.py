@@ -136,7 +136,7 @@ class ApprovalRepository:
     # --------------------------------------------------------------- steps
 
     def open_steps_for_report(
-        self, scope: TenantScope, report: ServiceReport,
+        self, scope: TenantScope, report: ServiceReport, *, max_steps: int | None = None,
     ) -> list[ApprovalStep]:
         """Create the pending steps for a freshly submitted report.
 
@@ -164,8 +164,14 @@ class ApprovalRepository:
         self._s.flush()
 
         workflow = self.active_workflow(scope, "service_report")
+        specs = sorted(workflow.rules_json.get("steps") or [], key=lambda s: s["order"])
+        if max_steps is not None:
+            # Round 21D: on a plan without multi-level approval the saved
+            # chain opens its first step only (spec §3.4). Reports already
+            # mid-flow keep the steps they were opened with.
+            specs = specs[:max_steps]
         created: list[ApprovalStep] = []
-        for spec in sorted(workflow.rules_json.get("steps") or [], key=lambda s: s["order"]):
+        for spec in specs:
             approver_type = spec["approver_type"]
             approver_ref = str(spec["approver_ref"])
             if approver_type == "user" and approver_ref == "ticket_owner":

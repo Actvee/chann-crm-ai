@@ -19,11 +19,14 @@ from __future__ import annotations
 import logging
 
 from ..data_client import DataClient
+from . import entitlements
 from .thai_datetime import local_today
 
 log = logging.getLogger(__name__)
 
-DEFAULT_QUOTA = 30
+#: When the Data tier cannot answer, the spend fails open with Pro's
+#: allowance — the same Pro the principal falls back to (round 21D).
+FAIL_OPEN_ALLOWANCE = int(entitlements.UNKNOWN_PLAN["limits"]["ai_reports_per_month"])
 
 
 def this_month() -> str:
@@ -41,9 +44,9 @@ async def spend_one(client: DataClient, *, license_id: str) -> dict:
         out = await client.consume_ai_chart_quota(str(license_id), this_month())
     except Exception:  # noqa: BLE001
         log.exception("could not read the AI chart quota for %s", license_id)
-        return {"allowed": True, "used": 0, "allowance": DEFAULT_QUOTA,
+        return {"allowed": True, "used": 0, "allowance": FAIL_OPEN_ALLOWANCE,
                 "month": this_month(), "unknown": True}
-    return dict(out or {"allowed": True, "used": 0, "allowance": DEFAULT_QUOTA})
+    return dict(out or {"allowed": True, "used": 0, "allowance": FAIL_OPEN_ALLOWANCE})
 
 
 def receipt(quota: dict, *, charged_for: str | None = None) -> dict:

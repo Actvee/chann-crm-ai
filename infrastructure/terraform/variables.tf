@@ -201,6 +201,12 @@ variable "openrouter_model_reasoning" {
   description = "Reasoning-tier model slug (thinking ON) for ad-hoc reports. Phase 17 uses it; empty is fine until then."
 }
 
+variable "chann_sales_contact" {
+  type        = string
+  description = "Round 21D: 'label|https-url' of the Chann sales contact behind the upgrade button. Not a secret; empty hides the button."
+  default     = ""
+}
+
 variable "create_application_bucket" {
   type        = bool
   description = "Create the private/versioned application bucket only when file features require it and preflight proves it absent."

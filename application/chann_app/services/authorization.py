@@ -1,12 +1,13 @@
 """Application-tier tenant identity and permission boundary for Phase 2."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from fastapi import Header, HTTPException, status
 
 from ..auth.liff import LiffTokenInvalid, verify_id_token
 from ..data_client import DataClient
+from . import entitlements
 from .identity import apply_active_tenant, member_channel
 
 # Methods that read. Anything else against a suspended tenant is refused
@@ -44,6 +45,7 @@ class TenantPrincipal:
     chann_uid: str
     role: str
     is_owner: bool
+    #: Role grants MINUS what the plan locks (round 21D) — the effective set.
     permission_keys: frozenset[str]
     # Which OA's app is calling — a customer's permission set is fixed
     # (below) and their reads must be scoped to their own records.
@@ -53,6 +55,13 @@ class TenantPrincipal:
     # permissions endpoint can tell the page. Round 18: a soft-deleted
     # company ("deleted") is gated exactly like a suspended one.
     license_status: str = "active"
+    #: Round 21D: the shop's plan; a principal built without one is Pro.
+    plan: entitlements.PlanView = field(default_factory=entitlements.PlanView.unknown)
+    #: Held by the role, locked by the plan — what lets require() say WHY.
+    plan_locked_keys: frozenset[str] = frozenset()
+    #: Set when ONE feature locks every key (a customer of a shop without
+    #: the Customer LINE link); otherwise each key names its own family.
+    lock_feature: str | None = None
 
     @property
     def is_customer(self) -> bool:
@@ -62,23 +71,61 @@ class TenantPrincipal:
     def is_suspended(self) -> bool:
         return self.license_status in READ_ONLY_STATUSES
 
+    def _plan_refusal(self, key: str) -> HTTPException:
+        return entitlements.plan_required(
+            self.lock_feature or entitlements.feature_of(key) or "feature.service", self.plan,
+        )
+
     def require_any(self, *permission_keys: str) -> None:
         """Any one of several keys. For routes whose natural key was added
         to the catalogue after roles were already built on the broader one
         (ticket.assign next to ticket.update) — the old grant keeps
-        working, the new one now means something."""
-        if not any(key in self.permission_keys for key in permission_keys):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"permission required: {' or '.join(permission_keys)}",
-            )
+        working, the new one now means something. Round 21D: when none is
+        usable and one of them is held but plan-locked, the refusal names
+        the plan."""
+        if any(key in self.permission_keys for key in permission_keys):
+            return
+        locked = [key for key in permission_keys if key in self.plan_locked_keys]
+        if locked:
+            raise self._plan_refusal(locked[0])
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"permission required: {' or '.join(permission_keys)}",
+        )
 
     def require(self, permission_key: str) -> None:
+        # Plan before permission (spec §5.3): "your shop's plan doesn't have
+        # it" is the truer answer, and a role grant is irrelevant until the
+        # plan has it.
+        if permission_key in self.plan_locked_keys:
+            raise self._plan_refusal(permission_key)
         if permission_key not in self.permission_keys:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"permission required: {permission_key}",
             )
+
+    def require_feature(self, feature: str) -> None:
+        """The named checks of spec §4.1 — a feature that shares its
+        permission key with always-on work."""
+        if not self.plan.has(feature):
+            raise entitlements.plan_required(feature, self.plan)
+
+
+def build_principal(
+    *, license_id: str, chann_uid: str, role: str, is_owner: bool, role_keys, audience: str,
+    license_status: str, plan_payload, whole_road: str | None = None,
+) -> TenantPrincipal:
+    """The ONE place a principal gets its plan (spec §5.1): LIFF and the
+    external API both come through here."""
+    plan = entitlements.PlanView.from_payload(plan_payload)
+    keys, locked = entitlements.effective_keys(role_keys, plan, whole_road=whole_road)
+    return TenantPrincipal(
+        license_id=license_id, chann_uid=chann_uid, role=role, is_owner=is_owner,
+        permission_keys=keys, audience=audience, license_status=license_status,
+        plan=plan, plan_locked_keys=locked,
+        lock_feature=whole_road if (whole_road and not plan.has(whole_road)) else None,
+    )
 
 
 # Read-only tenant statuses: suspended (Phase 18) and soft-deleted (round 18).
@@ -173,14 +220,12 @@ async def resolve_tenant_principal(
         # the fixed customer set, the same one chat's customer branch and
         # OA_ALLOWED_PERMISSION_KEYS describe; every route reading with
         # this principal must scope to principal.chann_uid.
-        return TenantPrincipal(
-            license_id=str(selected["license_id"]),
-            chann_uid=identity["chann_uid"],
-            role="customer",
-            is_owner=False,
-            permission_keys=CUSTOMER_PERMISSION_KEYS,
-            audience="customer",
-            license_status=license_status,
+        return build_principal(
+            license_id=str(selected["license_id"]), chann_uid=identity["chann_uid"],
+            role="customer", is_owner=False, role_keys=CUSTOMER_PERMISSION_KEYS,
+            audience="customer", license_status=license_status, plan_payload=selected.get("plan"),
+            # Spec §7.3: the customer app IS the Customer LINE link.
+            whole_road="feature.customer_line_link",
         )
 
     # The row of the channel in use: the technician app reads the
@@ -191,12 +236,9 @@ async def resolve_tenant_principal(
     )
     if context is None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="inactive tenant member")
-    return TenantPrincipal(
-        license_id=str(selected["license_id"]),
-        chann_uid=identity["chann_uid"],
-        role=context["role"],
-        is_owner=bool(context["is_owner"]),
-        permission_keys=frozenset(context["permission_keys"]),
-        audience=x_liff_audience,
-        license_status=license_status,
+    return build_principal(
+        license_id=str(selected["license_id"]), chann_uid=identity["chann_uid"],
+        role=context["role"], is_owner=bool(context["is_owner"]),
+        role_keys=context["permission_keys"], audience=x_liff_audience,
+        license_status=license_status, plan_payload=selected.get("plan"),
     )

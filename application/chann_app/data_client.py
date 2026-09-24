@@ -924,8 +924,9 @@ class DataClient:
         )
         return self._unwrap(resp)
 
-    async def platform_tenants(self, *, q: str | None = None, status: str | None = None) -> list[dict]:
-        params = {k: v for k, v in (("q", q), ("status", status)) if v}
+    async def platform_tenants(self, *, q: str | None = None, status: str | None = None,
+                               plan: str | None = None) -> list[dict]:
+        params = {k: v for k, v in (("q", q), ("status", status), ("plan", plan)) if v}
         resp = await self._client.get(
             f"{self._base}/internal/v1/platform/tenants", params=params or None, headers=self._headers,
         )
@@ -934,6 +935,22 @@ class DataClient:
     async def platform_tenant(self, license_id: str) -> dict | None:
         resp = await self._client.get(
             f"{self._base}/internal/v1/platform/tenants/{license_id}", headers=self._headers,
+        )
+        if resp.status_code == 404:
+            return None
+        return self._unwrap(resp)
+
+    async def license_plan(self, license_id: str) -> dict:
+        """Round 21D — {"plan": <resolved>, "usage": {...}} for one shop."""
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/licenses/{license_id}/plan", headers=self._headers,
+        )
+        return self._unwrap(resp)
+
+    async def platform_plan_preview(self, license_id: str) -> dict | None:
+        """Round 21D — what each other plan would lock, for the admin."""
+        resp = await self._client.get(
+            f"{self._base}/internal/v1/platform/tenants/{license_id}/plan-preview", headers=self._headers,
         )
         if resp.status_code == 404:
             return None

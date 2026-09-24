@@ -228,7 +228,14 @@ async def sweep_jobs(client: DataClient, *, now: datetime | None = None, license
         except Exception:  # noqa: BLE001
             log.exception("job sweep: could not list tenants")
             return {"error": "tenants"}
-        license_ids = [str(t.get("id") or "") for t in tenants if str(t.get("status") or "") != "suspended"]
+        from . import entitlements
+
+        # Round 21D (spec §5.9): a shop whose plan has no service jobs is
+        # not swept; a row with no plan (an older Data tier) is Pro.
+        license_ids = [
+            str(t.get("id") or "") for t in tenants
+            if str(t.get("status") or "") != "suspended" and entitlements.entitled(t.get("plan"), "feature.service")
+        ]
     told = 0
     checked = 0
     for license_id in license_ids:

@@ -1,0 +1,208 @@
+# Round 21D — a Starter shop in chat (spec §5.3, §6.2, §7.2). Every
+# refusal names the feature, the plan that has it, the plan the shop is on,
+# and — to someone who can upgrade — who to contact. The model readings
+# below are the ones scripts/dev/ask-model.py returned for these exact
+# sentences on 24 ก.ย. 2569 (google/gemini-3.1-flash-lite, --oa sales);
+# the invite and template phrases never reach the model (trigger roads),
+# and the template step proves it with used_ai: false.
+name: round21d-plan
+description: On Starter, a technician invite, a repair job, a service report, a warranty, a technician team and a template design are each refused with the plan — before any model call on the template road — while sales groups (always on, Ruling 25) still work
+backend: fake
+actor:
+  oa: sales
+  role: owner
+  language: th
+  permissions: all
+  plan: starter
+
+steps:
+  - send:
+      message: "ขอรหัสเชิญช่าง"
+      ai: {action: read, entity: invite, fields: {}, missing: []}
+    expect:
+      contains: ["🔒 «งานบริการ / งานซ่อม และทีมช่าง» อยู่ในแพ็กเกจ Pro ขึ้นไป — ร้านนี้ใช้แพ็กเกจ Starter",
+                 "ข้อมูลเดิมของร้านยังอยู่ครบ", "อยากเปิดใช้: ติดต่อทีม Chann1 CRM AI"]
+      not_contains: ["รหัสเชิญ:", "ขอสิทธิ์ได้จากเจ้าของร้าน"]
+      used_ai: false
+      max_lines: 5
+
+  - send:
+      message: "ออกแบบเอกสาร"
+      ai: {action: suggest, suggestions: ["สร้างใบเสนอราคา", "สร้างใบแจ้งหนี้", "ออกใบเสร็จ"], entity: null, fields: {}, missing: []}
+    expect:
+      contains: ["🔒 «แบบฟอร์มเอกสารของร้านเอง» อยู่ในแพ็กเกจ Pro ขึ้นไป — ร้านนี้ใช้แพ็กเกจ Starter"]
+      not_contains: ["ใบรายงานการซ่อม"]
+      used_ai: false
+      max_lines: 5
+
+  - send:
+      message: "เปิดงานซ่อมให้คุณสมชาย แอร์ไม่เย็น"
+      ai: {action: create, entity: ticket, fields: {target_name: "คุณสมชาย", issue_description: "แอร์ไม่เย็น"}, missing: []}
+    expect:
+      contains: ["🔒 «งานบริการ / งานซ่อม และทีมช่าง»", "ร้านนี้ใช้แพ็กเกจ Starter",
+                 "ข้อมูลเดิมของร้านยังอยู่ครบ ไม่มีอะไรถูกลบ"]
+      not_contains: ["ขอสิทธิ์ได้จากเจ้าของร้าน", "JOB-"]
+      is_not: [permission, generic_error, not_a_feature]
+      max_lines: 5
+
+  - send:
+      message: "ดูรายงานการซ่อมของงาน JOB-2026-0001"
+      ai: {action: read, entity: service_report, fields: {code: "JOB-2026-0001"}, missing: []}
+    expect:
+      contains: ["🔒 «งานบริการ / งานซ่อม และทีมช่าง»", "ร้านนี้ใช้แพ็กเกจ Starter"]
+      not_contains: ["ขอสิทธิ์ได้จากเจ้าของร้าน"]
+      max_lines: 5
+
+  - send:
+      message: "ลงทะเบียนประกันเครื่อง SN123 ให้คุณสมชาย"
+      ai: {action: create, entity: warranty, fields: {serial_number: "SN123", target_name: "คุณสมชาย"}, missing: ["product_name"]}
+    expect:
+      contains: ["🔒 «ทะเบียนเครื่อง / ประกัน» อยู่ในแพ็กเกจ Pro ขึ้นไป"]
+      is_not: [permission, generic_error, not_a_feature]
+      max_lines: 5
+
+  # Task 8, spec §7.2 — an existing technician of this (downgraded) shop:
+  # every message on the Technician OA gets the same notice, before the
+  # model is ever asked, and profile/language keep working (proved in
+  # tests/unit/test_round21d_oa_behaviour.py — a scenario cannot switch
+  # language mid-run against a fixed `expect`).
+  - send:
+      oa: technician
+      role: technician
+      permissions: technician
+      message: "งานของฉัน"
+    expect:
+      contains: ["ร้าน บริษัททดสอบ ปิดงานบริการและทีมช่างไว้ชั่วคราว (แพ็กเกจ Starter)",
+                 "แจ้งเจ้าของร้านถ้าต้องการเปิดใช้"]
+      not_contains: ["JOB-", "T-2026-", "ขอสิทธิ์ได้จากเจ้าของร้าน"]
+      used_ai: false
+      max_lines: 5
+
+  # Task 8, spec §7.3 — a customer of this shop: the fault is never filed,
+  # and the fake's default company profile has no phone, so the shorter
+  # table is what shows (the phone line is covered by the unit test).
+  - send:
+      oa: customer
+      role: customer
+      permissions: customer
+      message: "แอร์ไม่เย็น"
+    expect:
+      contains: ["ร้าน บริษัททดสอบ ยังไม่เปิดให้บริการลูกค้าทาง LINE"]
+      not_contains: ["เครื่องไหน", "T-2026-"]
+      used_ai: false
+      max_lines: 5
+
+  # Ruling 25 — sales groups are always on. Readings: ask-model.py,
+  # 24 ก.ย. 2569 (the delete reading carries no scope at all).
+  - send:
+      message: "สร้างกลุ่มขาย เหนือ"
+      ai: {action: create, entity: team, fields: {team_name: "เหนือ", scope: sales}, missing: []}
+    expect:
+      contains: ["เหนือ"]
+      not_contains: ["🔒"]
+      is_not: [not_sure, generic_error, permission]
+
+  - send:
+      message: "ลบกลุ่มขาย เหนือ"
+      ai: {action: delete, entity: team, fields: {team_name: "เหนือ"}, missing: []}
+    expect:
+      contains: ["เหนือ"]
+      not_contains: ["🔒"]
+      is_not: [not_sure, generic_error, permission]
+
+  - send:
+      message: "สร้างทีมช่าง ทีมเหนือ"
+      ai: {action: create, entity: team, fields: {team_name: "ทีมเหนือ", scope: technician}, missing: [members]}
+    expect:
+      contains: ["🔒 «งานบริการ / งานซ่อม และทีมช่าง» อยู่ในแพ็กเกจ Pro ขึ้นไป"]
+      max_lines: 5
+
+  # Task 9, owner decision Q4 — one of the two service reports (spec §5).
+  - send:
+      message: "งานซ่อมค้างแยกตามช่าง"
+      ai: {action: read, entity: report, fields: {type: jobs}, missing: [], report: open_jobs_by_tech}
+    expect:
+      contains: ["🔒 «งานบริการ / งานซ่อม และทีมช่าง» อยู่ในแพ็กเกจ Pro ขึ้นไป"]
+      max_lines: 5
+
+  # Task 9 — the three basic reports stay free on Starter, no model call
+  # spent (report is read by chosen key, not a spec).
+  - send:
+      message: "ยอดมูลค่าดีลทั้งหมด"
+      ai: {action: read, entity: report, fields: {type: sales}, missing: [], report: pipeline_value}
+    expect:
+      contains: ["มูลค่าดีลทั้งหมด"]
+      quick_replies_include: ["ยอดปิดสำเร็จเดือนนี้", "ยอดค้างชำระ"]
+      not_contains: ["🔒"]
+      max_lines: 15
+      is_not: [generic_error, not_sure, permission, not_found, not_a_feature]
+
+  # Task 9, M7/C10 — the explicit AI-report prefix declines before any
+  # model call: the model never sees the sentence (used_ai: false).
+  - send:
+      message: "สร้างรายงานด้วย AI: ยอดขายแยกตามเดือน"
+      ai: {action: read, entity: report, fields: {}, missing: []}
+    expect:
+      contains: ["🔒 «ถามรายงานด้วย AI» อยู่ในแพ็กเกจ Pro ขึ้นไป — ร้านนี้ใช้แพ็กเกจ Starter",
+                 "รายงานพื้นฐาน (มูลค่าดีลทั้งหมด · ยอดปิดเดือนนี้ · ยอดค้างชำระ) ยังถามได้ฟรีเสมอ"]
+      used_ai: false
+      max_lines: 5
+
+  # Fix round 1 (task 9 review, Critical) — a button under a free report
+  # ("รายงาน: <key>" postback, the direct road, no model reading needed)
+  # must answer free, not dead-end on the AI-locked refusal. Owner
+  # decision Q4: Starter's three free reports, buttons included.
+  - send: "รายงาน: won_this_month"
+    expect:
+      contains: ["ยอดปิดสำเร็จเดือนนี้"]
+      not_contains: ["🔒"]
+      used_ai: false
+      is_not: [generic_error, not_sure, permission, not_found, not_a_feature]
+
+  - send: "รายงาน: outstanding_invoices"
+    expect:
+      contains: ["ยอดค้างชำระ"]
+      not_contains: ["🔒"]
+      used_ai: false
+      is_not: [generic_error, not_sure, permission, not_found, not_a_feature]
+
+  # The same postback shape, but for a report Starter's plan does not have:
+  # the service refusal, not the AI-locked one.
+  - send: "รายงาน: satisfaction_avg"
+    expect:
+      contains: ["🔒 «งานบริการ / งานซ่อม และทีมช่าง» อยู่ในแพ็กเกจ Pro ขึ้นไป"]
+      used_ai: false
+      max_lines: 5
+
+  # The "ดูเป็นรูป" button under a free report is still the metered/locked
+  # picture road on Starter — the plan refusal, no credit.
+  - send: "สร้างรายงานด้วย AI: ยอดปิดสำเร็จเดือนนี้ เป็นกราฟ"
+    expect:
+      contains: ["🔒 «ถามรายงานด้วย AI» อยู่ในแพ็กเกจ Pro ขึ้นไป — ร้านนี้ใช้แพ็กเกจ Starter"]
+      used_ai: false
+      max_lines: 5
+
+  # Task 10, spec §6.1 — the plan in words. Readings are ask-model.py's
+  # for these exact sentences after the entity="plan" block (24 ก.ย. 2569,
+  # plan-readings-after.txt); before it, "แพ็กเกจของร้าน" read
+  # read/setting {field: code} and the credit question read/report.
+  - send:
+      message: "แพ็กเกจของร้าน"
+      ai: {action: read, entity: plan, fields: {}, missing: []}
+    expect:
+      contains: ["แพ็กเกจของร้าน: Starter", "ถามรายงานด้วย AI: มีในแพ็กเกจ Pro ขึ้นไป", "ยังไม่มีในแพ็กเกจนี้:"]
+      not_contains: ["🔒", "มีในแพ็กเกจ: "]
+      intent: {action: read, entity: plan}
+      used_ai: true
+      max_lines: 15
+      max_chars: 700
+      is_not: [generic_error, not_sure, permission, not_found, not_a_feature]
+
+  - send:
+      message: "เหลือเครดิตรายงาน AI เท่าไหร่"
+      ai: {action: read, entity: plan, fields: {}, missing: []}
+    expect:
+      contains: ["แพ็กเกจของร้าน: Starter", "ถามรายงานด้วย AI: มีในแพ็กเกจ Pro ขึ้นไป"]
+      intent: {action: read, entity: plan}
+      used_ai: true
+      is_not: [generic_error, not_sure, permission, not_found, not_a_feature]

@@ -114,7 +114,7 @@ export function TenantMembers({
   }
 
   return (
-    <section className="pa-card">
+    <section className="pa-card" id="tenant-members">
       <h2>{copy.membersTitle} ({members.length})</h2>
       <div className="pa-table-wrap">
         <table className="pa-table">

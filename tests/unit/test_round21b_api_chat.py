@@ -17,6 +17,7 @@ from chann_app.config import settings  # noqa: E402
 from chann_app.services import chat  # noqa: E402
 from chann_app.services.chat import ACTION_PERMISSIONS, handle_chat_message  # noqa: E402
 from test_phase6_chat import FakeDataClient, LICENSE_ID, _ai, _ctx  # noqa: E402
+from plan_fixtures import plan_payload  # noqa: E402
 
 KEYS = ["setting.manage", "customer.read"]
 LIST = {"action": "read", "entity": "api_key", "fields": {}, "missing": []}
@@ -62,6 +63,9 @@ def _shop_with_duplicate_names(owner=True, keys=KEYS):
 async def _say(client, message, reading, *, owner=True):
     ctx = _ctx(primary_role="sales", oa="sales")
     ctx.memberships[0]["is_owner"] = owner
+    # Round 21D: making a key is an Enterprise feature; this file is about
+    # the key roads themselves, so the shop is on the plan that has them.
+    ctx.memberships[0]["plan"] = plan_payload("enterprise")
     async with httpx.AsyncClient(transport=_ai(json.dumps(reading, ensure_ascii=False))) as ai:
         return await handle_chat_message(client, message=message, ctx=ctx, ai_client=ai)
 

@@ -50,6 +50,7 @@ class MembershipOut(BaseModel):
     # None for a customer "membership", which is a shop relationship
     # rather than a staff role and has no members row at all.
     member_id: uuid.UUID | None = None
+    plan: dict | None = None  # round 21D — chann_data.plans.resolve()
 
 
 class MemberOut(BaseModel):
@@ -382,6 +383,7 @@ class LicenseOut(BaseModel):
     status: str
     expires_at: datetime | None
     created_by_chann_uid: str | None
+    plan_code: str = "pro"  # round 21D — the sales plan (chann_data/plans.py)
 
 
 class TrialExpiringOut(BaseModel):
@@ -519,6 +521,7 @@ class TenantUpdateIn(BaseModel):
     company_address: str | None = None
     tax_id: str | None = None
     admin_notes: str | None = None
+    plan_code: str | None = None  # validated by PlanRepository.check_change → 422 unknown_plan
 
 
 class TenantExtendIn(BaseModel):
@@ -1499,6 +1502,9 @@ class TenantSummaryOut(BaseModel):
     open_tickets: int
     deals: int
     last_activity_at: datetime | None
+    # Round 21D — the sales plan and its resolved payload.
+    plan_code: str = "pro"
+    plan: dict | None = None
 
 
 class TenantMemberOut(BaseModel):
@@ -1605,3 +1611,4 @@ class ApiKeyResolveOut(BaseModel):
     permission_keys: list[str]
     limit: int
     remaining: int
+    plan: dict | None = None  # round 21D — the key's licence's resolved plan

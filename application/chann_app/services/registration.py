@@ -17,6 +17,7 @@ import logging
 import re
 
 from ..data_client import DataClient
+from . import entitlements
 from .identity import ResolvedContext, TenantResolution
 from . import pdpa as pdpa_service
 from .richmenu import sync_rich_menu
@@ -579,6 +580,13 @@ async def _link_and_continue(
     try:
         link = await client.link_customer(chann_uid=ctx.chann_uid, company_code=company_code)
     except Exception as exc:  # noqa: BLE001
+        body = getattr(exc, "structured", None)
+        if isinstance(body, dict) and body.get("error") == "plan_required":
+            # Spec §7.3: no link row is written; say how to reach the shop.
+            return entitlements.customer_oa_plan_locked_reply(
+                body.get("company_name") or company_name or company_code,
+                str(body.get("company_phone") or ""), language,
+            )
         if _is_conflict(exc):
             # Linked to this shop already: not "no such code" (review,
             # 6 Sep 2026).
@@ -808,6 +816,22 @@ def _is_bare_token(text: str) -> bool:
     return " " not in token and not re.search(r"[฀-๿]", token)
 
 
+async def _tell_owner_turned_away(client: DataClient, body: dict) -> None:
+    """Spec §5.7: a join refused by the limit is never silent — the owner
+    hears it on the Sales OA. Best effort: the joiner's answer never waits
+    on it (see `entitlements.owner_notice`)."""
+    plan = entitlements.PLAN_LABELS.get(str(body.get("plan")), str(body.get("plan") or ""))
+    words = {"company": body.get("company_name") or "", "limit": body.get("limit"), "plan": plan}
+    await entitlements.owner_notice(
+        client,
+        license_id=str(body.get("license_id") or ""),
+        owner_chann_uid=str(body.get("owner_chann_uid") or ""),
+        kind="member_limit_reached",
+        message=entitlements.MEMBER_LIMIT_OWNER_NOTICE["th"].format(**words),
+        message_en=entitlements.MEMBER_LIMIT_OWNER_NOTICE["en"].format(**words),
+    )
+
+
 async def _redeem_invite_reply(
     client: DataClient, text: str, ctx: ResolvedContext, language: str,
     oa: str = "sales",
@@ -825,6 +849,17 @@ async def _redeem_invite_reply(
             oa=oa,
         )
     except Exception as exc:  # noqa: BLE001
+        body = getattr(exc, "structured", None)
+        if isinstance(body, dict) and body.get("error") == "plan_required":
+            # Spec §7.2: the code is not spent; it works after an upgrade.
+            return _t(entitlements.TECH_INVITE_PLAN_LOCKED, language).format(
+                company=body.get("company_name") or "",
+                plan=entitlements.PLAN_LABELS.get(str(body.get("plan")), str(body.get("plan") or "")))
+        if isinstance(body, dict) and body.get("error") == "member_limit_reached":
+            await _tell_owner_turned_away(client, body)
+            return _t(entitlements.MEMBER_LIMIT_JOIN_REFUSED, language).format(
+                company=body.get("company_name") or "", limit=body.get("limit"),
+                plan=entitlements.PLAN_LABELS.get(str(body.get("plan")), str(body.get("plan") or "")))
         detail = str(getattr(exc, "detail", "") or exc)
         wrong_oa = re.search(r"invite is for the (sales|technician) OA", detail)
         if _is_conflict(exc) and wrong_oa:

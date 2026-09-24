@@ -25,6 +25,21 @@ export type TenantSummary = {
   open_tickets: number;
   deals: number;
   last_activity_at: string | null;
+  /** Round 21D — the shop's plan (the Data tier backfills "pro"). */
+  plan_code?: string;
+  plan?: { code: string; label: string; limits: { members: number | null; ai_reports_per_month: number } } | null;
+};
+
+/** Round 21D — what moving to one other plan would lock, and whether the
+ *  Data tier would refuse it (more active members than its limit). */
+export type PlanPreview = {
+  plan: string;
+  label: string;
+  locks: { feature: string; counts: Record<string, number> }[];
+  members: number;
+  limit: number | null;
+  refused: boolean;
+  inactivate: number;
 };
 
 export type TenantMember = {
@@ -50,6 +65,10 @@ export type TenantDetail = TenantSummary & {
   ai_chart_quota?: number | string | null;
   ai_chart_used?: number | null;
   ai_chart_month?: string | null;
+  /** Round 21D — this month's use against the plan's limits. */
+  usage?: { members: number; members_limit: number | null; ai_reports_used: number; ai_reports_allowance: number } | null;
+  /** Round 21D — every other plan's preview; null when it could not be read. */
+  plan_preview?: { current: string; previews: Record<string, PlanPreview> } | null;
   members_detail: TenantMember[];
 };
 
@@ -66,8 +85,10 @@ export type TenantEditFields = {
   /** YYYY-MM-DD in Bangkok, or "" for no deadline. */
   expires_at: string;
   status: "trial" | "active" | "suspended" | "deleted" | string;
-  /** "" means leave it at the system default. */
+  /** "" means back to the plan's own number. */
   ai_chart_quota: string;
+  /** Round 21D — starter | pro | enterprise | enterprise_plus. */
+  plan_code: string;
 };
 
 /** Is the subscription's end already behind us? */

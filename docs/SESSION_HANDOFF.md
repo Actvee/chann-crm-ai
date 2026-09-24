@@ -7,7 +7,75 @@
 เจ้าของสั่ง 10 ก.ย.: *"ต่อจากนี้ให้บันทึก model first แบบนี้ในทุกๆที่ อย่าให้หลุดอีก
 เพราะการใช้กฎแบบเดิมเลย น่าจะทำให้ประสบการณ์ใช้งานแย่ลง"*
 
-**รอบ 21E (24 ก.ย. — DEV `__21E_SHA__`, ต่อจาก `449819e`): "ส่งให้ลูกค้า" หลังออกเอกสารส่งใบนั้นจริง · ส่งไม่ผ่านต้องบอกว่าไม่ผ่าน · กล่องปุ่มหน้าเรคอร์ดไม่ชิดขอบ · ปุ่ม "ออกใบแจ้งหนี้" ปุ่มเดียวทุกหน้า**
+**รอบ 21D (24 ก.ย. — DEV `__21D_SHA__`, ต่อจาก `f3e6210`): ตัวควบคุมฟีเจอร์ตามแพ็กเกจ — Starter · Pro · Enterprise · Enterprise Plus**
+
+- **เจ้าของ:** *"ตัวควบคุมฟีเจอร์ตาม plan"* + ตารางแพ็กเกจ (`docs/superpowers/specs/2026-09-24-sales-plans-source.html`) · spec
+  `docs/superpowers/specs/2026-09-24-plan-entitlements-design.md` · plan `docs/superpowers/plans/2026-09-24-plan-entitlements.md` ·
+  เจ้าของตัดสิน 5 ข้อ (24 ก.ย.): backfill ขึ้น (Pro / Enterprise เมื่อมี API key · อนุมัติหลายขั้น · >15 คน / Enterprise Plus >50) ·
+  **ลดแพ็กเกจถูกปฏิเสธถ้าสมาชิกที่ใช้งานเกินขีดจำกัดของแพ็กเกจใหม่** ("ต้องปิดใช้งาน (inactivate) สมาชิก N คนก่อนลดแพ็กเกจเป็น …") ·
+  Enterprise Plus เริ่ม 100 เครดิต เติมได้ Pro ขึ้นไป · Starter เห็นรายงานพื้นฐาน 3 ตัว · ปุ่มอัปเกรดเปิด `CHANN_SALES_CONTACT` (ไม่ตั้ง = ไม่มีปุ่ม)
+- **ตารางแพ็กเกจ (`data/chann_data/plans.py` ตารางเดียว — 10 key: 8 `feature.*` + `quota.ai_reports_per_month` + `limit.members`):**
+  Starter = ไม่มีฟีเจอร์เสริม · เครดิตรายงาน AI 0 (ล็อก ไม่ใช่หมด — รายงานพื้นฐาน 3 ตัวฟรี) · ผู้ใช้ 5 · เติมเครดิตไม่ได้ ·
+  **Pro** = LINE ลูกค้า · แชทลูกค้า + SLA · งานบริการ/ทีมช่าง · ประกัน · แบบฟอร์มเอกสารเอง · บทบาทเอง · 30 เครดิต/เดือน · ผู้ใช้ 15 ·
+  **Enterprise** = Pro + อนุมัติหลายระดับ + API ภายนอก · 100 เครดิต · ผู้ใช้ 50 · **Enterprise Plus** = เหมือน Enterprise · 100 เครดิต · ผู้ใช้ไม่จำกัด ·
+  plan ที่ไม่รู้จัก = Pro (ร้านเดิมทุกร้านเป็น Pro ขึ้นไปหลัง migration 0039)
+- **Data:** `plans.py` (ทดสอบเทียบ HTML ทีละช่อง) · migration **0039_license_plan** (+CHECK, backfill, assertion ว่าไม่มีร้านเกินขีด) ·
+  `PlanRepository` (seat ใน transaction เดียวกับการเข้าร่วม/เปิดกลับ/ย้าย, การเปลี่ยนแพ็กเกจ, preview) · แพ็กเกจเดินไปกับ membership /
+  api-key resolve / tenant rows · cache `license_plan:<id>` แยกจาก `permissions:*` (PATCH แพ็กเกจลบคีย์เดียว)
+- **Application:** `entitlements.py` · principal ลบ key ที่แพ็กเกจล็อกในที่เดียว + `require_feature` · 403 `plan_required` รูปเดียวทุกผิว ·
+  API ภายนอก 403 ต่ำกว่า Enterprise (หลังตรวจ key) · credits ตามแพ็กเกจ
+- **แชท (model-first):** คำปฏิเสธ §6.2 · ประตูกลาง plan ก่อน permission · `_no_permission` แทน 115 จุดที่ตอบ "ไม่มีสิทธิ์" เปล่า ๆ ·
+  prompt เพิ่ม `entity="plan"` บล็อกเดียว — **ผล ask-model ก่อน/หลัง ทีละประโยค** (google/gemini-3.1-flash-lite · `--oa sales` · owner;
+  ไฟล์ `.superpowers/sdd/2026-09-24-plan-entitlements/plan-readings-{before,after}.txt`):
+  - "ร้านใช้แพ็กเกจอะไร": read/setting {field: license} → **read/plan**
+  - "เหลือเครดิตรายงาน AI เท่าไหร่": read/report {type: ai_credit} → **read/plan**
+  - "เชิญได้อีกกี่คน": read/invite → **read/plan**
+  - "แพ็กเกจของร้าน": read/setting {field: code} → **read/plan**
+  - "what plan are we on": read/setting {field: license} → **read/plan**
+  - เพื่อนบ้านที่ต้องไม่ขยับ — ไม่ขยับ: "ข้อมูลบริษัท" read/setting {legal} · "รหัสร้านเราคืออะไร" read/setting {code} ·
+    "ดูรหัสเชิญ" / "ขอรหัสเชิญทีมขาย" read/invite · "รายการ API key" read/api_key · "ยอดมูลค่าดีลทั้งหมด" read/report {type: sales} ·
+    "สร้างรายงานด้วย AI: ยอดขายแยกตามเดือน" read/report ทั้งก่อนและหลัง (fields.type chart/sales ต่างกันครั้งเดียว = sampling noise:
+    ถามซ้ำ 3 ครั้งทั้ง prompt เก่าและใหม่ได้ {type: sales, period: month} ทุกครั้ง และประโยคนี้เข้าทาง typed prefix ก่อนถึงโมเดลอยู่แล้ว)
+  - **final fix (Task 10 review)** — คำถามเครดิตระหว่างมี pending ค้าง (`final-fix-task10-readings-{before,after}.txt`): คำอ่านของโมเดลเหมือนเดิม
+    ("เหลือเครดิตรายงาน AI เท่าไหร่" → read/plan · "ราคาแอร์เท่าไหร่" → read/product {target_name: แอร์}) และ**คงเดิมเมื่อส่ง pending ไปด้วย**
+    (pending_customer_message / customer) — ที่เปลี่ยนคือทาง: ก่อนแก้ road=pending ไม่ถามโมเดลเลย แขน "เท่าไหร่" ตอบเป็นรายการสินค้า ·
+    หลังแก้ โมเดลอ่านพร้อม pending แล้วตอบการ์ดแพ็กเกจ (scenario `round21d-plan-pro.yaml` ขั้นที่ 7–8)
+- **OA:** ช่างของร้านที่ลดแพ็กเกจได้ประโยคเดียวต่อข้อความ (โปรไฟล์/ภาษายังใช้ได้) · ลูกค้าได้เบอร์ร้าน · storefront ยังใช้ได้ ·
+  รหัสเชิญช่างที่ออกก่อนลดแพ็กเกจไม่ถูกใช้ไป · คนที่เข้าร่วมไม่ได้เพราะเต็ม → เจ้าของได้แจ้ง
+- **จอ (ui-ux-pro-max):** เมนูที่ล็อกขึ้นกุญแจ + "Pro ขึ้นไป" ให้ทุกคนที่ถือสิทธิ์ที่จะเปิดหน้านั้น (R-C) · หน้าล็อก · การ์ดแพ็กเกจ · เหตุผลใต้ปุ่มที่ปิดทุกปุ่ม ·
+  admin: เลือกแพ็กเกจ + ยืนยันพร้อมรายการที่จะล็อก · ลดแพ็กเกจเกินขีด = ไม่มีปุ่มยืนยัน
+- **Rich menu เดียวทุกแพ็กเกจ (spec §5.8, เจ้าของ Q6):** ไม่แยก rich menu ตามแพ็กเกจ — เมนูยังเลือกตาม OA และภาษาเท่านั้น ·
+  ทุกปุ่มบน Starter ตอบหรือปฏิเสธตามแพ็กเกจ ไม่มีปุ่มตัน และไม่มีปุ่มที่*ทำงาน*บนฟีเจอร์ที่ร้านไม่มี — พิสูจน์ใน `tests/unit/test_round21d_richmenu.py`
+  ซึ่งเดินตารางปุ่มจริง (`scripts/richmenu/generate.py::TILES`) ปุ่มที่เพิ่มทีหลังจึงถูกตรวจเอง (Task 14 เจอช่องจริง 2 จุด: "ทีมช่าง" และ "รายการรออนุมัติ" — แก้แล้ว)
+- **คำตัดสินระหว่างรอบ (ledger `.superpowers/sdd/2026-09-24-plan-entitlements/progress.md`):**
+  - R-A: ห้ามแตกทางตามชื่อบทบาท — แตกตาม OA/ช่องทาง (`ctx.oa == 'technician'`)
+  - R-B: principal ได้แพ็กเกจจากที่เดียว — ทาง template ปฏิเสธก่อนเรียกโมเดล (`feature.custom_documents`)
+  - R-C: เมนูที่ล็อกแสดงกับทุกคนที่ถือสิทธิ์ที่จะเปิดมัน ไม่ใช่แค่เจ้าของ (`mayOpen` แยก "ไม่มีสิทธิ์" กับ "ล็อกตามแพ็กเกจ")
+  - R-D: ดูรายการ/เพิกถอน API key เปิดทุกแพ็กเกจ · สร้างเท่านั้นที่ล็อก
+  - 24: `_no_permission` ตอบคำปฏิเสธแพ็กเกจเฉพาะเมื่อ**ทุก** key ที่ส่งมาถูกแพ็กเกจล็อก
+  - 25: กลุ่มขายเปิดเสมอ — มีแต่ทีมช่างที่เป็น `feature.service`
+  - 26: กฎมอบหมายงานขอบเขตช่าง = `feature.service` (Application และ Data)
+  - 27: คำปฏิเสธแพ็กเกจจากฝั่ง Data บนสายอนุมัติออกทาง `_plan_reply_from`
+  - 28: admin API ปฏิเสธการเติมเครดิตให้ Starter (ไม่ใช่แค่ UI)
+  - 29: นาที SLA/หมดเวลาแชท = `feature.live_chat` ทั้งสองผิว
+  - 30: "ทีม" เปล่า ๆ ที่ถูกปฏิเสธบน Starter บอกด้วยว่ากลุ่มขายมีทุกแพ็กเกจ และไปที่ "ดูกลุ่มขาย"
+  - 31: scenario ต่อจากไฟล์ที่ส่งแล้ว (`round21d-plan.yaml` / `round21d-plan-pro.yaml`) ไม่แยกไฟล์ใหม่
+  - 32: ส่วนผู้ทดสอบคือ **Y** (X เป็นของ 21E) แถว 21D-1…
+  - 33: รูปคู่มือตรงกับหน้าจอจริง — หน้าสมาชิกมีแค่บรรทัดจำนวนผู้ใช้ (และเหตุผลเมื่อเต็ม) ไม่มีการ์ดแพ็กเกจ
+- **ตั้งใจไม่ทำ / ข้อจำกัดที่รู้:** Daily Summary ไม่มีส่วนงานซ่อมให้ตัด (แจ้งเตือนเฉพาะนัด) · `/me/permissions` ไม่ส่ง usage
+  (การ์ดและหน้าสมาชิกขอ `…/plan` เอง) · อ่าน/เพิกถอน API key ยังได้หลังลดแพ็กเกจ (สร้างไม่ได้) · แจ้งเจ้าของเรื่องเปลี่ยนแพ็กเกจเป็น best-effort ·
+  ชื่อ setting เก่า `chat_sla` / `session_timeout` และ `DELETE settings/{key}` **ไม่ได้ผูกแพ็กเกจ** — ไม่มีผลกับ Starter เพราะไม่มีหน้าแชทลูกค้าให้ใช้ ·
+  pending แบบยืนยัน (ใช่/ไม่) ที่เจอคำถามพิมพ์เข้ามายังถามคำยืนยันซ้ำ (ทาง closed follow-up ที่ `docs/MODEL_FIRST.md` อนุญาต) ·
+  `liveChatOn` ของหน้าข้อมูลบริษัท fail open ระหว่างโหลด session (403 จากเซิร์ฟเวอร์คือประตูจริง)
+- เทสต์: `tests/unit/test_round21d_{plan_matrix,migration_literals,entitlements,principal,ext_api,chat_refusal,no_bare_refusal,oa_behaviour,credits,plan_read,pending_road,team_road,template_road,background,ui,admin,richmenu,checkers}.py`,
+  `tests/integration/test_round21d_{migration,plan_data,feature_checks}.py`, scenario `round21d-plan.yaml` (Starter) + `round21d-plan-pro.yaml` (Pro) ·
+  `check-perms.py` รู้ 10 key และบังคับจัดทุก permission key · `check-parity.py` มีส่วน PLAN (`ACCEPTED_PLAN`) · คู่มือ ai-reports/members/api บอกแพ็กเกจ ·
+  รูป `sales-members` วาดใหม่ตามหน้าจอจริง (บรรทัด "ผู้ใช้ 9/15 คน" ใต้วิธีเพิ่มสมาชิก — การ์ดแพ็กเกจเต็มอยู่หน้าข้อมูลบริษัท, Ruling 33) และ**ดูด้วยตาแล้ว**
+- **gate บนต้นไม้นี้ (f4c57cc, 24 ก.ย.):** unit+boundary 4922 passed · integration บน Postgres 598 passed (ไม่มี skip) · agent-test 359/359 (1347 steps) · simulate-day/edge 0 FINDINGS · simulate-phrasings mock 492 cases · 2 not as expected · 0 long · **`--real`** 492 cases · 7 not as expected · 0 answered badly · 0 long · **ไม่มี 🔒 ในคำตอบใดเลย** (ทุกร้านในชุดนี้เป็น Pro) — เท่ากับ baseline 21E ทุกตัวเลข · check-* ครบ 16 ตัว ok · typecheck + next build ผ่าน · guides/pictures current
+- **converse smoke (`~/stage-fix/scenarios/smoke.json`, โมเดลจริง):** 1 run · 1 with findings — สถานการณ์ "diary — question mid-form then finish the form" turn 3 'นัดพรุ่งนี้' เรียก `create_follow_up` ทั้งที่ยังอยู่กลางฟอร์ม และ turn 4 ตอบชื่อ 'สุดใจ' — **รันชุดเดียวกันบนต้นไม้ 21E ที่ deploy แล้ว (9ebd033) ได้ผลเดียวกันทุกตัวอักษร** → เป็นของเดิม ไม่ใช่ถดถอยของรอบนี้ (รายงาน `~/stage-fix/out/21{d,e}-converse-smoke.json`) · ยกไปรอบถัดไป: ทางฟอร์มค้าง (pending form) อ่านคำตอบวันที่เป็นคำสั่งใหม่
+- **หลัง deploy ต้องพิสูจน์ของจริง:** ร้านทดสอบ → Starter ใน `/admin` → 21D-1…21D-10 ในส่วน **Y** ของ `~/CHECKLIST-หลัง-deploy.md` → กลับเป็น Pro → ข้อมูลเดิมครบ
+
+**รอบ 21E (24 ก.ย. — DEV `f3e6210`, ต่อจาก `449819e`): "ส่งให้ลูกค้า" หลังออกเอกสารส่งใบนั้นจริง · ส่งไม่ผ่านต้องบอกว่าไม่ผ่าน · กล่องปุ่มหน้าเรคอร์ดไม่ชิดขอบ · ปุ่ม "ออกใบแจ้งหนี้" ปุ่มเดียวทุกหน้า**
 
 - **เจ้าของ:** *"ใบเสนอราคาส่งให้ลูกค้าทางแชทไม่ได้ หน้า UI สถานะใบเสนอราคา เอกสารใบแจ้งหนี้ใน Quote และ สถานะดีล กับเอกสารแจ้งหนี้ในดีล
   ปุ่มก็ชิดขอบออกแบบไม่ดี และในหน้าใบแจ้งหนี้ ปุ่มสร้างใบแจ้งหนี้ก็ไม่เหมือนในใบเสนอราคา"* · ทำซ้ำบน DEV: "ออกเอกสาร Q-2026-0010" →
@@ -75,7 +143,7 @@
   `tests/unit/test_brand.py` กัน "Chann" เปล่ากลับมา — รายละเอียดเต็มใน
   `.superpowers/sdd/2026-09-24-record-pages-fix/report.md` หัวข้อ "Branding: Chann → Chann1"
 
-**รอบ 21C (23 ก.ย. — DEV `__21C_SHA__`, ต่อจาก `28b6e5b`): รายงานที่ถูก — นิยามมูลค่าดีลเดียว, ห้ารายงานพื้นฐาน, ใบแจ้งหนี้ปิดดีล, และรูปที่ AI ออกแบบ**
+**รอบ 21C (23 ก.ย. — DEV `449819e`, ต่อจาก `28b6e5b`): รายงานที่ถูก — นิยามมูลค่าดีลเดียว, ห้ารายงานพื้นฐาน, ใบแจ้งหนี้ปิดดีล, และรูปที่ AI ออกแบบ**
 
 - **เจ้าของ:** *"ยอดมูลค่าดีลทั้งหมดขึ้น 0 ในรูปแบบใหม่"* → วินิจฉัยที่ `docs/superpowers/specs/2026-09-23-ai-reports-diagnosis.md`
   แล้วสั่ง 8 ข้อ: มูลค่าดีล = `amount` ที่พิมพ์ชนะ ไม่งั้นรวมรายการ · *"ใบแจ้งหนี้จะอัพเดตไปที่ดีลตอนชำระเงินแล้ว"* ·

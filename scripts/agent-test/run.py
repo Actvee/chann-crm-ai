@@ -189,6 +189,7 @@ async def _execute(step, kind, scenario, backend, refs, last):
         return await backend.send(
             message=body["message"], oa=oa, role=role, language=language,
             permissions=permissions, ai=body.get("ai"), refs=refs,
+            plan=actor.get("plan"),
         )
     if kind == "http":
         body = step["http"]

@@ -47,7 +47,7 @@ class TestTheColumn:
 
         with migrated_db.begin() as conn:
             head = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-        assert head == EXPECTED_MIGRATION_HEAD == "0038_deal_closed_at"
+        assert head == EXPECTED_MIGRATION_HEAD
 
 
 class TestWhenItIsStamped:

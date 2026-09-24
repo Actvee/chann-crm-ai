@@ -473,6 +473,19 @@ body {
   color: var(--ink);
 }
 
+/* A locked field (21D final fix round 1: the chat minutes on a plan
+   without live chat). The explicit background above hides the browser's
+   own disabled look, so it is restated: chip-coloured fill, muted ink
+   (≥ 4.5:1, no opacity), a not-allowed cursor — and the reason is the
+   PlanReason line under it, never the look alone (disabled-states). */
+.field input:disabled,
+.field textarea:disabled,
+.field select:disabled {
+  background: var(--chip-bg);
+  color: var(--ink-soft);
+  cursor: not-allowed;
+}
+
 .field input:focus,
 .field textarea:focus,
 .field select:focus {
@@ -3475,3 +3488,38 @@ button.notif-open {
   word-break: break-all; user-select: all; line-height: 1.5;
 }
 .api-key-once { margin: 0; color: var(--ink-soft); font-size: 14px; }
+
+/* Round 21D — the plan (spec §5.4, §8). ui-ux-pro-max: a reason is text a
+   phone can read, never only a tooltip (disabled-states); --ink-soft keeps
+   it at ≥ 4.5:1 on white (color-contrast); the lock is a glyph and words,
+   not colour alone (color-not-only). No opacity on a locked rail link —
+   faded text would fall under 4.5:1; the muted ink + lock glyph + second
+   line carry the state instead (state-clarity). */
+.plan-reason { margin: 6px 0 0; font-size: 13.5px; line-height: 1.45; color: var(--ink-soft); }
+.rail-link[data-locked] { color: var(--ink-soft); }
+.rail-lock-reason { display: block; font-size: 12.5px; font-weight: 400; line-height: 1.25; color: var(--ink-soft); }
+.plan-locked { display: grid; gap: 8px; justify-items: start; padding: 20px; margin-bottom: 16px; }
+.plan-locked h2 { margin: 0; font-size: 17px; }
+.plan-locked p { margin: 0; }
+.plan-locked-icon svg { display: block; width: 28px; height: 28px; color: var(--accent); }
+.plan-card { margin-bottom: 16px; min-height: 64px; }
+.plan-features { list-style: none; margin: 8px 0 12px; padding: 0; display: grid; gap: 6px; }
+.plan-features li { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.plan-features .plan-reason { margin: 0; }
+.plan-feature-icon { flex: none; align-self: center; }
+.plan-feature-icon svg { display: block; width: 16px; height: 16px; color: var(--ink-soft); }
+.plan-features li[data-on="true"] .plan-feature-icon svg { color: var(--accent); }
+/* Review fix round 1: a locked entry keeps its own icon (collapsed, eight
+   identical padlocks could not be told apart — nav-label-icon) and wears
+   a small lock badge on the corner. The badge has a surface ring so it
+   reads on the active tint as well as on white. */
+.rail-link[data-locked] .rail-icon { position: relative; }
+.rail-lock-badge {
+  position: absolute; right: -5px; bottom: -4px; width: 13px; height: 13px;
+  border-radius: 50%; background: var(--surface, #fff); color: var(--ink-soft);
+  box-shadow: 0 0 0 1px var(--surface, #fff);
+}
+.rail-lock-badge svg { display: block; width: 100%; height: 100%; }
+/* Close to the drawn card's height, so the subscription section below
+   barely moves when the plan arrives (content-jumping). */
+.plan-card-loading { min-height: 280px; }

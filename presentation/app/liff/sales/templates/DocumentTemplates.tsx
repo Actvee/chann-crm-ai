@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { FieldRow } from "../../_field-row";
+import { planHas } from "../../_plan";
 import { openExternal } from "../../_shared";
 import { proxyHeaders } from "../_lib";
 import { useSalesSession } from "../_session";
@@ -583,6 +584,11 @@ export default function DocumentTemplates({ liffId }: { liffId: string }) {
   }
 
   const canManage = !session.suspended && permissions.has("setting.manage");
+  // Round 21D (spec §3.4, §5.4): on a plan without the shop's own forms the
+  // page stays readable under the lock panel the shell draws above it —
+  // that panel is the reason — and only uploading, publishing and choosing
+  // a form are taken away (the routes the API refuses). Archiving stays.
+  const docsOn = planHas(session.plan, "feature.custom_documents");
 
   return (
     <SalesShell
@@ -598,7 +604,7 @@ export default function DocumentTemplates({ liffId }: { liffId: string }) {
         {t.dashboard.templates.intro}
       </p>
 
-      {canManage && (
+      {canManage && docsOn && (
         <section className="section" style={{ marginBottom: 16 }}>
           <div className="section-head">
             <h2>{t.dashboard.templates.upload}</h2>
@@ -832,7 +838,7 @@ export default function DocumentTemplates({ liffId }: { liffId: string }) {
                           has every template flagged active, and asking
                           them to switch one off before switching another
                           on would be a puzzle, not a choice. */}
-                      {canManage && !isUsed && (
+                      {canManage && docsOn && !isUsed && (
                         <button
                           type="button"
                           className="btn"
@@ -843,7 +849,7 @@ export default function DocumentTemplates({ liffId }: { liffId: string }) {
                           {t.dashboard.templates.chooseThis}
                         </button>
                       )}
-                      {canManage && isUsed && (
+                      {canManage && docsOn && isUsed && (
                         <button
                           type="button"
                           className="btn"
@@ -886,7 +892,7 @@ export default function DocumentTemplates({ liffId }: { liffId: string }) {
                             {t.dashboard.templates.sourceDownload}
                           </button>
                         )}
-                        {canManage && version.status !== "published" && (
+                        {canManage && docsOn && version.status !== "published" && (
                           <button
                             type="button"
                             className="btn"

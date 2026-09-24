@@ -54,3 +54,6 @@ line_login_channel_id = "REQUIRED_NOT_CONFIGURED_CHANNEL_ID_NOT_LIFF_ID"
 # preflight proves the selected globally unique name is absent.
 create_application_bucket = false
 application_bucket_name   = ""
+
+# Round 21D (owner decision Q5): the Chann sales contact behind every upgrade button.
+chann_sales_contact = "" # "LINE @channcrm|https://line.me/R/ti/p/@channcrm" — the owner supplies it

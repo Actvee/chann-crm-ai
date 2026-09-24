@@ -1,10 +1,13 @@
 "use client";
 
+import { usePathname } from "next/navigation";
 import { ReactNode } from "react";
 
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 import { NotificationBell } from "@/lib/NotificationBell";
 
+import { currentKey, lockedBy, navGroups } from "../_nav-model";
+import { PlanLocked } from "../_plan";
 import { ShopSwitcher } from "../_shop-switcher";
 import { SuspendedNotice } from "../_suspended";
 import { AppShell } from "./_components";
@@ -40,6 +43,21 @@ export function SalesShell({
   children: ReactNode;
 }) {
   const { t } = useLanguage();
+  // Round 21D (spec §5.4, §8.2): the page this path belongs to, and the
+  // plan feature that locks it on this shop's plan, if any.
+  const pathname = usePathname() ?? "";
+  const entries = navGroups(t, "sales").flatMap((group) => group.entries);
+  const here = entries.find((entry) => entry.key === currentKey(entries, pathname));
+  // "part" pages (teams) lock their own part; the rest stays usable.
+  const locked = here && here.lockMode !== "part" ? lockedBy(here, session.plan) : null;
+  const canUpgrade = session.isOwner || session.permissions.has("setting.manage");
+  const lockPanel = locked ? (
+    <PlanLocked feature={locked} plan={session.plan} canUpgrade={canUpgrade} contact={session.salesContact} />
+  ) : null;
+  // Until /me answers, a page the plan may replace is not drawn — so it
+  // never flashes open and then turns into the locked panel. The status
+  // line above still says it is opening.
+  const waiting = !session.ready && Boolean(here?.feature) && (here?.lockMode ?? "page") === "page";
   return (
     <AppShell
       title={title}
@@ -54,6 +72,9 @@ export function SalesShell({
       // The rail draws only what this person's /me says they may open.
       permissions={session.permissions}
       isOwner={session.isOwner}
+      heldKeys={session.heldKeys}
+      plan={session.plan}
+      meAnswered={session.meAnswered}
       notice={<SuspendedNotice memberships={session.memberships} />}
       // One bell, in the bar, on every Sales page. Before this it was placed
       // by hand on four pages and absent from the other fifteen, so whether
@@ -75,7 +96,10 @@ export function SalesShell({
           onSwitched={() => void session.switchShop()}
         />
       )}
-      {children}
+      {/* Round 21D: a page opened directly (bookmark, deep link) that the
+          plan locks shows the locked panel instead of itself — or above
+          itself for a read-only page (spec §5.4, §3.4). */}
+      {waiting ? null : lockPanel && here?.lockMode !== "notice" ? lockPanel : <>{lockPanel}{children}</>}
     </AppShell>
   );
 }

@@ -637,6 +637,23 @@ class FakeDataClient:
             "open_tickets": 0, "deals": 0, "last_activity_at": None,
         }
 
+    async def license_plan(self, license_id):
+        """Round 21D — the Data tier's `GET /licenses/{id}/plan`. The plan is
+        the membership row's (a test sets `_plan_code`); none is Pro, the
+        backfill value, straight from the Data tier's own resolve() so the
+        fake is never more generous than the real payload. Task 7: a whole
+        payload in `_plan` (what the agent-test fake backend sets beside
+        the membership row) wins over `_plan_code`; `_members_count` is the
+        usage count."""
+        from plan_fixtures import plan_payload
+
+        payload = getattr(self, "_plan", None) or plan_payload(getattr(self, "_plan_code", None) or "pro")
+        return {"plan": payload, "usage": {
+            "members": getattr(self, "_members_count", 1), "members_limit": payload["limits"]["members"],
+            "ai_reports_used": 0, "ai_reports_allowance": payload["limits"]["ai_reports_per_month"],
+            "ai_reports_month": "2026-09",
+        }}
+
     async def run_report_query(self, license_id, spec, actor_id=None):
         """The ad-hoc report engine's one query. The fake never had it, so
         nothing had ever exercised the AI report road through the chat —

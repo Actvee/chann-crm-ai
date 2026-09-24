@@ -539,6 +539,11 @@ async def send_survey(
     account on file (a walk-in ticket) — the survey row still exists.
     """
     license_id = str(license_id)
+    from . import entitlements
+
+    if not await entitlements.feature_allowed(client, license_id, "feature.customer_line_link"):
+        # Round 21D (R5): no push to customers on a shop without the link.
+        return "plan_locked"
     try:
         ticket = await client.get_ticket(license_id, str(survey.get("ticket_id") or "")) or {}
         uid = str(ticket.get("customer_chann_uid") or "")

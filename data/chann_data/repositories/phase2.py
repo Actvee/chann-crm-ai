@@ -280,19 +280,14 @@ class LicenseSettingRepository:
     #: and the counter is one small JSON value beside it.
     QUOTA_KEY = "ai_chart_quota"
     USAGE_KEY = "ai_chart_usage"
-    DEFAULT_QUOTA = 30
 
+    #: Round 21D: the allowance is the PLAN's (chann_data/plans.py), with
+    #: this shop's `ai_chart_quota` override honoured on Pro and up (owner,
+    #: 24 ก.ย. 2569). The setting's name stays — no rename for a word.
     def ai_chart_allowance(self, scope: TenantScope) -> int:
-        row = self._s.execute(
-            select(LicenseSetting).where(
-                LicenseSetting.license_id == scope.license_id,
-                LicenseSetting.setting_key == self.QUOTA_KEY,
-            )
-        ).scalar_one_or_none()
-        try:
-            return max(0, int(str((row.setting_value if row is not None else None) or self.DEFAULT_QUOTA)))
-        except (TypeError, ValueError):
-            return self.DEFAULT_QUOTA
+        from .plan_repo import PlanRepository
+
+        return int(PlanRepository(self._s).payload(scope.license_id)["limits"]["ai_reports_per_month"])
 
     def consume_ai_chart(self, scope: TenantScope, *, month: str) -> tuple[bool, int, int]:
         """Spend one chart from this month's allowance.

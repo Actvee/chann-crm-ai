@@ -147,6 +147,13 @@ def k_license_setting(license_id: str, setting_key: str) -> str:
     return f"license_setting:{license_id}:{setting_key}"
 
 
+def k_license_plan(license_id: str) -> str:
+    """Round 21D — the resolved plan of one licence. Its own key, never
+    folded into k_permissions (which is per person): a plan change must reach
+    every member at once by invalidating ONE key (spec §3.2)."""
+    return f"license_plan:{license_id}"
+
+
 def k_license_patterns(license_id: str) -> tuple[str, ...]:
     """Every per-license key family, as glob patterns, for a purge (round
     18). Kept next to the builders so a new per-license key is added here
@@ -156,6 +163,7 @@ def k_license_patterns(license_id: str) -> tuple[str, ...]:
         f"license_member:{license_id}:*",
         f"permissions:{license_id}:*",
         f"license_setting:{license_id}:*",
+        f"license_plan:{license_id}",
         f"recent_turns:{license_id}:*",
         f"last_customer_ref:{license_id}:*",
         f"last_entity_ref:{license_id}:*",

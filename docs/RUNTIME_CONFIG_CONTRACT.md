@@ -53,6 +53,7 @@
 | `OPENROUTER_API_KEY` | REQUIRED_NOT_CONFIGURED | OpenRouter access |
 | `OPENROUTER_MODEL` | REQUIRED_NOT_CONFIGURED | chat-tier model selector (thinking off) |
 | `OPENROUTER_MODEL_REASONING` | OPTIONAL_UNTIL_PHASE_17 | reasoning-tier model selector (ad-hoc reports) |
+| `CHANN_SALES_CONTACT` | OPTIONAL (default empty) | round 21D — the Chann team's contact behind every "ติดต่อเพื่ออัปเกรด": `label\|https-url` (e.g. `LINE @channcrm\|https://line.me/R/ti/p/@channcrm`); empty = the button is not drawn and the text says to contact the team that looks after the shop. Not a secret. |
 | `CATALYST_API_DOMAIN` | OPTIONAL (default `https://api.catalyst.zoho.com`) | Catalyst API host (datacenter-specific); Terraform also exports it to the SDK as `X_ZOHO_CATALYST_CONSOLE_URL` |
 | `CATALYST_PROJECT_ID` | REQUIRED_BY_PHASE_10 | Zoho Catalyst project containing SmartBrowz |
 | `CATALYST_ENVIRONMENT` | OPTIONAL (default `Development`) | Catalyst environment name |

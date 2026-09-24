@@ -5,18 +5,22 @@ import { adminCall, fmtDate, type TenantSummary } from "./_server";
 // "deleted" is only listed when asked for: the Application tier hides
 // soft-deleted companies from the default list (round 18).
 const STATUSES = ["", "active", "trial", "suspended", "deleted"] as const;
+// Round 21D — the plan filter; "" is every plan.
+const PLANS = ["", "starter", "pro", "enterprise", "enterprise_plus"] as const;
+const planNames = ADMIN.tenant.edit.planNames;
 const copy = ADMIN.tenants;
 
 /** Phase 18.1 — every tenant, searchable, with its size at a glance. */
 export default async function AdminTenants({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; status?: string }>;
+  searchParams: Promise<{ q?: string; status?: string; plan?: string }>;
 }) {
-  const { q = "", status = "" } = await searchParams;
+  const { q = "", status = "", plan = "" } = await searchParams;
   const params = new URLSearchParams();
   if (q.trim()) params.set("q", q.trim());
   if (status) params.set("status_filter", status);
+  if (plan) params.set("plan", plan);
   const query = params.toString();
   const tenants = await adminCall<TenantSummary[]>(`/api/v1/platform/tenants${query ? `?${query}` : ""}`);
 
@@ -56,7 +60,7 @@ export default async function AdminTenants({
         </div>
       </div>
 
-      {(q.trim() || status) && <p className="pa-muted">{copy.filteredSummary}</p>}
+      {(q.trim() || status || plan) && <p className="pa-muted">{copy.filteredSummary}</p>}
 
       <form className="pa-filters" method="get" action="/admin">
         <label className="pa-field">
@@ -71,8 +75,16 @@ export default async function AdminTenants({
             ))}
           </select>
         </label>
+        <label className="pa-field">
+          {copy.planLabel}
+          <select name="plan" defaultValue={plan}>
+            {PLANS.map((p) => (
+              <option key={p} value={p}>{p ? planNames[p] : copy.anyPlan}</option>
+            ))}
+          </select>
+        </label>
         <button type="submit" className="pa-btn pa-btn-primary">{copy.searchButton}</button>
-        {(q || status) && <a className="pa-btn" href="/admin">{copy.clear}</a>}
+        {(q || status || plan) && <a className="pa-btn" href="/admin">{copy.clear}</a>}
       </form>
 
       <div className="pa-table-wrap">
@@ -81,6 +93,7 @@ export default async function AdminTenants({
             <tr>
               <th>{copy.columns.shop}</th>
               <th>{copy.columns.status}</th>
+              <th>{copy.columns.plan}</th>
               <th>{copy.columns.owner}</th>
               <th className="num">{copy.columns.members}</th>
               <th className="num">{copy.columns.customers}</th>
@@ -92,7 +105,7 @@ export default async function AdminTenants({
           </thead>
           <tbody>
             {tenants.length === 0 && (
-              <tr><td colSpan={9} className="pa-empty">{copy.empty}</td></tr>
+              <tr><td colSpan={10} className="pa-empty">{copy.empty}</td></tr>
             )}
             {tenants.map((t) => (
               <tr key={t.id}>
@@ -101,6 +114,7 @@ export default async function AdminTenants({
                   <div className="pa-muted mono">{t.company_code ?? "—"} · {t.license_code}</div>
                 </td>
                 <td><span className={`pa-chip pa-chip-${t.status}`}>{ADMIN.status[t.status] ?? t.status}</span></td>
+                <td>{planNames[t.plan_code ?? "pro"] ?? t.plan_code}</td>
                 <td>{t.owner_name ?? <span className="pa-muted">{t.owner_chann_uid ?? "—"}</span>}</td>
                 <td className="num">{t.members}</td>
                 <td className="num">{t.customers}</td>

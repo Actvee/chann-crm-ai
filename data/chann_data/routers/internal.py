@@ -25,6 +25,7 @@ from ..cache import (
     k_identity,
     k_last_customer_ref,
     k_license_patterns,
+    k_license_plan,
     k_recent_turns,
     k_last_entity_ref,
     k_member,
@@ -35,6 +36,10 @@ from ..config import settings
 from ..db import get_session
 from .. import assignment_engine
 from ..models import ChannIdentity, License, LicenseMember, SalesGroup
+from ..plans import (
+    ASSIGNMENT_RULE_SCOPE_FEATURE, MemberLimitReached, PlanDowngradeRefused, PlanFeatureLocked, UnknownPlan,
+)
+from ..repositories.plan_repo import PlanRepository
 from ..repositories.tenant_scope import (
     CrossTenantAccessDenied,
     IdentityRepository,
@@ -592,6 +597,31 @@ def set_identity_display_name(
     )
 
 
+def _plan_payload(session: Session, license_id) -> dict:
+    """Round 21D — a licence's resolved plan, cached under its own
+    licence-level key (never inside k_permissions, spec §3.2). Invalidated
+    by the admin's plan PATCH and by the ai_chart_quota setting."""
+    value = cache.get_or_load(
+        k_license_plan(str(license_id)),
+        settings.cache_ttl_license_setting_s,
+        lambda: PlanRepository(session).payload(license_id),
+        CacheFailureMode.FALLBACK_DB,
+    )
+    return value if isinstance(value, dict) else PlanRepository(session).payload(license_id)
+
+
+def _plan_refusal(exc: Exception) -> HTTPException | None:
+    """The three plan refusals in the shapes every tier reads (spec §5.2)."""
+    if isinstance(exc, PlanFeatureLocked):
+        return HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=exc.detail())
+    if isinstance(exc, (MemberLimitReached, PlanDowngradeRefused)):
+        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.detail())
+    if isinstance(exc, UnknownPlan):
+        return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                             detail={"error": "unknown_plan", "message": str(exc)})
+    return None
+
+
 @router.get("/identities/{chann_uid}/memberships", response_model=list[MembershipOut])
 def list_memberships(
     chann_uid: str, oa: str | None = None, session: Session = Depends(get_session),
@@ -631,6 +661,7 @@ def list_memberships(
                 channel="customer",
                 license_status=shop.status,
                 license_expires_at=getattr(shop, "expires_at", None),
+                plan=_plan_payload(session, shop.id),
             )
             for shop in shops
         ]
@@ -648,6 +679,7 @@ def list_memberships(
             channel=m.channel,
             license_status=m.license.status,
             license_expires_at=m.license.expires_at,
+            plan=_plan_payload(session, m.license_id),
         )
         for m in members
     ]
@@ -795,6 +827,9 @@ def set_member_status(
                 {"id": str(t.id), "ticket_number": t.ticket_number} for t in unassigned
             ],
         )
+    except MemberLimitReached as exc:
+        session.rollback()
+        raise _plan_refusal(exc)
     except MemberNotFound as exc:
         session.rollback()
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
@@ -953,6 +988,9 @@ def _integrity_conflict(exc: IntegrityError) -> HTTPException:
 
 
 def _phase2_http_error(exc: Exception) -> HTTPException:
+    refusal = _plan_refusal(exc)
+    if refusal is not None:
+        return refusal
     if isinstance(exc, Phase2NotFound):
         return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
     if isinstance(exc, IntegrityError):
@@ -1006,6 +1044,20 @@ def get_authorization_context(
     if value is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="active member not found")
     return AuthorizationContextOut(**value)
+
+
+@router.get("/licenses/{license_id}/plan")
+def license_plan(license_id: uuid.UUID, session: Session = Depends(get_session)):
+    """Round 21D — the shop's plan and how much of it is in use. Usage is
+    counted fresh (it moves with every join); the plan comes from cache."""
+    from ..repositories.localtime import bangkok_today
+
+    if session.get(License, license_id) is None:
+        # The same body as the admin's tenant routes (and plan-preview).
+        raise HTTPException(status_code=404, detail={"error": "tenant_not_found"})
+    month = bangkok_today().strftime("%Y-%m")
+    return {"plan": _plan_payload(session, license_id),
+            "usage": PlanRepository(session).usage(license_id, month=month)}
 
 
 @router.get("/licenses/{license_id}/roles", response_model=list[RoleOut])
@@ -1120,6 +1172,18 @@ def set_member_role(
 ):
     scope = TenantScope(license_id=license_id)
     try:
+        needs = []
+        if payload.role_name not in DEFAULT_ROLE_TEMPLATES:
+            # Spec §4.1: members KEEP a custom role after a downgrade;
+            # assigning one needs feature.custom_roles.
+            needs.append("feature.custom_roles")
+        if payload.channel == "technician":
+            # Pre-flight S21 (spec §7.2): the Technician OA itself is
+            # feature.service — gated by the channel field, never the role
+            # name, so assigning any role there needs the same feature the
+            # invite/redeem road already requires.
+            needs.append("feature.service")
+        PlanRepository(session).require_features(license_id, *needs)   # one plan read
         before_member = MemberRepository(session).get(scope, chann_uid, channel=payload.channel)
         before = {"role": before_member.role} if before_member is not None else {}
         member = MemberRoleRepository(session).set_role(
@@ -1177,6 +1241,9 @@ def put_license_setting(
             field_changes=diff_fields(before, {"setting_value": row.setting_value}),
         )
         session.commit()
+        if setting_key == "ai_chart_quota":
+            # Round 21D: the override is part of the resolved plan.
+            cache.invalidate(k_license_plan(str(license_id)))
         return LicenseSettingOut(setting_key=row.setting_key, setting_value=row.setting_value)
     except Exception as exc:
         session.rollback()
@@ -1233,6 +1300,9 @@ def delete_license_setting(
                 field_changes=diff_fields({"setting_value": existing.setting_value}, {}),
             )
         session.commit()
+        if setting_key == "ai_chart_quota":
+            # Round 21D: the override is part of the resolved plan.
+            cache.invalidate(k_license_plan(str(license_id)))
     except Exception as exc:
         session.rollback()
         raise _phase2_http_error(exc)
@@ -1806,6 +1876,9 @@ def permission_catalog():
 
 
 def _phase65_http_error(exc: Exception) -> HTTPException:
+    refusal = _plan_refusal(exc)
+    if refusal is not None:
+        return refusal
     if isinstance(exc, RegistrationNotFound):
         return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
     if isinstance(exc, RegistrationConflict):
@@ -4314,6 +4387,11 @@ def upsert_assignment_rule(
     """
     scope = TenantScope(license_id=license_id)
     try:
+        # Ruling 26 at the tier seam too: a technician-scope rule is
+        # feature.service, whoever calls this route (403 plan_required).
+        scope_feature = ASSIGNMENT_RULE_SCOPE_FEATURE.get(str(payload.scope or ""))
+        if scope_feature:
+            PlanRepository(session).require_feature(license_id, scope_feature)
         row = AssignmentRuleRepository(session).upsert_active(
             scope, rule_scope=payload.scope, rules_json=payload.rules_json,
             updated_by=payload.updated_by,
@@ -5109,6 +5187,9 @@ def _approval_error(exc: Exception):
     from ..repositories.phase14 import ApprovalConflict, ApprovalNotFound
     from ..repositories.tenant_scope import CrossTenantAccessDenied
 
+    refusal = _plan_refusal(exc)
+    if refusal is not None:
+        return refusal
     if isinstance(exc, CrossTenantAccessDenied):
         return HTTPException(status_code=404, detail="not found")
     if isinstance(exc, ApprovalNotFound):
@@ -5176,6 +5257,9 @@ def replace_approval_workflow(
 
     scope = TenantScope(license_id=license_id)
     try:
+        steps = (payload.get("rules_json") or {}).get("steps") or []
+        if len(steps) > 1:
+            PlanRepository(session).require_feature(license_id, "feature.multi_level_approval")
         updated_by = payload.get("updated_by")
         row = ApprovalRepository(session).replace_workflow(
             scope, entity_type, payload.get("rules_json") or {},
@@ -5205,10 +5289,15 @@ def open_approval_steps(
 
     scope = TenantScope(license_id=license_id)
     try:
+        from ..plans import PLANS
+
         report = session.get(ServiceReport, report_id)
         if report is None:
             raise ApprovalNotFound("service report not found")
-        steps = ApprovalRepository(session).open_steps_for_report(scope, report)
+        chain = PLANS[PlanRepository(session).plan_code(license_id)].has("feature.multi_level_approval")
+        steps = ApprovalRepository(session).open_steps_for_report(
+            scope, report, max_steps=None if chain else 1,
+        )
         session.commit()
         return [_step_out(s) for s in steps]
     except Exception as exc:
@@ -6155,8 +6244,9 @@ def sweep_chat_sessions(session: Session = Depends(get_session)):
         # tier claims each one right before it tells the shop, and releases
         # it if the telling fails. Stamping them here — before anyone was
         # told — is how every warning on DEV was lost on 21 ก.ย. 2569.
-        overdue = repo.sla_overdue()
-        timed_out = repo.time_out()
+        skip = PlanRepository(session).licences_without("feature.live_chat")
+        overdue = repo.sla_overdue(skip_licenses=skip)
+        timed_out = repo.time_out(skip_licenses=skip)
         session.commit()
         # Grouped by licence rather than one call per row: _chat_sessions_out
         # runs a summaries query and an identity query each time, and the
@@ -6308,10 +6398,13 @@ def reject_pdpa_request(
 
 @router.get("/platform/tenants", response_model=list[TenantSummaryOut])
 def platform_tenants(
-    q: str | None = None, status: str | None = None, limit: int = 200,
+    q: str | None = None, status: str | None = None, plan: str | None = None, limit: int = 200,
     session: Session = Depends(get_session),
 ):
-    return [TenantSummaryOut(**row) for row in PlatformRepository(session).tenants(q=q, status=status, limit=limit)]
+    return [
+        TenantSummaryOut(**row)
+        for row in PlatformRepository(session).tenants(q=q, status=status, plan=plan, limit=limit)
+    ]
 
 
 @router.get("/platform/tenants/{license_id}")
@@ -6330,8 +6423,18 @@ def platform_tenant(license_id: uuid.UUID, session: Session = Depends(get_sessio
         "company_email": data.get("company_email"), "company_address": data.get("company_address"),
         "tax_id": data.get("tax_id"), "admin_notes": data.get("admin_notes"),
         "members_detail": [TenantMemberOut(**m).model_dump() for m in members],
+        "usage": data.get("usage"),
     })
     return payload
+
+
+@router.get("/platform/tenants/{license_id}/plan-preview")
+def platform_plan_preview(license_id: uuid.UUID, session: Session = Depends(get_session)):
+    """Round 21D — for the admin's confirm dialog: what each other plan
+    would lock (with counts) and whether its user limit refuses the change."""
+    if session.get(License, license_id) is None:
+        raise HTTPException(status_code=404, detail={"error": "tenant_not_found"})
+    return PlanRepository(session).preview(license_id)
 
 
 def _auditable(value):
@@ -6363,6 +6466,10 @@ def platform_tenant_update(
         before, row = PlatformRepository(session).update(license_id, changes)
     except PlatformNotFound:
         raise HTTPException(status_code=404, detail={"error": "tenant_not_found"})
+    except (UnknownPlan, PlanDowngradeRefused) as exc:
+        # UnknownPlan is a ValueError: this branch must stay above the next.
+        session.rollback()
+        raise _plan_refusal(exc)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail={"error": "invalid_tenant_update", "message": str(exc)})
     after = {k: getattr(row, k) for k in changes}
@@ -6375,10 +6482,17 @@ def platform_tenant_update(
         cross_tenant=True,
     )
     session.commit()
+    if "plan_code" in changes:
+        # Round 21D: ONE licence-level key — every member sees the new
+        # plan on their next request, not when their own entries expire.
+        cache.invalidate(k_license_plan(str(license_id)))
     return platform_tenant(license_id, session)
 
 
 def _platform_error(exc: Exception) -> HTTPException:
+    refusal = _plan_refusal(exc)
+    if refusal is not None:
+        return refusal
     if isinstance(exc, PlatformNotFound):
         return HTTPException(status_code=404, detail={"error": "not_found", "message": str(exc)})
     if isinstance(exc, PlatformConflict):
@@ -6775,4 +6889,5 @@ def resolve_api_key(payload: ApiKeyResolveIn, session: Session = Depends(get_ses
         license_status=str(getattr(license_row, "status", None) or "active"),
         permission_keys=sorted(DEFAULT_ROLE_TEMPLATES["admin"] or ()),
         limit=RATE_LIMIT_PER_MINUTE, remaining=remaining,
+        plan=_plan_payload(session, row.license_id),
     )

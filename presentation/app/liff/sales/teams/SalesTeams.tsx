@@ -6,6 +6,7 @@ import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { FieldRow } from "../../_field-row";
 import { ListFilters, matchesQuery } from "../../_filters";
+import { PlanLocked, planHas } from "../../_plan";
 import { useFailureText } from "../_format";
 import { proxyHeaders } from "../_lib";
 import { useSalesSession } from "../_session";
@@ -60,6 +61,11 @@ export default function SalesTeams({ liffId }: { liffId: string }) {
   const session = useSalesSession(liffId, say);
   const { token, licenseId, permissions } = session;
   const canManage = !session.suspended && permissions.has("team.manage");
+  // Round 21D (ruling 25): technician teams are the service feature; sales
+  // groups are on every plan. On a plan without service only the technician
+  // part is locked (and not asked for — the API refuses it there), so a
+  // Starter shop still runs its sales groups here.
+  const serviceOn = planHas(session.plan, "feature.service");
 
   const load = useCallback(async () => {
     if (!token || !licenseId) return;
@@ -120,15 +126,24 @@ export default function SalesTeams({ liffId }: { liffId: string }) {
   useEffect(() => {
     if (!session.ready) return;
     void (async () => {
-      try {
-        await load();
-        await loadGroups();
-        say("");
-      } catch (error) {
-        say(error instanceof Error ? error.message : t.dashboard.loadFailed, "error");
+      // The two halves load independently: a refused technician list must
+      // not take the sales groups down with it.
+      let failure = "";
+      if (serviceOn) {
+        try {
+          await load();
+        } catch (error) {
+          failure = error instanceof Error ? error.message : t.dashboard.loadFailed;
+        }
       }
+      try {
+        await loadGroups();
+      } catch (error) {
+        failure = failure || (error instanceof Error ? error.message : t.dashboard.loadFailed);
+      }
+      say(failure, failure ? "error" : undefined);
     })();
-  }, [session.ready, load, loadGroups, say, t]);
+  }, [session.ready, serviceOn, load, loadGroups, say, t]);
 
   /** One request, then reload; every caller names its own URL so the
    *  route checker (and a reader) can see exactly what the page calls. */
@@ -306,7 +321,16 @@ export default function SalesTeams({ liffId }: { liffId: string }) {
 
       <ListFilters query={query} onQuery={setQuery} />
 
-      {canManage && (
+      {session.ready && !serviceOn && (
+        <PlanLocked
+          feature="feature.service"
+          plan={session.plan}
+          canUpgrade={session.isOwner || permissions.has("setting.manage")}
+          contact={session.salesContact}
+        />
+      )}
+
+      {serviceOn && canManage && (
         <section className="section">
           <div className="section-head">
             <h2>{copy.create}</h2>
@@ -332,7 +356,7 @@ export default function SalesTeams({ liffId }: { liffId: string }) {
         </section>
       )}
 
-      {teams.length === 0 ? (
+      {!session.ready || !serviceOn ? null : teams.length === 0 ? (
         <div className="empty">
           <p>{copy.empty}</p>
         </div>

@@ -9,8 +9,9 @@ import { LanguageSwitcher } from "@/lib/i18n/LanguageSwitcher";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import PipelineSummary from "./PipelineSummary";
-import { homeEntries, mayOpen, navGroups } from "../_nav-model";
+import { homeEntries, navGroups, navState } from "../_nav-model";
 import { NavFrame, NavMenuButton } from "../_nav";
+import type { PlanInfo } from "../_plan";
 import { useFailureText } from "./_format";
 import { LIFF_SDK_SRC, completeLiffRedirect, proxyHeaders, whenLiffReady } from "./_lib";
 import { useSalesSession } from "./_session";
@@ -56,9 +57,14 @@ export default function SalesMenu({ liffId }: { liffId: string }) {
   // What this person may open, so the rail and the shortcuts below draw
   // the same set. It comes from the session the page already starts —
   // no extra call.
-  const [access, setAccess] = useState<{ permissions: Set<string>; isOwner: boolean }>({
+  // Round 21D: with the held keys and the plan, so the rail draws a
+  // plan-locked entry the same way here as on every other page.
+  const [access, setAccess] = useState<MenuAccess>({
     permissions: new Set(),
     isOwner: false,
+    held: new Set(),
+    plan: null,
+    answered: false,
   });
 
   useEffect(() => {
@@ -91,10 +97,13 @@ export default function SalesMenu({ liffId }: { liffId: string }) {
       cancelled = true;
     };
   }, [liffId, router]);
-  const shortcuts = useMemo(() => homeEntries(t, access.permissions, access.isOwner), [t, access]);
+  const shortcuts = useMemo(
+    () => homeEntries(t, access),
+    [t, access],
+  );
   const dealsEntry = navGroups(t, "sales").flatMap((group) => group.entries)
     .find((entry) => entry.key === "deals")!;
-  const showPipeline = mayOpen(dealsEntry, access.permissions, access.isOwner);
+  const showPipeline = navState(dealsEntry, access) === "open";
 
   if (redirecting) {
     // A blank frame for the instant before the navigation commits. Showing
@@ -103,7 +112,14 @@ export default function SalesMenu({ liffId }: { liffId: string }) {
   }
 
   return (
-    <NavFrame audience="sales" permissions={access.permissions} isOwner={access.isOwner}>
+    <NavFrame
+      audience="sales"
+      permissions={access.permissions}
+      isOwner={access.isOwner}
+      heldKeys={access.held}
+      plan={access.plan}
+      meAnswered={access.answered}
+    >
       {/* The SDK is loaded even though this page needs no session, because
           liff.state has to be read before anything else can happen and the
           SDK sets up the LIFF context the sub-pages then rely on. */}
@@ -162,6 +178,14 @@ export default function SalesMenu({ liffId }: { liffId: string }) {
   );
 }
 
+type MenuAccess = {
+  permissions: Set<string>;
+  isOwner: boolean;
+  held: Set<string>;
+  plan: PlanInfo | null;
+  answered: boolean;
+};
+
 type Transfer = { id: string; status: string; to_chann_uid?: string | null };
 
 /**
@@ -179,7 +203,7 @@ function MenuSession({
   onShopChanged: () => void;
   /** Handed up so the rail and the shortcuts can be drawn from the same
    *  /me this component already asks for, rather than a second call. */
-  onAccess: (access: { permissions: Set<string>; isOwner: boolean }) => void;
+  onAccess: (access: MenuAccess) => void;
 }) {
   const { request: confirming, ask, close: closeConfirm } = useConfirm();
   const { t } = useLanguage();
@@ -210,8 +234,14 @@ function MenuSession({
 
   useEffect(() => {
     if (!session.ready) return;
-    onAccess({ permissions: session.permissions, isOwner: session.isOwner });
-  }, [session.ready, session.permissions, session.isOwner, onAccess]);
+    onAccess({
+      permissions: session.permissions,
+      isOwner: session.isOwner,
+      held: session.heldKeys,
+      plan: session.plan,
+      answered: session.meAnswered,
+    });
+  }, [session.ready, session.permissions, session.isOwner, session.heldKeys, session.plan, session.meAnswered, onAccess]);
 
   useEffect(() => {
     if (!session.ready || session.isOwner) {

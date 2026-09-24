@@ -58,6 +58,7 @@ header อย่างเดียว) `limit` สูงสุด 200 ค่า�
 | 429 | `rate_limited` | เกิน 600 คำขอ/นาที/key — มี header `Retry-After` (วินาที) |
 | 423 | `tenant_suspended` | ร้านถูกระงับ/ลบแบบ soft — คำขอที่ไม่ใช่ GET ถูกปฏิเสธ (อ่านได้ปกติ) |
 | 403 | `forbidden` | key นี้ไม่มี permission key ที่ route ต้องการ |
+| 403 | `plan_required` | แพ็กเกจของร้านไม่มี API ภายนอก (มีตั้งแต่ Enterprise ขึ้นไป) — ทุก route รวม `/me` · key ยังอยู่ ใช้ได้อีกเมื่อร้านอัปเกรด |
 | 404 | `not_found` | ไม่พบเรคอร์ด — รวมถึง path ที่ไม่มีอยู่จริง |
 | 405 | `method_not_allowed` | path ถูกแต่ method ผิด (เช่น `DELETE /customers`) |
 | 409 | `conflict` | สถานะขัดกัน (ทั่วไป) — บาง route ตอบ `code` เจาะจงกว่านี้ เช่น `invoice_state` |

@@ -49,7 +49,9 @@ SEED_KEYS = {
     "members", "invites", "redeem", "raw", "call",
 }
 HTTP_KEYS = {"method", "path", "json", "params", "as"}
-ACTOR_KEYS = {"oa", "role", "language", "permissions", "line_user_id"}
+ACTOR_KEYS = {"oa", "role", "language", "permissions", "line_user_id", "plan"}
+#: Round 21D — the shop's sales plan, fake backend only.
+PLANS = ("starter", "pro", "enterprise", "enterprise_plus")
 STEP_VERBS = ("send", "seed", "reset", "http")
 
 
@@ -229,6 +231,8 @@ def parse(raw: Any, path: Path) -> Scenario:
                      f"Allowed: {', '.join(LANGUAGES)}")
     if actor.get("oa") and actor["oa"] not in OAS:
         _fail(where, f"unknown actor oa {actor['oa']!r}. Allowed: {', '.join(OAS)}")
+    if actor.get("plan") and actor["plan"] not in PLANS:
+        _fail(where, f"unknown actor plan {actor['plan']!r}. Allowed: {', '.join(PLANS)}")
     steps = raw.get("steps")
     if not isinstance(steps, list) or not steps:
         _fail(where, "`steps` must be a non-empty list")

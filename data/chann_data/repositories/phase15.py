@@ -289,19 +289,24 @@ class ChatSessionRepository:
 
     # --------------------------------------------------------- sweeps (cross-tenant)
 
-    def sla_overdue(self, *, now: datetime | None = None) -> list[ChatSession]:
+    def sla_overdue(self, *, now: datetime | None = None, skip_licenses=()) -> list[ChatSession]:
         """Live conversations the shop has left past the deadline and not
         yet been told about. A plain read (round 20W): the caller CLAIMS
         each row it will act on with claim_escalation, which is what keeps
         two overlapping sweeps from both pushing the warning."""
         now = now or _now()
+        query = select(ChatSession).where(
+            ChatSession.status.in_(LIVE_STATUSES),
+            ChatSession.sla_deadline.is_not(None),
+            ChatSession.sla_deadline < now,
+            ChatSession.escalated_at.is_(None),
+        )
+        if skip_licenses:
+            # Round 21D: a shop without feature.live_chat is left alone by
+            # the platform's clock — nothing escalated, nothing closed.
+            query = query.where(ChatSession.license_id.notin_(list(skip_licenses)))
         return list(self._s.execute(
-            select(ChatSession).where(
-                ChatSession.status.in_(LIVE_STATUSES),
-                ChatSession.sla_deadline.is_not(None),
-                ChatSession.sla_deadline < now,
-                ChatSession.escalated_at.is_(None),
-            ).order_by(ChatSession.sla_deadline.asc())
+            query.order_by(ChatSession.sla_deadline.asc())
         ).scalars())
 
     def mark_escalated(self, row: ChatSession, *, now: datetime | None = None) -> None:
@@ -343,16 +348,21 @@ class ChatSessionRepository:
         self._s.flush()
         return bool(result.rowcount)
 
-    def time_out(self, *, now: datetime | None = None) -> list[ChatSession]:
+    def time_out(self, *, now: datetime | None = None, skip_licenses=()) -> list[ChatSession]:
         """Close every live conversation nobody has touched past its
         timeout. Returns the ones closed, so the customer can be told."""
         now = now or _now()
+        query = select(ChatSession).where(
+            ChatSession.status.in_(LIVE_STATUSES),
+            ChatSession.timeout_at.is_not(None),
+            ChatSession.timeout_at < now,
+        )
+        if skip_licenses:
+            # Round 21D: a shop without feature.live_chat is left alone by
+            # the platform's clock — nothing escalated, nothing closed.
+            query = query.where(ChatSession.license_id.notin_(list(skip_licenses)))
         rows = list(self._s.execute(
-            select(ChatSession).where(
-                ChatSession.status.in_(LIVE_STATUSES),
-                ChatSession.timeout_at.is_not(None),
-                ChatSession.timeout_at < now,
-            ).with_for_update(skip_locked=True)
+            query.with_for_update(skip_locked=True)
         ).scalars())
         for row in rows:
             row.status = "timeout"

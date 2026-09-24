@@ -100,9 +100,11 @@ async def _run(sentences: list[str], *, oa: str, role: str, model: str, language
     settings.openrouter_model = model or os.environ.get("OPENROUTER_MODEL") or DEV_MODEL
 
     from chann_app.services.ai.intent import parse_intent
-    from chann_data.permissions import DEFAULT_ROLE_TEMPLATES
+    from chann_data.permissions import DEFAULT_ROLE_TEMPLATES, PERMISSION_KEYS
 
-    keys = sorted(DEFAULT_ROLE_TEMPLATES.get(role, DEFAULT_ROLE_TEMPLATES["admin"]))
+    # The owner's template is None — "every key in the catalogue".
+    template = DEFAULT_ROLE_TEMPLATES.get(role, DEFAULT_ROLE_TEMPLATES["admin"])
+    keys = sorted(PERMISSION_KEYS if template is None else template)
     print(f"model: {settings.openrouter_model}  ·  oa: {oa}  ·  role: {role}\n")
 
     failures = 0

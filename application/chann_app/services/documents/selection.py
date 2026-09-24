@@ -92,6 +92,14 @@ async def resolve_tenant_template(
     with, and refusing to issue it would be a worse answer than issuing
     the standard layout.
     """
+    from .. import entitlements
+
+    if not await entitlements.feature_allowed(client, str(license_id), "feature.custom_documents"):
+        # Round 21D (spec §3.4): a new document renders with the system
+        # template on a plan without custom documents; already-issued PDFs
+        # keep their frozen data_snapshot and are not touched, and the
+        # shop's own templates stay on record for when it upgrades.
+        return None, None
     try:
         templates = await client.list_document_templates(
             license_id, document_type=document_type,

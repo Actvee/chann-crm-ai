@@ -114,6 +114,10 @@
 }
 .pa-field textarea { min-height: 72px; resize: vertical; }
 .pa-field input::placeholder { color: var(--pa-ink-faint); }
+.pa-field input:disabled, .pa-field select:disabled { opacity: 0.55; cursor: not-allowed; }
+/* Round 21D — the field the refusal is about (ui-ux error-placement). */
+.pa-field [aria-invalid="true"] { border-color: var(--pa-danger); }
+#tenant-members { scroll-margin-top: 16px; }
 .pa-btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;
   min-height: 42px; padding: 8px 16px; border-radius: 8px; cursor: pointer;
@@ -123,7 +127,7 @@
 }
 .pa-btn:hover { background: var(--pa-line); }
 .pa-btn:active { transform: translateY(1px); }
-.pa-btn:disabled { opacity: 0.55; cursor: default; transform: none; }
+.pa-btn:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
 .pa-btn-primary { background: var(--pa-accent); border-color: var(--pa-accent); color: var(--pa-accent-ink); }
 .pa-btn-primary:hover { background: #34d074; }
 .pa-btn-danger { background: var(--pa-danger-soft); border-color: #7f2e2e; color: #fecaca; }

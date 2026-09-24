@@ -87,12 +87,17 @@ SEND_FAILURE_WORDS = {
     "channel_refused": {"th": "โทเค็น/สิทธิ์ของ OA ไม่ผ่าน — ตรวจการตั้งค่า LINE",
                         "en": "the OA's token or permission was refused (check the LINE settings)"},
     "line_refused": {"th": "LINE ไม่รับข้อความ", "en": "LINE did not accept the message"},
+    # notify's strict road refused before LINE was asked (round 21D).
+    "plan_locked": {"th": "แพ็กเกจของร้านยังไม่มีการผูก LINE ลูกค้ากับร้าน จึงส่งทาง LINE ไม่ได้",
+                    "en": "the shop's plan has no Customer LINE link, so nothing goes out on LINE"},
 }
 
 
 def failure_reason(detail: str) -> str:
     """LINE's raw error -> one of SEND_FAILURE_WORDS' keys."""
     text = str(detail or "")
+    if text == "plan_locked":
+        return "plan_locked"
     if "NOT_CONFIGURED" in text or "ACCESS_TOKEN" in text:
         return "not_configured"
     # LINE's documented answers: 403 is the CHANNEL (token, plan, API not

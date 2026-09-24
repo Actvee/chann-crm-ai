@@ -160,6 +160,17 @@ class MemberRepository:
             raise MemberNotFound("member not found on this channel")
         if status == "removed" and self.is_owner_row(scope, member):
             raise MemberConflict("the owner cannot be removed or demoted")
+        if status == "active" and member.status != "active":
+            # Round 21D: bringing someone back takes a seat like a join does.
+            # Pre-flight S21 (spec §7.2): reactivating a Technician-OA row
+            # also needs feature.service — gated by the channel this row is
+            # on, never by its role name.
+            from .plan_repo import PlanRepository
+
+            plan_repo = PlanRepository(self._s)
+            if channel == "technician":
+                plan_repo.require_feature(scope.license_id, "feature.service")
+            plan_repo.require_seat(scope.license_id, chann_uid)
         unassigned: list = []
         if status == "removed" and member.status != "removed" and channel == "technician":
             unassigned = self._release_field_work(scope, member)

@@ -45,6 +45,7 @@ from .capabilities import CUSTOMER_CREATE, capability
 from .intent_guard import ASK, intent_to_act
 from .registration import COMPANY_CODE_RE, as_company_code
 from . import storefront as storefront_service
+from . import entitlements
 from . import live_chat
 from . import pdpa as pdpa_service
 from . import ticket_machine
@@ -260,6 +261,9 @@ ACTION_PERMISSIONS: dict[tuple[str, str], str] = {
     ("read", "api_key"): "setting.manage",
     ("delete", "api_key"): "setting.manage",
     ("create", "api_key"): "setting.manage",
+    # Round 21D — the shop's plan, read (the dashboard's plan card is the
+    # twin). setting.manage: the people who can act on it.
+    ("read", "plan"): "setting.manage",
     # The satisfaction surveys, collected since Phase 14 and never read
     # back. view_reports, like the AI reports beside them.
     ("read", "survey"): "view_reports",
@@ -359,6 +363,10 @@ INVITE_REPLY_BY_ROLE = {
     "cs": SALES_INVITE_REPLY,
     "admin": SALES_INVITE_REPLY,
 }
+#: Round 21D — the feature an invite's role needs (spec §7.2). A lookup
+#: for the reason INVITE_REPLY_BY_ROLE is one: application policy may not
+#: branch on a role string (tests/boundary).
+INVITE_FEATURE_BY_ROLE = {"technician": "feature.service"}
 INVITE_WHICH_KIND = {
     "th": "ได้ครับ — รหัสเชิญมี 2 แบบ จะเอาแบบไหนครับ\n• ช่าง — ลงทะเบียนใน LINE ช่าง\n• ทีมขาย/CS — ลงทะเบียนใน LINE ฝ่ายขาย/แอดมิน",
     "en": "Sure — there are two kinds of invite code. Which one?\n• Technician — registers on the Technician OA\n• Sales/CS — registers on the Sales/Admin OA",
@@ -487,6 +495,18 @@ async def _handle_invite_request(
 ) -> ChatReply:
     if "member.manage" not in set(permission_keys):
         return ChatReply(text=_t(TECHNICIAN_INVITE_DENIED, language))
+    # Round 21D: said before a code is handed out — a technician code on a
+    # shop without service would only be refused at redeem. Decline-only.
+    feature = INVITE_FEATURE_BY_ROLE.get(role)
+    if feature is not None and not _plan_has(feature):
+        return _plan_refusal(feature, language)
+    # Spec §5.7 — the early refusal: the count is read fresh (usage is not
+    # on `_PLAN`, only the plan and who may upgrade it), so the owner hears
+    # the shop is full before a code exists to hand out.
+    plan_now, usage = await entitlements.plan_for(client, str(ctx.license_id))
+    if plan_now.members_limit is not None and int(usage.get("members") or 0) >= plan_now.members_limit:
+        return ChatReply(text=_t(entitlements.MEMBER_LIMIT_REACHED, language).format(
+            limit=plan_now.members_limit, plan=plan_now.label))
     invite = await client.create_invite(
         str(ctx.license_id),
         {"role": role, "max_uses": 1, "expires_in_days": 7},
@@ -816,6 +836,11 @@ TEAM_LIST_PHRASES = (
     "รายชื่อทีมช่าง", "ทีมช่าง", "ดูทีมช่าง", "technician teams", "teams", "มีทีมอะไรบ้าง", "ทีมมีอะไรบ้าง", "ทีม",
     "ทีมทั้งหมด", "รายชื่อทีม", "ดูทีม", "team list", "ทีมไหนบ้าง", "มีทีมไหนบ้าง", "ทีมช่างทั้งหมด",
 )
+#: Ruling 30: the sentence a Starter shop's "ทีม" decline adds.
+TEAM_SALES_GROUPS_STILL_OPEN = {
+    "th": "กลุ่มขายใช้ได้ทุกแพ็กเกจ — พิมพ์ \"ดูกลุ่มขาย\" หรือ \"สร้างกลุ่มขาย <ชื่อกลุ่ม>\"",
+    "en": "Sales groups are on every plan — type \"sales groups\" or \"create sales group <name>\"",
+}
 # Read-level gates for the list/view tiles (review, 6 Sep 2026): the
 # shipped role templates — member (salesperson), cs — must be able to use
 # every tile on their menu. Seeing who the technicians are, or what the
@@ -969,8 +994,20 @@ async def _maybe_handle_teams(
     held = set(permission_keys)
 
     if _matches_phrase(text, TEAM_LIST_PHRASES):
+        if not _plan_has("feature.service"):
+            # Round 21D: technician teams are the service feature (spec
+            # §4.1). The phrase only declines here — it acts on nothing.
+            refusal = _plan_refusal("feature.service", language)
+            if not any(w in lowered for w in ("ช่าง", "technician")):
+                # Ruling 30 (final fix round 1): a bare "ทีม" / "teams" may
+                # have meant the sales groups, which every plan has (Ruling
+                # 25). A decline may not hide an always-on road, so it says
+                # where that road is — "ดูกลุ่มขาย", which DEV's model reads
+                # as read/team scope=sales (final-fix-report.md).
+                refusal = replace(refusal, text=refusal.text + "\n" + _t(TEAM_SALES_GROUPS_STILL_OPEN, language))
+            return refusal
         if not held & TEAM_VIEW_KEYS:
-            return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+            return _no_permission(language, *TEAM_VIEW_KEYS)
         try:
             teams = await client.list_technician_teams(license_id)
         except Exception:
@@ -1018,6 +1055,10 @@ async def _maybe_handle_teams(
         None,
     )
     if create is not None or lowered in ("สร้างทีมช่าง", "ตั้งทีมช่าง"):
+        if not _plan_has("feature.service"):
+            # Round 21D: technician teams are the service feature (spec
+            # §4.1). The phrase only declines here — it acts on nothing.
+            return _plan_refusal("feature.service", language)
         # "สร้างทีมช่างยังไง" — how do I create a technician team? — took
         # everything after the trigger as the name and created a team
         # called "ยังไง" (10 ก.ย. 2569). A team named out of a question is
@@ -1026,7 +1067,7 @@ async def _maybe_handle_teams(
         if guarded is not None:
             return guarded
         if "team.manage" not in held:
-            return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+            return _no_permission(language, "team.manage")
         name = text[len(create):].strip(" :") if create else ""
         if not name:
             return ChatReply(text=_t(TEAM_TEXT["need_name"], language))
@@ -1063,8 +1104,12 @@ async def _maybe_handle_teams(
         m = regex.match(text)
         if not m:
             continue
+        if not _plan_has("feature.service"):
+            # Round 21D: technician teams are the service feature (spec
+            # §4.1). The phrase only declines here — it acts on nothing.
+            return _plan_refusal("feature.service", language)
         if "team.manage" not in held:
-            return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+            return _no_permission(language, "team.manage")
         who, team_name = m.group("who"), m.group("team")
         if kind == "add" and m.group("lead"):
             team_name = team_name.strip()
@@ -1095,8 +1140,12 @@ async def _maybe_handle_teams(
 
     m = _TEAM_DELETE_RE.match(text)
     if m:
+        if not _plan_has("feature.service"):
+            # Round 21D: technician teams are the service feature (spec
+            # §4.1). The phrase only declines here — it acts on nothing.
+            return _plan_refusal("feature.service", language)
         if "team.manage" not in held:
-            return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+            return _no_permission(language, "team.manage")
         team = await _team_named(client, license_id, m.group("team"))
         if team is None:
             return ChatReply(text=_t(TEAM_TEXT["no_team"], language).format(team=m.group("team").strip()))
@@ -1280,7 +1329,7 @@ async def _handle_warranty_book(
     client: DataClient, *, license_id, permission_keys: list[str], language: str,
 ) -> ChatReply:
     if "warranty.read" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "warranty.read")
     try:
         rows = await client.list_warranties(str(license_id))
     except Exception:
@@ -1301,8 +1350,14 @@ async def _handle_warranty_book(
 async def _handle_technician_list(
     client: DataClient, *, license_id, permission_keys: list[str], language: str,
 ) -> ChatReply:
+    # Round 21D: the technician roster IS the service feature — on a plan
+    # without it, the plan is the answer, not "no technicians yet" with an
+    # invite button that would be refused. Guarded by always-on keys, so
+    # the key subtraction alone cannot see it.
+    if not _plan_has("feature.service"):
+        return _plan_refusal("feature.service", language)
     if not set(permission_keys) & TEAM_VIEW_KEYS:
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, *TEAM_VIEW_KEYS)
     try:
         members = await client.list_members(str(license_id))
     except Exception:
@@ -1922,7 +1977,7 @@ async def _handle_note_create(
     permission_keys: list[str], language: str, actor_id: str,
 ) -> ChatReply:
     if "note.create" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "note.create")
 
     license_id = str(license_id)
     try:
@@ -2048,7 +2103,7 @@ async def _handle_note_edit(
     """
     needed = "note.update"
     if needed not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, needed)
 
     license_id = str(license_id)
     try:
@@ -2170,7 +2225,7 @@ async def _handle_note_list(
     form-shaped failure the 21:48 screenshots showed for appointments.
     """
     if "note.read" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "note.read")
 
     license_id = str(license_id)
     try:
@@ -2410,7 +2465,7 @@ async def _handle_reminder_list(
             return await _handle_work_list(
                 client, license_id=license_id, permission_keys=permission_keys, language=language, days=7,
             )
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "followup.read")
     if window is None:
         window = _diary_window(message)
 
@@ -2692,7 +2747,7 @@ async def _handle_reminder_move(
     """
     keys = set(permission_keys)
     if "followup.update" not in keys:
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "followup.update")
 
     license_id = str(license_id)
     try:
@@ -2801,7 +2856,7 @@ async def _handle_reminder_cancel(
     an over-broad cancel is visible immediately.
     """
     if "followup.update" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "followup.update")
 
     license_id = str(license_id)
     target = None
@@ -2887,7 +2942,7 @@ async def _handle_reminder_delete(
     undone.
     """
     if "followup.update" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "followup.update")
 
     license_id = str(license_id)
     try:
@@ -3148,7 +3203,7 @@ async def _handle_reminder_create(  # noqa: PLR0913
     )
 
     if "followup.create" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "followup.create")
 
     license_id = str(license_id)
     if target is None:
@@ -3286,7 +3341,7 @@ async def _handle_work_list(
 
     held = set(permission_keys)
     if not held & WORK_VIEW_KEYS:
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, *WORK_VIEW_KEYS)
     # Scheduled visits are part of the day too — and for CS (ticket.read,
     # no followup.read) they are the whole of it (review, 6 Sep 2026: the
     # highlighted "งานวันนี้" tile refused CS).
@@ -3643,7 +3698,7 @@ async def _handle_warranty_register(
             warranty_start=_purchase_terms(message)[0],
         )
     if "warranty.create" not in set(permission_keys or []):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "warranty.create")
     try:
         # The product, if the serial or the message names one we know.
         # Optional by design: the customer has the sticker, not the
@@ -3882,7 +3937,7 @@ async def _handle_warranty_purchase_date(
     """"วันที่ซื้อ SN12345 1 ก.ย. 2569": the purchase date (and optionally
     the period) of a unit registered without one; the end date follows."""
     if "warranty.update" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "warranty.update")
     license_id = str(license_id)
     match = SERIAL_RE.search(message or "")
     serial = (match.group(1) if match else str(fields.get("serial_number") or "")).upper()
@@ -4111,7 +4166,7 @@ async def _handle_shop_chat_start(
     """"คุยกับลูกค้า สมชาย" / "คุยกับลูกค้า T-2026-0001" on the sales OA: open
     the conversation with a customer the shop knows (round 19g)."""
     if "chat_session.reply" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "chat_session.reply")
     license_id = str(license_id)
     name = ""
     chann_uid = ""
@@ -4779,7 +4834,7 @@ async def _maybe_job_sla_setting(
     if setting is None and not viewing:
         return None
     if "setting.manage" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "setting.manage")
     head = ""
     if setting is not None:
         parsed = parse_sla_sentence(text[len(setting):])
@@ -5769,7 +5824,7 @@ async def _maybe_auto_accept_setting(
     if matched is None and not names_it and not _matches_phrase(text, AUTO_ACCEPT_VIEW):
         return None
     if "setting.manage" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "setting.manage")
     if matched is None and names_it and not _matches_phrase(text, AUTO_ACCEPT_VIEW):
         # Names the setting but does not open with it, so the dispatch below
         # will not claim it and the sentence used to walk out of here to the
@@ -5846,7 +5901,13 @@ async def _maybe_chat_policy_setting(
     if key is None and not names_it and not _matches_phrase(text, CHAT_POLICY_VIEW):
         return None
     if "setting.manage" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "setting.manage")
+    if key is not None and entitlements.SETTING_KEY_FEATURE.get(key) and not _plan_has(entitlements.SETTING_KEY_FEATURE[key]):
+        # Ruling 29: the live-chat minutes are feature.live_chat — the same
+        # 403 the dashboard's PUT settings/{key} gives. Reached only after
+        # the model had its read (this arm is on the rule road). Viewing the
+        # two values stays open, as GET settings does.
+        return _plan_refusal(entitlements.SETTING_KEY_FEATURE[key], language)
     if key is None and names_it and not _matches_phrase(text, CHAT_POLICY_VIEW):
         # Same arm, same reasoning as _maybe_auto_accept_setting: the head
         # test cannot see "ไม่ต้องตั้งค่าเวลาตอบแชท 15", so that sentence
@@ -6241,9 +6302,9 @@ async def _handle_ticket_photos(
     held = set(permission_keys)
     writing = action in ("delete", "update")
     if writing and "ticket.update" not in held:
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "ticket.update")
     if not writing and "ticket.read" not in held:
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "ticket.read")
     said = " ".join(p for p in (str(fields.get("code") or ""), message) if str(p or "").strip())
     try:
         member, ticket = await _ticket_for_photos(client, license_id, ctx, said)
@@ -8176,6 +8237,9 @@ async def _notify_customer(client: DataClient, ticket: dict, text: str, text_en:
     uid = str((ticket or {}).get("customer_chann_uid") or "")
     if not uid:
         return
+    license_id = str((ticket or {}).get("license_id") or "")
+    if license_id and not await entitlements.feature_allowed(client, license_id, "feature.customer_line_link"):
+        return
     try:
         line_uid = await client.line_target_of(uid)
         if not line_uid:
@@ -8683,7 +8747,7 @@ async def _handle_check_in(
     permission_keys: list[str], language: str,
 ) -> ChatReply:
     if "ticket.update" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "ticket.update")
 
     license_id = str(license_id)
     try:
@@ -8691,7 +8755,7 @@ async def _handle_check_in(
             client, license_id, ctx, message, prefer_status=("assigned", "in_progress"),
         )
         if member is None:
-            return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+            return _no_permission(language)
         if ticket is None:
             # Nothing, or several: say which (review, 6 Sep 2026 — the old
             # reply gave "ปิดงาน" as the example for a check-in).
@@ -8852,7 +8916,7 @@ async def _close_from_the_shop(
     three-question report; the cause and the fix are optional (owner,
     16 ก.ย. 2569: "มีช่องให้บันทึกสาเหตุกับการแก้ไขได้ แต่ไม่ได้บังคับ")."""
     if "ticket.close" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "ticket.close")
     code = str(ticket.get("ticket_number") or "")
     ticket_id = str(ticket.get("id") or "")
     cause, fix = _shop_close_details(message, code)
@@ -8912,7 +8976,7 @@ async def _handle_check_out(
     permission_keys: list[str], language: str,
 ) -> ChatReply:
     if "ticket.update" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "ticket.update")
 
     license_id = str(license_id)
 
@@ -9509,7 +9573,7 @@ async def _handle_report_pdf(
     from .report_issue import ReportAlreadyIssued, ReportNotApproved, issue_for_report
 
     if "service_report.read" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "service_report.read")
     license_id = str(license_id)
     match = SERVICE_REPORT_CODE_RE.search(message or "")
     code = match.group(1).upper() if match else ""
@@ -9597,7 +9661,7 @@ async def _handle_report_list(
     one thing they need to know to act on it.
     """
     if "service_report.read" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "service_report.read")
     try:
         member = await client.get_member(str(license_id), ctx.chann_uid, channel=member_channel(ctx.oa))
         rows = await client.list_service_reports(str(license_id))
@@ -9635,7 +9699,7 @@ async def _handle_ticket_detail(
     down, to an apology.
     """
     if "ticket.read" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "ticket.read")
 
     match = TICKET_CODE_RE.search(message or "")
     if not match:
@@ -9776,7 +9840,7 @@ async def _handle_ticket_list(
     unassigned: bool = False,
 ) -> ChatReply:
     if "ticket.read" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "ticket.read")
 
     license_id = str(license_id)
     try:
@@ -10211,7 +10275,7 @@ async def _handle_ticket_release(
     (round 19f). Dispatching's other half — the same permission as assign,
     the same completeness gate."""
     if "ticket.assign" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "ticket.assign")
     license_id = str(license_id)
     match = TICKET_CODE_RE.search(message or "")
     code = match.group(1).upper() if match else ""
@@ -10283,7 +10347,7 @@ async def _handle_ticket_assign(
     # granted assign-but-not-edit was refused here for no reason it could
     # see.
     if "ticket.assign" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "ticket.assign")
 
     # Three things are being said at once — WHICH job, to WHOM, and that
     # it should be dispatched — and until 10 ก.ย. 2569 a message missing
@@ -10745,7 +10809,7 @@ async def _handle_ticket_claim(
     permission_keys: list[str], language: str,
 ) -> ChatReply:
     if "ticket.update" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "ticket.update")
 
     license_id = str(license_id)
     match = TICKET_CODE_RE.search(message or "")
@@ -10754,7 +10818,7 @@ async def _handle_ticket_claim(
     try:
         member = await client.get_member(license_id, ctx.chann_uid, channel=member_channel(ctx.oa))
         if member is None:
-            return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+            return _no_permission(language)
         tickets = await _tickets_this_person_may_see(client, license_id, ctx, member)
 
         if not code:
@@ -10980,7 +11044,7 @@ async def _handle_ticket_reject(
     """12.4: the assignee says no. Back to the dispatcher, who is told,
     and nobody else is given the job by the system."""
     if "ticket.update" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "ticket.update")
     license_id = str(license_id)
     match = TICKET_CODE_RE.search(message or "")
     code = match.group(1).upper() if match else ""
@@ -10998,7 +11062,7 @@ async def _handle_ticket_reject(
     try:
         member = await client.get_member(license_id, ctx.chann_uid, channel=member_channel(ctx.oa))
         if member is None:
-            return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+            return _no_permission(language)
         tickets = await _tickets_this_person_may_see(client, license_id, ctx, member)
         me = str(member["id"])
         mine_pending = [
@@ -11096,7 +11160,7 @@ async def _resolve_ticket_reject_confirm(
             quick_replies=[("งานของฉัน", "งานของฉัน")],
         )
     if "ticket.update" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "ticket.update")
     reason = (message or "").strip()
     for word in ("ยืนยันปฏิเสธ", "ยืนยัน", "confirm"):
         if reason.lower().startswith(word):
@@ -11108,7 +11172,7 @@ async def _resolve_ticket_reject_confirm(
     except Exception:
         member = None
     if member is None:
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language)
     return await _do_ticket_reject(
         client, ctx=ctx, license_id=str(license_id), ticket_id=str(fields.get("ticket_id") or ""),
         code=code, member_id=str(member["id"]), reason=reason or _t(TICKET_REJECT_NO_REASON, language),
@@ -11376,6 +11440,15 @@ async def _handle_approval_list(
     client: DataClient, *, ctx: ResolvedContext, license_id,
     permission_keys: list[str], language: str,
 ) -> ChatReply:
+    if not _plan_has("feature.service"):
+        # Round 21D: approvals are of service reports only (entitlements.py
+        # PERMISSION_FEATURE: "approval." -> feature.service), so a plan without the
+        # feature already lost "approval.view" from `permission_keys`
+        # (effective_keys). Without this check every Starter member, owner
+        # included, fell into APPROVAL_NOT_AN_APPROVER below — a role-gap
+        # message on a plan-locked feature, which reads as "ask the owner
+        # for the role" instead of the truth: upgrade the plan.
+        return _plan_refusal("feature.service", language)
     if "approval.view" not in set(permission_keys):
         # The tile is on every sales menu; a member who is not an approver
         # gets the truthful answer, not a permission wall (review, 6 Sep 2026).
@@ -11417,7 +11490,7 @@ async def _handle_approval_act(
 
     needed = "approval.approve" if approve else "approval.reject"
     if needed not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, needed)
     license_id = str(license_id)
 
     match = SERVICE_REPORT_CODE_RE.search(message or "")
@@ -11565,7 +11638,7 @@ async def _handle_approval_policy(
     from .ai.approval_policy import policy_to_workflow
 
     if "approval.manage" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "approval.manage")
 
     lowered = message.lower()
     index = lowered.find(trigger.lower())
@@ -11623,7 +11696,7 @@ async def _handle_approval_policy_confirm(
     from . import approval as approval_service
 
     if "approval.manage" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "approval.manage")
     if not pending or pending.get("entity") != "approval_workflow":
         return ChatReply(text=_t(APPROVAL_POLICY_NOTHING_PENDING, language))
     rules = (pending.get("fields") or {}).get("rules")
@@ -11634,6 +11707,15 @@ async def _handle_approval_policy_confirm(
             client, license_id=str(license_id), rules_json=rules, actor_chann_uid=ctx.chann_uid,
         )
         await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
+    except DataTierError as exc:
+        # Ruling 27 (round 21D task 11): a Data-tier plan refusal on the
+        # chain save (e.g. a multi-step chain on a plan without
+        # feature.multi_level_approval) is the plan's answer, not a
+        # generic failure.
+        if entitlements.is_plan_refusal(exc):
+            return _plan_reply_from(exc.structured or {}, language)
+        log.exception("saving an approval workflow failed")
+        return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
     except Exception:
         log.exception("saving an approval workflow failed")
         return ChatReply(text=_t(COMPANY_SAVE_FAILED, language))
@@ -11650,7 +11732,7 @@ async def _handle_approval_policy_show(
     from . import approval as approval_service
 
     if not {"approval.manage", "approval.view"} & set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "approval.manage", "approval.view")
     try:
         workflow = await approval_service.current_workflow(client, license_id=str(license_id))
     except Exception:
@@ -11794,7 +11876,7 @@ async def _handle_assignment_policy(
     # setting.manage, not a dedicated key: this is company configuration,
     # and the spec gives assignment rules no permission of their own.
     if "setting.manage" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "setting.manage")
 
     lowered = message.lower()
     index = lowered.find(trigger.lower())
@@ -11854,13 +11936,20 @@ async def _handle_assignment_confirm(
     from .ai.assignment_policy import describe_rule
 
     if "setting.manage" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "setting.manage")
     if not pending or pending.get("entity") != "assignment_rule":
         return ChatReply(text=_t(POLICY_NOTHING_PENDING, language))
 
     rule = (pending.get("fields") or {}).get("rule")
     if not isinstance(rule, dict):
         return ChatReply(text=_t(POLICY_NOTHING_PENDING, language))
+
+    # Ruling 26 (round 21D task 11): a technician-scope rule belongs to
+    # feature.service — setting.manage is always on, so the plan is the
+    # gate here, not the permission key.
+    scope_feature = entitlements.ASSIGNMENT_RULE_SCOPE_FEATURE.get(str(rule.get("scope") or "technician"))
+    if scope_feature and not _plan_has(scope_feature):
+        return _plan_refusal(scope_feature, language)
 
     try:
         await client.upsert_assignment_rule(
@@ -11883,7 +11972,7 @@ async def _handle_assignment_show(
     from .ai.assignment_policy import describe_rule
 
     if "setting.manage" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "setting.manage")
     try:
         rules = await client.get_assignment_rules(str(license_id))
     except Exception:
@@ -11942,7 +12031,7 @@ async def _handle_assignment_close(
     from .ai.assignment_policy import describe_rule
 
     if "setting.manage" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "setting.manage")
     try:
         rules = await client.get_assignment_rules(str(license_id))
     except Exception:  # noqa: BLE001
@@ -11989,7 +12078,7 @@ async def _resolve_assignment_close(
         )
     await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
     if "setting.manage" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "setting.manage")
     try:
         row = await client.deactivate_assignment_rule(str(license_id), scope, actor_id=ctx.chann_uid)
     except Exception:  # noqa: BLE001
@@ -12110,7 +12199,7 @@ async def _handle_quote_issue(
     )
 
     if "quote.update" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "quote.update")
     if not code:
         return ChatReply(text=_t(SEARCH_NEEDS_TERM, language))
 
@@ -13495,6 +13584,11 @@ _ROAD: contextvars.ContextVar[dict | None] = contextvars.ContextVar("chat_road",
 #: The record a quoted LINE reply is about, for the model's reading of the
 #: reply text — set by handle_reply for the one message it dispatches.
 _REPLY_TO: contextvars.ContextVar[dict | None] = contextvars.ContextVar("chat_reply_to", default=None)
+#: Round 21D — (the shop's plan, may this person upgrade it) for the message
+#: being handled. Set by _route_chat_message once the membership and the
+#: role are known; read by every refusal, so a handler that says "no" does
+#: not have to be handed the plan. None outside a message → Pro.
+_PLAN: contextvars.ContextVar[tuple | None] = contextvars.ContextVar("chat_plan", default=None)
 
 
 def _note_road(**facts) -> None:
@@ -13507,6 +13601,87 @@ def _note_road(**facts) -> None:
             # road's own suggest handler stays "suggest→rule".
             continue
         rec[k] = v
+
+
+def _plan_now() -> tuple:
+    held = _PLAN.get()
+    return held if held else (entitlements.PlanView.unknown(), False)
+
+
+def _plan_has(key: str) -> bool:
+    return _plan_now()[0].has(key)
+
+
+def _upgrade_tail(language: str) -> tuple[str | None, tuple[str, str] | None]:
+    """(the contact line, the contact button) from CHANN_SALES_CONTACT —
+    owner decision Q5. The line is None when no contact is configured; the
+    button is None when there is no https url. Shared by the plan refusal
+    and the plan read, so the two never word the contact differently."""
+    contact = entitlements.sales_contact()
+    if not contact:
+        return None, None
+    line = _t(PLAN_REQUIRED_OWNER_TAIL, language).format(contact=contact["label"]) if contact.get("label") else None
+    button = (_t(PLAN_CONTACT_BUTTON, language), contact["url"]) if contact.get("url") else None
+    return line, button
+
+
+def _plan_refusal(feature: str, language: str) -> ChatReply:
+    """Spec §6.2: which plan has it, which plan the shop is on, that
+    nothing was deleted — then who can act on it. Decline-only: nothing
+    here acts on a word."""
+    plan, can_upgrade = _plan_now()
+    lines = [_t(PLAN_REQUIRED, language).format(
+        feature=entitlements.feature_label(feature, language),
+        min_plan=plan.min_label(feature), plan=plan.label,
+    )]
+    button = None
+    if can_upgrade:
+        tail, button = _upgrade_tail(language)
+        lines.append(tail or _t(PLAN_REQUIRED_OWNER_TAIL_NO_CONTACT, language))
+    else:
+        lines.append(_t(PLAN_REQUIRED_MEMBER_TAIL, language))
+    if feature == entitlements.AI_REPORTS:
+        lines.append(_t(AI_REPORTS_LOCKED_HINT, language))
+    return ChatReply(text="\n".join(lines), quick_reply_url=button)
+
+
+def _ai_reports_locked(language: str) -> ChatReply | None:
+    """R4: the one AI-locked guard `_handle_ai_report` and
+    `_handle_basic_report_picture` both call. The picture under a basic
+    report is the metered road (spec §5), so it needs this lock even
+    though the report's own words are one of Starter's free three (owner
+    decision Q3/Q4). None means "not locked — go on"."""
+    if _plan_has(entitlements.AI_REPORTS):
+        return None
+    return _plan_refusal(entitlements.AI_REPORTS, language)
+
+
+def _plan_reply_from(body: dict, language: str) -> ChatReply:
+    """A Data-tier plan refusal (403 plan_required / 409 member_limit_reached)
+    in the same words chat uses for its own."""
+    if (body or {}).get("error") == "member_limit_reached":
+        return ChatReply(text=_t(entitlements.MEMBER_LIMIT_REACHED, language).format(
+            limit=body.get("limit"), plan=entitlements.PLAN_LABELS.get(str(body.get("plan")), str(body.get("plan"))),
+        ))
+    return _plan_refusal(str((body or {}).get("feature") or "feature.service"), language)
+
+
+def _no_permission(language: str, *keys: str, url: tuple[str, str] | None = None) -> ChatReply:
+    """Every "you may not" in chat (round 21D). A key whose feature the
+    shop's plan lacks is answered with the plan; anything else with the
+    permission lead it always had. Plan first: a role grant is irrelevant
+    until the plan has the feature (spec §5.3).
+
+    `keys` are the keys the guard would accept (`not held & VIEW_KEYS`
+    passes a whole any-of set): the plan is the reason only when EVERY
+    one of them is locked. When a role grant of an always-on key would
+    open the door, the permission lead is the true sentence. Sorted, so a
+    frozenset's order never picks the feature named."""
+    features = [entitlements.feature_of(key) for key in sorted(keys)]
+    if features and all(f is not None and not _plan_has(f) for f in features):
+        return _plan_refusal(features[0], language)
+    lead = _t(SUGGEST_NO_PERMISSION_LEAD, language)
+    return ChatReply(text=lead, quick_reply_url=url)
 
 
 def _is_a_button_press(message: str, oa: str) -> bool:
@@ -14185,7 +14360,7 @@ async def _handle_customer_list(
     search_term: str | None = None, stage: str = "",
 ) -> ChatReply:
     if "customer.read" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "customer.read")
     try:
         customers = await client.list_customers(str(license_id))
     except Exception:
@@ -14482,7 +14657,7 @@ async def _handle_customer_detail(
     ctx: ResolvedContext | None = None,
 ) -> ChatReply:
     if "customer.read" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "customer.read")
     if not code and ctx is not None:
         # Bare "ข้อมูลลูกค้า" as a REPLY to a message about someone, or
         # right after working on them, means that person — asking "ระบุ
@@ -15543,7 +15718,7 @@ async def _resolve_line_item_add(
     needed = "quote.update" if kind == "quote" else "deal.update"
     if needed not in set(permission_keys):
         await _drop_pending_quietly(client, ctx)
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, needed)
     final_price = answered_price or price
     if final_price is None:
         # "ใช่" without a price: the line is agreed, the price still is not.
@@ -15577,14 +15752,14 @@ async def _handle_line_item_command(
         if code:
             needed = "quote.update" if code.upper().startswith("Q") else "deal.update"
             if needed not in set(permission_keys):
-                return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+                return _no_permission(language, needed)
             return ChatReply(text=_t(QUOTE_DEAL_NOT_FOUND, language).format(deal_id=code))
         # No deal or quote in play: "เอาสมชายออก" is about a lead, "เพิ่มพัดลม
         # 2 ตัว" about the catalogue — the other readings get the sentence.
         return None
     needed = "quote.update" if kind == "quote" else "deal.update"
     if needed not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, needed)
     where = _where_label(kind, language)
     code = code or ""
     if op == "add" and not cmd.get("more") and not cmd.get("_one_clause"):
@@ -15991,7 +16166,7 @@ async def _handle_staff_ticket_create(
     customer's own report.
     """
     if "ticket.create" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "ticket.create")
 
     issue = str(fields.get("issue_description") or "").strip()
     if not issue:
@@ -16229,7 +16404,7 @@ async def _handle_sales_summary(
     cannot disagree about the shop's own numbers.
     """
     if "deal.read" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "deal.read")
     try:
         summary = await client.pipeline_summary(str(license_id))
     except Exception:
@@ -16611,7 +16786,7 @@ async def _handle_api_key_list(
     client: DataClient, *, ctx: ResolvedContext, license_id, permission_keys: list[str], language: str,
 ) -> ChatReply:
     if "setting.manage" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "setting.manage")
     if not _is_owner_here(ctx):
         return ChatReply(text=_t(API_KEY_OWNER_ONLY, language))
     try:
@@ -16634,7 +16809,7 @@ async def _handle_api_key_revoke(
     permission_keys: list[str], language: str,
 ) -> ChatReply:
     if "setting.manage" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "setting.manage")
     if not _is_owner_here(ctx):
         return ChatReply(text=_t(API_KEY_OWNER_ONLY, language))
     fields = intent.get("fields") or {}
@@ -16700,7 +16875,7 @@ async def _handle_api_key_revoke(
 
 def _handle_api_key_create_pointer(ctx: ResolvedContext, language: str, permission_keys: list[str]) -> ChatReply:
     if "setting.manage" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "setting.manage")
     if not _is_owner_here(ctx):
         return ChatReply(text=_t(API_KEY_OWNER_ONLY, language))
     return ChatReply(text=_t(API_KEY_CREATE_ON_SCREEN, language), quick_reply_url=_dashboard_button("api-keys", language))
@@ -17950,7 +18125,7 @@ async def _handle_quote_status(
     and issue another. Neither was possible from chat.
     """
     if "quote.update" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "quote.update")
     license_id = str(license_id)
     match = re.search(r"(?<![A-Za-z0-9])(Q-\d{4}-\d{4})(?![0-9])", message or "", re.I)
     code = match.group(1).upper() if match else None
@@ -18067,7 +18242,7 @@ async def _handle_quote_discount(
     the quote's discount, not a line's price.
     """
     if "quote.update" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "quote.update")
 
     license_id = str(license_id)
     # The code is stripped first: "ส่วนลด Q-2026-0001 500 บาท" used to read
@@ -18134,7 +18309,7 @@ async def _handle_line_edit(
 
     needed = "quote.update" if kind == "quote" else "deal.update"
     if needed not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, needed)
 
     # Everything after the trigger, minus the codes and the new value, is
     # the product being pointed at.
@@ -18332,7 +18507,7 @@ async def _handle_deal_product_add(
     FAN001" is enough for a shop that has set its prices up.
     """
     if "deal.update" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "deal.update")
 
     license_id = str(license_id)
     text = (message or "")
@@ -18511,7 +18686,7 @@ async def _handle_quote_create_direct(
     system not paying attention.
     """
     if "quote.create" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "quote.create")
 
     license_id = str(license_id)
     # A caller may already have the deal — the model road passes what it
@@ -18863,7 +19038,7 @@ async def _handle_bare_create_prompt(
         if lowered not in {p.lower() for p in phrases}:
             continue
         if needed not in set(permission_keys):
-            return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+            return _no_permission(language, needed)
         return ChatReply(text=_t(prompt, language))
     return None
 
@@ -18967,7 +19142,7 @@ async def _handle_deal_create_direct(
     someone opened seconds ago is almost always the one they mean.
     """
     if "deal.create" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "deal.create")
 
     license_id = str(license_id)
 
@@ -19114,7 +19289,7 @@ async def _handle_deal_close_date(
     reader is what fixes the second — neither alone does both.
     """
     if "deal.update" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "deal.update")
 
     from .thai_datetime import format_thai_date
     from . import deal_fields
@@ -19172,7 +19347,7 @@ async def _handle_deal_query(
     learn which deals are due this week; they ask.
     """
     if "deal.read" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "deal.read")
 
     from datetime import date as _date, timedelta
 
@@ -19288,7 +19463,7 @@ async def _handle_deal_list(
     open_only: bool = False, for_customer: str | None = None,
 ) -> ChatReply:
     if not set(permission_keys) & DEAL_VIEW_KEYS:
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, *DEAL_VIEW_KEYS)
     license_id = str(license_id)
     try:
         deals = await client.list_deals(license_id)
@@ -19416,7 +19591,7 @@ async def _handle_deal_detail(
     ctx: ResolvedContext | None = None,
 ) -> ChatReply:
     if "deal.read" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "deal.read")
     if not code:
         return ChatReply(text=_t(SEARCH_NEEDS_TERM, language))
     try:
@@ -19559,7 +19734,7 @@ async def _handle_product_list(
     """The catalogue — all of it, or the products matching a name
     ("มีสินค้าอะไรบ้างที่เป็น พัดลม", "ค้นหาสินค้า พัดลม")."""
     if not set(permission_keys) & PRODUCT_VIEW_KEYS:
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, *PRODUCT_VIEW_KEYS)
     try:
         products = await client.list_products(str(license_id))
     except Exception:
@@ -19678,7 +19853,7 @@ async def _handle_quote_list(
     wanted: str = "",
 ) -> ChatReply:
     if "quote.read" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "quote.read")
     try:
         quotes = await client.list_quotes(str(license_id))
     except Exception:
@@ -20324,6 +20499,31 @@ SUGGEST_NO_PERMISSION_NAMED = {
     "th": "⛔ คุณยังไม่มีสิทธิ์ทำสิ่งนี้ — ต้องมีสิทธิ์ «{needed}»\nขอได้จากเจ้าของร้านหรือแอดมิน (แดชบอร์ด > จัดการสิทธิ์และบทบาท)",
     "en": "⛔ Not allowed — this needs «{needed}»\nAsk the owner or an admin (dashboard > roles and team)",
 }
+# Round 21D — the plan is the reason (spec §6.2). Five lines at most.
+PLAN_REQUIRED = {
+    "th": "🔒 «{feature}» อยู่ในแพ็กเกจ {min_plan} ขึ้นไป — ร้านนี้ใช้แพ็กเกจ {plan}\n"
+          "ข้อมูลเดิมของร้านยังอยู่ครบ ไม่มีอะไรถูกลบ",
+    "en": "🔒 «{feature}» is included from the {min_plan} plan — this shop is on {plan}.\n"
+          "Nothing the shop already has has been deleted.",
+}
+PLAN_REQUIRED_OWNER_TAIL = {       # the owner, or anyone holding setting.manage
+    "th": "อยากเปิดใช้: ติดต่อทีม Chann1 CRM AI {contact}",
+    "en": "To upgrade, contact the Chann1 CRM AI team {contact}",
+}
+#: CHANN_SALES_CONTACT unset (owner decision Q5): no button, and these words.
+PLAN_REQUIRED_OWNER_TAIL_NO_CONTACT = {
+    "th": "อยากเปิดใช้: ติดต่อทีม Chann1 CRM AI ที่ดูแลร้านของคุณ",
+    "en": "To upgrade, contact the Chann1 CRM AI team that looks after your shop.",
+}
+PLAN_REQUIRED_MEMBER_TAIL = {
+    "th": "ถ้าต้องการใช้ แจ้งเจ้าของร้านได้เลย",
+    "en": "If you need it, let the shop owner know.",
+}
+AI_REPORTS_LOCKED_HINT = {        # appended on Starter's AI-report refusal
+    "th": "รายงานพื้นฐาน (มูลค่าดีลทั้งหมด · ยอดปิดเดือนนี้ · ยอดค้างชำระ) ยังถามได้ฟรีเสมอ",
+    "en": "The basic reports (pipeline value · won this month · outstanding invoices) are always free.",
+}
+PLAN_CONTACT_BUTTON = {"th": "ติดต่อทีม Chann1", "en": "Contact Chann1"}
 SUGGEST_UNKNOWN_FEATURE_LEAD = {
     "th": "ระบบยังไม่มีฟังก์ชันนี้ครับ",
     "en": "That is not a feature yet.",
@@ -21342,7 +21542,20 @@ def suggest_what_you_can_do(
     a member with nothing at all is told to ask, not sent to a guide of
     things they cannot do. `catalog` is used only to name the missing
     permission in the member's language.
+
+    Round 21D: a feature the shop's plan lacks is answered with the plan,
+    before anything about permissions — a Starter technician holds
+    nothing, and "ask for a permission" is the wrong sentence for them
+    (spec §5.3). The order stays unknown → wrong OA → plan → permission.
     """
+    if requested_entity:
+        needed_here = required_permission(requested_action or "", requested_entity)
+        feature = entitlements.feature_for_intent(requested_action or "", requested_entity, needed_here)
+        if (
+            feature is not None and not _plan_has(feature)
+            and (needed_here is None or _oa_allows(oa, needed_here))
+        ):
+            return _plan_refusal(feature, language).text
     held = set(permission_keys)
     if not held:
         return _t(SUGGEST_NOTHING, language)
@@ -22701,7 +22914,7 @@ async def _handle_deal_archive(
     "ลบดีล" typed in passing is too cheap a sentence for that — the same
     reasoning as the customer archive, whose flow this mirrors."""
     if "deal.archive" not in set(permission_keys) or not _oa_allows(ctx.oa, "deal.archive"):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "deal.archive")
 
     fields = intent.get("fields") or {}
     code = str(fields.get("deal_code") or fields.get("code")
@@ -22772,7 +22985,7 @@ async def _resolve_deal_archive_confirm(
         )
     if "deal.archive" not in set(permission_keys) or not _oa_allows(ctx.oa, "deal.archive"):
         await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "deal.archive")
     await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
     if len(rows) > 1:
         done: list[str] = []
@@ -23244,7 +23457,7 @@ async def _handle_product_archive(
     the confirmation says so rather than leaving the person to wonder.
     """
     if "product.manage" not in set(permission_keys) or not _oa_allows(ctx.oa, "product.manage"):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "product.manage")
 
     fields = intent.get("fields") or {}
     named = next(
@@ -23287,7 +23500,7 @@ async def _resolve_product_archive_confirm(
         )
     if "product.manage" not in set(permission_keys) or not _oa_allows(ctx.oa, "product.manage"):
         await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "product.manage")
     await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
     try:
         await client.archive_product(
@@ -23758,7 +23971,7 @@ async def _handle_invoice_list(
     language: str, outstanding_only: bool = False,
 ) -> ChatReply:
     if "invoice.read" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "invoice.read")
     try:
         rows, total = await client.list_invoices_with_total(str(license_id), limit=200)
     except Exception:
@@ -23816,7 +24029,7 @@ async def _handle_invoice_detail(
     from .documents.snapshot import PAYMENT_METHOD_LABELS
 
     if "invoice.read" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "invoice.read")
     row = await _invoice_by_code(client, license_id, code)
     if row is None:
         return ChatReply(text=_t(NOT_FOUND_BY_CODE, language).format(what=_entity_noun("invoice", language), code=code))
@@ -23980,7 +24193,7 @@ async def _handle_invoice_create(
     from . import invoices as invoice_service
 
     if "invoice.create" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "invoice.create")
     license_id = str(license_id)
     quote_code = ""
     deal_code = ""
@@ -24148,7 +24361,7 @@ async def _handle_invoice_issue(
     """"ออกใบแจ้งหนี้ INV-…": the PDF for an invoice that exists (a draft, or
     a re-issue with "ใหม่")."""
     if "invoice.update" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "invoice.update")
     row = await _invoice_by_code(client, license_id, code)
     if row is None:
         return ChatReply(text=_t(NOT_FOUND_BY_CODE, language).format(what=_entity_noun("invoice", language), code=code))
@@ -24286,7 +24499,7 @@ async def _handle_invoice_payment(
     from . import invoices as invoice_service
 
     if "invoice.update" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "invoice.update")
     code = _invoice_code_in(fields, message)
     # Which bill (controller ruling c). A code the sentence or the model
     # gave — the model fills it from the recent turns — is recorded at
@@ -24383,7 +24596,7 @@ async def _resolve_invoice_pay_amount(
         return ChatReply(text=_t(INVOICE_PAYMENT_CANCELLED, language).format(code=code))
     if "invoice.update" not in set(permission_keys):
         await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "invoice.update")
 
     amount, full, method = None, False, None
     plain = _PLAIN_AMOUNT_RE.match(message or "")
@@ -24456,7 +24669,7 @@ async def _handle_invoice_receipt(
     from . import invoices as invoice_service
 
     if "invoice.update" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "invoice.update")
     if not code:
         ref = await _last_entity_ref(client, ctx)
         if ref and str(ref.get("entity_type") or "") == "invoice" and ref.get("code"):
@@ -24508,7 +24721,7 @@ async def _handle_invoice_void(
     """"ยกเลิกใบแจ้งหนี้ INV-…": asks first, like the archives; refused by
     the Data tier once money was received."""
     if "invoice.void" not in set(permission_keys) or not _oa_allows(ctx.oa, "invoice.void"):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "invoice.void")
     if not code:
         ref = await _last_entity_ref(client, ctx)
         if ref and str(ref.get("entity_type") or "") == "invoice" and ref.get("code"):
@@ -24558,7 +24771,7 @@ async def _resolve_invoice_void_confirm(
         )
     await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
     if "invoice.void" not in set(permission_keys) or not _oa_allows(ctx.oa, "invoice.void"):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "invoice.void")
     try:
         row = await client.void_invoice(str(license_id), str(held.get("invoice_id") or ""), actor_id=ctx.chann_uid)
     except DataTierError as exc:
@@ -24845,7 +25058,7 @@ async def _handle_invoice_edit(
 
     fields = fields or {}
     if "invoice.update" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "invoice.update")
     code = _invoice_code_in(fields, message)
     if not code:
         ref = await _last_entity_ref(client, ctx)
@@ -24947,7 +25160,7 @@ async def _resolve_invoice_edit_confirm(
         )
     await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
     if "invoice.update" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "invoice.update")
     invoice = await _invoice_by_code(client, license_id, code)
     if invoice is None:
         return ChatReply(text=_t(NOT_FOUND_BY_CODE, language).format(
@@ -25223,7 +25436,11 @@ async def _handle_document_send(
     fields = fields or {}
     needed = "quote.update" if entity == "quote" else "invoice.update"
     if needed not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, needed)
+    # Round 21D: no plan check here. `("send", "quote"/"invoice")` is a
+    # NAMED_FEATURE_CHECKS entry, and the only callers are the quote and
+    # invoice intent handlers `_execute_intent` dispatches to AFTER its
+    # central plan gate — a Starter shop never reaches this line.
 
     # Which document. The model's `kind` WINS; the sentence is read only
     # when the model named none — the same shape `_is_an_invoice_correction`
@@ -26209,7 +26426,7 @@ async def _handle_technician_situation(
     # "the road below the gate" is the exact shape of every hole this
     # session has closed (11 ก.ย. 2569).
     if "ticket.update" not in set(permission_keys) or not _oa_allows(ctx.oa, "ticket.update"):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "ticket.update")
     license_id = str(license_id)
     label = _t(_SITUATION_LABEL[kind], language)
     try:
@@ -26568,7 +26785,7 @@ async def _handle_quote_detail(
     client: DataClient, *, ctx: ResolvedContext, license_id, code: str, permission_keys: list[str], language: str,
 ) -> ChatReply:
     if "quote.read" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "quote.read")
     license_id = str(license_id)
     try:
         quotes = await client.list_quotes(license_id)
@@ -26609,7 +26826,7 @@ async def _handle_report_detail(
     client: DataClient, *, ctx: ResolvedContext, license_id, code: str, permission_keys: list[str], language: str,
 ) -> ChatReply:
     if "service_report.read" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "service_report.read")
     license_id = str(license_id)
     try:
         rows = await client.list_service_reports(license_id)
@@ -26792,6 +27009,7 @@ async def handle_chat_message(
     (B14); _route_chat_message is the router itself."""
     message = _normalise_message(message)
     token = _ROAD.set({"oa": ctx.oa})
+    plan_token = _PLAN.set(None)
     started = monotonic()
     try:
         reply = await _handle_chat_message_inner(
@@ -26800,6 +27018,7 @@ async def handle_chat_message(
     finally:
         rec = _ROAD.get() or {}
         _ROAD.reset(token)
+        _PLAN.reset(plan_token)
     road = str(rec.get("road") or "prelude")
     try:
         _ai_metrics.record_road(ctx.oa, road)
@@ -27003,6 +27222,20 @@ async def _route_chat_message(
             text=_t(TENANT_SUSPENDED, language).format(company=member.get("company_name") or ""),
         )
 
+    # Round 21D — the two OA-level declines (spec §7.2/§7.3): decided by the
+    # OA the message arrived on, never by a role string (boundary rule; see
+    # `INVITE_FEATURE_BY_ROLE` above for the same lookup-not-comparison
+    # shape). `plan_here` is read once and reused by the customer branch
+    # below.
+    plan_here = entitlements.PlanView.from_payload(member.get("plan"))
+    if ctx.oa == "technician" and not plan_here.has("feature.service") \
+            and _language_switch_requested(message) is None and not _looks_like_profile_edit(message):
+        # Spec §7.2: once per message; profile, language and the shop
+        # switch (handled above) still work — they are not the shop's feature.
+        _note_road(road="plan_locked")
+        return ChatReply(text=_t(entitlements.TECH_OA_PLAN_LOCKED, language).format(
+            company=member.get("company_name") or "", plan=plan_here.label))
+
     if ctx.oa == "customer":
         # A customer is linked through customer_license_links and holds no
         # license_members row BY DESIGN (Phase 6.5: linking must never
@@ -27012,6 +27245,23 @@ async def _route_chat_message(
         # fault at all (3 Sep). Their branch checks no permission keys.
         permission_keys: list[str] = []
         context: dict = {}
+        _PLAN.set((plan_here, False))
+        if not plan_here.has("feature.customer_line_link"):
+            # Spec §7.3: the storefront is platform-wide, not this shop's
+            # feature — it still answers. Everything else about the shop
+            # gets one sentence; the link row is kept (nothing here writes).
+            browsed = await maybe_handle_storefront(client, message=message, ctx=ctx, language=language)
+            if browsed is not None:
+                return browsed
+            phone = ""
+            try:
+                profile = await client.get_company_profile(str(license_id))
+                phone = str((profile or {}).get("company_phone") or "")
+            except Exception:  # noqa: BLE001 — the sentence works without the number
+                log.exception("could not read the shop's phone for a locked customer reply")
+            _note_road(road="plan_locked")
+            return ChatReply(text=entitlements.customer_oa_plan_locked_reply(
+                member.get("company_name") or "", phone, language))
         # A product list waiting for its number is answered here, before
         # anything reads the digit as a greeting or a menu pick (audit,
         # 15 ก.ย. 2569: "2" after "สินค้าทั้งหมด" was "สวัสดีครับ").
@@ -27067,7 +27317,14 @@ async def _route_chat_message(
         )
         if context is None:
             return ChatReply(text=_t(REPLY_NOT_REGISTERED, language))
-        permission_keys = list(context.get("permission_keys") or [])
+        # Round 21D: role grants MINUS what the plan locks — in one place,
+        # so every `"x" in set(permission_keys)` below is plan-aware
+        # without being edited (spec §5.1). Order preserved.
+        plan = entitlements.PlanView.from_payload(member.get("plan"))
+        role_keys = list(context.get("permission_keys") or [])
+        effective, _locked = entitlements.effective_keys(role_keys, plan)
+        permission_keys = [key for key in role_keys if key in effective]
+        _PLAN.set((plan, bool(context.get("is_owner")) or "setting.manage" in effective))
 
     # "สร้างรายงานด้วย AI: …" is the person saying which road they want, so
     # it is honoured before any road can take the sentence for something
@@ -28866,11 +29123,18 @@ async def _route_chat_message(
                 language=language,
             )
         if _matches_phrase(message, SALES_PRODUCT_LIST_PHRASES) or _is_bare_word(message, BARE_PRODUCT_WORDS) or (
-            # "ราคาแอร์เท่าไหร่" on the staff OA: the catalogue with prices.
-            # Not while "รับชำระ INV-… เท่าไหร่ครับ" is open: "ค้างเท่าไหร่นะ"
-            # is about that bill and belongs to its own answer road (round
-            # 21E fix round 4), not to the product price list.
-            not (early_pending and str(early_pending.get("entity") or "") == "invoice_pay_amount")
+            # "ราคาแอร์เท่าไหร่" on the staff OA: the catalogue with prices —
+            # only after the model had its read and shrugged (`why is None`:
+            # the sentence went to the model above). Round 21D final fix
+            # (Task 10, fix round 1): with a form or a question pending the
+            # model was skipped (road=pending), and "เหลือเครดิตรายงาน AI
+            # เท่าไหร่" was answered with the product list by the word
+            # "เท่าไหร่". A word may decline, never act (docs/MODEL_FIRST.md):
+            # the sentence goes on to the tail, whose model road reads it with
+            # the pending in view. This also covers "รับชำระ INV-… เท่าไหร่ครับ"
+            # (round 21E fix round 4): that pending is road=pending too. A help
+            # menu does NOT skip the model, so it behaves as nothing held.
+            why is None
             and _asks_price(message) and _looks_like_a_question(message)
             and not re.search(r"(?<![A-Za-z0-9])(?:SR|[CDQT])-\d{4}-\d{4}", message or "", re.I)
             and not any(w in _canonical(message) for w in ("ดีล", "ใบเสนอ", "ส่วนลด", "quote", "deal", "ค่าแรง", "ค่าบริการ"))
@@ -29873,7 +30137,7 @@ async def _handle_transfer_intent(
     owners, old and new, because "โอนแล้ว" alone cannot be checked."""
     license_id = str(license_id)
     if "reassign_records" not in set(permission_keys) or not _oa_allows(ctx.oa, "reassign_records"):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language), quick_reply_url=_guide_button(ctx.oa, language))
+        return _no_permission(language, "reassign_records", url=_guide_button(ctx.oa, language))
     entity = str(intent.get("entity") or "customer")
     fields = intent.get("fields") or {}
     to_name = next((str(fields[k]).strip() for k in ("to_name", "to_target_name", "new_owner", "owner", "assigned_to", "member", "to") if fields.get(k)), "")
@@ -30005,7 +30269,7 @@ async def _resolve_transfer_all_confirm(
         )
     await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
     if "reassign_records" not in set(permission_keys) or not _oa_allows(ctx.oa, "reassign_records"):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "reassign_records")
     license_id = str(license_id)
     ids = [str(i) for i in (fields.get("customer_ids") or [])]
     rows = {str(r.get("id")): r for r in await client.list_customers(license_id)}
@@ -30067,14 +30331,80 @@ def _as_a_survey_question(intent: dict, message: str) -> dict:
     return {**intent, "action": "read", "entity": "survey"}
 
 
+PLAN_READ_HEAD = {"th": "แพ็กเกจของร้าน: {plan}", "en": "The shop's plan: {plan}"}
+PLAN_READ_INCLUDED = {"th": "มีในแพ็กเกจ: {features}", "en": "Included: {features}"}
+PLAN_READ_USERS = {"th": "ผู้ใช้ {n}/{limit} คน", "en": "Users {n}/{limit}"}
+PLAN_READ_USERS_UNCAPPED = {"th": "ผู้ใช้ {n} คน · ไม่จำกัด", "en": "Users {n} · no cap"}
+PLAN_READ_CREDITS = {"th": "เครดิตรายงาน AI เดือนนี้ {used}/{allowance}", "en": "AI report credits this month {used}/{allowance}"}
+PLAN_READ_NO_AI = {"th": "ถามรายงานด้วย AI: มีในแพ็กเกจ {min_plan} ขึ้นไป", "en": "AI reports: from the {min_plan} plan"}
+PLAN_READ_LOCKED = {"th": "ยังไม่มีในแพ็กเกจนี้: {features}", "en": "Not in this plan: {features}"}
+PLAN_READ_BUTTON = {"th": "ดูแพ็กเกจบนหน้าจอ", "en": "Open the plan"}
+PLAN_READ_UNAVAILABLE = {
+    "th": "ขออภัย ตอนนี้อ่านข้อมูลแพ็กเกจไม่ได้ กรุณาลองใหม่อีกครั้ง",
+    "en": "Sorry, the plan cannot be read right now. Please try again.",
+}
+
+
+async def _handle_plan_read(
+    client: DataClient, *, ctx: ResolvedContext, license_id, permission_keys: list[str], language: str,
+) -> ChatReply:
+    """Round 21D — the plan card in words (spec §6.1): the plan, what it
+    includes, users n/limit, AI credits used/allowance this month, what the
+    plan does not have, and — only when CHANN_SALES_CONTACT is set and there
+    is a plan above — who to ask for more. Six lines at most. Reads the
+    Data tier each time: usage moves with every join and every report.
+    plan_for fails open to Pro for GATING (spec §5.1); a read whose job is
+    to say the plan answers "cannot read it now" instead of that fallback."""
+    if "setting.manage" not in set(permission_keys):
+        return _no_permission(language, "setting.manage")
+    plan, usage = await entitlements.plan_for(client, str(license_id))
+    if not plan.known:
+        return ChatReply(text=_t(PLAN_READ_UNAVAILABLE, language), intent={"action": "read", "entity": "plan"})
+    n = int(usage.get("members") or 0)
+    lines = [_t(PLAN_READ_HEAD, language).format(plan=plan.label)]
+    included = [key for key in entitlements.FEATURE_LABELS if key in plan.features]
+    if included:
+        lines.append(_t(PLAN_READ_INCLUDED, language).format(
+            features=" · ".join(entitlements.feature_label(key, language) for key in included)))
+    lines.append(
+        _t(PLAN_READ_USERS, language).format(n=n, limit=plan.members_limit)
+        if plan.members_limit is not None else _t(PLAN_READ_USERS_UNCAPPED, language).format(n=n)
+    )
+    if plan.has(entitlements.AI_REPORTS):
+        lines.append(_t(PLAN_READ_CREDITS, language).format(
+            used=int(usage.get("ai_reports_used") or 0), allowance=plan.ai_allowance))
+    else:
+        lines.append(_t(PLAN_READ_NO_AI, language).format(min_plan=plan.min_label(entitlements.AI_REPORTS)))
+    locked = dict(plan.locked)
+    missing = [key for key in entitlements.FEATURE_LABELS if key in locked and key != entitlements.AI_REPORTS]
+    if missing:
+        lines.append(_t(PLAN_READ_LOCKED, language).format(features=" · ".join(
+            f"{entitlements.feature_label(key, language)} ({plan.min_label(key)}+)" for key in missing)))
+    url = dashboard_link("company", ctx.oa)
+    button = (_t(PLAN_READ_BUTTON, language), url) if url else None
+    # The upgrade contact only when it is configured (owner decision Q5)
+    # and there is a plan to move to. An empty url draws no button.
+    if plan.code != entitlements.PLAN_ORDER[-1]:
+        tail, contact_button = _upgrade_tail(language)
+        if tail:
+            lines.append(tail)
+            button = contact_button or button
+    return ChatReply(text="\n".join(lines), quick_reply_url=button,
+                     intent={"action": "read", "entity": "plan"})
+
+
 async def _handle_survey_summary(
     client: DataClient, *, intent: dict, ctx: ResolvedContext, license_id, message: str,
     permission_keys: list[str], language: str,
 ) -> ChatReply:
     """"คะแนนความพึงพอใจ" / "ความพึงพอใจเดือนนี้" / "ความพึงพอใจของช่าง สมศักดิ์"
     — the same figures the satisfaction page shows, in a few lines."""
+    if not _plan_has("feature.service"):
+        # Round 21D: ("read", "survey") is a named service check (surveys
+        # follow service reports); guarded here by always-on view_reports.
+        return _plan_refusal("feature.service", language)
     if "view_reports" not in set(permission_keys) or not _oa_allows(ctx.oa, "view_reports"):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language), quick_reply_url=_guide_button(ctx.oa, language))
+        return _no_permission(language, "view_reports", url=_guide_button(ctx.oa, language))
     fields = intent.get("fields") or {}
     days = _survey_days(message, str(fields.get("period") or ""))
     window = _t(SURVEY_WINDOW[days], language)
@@ -30181,7 +30511,7 @@ async def _execute_bulk(
     verb, entity = _canonical_verb(items[0]), str(items[0].get("entity") or "")
     needed = required_permission(verb, entity)
     if needed is not None and (needed not in set(permission_keys) or not _oa_allows(ctx.oa, needed)):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language), quick_reply_url=_guide_button(ctx.oa, language))
+        return _no_permission(language, needed, url=_guide_button(ctx.oa, language))
     license_id = str(license_id)
     _note_road(road="bulk", verb=verb, entity=entity, n=len(items))
 
@@ -30503,6 +30833,24 @@ async def _execute_intent(
     req_action = intent.get("action", "")
     req_entity = intent.get("entity")
     needed = required_permission(req_action, req_entity)
+    # Round 21D — the plan, before the permission (spec §5.3): unknown
+    # feature → wrong OA → PLAN → permission → handler. The feature comes
+    # from the model's (action, entity): the key family, or a named check
+    # for a feature that shares its key with always-on work. Decline-only:
+    # it answers "your shop's plan does not have this" and acts on nothing.
+    # Not on the customer OA: a customer is not the shop and cannot change
+    # its plan — the customer channel's own plan road (§7.3) answers them.
+    if needed is not None and ctx.oa != "customer" and _oa_allows(ctx.oa, needed):
+        feature = entitlements.feature_for_intent(req_action, req_entity, needed)
+        if req_entity == "team" and not _reads_as_technician_team(intent):
+            # Ruling 25: entity=team is also the SALES-groups road, which is
+            # always on. Only the model's explicit technician scope is
+            # refused here; any other team reading goes on to the dispatch,
+            # and the technician-team handler declines on plan itself.
+            feature = None
+        if feature is not None and not _plan_has(feature):
+            _note_road(road="plan_locked")
+            return _plan_refusal(feature, language)
     if (
         needed is None
         or needed not in set(permission_keys)
@@ -30577,6 +30925,12 @@ async def _execute_intent(
         return await _handle_assignment_rule_intent(
             client, intent=intent, ctx=ctx, license_id=license_id, message=message,
             permission_keys=permission_keys, language=language, ai_client=ai_client,
+        )
+    # Round 21D — the plan card in words. The entity is the model's
+    # reading (measured, plan-readings-{before,after}.txt); no word acts.
+    if intent.get("entity") == "plan":
+        return await _handle_plan_read(
+            client, ctx=ctx, license_id=license_id, permission_keys=permission_keys, language=language,
         )
 
     # Domain execution. Phase 9 adds real customer/deal CRUD; everything
@@ -30809,6 +31163,21 @@ async def _sales_group_named(client: DataClient, license_id: str, fragment: str)
     return loose[0] if len(loose) == 1 else None
 
 
+#: The model's own scope words for a technician team (INTENT_SYSTEM_PROMPT
+#: asks for "scope" on entity=team).
+_TECHNICIAN_SCOPES = ("technician", "technicians", "ช่าง")
+
+
+def _reads_as_technician_team(intent: dict) -> bool:
+    """Round 21D (Ruling 25): did the MODEL say this team sentence is about
+    technician teams? Its reading only — never the sentence's words — so
+    the plan gate cannot be steered by phrasing. A reading with no scope is
+    not claimed; the dispatch below decides the road, and every road that
+    writes technician teams declines on plan on its own."""
+    scope = str((intent.get("fields") or {}).get("scope") or "").strip().lower()
+    return scope in _TECHNICIAN_SCOPES
+
+
 def _is_a_sales_group(intent: dict, message: str) -> bool:
     """Did this team sentence mean the SALES groups table?
 
@@ -30852,7 +31221,7 @@ async def _handle_sales_group_intent(
     road and the confirmation may arrive after a role change.
     """
     if "team.manage" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "team.manage")
 
     action = str(intent.get("action") or "").strip().lower()
     fields = intent.get("fields") or {}
@@ -30966,7 +31335,14 @@ async def _handle_team_intent(
     """A team request the model read, routed to the handler the typed words
     reach. _maybe_handle_teams parses a sentence, so the model's reading is
     rebuilt into one — and when it declines (returns None) the honest reply
-    with the Teams page is what comes back, never silence."""
+    with the Teams page is what comes back, never silence.
+
+    Round 21D (Ruling 25): technician teams are `feature.service`. The
+    central gate refuses only a reading that SAYS technician; a scope-less
+    team reading that the dispatch did not take for a sales group lands
+    here, and is declined on plan before anything is read or written."""
+    if not _plan_has("feature.service"):
+        return _plan_refusal("feature.service", language)
     action = str(intent.get("action") or "")
     fields = intent.get("fields") or {}
     name = str(fields.get("team_name") or fields.get("name") or "").strip()
@@ -31094,6 +31470,7 @@ ENTITY_DASHBOARD_PAGE: dict[str, tuple[str, dict[str, str]]] = {
     "team": ("teams", {"th": "ทีม", "en": "Teams"}),
     "survey": ("reports/satisfaction", {"th": "ความพึงพอใจ", "en": "Satisfaction"}),
     "assignment_rule": ("company", {"th": "ข้อมูลบริษัท", "en": "Company"}),
+    "plan": ("company", {"th": "ข้อมูลบริษัท (แพ็กเกจ)", "en": "Company details (plan)"}),
     "sales_group": ("teams", {"th": "ทีม", "en": "Teams"}),
     "member": ("members", {"th": "สมาชิกและสิทธิ์", "en": "Members and permissions"}),
     "role": ("roles", {"th": "บทบาทและสิทธิ์", "en": "Roles and permissions"}),
@@ -31329,6 +31706,9 @@ async def _handle_basic_report_picture(
     allowance the numbers still come back and the picture is withheld,
     said with the number and the date it resets.
     """
+    locked = _ai_reports_locked(language)
+    if locked is not None:
+        return locked
     from . import basic_reports, chart_plan, chart_quota, reports_ai
 
     try:
@@ -31385,7 +31765,9 @@ async def _handle_basic_report(
     from . import basic_reports
 
     if "view_reports" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "view_reports")
+    if key in entitlements.SERVICE_BASIC_REPORTS and not _plan_has("feature.service"):
+        return _plan_refusal("feature.service", language)
     try:
         report = await basic_reports.fetch(client, license_id=str(license_id), key=key)
     except DataTierError:
@@ -31393,18 +31775,20 @@ async def _handle_basic_report(
         return ChatReply(text=_t(AI_REPORT_UNAVAILABLE, language))
     text = basic_reports.as_text(report, language)
     said = "th" if language != "en" else "en"
-    buttons: list[tuple[str, str]] = [(
-        _t(BASIC_REPORT_PICTURE, language),
-        _t(BASIC_REPORT_PICTURE_SAYS, language).format(
-            title=basic_reports.TITLES[key][said]),
-    )]
-    # The other four, every time: the question a person asks next is
-    # usually one of them, and a button is cheaper than a sentence they
-    # have to phrase (spec §5 — "the other four reports, and ดูเป็นรูป").
+    buttons: list[tuple[str, str]] = []
+    if _plan_has(entitlements.AI_REPORTS):
+        # The picture is the metered road; Starter has none (round 21D).
+        buttons.append((
+            _t(BASIC_REPORT_PICTURE, language),
+            _t(BASIC_REPORT_PICTURE_SAYS, language).format(
+                title=basic_reports.TITLES[key][said]),
+        ))
+    # The others, every time — the ones this plan has (owner decision Q4).
     buttons += [
         (_t(BASIC_REPORT_SHORT.get(other) or basic_reports.TITLES[other], language),
          f"{BASIC_REPORT_PREFIX} {other}")
-        for other in basic_reports.REPORT_KEYS if other != key
+        for other in basic_reports.REPORT_KEYS
+        if other != key and (other not in entitlements.SERVICE_BASIC_REPORTS or _plan_has("feature.service"))
     ]
     return ChatReply(text=text, quick_replies=buttons,
                      intent={"action": "report", "entity": key})
@@ -31478,7 +31862,7 @@ async def _handle_ai_report(
     from . import reports_ai
 
     if "view_reports" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "view_reports")
     company = ""
     try:
         company = str((ctx.memberships[0] if ctx.memberships else {}).get("company_name") or "")
@@ -31520,6 +31904,22 @@ async def _handle_ai_report(
                 client, ctx=ctx, license_id=license_id, key=fixed,
                 permission_keys=permission_keys, language=language,
             )
+    # Fix round 1 (task 9 review, Critical): the lock sits HERE, after the
+    # free five's own short-circuits, not at the top of this function.
+    # Placed at the top it also caught a Starter's own free-report BUTTON
+    # ("รายงาน: <key>" is a postback, which the pre-model trigger routes
+    # into this same function) and dead-ended it on the AI refusal — owner
+    # decision Q4 says Starter's three free reports, buttons included,
+    # keep working. Only the true ad-hoc/model road below is metered and
+    # locked; the picture road is guarded separately in
+    # _handle_basic_report_picture, and a basic report's own service gate
+    # is in _handle_basic_report.
+    locked = _ai_reports_locked(language)
+    if locked is not None:
+        # Round 21D: locked, not used up — no model call, no credit. The
+        # typed "สร้างรายงานด้วย AI:" prefix declines here (a word declining
+        # is allowed; spec §5.3).
+        return locked
     quota = None
     try:
         out = await reports_ai.handle_report_request(
@@ -31818,7 +32218,7 @@ async def _handle_sales_chart(
 
     kind = str(request.get("kind") or "pipeline")
     if CHART_PERMISSION.get(kind, "view_reports") not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, CHART_PERMISSION.get(kind, "view_reports"))
     company = ""
     try:
         company = str((ctx.memberships[0] if ctx.memberships else {}).get("company_name") or "")
@@ -31946,7 +32346,7 @@ async def _resolve_customer_duplicate(
     # row, and it checked neither the key nor the channel (10 ก.ย. 2569).
     if "customer.update" not in set(permission_keys) or not _oa_allows(ctx.oa, "customer.update"):
         await _drop_pending_quietly(client, ctx)
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "customer.update")
     fields = pending.get("fields") or {}
     existing = fields.get("existing") or {}
     new_fields = fields.get("new_fields") or {}
@@ -32005,7 +32405,7 @@ async def _resolve_customer_merge_confirm(
     # row, and it checked neither the key nor the channel (10 ก.ย. 2569).
     if "customer.update" not in set(permission_keys) or not _oa_allows(ctx.oa, "customer.update"):
         await _drop_pending_quietly(client, ctx)
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "customer.update")
     fields = pending.get("fields") or {}
     existing = fields.get("existing") or {}
     conflicts = fields.get("conflicts") or {}
@@ -32064,7 +32464,7 @@ async def _handle_lead_archive_request(
     """Issue 3: "ลบ Lead สมชาย" / "ลบ Lead นี้". Archive is the platform's
     soft delete; it needs customer.archive and an explicit confirmation."""
     if "customer.archive" not in set(permission_keys) or not _oa_allows(ctx.oa, "customer.archive"):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language), quick_reply_url=_guide_button(ctx.oa, language))
+        return _no_permission(language, "customer.archive", url=_guide_button(ctx.oa, language))
     license_id = str(license_id)
     if name:
         row, problem = await _find_one_customer_by_name(
@@ -32118,7 +32518,7 @@ async def _resolve_archive_confirm(
     # Re-checked at execution: the confirmation may arrive after a role change.
     if "customer.archive" not in set(permission_keys):
         await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "customer.archive")
     await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
     if len(rows) > 1:
         done: list[dict] = []
@@ -32169,7 +32569,7 @@ async def _maybe_lead_cleanup_setting(
     if not _oa_allows(ctx.oa, "setting.manage"):
         return None
     if "setting.manage" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "setting.manage")
     if set_match or off:
         # The number is pulled with a bare re.search, which happily ignores
         # a trailing question — so "ตั้งค่าลบ lead อัตโนมัติ 90 วัน ได้ยังไง
@@ -32269,7 +32669,7 @@ async def _resolve_deal_context_confirm(
                      )
     await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
     if "deal.create" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "deal.create")
     return await _apply_deal_create(
         client, contact=contact, fields=deal_fields, ctx=ctx,
         license_id=str(license_id), language=language, used_context=True,
@@ -32379,7 +32779,7 @@ async def _handle_sales_interest(
         ):
             return None
     if "deal.create" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "deal.create")
     try:
         pending = await client.get_pending_intent(ctx.chann_uid, ctx.oa)
     except Exception:
@@ -32416,7 +32816,7 @@ async def _resolve_deal_item_confirm(
         )
     await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
     if "deal.create" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "deal.create")
     license_id = str(license_id)
     reply = await _apply_deal_create(
         client, contact=contact, fields={}, ctx=ctx, license_id=license_id, language=language,
@@ -32668,7 +33068,7 @@ async def _resolve_draft_customer_deal_confirm(
     await client.clear_pending_intent(ctx.chann_uid, ctx.oa)
     keys = set(permission_keys)
     if "customer.create" not in keys or "deal.create" not in keys:
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "customer.create", "deal.create")
     license_id = str(license_id)
     editable = {k: v for k, v in draft.items() if k in ("first_name", "last_name", "phone", "email", "address", "notes") and v not in (None, "")}
     try:
@@ -32976,7 +33376,7 @@ async def _handle_bulk_customer_add(
     # write on the AI road passes _oa_allows; this one and the phone
     # resolver below were the two that did not.
     if "customer.create" not in set(permission_keys) or not _oa_allows(ctx.oa, "customer.create"):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "customer.create")
     license_id = str(license_id)
     saved: list[str] = []
     skipped: list[str] = []
@@ -33110,7 +33510,7 @@ async def _resolve_bulk_customer_phone(
     elif _looks_like_phone(text) or re.fullmatch(r"\+?[\d\-\s().]{8,16}", text):
         if "customer.create" not in set(permission_keys):
             await _drop_pending_quietly(client, ctx)
-            return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+            return _no_permission(language, "customer.create")
         outcome, row = await _bulk_create_one(
             client, str(license_id), ctx, {**current, "phone": re.sub(r"[\s-]", "", text)}, fields.get("owner_id"), language,
         )
@@ -33165,6 +33565,9 @@ async def _resolve_bulk_customer_phone(
 #
 # The drafting itself is `services/documents/design.py`; this is only the
 # conversation around it.
+
+#: Round 21D — the feature the whole template road belongs to (spec §4.1).
+CUSTOM_DOCUMENTS = "feature.custom_documents"
 
 TEMPLATE_DESIGN_TRIGGERS = (
     "ออกแบบใบเสนอราคา", "ทำแม่แบบใบเสนอราคา", "ทำเทมเพลตใบเสนอราคา",
@@ -33532,17 +33935,24 @@ def _template_principal(ctx: ResolvedContext, license_id, permission_keys: list[
     `license_status` is "active" because the router already refused a
     suspended tenant several stages above; a message never reaches here
     otherwise.
-    """
-    from ..services.authorization import TenantPrincipal
 
-    return TenantPrincipal(
-        license_id=str(license_id),
-        chann_uid=ctx.chann_uid,
-        role="sales",
-        is_owner=False,
-        permission_keys=frozenset(permission_keys),
-        audience="sales",
-        license_status="active",
+    Round 21D (pre-flight ruling R-B): built through `build_principal`,
+    the one place a principal gets its plan, from the same membership row
+    the LIFF principal reads — so `feature.custom_documents` gates a
+    template drafted in chat exactly as it gates one uploaded on the
+    dashboard. A principal made here without the plan would be Pro, and a
+    Starter shop could draft and publish through LINE what the page
+    refuses.
+    """
+    from ..services.authorization import build_principal
+
+    member = next(
+        (row for row in (ctx.memberships or []) if str(row.get("license_id")) == str(license_id)), {},
+    )
+    return build_principal(
+        license_id=str(license_id), chann_uid=ctx.chann_uid, role="sales", is_owner=False,
+        role_keys=permission_keys, audience="sales", license_status="active",
+        plan_payload=member.get("plan"),
     )
 
 
@@ -33583,7 +33993,15 @@ async def _template_draft_reply(
     sanitised and its placeholders checked BEFORE anything is written, so
     a draft that fails leaves no template row, no version and no stored
     object behind — there is nothing to clean up because nothing was made.
+
+    Round 21D: every road into a draft (the first turn, the type answer,
+    a refinement) passes here, so the plan is checked here too, before
+    the drafting call — a shop downgraded between two turns is refused
+    without the model being asked or a version being stored.
     """
+    if not _plan_has(CUSTOM_DOCUMENTS):
+        await _drop_pending_quietly(client, ctx)
+        return _plan_refusal(CUSTOM_DOCUMENTS, language)
     from ..routers_phase2 import (
         DOCX_CONTENT_TYPE, TemplateUploadIn, preview_document_template,
         upload_document_template,
@@ -33743,9 +34161,16 @@ async def _handle_template_design(
     without `setting.manage` gets exactly what they get for every other
     thing they cannot do, and the flow never starts, so no draft is made
     and no model call is spent.
+
+    Round 21D (pre-flight S15): the plan is asked first, for the same
+    reason — a shop whose plan has no custom documents is told so before
+    a question is held, a model call is spent or a row is written. This
+    only declines; the words that reached here act on nothing.
     """
+    if not _plan_has(CUSTOM_DOCUMENTS):
+        return _plan_refusal(CUSTOM_DOCUMENTS, language)
     if "setting.manage" not in set(permission_keys):
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "setting.manage")
 
     document_type = _template_type_from(message)
     if document_type is None:
@@ -33801,7 +34226,7 @@ async def _resolve_template_design(
             return None
         if "setting.manage" not in set(permission_keys):
             await _drop_pending_quietly(client, ctx)
-            return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+            return _no_permission(language, "setting.manage")
         await _drop_pending_quietly(client, ctx)
         described = str(fields.get("description") or "")
         return await _template_draft_reply(
@@ -33820,7 +34245,7 @@ async def _resolve_template_design(
             return await _discard_template_draft(client, ctx=ctx, label=label, language=language)
         if "setting.manage" not in set(permission_keys):
             await _drop_pending_quietly(client, ctx)
-            return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+            return _no_permission(language, "setting.manage")
         return await _template_draft_reply(
             client, ctx=ctx, license_id=license_id, document_type=document_type,
             description=(message or "").strip(),
@@ -33890,7 +34315,7 @@ async def _resolve_template_design(
     if decision == "edit":
         if "setting.manage" not in set(permission_keys):
             await _drop_pending_quietly(client, ctx)
-            return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+            return _no_permission(language, "setting.manage")
         return await _template_draft_reply(
             client, ctx=ctx, license_id=license_id, document_type=document_type,
             description=(message or "").strip(),
@@ -33982,9 +34407,14 @@ async def _publish_template_draft(
     template_id = str(fields.get("template_id") or "")
     version_id = str(fields.get("version_id") or "")
 
+    if not _plan_has(CUSTOM_DOCUMENTS):
+        # Round 21D: the publish route refuses a Starter shop too, but its
+        # refusal lands in the generic except below as "could not publish".
+        await _drop_pending_quietly(client, ctx)
+        return _plan_refusal(CUSTOM_DOCUMENTS, language)
     if "setting.manage" not in set(permission_keys):
         await _drop_pending_quietly(client, ctx)
-        return ChatReply(text=_t(SUGGEST_NO_PERMISSION_LEAD, language))
+        return _no_permission(language, "setting.manage")
     if not template_id or not version_id:
         await _drop_pending_quietly(client, ctx)
         return ChatReply(text=_t(TEMPLATE_DRAFT_GONE, language))

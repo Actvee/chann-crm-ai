@@ -33,6 +33,7 @@ locals {
     OPENROUTER_API_KEY                   = var.openrouter_api_key
     OPENROUTER_MODEL                     = var.openrouter_model
     OPENROUTER_MODEL_REASONING           = var.openrouter_model_reasoning
+    CHANN_SALES_CONTACT                  = var.chann_sales_contact
     SMARTBROWZ_ACCOUNTS_URL              = var.smartbrowz_accounts_url
     SMARTBROWZ_CLIENT_ID                 = var.smartbrowz_client_id
     SMARTBROWZ_CLIENT_SECRET             = var.smartbrowz_client_secret

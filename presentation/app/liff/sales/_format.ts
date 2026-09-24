@@ -5,6 +5,7 @@ import { useCallback } from "react";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 import type { Dictionary } from "@/lib/i18n";
 
+import { PLAN_LABELS } from "../_plan";
 import type { SalesText } from "./_strings";
 import { useSalesText } from "./_strings";
 
@@ -54,6 +55,12 @@ export type ApiFailure = {
   existingCode: string;
   /** A structured body's `reason`, e.g. push_failed's "not_configured". */
   reason: string;
+  /** Round 21D — a plan refusal (`plan_required` / `member_limit_reached`):
+   *  the feature, the plan it needs, the shop's plan, the member limit. */
+  feature: string;
+  minPlan: string;
+  plan: string;
+  limit: number | null;
 };
 
 export async function readFailure(response: Response): Promise<ApiFailure> {
@@ -73,6 +80,10 @@ export async function readFailure(response: Response): Promise<ApiFailure> {
       missing: Array.isArray(body.missing) ? body.missing.map(String) : [],
       existingCode: String(body.existing_code ?? ""),
       reason: String(body.reason ?? ""),
+      feature: String(body.feature ?? ""),
+      minPlan: String(body.min_plan ?? ""),
+      plan: String(body.plan ?? ""),
+      limit: typeof body.limit === "number" ? body.limit : null,
     };
   }
   return {
@@ -83,6 +94,10 @@ export async function readFailure(response: Response): Promise<ApiFailure> {
     missing: [],
     existingCode: "",
     reason: "",
+    feature: "",
+    minPlan: "",
+    plan: "",
+    limit: null,
   };
 }
 
@@ -138,6 +153,18 @@ export function describeFailure(
   }
   if (failure.code === "duplicate") {
     return reasons.duplicate.replace("{code}", failure.existingCode || "—");
+  }
+  // Round 21D (spec §5.2): the plan's refusal in words, never "(403)".
+  if (failure.code === "plan_required") {
+    const p = t.dashboard.plan;
+    const label = (p.features as Record<string, { label: string }>)[failure.feature]?.label ?? failure.feature;
+    return p.planRequired.replace("{feature}", label)
+      .replace("{min_plan}", PLAN_LABELS[failure.minPlan] ?? failure.minPlan)
+      .replace("{plan}", PLAN_LABELS[failure.plan] ?? failure.plan);
+  }
+  if (failure.code === "member_limit_reached") {
+    return t.dashboard.plan.memberLimit.replace("{limit}", String(failure.limit ?? ""))
+      .replace("{plan}", PLAN_LABELS[failure.plan] ?? failure.plan);
   }
   if (failure.code && reasons[failure.code]) return reasons[failure.code];
   switch (failure.status) {

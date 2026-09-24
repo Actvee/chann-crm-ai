@@ -5,6 +5,8 @@ import sys
 import uuid
 from pathlib import Path
 
+import redis
+
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "data"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -104,6 +106,10 @@ class TestTheInternalRoutes:
 
         class _Redis:
             def pipeline(self): return _Pipe()
+            # Round 21D: resolve now reads the plan through the cache;
+            # this stub stands in for the rate window only, so every other
+            # read is "Redis down" and the plan comes from the database.
+            def get(self, k): raise redis.ConnectionError("stub: rate window only")
 
         monkeypatch.setattr(cache_module.cache, "_client", _Redis())
 
@@ -163,6 +169,10 @@ class TestTheInternalRoutes:
 
         class _Redis:
             def pipeline(self): return _Pipe()
+            # Round 21D: resolve now reads the plan through the cache;
+            # this stub stands in for the rate window only, so every other
+            # read is "Redis down" and the plan comes from the database.
+            def get(self, k): raise redis.ConnectionError("stub: rate window only")
 
         monkeypatch.setattr(cache_module.cache, "_client", _Redis())
 

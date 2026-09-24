@@ -10,6 +10,7 @@ import { usePathname } from "next/navigation";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
 import { NavFrame, NavMenuButton } from "../_nav";
+import type { PlanInfo } from "../_plan";
 import { LIFF_SDK_SRC } from "./_lib";
 
 /**
@@ -32,6 +33,9 @@ export function AppShell({
   nav = true,
   permissions,
   isOwner = false,
+  heldKeys,
+  plan,
+  meAnswered = false,
   guideHref,
   tools,
   wide = false,
@@ -59,6 +63,12 @@ export function AppShell({
    *  the same direction fetchPermissions already fails in. */
   permissions?: Set<string>;
   isOwner?: boolean;
+  /** Round 21D: the role's keys before the plan, the plan, and whether /me
+   *  has answered — the rail draws a plan-locked entry, locked, for
+   *  whoever holds its key (ruling R-C). */
+  heldKeys?: Set<string>;
+  plan?: PlanInfo | null;
+  meAnswered?: boolean;
   liffId: string;
   onReady: () => void;
   onSdkError: () => void;
@@ -124,7 +134,15 @@ export function AppShell({
       <Script src={LIFF_SDK_SRC} strategy="afterInteractive" onError={onSdkError} />
       {/* The rail sits outside the shell, not inside it: the shell is a
           640px reading column and the navigation is a sibling of it. */}
-      <NavFrame audience={audience} permissions={permissions} isOwner={isOwner} enabled={nav}>
+      <NavFrame
+        audience={audience}
+        permissions={permissions}
+        isOwner={isOwner}
+        heldKeys={heldKeys}
+        plan={plan}
+        meAnswered={meAnswered}
+        enabled={nav}
+      >
         <div className="shell" data-wide={wide ? "true" : undefined}>
           <header className="topbar">
             {/* Opens the drawer on a phone; absent once the rail is
